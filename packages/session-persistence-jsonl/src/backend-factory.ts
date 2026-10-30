@@ -1,24 +1,24 @@
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import { validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
+import { canonicalJsonData, validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMetadataUpdate } from "./format.ts"
-import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
+import { createSessionFile, stageOwnedSessionFile, replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
 import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact-journal.ts'
-import { upgradeFactJournal } from './backend/format-upgrade.ts'
+import { upgradeFactJournal, stageOwnedUpgrade } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
 import { createJsonlProcessReadCapability } from './backend/process-read.ts'
-import { assembleSessionCoordinatorWithProcessStorage } from '@i-harness/session-persistence/internal/process-read-assembly'
-import type { CoordinatorOptions, SessionCoordinator } from '@i-harness/session-persistence'
+import { assembleSessionCoordinatorWithProcessStorage, type TaskTransitionBackendSession, type TaskTransitionConfiguration } from '@i-harness/session-persistence/internal/process-read-assembly'
+import { routeInvocation, type CoordinatorOptions, type SessionCoordinator, type BootstrapRoute, type BootstrapReadState } from '@i-harness/session-persistence'
 import { createTaskDocumentObservation } from './backend/task-document-observation.ts'
 import { writeLegacyDocument } from './backend/document-write.ts'
-import type { HeldTaskDocumentScope, TaskDocumentBackendSession } from '@i-harness/session-persistence'
+import type { HeldTaskDocumentScope, TaskDocumentBackendSession, HeldFactOwner } from '@i-harness/session-persistence'
 
 // Only the original constructor below can associate a backend. Byte adapters
 // and callers with structurally identical objects cannot mint this identity.
-const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): TaskDocumentBackendSession }>()
+const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): TaskDocumentBackendSession; openTransitionTask(scope: HeldTaskDocumentScope): TaskTransitionBackendSession; stageCreateHeader(scope: HeldTaskDocumentScope, meta: SessionMeta, proof: Awaited<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['observeFreshTaskParent']>>): ReturnType<typeof stageOwnedSessionFile>; stageUpgradeHeader(scope: HeldTaskDocumentScope, proof: Awaited<ReturnType<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['openTaskHistory']>['observe']>>, held: HeldFactOwner): ReturnType<typeof stageOwnedUpgrade>; trackHeaderOwner(id: string, owner: HeldFactOwner): void; settleTrackedHeaderIO(id: string, owner: HeldFactOwner): Promise<void>; readTrackedState(route: BootstrapRoute, owner: HeldFactOwner): Promise<BootstrapReadState>; hasTrackedHeaderDebt(id: string, owner: HeldFactOwner): boolean; trackedStageIO(id: string, owner: HeldFactOwner): import('./backend/bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id: string, owner: HeldFactOwner): ReturnType<ReturnType<typeof createBootstrapHeaderBackend>['resolveTrackedBirth']> }>()
 export function lookupJsonlProcessRead(backend: object) {
   const owner = processReadOwners.get(backend)
   if (!owner) return undefined
@@ -32,11 +32,78 @@ export function createJsonlSessionCoordinator(root: string, options?: Coordinato
     captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) },
   })
 }
-export function createJsonlTaskDocumentCoordinator(root: string, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
-  const backend = createJsonlBackend(root), owner = processReadOwners.get(backend)!
+export function composeJsonlTaskDocumentCoordinator(backend: PersistenceBackend, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
+  const owner = processReadOwners.get(backend)
+  if (!owner) throw new TypeError('Original JSONL backend required')
+  owner.assertOriginal()
   return assembleSessionCoordinatorWithProcessStorage(backend, options, { capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) }, captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) } }, { validator, open(scope) { owner.assertOriginal(); return owner.openTask(scope) } })
 }
-
+export function createJsonlTaskDocumentCoordinator(root: string, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
+  return composeJsonlTaskDocumentCoordinator(createJsonlBackend(root), options, validator)
+}
+/** Internal candidate: full transition wiring is not production-qualified. */
+export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBackend, options: CoordinatorOptions | undefined, validator: TaskTransitionConfiguration['validator']): SessionCoordinator {
+  const owner = processReadOwners.get(backend); if (!owner) throw new TypeError('Original JSONL backend required'); owner.assertOriginal()
+  return assembleSessionCoordinatorWithProcessStorage(backend, options,
+    { capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) }, captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) } },
+    { validator, open(scope) { owner.assertOriginal(); return owner.openTask(scope) } },
+    { validator, open(scope) { owner.assertOriginal(); return owner.openTransitionTask(scope) }, observeFresh(scope) { owner.assertOriginal(); return owner.capability.observeFreshTaskParent(scope) },
+      observeBootstrap(scope, route, held) {
+        owner.assertOriginal(); if (routeInvocation(route).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
+        return owner.capability.observeReservedTaskParent(scope, async () => {
+          owner.assertOriginal(); scope.assertActive(); const state = await owner.readTrackedState(route,held); scope.assertActive(); owner.assertOriginal()
+          if (state.kind === 'unavailable' || state.foreign || state.meta || state.rawHeader || state.publicationPresent || state.promotionPresent || state.stagePresent && !state.stageBytes && !state.captureReservation) throw new Error('Bootstrap target unavailable')
+          return canonicalJsonData({ kind: state.kind, stagePresent: !!state.stagePresent, stage: state.stageBytes ? Buffer.from(state.stageBytes).toString('base64') : null, reservation: state.captureReservation ?? null })
+        })
+      }, openHistory(scope, held) {
+        owner.assertOriginal()
+        return owner.capability.openTaskHistory(scope, async () => { owner.assertOriginal(); const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); owner.assertOriginal(); return birth?.digest })
+      },
+      openBootstrapHistory(scope, route, held) {
+        owner.assertOriginal(); if (routeInvocation(route).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
+        let originalStage: string | undefined
+        return owner.capability.openTaskHistory(scope, async () => {
+          owner.assertOriginal(); const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); owner.assertOriginal()
+          if (!birth || canonicalJsonData(birth.route) !== canonicalJsonData(route)) throw new Error('Bootstrap history unavailable')
+          const stage = canonicalJsonData(birth.stage); if (originalStage !== undefined && originalStage !== stage) throw new Error('Bootstrap stage changed'); originalStage ??= stage
+          return birth.digest
+        })
+      },
+      openHistoryHeader(scope, held, proof) {
+        owner.assertOriginal(); owner.capability.originalHistory(proof,scope); scope.assertActive()
+        let decided = false, operation: import('@i-harness/session-persistence').BootstrapHeaderOperation | undefined, captured = false
+        let result: import('@i-harness/session-persistence').HeaderOutcome | {kind:'not-required'} | undefined, flight: Promise<import('@i-harness/session-persistence').HeaderOutcome | {kind:'not-required'}> | undefined, settling: Promise<void> | undefined
+        const session = Object.freeze({
+          confirm() {
+            if (this !== session) return Promise.reject(new TypeError('Invalid history header receiver'))
+            if (result?.kind === 'committed' || result?.kind === 'not-required' || result?.kind === 'conflict') return Promise.resolve(result)
+            if (flight) return flight
+            flight = Promise.resolve().then(async () => {
+              owner.assertOriginal(); scope.assertActive()
+              if (!decided) {
+                const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); await proof.assertCurrent(); scope.assertActive(); decided = true
+                if (!birth) return result = {kind:'not-required' as const}
+                operation = { invocation:birth.stage.invocation, target:birth.stage.originalTarget, stageBytes:birth.stageBytes, headerBytes:Buffer.from(birth.stage.headerBytes) }
+                captured = !!birth.stage.captureReservation
+              }
+              try { result = await backend.reconcileBootstrapHeader!(scope.parentSessionId,held,operation!); return result }
+              catch { return result = {kind:'unknown' as const} }
+            })
+            void flight.then(() => { flight = undefined }, () => { flight = undefined }); return flight
+          },
+          settle() {
+            if (this !== session) return Promise.reject(new TypeError('Invalid history header receiver'))
+            if (settling) return settling
+            settling = Promise.resolve().then(async () => { await flight?.catch(() => {}); await owner.settleTrackedHeaderIO(scope.parentSessionId,held); if (captured) await backend.settleBootstrapCaptureIO!(scope.parentSessionId,held) })
+            void settling.then(() => { settling = undefined }, () => { settling = undefined }); return settling
+          },
+        })
+        return session
+      }, trackHeader(id, held) { owner.assertOriginal(); owner.trackHeaderOwner(id, held) }, settleHeader(id, held) { owner.assertOriginal(); return owner.settleTrackedHeaderIO(id, held) }, hasHeaderDebt(id, held) { owner.assertOriginal(); return owner.hasTrackedHeaderDebt(id, held) }, readBootstrapState(route, held) { owner.assertOriginal(); return owner.readTrackedState(route, held) }, stageUpgrade(scope, proof, held) { owner.assertOriginal(); return owner.stageUpgradeHeader(scope, proof, held) }, stageHeader(scope, meta, proof) { owner.assertOriginal(); return owner.stageCreateHeader(scope, meta, proof) } })
+}
+export function createJsonlTaskTransitionCoordinator(root: string, options: CoordinatorOptions | undefined, validator: TaskTransitionConfiguration['validator']): SessionCoordinator {
+  return composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), options, validator)
+}
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
 // answer (no turn/start yet); a larger one is served non-blank without a read
@@ -129,9 +196,14 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     return { visibility: value.visibility, manifest: { documents: value.documents, files: value.files } }
   }
 
+  function initialHeader(meta: SessionMeta): string {
+    const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
+    return serializeHeader({ ...meta, journal }) + '\n'
+  }
+  const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath)
   const backend: PersistenceBackend = {
     ...createFactJournalBackend(filePath, assertNotDeleted),
-    ...createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath),
+    ...bootstrapBackend,
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.
@@ -145,8 +217,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       if (meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("new session writers require current format; downgrade refused")
       await mkdir(rootPath, { recursive: true })
       // wx: fail if the session file already exists.
-      const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
-      await writeFile(filePath(sessionId), serializeHeader({ ...meta, journal }) + "\n", { flag: "wx" })
+      await createSessionFile(filePath(sessionId), initialHeader(meta))
     },
 
     async append(sessionId: string, events: SessionEvent[]): Promise<void> {
@@ -418,7 +489,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
   }
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
     async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
-  processReadOwners.set(backend, { capability, assertOriginal, openTask(scope) {
+  function openOwnedTask(scope: HeldTaskDocumentScope, initialize: boolean): TaskDocumentBackendSession {
     assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope, undefined, available)
     async function available() {
       for (const path of [tombPath('session', scope.parentSessionId), tombPath('document', scope.key)]) {
@@ -430,10 +501,29 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       async observe() { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); await available(); const result = await original.observe(); await available(); assertOriginal(); return result },
       async confirm(witness: Parameters<typeof original.confirm>[0]) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); await available(); const result = await original.confirm(witness); await available(); assertOriginal(); return result },
       stageWrite(witness: Parameters<typeof original.stageWrite>[0], bytes: Uint8Array) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); return original.stageWrite(witness, bytes) },
+      ...(initialize ? { stageInitialize(bytes: Uint8Array) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); return original.stageInitialize(bytes) } } : {}),
       settleResources() { if (this !== session) return Promise.reject(new TypeError('Invalid task backend receiver')); return original.settleResources() },
     })
     return session
-  } })
+  }
+  processReadOwners.set(backend, {
+    capability, assertOriginal, trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth,
+    openTask(scope) { return openOwnedTask(scope, false) },
+    openTransitionTask(scope) { return openOwnedTask(scope, true) as TaskTransitionBackendSession },
+    stageUpgradeHeader(scope, proof, held) {
+      assertOriginal(); const original = capability.originalHistory(proof, scope)
+      return stageOwnedUpgrade(filePath(scope.parentSessionId), original.bytes, original.identity,
+        () => { assertOriginal(); capability.originalHistory(proof, scope); scope.assertActive() },
+        async () => { await proof.assertRoot(); assertOriginal(); scope.assertActive() }, trackedStageIO(scope.parentSessionId,held))
+    },    stageCreateHeader(scope, meta, proof) {
+      assertOriginal(); capability.assertFreshOwner(proof, scope); scope.assertActive()
+      if (meta.sessionId !== scope.parentSessionId || meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Invalid original session header')
+      const bytes = Buffer.from(initialHeader(meta))
+      return stageOwnedSessionFile(filePath(scope.parentSessionId), bytes,
+        () => { assertOriginal(); capability.assertFreshOwner(proof, scope); scope.assertActive() },
+        async () => { await proof.assertRoot(); assertOriginal(); scope.assertActive() })
+    },
+  })
   return backend
 }
 

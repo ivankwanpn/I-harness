@@ -1,12 +1,13 @@
-import { CURRENT_FORMAT_VERSION, stringifyJsonData, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, stringifyJsonData, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
 import { repairTurnTail } from "../repair.ts"
-import { preflightSessionFormat, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
+import { preflightSessionFormat, preflightBatchShape, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
 import { SessionFormatUnsupportedError } from '../format/registry.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
 export function createLoads(
   backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "append" | "id" | "upgradeSessionFormat">,
@@ -14,6 +15,7 @@ export function createLoads(
     Pick<Ownership, "withSessionOperation" | "borrowOwnership">,
   { assertWritable, pendingWriteBehind, invalidateConversation }: Pick<Mutations, "assertWritable" | "pendingWriteBehind" | "invalidateConversation">,
   processLatches?: ReturnType<typeof createProcessReadLatches>,
+  transitions?: ReturnType<typeof createTaskDocumentTransitions>,
 ) {
   async function processMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
@@ -27,7 +29,40 @@ export function createLoads(
       throw cause
     }
   }
+  async function transitionLoad(sessionId: string, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, skipPending = false) {
+      if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
+        assertWritable(sessionId)
+        const pending = skipPending ? undefined : pendingWriteBehind(sessionId)
+        return transitions.existing(sessionId, async () => {
+          invalidateConversation(sessionId)
+          const peeked = await read(sessionId)
+          preflightSessionFormat(peeked.version, peeked.events, peeked.meta)
+          await migrate(peeked.version, guardIgnorable(peeked.events, true), peeked.meta)
+          const repaired = await backend.repair(sessionId)
+          preflightSessionFormat(repaired.version, repaired.events, repaired.meta)
+          const migrated = await migrate(repaired.version, guardIgnorable(repaired.events, true), repaired.meta)
+          const canonical = repairTurnTail(migrated, { appendOnly: repaired.meta?.journal !== undefined }).map((event, index): SessionEvent => {
+            if (event.seq !== undefined && event.seq !== index) throw new Error(`session sequence invariant failed for ${sessionId}`)
+            return event.seq === index ? event : { ...event, seq: index }
+          })
+          preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical, repaired.meta)
+          const needsRewrite = canonical.length !== repaired.events.length || canonical.some((event, index) => stringifyJsonData(event) !== stringifyJsonData(repaired.events[index]))
+          if (needsRewrite) {
+            const unchanged = canonical.slice(0, repaired.events.length).every((event, index) => stringifyJsonData(event) === stringifyJsonData(repaired.events[index]))
+            if (unchanged) {
+              preflightBatchShape(repaired.version, canonical.slice(repaired.events.length))
+              await backend.append(sessionId, canonical.slice(repaired.events.length))
+            } else {
+              if (repaired.meta?.journal !== undefined || repaired.events.some(event => event.type === 'conversation/semantics') || !backend.replaceEvents) throw new Error('TASK_TRANSITION_RECOVERY_UNSUPPORTED')
+              preflightSessionFormat(repaired.version, canonical, repaired.meta)
+              await backend.replaceEvents(sessionId, canonical)
+            }
+          }
+          return { session: buildSession(repaired.meta, canonical) }
+        }, pending ? () => pending.flush() : undefined, async proof => { const meta = proof.initial.header as SessionMeta | undefined; const physical = JSON.parse(JSON.stringify(proof.initial.events)) as SessionEvent[]; return { session: buildSession(meta, await migrate(proof.initial.formatVersion, guardIgnorable(physical, true), meta)) } }, after)
+      }
   return {
+    transitionLoad,
     async snapshot(sessionId: string) {
       const { version, events, meta } = await read(sessionId)
       preflightSessionFormat(version, events, meta)
@@ -95,6 +130,7 @@ export function createLoads(
       }))
     },
     async loadOwned(sessionId: string) {
+      if (transitions) return transitionLoad(sessionId)
       assertWritable(sessionId)
       return processMutation(sessionId, async () => {
       const pendingWrites = pendingWriteBehind(sessionId)
@@ -130,7 +166,8 @@ export function createLoads(
             const unchangedPrefix = canonical.slice(0, repaired.events.length).every((event, index) => stringifyJsonData(event) === stringifyJsonData(repaired.events[index]))
             if (fenced && unchangedPrefix) {
               await ensureWritableFormatUnlocked(backend, sessionId)
-              await backend.append(sessionId, canonical.slice(repaired.events.length))
+              preflightBatchShape(repaired.version, canonical.slice(repaired.events.length))
+            await backend.append(sessionId, canonical.slice(repaired.events.length))
             } else {
               if (backend.replaceEvents === undefined) {
                 throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)

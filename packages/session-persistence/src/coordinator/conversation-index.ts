@@ -32,7 +32,7 @@ export function createConversationIndexes(backend: Pick<PersistenceBackend, "rea
       preflightBatchShape(CURRENT_FORMAT_VERSION, suffix)
       try {
         const staged = index.stage(suffix, { readCurrentEvent: position => loaded.events[position] })
-        return { events: suffix, commit: () => staged.commit() }
+        return { events: suffix, baseLength: loaded.events.length, commit: () => staged.commit() }
       } catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation suffix", { cause }) }
     },
   }

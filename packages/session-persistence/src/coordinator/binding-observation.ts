@@ -11,6 +11,8 @@ import type { BootstrapCaptureRequest } from './bootstrap-types.ts'
 import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionCoordinator, type SessionBindingObservationRequest, type SessionBindingObservation, type ExistingSessionBindingObservationRequest, type ExistingSessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import { assertOutsideTaskDocumentOperation } from './task-document-operation.ts'
+import { assertOutsideTaskTransition } from './task-document-transition.ts'
+import { assertOriginalBootstrapEntry } from './bootstrap.ts'
 
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!
 const signalAddListener = EventTarget.prototype.addEventListener
@@ -34,35 +36,90 @@ export function createBindingObservations(
   type Scope = { ids: Set<string>; keys: Set<string>; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean; revoke?: () => void } & ScopeKind
   type Captured = { ids: string[]; existing: string[]; signal?: AbortSignal } & ScopeKind
   const scopes = new Set<Scope>(), context = new AsyncLocalStorage<readonly Scope[]>()
+  const bootstrapContext = new AsyncLocalStorage<{ id: string; invocation: BootstrapInvocation; allowed: Scope[]; active: boolean }>()
+  const bootstrapTickets = new WeakMap<object, ReturnType<typeof makeBootstrapTicket>>()
   const taskContextIdentity = Object.freeze({})
-  type OwnedDocument = { id: string; key: string; revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside(): void; closing: boolean }
+  type OwnedDocument = { id: string; key: string; revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside(): void; closing: boolean; writing: boolean; bootstrapEntry?: object }
   const ownedDocuments = new Set<OwnedDocument>()
   const cleanupErrors = new WeakMap<object, ObservationCleanupHandle>()
   const pendingIds = new Map<string, number>(), pendingKeys = new Map<string, number>(), deletedIds = new Set<string>(), deletedKeys = new Set<string>()
+  const unknownDocumentKeys = new Set<string>()
   const retiringIds = new Map<string, number>()
+  const pendingMutations = new Set<{ keys: readonly string[]; done: Promise<'settled' | 'unknown'> }>()
   let closed = false
   const bindingKey = (id: string) => `desktop-session-project-${createHash('sha256').update(id).digest('hex')}`
   const intersects = (scope: Scope, ids: readonly string[], keys: readonly string[]) => ids.some(id => scope.ids.has(id)) || keys.some(key => scope.keys.has(key))
   const ownedIntersects = (scope: OwnedDocument, ids: readonly string[], keys: readonly string[]) => ids.includes(scope.id) || keys.includes(scope.key)
   function registerOwnedDocumentOperation(id: string, key: string, operations: { revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside?(): void }) {
-    assertOutsideTaskDocumentOperation(taskContextIdentity, [id], [key])
+    assertOutsideTaskDocumentOperation(taskContextIdentity, [id], [key]); assertOutsideTaskTransition(taskContextIdentity, [id], [key])
     if (closed || deletedIds.has(id) || deletedKeys.has(key) || pendingIds.has(id) || pendingKeys.has(key) || retiringIds.has(id)
       || [...scopes].some(scope => intersects(scope, [id], [key])) || [...ownedDocuments].some(scope => ownedIntersects(scope, [id], [key]))) throw new Failure('conflict')
-    const entry: OwnedDocument = { id, key, revoke: operations.revoke, close: operations.close, retryClose: operations.retryClose, assertOutside: operations.assertOutside ?? (() => {}), closing: false }
+    const entry: OwnedDocument = { id, key, revoke: operations.revoke, close: operations.close, retryClose: operations.retryClose, assertOutside: operations.assertOutside ?? (() => {}), closing: false, writing: false }
     ownedDocuments.add(entry)
-    let writing = false
     const registration = Object.freeze({
-      unregister() { if (this !== registration || writing) throw new TypeError('Invalid task registration receiver'); ownedDocuments.delete(entry) },
+      unregister() { if (this !== registration || entry.writing) throw new TypeError('Invalid task registration receiver'); ownedDocuments.delete(entry) },
       beginOwnedWrite() {
-        if (this !== registration || !ownedDocuments.has(entry) || entry.closing || writing || closed || deletedIds.has(id) || deletedKeys.has(key) || retiringIds.has(id) || pendingIds.has(id) || pendingKeys.has(key)
+        if (this !== registration || !ownedDocuments.has(entry) || entry.closing || entry.writing || closed || deletedIds.has(id) || deletedKeys.has(key) || retiringIds.has(id) || pendingIds.has(id) || pendingKeys.has(key)
           || [...scopes].some(scope => intersects(scope, [id], [key])) || [...ownedDocuments].some(scope => scope !== entry && ownedIntersects(scope, [id], [key]))) throw new Failure('conflict')
-        writing = true; pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1)
+        entry.writing = true; pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1)
         let finished = false
-        const token = Object.freeze({ finish() { if (this !== token || finished) throw new TypeError('Invalid task write admission'); finished = true; writing = false; const count = pendingKeys.get(key)! - 1; if (count) pendingKeys.set(key, count); else pendingKeys.delete(key) } })
+        const token = Object.freeze({ finish(outcome: 'settled' | 'unknown' = 'unknown') { if (this !== token || finished) throw new TypeError('Invalid task write admission'); finished = true; if (outcome === 'unknown') unknownDocumentKeys.add(key); entry.writing = false; const count = pendingKeys.get(key)! - 1; if (count) pendingKeys.set(key, count); else pendingKeys.delete(key) } })
         return token
       },
     })
     return registration
+  }
+  // This ticket belongs to the original mutation owner. It fences both the
+  // parent and its task key before joining older scopes; only the ticket's
+  // own record is exempt from the pending counters it established.
+  function beginTaskTransition(id: string, operations: { revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside?(): void }) {
+    const key = `task-${id}`
+    assertOutsideTaskDocumentOperation(taskContextIdentity, [id], [key]); assertOutsideTaskTransition(taskContextIdentity, [id], [key])
+    const ownedWrites = [...ownedDocuments].filter(scope => scope.key === key && scope.writing).length
+    const priorMutations = [...pendingMutations].filter(record => record.keys.includes(key))
+    const recordedKeys = priorMutations.reduce((sum, record) => sum + record.keys.filter(value => value === key).length, 0)
+    if (closed || deletedIds.has(id) || deletedKeys.has(key) || unknownDocumentKeys.has(key) || pendingIds.has(id) || (pendingKeys.get(key) ?? 0) !== ownedWrites + recordedKeys || retiringIds.has(id) || [...ownedDocuments].some(scope => scope.key === key && !scope.writing && scope.closing)) throw new Failure('conflict')
+    if (!operations || typeof operations !== 'object' || utilTypes.isProxy(operations)) throw new TypeError('Invalid transition operation')
+    const captured = Object.getOwnPropertyDescriptors(operations)
+    for (const name of ['revoke', 'close', 'retryClose'] as const) if (!captured[name] || !('value' in captured[name]!) || typeof captured[name]!.value !== 'function') throw new TypeError('Invalid transition operation')
+    const call = (name: 'revoke' | 'close' | 'retryClose' | 'assertOutside'): unknown => { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations, name); if (!expected && !now && name === 'assertOutside') return; if (!expected || !now || !('value' in expected) || !('value' in now) || expected.value !== now.value || typeof expected.value !== 'function') throw new TypeError('Changed transition operation'); return Reflect.apply(expected.value, operations, []) }
+    const prior = admitMutation([id], [key], false, [])
+    let revoked = false, finished = false, joining: Promise<void> | undefined
+    const entry: OwnedDocument = { id, key, revoke() { revoked = true; call('revoke') }, close() { return call('close') as Promise<void> }, retryClose() { return call('retryClose') as Promise<void> }, assertOutside() { call('assertOutside') }, closing: false, writing: false }
+    ownedDocuments.add(entry)
+    const ticket = Object.freeze({
+      join() { if (this !== ticket || finished) return Promise.reject(new Failure('conflict')); return joining ??= Promise.all([prior.join(), ...priorMutations.map(async record => { if (await record.done !== 'settled') throw new Failure('unavailable') })]).then(() => {}) },
+      assertCurrent() { if (this !== ticket || finished || revoked || closed || !ownedDocuments.has(entry)) throw new Failure('revoked'); for (const name of ['revoke', 'close', 'retryClose', 'assertOutside'] as const) { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations, name); if (!expected && !now && name === 'assertOutside') continue; if (!expected || !now || !('value' in expected) || !('value' in now) || now.value !== expected.value) throw new TypeError('Changed transition operation') } },
+      finish(outcome: 'settled' | 'unknown') { if (this !== ticket || finished) throw new TypeError('Invalid transition ticket'); finished = true; ownedDocuments.delete(entry); prior.finish(outcome) },
+    })
+    return ticket
+  }
+  function makeBootstrapTicket(id: string, entryObject: object, operations: { revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside(): void }, allowed: Scope[]) {
+    const key = `task-${id}`
+    if (closed || deletedIds.has(id) || deletedKeys.has(key) || unknownDocumentKeys.has(key) || retiringIds.has(id)) throw new Failure('conflict')
+    const captured = Object.getOwnPropertyDescriptors(operations)
+    for (const name of ['revoke','close','retryClose','assertOutside'] as const) if (!captured[name] || !('value' in captured[name]!) || typeof captured[name]!.value !== 'function') throw new TypeError('Invalid bootstrap transition operation')
+    const call = (name: 'revoke'|'close'|'retryClose'|'assertOutside'): unknown => { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations,name); if (!expected || !now || !('value' in expected) || !('value' in now) || now.value !== expected.value || typeof expected.value !== 'function') throw new TypeError('Changed bootstrap transition operation'); return Reflect.apply(expected.value,operations,[]) }
+    const priorMutations = [...pendingMutations].filter(record => record.keys.includes(key))
+    const prior = admitMutation([id], [key], false, allowed)
+    let revoked = false, finished = false, joining: Promise<void> | undefined
+    const owned: OwnedDocument = { id, key, bootstrapEntry: entryObject, writing: false, closing: false,
+      revoke() { revoked = true; call('revoke') }, close() { return call('close') as Promise<void> }, retryClose() { return call('retryClose') as Promise<void> }, assertOutside() { call('assertOutside') } }
+    ownedDocuments.add(owned)
+    const ticket = Object.freeze({
+      join() { if (this !== ticket || finished) return Promise.reject(new Failure('conflict')); return joining ??= Promise.all([prior.join(), ...priorMutations.map(async record => { if (await record.done !== 'settled') throw new Failure('unavailable') })]).then(() => {}) },
+      assertCurrent() { if (this !== ticket || finished || revoked || closed || !ownedDocuments.has(owned)) throw new Failure('revoked'); assertOriginalBootstrapEntry(entryObject,id); for (const name of ['revoke','close','retryClose','assertOutside'] as const) { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations,name); if (!expected || !now || !('value' in expected) || !('value' in now) || expected.value !== now.value) throw new TypeError('Changed bootstrap transition operation') } },
+      finish(outcome: 'settled' | 'unknown') { if (this !== ticket || finished) throw new TypeError('Invalid bootstrap transition ticket'); finished = true; ownedDocuments.delete(owned); bootstrapTickets.delete(entryObject); prior.finish(outcome) },
+    })
+    return ticket
+  }
+  function beginBootstrapTaskTransition(id: string, entryObject: object, operations: { revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside(): void }) {
+    const current = bootstrapContext.getStore()
+    if (!current?.active || current.id !== id) throw new Failure('conflict')
+    assertOriginalBootstrapEntry(entryObject,id)
+    const original = bootstrapTickets.get(entryObject)
+    if (original) { original.assertCurrent(); return original }
+    const ticket = makeBootstrapTicket(id,entryObject,operations,current.allowed); bootstrapTickets.set(entryObject,ticket); return ticket
   }
   function refuseSelf(ids: readonly string[], keys: readonly string[], all = false) {
     if (context.getStore()?.some(current => current.state !== 'done' && (all || intersects(current, ids, keys)))) throw new Failure('conflict')
@@ -71,7 +128,7 @@ export function createBindingObservations(
     if (deletedIds.has(id)) throw new Failure('deleted')
     if (pendingIds.has(id)) throw new Failure('conflict')
   }
-  function assertOutsideOwnedOperations(ids: readonly string[] = [], keys: readonly string[] = [], all = false) { assertOutsideTaskDocumentOperation(taskContextIdentity, ids, keys, all); for (const scope of ownedDocuments) if (all || ownedIntersects(scope, ids, keys)) scope.assertOutside() }
+  function assertOutsideOwnedOperations(ids: readonly string[] = [], keys: readonly string[] = [], all = false) { assertOutsideTaskDocumentOperation(taskContextIdentity, ids, keys, all); assertOutsideTaskTransition(taskContextIdentity, ids, keys, all); for (const scope of ownedDocuments) if (all || ownedIntersects(scope, ids, keys)) scope.assertOutside() }
   function revokeOwnedDocumentOperations(id: string) {
     const affected = [...ownedDocuments].filter(scope => scope.id === id)
     for (const scope of affected) scope.assertOutside()
@@ -97,8 +154,10 @@ export function createBindingObservations(
     }
     // Only this callback's captured original target is exempt. All other
     // observations of this identity revoke/join before the original owner runs.
-    const admission = admitMutation([original.targetSessionId], [], false, allowed)
-    try { await admission.join(); return await run() } finally { admission.finish() }
+    const retained = [...ownedDocuments].filter(scope => scope.id === original.targetSessionId && !!scope.bootstrapEntry)
+    const admission = admitMutation([original.targetSessionId], [], false, allowed, retained)
+    const current = { id: original.targetSessionId, invocation: original, allowed, active: true }
+    try { await admission.join(); return await bootstrapContext.run(current, run) } finally { current.active = false; admission.finish() }
   }
   function captureBootstrapGuards(guards: BootstrapGuards): BootstrapGuards {
     const port = Object.getOwnPropertyDescriptor(guards, 'targetPreparation')
@@ -175,25 +234,27 @@ export function createBindingObservations(
     let finished = false
     return { join: admission.join, finish() { if (finished) return; finished = true; const count = retiringIds.get(id)! - 1; if (count) retiringIds.set(id, count); else retiringIds.delete(id); admission.finish() } }
   }
-  function admitMutation(ids: readonly string[], keys: readonly string[], deleted: boolean, allowed: readonly Scope[]) {
-    assertOutsideTaskDocumentOperation(taskContextIdentity, ids, keys)
+  function admitMutation(ids: readonly string[], keys: readonly string[], deleted: boolean, allowed: readonly Scope[], allowedOwned: readonly OwnedDocument[] = []) {
+    assertOutsideTaskDocumentOperation(taskContextIdentity, ids, keys); assertOutsideTaskTransition(taskContextIdentity, ids, keys)
     if (context.getStore()?.some(current => current.state !== 'done' && !allowed.includes(current) && intersects(current, ids, keys))) throw new Failure('conflict')
-    for (const scope of ownedDocuments) if (ownedIntersects(scope, ids, keys)) scope.assertOutside()
+    for (const scope of ownedDocuments) if (!allowedOwned.includes(scope) && ownedIntersects(scope, ids, keys)) scope.assertOutside()
     for (const id of ids) { pendingIds.set(id, (pendingIds.get(id) ?? 0) + 1); if (deleted) deletedIds.add(id) }
     for (const key of keys) { pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1); if (deleted) deletedKeys.add(key) }
     const affected = [...scopes].filter(scope => !allowed.includes(scope) && intersects(scope, ids, keys))
-    const owned = [...ownedDocuments].filter(scope => ownedIntersects(scope, ids, keys))
+    const owned = [...ownedDocuments].filter(scope => !allowedOwned.includes(scope) && ownedIntersects(scope, ids, keys))
     for (const scope of owned) { scope.revoke(); scope.closing = true }
     for (const scope of affected) { if(scope.revoke)scope.revoke();else scope.state = 'revoked' }
     let finished = false
+    const completion = Promise.withResolvers<'settled' | 'unknown'>(), mutation = { keys, done: completion.promise }
+    pendingMutations.add(mutation)
     return {
       async join() { const settled = await Promise.allSettled([...affected.map(scope => scope.done), ...owned.map(scope => scope.close())]); const errors = settled.flatMap(x => x.status === 'rejected' ? [x.reason] : []); if (errors.length) throw new AggregateError(errors, 'Observation cleanup is unresolved') },
-      finish() { if (finished) return; finished = true; for (const [map, values] of [[pendingIds, ids], [pendingKeys, keys]] as const) for (const value of values) { const count = map.get(value)! - 1; if (count) map.set(value, count); else map.delete(value) } },
+      finish(outcome: 'settled' | 'unknown' = 'unknown') { if (finished) return; finished = true; for (const [map, values] of [[pendingIds, ids], [pendingKeys, keys]] as const) for (const value of values) { const count = map.get(value)! - 1; if (count) map.set(value, count); else map.delete(value) }; if (outcome === 'unknown') for (const key of keys) unknownDocumentKeys.add(key); pendingMutations.delete(mutation); completion.resolve(outcome) },
     }
   }
   function closeAdmission() {
     refuseSelf([], [], true)
-    assertOutsideTaskDocumentOperation(taskContextIdentity, [], [], true)
+    assertOutsideTaskDocumentOperation(taskContextIdentity, [], [], true); assertOutsideTaskTransition(taskContextIdentity, [], [], true)
     for (const scope of ownedDocuments) scope.assertOutside()
     closed = true
     const affected = [...scopes]
@@ -273,7 +334,7 @@ export function createBindingObservations(
     const { ids, existing, signal } = captured
     if (!ownership.lockEnabled || !ownership.pinOwnership || !ownership.withSessionOperation || !backend.profile || !backend.readDocumentObserved) throw new Failure('unsupported')
     const keys = ids.map(bindingKey).sort()
-    assertOutsideTaskDocumentOperation(taskContextIdentity, ids, keys)
+    assertOutsideTaskDocumentOperation(taskContextIdentity, ids, keys); assertOutsideTaskTransition(taskContextIdentity, ids, keys)
     refuseSelf(ids, keys)
     if (closed || isAborted(signal)) throw new Failure('revoked')
     if (ids.some(id => deletedIds.has(id)) || keys.some(key => deletedKeys.has(key))) throw new Failure('deleted')
@@ -471,7 +532,7 @@ export function createBindingObservations(
       },
     })
   }
-  return { taskContextIdentity, registerOwnedDocumentOperation, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
+  return { taskContextIdentity, registerOwnedDocumentOperation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

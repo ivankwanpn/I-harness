@@ -12,6 +12,9 @@ export function createProcessReadLatches() {
         && m.sessionIds.includes(r.input.sessionId) && !m.documentKeys.some(key => r.input.documentKeys.includes(key));
     const denied = () => { throw new Error('PROCESS_READ_UNAVAILABLE'); };
     return {
+        assertUnpoisoned(sessionId: string, documentKeys: readonly string[]) {
+            if (closed || poisonedSessions.has(sessionId) || documentKeys.some(key => poisonedDocuments.has(key))) denied();
+        },
         beginMutation(input: Mutation) {
             const mutation: Mutation = { ...input, sessionIds: [...new Set(input.sessionIds)], documentKeys: [...new Set(input.documentKeys)] };
             active.add(mutation);

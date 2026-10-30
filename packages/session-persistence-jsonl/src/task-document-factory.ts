@@ -1,1 +1,1 @@
-export { createJsonlTaskDocumentCoordinator } from './backend-factory.ts'
+export { createJsonlTaskDocumentCoordinator, composeJsonlTaskDocumentCoordinator, createJsonlTaskTransitionCoordinator, composeJsonlTaskTransitionCoordinator } from './backend-factory.ts'

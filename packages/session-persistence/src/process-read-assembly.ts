@@ -8,6 +8,7 @@ import { createManagedProcessReadOwner } from './coordinator/process-read-manage
 import type { createProcessReadVisibility } from './coordinator/process-read-visibility.ts'
 import type { SessionCoordinator } from './coordinator/types.ts'
 import type { TaskDocumentConfiguration } from './coordinator/task-document-operation.ts'
+import type { TaskTransitionConfiguration } from './coordinator/task-document-transition.ts'
 
 type Scope = { coordinator: SessionCoordinator; id: string; observation: ProcessReadObservation; visibility: ReturnType<typeof createProcessReadVisibility>; control: ProcessReadScopeControl; assertOriginal(): void; failed: boolean }
 const active = new AsyncLocalStorage<Scope>()
@@ -34,9 +35,9 @@ export function lookupProcessReadContext(coordinator: SessionCoordinator, id: st
 }
 
 /** Trusted construction seam; it creates the coordinator and all owners once. */
-export function assembleSessionCoordinatorWithProcessStorage(backend: PersistenceBackend, options: CoordinatorOptions | undefined, storage: ProcessReadStorage, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>) {
+export function assembleSessionCoordinatorWithProcessStorage(backend: PersistenceBackend, options: CoordinatorOptions | undefined, storage: ProcessReadStorage, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>, transitionStorage?: TaskTransitionConfiguration) {
   let owners: Parameters<NonNullable<Parameters<typeof createSessionCoordinatorCore>[3]>>[0] | undefined
-  const coordinator = createSessionCoordinatorCore(backend, options, storage, value => { owners = value }, taskStorage)
+  const coordinator = createSessionCoordinatorCore(backend, options, storage, value => { owners = value }, taskStorage, transitionStorage)
   const original = owners!
   const cold = createColdProcessReadOwner(storage, original.latches), managed = createManagedProcessReadOwner(storage, original.managed)
   let originalMethod: SessionCoordinator['withProcessReadObservation']
@@ -72,3 +73,5 @@ export function assembleSessionCoordinatorWithProcessStorage(backend: Persistenc
   originalDescriptors = Object.getOwnPropertyDescriptors(coordinator)
   return coordinator
 }
+
+export type { TaskTransitionBackendSession, TaskTransitionConfiguration } from './coordinator/task-document-transition.ts'

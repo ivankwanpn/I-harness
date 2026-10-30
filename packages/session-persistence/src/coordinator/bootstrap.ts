@@ -25,13 +25,14 @@ import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPrepara
 import { preparationFacts } from './bootstrap-preparation-facts.ts'
 import { captureManagedReadyObservation, type ManagedReadyObservation } from './managed-document.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
 export interface ManagedEntry {
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
-  document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
+  document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl; cachedTaskBarrier?: ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;
   flight?: Promise<unknown>; revoked?: boolean; revocation?: object; ready?: boolean; headerUnknown?: boolean;
-  bootstrap?: { invocation: BootstrapInvocation; manifestDigest?: string; request?: BootstrapRequest; stage?: BootstrapHeaderStage; operation?: BootstrapHeaderOperation; phase: BootstrapPhase; issued: boolean; pending?: FactOutcome;
+  bootstrap?: { invocation: BootstrapInvocation; manifestDigest?: string; request?: BootstrapRequest; stage?: BootstrapHeaderStage; operation?: BootstrapHeaderOperation; phase: BootstrapPhase; issued: boolean; pending?: FactOutcome; taskBarrier?: ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>; headerOutcome?: import('./bootstrap-types.ts').HeaderOutcome;
     capture?: { request: BootstrapCaptureRequest|ChildBootstrapCaptureRequest; reservation: OwnedCaptureReservation; phase: 'unreserved'|'reserving'|'reserved'|'capturing'|'captured'|'spent'; entered: boolean; ownedRequest?: BootstrapRequest } };
 }
 /** New-work revocation stays terminal; its identity also fences in-flight observations. */
@@ -93,7 +94,12 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
     if(compiled.dependencyDigest!==stage.seed.dependencyDigest)throw new Error('Bootstrap dependency binding conflict')
   } else if(stage.seed.sourceObservation.kind!=='none')throw new Error('Bootstrap empty source binding conflict')
 }
-export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>) {
+const originalBootstrapEntries = new WeakMap<object, { id: string; documents: Map<string, ManagedEntry> }>()
+export function assertOriginalBootstrapEntry(entry: object, id: string): void {
+  const record = originalBootstrapEntries.get(entry)
+  if (!record || record.id !== id || record.documents.get(id) !== entry) throw new TypeError('Invalid original bootstrap entry')
+}
+export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>,transitions?:ReturnType<typeof createTaskDocumentTransitions>) {
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
   const captureSupported=()=>supported()&&(process.platform==='win32'||process.platform==='linux')&&!!backend.checkBootstrapCaptureRoot&&!!backend.readBootstrapCapture&&!!backend.prepareBootstrapCapture&&!!backend.settleBootstrapCaptureIO
   const childSupported=()=>captureSupported()&&!!backend.bootstrapRoutes&&['readState','readCapture','reserveCapture','resolveBirth'].every(key=>typeof (backend.bootstrapRoutes as any)[key]==='function')
@@ -131,8 +137,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   async function captureBundle(entry:ManagedEntry) {
     if(entry.captureIO)return entry.captureIO
-    const id=entry.bootstrap!.invocation.targetSessionId,claim=await ownership.pinOwnership(id)
-    const held=heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim.assertHeld())
+    const id=entry.bootstrap!.invocation.targetSessionId, existing=entry.bootstrap!.taskBarrier
+    const claim=existing ? existing.transferClaim() : await ownership.pinOwnership(id)
+    const held=existing ? existing.held() : heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim.assertHeld())
     const bundle:NonNullable<ManagedEntry['captureIO']>={claim,held,issuer:undefined!,settled:true,released:false}
     bundle.issuer=issuingFactOwner(held,()=>{if(!bundle.activeIssue)throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'});bundle.activeIssue()})
     entry.captureIO=bundle;return bundle
@@ -183,6 +190,10 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
   }
   async function releaseCapture(entry:ManagedEntry) {
+    // The task transition borrows this exact claim. Its original file and
+    // document-lease cleanup must finish before the capture owner retires it.
+    await entry.bootstrap?.taskBarrier?.retryClose()
+    await entry.cachedTaskBarrier?.retryClose()
     await settleCapture(entry)
     const io=entry.captureIO
     if(!io||io.released)return
@@ -221,7 +232,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(!reconcile)current(guards,entry)
     return outcome.kind==='confirmed'?outcome.closureDigest:undefined
   }
-  async function adopt(entry:ManagedEntry,state:BootstrapReadState,guards:BootstrapGuards,cached?:ManagedReadyObservation,observation={revocation:entry.revocation}):Promise<BootstrapOutcome> {
+  async function adopt(entry:ManagedEntry,state:BootstrapReadState,guards:BootstrapGuards,cached?:ManagedReadyObservation,observation={revocation:entry.revocation},taskEntry:ManagedEntry=entry):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,stage=b.stage!
     cached?.assertCurrent()
     if(state.torn)return blocked(entry)
@@ -247,8 +258,27 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       receipts.push(checked.receipt)
     }
     targetCurrent(guards)
+    if (transitions && !b.taskBarrier?.completed) {
+      if (![11,12,13,CURRENT_FORMAT_VERSION].includes(state.meta!.formatVersion) || !state.stageBytes) return blocked(entry)
+      b.taskBarrier ??= transitions.bootstrap(b.invocation.targetSessionId,taskEntry,entry.route ?? {protocol:'public',invocation:b.invocation},'completed',entry.captureIO ? {claim:entry.captureIO.claim,held:entry.captureIO.held} : undefined)
+      b.taskBarrier.setMode('completed'); b.taskBarrier.setGuard(() => { if (guards.signal?.aborted || taskEntry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); cached?.assertCurrent(); targetCurrent(guards) })
+      try {
+        await b.taskBarrier.prepare(); await b.taskBarrier.settleHeader()
+        let headerOutcome = b.taskBarrier.headerOutcome ?? b.headerOutcome
+        if (!b.taskBarrier.headerCommitted || headerOutcome?.kind !== 'committed') {
+          const operation:BootstrapHeaderOperation = { invocation:stage.invocation, target:stage.originalTarget, stageBytes:state.stageBytes, headerBytes:Buffer.from(stage.headerBytes) }
+          if (entry.captureIO) entry.captureIO.settled = false
+          headerOutcome = await b.taskBarrier.runHeader(h => backend.reconcileBootstrapHeader!(b.invocation.targetSessionId,h,operation))
+          await settleCapture(entry)
+          if (headerOutcome.kind !== 'committed') return blocked(entry)
+          b.headerOutcome = headerOutcome; b.taskBarrier.markHeaderCommitted()
+        }
+        if (state.meta!.formatVersion < CURRENT_FORMAT_VERSION || b.taskBarrier.upgradePending) await b.taskBarrier.upgrade()
+        await b.taskBarrier.finishHeader()
+      } catch { return blocked(entry) }
+    }
     // Confirm the original birth frames before changing only the writable header.
-    if ([11,12].includes(state.meta!.formatVersion) && state.meta!.formatVersion < CURRENT_FORMAT_VERSION) await ownership.withSessionOperation(b.invocation.targetSessionId, async () => {
+    if (!transitions && [11,12].includes(state.meta!.formatVersion) && state.meta!.formatVersion < CURRENT_FORMAT_VERSION) await ownership.withSessionOperation(b.invocation.targetSessionId, async () => {
       if (!backend.upgradeSessionFormat) throw new Error('Bootstrap writer cannot upgrade current storage')
       const upgraded = await backend.upgradeSessionFormat(b.invocation.targetSessionId, state.meta!.formatVersion, CURRENT_FORMAT_VERSION)
       if (upgraded.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Bootstrap storage upgrade incomplete')
@@ -271,7 +301,8 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const flight=Promise.resolve().then(async():Promise<BootstrapOutcome>=>{
       try{
         await previous;assertCurrent()
-        const state=await read(invocation,route);assertCurrent()
+        if (transitions) { originalBootstrapEntries.set(entry,{id:invocation.targetSessionId,documents}); if (entry.cachedTaskBarrier?.retired) entry.cachedTaskBarrier = undefined; entry.cachedTaskBarrier ??= transitions.bootstrap(invocation.targetSessionId,entry,route,undefined); candidate.bootstrap!.taskBarrier = entry.cachedTaskBarrier; entry.cachedTaskBarrier.setGuard(() => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); assertCurrent(); targetCurrent(guards) }); await entry.cachedTaskBarrier.openOwner() }
+        const state=entry.cachedTaskBarrier ? await entry.cachedTaskBarrier.readState() : await read(invocation,route);assertCurrent()
         // Cached observation changes no original namespace/publication fence.
         // In particular, usable READY bytes cannot erase a foreign sibling or
         // an unfinished/conflicting original existing-empty publication.
@@ -298,28 +329,35 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(!sameBootstrapData(cached.prefix,state.prefix)||cached.view.formatVersion!==state.meta.formatVersion
           ||['semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion'].some(key=>!sameBootstrapData((cached.view.header as any)?.[key],(state.meta as any)[key])))return{kind:'refused',reason:'wrong-view'}
         checkBirth(stage,state);assertCurrent()
-        return await adopt(candidate,state,guards,cached)
+        const result = await adopt(candidate,state,guards,cached,undefined,entry); if (entry.cachedTaskBarrier?.completed) entry.cachedTaskBarrier = undefined; return result
       }catch(error){
         const code=(error as {code?:string}|null|undefined)?.code
         if(code==='FACT_TARGET_UNAVAILABLE')return blocked(candidate,'dependency-unavailable')
         if(error instanceof FactRecoveryRequiredError)return{kind:'refused',reason:'wrong-view'}
         return blocked(candidate)
       }
-    }).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
+    }).finally(async()=>{ if(entry.flight===flight)entry.flight=undefined; if(entry.cachedTaskBarrier && !entry.cachedTaskBarrier.completed && !entry.cachedTaskBarrier.taskIssued) { await entry.cachedTaskBarrier.close(); entry.cachedTaskBarrier=undefined } })
     entry.flight=flight;return flight
   }
   async function run(entry:ManagedEntry,guards:BootstrapGuards,observation={revocation:entry.revocation}):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,id=b.invocation.targetSessionId
+    if (documents.get(id) !== entry) throw new Error('Invalid original bootstrap entry')
+    originalBootstrapEntries.set(entry,{id,documents})
     let held=entry.captureIO?.held??heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>{})
-    if(entry.captureIO)entry.captureIO.activeIssue=()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
+    if(entry.captureIO)entry.captureIO.activeIssue=()=>{if (b.taskBarrier?.mode) b.taskBarrier.markHeaderIssued();current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
     try {
       await settleCapture(entry)
       await ownership.withSessionOperation(id,async()=>{mutations.assertWritableBootstrap(id);await ownership.ensureOwnership(id)})
+      if (transitions) {
+        if (b.taskBarrier?.retired || b.taskBarrier?.completed) b.taskBarrier = undefined
+        b.taskBarrier ??= transitions.bootstrap(id,entry,entry.route ?? {protocol:'public',invocation:b.invocation},undefined,entry.captureIO ? {claim:entry.captureIO.claim,held:entry.captureIO.held} : undefined)
+        b.taskBarrier.setGuard(() => { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); targetCurrent(guards) }); await b.taskBarrier.openOwner(); held = b.taskBarrier.held()
+      }
       if(b.pending&&entry.document) {
         const pending=b.pending,key='key' in pending?pending.key:'receipt' in pending?pending.receipt.key:undefined
         if(key){const outcome=await entry.document.reconcile(key);b.pending=outcome;if(outcome.kind==='committed'||outcome.kind==='absent')b.pending=undefined;else return blocked(entry)}
       }
-      let state=await read(b.invocation,entry.route)
+      let state=b.taskBarrier ? await b.taskBarrier.readState() : await read(b.invocation,entry.route)
       if(state.foreign)return {kind:'refused',reason:'conflict'}
       if(entry.route?.protocol==='child-v1'&&(state.kind==='unavailable'||state.kind==='absent'))return blocked(entry)
       if(state.stagePresent||state.promotionPresent){b.issued=true;if(!state.captureReservation&&!state.stageBytes)entry.headerUnknown=true}
@@ -345,7 +383,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       }
       if(b.stage?.captureReservation&&captureSupported()&&!entry.captureIO) {
         const io=await captureBundle(entry);held=io.held
-        io.activeIssue=()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true;io.settled=false}
+        io.activeIssue=()=>{if (b.taskBarrier?.mode) b.taskBarrier.markHeaderIssued();current(guards,entry);b.issued=true;entry.headerUnknown=true;io.settled=false}
       }
       if(b.issued&&!state.meta?.semanticSeed&&!state.captureReservation)entry.headerUnknown=true
       if(b.stage&&b.request) {
@@ -364,26 +402,37 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         b.stage=built.stage;b.operation=built.operation
       }
       if(publicationStatus(state,b.stage)!=='valid')return blocked(entry)
+      const predecessorBirth = !!state.meta?.semanticSeed && state.meta.formatVersion === 13 && !b.taskBarrier?.mode
+      if (transitions && !predecessorBirth) {
+        if (!b.taskBarrier?.mode && (b.request.target.kind === 'resume' || b.request.target.kind === 'new' && !!state.meta)) return {kind:'not-issued',reason:'unsupported'}
+        const barrier = b.taskBarrier; if (!barrier) return blocked(entry)
+        barrier.setMode(b.request.target.kind === 'existing-empty' ? 'existing-empty' : 'new'); barrier.setGuard(() => { if (barrier.headerWasIssued) { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}) } else current(guards,entry); targetCurrent(guards) })
+        try { await barrier.prepare(); held = barrier.held(); await barrier.settleHeader() }
+        catch (error) { const conflict = barrier.taskConflict; if (!barrier.taskIssued || conflict) { await barrier.close(); b.taskBarrier = undefined }; return conflict ? {kind:'refused',reason:'conflict'} : blocked(entry) }
+      }
       b.phase='header'
       if(entry.captureIO)entry.captureIO.settled=false
-      let outcome=await ownership.withSessionOperation(id,()=>backend.reconcileBootstrapHeader!(id,held,b.operation!))
+      let outcome = !predecessorBirth && b.taskBarrier?.headerCommitted && b.taskBarrier.headerOutcome?.kind === 'committed' ? b.taskBarrier.headerOutcome : !predecessorBirth && b.taskBarrier ? await b.taskBarrier.runHeader(h => backend.reconcileBootstrapHeader!(id,h,b.operation!)) : await ownership.withSessionOperation(id,()=>backend.reconcileBootstrapHeader!(id,held,b.operation!))
       await settleCapture(entry)
       if(outcome.kind!=='committed') {
         if(outcome.kind==='conflict')return {kind:'refused',reason:'conflict'}
         current(guards,entry)
-        outcome=await ownership.withSessionOperation(id,async()=>{
+        const issue = async (headerHeld: HeldFactOwner, beforeIssue: () => void) => {
           if(mutations.pendingWriteBehind(id)?.hasWork)return {kind:'conflict' as const}
-          const issuing=entry.captureIO?.issuer??issuingFactOwner(held,()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true})
+          const issuing=entry.captureIO?.issuer??issuingFactOwner(headerHeld,()=>{beforeIssue();current(guards,entry);b.issued=true;entry.headerUnknown=true})
           return backend.prepareBootstrapHeader!(id,issuing,b.operation!)
-        })
+        }
+        outcome = !predecessorBirth && b.taskBarrier ? await b.taskBarrier.runHeader(issue) : await ownership.withSessionOperation(id,()=>issue(held,()=>{}))
       }
       if(outcome.kind!=='committed') {
         if(outcome.kind==='conflict')return {kind:'refused',reason:'conflict'}
         if(!b.issued&&outcome.kind==='not-issued')return {kind:'not-issued',reason:outcome.reason}
         return blocked(entry)
       }
+      if (predecessorBirth && b.taskBarrier) { try { await b.taskBarrier.settleHeader() } catch { return blocked(entry) } }
+      if (!predecessorBirth && b.taskBarrier) { b.headerOutcome = outcome; b.taskBarrier.markHeaderCommitted(); try { await b.taskBarrier.finishHeader() } catch { return blocked(entry) } }
       entry.headerUnknown=false
-      state=await read(b.invocation,entry.route)
+      state=b.taskBarrier && !b.taskBarrier.completed ? await b.taskBarrier.readState() : await read(b.invocation,entry.route)
       if(!state.meta||!state.events||!state.prefix)return blocked(entry)
       const doc=entry.document??attach(id,entry,buildSession(state.meta,state.events),state.prefix)
       b.phase='dependencies'
@@ -422,16 +471,16 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           return blocked(entry,result.kind==='not-issued'&&result.code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown')
         }
         targetCurrent(guards)
-        state=await read(b.invocation,entry.route)
+        state=b.taskBarrier && !b.taskBarrier.completed ? await b.taskBarrier.readState() : await read(b.invocation,entry.route)
       }
       const adopted=await adopt(entry,state,guards,undefined,observation)
       return adopted.kind==='already-ready'?{...adopted,kind:'ready'}:adopted
     } catch(error) {
-      const code=(error as {code?:string}).code
+      const code=(error as {code?:string}|null|undefined)?.code
       if(code==='FACT_TARGET_UNAVAILABLE')return blocked(entry,'dependency-unavailable')
       if(code==='FACT_PRECONDITION_STALE'||code==='FACT_CANCELLED')return b.issued?blocked(entry,code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown'):{kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
-      return b.issued?blocked(entry):{kind:'refused',reason:'manifest-invalid'}
-    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)} }
+      return b.issued || b.taskBarrier?.taskIssued ? blocked(entry) : {kind:'refused',reason:'manifest-invalid'}
+    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)}; if (b.taskBarrier && !b.taskBarrier.completed && !b.taskBarrier.taskIssued && !b.issued) { await b.taskBarrier.close(); b.taskBarrier = undefined } }
   }
   function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation}):Promise<BootstrapOutcome> {
     let captured: BootstrapInvocation
@@ -471,7 +520,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       entry.bootstrap!.request??=r
     }else{entry={route,bootstrap:{invocation:captured,request:r,phase:'header',issued:false}};documents.set(id,entry)}
     const owned=entry
-    const flight=run(owned,guards).finally(()=>{if(owned.flight===flight)owned.flight=undefined;if(!owned.bootstrap!.issued&&!owned.document&&documents.get(id)===owned)documents.delete(id)})
+    const flight=run(owned,guards).finally(()=>{if(owned.flight===flight)owned.flight=undefined;if(!owned.bootstrap!.issued&&!owned.bootstrap!.taskBarrier&&!owned.document&&documents.get(id)===owned)documents.delete(id)})
     owned.flight=flight;return flight
   }
   function captureTarget(input:BootstrapCaptureRoute,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>):Promise<BootstrapOutcome> {
