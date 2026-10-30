@@ -7,7 +7,7 @@ import {createProjectScopeBroker} from '../src/project-scope.ts'
 import {createNativeContextRuntime} from '../src/context-runtime.ts'
 
 it('catalog revocation never turns a durable project binding into workspace or reference authority',async()=>{
-  const base=resolve('build/native-project-revocation');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'scope-'))
+  const base=process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT??resolve('build/native-project-revocation');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'scope-'))
   const workspace=join(root,'workspace'),other=join(root,'other'),reference=join(root,'reference')
   for(const path of [workspace,other,reference])await mkdir(path)
   await writeFile(join(workspace,'work.ts'),'export const WORKSPACE_SECRET = true')

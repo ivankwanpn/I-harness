@@ -1,7 +1,7 @@
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import { canonicalJsonData, validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
+import { canonicalJsonData, validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, validateSubagentHeader, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMetadataUpdate } from "./format.ts"
 import { createSessionFile, stageOwnedSessionFile, replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
@@ -9,6 +9,8 @@ import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact
 import { upgradeFactJournal, stageOwnedUpgrade } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
+import { createBootstrapCaptureIO } from './backend/bootstrap-capture-io.ts'
+import { createSelectedFactJournalBackend } from './backend/selected-fact-journal.ts'
 import { createJsonlProcessReadCapability } from './backend/process-read.ts'
 import { assembleSessionCoordinatorWithProcessStorage, type TaskTransitionBackendSession, type TaskTransitionConfiguration } from '@i-harness/session-persistence/internal/process-read-assembly'
 import { routeInvocation, type CoordinatorOptions, type SessionCoordinator, type BootstrapRoute, type BootstrapReadState } from '@i-harness/session-persistence'
@@ -110,8 +112,9 @@ export function createJsonlTaskTransitionCoordinator(root: string, options: Coor
 // (honest-bounding: it may have content — never guessed blank).
 const BLANK_PROBE_MAX_BYTES = 1024
 
-export function createJsonlBackend(root: string): PersistenceBackend {
+export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const rootPath = resolve(root)
+  const captureIO = createBootstrapCaptureIO()
   const artifactPath = (id: string, suffix: string): string => {
     const portableId = id.replace(/\\/g, "/")
     const candidate = resolve(rootPath, `${portableId}${suffix}`)
@@ -200,10 +203,12 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
     return serializeHeader({ ...meta, journal }) + '\n'
   }
-  const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath)
-  const backend: PersistenceBackend = {
+  const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO)
+  const backend: PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>; selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } = {
     ...createFactJournalBackend(filePath, assertNotDeleted),
     ...bootstrapBackend,
+    // Original private selected lane shares capture IO with bootstrap.
+    selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO),
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.
@@ -212,6 +217,8 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     deletionReceipt,
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
+      validateSubagentHeader(meta)
+      if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy create cannot install selected results')
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId, true)
       if (meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("new session writers require current format; downgrade refused")

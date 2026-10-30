@@ -9,6 +9,7 @@ import { seedHash } from './seed-digest.ts'
 import { historyFact } from './history/facts.ts'
 import { originalRewindWindows } from '../projection/rewind.ts'
 import type { SelectionSource } from './passive-seed-context.ts'
+import { readOwnedSelectionMetadata } from '../managed/view.ts'
 
 export type SemanticTurnBoundary = { last: number; localCutSeq?: number }
 /** Closure precedes omission: interleaved complete siblings cannot escape an
@@ -22,9 +23,11 @@ function sourceTurns(view: SessionView) {
 }
 /** One structural source for conversation selection and passive capture. */
 export function buildSelectionSource(view: SessionView): SelectionSource {
-  const index = createSemanticSourceConversationIndex(view.events, view.formatVersion, view.header)
+  const owned = readOwnedSelectionMetadata(view)
+  const index = owned ? undefined : createSemanticSourceConversationIndex(view.events, view.formatVersion, view.header)
+  const facts = owned?.facts ?? index!.resultFacts()
   return { view, coordinates: view.events.map((event, index) => ({ index, seq: event.seq ?? index })),
-    turns: sourceTurns(view), history: index.history(), originalWindows: originalRewindWindows(view) }
+    facts, turns: historyTurns({ length: facts.length, get: index => facts[index]! }), history: owned?.history ?? index!.history(), originalWindows: originalRewindWindows(view) }
 }
 function validSelection(selection: SeedSelection): boolean {
   if (!selection || typeof selection !== 'object') return false
@@ -40,7 +43,7 @@ export function resolveSeedBoundary(view: SessionView, selection: SeedSelection,
   if (selection.kind !== 'completed') return { kind: 'resolved', boundary: { last: turns.total } }
   if (selection.atSeq !== undefined) {
     const record = view.events.find(event => event.seq === selection.atSeq)
-    if (record?.type === 'conversation/seed-manifest') return { kind: 'refused', reason: 'ambiguous-boundary' }
+    if (record?.type === 'conversation/seed-manifest' || record?.type === 'conversation/seed-results') return { kind: 'refused', reason: 'ambiguous-boundary' }
     if (record?.type === 'conversation/seed-group') {
       const extent = record.group.extent
       if (extent.kind !== 'framed' || extent.first !== extent.last) return { kind: 'refused', reason: 'ambiguous-boundary' }

@@ -35,8 +35,9 @@ export type SessionEvent =
   | (
     | import('./runtime-context.ts').RuntimeContextRecordV1
     | { type: "turn/start"; seq?: number }
-    | import('./bootstrap.ts').SeedManifestRecord
+    | import('./bootstrap.ts').SeedManifestEvent
     | import('./bootstrap.ts').SeedGroupRecord
+    | import('./bootstrap.ts').SeedResultsRecordV1
     | import('./bootstrap.ts').BootstrapCompleteRecord
     | { type: "step/start"; actionId?: string; attemptId?: string; seq?: number }
     | { type: "step/failed"; seq?: number }

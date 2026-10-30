@@ -23,6 +23,9 @@ import { dispatchGatewayProjectFiles } from "./project-files.ts"
 import { dispatchGatewayContentSearch } from "./project-content-search.ts"
 import { usageRequest } from "./usage-wire.ts"
 import { instructionRequest } from './instructions/wire.ts'
+import { canonicalJsonData } from '@i-harness/core-session'
+import { ForkAdmissionError } from '@i-harness/session-persistence'
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -101,11 +104,14 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
 } {
   let initialized = false
   let closed = false
+  let closing: Promise<void> | undefined
+  const forkRequestContext = new AsyncLocalStorage<{ active: boolean }>()
   const activePrompts = new Map<string, number>()
   const compacting = new Map<string, AbortController>()
   const compactJobs = new Set<Promise<unknown>>()
   const probes = handlers.provider ? createProviderProbes(handlers.provider) : undefined
   const modelSwitches = new Map<string, Promise<unknown>>()
+  const forkSources = new Map<string, { identity: string; flight: Promise<unknown> }>()
 
   return {
     async handleLine(line) {
@@ -121,6 +127,28 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
 
       if (!message.method.startsWith("desktop/")) {
+        if (['session/fork/prepare', 'session/fork/begin', 'session/fork/retry'].includes(message.method)) {
+          const request = { active: true }
+          try { await forkRequestContext.run(request, () => base.handleLine(line, { fork: { async withNewWork<T>(sourceSessionId: string, _operationId: string, use: () => Promise<T>): Promise<T> {
+            if (closed) throw new ForkAdmissionError('cancelled')
+            // Base SDK validates the complete operation before invoking this
+            // host-only callback. Identity here restricts concurrent admission.
+            const identity = canonicalJsonData(asRecord(message.params)?.operation)
+            const prior = forkSources.get(sourceSessionId)
+            if (prior) {
+              if (prior.identity === identity) return prior.flight as Promise<T>
+              throw new ForkAdmissionError('busy')
+            }
+            if (activePrompts.has(sourceSessionId) || compacting.has(sourceSessionId) || modelSwitches.has(sourceSessionId)) throw new ForkAdmissionError('busy')
+            if (!handlers.sessions) throw new ForkAdmissionError('unsupported')
+            const owned = { identity, flight: Promise.resolve().then(() => handlers.sessions!.withForkSource(sourceSessionId, use)) }
+            forkSources.set(sourceSessionId, owned)
+            try { return await owned.flight }
+            finally { if (forkSources.get(sourceSessionId) === owned) forkSources.delete(sourceSessionId) }
+          } } })) }
+          finally { request.active = false }
+          return
+        }
         if (message.method === "session/create" && asRecord(message.params)?.clientToken !== undefined && handlers.draftSession) {
           if (!initialized) { send(makeFailure(message.id, INVALID_REQUEST, "not initialized: send initialize first")); return }
           try { send(makeSuccess(message.id, await handlers.draftSession(asRecord(message.params)!.clientToken as string))) }
@@ -129,7 +157,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         }
         if (message.method === "shutdown") for (const controller of compacting.values()) controller.abort()
         const scopedSessionId = asRecord(message.params)?.sessionId
-        if (typeof scopedSessionId === "string" && modelSwitches.has(scopedSessionId)
+        if (typeof scopedSessionId === "string" && (modelSwitches.has(scopedSessionId) || forkSources.has(scopedSessionId))
           && ["session/prompt", "session/model/set", "session/rewind/execute"].includes(message.method)) {
           send(makeFailure(message.id, INVALID_REQUEST, "session model change is running", { reason: "session_busy" })); return
         }
@@ -269,7 +297,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         const params = asRecord(message.params)
         const sessionId = params?.sessionId
         if (typeof sessionId !== "string" || !sessionId || sessionId.length > 128) { send(makeFailure(message.id, INVALID_PARAMS, "Invalid session")); return }
-        if (compacting.has(sessionId) || modelSwitches.has(sessionId)) { send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return }
+        if (compacting.has(sessionId) || modelSwitches.has(sessionId) || forkSources.has(sessionId)) { send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return }
         try {
           const operation = message.method.slice("desktop/session/input/".length)
           let result: unknown
@@ -505,11 +533,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         const sessionId = params?.sessionId
         const action = params?.action
         const navigationOnly = ["pin", "unpin", "read", "unread"].includes(String(action))
-        if (typeof sessionId !== "string" || !sessionId || !["rename", "archive", "restore", "fork", "pin", "unpin", "read", "unread"].includes(String(action))
+        if (typeof sessionId !== "string" || !sessionId || !["rename", "archive", "restore", "pin", "unpin", "read", "unread"].includes(String(action))
           || (action === "rename" && (typeof params?.title !== "string" || !params.title.trim() || params.title.length > 256))) {
           send(makeFailure(message.id, INVALID_PARAMS, "Invalid session management request")); return
         }
-        if (!navigationOnly && (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId))) {
+        if (!navigationOnly && (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId) || forkSources.has(sessionId))) {
           send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return
         }
         const job = handlers.sessions.mutate(sessionId, action as import("./session-management.ts").SessionManagementAction, params?.title as string | undefined)
@@ -708,21 +736,31 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
 
       send(makeFailure(message.id, METHOD_NOT_FOUND, `unknown method: ${message.method}`))
     },
-    async close() {
-      await handlers.projectContentSearch?.close()
-      if (closed) return
+    close() {
+      if (forkRequestContext.getStore()?.active) return Promise.reject(new Error('Gateway fork callback cannot close its own request'))
+      if (closing) return closing
       closed = true
-      await probes?.close()
-      await Promise.allSettled(modelSwitches.values())
-      for (const controller of compacting.values()) controller.abort()
-      for (const sessionId of activePrompts.keys()) {
-        const id = `desktop-internal-${randomUUID()}`
-        internalIds.add(id)
-        try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
-        finally { internalIds.delete(id) }
-      }
-      await Promise.allSettled([...compactJobs])
-      await base.close()
+      const attempt = (async () => {
+        const failures: unknown[] = []
+        // Independent auxiliary cleanup cannot skip the original SDK join.
+        try { await handlers.projectContentSearch?.close() } catch (cause) { failures.push(cause) }
+        try { await probes?.close() } catch (cause) { failures.push(cause) }
+        await Promise.allSettled(modelSwitches.values())
+        for (const controller of compacting.values()) controller.abort()
+        for (const sessionId of activePrompts.keys()) {
+          const id = `desktop-internal-${randomUUID()}`
+          internalIds.add(id)
+          try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
+          catch (cause) { failures.push(cause) }
+          finally { internalIds.delete(id) }
+        }
+        await Promise.allSettled([...compactJobs])
+        try { await base.close() } catch (cause) { failures.push(cause) }
+        if (failures.length) throw new AggregateError(failures, 'Gateway router cleanup incomplete')
+      })()
+      closing = attempt
+      void attempt.catch(() => { if (closing === attempt) closing = undefined })
+      return attempt
     },
   }
 }

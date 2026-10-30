@@ -1,7 +1,7 @@
 import type { SessionView } from '../managed/types.ts'
 import { captureSelectedData } from '../serialization/bounded-json.ts'
 import type { HistoryItem } from './history/types.ts'
-import type { SeedArtifact, SeedItem, SeedOrigin, SeedOriginAddress, SeedOmission, SeedResult } from './seed-types.ts'
+import type { SeedArtifact, SeedItem, SeedOriginAddress, SeedOmission, SeedResult } from './seed-types.ts'
 import { canonicalJsonData } from '../serialization/json-data.ts'
 import { seedHash } from './seed-digest.ts'
 import { seedInvalid } from './seed-codec.ts'
@@ -9,22 +9,28 @@ import { renderConversationItems } from './render-items.ts'
 import { eventArchive } from './archive.ts'
 import { copyConversationData } from './render.ts'
 import type { selectSeedHistory } from './seed-selection.ts'
+import { createSeedOriginNormalizer, consumeSelectedOriginPlan, type SeedOriginNormalizer } from './seed-origins.ts'
+import type { CompletedPassiveContext } from './passive-seed-context.ts'
+import type { HeldSelectedResults } from './selected-results-types.ts'
 
 /** One selected payload capture. Origin and dependency normalization subsequently
  * traverses these captured data only, never the source archive bodies again. */
 export function captureSeedSelection(view: SessionView, selected: Extract<ReturnType<typeof selectSeedHistory>, { kind: 'selected' }>) {
+  return captureSelection(view, selected)
+}
+export function captureSeedSelectionForResults(context: CompletedPassiveContext, results: HeldSelectedResults) {
+  const plan = consumeSelectedOriginPlan(context, results)
+  results.assertCurrent()
+  const captured = captureSelection(context.source.view, context.selected, plan)
+  results.assertCurrent()
+  return captured
+}
+function captureSelection(view: SessionView, selected: Extract<ReturnType<typeof selectSeedHistory>, { kind: 'selected' }>, fixed?: SeedOriginNormalizer) {
   const descriptors = selected.groups.flatMap(group => group.items)
   const projection = renderConversationItems(eventArchive(view.events), { items: descriptors, diagnostics: selected.diagnostics }, { header: view.header, capturePayload: captureSelectedData })
-  const inherited: SeedOrigin[] = [], artifacts: SeedArtifact[] = [], omissions: SeedOmission[] = []
-  const originSlots = new Map<string, number>(), artifactSlots = new Map<string, number>()
-  const origin = (manifest: Extract<SessionView['events'][number], { type: 'conversation/seed-manifest' }>, old: number) => {
-    const descriptor = manifest.origins[old]
-    if (!Number.isSafeInteger(old) || old < 0 || !descriptor) seedInvalid()
-    const key = canonicalJsonData(descriptor)
-    let slot = originSlots.get(key)
-    if (slot === undefined) { slot = inherited.length + 1; inherited.push(copyConversationData(descriptor)); originSlots.set(key, slot) }
-    return slot
-  }
+  const artifacts: SeedArtifact[] = [], omissions: SeedOmission[] = []
+  const normalizer = fixed ?? createSeedOriginNormalizer(), origin = normalizer.origin
+  const artifactSlots = new Map<string, number>()
   const addArtifact = (ref: SeedArtifact['ref'], origins: SeedArtifact['origins'], use: SeedArtifact['uses'][number]) => {
     const identity = `${ref.id}:${ref.revision}`
     let index = artifactSlots.get(identity)
@@ -122,14 +128,13 @@ export function captureSeedSelection(view: SessionView, selected: Extract<Return
     return { ...base, kind: 'exchange', calls, results, sourceAcceptance: rendered.exchange?.acceptance ?? 'legacy-inferred' }
   }) }))
   // Normalize every index in the captured DTO, including the old slot zero.
-  const sorted = inherited.map((descriptor, index) => ({ descriptor, old: index + 1, key: canonicalJsonData(descriptor) })).sort((a, b) => Buffer.compare(Buffer.from(a.key), Buffer.from(b.key)))
-  const slots = new Map(sorted.map((entry, index) => [entry.old, index + 1]))
+  const inheritedOrigins = fixed ? normalizer.inheritedOrigins() : normalizer.finalize()
   const rebased = new WeakSet<object>()
   const rebase = (value: unknown): void => {
     if (!value || typeof value !== 'object') return
     if (rebased.has(value)) return
     rebased.add(value)
-    if (Object.hasOwn(value, 'origin')) { const address = value as { origin: number }; if (address.origin !== 0) { const slot = slots.get(address.origin); if (slot === undefined) seedInvalid(); address.origin = slot } }
+    if (Object.hasOwn(value, 'origin') && !fixed) { const address = value as { origin: number }; address.origin = normalizer.remap(address.origin) }
     for (const child of Object.values(value)) rebase(child)
   }
   // Rendered messages are immutable; only provenance descriptors have origins.
@@ -145,5 +150,5 @@ export function captureSeedSelection(view: SessionView, selected: Extract<Return
     const { digest: _, ...metadata } = omission, preimage = { ...metadata, relatedInputs: related[index]! }
     return { ...preimage, digest: seedHash('ih.semantic-seed.omission.v1', preimage) }
   })
-  return { inheritedOrigins: sorted.map(entry => entry.descriptor), groups, artifacts, omissions: normalizedOmissions }
+  return { inheritedOrigins, groups, artifacts, omissions: normalizedOmissions }
 }

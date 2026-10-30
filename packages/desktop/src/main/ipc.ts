@@ -23,6 +23,8 @@ import type { AttachmentDraftStore } from "./attachment-draft-store.ts"
 import { listDesktopTerminalShellOptions } from "../../../desktop-gateway/src/terminal-shells.ts"
 import type { attachNativeWindow } from "./native-window.ts"
 import type { createBrowserSurface } from "./browser-surface.ts"
+import { readForkPrepareRequest, readForkPrepareResult, readForkOperation, readForkOutcome, readForkHostErrorData } from '@i-harness/sdk/fork'
+import { RpcError } from '@i-harness/sdk'
 
 export interface DesktopIpcDependencies {
   catalog: WorkspaceCatalog
@@ -382,10 +384,35 @@ export async function dispatchDesktopRequest(
       }
       return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, params, 120000)
     }
+    case 'desktop/session/fork/prepare': {
+      if (Object.keys(value).length !== 3 || Object.keys(value).some(key => !['kind', 'workspaceId', 'request'].includes(key))) throw new Error('Invalid fork preparation request')
+      const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId'), request = readForkPrepareRequest(value.request)
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies), versions = runtime.info.capabilities['session-fork-bootstrap']
+      if (!Array.isArray(versions) || !versions.includes('1')) throw new Error('Session fork unavailable')
+      const result = readForkPrepareResult(await runtime.client.request('session/fork/prepare', request))
+      if (result.kind === 'prepared' && (result.prepared.core.sourceSessionId !== request.sourceSessionId
+        || JSON.stringify(result.prepared.core.selection) !== JSON.stringify(request.selection ?? { kind: 'completed' }))) throw new Error('Invalid fork preparation response')
+      return result
+    }
+    case 'desktop/session/fork/begin':
+    case 'desktop/session/fork/retry': {
+      if (Object.keys(value).length !== 3 || Object.keys(value).some(key => !['kind', 'workspaceId', 'operation'].includes(key))) throw new Error('Invalid fork operation request')
+      const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId'), operation = readForkOperation(value.operation)
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies), versions = runtime.info.capabilities['session-fork-bootstrap']
+      if (!Array.isArray(versions) || !versions.includes('1')) throw new Error('Session fork unavailable')
+      try { return readForkOutcome(await runtime.client.request(value.kind === 'desktop/session/fork/begin' ? 'session/fork/begin' : 'session/fork/retry', { operation }), operation) }
+      catch (cause) {
+        if (!(cause instanceof RpcError)) throw cause
+        // Electron invocation errors omit custom data. Only this existing,
+        // operation-bound safe DTO crosses as data; never arbitrary RPC fields.
+        try { return readForkHostErrorData(cause.data, operation) }
+        catch { throw new Error('Invalid session fork response') }
+      }
+    }
     case "desktop/session/manage": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
-      if (!["rename", "archive", "restore", "fork", "pin", "unpin", "read", "unread"].includes(String(value.action))) throw new Error("invalid session action")
+      if (!["rename", "archive", "restore", "pin", "unpin", "read", "unread"].includes(String(value.action))) throw new Error("invalid session action")
       const title = value.action === "rename" ? requireNonEmpty(value.title, "title") : undefined
       if (title && title.length > 256) throw new Error("title is too long")
       return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, { sessionId, action: value.action, ...(title ? { title } : {}) })

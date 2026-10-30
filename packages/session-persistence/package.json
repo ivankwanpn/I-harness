@@ -8,7 +8,8 @@
     "./fork-contract": "./src/fork-contract.ts",
     "./internal/process-read-assembly": "./src/process-read-assembly.ts",
     "./internal/process-read-context": "./src/process-read-context.ts",
-    "./internal/task-document-operations": "./src/task-document-internal.ts"
+    "./internal/task-document-operations": "./src/task-document-internal.ts",
+    "./internal/selected-source-owner": "./src/selected-source-owner.ts"
   },
   "scripts": {
     "test": "vitest run",

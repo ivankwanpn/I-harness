@@ -15,6 +15,7 @@ import type { DiagnosticsRequest } from "@i-harness/desktop-gateway"
 import type { NotificationHistoryRequest } from "../main/notification-history.ts"
 import type { MemoryAuthoringRequest } from "@i-harness/desktop-gateway"
 import type { DraftRequest } from "./attachment-drafts.ts"
+import type { ForkPrepareRequest, ForkOperation } from '@i-harness/sdk/fork'
 import type { ContextSubsystemRequest } from "@i-harness/desktop-gateway"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
@@ -98,7 +99,9 @@ export type DesktopRequest =
   | { kind: "desktop/rewind/plan"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation" }
   | { kind: "desktop/rewind/execute"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation"; fingerprint: string }
   | { kind: "desktop/session/archived"; workspaceId: string }
-  | { kind: "desktop/session/manage"; workspaceId: string; sessionId: string; action: "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread"; title?: string }
+  | { kind: 'desktop/session/fork/prepare'; workspaceId: string; request: ForkPrepareRequest }
+  | { kind: 'desktop/session/fork/begin' | 'desktop/session/fork/retry'; workspaceId: string; operation: ForkOperation }
+  | { kind: "desktop/session/manage"; workspaceId: string; sessionId: string; action: "rename" | "archive" | "restore" | "pin" | "unpin" | "read" | "unread"; title?: string }
   | { kind: "session/model/set"; workspaceId: string; sessionId: string; selection: SessionModelSelection }
   | { kind: "desktop/provider/directory"; workspaceId: string }
   | { kind: "desktop/provider/probe"; workspaceId: string; id: string; token: string }

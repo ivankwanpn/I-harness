@@ -31,7 +31,7 @@ export interface ContextOutputService {
   closeLegacyForkTransfer(scope: import('./legacy/fork-types.ts').LegacyForkTransferScope): Promise<void>;
   readLegacyObserved(access: ContextAccess, query: import('./legacy/fork-types.ts').LegacyReadQuery, observation: import('./legacy/fork-types.ts').LegacyReadObservation): Promise<ContextReadResult>;
   searchLegacyObserved(access: ContextAccess, query: import('./legacy/fork-types.ts').LegacySearchQuery, observation: import('./legacy/fork-types.ts').LegacyReadObservation): Promise<ContextSearchResult>;
-  registerSeedDependencyTransfer(access: import('./artifact/bootstrap-transfer.ts').SeedDependencyHostAccess): import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope;
+  registerSeedDependencyTransfer(access: import('./artifact/bootstrap-transfer.ts').SeedDependencyHostAccess, originalPublication?: 'original-publication'): import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope;
   confirmSeedDependencies(scope: import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope, request: import('@i-harness/core-session').BootstrapDependencyRequest, current: () => boolean): Promise<import('@i-harness/core-session').BootstrapDependencyOutcome>;
   reconcileSeedDependencies(scope: import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope, request: import('@i-harness/core-session').BootstrapDependencyRequest): Promise<import('@i-harness/core-session').BootstrapDependencyOutcome>;
   /** Host composition only; model tools expose read DTOs, never this method. */

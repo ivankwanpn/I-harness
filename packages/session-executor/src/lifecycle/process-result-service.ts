@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createContextOutputService, type ContextCapture, type ContextOutputService } from '@i-harness/context-output'
 import type { ManagedArtifactRef } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
+import { inspectSelectedTarget } from '@i-harness/session-persistence/internal/selected-source-owner'
+import { canonicalJsonData } from '@i-harness/core-session'
 import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
+import { acquireSelectedMetadata as acquireCoreSelectedMetadata, selectedMetadataCleanupFor,selectedLegacyTransferFor } from '../../../context-output/src/service.ts'
 
 type ServiceOptions = Parameters<typeof createContextOutputService>[0]
 type Policy = Omit<ServiceOptions, 'authorizeResult'> & {
@@ -75,5 +78,18 @@ export function createProcessAwareResultService(policy: Policy) {
     })
   } })
   owners.set(service, bridge)
-  return { service, withPage: bridge.withPage.bind(bridge), retireBridge() { retired = true } }
+  const acquireSelectedMetadata=async(observation:Parameters<typeof acquireCoreSelectedMetadata>[1])=>{
+    if(retired)throw Error('Original result service retired')
+    const selected=await acquireCoreSelectedMetadata(service,observation)
+    if(retired){await selected.close();throw Error('Original result service retired')}
+    return selected
+  }
+  function acquireSelectedLegacyTransfer(coordinator:SessionCoordinator,target:object,capture:import('../../../context-output/src/legacy/fork-types.ts').SelectedLegacyCapture) {
+    if(retired)throw Error('Original result service retired')
+    const actual=inspectSelectedTarget(coordinator,target)
+    if(canonicalJsonData(actual.facts)!==canonicalJsonData(capture.facts)||canonicalJsonData(actual.seed.records)!==canonicalJsonData(capture.targetView.events))throw Error('Original selected seed required')
+    const owner=selectedLegacyTransferFor(service),scope=owner.register(capture)
+    return Object.freeze({assertCurrent:()=>owner.assertCurrent(scope),confirm:()=>owner.confirm(scope),reconcile:()=>owner.reconcile(scope),close:()=>owner.closeScope(scope)})
+  }
+  return { service, acquireSelectedLegacyTransfer, withPage: bridge.withPage.bind(bridge), acquireSelectedMetadata, selectedMetadataCleanupFor:(error:unknown)=>selectedMetadataCleanupFor(service,error), retireBridge() { retired = true } }
 }

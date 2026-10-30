@@ -104,6 +104,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       let handle:FileHandle|undefined
       try {
         const bytes=await readFile(filePath(id)),end=bytes.indexOf(10),meta=parseHeader(bytes.subarray(0,end).toString('utf8'))
+        if(meta.semanticSeed?.version===3)throw new TypeError('Legacy acknowledgment cannot confirm selected results')
         const decoded=readBootstrapFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
         if(decoded.torn)return {kind:'unknown'}
         readFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
@@ -119,6 +120,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       const path = filePath(id), bytes = await readFile(path)
       const end = bytes.indexOf(0x0a)
       const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
+      if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy owned prefix cannot repair selected results')
       if (![6, 7, 8, 9, 10, 11, 12, 13].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
       const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal, meta.formatVersion, meta)
       const handle = await open(path, 'r+')

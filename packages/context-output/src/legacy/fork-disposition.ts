@@ -8,7 +8,7 @@ import { recordHash } from './fork-codec.ts'
 import type { LegacyRoot, LegacyCommitment } from './fork-types.ts'
 import { fundingParents, nativeFundingFile, fileFields, fundingDescription, assertFundingFile, withFundingFile, sum, type FundingFile, type FundingDescription, type FundingBatchScope, type LegacyFundingBatchOwner } from './funding-batch.ts'
 
-export type Terminal = { version: 1; kind: 'legacy-fork-revoked'; bindingDigest: string; planDigest: string }
+export type Terminal = { version: 1 | 2; kind: 'legacy-fork-revoked'; bindingDigest: string; planDigest: string }
   | ({ version: 1; kind: 'legacy-ref-expired'; workspaceId: string } & LegacyCommitment)
 const wire = (generation: 0 | 1, tuple: Terminal) => Buffer.from(JSON.stringify({ version: 1, generation, status: generation === 0 ? 'live' : 'terminal', tuple }))
 function encoded(generation: 0 | 1, tuple: Terminal, capacity: number): Buffer {
@@ -20,7 +20,7 @@ function encoded(generation: 0 | 1, tuple: Terminal, capacity: number): Buffer {
 export function slotCapacity(tuple: Terminal): number {
   return Math.max(...([0, 1] as const).map(generation => { const payload = wire(generation, tuple); return 8 + String(payload.length).length + 1 + 64 + 1 + payload.length }))
 }
-export const revokedTuple = (root: LegacyRoot): Terminal => ({ version: 1, kind: 'legacy-fork-revoked', bindingDigest: recordHash('binding', root.binding), planDigest: recordHash('plan', root) })
+export const revokedTuple = (root: LegacyRoot): Terminal => ({ version: root.version, kind: 'legacy-fork-revoked', bindingDigest: recordHash('binding', root.binding,root.version), planDigest: recordHash('plan', root,root.version) })
 export const expiredTuple = (workspaceId: string, c: LegacyCommitment): Terminal => ({ version: 1, kind: 'legacy-ref-expired', workspaceId, refId: c.refId, revision: c.revision, metadataDigest: c.metadataDigest, metadataEncodedBytes: c.metadataEncodedBytes, expiresAt: c.expiresAt })
 export const expiryBase = (directory: string, c: LegacyCommitment) => resolve(directory, 'legacy-expiry-v1', c.refId, c.metadataDigest, 'expiry')
 async function originalSlot(directory: string, path: string, handle?: import('node:fs/promises').FileHandle): Promise<void> {

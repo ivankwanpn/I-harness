@@ -24,7 +24,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id))
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id))
     entry.document=document
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
@@ -38,11 +38,11 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       finally {token?.end(outcome)}
     }
     if(entry.revoked)document.revokeNewWork()
-    if(!entry.bootstrap)resolved.set(id,document)
+    if(!entry.bootstrap&&!entry.selected)resolved.set(id,document)
     return document
   }
   function assertEntry(entry:ManagedEntry|undefined) {
-    if(entry?.bootstrap && !entry.ready)throw new FactRecoveryRequiredError()
+    if((entry?.bootstrap||entry?.selected) && !entry.ready)throw new FactRecoveryRequiredError()
   }
   async function closeOne(id:string) {
     assertTaskOutside(id)
@@ -55,11 +55,11 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
     if(entry.document)await entry.document.close()
-    else {await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
+    else {if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
     outcome='settled'
     } finally { token?.end(outcome) }
   }
-  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions)
+  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)})
   return {
     ...bootstrap,
     captureProcessRead(document: ManagedDocument, documentKeys: readonly string[]) {
@@ -84,7 +84,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const { id, entry } = association
       const readiness = captureManagedParentReadiness(document, ownership)
       const check = () => {
-        if (documents.get(id) !== entry || entry.document !== document || entry.revoked || (entry.bootstrap && !entry.ready)) throw new FactRecoveryRequiredError()
+        if (documents.get(id) !== entry || entry.document !== document || entry.revoked || ((entry.bootstrap||entry.selected) && !entry.ready)) throw new FactRecoveryRequiredError()
         readiness.assertCurrent()
       }
       check()

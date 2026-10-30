@@ -94,7 +94,7 @@ export function projectPassiveCodeStore(context: CompletedPassiveContext): Owned
   const local = projectLocalCodeStore(context), inherited = context.boundary.inherited
   if (inherited.kind === 'empty') return local
   const manifest = context.source.view.events[inherited.manifest.index]
-  if (manifest?.type !== 'conversation/seed-manifest' || manifest.version !== 2) throw new TypeError('Invalid semantic seed')
+  if (manifest?.type !== 'conversation/seed-manifest' || !(manifest.version === 2 || manifest.version === 3 && manifest.profile === 'public-completed')) throw new TypeError('Invalid semantic seed')
   const data = manifest.passive.codeStore, expanded = expandInheritedCodeStore(data)
   const selectedBase = inherited.kind === 'completed' ? data.completed.find(entry => entry.turn === inherited.turn)?.cut : data.latest
   if (selectedBase === undefined) throw new TypeError('Invalid semantic seed')

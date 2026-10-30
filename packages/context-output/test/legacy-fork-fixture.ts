@@ -150,7 +150,7 @@ export async function legacyFixture(options: { observations?: number; disabled?:
     return { sessionId: 'target', sourceId: contextSourceIdentity('workspace', project.primaryRoot, scope.scope),
       bootstrap: { invocation, manifestDigest: seed.manifestDigest, seedDigest: seed.seedDigest },
       assertCurrent() { ready.assertReady(); if (getter!().revision !== scope.revision) throw Error('Project scope changed') }, localVisible: () => false,
-      anchorVisible(anchor) { return anchor.kind === 'manifest' || ready.view.events.some(e => e.type === 'conversation/seed-group' && e.ordinal === anchor.ordinal) } }
+      anchorVisible(anchor) { return anchor.kind === 'manifest' || anchor.kind === 'seed-group' && ready.view.events.some(e => e.type === 'conversation/seed-group' && e.ordinal === anchor.ordinal) } }
   }
   return { root, workspace, project, sourceId, visible, selectedRefs, hidden, future, managed, document, view, exported, request, run, observation,
     service: () => service, coordinator: () => coordinator, broker: () => broker,

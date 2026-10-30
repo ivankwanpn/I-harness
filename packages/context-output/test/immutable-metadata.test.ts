@@ -146,3 +146,20 @@ it('refuses JSON lossy properties before any getter or toJSON can run and captur
   expect((await work).kind).toBe('confirmed')
   expect(await readFile(f.path, 'utf8')).toBe('{"version":1,"value":"original"}')
 })
+
+it('keeps a foreign equal pending transaction outside a selected original issuance',async()=>{
+ const foreign=await fixture();await writeFile(pending(foreign.path),bytes.subarray(0,5));let issued=false
+ const policy={async onCreated(){issued=true},async allowExisting(){return issued}}
+ expect((await continueAtomicJson(foreign.root,foreign.path,value,()=>true,undefined,policy)).kind).toBe('unknown');expect(issued).toBe(false);expect(await readFile(pending(foreign.path))).toEqual(bytes.subarray(0,5))
+ const own=await fixture();expect((await continueAtomicJson(own.root,own.path,value,()=>true,undefined,policy)).kind).toBe('confirmed');expect(issued).toBe(true)
+})
+
+it('passively resumes only an already created original metadata file',async()=>{
+ const f=await fixture();let identity:{dev:bigint;ino:bigint}|undefined,current=true
+ const policy={async onCreated(handle:import('node:fs/promises').FileHandle){const info=await handle.stat({bigint:true});identity={dev:info.dev,ino:info.ino}},async allowExisting(handle:import('node:fs/promises').FileHandle){const info=await handle.stat({bigint:true});return !!identity&&info.dev===identity.dev&&info.ino===identity.ino}}
+ expect((await continueAtomicJson(f.root,f.path,value,()=>true,undefined,{...policy,resumeOnly:true})).kind).toBe('not-issued');expect(identity).toBeUndefined()
+ controls.path=f.path;controls.maxWrite=5;controls.afterWrite=()=>{current=false}
+ expect((await continueAtomicJson(f.root,f.path,value,()=>current,undefined,policy)).kind).toBe('unknown');expect(identity).toBeDefined()
+ controls.afterWrite=undefined;controls.maxWrite=Infinity
+ expect((await continueAtomicJson(f.root,f.path,value,()=>true,undefined,{...policy,resumeOnly:true})).kind).toBe('confirmed');expect(await readFile(f.path)).toEqual(bytes)
+})

@@ -4,11 +4,12 @@ import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 import type { SessionCoordinator, SessionMeta, ExistingSessionBindingObservation } from "@i-harness/session-persistence"
 import { captureBootstrapTargetPreparationRequest, type BootstrapTargetPreparationRequest, type BootstrapTargetPreparationOutcome } from '@i-harness/session-persistence'
-import { isStrictFactData, canonicalJsonData } from '@i-harness/core-session'
+import { isStrictFactData, canonicalJsonData, captureSelectedResultsBootstrapPreparationFacts, type BootstrapPreparationFactsV2 } from '@i-harness/core-session'
 import type { SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
-import { captureBootstrapProject, type BootstrapProjectCapture, type BootstrapProjectPreparation, type BootstrapTargetScope } from './bootstrap-project.ts'
+import { captureBootstrapProject, captureSelectedProject as importSelectedProject, type BootstrapProjectCapture, type BootstrapProjectPreparation, type BootstrapTargetScope } from './bootstrap-project.ts'
+import { inspectSelectedTarget } from '@i-harness/session-persistence/internal/selected-source-owner'
 import type { BindingObservations } from '../../session-persistence/src/coordinator/binding-observation.ts'
 export type { BootstrapProjectCapture, BootstrapProjectPreparation, BootstrapTargetScope } from './bootstrap-project.ts'
 export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; drainSession?(id: string): Promise<void>; authorityChanged?(ids: readonly string[]): Promise<void>; fence?: SessionManagementFence }
@@ -230,6 +231,127 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     if (ids.length) await moveOptions.authorityChanged?.(ids)
     for (const id of projectIds) pendingChanges.delete(id)
   }
+  function prepareProject(capture: Pick<BootstrapProjectCapture,'invocation'|'sourceSessionId'|'sourceAvailable'|'assertNewWorkCurrent'|'targetAvailable'> & {requestIntent:{project:BootstrapProjectCapture['requestIntent']['project']}}, inspect:()=>Promise<{invocation:BootstrapProjectCapture['invocation'];manifestDigest:string}|undefined>):BootstrapProjectPreparation {
+      const id = capture.invocation.targetSessionId
+      const projectId = capture.requestIntent.project.kind === 'project' ? capture.requestIntent.project.projectId : undefined
+      let active = true, targetBaseline: string | undefined, sourceBaseline: string | undefined, attemptEpoch: string | undefined
+      const fail = (reason: 'unknown'|'unavailable'|'conflict'|'policy'): never => { throw Object.assign(new Error('Bootstrap project ' + reason), { bootstrapReason: reason }) }
+      const lifetime = () => { assertOpen(); if (!active || !capture.targetAvailable()) { active = false; fail('unavailable') } }
+      const epoch = () => `${projectId ?? 'unassigned'}:${revisions.get(projectId ?? '') ?? 0}:refs:${referenceRevision}`
+      const available = () => {
+        lifetime()
+        if (attemptEpoch !== undefined && attemptEpoch !== epoch()) { active = false; fail('policy') }
+        if (referenceFailure || referenceUpdates || scopeUpdates.has(projectId ?? '') || pendingChanges.has(projectId ?? '')) fail('policy')
+        assertAvailable(projectId)
+      }
+      const targetRevision = () => `${epoch()}:binding:${bindingRevisions.get(id) ?? 0}`
+      const assertTargetCurrent = () => {
+        available()
+        if (!bindings.get(id)?.bound || bindings.get(id)?.projectId !== projectId || targetBaseline === undefined || targetBaseline !== targetRevision()) fail('policy')
+      }
+      const sourceRevision = () => {
+        if (!capture.sourceSessionId) return epoch() + ':explicit-import'
+        const chain: string[] = [], seen = new Set<string>()
+        let cursor: string | undefined = capture.sourceSessionId
+        while (cursor) {
+          if (seen.has(cursor) || seen.size >= 32 || !bindings.has(cursor)) fail('policy')
+          seen.add(cursor); chain.push(`${cursor}:${bindingRevisions.get(cursor) ?? 0}:${canonicalJsonData(bindings.get(cursor))}`)
+          if (bindings.get(cursor)?.bound) break
+          cursor = parents.get(cursor)
+        }
+        if (liveOwner(capture.sourceSessionId) !== projectId) fail('policy')
+        return epoch() + ':' + canonicalJsonData(chain)
+      }
+      const newWork = (current: () => boolean) => {
+        available()
+        if (!capture.sourceAvailable() || !current()) fail('policy')
+        capture.assertNewWorkCurrent()
+      }
+      const assertSourceCurrent = () => {
+        newWork(() => true)
+        if (sourceBaseline === undefined || sourceBaseline !== sourceRevision()) fail('policy')
+      }
+      async function readTargetBinding(): Promise<Binding> {
+        try { return parseBinding(await coordinator.getDocument(key(id))) }
+        catch (error) {
+          // A previously acquired getter cannot survive an observation that
+          // its durable authority is no longer verifiable. Initial uncertain
+          // saves remain recoverable by exact passive readback.
+          if (targetBaseline !== undefined) active = false
+          throw error
+        }
+      }
+      async function prepare(value: BootstrapTargetPreparationRequest, passive: boolean, current: () => boolean): Promise<BootstrapTargetPreparationOutcome> {
+        let request: BootstrapTargetPreparationRequest
+        try {
+          request = captureBootstrapTargetPreparationRequest(value)
+          if (canonicalJsonData(request.invocation) !== canonicalJsonData(capture.invocation)) return { kind: 'blocked', reason: 'conflict' }
+        } catch { return { kind: 'blocked', reason: 'conflict' } }
+        return serial(id, async () => {
+          try {
+            available()
+            attemptEpoch ??= epoch()
+            if (targetBaseline !== undefined) assertTargetCurrent()
+            const generation = epoch()
+            const check = () => { available(); if (generation !== epoch()) fail('policy'); if (!passive) { newWork(current); if (sourceBaseline !== undefined && sourceBaseline !== sourceRevision()) fail('policy') } }
+            check()
+            const inspection = await inspect()
+            check()
+            if (!inspection || inspection.manifestDigest !== request.manifestDigest
+              || canonicalJsonData(inspection.invocation) !== canonicalJsonData(capture.invocation)) fail('conflict')
+            if (!passive) {
+              if (capture.sourceSessionId) { await resolveOwner(capture.sourceSessionId, undefined, true); check() }
+              const revision = sourceRevision()
+              if (sourceBaseline !== undefined && sourceBaseline !== revision) fail('policy')
+              sourceBaseline ??= revision
+              assertSourceCurrent()
+            }
+            await loading.get(id); check()
+            // Always refresh durable identity: an earlier save may have landed
+            // even though its response/readback did not confirm it.
+            const own = await readTargetBinding(); check()
+            observeBinding(id, own)
+            if (own.bound && own.projectId !== projectId) fail('conflict')
+            if (!own.bound) {
+              if (passive || targetBaseline !== undefined) fail('unavailable')
+              check()
+              bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1)
+              await coordinator.putDocument(key(id), { version: 1, ...(projectId ? { projectId } : {}) }); check()
+              const saved = await readTargetBinding(); check()
+              if (!saved.bound || saved.projectId !== projectId) fail('unavailable')
+              observeBinding(id, saved)
+            }
+            observed.add(id)
+            if (projectId) {
+              const declared = projects.get(projectId)!
+              // Do not enter catalog(): its invalidation drain may itself be
+              // waiting for this admitted bootstrap to finish.
+              let resolved: ConfirmedProjectScope
+              try { resolved = await resolveScope(declared) }
+              catch (error) { if (targetBaseline !== undefined) active = false; throw error }
+              check()
+              if (canonicalJsonData(resolved) !== canonicalJsonData(projects.get(projectId))) { if (targetBaseline !== undefined) active = false; fail('policy') }
+            }
+            check()
+            targetBaseline ??= targetRevision()
+            assertTargetCurrent()
+            return { kind: 'confirmed' }
+          } catch (error) {
+            return { kind: 'blocked', reason: (error as { bootstrapReason?: 'unknown'|'unavailable'|'conflict'|'policy' }).bootstrapReason ?? 'unavailable' }
+          }
+        })
+      }
+      return {
+        targetPreparation: Object.freeze({ confirm: (request: BootstrapTargetPreparationRequest, current: () => boolean) => prepare(request, false, current), reconcile: (request: BootstrapTargetPreparationRequest) => prepare(request, true, () => true), assertTargetCurrent }),
+        targetScope(): BootstrapTargetScope {
+          assertTargetCurrent()
+          const scope = projectId ? projects.get(projectId)! : undefined
+          return { ...(projectId ? { projectId } : {}), ...(scope ? { scope: { id: scope.id, name: scope.name, roots: [...scope.roots], primaryRoot: scope.primaryRoot! } } : {}), revision: targetBaseline! }
+        },
+        assertSourceCurrent,
+        close() { active = false },
+      }
+    }
   return {
     async retainSelectedBindingRead(sessionIds:readonly string[],binding:Awaited<ReturnType<BindingObservations['acquireSelectedBindingRead']>>,sourceId:string) {
       assertOpen();binding.assertCurrent()
@@ -294,125 +416,20 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       } finally { active = false }
     },
     prepareBootstrapInheritance(input: BootstrapProjectCapture): BootstrapProjectPreparation {
-      const capture = captureBootstrapProject(input), id = capture.invocation.targetSessionId
-      const projectId = capture.requestIntent.project.kind === 'project' ? capture.requestIntent.project.projectId : undefined
-      let active = true, targetBaseline: string | undefined, sourceBaseline: string | undefined, attemptEpoch: string | undefined
-      const fail = (reason: 'unknown'|'unavailable'|'conflict'|'policy'): never => { throw Object.assign(new Error('Bootstrap project ' + reason), { bootstrapReason: reason }) }
-      const lifetime = () => { assertOpen(); if (!active || !capture.targetAvailable()) { active = false; fail('unavailable') } }
-      const epoch = () => `${projectId ?? 'unassigned'}:${revisions.get(projectId ?? '') ?? 0}:refs:${referenceRevision}`
-      const available = () => {
-        lifetime()
-        if (attemptEpoch !== undefined && attemptEpoch !== epoch()) { active = false; fail('policy') }
-        if (referenceFailure || referenceUpdates || scopeUpdates.has(projectId ?? '') || pendingChanges.has(projectId ?? '')) fail('policy')
-        assertAvailable(projectId)
+      const capture=captureBootstrapProject(input)
+      return prepareProject(capture,async()=>{const inspection=await coordinator.inspectBootstrap(capture.invocation);return ['reserved','ready'].includes(inspection.kind)&&inspection.token&&'manifestDigest' in inspection.token?{invocation:inspection.invocation,manifestDigest:inspection.token.manifestDigest}:undefined})
+    },
+    prepareSelectedInheritance(input: import('./bootstrap-project.ts').SelectedProjectCapture) {
+      const capture=importSelectedProject(input),owner=prepareProject(capture,async()=>inspectSelectedTarget(coordinator,capture.target))
+      const invoke=(input:BootstrapPreparationFactsV2,current:(()=>boolean)|undefined)=>{
+        try{
+          const facts=captureSelectedResultsBootstrapPreparationFacts(input),original=inspectSelectedTarget(coordinator,capture.target)
+          if(canonicalJsonData(facts)!==canonicalJsonData(original.facts))throw Error('Selected preparation mismatch')
+          const request={invocation:facts.invocation,manifestDigest:facts.manifestDigest}
+          return current?owner.targetPreparation.confirm(request,current):owner.targetPreparation.reconcile(request)
+        }catch{return Promise.resolve({kind:'blocked' as const,reason:'conflict' as const})}
       }
-      const targetRevision = () => `${epoch()}:binding:${bindingRevisions.get(id) ?? 0}`
-      const assertTargetCurrent = () => {
-        available()
-        if (!bindings.get(id)?.bound || bindings.get(id)?.projectId !== projectId || targetBaseline === undefined || targetBaseline !== targetRevision()) fail('policy')
-      }
-      const sourceRevision = () => {
-        if (!capture.sourceSessionId) return epoch() + ':explicit-import'
-        const chain: string[] = [], seen = new Set<string>()
-        let cursor: string | undefined = capture.sourceSessionId
-        while (cursor) {
-          if (seen.has(cursor) || seen.size >= 32 || !bindings.has(cursor)) fail('policy')
-          seen.add(cursor); chain.push(`${cursor}:${bindingRevisions.get(cursor) ?? 0}:${canonicalJsonData(bindings.get(cursor))}`)
-          if (bindings.get(cursor)?.bound) break
-          cursor = parents.get(cursor)
-        }
-        if (liveOwner(capture.sourceSessionId) !== projectId) fail('policy')
-        return epoch() + ':' + canonicalJsonData(chain)
-      }
-      const newWork = (current: () => boolean) => {
-        available()
-        if (!capture.sourceAvailable() || !current()) fail('policy')
-        capture.assertNewWorkCurrent()
-      }
-      const assertSourceCurrent = () => {
-        newWork(() => true)
-        if (sourceBaseline === undefined || sourceBaseline !== sourceRevision()) fail('policy')
-      }
-      async function readTargetBinding(): Promise<Binding> {
-        try { return parseBinding(await coordinator.getDocument(key(id))) }
-        catch (error) {
-          // A previously acquired getter cannot survive an observation that
-          // its durable authority is no longer verifiable. Initial uncertain
-          // saves remain recoverable by exact passive readback.
-          if (targetBaseline !== undefined) active = false
-          throw error
-        }
-      }
-      async function prepare(value: BootstrapTargetPreparationRequest, passive: boolean, current: () => boolean): Promise<BootstrapTargetPreparationOutcome> {
-        let request: BootstrapTargetPreparationRequest
-        try {
-          request = captureBootstrapTargetPreparationRequest(value)
-          if (canonicalJsonData(request.invocation) !== canonicalJsonData(capture.invocation)) return { kind: 'blocked', reason: 'conflict' }
-        } catch { return { kind: 'blocked', reason: 'conflict' } }
-        return serial(id, async () => {
-          try {
-            available()
-            attemptEpoch ??= epoch()
-            if (targetBaseline !== undefined) assertTargetCurrent()
-            const generation = epoch()
-            const check = () => { available(); if (generation !== epoch()) fail('policy'); if (!passive) { newWork(current); if (sourceBaseline !== undefined && sourceBaseline !== sourceRevision()) fail('policy') } }
-            check()
-            const inspection = await coordinator.inspectBootstrap(capture.invocation)
-            check()
-            if (!['reserved', 'ready'].includes(inspection.kind) || !inspection.token || !('manifestDigest' in inspection.token) || inspection.token.manifestDigest !== request.manifestDigest
-              || canonicalJsonData(inspection.invocation) !== canonicalJsonData(capture.invocation)) fail('conflict')
-            if (!passive) {
-              if (capture.sourceSessionId) { await resolveOwner(capture.sourceSessionId, undefined, true); check() }
-              const revision = sourceRevision()
-              if (sourceBaseline !== undefined && sourceBaseline !== revision) fail('policy')
-              sourceBaseline ??= revision
-              assertSourceCurrent()
-            }
-            await loading.get(id); check()
-            // Always refresh durable identity: an earlier save may have landed
-            // even though its response/readback did not confirm it.
-            const own = await readTargetBinding(); check()
-            observeBinding(id, own)
-            if (own.bound && own.projectId !== projectId) fail('conflict')
-            if (!own.bound) {
-              if (passive || targetBaseline !== undefined) fail('unavailable')
-              check()
-              bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1)
-              await coordinator.putDocument(key(id), { version: 1, ...(projectId ? { projectId } : {}) }); check()
-              const saved = await readTargetBinding(); check()
-              if (!saved.bound || saved.projectId !== projectId) fail('unavailable')
-              observeBinding(id, saved)
-            }
-            observed.add(id)
-            if (projectId) {
-              const declared = projects.get(projectId)!
-              // Do not enter catalog(): its invalidation drain may itself be
-              // waiting for this admitted bootstrap to finish.
-              let resolved: ConfirmedProjectScope
-              try { resolved = await resolveScope(declared) }
-              catch (error) { if (targetBaseline !== undefined) active = false; throw error }
-              check()
-              if (canonicalJsonData(resolved) !== canonicalJsonData(projects.get(projectId))) { if (targetBaseline !== undefined) active = false; fail('policy') }
-            }
-            check()
-            targetBaseline ??= targetRevision()
-            assertTargetCurrent()
-            return { kind: 'confirmed' }
-          } catch (error) {
-            return { kind: 'blocked', reason: (error as { bootstrapReason?: 'unknown'|'unavailable'|'conflict'|'policy' }).bootstrapReason ?? 'unavailable' }
-          }
-        })
-      }
-      return {
-        targetPreparation: Object.freeze({ confirm: (request: BootstrapTargetPreparationRequest, current: () => boolean) => prepare(request, false, current), reconcile: (request: BootstrapTargetPreparationRequest) => prepare(request, true, () => true), assertTargetCurrent }),
-        targetScope(): BootstrapTargetScope {
-          assertTargetCurrent()
-          const scope = projectId ? projects.get(projectId)! : undefined
-          return { ...(projectId ? { projectId } : {}), ...(scope ? { scope: { id: scope.id, name: scope.name, roots: [...scope.roots], primaryRoot: scope.primaryRoot! } } : {}), revision: targetBaseline! }
-        },
-        assertSourceCurrent,
-        close() { active = false },
-      }
+      return Object.freeze({confirm:(facts:BootstrapPreparationFactsV2,current:()=>boolean)=>invoke(facts,current),reconcile:(facts:BootstrapPreparationFactsV2)=>invoke(facts,undefined),assertTargetCurrent:owner.targetPreparation.assertTargetCurrent,targetScope:owner.targetScope,close:owner.close})
     },
     async authorityFor(id: string): Promise<() => AuthorityState> {
       await resolveOwner(id)

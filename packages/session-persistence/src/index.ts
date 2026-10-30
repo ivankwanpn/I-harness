@@ -52,6 +52,12 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
 export { ownedContextReadiness } from "./context-readiness.ts"
 export type { HeldFactOwner, IssuingFactOwner, BackendFactOutcome, OwnedFactBackend, ManagedDocument } from './coordinator/fact-types.ts'
 export { isHeldFactOwner } from './coordinator/fact-owner.ts'
+export { captureSelectedResultsRoute, selectedBootstrapPathKey } from './coordinator/selected-results-route.ts'
+export type { SelectedResultsRoute } from './coordinator/selected-results-route.ts'
+export { parseSelectedResultsReservation } from './coordinator/selected-results-intent.ts'
+export type { SelectedResultsReservationV1 } from './coordinator/selected-results-intent.ts'
+export { parseSelectedResultsHeaderStage } from './coordinator/selected-results-header.ts'
+export type { SelectedResultsHeaderStageV2 } from './coordinator/selected-results-header.ts'
 
 export type { HeldTaskDocumentScope, TaskDocumentWitness, TaskDocumentAck, TaskObservation, Confirmation, RawTaskObservation, TaskDocumentBackendSession, OpenTaskDocumentSession } from './coordinator/task-document-types.ts'
 export type { TaskWriteOutcome, TaskDocumentWrite } from './coordinator/task-document-types.ts'

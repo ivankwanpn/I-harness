@@ -512,3 +512,18 @@ it('transfers original refs with canonical v2 witnesses without reading member b
     expect(f.sourceCalls()).toBe(calls); expect(controls.mutations).toBe(mutations)
   } finally { await f.service.close() }
 })
+
+it.each(['link', 'sync', 'response'] as const)('settles only original selected managed publications after a %s cut', async cut => {
+  const f = await fixture()
+  try {
+    const scope = f.service.registerSeedDependencyTransfer(f.access, 'original-publication')
+    // The final companion is the last publication; all preceding work is owned.
+    controls.cutPath = f.companion(f.members[1]!); controls.cut = cut
+    expect((await f.service.confirmSeedDependencies(scope, f.request, () => true)).kind).toBe('blocked')
+    controls.cut = ''; f.revokeSource(); const calls = f.sourceCalls()
+    expect((await f.service.reconcileSeedDependencies(scope, f.request)).kind).toBe('confirmed')
+    expect(f.sourceCalls()).toBe(calls)
+    const foreign = f.service.registerSeedDependencyTransfer(f.access, 'original-publication')
+    expect((await f.service.reconcileSeedDependencies(foreign, f.request)).kind).toBe('blocked')
+  } finally { controls.cut = ''; await f.service.close() }
+})

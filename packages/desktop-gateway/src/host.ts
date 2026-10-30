@@ -15,7 +15,7 @@ import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harne
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
 import { maybeAutoTitle } from "@i-harness/session-title"
-
+import { createForkSessionController } from "@i-harness/session-persistence"
 import { createJsonlSessionCoordinator } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
@@ -26,6 +26,8 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
+import { createGatewayForkHost } from './fork-session.ts'
+import { assertOutsideForkController } from '../../session-persistence/src/fork-controller.ts'
 import { createContextPicker } from "./context-picker.ts"
 import { createDraftSession } from "./draft-session.ts"
 import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
@@ -196,10 +198,15 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const nativeContext=await createNativeContextRuntime({workspace:options.workspace,storageRoot:join(options.sessionDir,"native-context"),coordinator,
     projectFor:projects.nativeScopeFor,
     resultReadScopeFor:projects.resultReadScopeFor,
+    withBindingObservation:projects.withBindingObservation,
+    retainSelectedProjectRead:projects.retainSelectedBindingRead.bind(projects),
     prepareBootstrapInheritance:projects.prepareBootstrapInheritance,
+    prepareSelectedInheritance:projects.prepareSelectedInheritance.bind(projects),
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
-      const snapshot=service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
+      const observed=nativeContext.observations.current(id)
+      const snapshot=observed?.view ?? service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
+      observed?.assertCurrent()
       const cuts=rewindCuts(snapshot)
       return [...semanticSeedResultRefs(snapshot), ...snapshot.events.flatMap<ContextResultRef | ManagedArtifactRef>(event=>!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?event.type==="context/result-ref"?[event.ref]:managedResultRefs(event):[])]
     },
@@ -278,6 +285,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     additionalTools,
     contextOutput:nativeContext.contextOutput,
     contextOutputSourceFor:nativeContext.sourceFor,
+    contextOutputLegacyReadObservation:nativeContext.withLegacyReadObservation,
     resultReadScopeFor:projects.resultReadScopeFor,
     sessionQuery,
     workspace: options.workspace,
@@ -386,12 +394,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }
   management = createSessionManagement(coordinator, service, isConversation, { workspace: options.workspace, sessionDir: options.sessionDir, fence,
-    projectFor: projects.projectFor, onFork: async(parent,target)=>{
-      await projects.inherit(parent,target)
-      const snapshot=await coordinator.snapshot!(target)
-      const refs=snapshot.session.events.flatMap(event=>event.type==="context/result-ref"?[event.ref]:[])
-      await nativeContext.inheritFork(parent,target,refs)
-    }, onVisibilityWithdrawn: id => instructions.revokeSession(id), moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
+    projectFor: projects.projectFor, onVisibilityWithdrawn: id => instructions.revokeSession(id), moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
     activeWork: async id => (await workflow.read(id)).goalRun?.running === true, drainSession })
   const schedules = createDesktopSchedules(coordinator, service)
   const rewind = createDesktopRewind(options.sessionDir, options.workspace, coordinator, service)
@@ -447,10 +450,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     review,
   }
   const internalIds = new Set<string>()
+  const forkController=createForkSessionController(coordinator,createGatewayForkHost({workspace:options.workspace,coordinator,projects,nativeContext,
+    assertAvailable(){if(shutdownRequested)throw new Error('Desktop host is closing')}}))
   const base = createSdkServer(service, {
     readResultPage: conversationRead,
     supportsResultDependencyMembership: true,
     coordinator,
+    prepareForkSession:request=>forkController.prepare(request),
+    executeForkSession:(command,control)=>forkController.execute(command,control),
     modelState: async (sessionId) => {
       await coordinator.profile(sessionId)
       return service.modelState(sessionId)
@@ -511,6 +518,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   return {
     handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
     close: () => {
+      assertOutsideForkController(coordinator)
       if (shutdownComplete) return Promise.resolve()
       if (closing) return closing
       shutdownRequested = true
@@ -531,15 +539,17 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("input", () => input.close())
         await once("project content search", () => projectContentSearch.close())
         await once("router", () => router.close())
+        await once('fork controller',()=>forkController.close())
         await once("coding plans", () => codingPlans.close())
         await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())
         await once('instruction subscriptions', () => instructions.close())
-        await once("projects", () => projects.close())
+        const forksJoined=cleaned.has('router')&&cleaned.has('fork controller')
+        if(forksJoined)await once("projects", () => projects.close())
         await once("review", () => review.close())
-        await once("workflow", () => workflow.close())
-        await once("session service", () => service.close())
-        await once("native context", () => nativeContext.close())
+        if(forksJoined)await once("workflow", () => workflow.close())
+        if(forksJoined)await once("session service", () => service.close())
+        if(forksJoined)await once("native context", () => nativeContext.close())
         await once("approvals", () => approvals.flush())
         await once("plugins", () => plugins.close())
         // A refresh may await creating session assemblies. Fence early, but
@@ -549,7 +559,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         if (cleaned.has('trust watcher') && cleaned.has('instructions')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
-        if (cleaned.has("session service")) await once("coordinator", () => coordinator.close())
+        if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => coordinator.close())
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),
           `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)
         shutdownComplete = true

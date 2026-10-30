@@ -2,12 +2,34 @@ import type { BootstrapInvocation } from '../events/bootstrap.ts'
 import type { SeedSelection, SeedTurnDomain } from './seed-types.ts'
 import { seedData, seedFields, seedCount, seedDigest, seedId, seedInvalid } from './seed-codec.ts'
 import { freezeJsonData } from '../managed/capture.ts'
+import { validateResultsSummary } from './selected-results-codec.ts'
 
 export interface BootstrapPreparationFacts {
   version: 1; invocation: BootstrapInvocation; manifestDigest: string; seedDigest: string;
   sourceObservation: { kind: 'none' } | { kind: 'semantic'; digest: string };
   groupCount: number;
   semantic?: { selection: Exclude<SeedSelection, { kind: 'none' }>; turns: SeedTurnDomain };
+}
+export type SelectedResultsPreparationSemantic = { version: 3; profile: 'public-completed'; selection: import('./seed-types.ts').SemanticSeedV3Public['selection']; turns: SeedTurnDomain; results: import('./selected-results-types.ts').ResultsSummaryV1 }
+  | { version: 3; profile: 'child-history'; selection: import('./seed-types.ts').SemanticSeedV3Child['selection']; turns: SeedTurnDomain; results: import('./selected-results-types.ts').ResultsSummaryV1 }
+export interface BootstrapPreparationFactsV2 {
+  version: 2; invocation: BootstrapInvocation; manifestDigest: string; seedDigest: string; dependencyDigest: string;
+  sourceObservation: { kind: 'semantic'; digest: string }; seedLength: number; groupCount: number; resultPageCount: number;
+  semantic: SelectedResultsPreparationSemantic;
+}
+export function captureSelectedResultsBootstrapPreparationFacts(value: unknown): BootstrapPreparationFactsV2 {
+  seedData(value); seedFields(value, ['version', 'invocation', 'manifestDigest', 'seedDigest', 'dependencyDigest', 'sourceObservation', 'seedLength', 'groupCount', 'resultPageCount', 'semantic'])
+  const facts = value as BootstrapPreparationFactsV2, semantic = facts.semantic
+  seedFields(semantic, ['version', 'profile', 'selection', 'turns', 'results'])
+  if (facts.version !== 2 || semantic.version !== 3 || !seedDigest(facts.dependencyDigest) || facts.sourceObservation.kind !== 'semantic'
+    || !seedCount(facts.seedLength) || !seedCount(facts.resultPageCount) || !seedCount(facts.groupCount)
+    || !Number.isSafeInteger(1 + facts.resultPageCount + facts.groupCount) || facts.seedLength !== 1 + facts.resultPageCount + facts.groupCount
+    || (semantic.profile === 'public-completed' ? semantic.selection.kind !== 'completed' : semantic.profile !== 'child-history' || !['all', 'last-turns'].includes(semantic.selection.kind))) seedInvalid()
+  validateResultsSummary(semantic.results)
+  if (facts.resultPageCount !== semantic.results.pages) seedInvalid()
+  captureBootstrapPreparationFacts({ version: 1, invocation: facts.invocation, manifestDigest: facts.manifestDigest, seedDigest: facts.seedDigest,
+    sourceObservation: facts.sourceObservation, groupCount: facts.groupCount, semantic: { selection: semantic.selection, turns: semantic.turns } })
+  return freezeJsonData(structuredClone(facts)) as BootstrapPreparationFactsV2
 }
 /** Own only metadata; callbacks never receive mutable coordinator arrays. */
 export function captureBootstrapPreparationFacts(value: unknown): BootstrapPreparationFacts {

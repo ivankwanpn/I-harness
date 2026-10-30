@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { canonicalJsonData, type BootstrapDependencyRequest, type BootstrapDependencyOutcome, type ManagedArtifactRef } from '@i-harness/core-session'
 import type { ContextAccess, ContextOutputOptions } from '../types.ts'
-import { confirmAtomicJson, continueAtomicJson, ownedPath, type ImmutableMetadataOutcome } from './io.ts'
+import { confirmAtomicJson, continueAtomicJson, createAtomicJsonPublication, ownedPath, type ImmutableMetadataOutcome } from './io.ts'
 import { createDependencyMembership, validTransferMembership, type TransferMembership } from './dependency-membership.ts'
 import { readDependencyCatalog } from './dependency-catalog.ts'
 import type { ArtifactPin } from './pins.ts'
@@ -14,7 +14,7 @@ import { captureHost, captureRequest, captureTarget, TransferBlocked, type SeedD
 import { canonicalCompare, createTransferClosure } from './transfer-closure.ts'
 export type { SeedDependencyHostAccess, SeedDependencyTransferBinding, SeedDependencyTransferScope } from './transfer-codec.ts'
 
-interface Registration { access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean }
+interface Registration { access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
 interface SourceRelation { ref: ManagedArtifactRef; viaCatalog?: ManagedArtifactRef }
 interface Publication { path: string; value: ArtifactPin | TransferMembership | { version: 1; sessionId: string; revision: string; pinId: string }; relations: Set<SourceRelation> }
 export function createSeedDependencyTransfer(deps: {
@@ -25,11 +25,13 @@ export function createSeedDependencyTransfer(deps: {
   membership: ReturnType<typeof createDependencyMembership>;
 }) {
   const scopes = new WeakMap<SeedDependencyTransferScope, Registration>()
-  function registerSeedDependencyTransfer(access: SeedDependencyHostAccess): SeedDependencyTransferScope {
+  // Original publication IO cleanup only; this collection grants no authority.
+  const publicationIO = new Set<ReturnType<typeof createAtomicJsonPublication>>()
+  function registerSeedDependencyTransfer(access: SeedDependencyHostAccess, originalPublication?: 'original-publication'): SeedDependencyTransferScope {
     const captured = captureHost(access)
     if (!deps.available(captured.binding.targetDocumentId)) throw new TransferBlocked('unavailable')
     const scope = Object.freeze({ kind: 'seed-dependency-transfer' as const })
-    scopes.set(scope, { access: captured, revoked: false }); return scope
+    scopes.set(scope, { access: captured, revoked: false, ...(originalPublication === 'original-publication' ? { publications: new Map() } : {}) }); return scope
   }
   function metadataOutcome(result: ImmutableMetadataOutcome): void {
     if (result.kind !== 'confirmed') throw new TransferBlocked(result.kind === 'conflict' ? 'conflict' : result.kind === 'absent' || result.kind === 'not-issued' ? 'unavailable' : 'unknown')
@@ -151,7 +153,22 @@ export function createSeedDependencyTransfer(deps: {
         const unfinished: Publication[] = []
         for (const publication of publications.values()) {
           const { path, value } = publication
-          const result = await wait(confirmAtomicJson(deps.root, path, value))
+          if (!registration.publications) {
+            const result = await wait(confirmAtomicJson(deps.root, path, value))
+            if (passive || result.kind === 'conflict') metadataOutcome(result)
+            if (result.kind !== 'confirmed') unfinished.push(publication)
+            continue
+          }
+          let retained = registration.publications.get(path)
+          const encoded = canonicalJsonData(value)
+          if (retained && retained.value !== encoded) throw new TransferBlocked('conflict')
+          if (!retained) {
+            if (passive) throw new TransferBlocked('unknown')
+            retained = { value: encoded, original: createAtomicJsonPublication(deps.root, path, value) }
+            registration.publications.set(path, retained)
+            publicationIO.add(retained.original)
+          }
+          const result = await wait(passive ? retained.original.settle(() => { check(); return true }) : retained.original.confirm())
           if (passive || result.kind === 'conflict') metadataOutcome(result)
           // NEW may continue its exact retained pending transaction; already
           // confirmed publications require neither growth nor mkdir/cleanup.
@@ -172,13 +189,13 @@ export function createSeedDependencyTransfer(deps: {
               await wait(ownedPath(deps.root, directory))
             }
             await renew(relations)
-            check(); metadataOutcome(await wait(continueAtomicJson(deps.root, path, value, () => { check(); return true })))
+            check(); metadataOutcome(await wait(registration.publications ? registration.publications.get(path)!.original.issue(() => { check(); return true }) : continueAtomicJson(deps.root, path, value, () => { check(); return true })))
             await renew(relations)
           }
         }
         // A surviving source is irrelevant to passive confirmation. Only exact
         // target publications, original operations and target policy gate it.
-        for (const { path, value } of publications.values()) metadataOutcome(await wait(confirmAtomicJson(deps.root, path, value)))
+        for (const { path, value } of publications.values()) metadataOutcome(await wait(registration.publications ? registration.publications.get(path)!.original.confirm() : confirmAtomicJson(deps.root, path, value)))
         for (const value of operations.values()) {
           if (canonicalJsonData(await wait(deps.membership.operation(value.ref!))) !== canonicalJsonData(value)) throw new TransferBlocked('conflict')
           await wait(readVerifiedArtifactBytes(deps.root, deps.directory(value.id), value.ref!, 0, 0))
@@ -194,6 +211,7 @@ export function createSeedDependencyTransfer(deps: {
     })
   }
   return { registerSeedDependencyTransfer,
+    async closeTransfers() { for (const original of publicationIO) await original.close() },
     confirmSeedDependencies: (scope: SeedDependencyTransferScope, request: BootstrapDependencyRequest, current: () => boolean): Promise<BootstrapDependencyOutcome> => typeof current === 'function' ? invoke(scope, request, current) : Promise.resolve({ kind: 'blocked', reason: 'conflict' }),
     reconcileSeedDependencies: (scope: SeedDependencyTransferScope, request: BootstrapDependencyRequest) => invoke(scope, request, undefined) }
 }
