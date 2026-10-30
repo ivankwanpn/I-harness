@@ -716,6 +716,51 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }).catch(()=>({kind:'blocked' as const})).finally(async()=>{io.activeIssue=undefined;try{await settleCapture(entry)}finally{if(entry.flight===flight)entry.flight=undefined}})
     entry.flight=flight;return flight
   }
+  /** Cold admission retains the original entry and owner, but does not release
+   * readiness until the completed-target transition and target qualification. */
+  function inspectColdSelected(input:SelectedResultsRoute):Promise<{kind:'qualification-required'|'conflict'|'blocked'}> {
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+    let entry=documents.get(id)
+    if(entry) {
+      if(!entry.selected||!sameBootstrapData(entry.selected.route,route))return Promise.resolve({kind:'conflict'})
+      if(entry.revoked||captureClosed)return Promise.resolve({kind:'blocked'})
+      if(entry.flight)return entry.flight.then(()=>({kind:'blocked' as const}),()=>({kind:'blocked' as const}))
+      return Promise.resolve({kind:entry.document&&entry.selected.resultReceipt?'qualification-required':'blocked'})
+    }
+    if(captureClosed||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)return Promise.resolve({kind:'blocked'})
+    const journal=(backend as PersistenceBackend & {selectedJournal?:{inspectCheckedBirth(route:SelectedResultsRoute,held:HeldFactOwner):Promise<
+      {kind:'unavailable'|'conflict'}|{kind:'checked';birth:{stage:import('./selected-results-header.ts').SelectedResultsHeaderStageV2;facts:ReturnType<typeof selectedResultsPreparationFacts>};history:{events:SessionEvent[];prefix:JournalPrefix}}
+    >}}).selectedJournal
+    if(!journal)return Promise.resolve({kind:'blocked'})
+    entry={selected:{route,identity:Object.freeze({}),issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}}
+    documents.set(id,entry);const owned=entry
+    const check=()=>{if(captureClosed||owned.revoked||documents.get(id)!==owned)throw new FactRecoveryRequiredError()}
+    const flight=Promise.resolve().then(async()=>{
+      await backend.checkBootstrapCaptureRoot!();check();const io=await captureBundle(owned);check()
+      io.settled=false
+      const result=await ownership.withSessionOperation(id,()=>journal.inspectCheckedBirth(route,io.held))
+      await settleCapture(owned);check()
+      if(result.kind!=='checked')return {kind:result.kind==='conflict'?'conflict' as const:'blocked' as const}
+      const {birth,history}=result,completion=history.events[birth.stage.seed.seedLength]
+      if(!completion||completion.type!=='session/bootstrap')return {kind:'blocked' as const}
+      const facts=birth.facts,meta=JSON.parse(birth.stage.headerBytes)
+      const doc=attach(id,owned,buildSession(meta,history.events),history.prefix)
+      await owned.control!.bindSelected!();check()
+      owned.selected!.resultReceipt=Object.freeze({version:2,invocation:birth.stage.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:completion.dependencyClosureDigest,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
+      void doc
+      return {kind:'qualification-required' as const}
+    }).catch(()=>({kind:'blocked' as const})).finally(async()=>{
+      try {
+        await settleCapture(owned)
+        if(!owned.document) {
+          await releaseCapture(owned)
+          owned.selected!.processToken?.end('settled');owned.selected!.processToken=undefined
+          if(documents.get(id)===owned)documents.delete(id)
+        }
+      } finally {if(owned.flight===flight)owned.flight=undefined}
+    })
+    owned.flight=flight;return flight
+  }
   function inspectSelected(input:SelectedResultsRoute,identity:object) {
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
     if(!entry||entry.revoked||!selected||selected.identity!==identity||!sameBootstrapData(selected.route,route)||!io||io.released||!selected.lane||!selected.headerIssued||selected.header?.kind!=='committed')throw Error('Original selected target unavailable')
@@ -758,7 +803,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     entry.flight=flight;return flight
   }
   return {
-    prepareSelectedCapture,captureSelected,inspectSelected,publishSelected,releaseSelected,reconcileSelected,
+    prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,publishSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,

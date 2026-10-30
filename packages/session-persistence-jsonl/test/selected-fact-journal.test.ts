@@ -203,7 +203,12 @@ it('joins selected birth binding before managed document closes',async()=>{
 it('qualifies a checked birth against the complete original route',async()=>{
  const f=await fixture()
  try{
-  expect((await f.journal.inspectCheckedBirth(f.route,f.held)).kind).toBe('checked')
+  const checked=await f.journal.inspectCheckedBirth(f.route,f.held)
+  expect(checked.kind).toBe('checked')
+  if(checked.kind==='checked') {
+   expect(checked.history.events).toEqual([...decodeFactBatch(f.frames[0]!.batch.bytes).events,...decodeFactBatch(f.frames[1]!.batch.bytes).events])
+   expect(checked.history.prefix.eventCount).toBe(checked.history.events.length)
+  }
   const changed={...f.route,request:{...f.route.request,invocation:{...f.route.request.invocation,createdAt:'2026-10-29T00:00:00.000Z'}}}
   expect((await f.journal.inspectCheckedBirth(changed,f.held)).kind).toBe('conflict')
   const foreign=f.path+'.bootstrap-'+'a'.repeat(64)+'.stage';await writeFile(foreign,'x')
@@ -214,4 +219,26 @@ it('qualifies a checked birth against the complete original route',async()=>{
   await unlink(f.path)
   expect((await f.journal.inspectCheckedBirth(f.route,f.held)).kind).toBe('unavailable')
  }finally{await f.close()}
+})
+
+it('admits a cold checked birth into the original managed entry without source capture',async()=>{
+ const f=await fixture()
+  await f.close()
+  const {createBootstrapOwner}=await import('../../session-persistence/src/coordinator/bootstrap.ts')
+  const {createManagedDocument}=await import('../../session-persistence/src/coordinator/managed-document.ts')
+  const documents=new Map<string,any>()
+  const owner=createBootstrapOwner(f.backend,f.ownership,documents,(id,entry,session,prefix)=>{
+   const document=createManagedDocument(id,session,prefix,f.backend,f.ownership,undefined,()=>{},{operationId:'op',selected:true,bind(control){entry.control=control}})
+   entry.document=document;return document
+  },{} as any)
+  const result=await owner.inspectColdSelected(f.route)
+  expect(result.kind).toBe('qualification-required')
+  const entry=documents.get('target');expect(entry.document).toBeDefined();expect(()=>entry.document.assertReady()).toThrow()
+  const completion=decodeFactBatch(f.frames[1]!.batch.bytes).events[0]!
+  if(completion.type!=='session/bootstrap')throw Error('Missing completion')
+  expect(entry.selected.resultReceipt).toMatchObject({invocation:f.route.request.invocation,dependencyClosureDigest:completion.dependencyClosureDigest,seedLength:f.birth.facts.seedLength})
+  const changed={...f.route,request:{...f.route.request,invocation:{...f.route.request.invocation,createdAt:'2026-10-29T00:00:00.000Z'}}}
+  expect((await owner.inspectColdSelected(changed)).kind).toBe('conflict')
+  entry.revoked=true;expect((await owner.inspectColdSelected(f.route)).kind).toBe('blocked')
+  await entry.document.close();await owner.releaseCapture(entry)
 })
