@@ -12,7 +12,7 @@ vi.mock('../../fs-lock/src/index.ts', async original => {
 })
 const fault = vi.hoisted(() => ({ afterRename: false, failFinalClose: false, finalOpens: 0, target: '', tempSynced: undefined as undefined | (() => Promise<void>), entered: undefined as undefined | (() => void), gate: undefined as undefined | Promise<void>, writeEntered: undefined as undefined | (() => void), writeGate: undefined as undefined | Promise<void> }))
 vi.mock('node:fs/promises', async original => { const fs = await original<typeof import('node:fs/promises')>(); return { ...fs, open: async (...args: Parameters<typeof fs.open>) => { const handle = await fs.open(...args), close = handle.close.bind(handle), sync = handle.sync.bind(handle), write = handle.write.bind(handle); if (String(args[0]) === fault.target && args[1] === 'r+') { fault.finalOpens++; handle.sync = async () => { handoff.syncs++; await sync() }; handle.close = async () => { if (handoff.closeGate) { handoff.closeEntered?.(); await handoff.closeGate }; if (fault.failFinalClose) throw null; await close() } }; if (String(args[0]).startsWith(fault.target + '.') && args[1] === 'wx') { handoff.temps++; handle.sync = async () => { await sync(); await fault.tempSynced?.() }; handle.write = (async (buffer: Uint8Array, offset: number, length: number, position: number) => { if (fault.writeGate) { fault.writeEntered?.(); await fault.writeGate }; return write(buffer, offset, length, position) }) as typeof handle.write }; return handle }, rename: async (...args: Parameters<typeof fs.rename>) => { await fs.rename(...args); if (String(args[1]) === fault.target) handoff.publications++; if (String(args[1]) === fault.target && fault.gate) { fault.entered?.(); await fault.gate }; if (fault.afterRename && String(args[1]) === fault.target) throw new Error('lost response') } } })
-import { createJsonlTaskDocumentCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { createJsonlTaskDocumentCoordinator, createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentOperationsFor } from '@i-harness/session-persistence/internal/task-document-operations'
 import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
 import { TaskPersistence } from '../src/task/persistence.ts'
@@ -492,4 +492,45 @@ it('actual spawn reconciliation resumes pre-terminal preparation after original 
     await f.source().reconcileTerminal()
     expect(f.counts()).toMatchObject({ hints: 1, unregisters: 1, launches: 1 })
   } finally { release.resolve(); fault.failFinalClose = false; fault.target = ''; handoff.closeGate = undefined; handoff.closeEntered = undefined; await f.close() }
+})
+
+it('retires a binding consumer after acknowledgement even after parent revocation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-binding-retire-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await coordinator.create({ sessionId:'parent' }); const document = await coordinator.openManagedDocument('parent')
+    await writeFile(join(root,'task-parent.doc.jsonl'), '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const persistence = new TaskPersistence(coordinator,'parent',false,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,document,document.view,'parent'))
+    const held = persistence.captureBindingSave()!; await held.done; document.revokeNewWork()
+    await held.retireConsumer(); expect(() => held.release()).toThrow(); expect(() => held.assertHandoff()).toThrow(); await persistence.flush()
+  } finally { await coordinator.close(); await rm(root,{recursive:true,force:true}) }
+})
+
+it('retirement releases a clean queue and checks receiver and repeated consumption', async () => {
+  const root=await mkdtemp(join(tmpdir(),'ih-binding-queue-')), coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+  try {
+    await coordinator.create({sessionId:'parent'}); const doc=await coordinator.openManagedDocument('parent')
+    const p=new TaskPersistence(coordinator,'parent',true,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
+    const held=p.captureBindingSave(); await held.done; const later=p.save(); await held.retireConsumer(); await held.retireConsumer(); await later; await p.flush()
+    await expect(held.retireConsumer.call({})).rejects.toThrow('receiver'); expect(()=>held.release()).toThrow(); expect(()=>held.assertHandoff()).toThrow()
+  } finally { await coordinator.close(); await rm(root,{recursive:true,force:true}) }
+})
+it('retirement retains unknown original write debt and releases the parked queue', async () => {
+  const root=await mkdtemp(join(tmpdir(),'ih-binding-unknown-')), coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+  try {
+    await coordinator.create({sessionId:'parent'}); const doc=await coordinator.openManagedDocument('parent'), path=join(root,'task-parent.doc.jsonl')
+    const p=new TaskPersistence(coordinator,'parent',true,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
+    fault.target=path; fault.afterRename=true; handoff.publications=0
+    const held=p.captureBindingSave(); await expect(held.done).rejects.toThrow(); const queued=p.save(); void queued.catch(()=>{})
+    await expect(held.retireConsumer()).rejects.toThrow(); await expect(queued).rejects.toThrow(); await expect(p.flush()).rejects.toThrow(); expect(handoff.publications).toBe(1); expect(p.lastOwnedSave()).toBe(held)
+  } finally { fault.afterRename=false; fault.target=''; await coordinator.close().catch(()=>{}); await rm(root,{recursive:true,force:true}) }
+})
+it('retirement retries only original close and retains its failure history', async () => {
+  const root=await mkdtemp(join(tmpdir(),'ih-binding-close-')), coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+  try {
+    await coordinator.create({sessionId:'parent'}); const doc=await coordinator.openManagedDocument('parent'), path=join(root,'task-parent.doc.jsonl')
+    const p=new TaskPersistence(coordinator,'parent',true,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
+    fault.target=path; fault.failFinalClose=true; handoff.publications=0
+    const held=p.captureBindingSave(); await expect(held.done).rejects.toBeNull(); fault.failFinalClose=false
+    await held.retireConsumer(); await p.flush(); expect(handoff.publications).toBe(1); expect(()=>held.release()).toThrow()
+  } finally { fault.failFinalClose=false; fault.target=''; await coordinator.close().catch(()=>{}); await rm(root,{recursive:true,force:true}) }
 })
