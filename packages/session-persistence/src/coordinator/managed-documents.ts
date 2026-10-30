@@ -30,13 +30,29 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     const revoke=document.revokeNewWork
     document.revokeNewWork=()=>{assertTaskOutside(id);void revokeTaskOperations(id);markManagedEntryRevoked(entry);revoke()}
     const close=document.close
+    let closeFlight:Promise<void>|undefined,closeComplete=false
     document.close=async()=>{
+      // Refuse self-use before tokens, revocation or cleanup; all attached closes
+      // share this wrapper rather than recursively entering closeOne.
       assertTaskOutside(id)
-      // An unready cold entry already owns the retryable cleanup fence.
+      bootstrap.assertOutsideCapture(id)
+      if(closeComplete)return
+      if(closeFlight)return closeFlight
       const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
       let outcome:'settled'|'unknown'='unknown'
-      try {await revokeTaskOperations(id);await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)};outcome='settled'}
-      finally {token?.end(outcome)}
+      const flight=(async()=>{
+        try {
+          revokeManagedEntry(entry)
+          await entry.flight?.catch(()=>{})
+          await bootstrap.settleCapture(entry)
+          if(entry.headerUnknown)throw new FactRecoveryRequiredError()
+          await revokeTaskOperations(id);await close();await bootstrap.releaseCapture(entry)
+          if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}
+          outcome='settled';closeComplete=true
+        }finally{token?.end(outcome)}
+      })().finally(()=>{if(closeFlight===flight)closeFlight=undefined})
+      closeFlight=flight
+      return flight
     }
     if(entry.revoked)document.revokeNewWork()
     if(!entry.bootstrap&&!entry.selected)resolved.set(id,document)
@@ -49,15 +65,20 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     assertTaskOutside(id)
     bootstrap.assertOutsideCapture(id)
     const entry=documents.get(id);if(!entry)return
+    const attachedDocument=()=>entry.document
+    if(entry.document){await entry.document.close();return}
     // Retain the original cold fence across failed cleanup instead of poisoning it.
     const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
     let outcome:'settled'|'unknown'='unknown'
     try {
     revokeManagedEntry(entry);await entry.flight?.catch(()=>{})
+    // The opening flight may have attached this exact entry while close waited.
+    const attached=attachedDocument()
+    if(attached){await attached.close();outcome='settled';return}
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
-    if(entry.document)await entry.document.close()
-    else {if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
+    if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry)
+    if(documents.get(id)===entry)documents.delete(id)
     outcome='settled'
     } finally { token?.end(outcome) }
   }
