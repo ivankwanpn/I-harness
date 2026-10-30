@@ -41,3 +41,10 @@ it('refuses missing task storage before replacing an existing-empty physical14 h
  const guards={assertCurrent(){},dependencies:{async confirm(){throw Error('unused')},async reconcile(){throw Error('unused')}}},coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
  try{expect((await coordinator.bootstrapSemanticTarget(request,guards)).kind).not.toBe('ready');expect(await readFile(join(root,'p.jsonl'))).toEqual(before);await expect(readFile(join(root,'task-p.doc.jsonl'))).rejects.toMatchObject({code:'ENOENT'})}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
+it('refuses an unknown future parent without mutating task storage',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'future-parent-')),backend=createJsonlBackend(root)
+ await backend.create('p',{sessionId:'p',formatVersion:14,createdAt:'x'})
+ const {writeFile}=await import('node:fs/promises'),path=join(root,'p.jsonl'),lines=(await readFile(path,'utf8')).split('\n'),header=JSON.parse(lines[0]!);header.formatVersion=15;lines[0]=JSON.stringify(header);await writeFile(path,lines.join('\n'))
+ const task='{ "formatVersion": 2, "tasks": [], "notifications": [] }\n';await writeFile(join(root,'task-p.doc.jsonl'),task);const before=await readFile(path),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{await expect(coordinator.loadOwned('p')).rejects.toThrow();expect(await readFile(path)).toEqual(before);expect(await readFile(join(root,'task-p.doc.jsonl'),'utf8')).toBe(task)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+})

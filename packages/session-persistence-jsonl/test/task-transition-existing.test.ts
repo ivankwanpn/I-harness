@@ -180,3 +180,9 @@ it('admits a new local task fact already represented by its original task docume
     expect((await createJsonlBackend(root).read('p')).events).toHaveLength(1)
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
+it('refuses a task v3 document beside an original13 parent without changing either file',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'future-task-'));await seedOriginal13(root)
+ const taskPath=join(root,'task-p.doc.jsonl'),literal='{ "formatVersion": 3, "tasks": [], "notifications": [] }\n';await writeFile(taskPath,literal)
+ const before=await readFile(join(root,'p.jsonl')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{await expect(coordinator.loadOwned('p')).rejects.toThrow();expect(await readFile(taskPath,'utf8')).toBe(literal);expect(await readFile(join(root,'p.jsonl'))).toEqual(before)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
