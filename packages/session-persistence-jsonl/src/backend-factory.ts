@@ -32,11 +32,15 @@ export function createJsonlSessionCoordinator(root: string, options?: Coordinato
     captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) },
   })
 }
-export function createJsonlTaskDocumentCoordinator(root: string, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
-  const backend = createJsonlBackend(root), owner = processReadOwners.get(backend)!
+export function composeJsonlTaskDocumentCoordinator(backend: PersistenceBackend, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
+  const owner = processReadOwners.get(backend)
+  if (!owner) throw new TypeError('Original JSONL backend required')
+  owner.assertOriginal()
   return assembleSessionCoordinatorWithProcessStorage(backend, options, { capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) }, captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) } }, { validator, open(scope) { owner.assertOriginal(); return owner.openTask(scope) } })
 }
-
+export function createJsonlTaskDocumentCoordinator(root: string, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
+  return composeJsonlTaskDocumentCoordinator(createJsonlBackend(root), options, validator)
+}
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
 // answer (no turn/start yet); a larger one is served non-blank without a read

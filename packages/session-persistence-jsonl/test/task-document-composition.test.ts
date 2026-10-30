@@ -206,3 +206,18 @@ it('refuses an equal JSON value with different original bytes and expires copied
     await expect(operation.confirm(observed.witness)).rejects.toThrow()
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+it('composes task and process capabilities only from the original JSONL backend', async () => {
+  const { createJsonlBackend, composeJsonlTaskDocumentCoordinator } = await import('../src/backend-factory.ts')
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-existing-backend-'))
+  const backend = createJsonlBackend(root)
+  expect(() => composeJsonlTaskDocumentCoordinator({ ...backend }, { lock: { enabled: true } }, taskDocumentStorageContract)).toThrow()
+  const coordinator = composeJsonlTaskDocumentCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await coordinator.create({ sessionId: 'p' }); const parent = await coordinator.openManagedDocument('p')
+    await writeFile(join(root, 'task-p.doc.jsonl'), '{"formatVersion":2,"tasks":[],"notifications":[]}')
+    const operations = taskDocumentOperationsFor(coordinator)!; const operation = await operations.begin(operations.parent(parent)); const observed = await operation.observe()
+    expect(observed.kind).toBe('present'); await operation.close()
+    expect(coordinator.withProcessReadObservation).toBeTypeOf('function')
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
