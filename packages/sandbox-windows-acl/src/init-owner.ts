@@ -122,6 +122,34 @@ export class NativeInitOwner {
     current()
     return value()
   }
+  /** Two handle outputs share one native issue; both entries precede that issue. */
+  outputHandlePair(first: NativePtr, second: NativePtr, name: string, issue: () => number): [NativePtr, NativePtr] {
+    if (first === second) throw new Error('output slots must be distinct')
+    const firstCurrent = this.captureHeapCurrent(first), secondCurrent = this.captureHeapCurrent(second)
+    let state: 'unknown' | 'success' | 'failed' = 'unknown'
+    const entries: Entry[] = []
+    const add = (slot: NativePtr) => {
+      let value: NativePtr | null = null
+      const entry = this.own(() => {
+        if (state === 'failed') return
+        if (state === 'unknown') throw new Error(`${name} outcome unknown`)
+        if (value === null) { value = decodePtr(slot); if (isInvalidHandle(value)) throw new Error(`${name} output unresolved`); entry.value = value! }
+        this.consume(entry, 'CloseHandle', () => this.api.closeHandle(value!), boolAck, () => throwLastError(this.api, 'CloseHandle', name))
+      }, undefined, 'handle')
+      entries.push(entry)
+      return () => { if (value === null) { value = decodePtr(slot); if (isInvalidHandle(value)) throw new Error(`${name} output unresolved`); entry.value = value! } return value! }
+    }
+    this.retirementGate(first, () => { if (entries.some(entry => !entry.done)) throw new Error(`${name} outputs unresolved`) })
+    this.retirementGate(second, () => { if (entries.some(entry => !entry.done)) throw new Error(`${name} outputs unresolved`) })
+    const readFirst = add(first), readSecond = add(second)
+    firstCurrent(); secondCurrent()
+    const result = issue()
+    if (boolAck(result) === 'unknown') throw new Error(`${name} outcome unknown`)
+    if (result === 0) { state = 'failed'; throwLastError(this.api, name) }
+    state = 'success'
+    firstCurrent(); secondCurrent()
+    return [readFirst(), readSecond()]
+  }
   release(value: NativePtr, domain: Entry['domain']) {
     const entry = [...this.entries].reverse().find(entry => !entry.done && entry.value === value && entry.domain === domain)
     if (!entry) throw new Error('resource is not owned')
@@ -181,3 +209,4 @@ export function withInitOwner<T extends NativePtr | void>(api: Win32Bindings, su
     throw error
   }
 }
+

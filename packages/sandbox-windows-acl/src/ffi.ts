@@ -61,6 +61,8 @@ export interface ProcessInfoOutput {
 /** The lazy koffi binding table: every Win32 call the ACL backend uses, signature-verified against the real headers. */
 export interface Win32Bindings {
   // ---- process / token handles --------------------------------------------
+  getCurrentProcess(): NativePtr
+  duplicateHandle(sourceProcess: NativePtr, source: NativePtr, targetProcess: NativePtr, target: NativePtr, access: number, inherit: number, options: number): number
   openProcess(desiredAccess: number, inheritHandle: number, pid: number): NativePtr
   openProcessToken(process: NativePtr, desiredAccess: number, tokenHandle: NativePtr): number
   closeHandle(handle: NativePtr): number
@@ -396,6 +398,8 @@ function bindings(): Win32Bindings {
     lib.func('__stdcall', name, result, args)
 
   cached = {
+    getCurrentProcess: bind(kernel32, 'GetCurrentProcess', PVOID, []),
+    duplicateHandle: bind(kernel32, 'DuplicateHandle', 'int', [PVOID, PVOID, PVOID, PPVOID, 'uint32', 'int', 'uint32']),
     openProcess: bind(kernel32, 'OpenProcess', PVOID, ['uint32', 'int', 'uint32']),
     openProcessToken: bind(advapi32, 'OpenProcessToken', 'int', [PVOID, 'uint32', PPVOID]),
     closeHandle: bind(kernel32, 'CloseHandle', 'int', [PVOID]),
@@ -532,3 +536,4 @@ export function throwLastError(api: Win32Bindings, name: string, detail?: string
 export function throwWin32(api: Win32Bindings, name: string, win32Code: number, detail?: string): never {
   throw new Win32Error(name, win32Code, detail ?? errorText(api, win32Code))
 }
+
