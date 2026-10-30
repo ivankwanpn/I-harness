@@ -1,3 +1,5 @@
+import { failuresTogether } from '../workspace-mutation.ts'
+import type { ArtifactQualificationIO } from './qualification-io.ts'
 import { open, lstat, realpath, rename, readdir, link, unlink, mkdir } from 'node:fs/promises'
 import { basename, dirname, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -26,13 +28,16 @@ export async function readExact(handle: FileHandle, length: number, position: nu
   }
   return bytes
 }
-export async function boundedJson(path: string, budget = 65536, retire?: RetireFile): Promise<unknown> {
-  const handle = await open(path, 'r')
+export async function boundedJson(path: string, budget = 65536, retire?: RetireFile, io?: ArtifactQualificationIO): Promise<unknown> {
+  const handle = await (io ? io.open(path, 'r') : open(path, 'r')), failures:unknown[]=[]
+  let value:unknown
   try {
     const info = await handle.stat()
     if (!info.isFile() || info.size > budget) throw new Error('Invalid artifact metadata')
-    return JSON.parse((await readExact(handle, info.size, 0)).toString('utf8'))
-  } finally { await retireFile(handle, retire) }
+    value=JSON.parse((await readExact(handle, info.size, 0)).toString('utf8'))
+  } catch(error){failures.push(error)}
+  try{await retireFile(handle, io?.retire ?? retire)}catch(error){failures.push(error)}
+  failuresTogether(failures,'Original metadata read/cleanup failed');return value
 }
 export async function atomicJson(path: string, value: unknown, renameRejected?: (cause: unknown) => void): Promise<void> {
   const bytes = Buffer.from(JSON.stringify(value))
@@ -74,7 +79,7 @@ function immutableBytes(value: unknown): Buffer {
   if (bytes.length > 65536) throw new MetadataConflict('Artifact metadata exceeds limit')
   return bytes
 }
-export async function inspectImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile): Promise<{ final: boolean; pending: boolean }> {
+export async function inspectImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile, io?: ArtifactQualificationIO): Promise<{ final: boolean; pending: boolean }> {
   const temporary = pendingPath(path, bytes)
   try {
     if (resolve(dirname(path)) === resolve(root)) {
@@ -92,39 +97,39 @@ export async function inspectImmutable(root: string, path: string, bytes: Buffer
   async function inspect(target: string, partial: boolean): Promise<boolean> {
     let handle: FileHandle | undefined
     try {
-      await ownedPath(root, target); handle = await open(target, 'r')
+      await ownedPath(root, target); handle = await (io ? io.open(target, 'r') : open(target, 'r'))
       const info = await handle.stat()
       if (!info.isFile() || info.size > bytes.length || !partial && info.size !== bytes.length
         || !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) throw new MetadataConflict('Immutable artifact metadata conflict')
       return true
     } catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false; throw cause }
-    finally { if (handle) await retireFile(handle, retire) }
+    finally { if (handle) await retireFile(handle, io?.retire ?? retire) }
   }
   return { final: await inspect(path, false), pending: await inspect(temporary, true) }
 }
-async function syncImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile): Promise<string[]> {
+async function syncImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile, io?: ArtifactQualificationIO): Promise<string[]> {
   await ownedPath(root, path)
   // Windows FlushFileBuffers requires a writable handle; no bytes are written.
-  const handle = await open(path, 'r+')
-  let failure: unknown
+  const handle = await (io ? io.open(path, 'r+') : open(path, 'r+'))
+  let failure: unknown, failed=false
   const diagnostics: string[] = []
   try {
     const info = await handle.stat()
     if (!info.isFile() || info.size !== bytes.length || !(await readExact(handle, info.size, 0)).equals(bytes)) throw new MetadataConflict('Immutable artifact metadata conflict')
     await handle.sync()
-  } catch (cause) { failure = cause }
-  try { await retireFile(handle, retire) }
+  } catch (cause) { failure = cause; failed=true }
+  try { await retireFile(handle, io?.retire ?? retire) }
   catch (cause) { diagnostics.push('Post-sync metadata handle cleanup: ' + (cause instanceof Error ? cause.message : String(cause))) }
-  if (failure) throw failure
+  if (failed) throw failure
   return diagnostics
 }
 function confirmed(diagnostics: readonly string[]): ImmutableMetadataOutcome { return { kind: 'confirmed', ...(diagnostics.length ? { diagnostics } : {}) } }
 function metadataFailure(cause: unknown): ImmutableMetadataOutcome { return { kind: cause instanceof MetadataConflict ? 'conflict' : 'unknown', diagnostics: [cause instanceof Error ? cause.message : String(cause)] } }
-export async function confirmAtomicJson(root: string, path: string, value: unknown, retire?: RetireFile): Promise<ImmutableMetadataOutcome> {
+export async function confirmAtomicJson(root: string, path: string, value: unknown, retire?: RetireFile, io?: ArtifactQualificationIO): Promise<ImmutableMetadataOutcome> {
   try {
-    const bytes = immutableBytes(value), state = await inspectImmutable(root, path, bytes, retire)
+    const bytes = immutableBytes(value), state = await inspectImmutable(root, path, bytes, retire, io)
     if (!state.final) return { kind: state.pending ? 'unknown' : 'absent' }
-    const diagnostics = await syncImmutable(root, path, bytes, retire)
+    const diagnostics = await syncImmutable(root, path, bytes, retire, io)
     if (state.pending) diagnostics.push('Retained exact pending metadata')
     return confirmed(diagnostics)
   } catch (cause) { return metadataFailure(cause) }

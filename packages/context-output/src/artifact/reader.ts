@@ -1,3 +1,5 @@
+import type { ArtifactQualificationIO } from './qualification-io.ts'
+import { failuresTogether } from '../workspace-mutation.ts'
 import { open, lstat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { ManagedArtifactRef } from '@i-harness/core-session'
@@ -7,14 +9,16 @@ import { CHUNK, dimensions, indexHeader, verifyChunk } from './index.ts'
 import type { ManagedArtifactPage } from './types.ts'
 
 /** One rooted range may intersect two64KiB body chunks plus bounded output/proof. */
-export async function readVerifiedArtifactBytes(root: string, directory: string, ref: ManagedArtifactRef, offset: number, length: number): Promise<Buffer> {
+export async function readVerifiedArtifactBytes(root: string, directory: string, ref: ManagedArtifactRef, offset: number, length: number, io?: ArtifactQualificationIO): Promise<Buffer> {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > 65536 || !Number.isSafeInteger(offset + length) || offset + length > ref.encodedBytes) throw new Error('Artifact range unavailable')
   const paths = ['manifest.json', 'index', 'body'].map(name => resolve(directory, name))
   for (const path of paths) await ownedPath(root, path)
-  const manifest = validateManifest(await boundedJson(paths[0]!, 4096), ref), shape = dimensions(ref.encodedBytes)
+  const manifest = validateManifest(await boundedJson(paths[0]!, 4096, undefined, io), ref), shape = dimensions(ref.encodedBytes)
   if (manifest.leaves !== shape.leaves || manifest.paddedLeaves !== shape.paddedLeaves) throw new Error('Artifact index corrupt')
-  const index = await open(paths[1]!, 'r'), body = await open(paths[2]!, 'r')
+  let index: import('node:fs/promises').FileHandle|undefined, body: import('node:fs/promises').FileHandle|undefined, result!:Buffer
+  const failures:unknown[]=[]
   try {
+    index=await (io?io.open(paths[1]!,'r'):open(paths[1]!,'r'));body=await (io?io.open(paths[2]!,'r'):open(paths[2]!,'r'))
     const before = await body.stat(), indexBefore = await index.stat()
     if (!before.isFile() || before.size !== ref.encodedBytes || !indexBefore.isFile() || indexBefore.size !== shape.indexBytes
       || !(await readExact(index, 64, 0)).equals(indexHeader(ref.encodedBytes)) || (await readExact(index, 32, 64)).toString('hex') !== manifest.treeRoot) throw new Error('Artifact index or body corrupt')
@@ -33,8 +37,10 @@ export async function readVerifiedArtifactBytes(root: string, directory: string,
     for (const path of paths) await ownedPath(root, path)
     const physicalBody = await lstat(paths[2]!), physicalIndex = await lstat(paths[1]!)
     if (physicalBody.dev !== before.dev || physicalBody.ino !== before.ino || physicalIndex.dev !== indexBefore.dev || physicalIndex.ino !== indexBefore.ino) throw new Error('Artifact identity changed while reading')
-    return output
-  } finally { await body.close(); await index.close() }
+    result=output
+  } catch(error){failures.push(error)}
+  for(const handle of [body,index])if(handle)try{await (io?io.retire(handle):handle.close())}catch(error){failures.push(error)}
+  failuresTogether(failures,'Original artifact read/cleanup failed');return result
 }
 
 export async function readArtifactPage(root: string, directory: string, ref: ManagedArtifactRef, offset: number, maxBytes: number): Promise<ManagedArtifactPage> {

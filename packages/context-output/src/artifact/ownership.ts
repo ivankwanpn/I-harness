@@ -188,6 +188,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       // Fence new turns immediately, while already issued callbacks retain
       // their original lifecycle until the shared queue drains.
       closing = true
+      transfers.closeTransferAdmission()
       await mutations.join()
       closed = true
       const failures: unknown[] = []
