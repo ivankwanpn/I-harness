@@ -32,7 +32,10 @@ export function createLoads(
   async function transitionLoad(sessionId: string, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, skipPending = false) {
       if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
         assertWritable(sessionId)
-        const pending = skipPending ? undefined : pendingWriteBehind(sessionId)
+        let pending = skipPending ? undefined : pendingWriteBehind(sessionId)
+        // A current-format queued batch must cross its own task transition.
+        // Only predecessor work can be drained before the historical proof.
+        if (pending?.hasWork && (await read(sessionId)).version >= 14) { await pending.flush(); pending = undefined }
         return transitions.existing(sessionId, async () => {
           invalidateConversation(sessionId)
           const peeked = await read(sessionId)

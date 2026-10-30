@@ -48,3 +48,12 @@ it('refuses an unknown future parent without mutating task storage',async()=>{
  const task='{ "formatVersion": 2, "tasks": [], "notifications": [] }\n';await writeFile(join(root,'task-p.doc.jsonl'),task);const before=await readFile(path),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
  try{await expect(coordinator.loadOwned('p')).rejects.toThrow();expect(await readFile(path)).toEqual(before);expect(await readFile(join(root,'task-p.doc.jsonl'),'utf8')).toBe(task)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
+it('does not drain queued work into physical14 before confirming task storage',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'queued-missing14-')),backend=createJsonlBackend(root);await backend.create('p',{sessionId:'p',formatVersion:14,createdAt:'x'})
+ const before=await readFile(join(root,'p.jsonl')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true},maxDelayMs:60000},taskDocumentStorageContract)
+ try{coordinator.enqueue('p',[{type:'user/message',text:'must stay queued'}]);await expect(coordinator.loadOwned('p')).rejects.toThrow();expect(await readFile(join(root,'p.jsonl'))).toEqual(before);await expect(readFile(join(root,'task-p.doc.jsonl'))).rejects.toMatchObject({code:'ENOENT'})}finally{await coordinator.close().catch(()=>{});await rm(root,{recursive:true,force:true})}
+})
+it('drains queued physical14 work through its own confirmed task transition',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'queued-valid14-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true},maxDelayMs:60000},taskDocumentStorageContract)
+ try{await coordinator.create({sessionId:'p'});coordinator.enqueue('p',[{type:'user/message',text:'queued'}]);expect((await coordinator.loadOwned('p')).session.events).toHaveLength(1);expect((await createJsonlBackend(root).read('p')).events).toHaveLength(1)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+})

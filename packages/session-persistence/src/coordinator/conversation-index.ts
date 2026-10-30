@@ -13,6 +13,7 @@ export function createConversationIndexes(backend: Pick<PersistenceBackend, "rea
     async stage(id: string, events: SessionEvent[], preservePhysical = false) {
       let index = indexes.get(id)
       const loaded = preservePhysical ? await backend.read(id) : await ensureWritableFormatUnlocked(backend, id)
+      if (preservePhysical && loaded.version >= 14) throw new Error('TASK_TRANSITION_RETRY_REQUIRED')
       if (preservePhysical) preflightSessionFormat(loaded.version,loaded.events,loaded.meta)
       const version = preservePhysical ? loaded.version : CURRENT_FORMAT_VERSION
       let suffix = events
