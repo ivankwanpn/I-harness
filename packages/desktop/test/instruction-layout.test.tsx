@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterAll, beforeAll, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
@@ -8,7 +8,11 @@ import { InstructionsPane } from '../src/renderer/session/InstructionsPane.tsx'
 import { InstructionSettings } from '../src/renderer/settings/InstructionSettings.tsx'
 import { useLocale } from '../src/renderer/design/i18n.ts'
 import { useUiStore } from '../src/renderer/shell/ui-store.ts'
-const root = process.env.IH_CONFIG_DIR!, modulePath = process.env.IH_I6_PLAYWRIGHT!, executablePath = process.env.IH_I6_BROWSER!
+const root = process.env.IH_CONFIG_DIR?.trim() ?? '', modulePath = process.env.IH_I6_PLAYWRIGHT?.trim() ?? '', executablePath = process.env.IH_I6_BROWSER?.trim() ?? ''
+const missing = Object.entries({ IH_CONFIG_DIR: root, IH_I6_PLAYWRIGHT: modulePath, IH_I6_BROWSER: executablePath }).filter(([, value]) => !value).map(([name]) => name)
+// This is an optional browser suite. Skip its hooks as well as its tests before
+// importing browser tooling or creating a profile; configured failures stay failures.
+describe.skipIf(missing.length > 0)(missing.length ? `Optional instruction browser visuals — skipped: missing ${missing.join(', ')}` : 'Optional isolated instruction browser visuals', () => {
 const originalLocale = useLocale.getState().locale
 let context: any
 beforeAll(async () => { const { chromium } = await import(/* @vite-ignore */ pathToFileURL(modulePath).href); context = await chromium.launchPersistentContext(join(root, 'i6-browser-profile'), { executablePath, headless: true }) })
@@ -72,3 +76,4 @@ it('keeps the mounted workbench instruction pane within light and dark narrow la
   }
   rendered.unmount(); await page.close(); useUiStore.setState({ reviewOpen: false, surface: 'conversation', sidebarCollapsed: false })
 }, 20000)
+})
