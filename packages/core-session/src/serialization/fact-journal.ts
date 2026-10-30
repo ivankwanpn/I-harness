@@ -86,7 +86,7 @@ function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersio
   for (const line of legacy.toString('utf8').split('\n')) {
     if (line.trim()) { try { events.push(JSON.parse(line)) } catch { fail() } }
   }
-  if (events.length !== metadata.legacyEventCount || events.some(event => isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && event.provenance?.producer === 'session.delivery.subagent')) fail()
+  if (events.length !== metadata.legacyEventCount || events.some(event => isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec'].includes(event.provenance?.producer ?? ''))) fail()
   let offset = metadata.legacyBodyBytes
   if (metadata.separatorBytes) { if (buffer[offset] !== 0x0a) fail(); offset++ }
   let prefixDigest = metadata.legacyPrefixDigest

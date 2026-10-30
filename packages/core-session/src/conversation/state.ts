@@ -70,7 +70,7 @@ export function readConversationState(session: Session, projection: Conversation
   for (const event of session.events) {
     if (isDeliveryEventType(event.type) && event.seq !== undefined) deliveryRefs.add(event.seq)
     if (event.type === 'agent/delivery-source' && event.generationId === delivery.activeGeneration()?.generationId && !consumedDeliverySources.has(event.seq!)) {
-      deliveryRefs.add(event.callSeq); deliveryRefs.add(event.startSeq)
+      deliveryRefs.add(event.callSeq); if (event.kind === 'subagent') deliveryRefs.add(event.startSeq)
     }
     if (event.type === 'agent/delivery-received' && delivery.receipt(event.key)?.disposition === 'pending') {
       deliveryRefs.add(event.sourceSeq); deliveryRefs.add(event.terminalSeq); deliveryRefs.add(event.seq! + 1)

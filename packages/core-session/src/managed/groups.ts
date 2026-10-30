@@ -32,6 +32,7 @@ export type TeamFact = Event<'team/member' | 'team/task' | 'team/message/queued'
 export type ContextReductionDraft = { kind: 'context-reduction'; events: readonly (DistributiveOmit<Event<'compaction/replacement' | 'compaction/prune' | 'compaction/reset'>, 'seq'> & { seq?: never })[]; softTerminal?: SoftReductionTerminalDraft }
 export type FactGroupDraft =
   | { kind: 'delivery-generation'; event: import("../events/delivery.ts").DeliveryGenerationEvent }
+  | { kind: 'exec-delivery-source'; event: import('../events/exec-delivery.ts').ExecDeliverySourceEvent }
   | { kind: 'subagent-delivery-start'; start: Event<'subagent/start'>; binding: import("../events/delivery.ts").SubagentDeliveryLaunchDraft }
   | { kind: 'delivery-admission'; receipt: Omit<import("../events/delivery.ts").DeliveryReceivedEvent,'seq'>; admitted: Event<'agent/input/admitted'> }
   | { kind: 'runtime-context'; event: import('../events/runtime-context.ts').RuntimeContextRecordV1 }
@@ -57,7 +58,7 @@ export type FactGroupDraft =
   | { kind: 'scheduled-input'; dispatches: readonly Event<'schedule/change'>[]; admitted: Event<'agent/input/admitted'> }
   | { kind: 'policy-import'; modes: readonly Event<'sandbox/mode'>[] }
   | { kind: 'team-transaction'; events: readonly TeamFact[] }
-  | { kind: 'delivery'; event: Event<'subagent/start' | 'subagent/end' | 'subagent/inbox' | 'job/status' | 'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered'> }
+  | { kind: 'delivery'; event: Event<'subagent/start' | 'subagent/end' | 'subagent/inbox' | 'job/status' | 'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered' | 'exec/end' | 'agent/delivery-handoff'> }
   | { kind: 'usage'; event: UsageDraft }
   | { kind: 'legacy-compaction'; events: readonly Event<'compaction/start' | 'compaction/end' | 'compaction/summary' | 'compaction/reset' | 'compaction/prune' | 'rewind/point'>[] }
 
@@ -74,6 +75,7 @@ export type CapturedFactGroup = DeepReadonly<FactGroupDraft> & { readonly [captu
 const owned = new WeakSet<object>()
 const family: Record<string, readonly SessionEvent['type'][]> = {
   'runtime-context': ['runtime/context'],
+  'exec-delivery-source': ['agent/delivery-source'],
   generation: ['context/action', 'context/attempt'],
   'soft-reduction': ['context/soft-reduction'],
   'generation-recovery': ['context/recovery', 'context/action'],
@@ -82,7 +84,7 @@ const family: Record<string, readonly SessionEvent['type'][]> = {
   lifecycle: ['turn/start', 'turn/end', 'step/start', 'step/end', 'step/failed', 'conversation/semantics', 'assistant/chunk', 'reasoning', 'model/retry'],
   metadata: ['plan/mode', 'sandbox/mode', 'todo/write', 'goal/change', 'schedule/change', 'session/title', 'context/budget', 'context/recovery', 'command/run', 'command/done', 'operator/run-end'],
   'result-reference': ['context/result-ref'],
-  delivery: ['subagent/start', 'subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered'],
+  delivery: ['subagent/start', 'subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered', 'exec/end', 'agent/delivery-handoff'],
   usage: ['context/usage'], 'legacy-compaction': ['compaction/start', 'compaction/end', 'compaction/summary', 'compaction/reset', 'compaction/prune', 'rewind/point'],
   'team-transaction': ['team/member', 'team/task', 'team/message/queued', 'team/message/delivered'],
   'context-reduction': ['compaction/replacement', 'compaction/prune', 'compaction/reset', 'context/soft-reduction'],
@@ -90,6 +92,7 @@ const family: Record<string, readonly SessionEvent['type'][]> = {
 function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
   switch (group.kind) {
     case 'delivery-generation': return [group.event]
+    case 'exec-delivery-source': return [group.event]
     case 'subagent-delivery-start': return [group.start, {type:'agent/delivery-source',version:1,kind:'subagent',...group.binding,startSeq:{kind:'group',position:0,expectedType:'subagent/start'}}]
     case 'delivery-admission': return [group.receipt, group.admitted]
     case 'input-admission': return [group.admitted]
@@ -147,6 +150,10 @@ export function captureFactGroup(draft: FactGroupDraft):
     if (draft.kind === 'subagent-delivery-start' && (!Object.keys(draft.binding).every(key=>['recipientSessionId','generationId','sourceNamespace','sourceId','callSeq'].includes(key)) || !validDeliveryEvent({type:'agent/delivery-source',version:1,kind:'subagent',...draft.binding,startSeq:0}))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'delivery-admission' && (Object.hasOwn(draft.receipt,'seq') || !validDeliveryEvent(draft.receipt))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'delivery-generation' && (Object.hasOwn(draft.event,'seq') || !validDeliveryEvent(draft.event))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+    if (draft.kind === 'exec-delivery-source' && (!isStrictFactData(draft) || !closedDeliveryData(draft) || Reflect.ownKeys(draft).length !== 2
+      || Object.hasOwn(draft.event, 'seq') || !validDeliveryEvent(draft.event) || draft.event.type !== 'agent/delivery-source' || draft.event.kind !== 'exec')) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+    if (draft.kind === 'delivery' && (draft.event.type === 'exec/end' || draft.event.type === 'agent/delivery-handoff')
+      && (!isStrictFactData(draft) || !closedDeliveryData(draft) || Reflect.ownKeys(draft).length !== 2 || Object.hasOwn(draft.event, 'seq') || !validDeliveryEvent(draft.event))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'exchange-acceptance' && !isStrictFactData(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'runtime-context' && (!isStrictFactData(draft) || Object.keys(draft).length !== 2 || Object.getOwnPropertyNames(draft).length !== 2 || !validRuntimeContextRecord(draft.event) || Object.hasOwn(draft.event, 'seq'))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'context-reduction' && !validContextReductionDraft(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
@@ -208,7 +215,7 @@ export function resolveFactGroup(group: CapturedFactGroup, view: SessionView, fi
       if (resolved.type === 'user/message' && resolved.inputPreparation && 'rawMessageSeq' in resolved.inputPreparation) resolved = { ...resolved, inputPreparation: { ...resolved.inputPreparation, rawMessageSeq } }
       if (resolved.type === 'agent/input/preparation' && resolved.op === 'promoted') resolved = { ...resolved, rawMessageSeq, derivedMessageSeqs: group.preparation.observations.map((_, index) => rawMessageSeq + index + 1) }
     }
-    if (resolved.type === 'agent/delivery-source' && group.kind === 'subagent-delivery-start') resolved = {...resolved,startSeq:reference((event as unknown as {startSeq:SeqRef<'subagent/start'>}).startSeq,'subagent/start',position)}
+    if (resolved.type === 'agent/delivery-source' && resolved.kind === 'subagent' && group.kind === 'subagent-delivery-start') resolved = {...resolved,startSeq:reference((event as unknown as {startSeq:SeqRef<'subagent/start'>}).startSeq,'subagent/start',position)}
     if (resolved.type === 'model/exchange-accepted' && group.kind !== 'seed-import') {
       const draft = event as unknown as AcceptedDraft
       if (draft.stepStartSeq.kind !== 'prior') throw new TypeError('Step reference must be committed')
