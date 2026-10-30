@@ -61,6 +61,11 @@ export function createDesktopPlugins(root: string, options: { watch: FsWatchServ
       catch { throw new Error("Plugin settings were saved, but live update failed; retry the operation") }
       return { ok: true }
     },
-    close: async () => { await managed.close(); await refreshTail },
+    close: async () => {
+      managed.assertCanClose()
+      const results = await Promise.allSettled([managed.close(), refreshTail])
+      const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      if (errors.length) throw new AggregateError(errors, "Plugin cleanup failed")
+    },
   }
 }

@@ -523,7 +523,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       if (shutdownComplete) return Promise.resolve()
       if (closing) return closing
       shutdownRequested = true
-      stopPluginObserver.dispose()
+      let pluginFenceFailure: { cause: unknown } | undefined
+      try { stopPluginObserver.dispose() } catch (cause) { pluginFenceFailure = { cause } }
       instructionEnvironment.dispose()
       const attempt = (async () => {
         const failures: Array<{ name: string; cause: unknown }> = []
@@ -532,6 +533,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
           try { await dispose(); cleaned.add(name) }
           catch (cause) { failures.push({ name, cause }) }
         }
+        if (pluginFenceFailure) failures.push({ name: "plugin observer fence", cause: pluginFenceFailure.cause })
         await once("trust watcher fence", () => trustWatcher.dispose())
         await once("policy timer", () => clearInterval(policyTimer))
         await once("interaction", () => interaction.close())

@@ -1,5 +1,5 @@
 import { createFsWatchService } from "@i-harness/fs-watch"
-import { mkdtemp, mkdir, rm, writeFile, rename } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile, rename, readFile, stat, utimes } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -10,6 +10,85 @@ import { createDesktopPlugins } from "../src/plugins.ts"
 import { pluginExtensions, expandPluginPrompt } from "../src/plugin-mount.ts"
 import { writeStdioStubServer } from "../../mcp-client/test/stdio-stub.ts"
 import { writeSuggestionMarketplace } from "./resource-suggestions-fixture.ts"
+import * as materialization from "../../plugin-registry/src/materialize.ts"
+import * as installation from "../../plugin-registry/src/install.ts"
+
+it("blocks original input reads behind held materialization and installs only once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-plugin-materialize-lock-"))
+  const watch = createFsWatchService()
+  const writer = createDesktopPlugins(root, { watch }), reader = createDesktopPlugins(root, { watch })
+  const install = vi.spyOn(installation, "installPlugin")
+  await writer.mutate({ action: "source/add", source: fileURLToPath(new URL("../../plugin-registry/test/fixtures/marketplace-a", import.meta.url)) })
+  await writer.mutate({ action: "install", id: "Marketplace A__hello" })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const original = materialization.materializePlugin
+  let entered = false
+  const materialize = vi.spyOn(materialization, "materializePlugin").mockImplementation(async (...args) => { entered = true; await held; return original(...args) })
+  let refreshes = 0, commands: string[] = []
+  const observer = reader.bindRefresh(async () => { refreshes++; commands = (await reader.inputs()).commandDescriptors.map(row => row.name) })
+  try {
+    await vi.waitFor(() => expect(refreshes).toBe(1))
+    const enabling = writer.mutate({ action: "enable", id: "Marketplace A__hello" })
+    await vi.waitFor(() => expect(entered).toBe(true))
+    let readDone = false
+    const reading = reader.inputs().then(value => { readDone = true; return value })
+    const before = refreshes
+    const path = join(root, "state.json")
+    await writeFile(path, await readFile(path))
+    await vi.waitFor(() => expect(refreshes).toBeGreaterThan(before), { timeout: 5000 })
+    expect(readDone).toBe(false)
+    release(); await enabling
+    expect((await reading).commandDescriptors.map(row => row.name)).toContain("hello")
+    await vi.waitFor(() => expect(commands).toContain("hello"), { timeout: 5000 })
+    expect(install).toHaveBeenCalledTimes(1); expect(materialize).toHaveBeenCalledTimes(1)
+  } finally { release(); materialize.mockRestore(); install.mockRestore(); await observer.close(); await reader.close(); await writer.close(); await watch.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
+})
+
+it("refuses plugin close from its active observer callback and permits manual recovery", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-plugin-self-close-"))
+  const watch = createFsWatchService(), plugins = createDesktopPlugins(root, { watch })
+  let calls = 0
+  const observer = plugins.bindRefresh(async () => {
+    calls++
+    await expect(plugins.close()).rejects.toThrow("observer callback")
+    if (calls === 1) throw ""
+  })
+  try {
+    await vi.waitFor(async () => expect((await plugins.state()).refreshError).toBe(""), { timeout: 5000 })
+    // Manual callbacks execute outside the observer context, so swap the binding
+    // only after fencing this observer, retaining the explicit refresh owner.
+    observer.dispose(); await observer.close()
+    const recovered = plugins.bindRefresh(async () => {})
+    await plugins.refresh()
+    expect((await plugins.state()).refreshError).toBeUndefined()
+    await recovered.close()
+  } finally { await plugins.close(); await watch.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
+})
+
+it("joins manual refresh despite managed lease cleanup failure and retries the same lease", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-plugin-close-refresh-"))
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const close = vi.fn(async () => { if (close.mock.calls.length === 1) throw new Error("lease cleanup") })
+  const acquire = vi.fn(() => ({ ready: Promise.resolve({ epoch: 1, revision: 0 }), subscribe: () => () => {}, close }))
+  const plugins = createDesktopPlugins(root, { watch: { acquire, close: vi.fn() } })
+  let calls = 0
+  const observer = plugins.bindRefresh(async () => { if (++calls === 2) await held })
+  await vi.waitFor(() => expect(calls).toBe(1))
+  const refreshing = plugins.refresh()
+  await vi.waitFor(() => expect(calls).toBe(2))
+  let done = false
+  const closing = plugins.close().then(() => undefined, error => error).finally(() => { done = true })
+  await new Promise(resolve => setImmediate(resolve))
+  expect(done).toBe(false)
+  release(); await refreshing
+  expect(await closing).toBeInstanceOf(AggregateError)
+  await plugins.close(); await observer.close()
+  expect(acquire).toHaveBeenCalledTimes(1)
+  expect(close).toHaveBeenCalledTimes(2)
+  await rm(root, { recursive: true, force: true })
+})
 
 it("withdraws skills-only and command plugin resources from the same existing assembly on disable and uninstall", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-live-plugin-resources-"))
@@ -132,21 +211,43 @@ it("enables and disables commands on the same existing agent without replacing h
 
 it("refreshes after atomic state replacement and recreation", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-plugin-watch-replace-"))
+  const directory = join(root, "plugins"), path = join(directory, "state.json")
+  const state = JSON.stringify({ version: 1, sources: [], plugins: [] })
+  await mkdir(directory)
+  await writeFile(path, state)
   const watch = createFsWatchService()
-  const plugins = createDesktopPlugins(join(root, "plugins"), { watch })
+  const plugins = createDesktopPlugins(directory, { watch })
   let calls = 0
-  const observer = plugins.bindRefresh(async () => { calls++; await plugins.inputs() })
+  let missing = false
+  const failures: unknown[] = []
+  const observer = plugins.bindRefresh(async () => { calls++; missing = await readFile(path).then(() => false, () => true); try { await plugins.inputs() } catch (error) { failures.push(error); throw error } })
   try {
     await vi.waitFor(() => expect(calls).toBeGreaterThan(0), { timeout: 5000 })
-    await mkdir(join(root, "plugins"), { recursive: true })
-    const state = JSON.stringify({ version: 1, sources: [], plugins: [] })
+    await plugins.refresh() // establish that the original document is readable
+    expect(await readFile(path, "utf8")).toBe(state)
+    const original = await stat(path)
     await writeFile(join(root, "plugins", "next.json"), state)
+    await utimes(join(directory, "next.json"), original.atime, original.mtime)
     const before = calls
     await rename(join(root, "plugins", "next.json"), join(root, "plugins", "state.json"))
     await vi.waitFor(() => expect(calls).toBeGreaterThan(before), { timeout: 5000 })
+    expect(await readFile(path, "utf8")).toBe(state)
+    expect((await stat(path)).size).toBe(original.size)
     const after = calls
     await rm(join(root, "plugins", "state.json"))
+    await vi.waitFor(() => expect(missing).toBe(true), { timeout: 5000 })
     await writeFile(join(root, "plugins", "state.json"), state)
-    await vi.waitFor(() => expect(calls).toBeGreaterThan(after), { timeout: 5000 })
+    await vi.waitFor(() => { expect(calls).toBeGreaterThan(after); expect(missing).toBe(false) }, { timeout: 5000 })
+    // Fixed ancestor routing must recover after the selected parent is replaced.
+    await rename(directory, join(root, "retired"))
+    await vi.waitFor(() => expect(missing).toBe(true), { timeout: 5000 })
+    // The original lock owner may recreate its parent while reading defaults.
+    await mkdir(directory, { recursive: true }); await writeFile(path, state)
+    await vi.waitFor(() => expect(missing).toBe(false), { timeout: 5000 })
+    await rm(path); await mkdir(path)
+    await vi.waitFor(() => expect(failures.length).toBeGreaterThan(0), { timeout: 5000 })
+    await expect(plugins.inputs()).rejects.toThrow()
+    await rm(path, { recursive: true }); await writeFile(path, state)
+    await vi.waitFor(async () => expect((await plugins.state()).refreshError).toBeUndefined(), { timeout: 5000 })
   } finally { await observer.close(); await plugins.close(); await watch.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
 })
