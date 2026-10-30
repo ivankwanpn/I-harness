@@ -553,7 +553,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())
         await once('instruction subscriptions', () => instructions.close())
-        const forksJoined=cleaned.has('router')&&cleaned.has('fork controller')
+        const forksJoined=cleaned.has('router')&&cleaned.has('fork controller')&&cleaned.has('execution observation')
         if(forksJoined)await once("projects", () => projects.close())
         await once("review", () => review.close())
         if(forksJoined)await once("workflow", () => workflow.close())
