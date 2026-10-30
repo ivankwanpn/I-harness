@@ -18,6 +18,17 @@ async function fixture(run: (f: { root: string; path: string; scope: ReturnType<
   finally { await lease.release(); await claim.release(); await rm(base, { recursive: true, force: true }) }
 }
 
+it('retains the genuine original preimage and one immutable replacement candidate', async () => fixture(async ({ root, path, scope }) => {
+  await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+  const session = createTaskDocumentObservation(root, path, scope), observed = await session.observe()
+  if (observed.kind !== 'present') throw new Error('missing')
+  const bytes = Buffer.from('{"formatVersion":2,"tasks":[],"notifications":[]}\n'), original = Buffer.from(bytes)
+  const write = session.stageWrite(observed.witness, bytes); bytes.fill(0)
+  const result = await write.issue(); expect(result.kind).toBe('committed'); expect(await write.issue()).toEqual(result)
+  expect(await (await import('node:fs/promises')).readFile(path)).toEqual(original)
+  await session.settleResources()
+}))
+
 it('retains one detached observation for literal v1 and v2 bytes', async () => {
   for (const raw of [' { "version" : 1, "tasks": [] }\n', '{\n "tasks": [], "version": 2\n}\n']) await fixture(async ({ root, path, scope }) => {
     await writeFile(path, raw)

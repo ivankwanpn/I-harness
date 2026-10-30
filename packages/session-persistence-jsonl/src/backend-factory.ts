@@ -13,11 +13,12 @@ import { createJsonlProcessReadCapability } from './backend/process-read.ts'
 import { assembleSessionCoordinatorWithProcessStorage } from '@i-harness/session-persistence/internal/process-read-assembly'
 import type { CoordinatorOptions, SessionCoordinator } from '@i-harness/session-persistence'
 import { createTaskDocumentObservation } from './backend/task-document-observation.ts'
-import type { HeldTaskDocumentScope } from '@i-harness/session-persistence'
+import { writeLegacyDocument } from './backend/document-write.ts'
+import type { HeldTaskDocumentScope, TaskDocumentBackendSession } from '@i-harness/session-persistence'
 
 // Only the original constructor below can associate a backend. Byte adapters
 // and callers with structurally identical objects cannot mint this identity.
-const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): ReturnType<typeof createTaskDocumentObservation> }>()
+const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): TaskDocumentBackendSession }>()
 export function lookupJsonlProcessRead(backend: object) {
   const owner = processReadOwners.get(backend)
   if (!owner) return undefined
@@ -349,9 +350,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       // Atomic write: temp file + rename so concurrent saves never
       // interleave/truncate the sidecar. A transient `<uuid>.tmp` matches
       // neither `*.jsonl` nor `*.doc.jsonl`, so list() stays correct.
-      const tmp = `${path}.${randomUUID()}.tmp`
-      await writeFile(tmp, JSON.stringify(data) + "\n", { encoding: "utf-8" })
-      await rename(tmp, path)
+      await writeLegacyDocument(path, data)
     },
     async getDocument(key: string): Promise<unknown | undefined> {
       const text = await readFile(docPath(key), "utf-8").catch(() => undefined)
@@ -420,7 +419,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
     async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
   processReadOwners.set(backend, { capability, assertOriginal, openTask(scope) {
-    assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope)
+    assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope, undefined, available)
     async function available() {
       for (const path of [tombPath('session', scope.parentSessionId), tombPath('document', scope.key)]) {
         try { await lstat(path); throw Object.assign(new Error('Task document is deleted'), { code: 'SESSION_DELETED' }) }
@@ -430,6 +429,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     const session = Object.freeze({
       async observe() { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); await available(); const result = await original.observe(); await available(); assertOriginal(); return result },
       async confirm(witness: Parameters<typeof original.confirm>[0]) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); await available(); const result = await original.confirm(witness); await available(); assertOriginal(); return result },
+      stageWrite(witness: Parameters<typeof original.stageWrite>[0], bytes: Uint8Array) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); return original.stageWrite(witness, bytes) },
       settleResources() { if (this !== session) return Promise.reject(new TypeError('Invalid task backend receiver')); return original.settleResources() },
     })
     return session
