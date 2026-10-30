@@ -1,3 +1,4 @@
+import { createWaitBridgeOwner } from './native-wait-bridge-owner.ts'
 import { verifyWaitAssets } from './native-wait-assets.mjs'
 export { verifyWaitAssets } from './native-wait-assets.mjs'
 import { isAbsolute } from 'node:path'
@@ -234,39 +235,28 @@ export function validateBridgePath(path: string, platform = process.platform, ar
   if (arch !== 'x64') throw new Error('ACL wait bridge requires x64')
   if (!isAbsolute(path)) throw new Error('ACL wait bridge path must be absolute')
 }
-let ownedService: { root: string; service: Promise<WaitDrainService> } | undefined
-/** Prewarm before native channel/wait creation. Fixed verified assets only; no arbitrary message-selected DLL/function. */
-export function createWaitDrainBridge(root = fileURLToPath(new URL(process.env.I_HARNESS_DIST ? './' : '../native/runtime/', import.meta.url))): Promise<WaitDrainService> {
-  validateBridgePath(root)
-  if (ownedService) {
-    if (ownedService.root !== root) return Promise.reject(new Error('ACL wait worker already owns another asset identity'))
-    return ownedService.service
-  }
+const ownedService = createWaitBridgeOwner(async root => {
   const assets = verifyWaitAssets(root)
-  const service: Promise<WaitDrainService> = Promise.resolve().then(async () => {
-    const epoch = randomUUID()
-    let owner: WaitDrainService | undefined
-    try {
-      // Resolve from the original executable/package owner, not a fresh asset
-      // candidate directory or CWD. Worker import still initializes a distinct N-API environment.
-      const koffiEntry = createRequire(import.meta.url).resolve('koffi')
-      const worker = new Worker(assets.workerPath, { execArgv: [], workerData: { protocol: 1, epoch, capacity: 256, bridgePath: assets.bridgePath, bridgeSha256: assets.manifest.files['ih-acl-wait-bridge.dll'], koffiVersion: assets.manifest.koffiVersion, koffiEntry } })
-      owner = createWaitDrainService(worker, epoch)
-      await owner.ready
-    } catch (error) {
-      // No wait can reserve capacity before ready. Join failed startup before
-      // allowing a fresh service for new, known-unissued work.
-      if (owner) await owner.close()
-      if (ownedService?.service === service) ownedService = undefined
-      throw error
-    }
-    const original = owner
-    return { ready: original.ready, reserve: () => original.reserve(), async close() {
-      await original.close()
-      if (ownedService?.service === service) ownedService = undefined
-    } }
-  })
-  // A failed or unresolved service is retained. Never create a replacement for old registration addresses.
-  ownedService = { root, service }
-  return service
+  const epoch = randomUUID()
+  let owner: WaitDrainService | undefined
+  try {
+    const koffiEntry = createRequire(import.meta.url).resolve('koffi')
+    const worker = new Worker(assets.workerPath, { execArgv: [], workerData: { protocol: 1, epoch, capacity: 256, bridgePath: assets.bridgePath, bridgeSha256: assets.manifest.files['ih-acl-wait-bridge.dll'], koffiVersion: assets.manifest.koffiVersion, koffiEntry } })
+    owner = createWaitDrainService(worker, epoch)
+    await owner.ready
+    return owner
+  } catch (error) {
+    if (owner) await owner.close()
+    throw error
+  }
+})
+const defaultRoot = () => fileURLToPath(new URL(process.env.I_HARNESS_DIST ? './' : '../native/runtime/', import.meta.url))
+/** Prewarm before native channel/wait creation. Fixed verified assets only. */
+export function createWaitDrainBridge(root = defaultRoot()): Promise<WaitDrainService> {
+  validateBridgePath(root)
+  return ownedService.get(root)
+}
+export function acquireWaitDrainBridgeClient(root = defaultRoot()) {
+  validateBridgePath(root)
+  return ownedService.acquire(root)
 }
