@@ -198,6 +198,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     withBindingObservation:projects.withBindingObservation,
     retainSelectedProjectRead:projects.retainSelectedBindingRead.bind(projects),
     prepareBootstrapInheritance:projects.prepareBootstrapInheritance,
+    prepareSelectedInheritance:projects.prepareSelectedInheritance.bind(projects),
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
       const observed=nativeContext.observations.current(id)

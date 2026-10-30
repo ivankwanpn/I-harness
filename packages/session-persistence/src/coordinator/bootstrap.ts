@@ -605,7 +605,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
     if(!entry||entry.revoked||!selected||selected.identity!==identity||!sameBootstrapData(selected.route,route)||!io||io.released||!selected.lane||!selected.headerIssued||selected.header?.kind!=='committed')throw Error('Original selected target unavailable')
     const state=selected.attempt?.inspect();if(!state||state.kind!=='captured')throw Error('Original selected capture unavailable')
-    io.held.assertHeld();return Object.freeze({invocation:route.request.invocation,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest as string,facts:selectedResultsPreparationFacts(state.stage,state.seed.records)})
+    io.held.assertHeld();return Object.freeze({invocation:route.request.invocation,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest as string,facts:selectedResultsPreparationFacts(state.stage,state.seed.records),seed:state.seed})
   }
   async function releaseSelected(input:SelectedResultsRoute,identity:object) {
     const route=captureSelectedResultsRoute(input),entry=documents.get(route.request.invocation.targetSessionId)

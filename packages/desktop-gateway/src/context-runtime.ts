@@ -2,7 +2,7 @@ import {join} from 'node:path'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {types} from 'node:util'
 import {contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope,type LegacyReadObservationRunner} from '@i-harness/context-output'
-import {isStrictFactData,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
+import {isStrictFactData,EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
 import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
 import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparationPort,ExistingSessionBindingObservation} from '@i-harness/session-persistence'
 import {createResultObservationScope,createLegacyReadObservationRunner,type ResultObservationCapture,type SessionProjectContext,type ResultReadScopeResolver} from '@i-harness/session-executor'
@@ -172,7 +172,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const stable=holderSource??(holderSource=held)
       return source.use(()=>handoffs.run(entry,async()=>{try{guard();captureSlot={source,assertCurrent:guard};const value=await work({source:stable,assertCurrent:guard});guard();return value}finally{captureSlot=undefined;entry.active=false}}))
     }
-    let projectPreparation:ReturnType<NonNullable<NativeContextOptions['prepareSelectedInheritance']>>|undefined
+    let projectPreparation:ReturnType<NonNullable<NativeContextOptions['prepareSelectedInheritance']>>|undefined,managedScope:SeedDependencyTransferScope|undefined
     let holderSource:Parameters<Parameters<typeof sourceHandoff>[1]>[0]['source']|undefined
     const single=<T>(run:()=>Promise<T>):Promise<T>=>{available();if(active)throw Error('Selected handoff already active');const flight=Promise.resolve().then(run);active=flight;void flight.finally(()=>{if(active===flight)active=undefined}).catch(()=>{});return flight}
     const holder=Object.freeze({
@@ -187,6 +187,19 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
         projectPreparation??=options.prepareSelectedInheritance({operation,target,sourceAvailable:()=>{try{if(!captureSlot)return false;captureSlot.assertCurrent();return true}catch{return false}},assertNewWorkCurrent:()=>{if(!captureSlot)throw Error('Selected source handoff unavailable');captureSlot.assertCurrent()},targetAvailable:()=>{try{available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);return true}catch{return false}}})
         const result=await projectPreparation.confirm(inspection.facts,()=>{try{slot.assertCurrent();return true}catch{return false}})
         slot.assertCurrent();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);return result
+      },
+      async confirmManagedDependencies(){
+        const slot=captureSlot;if(!slot||!projectPreparation)throw Error('Selected target preparation unavailable');slot.assertCurrent()
+        const inspection=inspectSelectedTarget(options.coordinator as SessionCoordinator,target),manifest=inspection.seed.records[0]
+        if(!manifest||manifest.type!=='conversation/seed-manifest')throw Error('Selected seed unavailable')
+        projectPreparation.assertTargetCurrent()
+        if(!manifest.artifacts.length)return {kind:'confirmed' as const,closureDigest:EMPTY_SEMANTIC_DEPENDENCY_DIGEST}
+        const request={operationId:operation.invocation.operationId,targetSessionId:operation.invocation.targetSessionId,manifestDigest:inspection.manifestDigest,sourceSessionId:operation.prepared.core.sourceSessionId,artifacts:manifest.artifacts}
+        const assertSourceCurrent=()=>{if(!captureSlot)throw Error('Selected source handoff unavailable');captureSlot.assertCurrent()}
+        const assertTargetCurrent=()=>{available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation!.assertTargetCurrent()}
+        managedScope??=contextOutput.registerSeedDependencyTransfer({binding:{operationId:request.operationId,manifestDigest:request.manifestDigest,sourceSessionId:request.sourceSessionId,targetSessionId:request.targetSessionId,targetDocumentId:request.targetSessionId},sourceAccess:{sessionId:request.sourceSessionId},sourceAvailable:()=>{try{assertSourceCurrent();return true}catch{return false}},assertSourceCurrent,targetAvailable:()=>{try{assertTargetCurrent();return true}catch{return false}},assertTargetCurrent,targetScope(){assertTargetCurrent();const selected=projectPreparation!.targetScope();return{source:{sourceId:contextSourceIdentity(workspaceKey,canonical,selected.scope),readonly:true},revision:selected.revision}}})
+        const result=await contextOutput.confirmSeedDependencies(managedScope,request,()=>{try{assertSourceCurrent();return true}catch{return false}})
+        slot.assertCurrent();assertTargetCurrent();return result
       },
       assertOutsideUse(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close')},
       revoke(){retired=true;original?.revoke()},

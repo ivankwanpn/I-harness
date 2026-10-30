@@ -75,3 +75,15 @@ it('confirms the selected target through the original captured operation and pro
   await holder.close()
  }finally{await f.close()}
 })
+
+it('confirms the selected managed artifacts through the original result store',async()=>{
+ const f=await createGatewayForkFixture();try{
+  await f.runtime.contextOutput.configure({enabled:true});await f.coordinator.adoptOwnership('source')
+  const source=await f.runtime.sourceFor('source'),current=(await f.projects.resultReadScopeFor('source'))!,scope=f.runtime.contextOutput.registerResultScope({operationId:'selected-producer',sessionId:'source',callId:'retained',source},()=>{current();return !!f.coordinator.ownerOf('source')}),sink=await f.runtime.contextOutput.beginResult(scope,'text-utf8-v1')
+  await sink.write(Buffer.from('selected managed'));const saved=await sink.finish('complete');if(saved.kind!=='committed')throw Error('Original artifact unavailable')
+  await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'selected'},{type:'step/start'},{type:'tool/call',callId:'retained',name:'read',args:{}},{type:'assistant/message',text:''},{type:'tool/result',callId:'retained',name:'read',envelope:{version:1,execution:{outcome:'succeeded',dispatch:'dispatched'},preview:'',media:[],retention:{kind:'artifact',ref:saved.ref}}},{type:'step/end'},{type:'turn/end'}])
+  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'selected-managed',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation)
+  const captured=await holder.captureFirst();if(captured.kind!=='captured')throw Error('Selected capture unavailable');expect(captured.seed.records[0]).toMatchObject({type:'conversation/seed-manifest',artifacts:[{ref:saved.ref}]})
+  expect((await holder.confirmTarget()).kind).toBe('confirmed');const flush=vi.spyOn(f.coordinator,'flush');const first=await holder.confirmManagedDependencies();expect(first.kind).toBe('confirmed');expect(await holder.confirmManagedDependencies()).toEqual(first);expect(flush).not.toHaveBeenCalled();await (await f.coordinator.openManagedDocument('source')).metadata.enterPlan('revoke');await expect(holder.confirmManagedDependencies()).rejects.toThrow();await holder.close();flush.mockRestore()
+ }finally{await f.close()}
+},30000)
