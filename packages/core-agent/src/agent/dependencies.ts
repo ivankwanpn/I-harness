@@ -16,10 +16,11 @@ export function createExecutionDependencies(host: Dependencies): Dependencies {
     'modelBindingIdentity', 'budgetBinding', 'contextMetadata', 'modelToolSchemas',
     'modelOverheadTokens', 'isSubagent', 'telemetry', 'flush', 'stepInputs', 'requestContext',
   ] as const satisfies readonly (keyof Dependencies)[]
+  const originalTools = host.modelCallOrigin ? host.tools : undefined
   for (const key of live) Object.defineProperty(deps, key, {
     enumerable: true,
     get() {
-      const value = host[key]
+      const value = key === 'tools' && originalTools ? originalTools : host[key]
       // Bind only the host's top-level callbacks. Nested clients and step-input
       // objects are forwarded intact so their methods retain their own receiver.
       return typeof value === 'function' ? value.bind(host) : value

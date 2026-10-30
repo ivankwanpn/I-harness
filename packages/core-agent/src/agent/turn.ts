@@ -18,7 +18,7 @@ import { promoteTurnInput } from './input-promotion.ts'
 import { openDirectInput } from './direct-input.ts'
 import type { ExecutionDependencies } from './dependencies.ts'
 import type { ExecuteToolCallsOptions } from '../tool-batch/types.ts'
-import { issueLiveBatch, reserveLiveContinuation, consumeLiveContinuation, releaseLiveBatch } from '../tool-batch/live-continuation.ts'
+import { retainModelGeneration, issueLiveBatch, reserveLiveContinuation, consumeLiveContinuation, releaseLiveBatch } from '../tool-batch/live-continuation.ts'
 
 export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
   // This budget and both subordinate owners persist across run/followup calls.
@@ -60,6 +60,7 @@ export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies
       steps += 1
       if (maxTurns !== undefined && steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
       deps.generationAction = firstGeneration ?? await deps.generationLifecycle?.open('main', generationOrigin, { signal: abort, timeoutMs: deps.modelActionTimeoutMs, maxAttempts: deps.modelActionMaxAttempts })
+      retainModelGeneration(deps.liveInvocation, deps.generationAction)
       firstGeneration = undefined
       const stepStartSeq = await startStep(deps, lifecycle)
       await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
@@ -100,7 +101,7 @@ export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies
               ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
               ...(deps.flush ? { flush: deps.flush } : {}),
             }
-            if (invocation) token = issueLiveBatch(invocation, requestScope, batch, batchOptions)
+            if (invocation) token = issueLiveBatch(invocation, requestScope, batch, batchOptions, response.accepted)
             return executeToolCalls(ctx, deps.session, deps.tools, batch, batchOptions)
           }, async () => { if (instructionBatch) { await instructionBatch.release(); instructionBatch = undefined } })
         } catch (error) {

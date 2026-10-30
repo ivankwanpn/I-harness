@@ -1,3 +1,6 @@
+import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
+import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
+import { isNondurableSession } from '@i-harness/core-session'
 import { ownedContextReadiness } from "@i-harness/session-persistence"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type ReasoningEffort } from "@i-harness/core-agent"
@@ -60,7 +63,10 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   }))
   if (!executionCurrent() || !record.current()) return false
   executionController.signal.throwIfAborted()
-  const childReg = createToolRegistry(childCtx, { inheritResultRetention: deps.parentRegistry, executionOwner: {view:record.view,factOwner,context:childCtx,...entry.sessionId!==undefined?{sessionId:entry.sessionId}:{}} })
+  const modelOrigins = !isNondurableSession(record.view) ? createAgentModelOriginOwner({view:record.view,factOwner}) : undefined
+  const modelPair = modelOrigins ? createToolRegistryWithModelOrigin(childCtx, { inheritResultRetention: deps.parentRegistry, executionOwner: {view:record.view,factOwner,context:childCtx,...entry.sessionId!==undefined?{sessionId:entry.sessionId}:{}} }, modelOrigins.verifier) : undefined
+  const childReg = modelPair?.registry ?? createToolRegistry(childCtx, { inheritResultRetention: deps.parentRegistry, executionOwner: {view:record.view,factOwner,context:childCtx,...entry.sessionId!==undefined?{sessionId:entry.sessionId}:{}} })
+  const modelCallOrigin = modelPair && modelOrigins!.bind(childReg, modelPair.driver)
   record.registry = childReg
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
   resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
@@ -129,6 +135,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const controller = executionController
   if (!executionCurrent() || !record.current()) return false
   const agent = record.agent = invokeOriginal(record, () => createAgent(childCtx, {
+      modelCallOrigin,
     ...(entry.sessionId && deps.generationFactoryFor ? { generationFactory: deps.generationFactoryFor(factOwner, entry.sessionId, () => model) } : {}),
     modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,
     summaryFactory: deps.summaryFactory,

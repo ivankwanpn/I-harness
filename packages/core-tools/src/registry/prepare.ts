@@ -11,7 +11,7 @@ import type { CapturedToolCall, ToolPrepareIdentity, NativePlan, NativeMutation,
 import { isDecision, mergeDecision } from "../approval/decision.ts"
 import { captureApproval } from "../approval/identity.ts"
 import type { createCatalog } from "./catalog.ts"
-import { createPreparedBodyInvoker, type ToolExecutionOwnerContext } from './prepared-body.ts'
+import { createPreparedBodyInvoker, attachPreparedModelOrigin, type ToolExecutionOwnerContext } from './prepared-body.ts'
 
 export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined, executionOwner?: ToolExecutionOwnerContext) {
   type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; executeBinding: ReturnType<typeof catalog.captureBinding>['executeBinding']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
@@ -193,5 +193,9 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     return prepared
   }
 
-  return { capture, inspectCapture, bindNativeInstructions, prepareCaptured, invokePrepared }
+  function attachModelOrigin(prepared: PreparedCall, proof: object, take: import('../model-origin.ts').ConstructorModelOriginVerifier['take']) {
+    if (!executions.has(prepared)) throw new Error('Foreign prepared execution')
+    attachPreparedModelOrigin(prepared, getRegistry(), proof, take)
+  }
+  return { capture, inspectCapture, bindNativeInstructions, prepareCaptured, invokePrepared, attachModelOrigin }
 }

@@ -50,7 +50,7 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
   const inFlight = new Map<number, Promise<number>>()
   const captured = new Map<number, { capture: CapturedToolCall; origin?: AcceptedInstructionCall; concurrencySafe: boolean }>()
   const replan: { value?: import('@i-harness/core-tools').InstructionReplanData } = {}
-  const startCall = createStartCall(session, tools, batch, opts, records, cancellation, (index, promise) => { inFlight.set(index, promise) }, index => captured.get(index), replan)
+  const startCall = createStartCall(session, tools, batch, opts, records, cancellation, (index, promise) => { inFlight.set(index, promise) }, index => captured.get(index), replan, liveToken)
   const finished = Promise.withResolvers<void>()
   const source = opts.registerFactSource!(async () => { await finished.promise; await records.drainSettled() })
   const closeSource = source.close.bind(source)

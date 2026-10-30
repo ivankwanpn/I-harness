@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./context-remaining": "./src/context-remaining.ts"
+    "./context-remaining": "./src/context-remaining.ts",
+    "./model-origin": "./src/model-origin.ts"
   },
   "scripts": {
     "test": "vitest run",

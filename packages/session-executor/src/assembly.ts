@@ -1,3 +1,6 @@
+import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
+import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
+import { isNondurableSession } from '@i-harness/core-session'
 import { summaryFactory, composeCompactConfig } from './context-composition.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
@@ -571,7 +574,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const resultStore = await acquireAssemblyResultStore(opts)
   opts = { ...opts, ...(resultStore.service ? { contextOutput: resultStore.service } : {}), ...(resultStore.sourceFor ? { contextOutputSourceFor: resultStore.sourceFor } : {}), ...(resultStore.withLegacyReadObservation ? { contextOutputLegacyReadObservation: resultStore.withLegacyReadObservation } : {}) }
   const ctx: PluginContext = createContext()
-  const tools = createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId), executionOwner: {view:session,factOwner,context:ctx,...opts.sessionId!==undefined?{sessionId:opts.sessionId}:{}} })
+  const modelOrigins = !isNondurableSession(session) ? createAgentModelOriginOwner({view:session,factOwner}) : undefined
+  const modelPair = modelOrigins ? createToolRegistryWithModelOrigin(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId), executionOwner: {view:session,factOwner,context:ctx,...opts.sessionId!==undefined?{sessionId:opts.sessionId}:{}} }, modelOrigins.verifier) : undefined
+  const tools = modelPair?.registry ?? createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId), executionOwner: {view:session,factOwner,context:ctx,...opts.sessionId!==undefined?{sessionId:opts.sessionId}:{}} })
+  const modelCallOrigin = modelPair && modelOrigins!.bind(tools, modelPair.driver)
 
   // ── session: live source of truth + coordinator mirror (write-behind) ──────
   // Created BEFORE the execution environment on purpose: the sandbox policy
@@ -1628,6 +1634,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const compactForAgent = composeCompactConfig(opts.compact, opts.contextWindow, overheadEstimate, d)
 
     const agent = createAgent(ctx, {
+      modelCallOrigin,
       requestContext: instructionManager,
       ...(managedDocument ? { inputPreparationFactory: createSteerPreparationFactory(session, inbox, opts.prepareHumanInput) } : {}),
       ...(managedDocument ? { generationFactory: (action, dependencies) => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }, dependencies) } : {}),

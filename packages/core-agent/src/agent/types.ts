@@ -69,6 +69,7 @@ export interface AgentDeps {
   budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding | (() => import("@i-harness/llm-seam").ModelBudgetBinding | undefined)
   contextMetadata?: ContextBindingMetadata | (() => ContextBindingMetadata | undefined)
   session: Session
+  modelCallOrigin?: import("../tool-batch/model-origin.ts").AgentModelOriginBinding
   tools: ToolRegistry
   model: ModelClient
   /** Optional inference exposure; executable registry authority stays intact. */

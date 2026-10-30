@@ -34,7 +34,14 @@ export type { ContextRemainingOptions } from "./context-remaining.ts"
 const registryRetention = new WeakMap<ToolRegistry, ToolResultRetention | undefined>()
 const registryInstructions = new WeakMap<ToolRegistry, { required: boolean; verify?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; retainCell?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined }>()
 export function registryRequiresInstructionOrigin(registry: ToolRegistry): boolean { return registryInstructions.get(registry)?.required === true }
-export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; executionOwner?: ToolExecutionOwnerContext; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; instructionCellRetainer?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined } = {}): ToolRegistry {
+type RegistryOptions = { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; executionOwner?: ToolExecutionOwnerContext; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; instructionCellRetainer?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined }
+export function createToolRegistry(ctx: PluginContext, options: RegistryOptions = {}): ToolRegistry { return buildRegistry(ctx, options).registry }
+export function createToolRegistryWithModelOrigin(ctx: PluginContext, options: RegistryOptions, verifier: import('./model-origin.ts').ConstructorModelOriginVerifier) {
+  const method = verifier?.take
+  if (typeof method !== 'function') throw new TypeError('Original verifier required')
+  return buildRegistry(ctx, options, method.bind(verifier))
+}
+function buildRegistry(ctx: PluginContext, options: RegistryOptions, take?: import('./model-origin.ts').ConstructorModelOriginVerifier['take']) {
   const ownerDescriptor = Object.getOwnPropertyDescriptor(options,'executionOwner')
   if (ownerDescriptor && !('value' in ownerDescriptor)) throw new TypeError('Execution owner must be own data')
   const executionOwner = captureExecutionOwnerContext(ctx, ownerDescriptor?.value)
@@ -104,5 +111,9 @@ export function createToolRegistry(ctx: PluginContext, options: { resultRetentio
   }
   registryRetention.set(registry, retention)
   registryInstructions.set(registry, { required, verify, retainCell })
-  return registry
+  const driver: import('./model-origin.ts').PreparedModelOriginDriver = Object.freeze({ attach(prepared: import('./types.ts').PreparedCall, proof: object) {
+    if (this !== driver || !take) throw new Error('Original driver required')
+    preparer.attachModelOrigin(prepared, proof, take)
+  } })
+  return { registry, driver }
 }

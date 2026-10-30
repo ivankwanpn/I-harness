@@ -7,7 +7,10 @@ import { createSession, createNondurableFactOwner, FactRecoveryRequiredError, de
 import { createToolRegistry, declareToolResultOutcome, retainedToolOutcome, type PreparedCall } from '@i-harness/core-tools'
 import { createMockClient } from '@i-harness/llm-mock'
 import { observeModelClient } from '@i-harness/llm-seam'
-import { createSessionCoordinator, ownedContextReadiness } from '../../session-persistence/src/index.ts'
+import { ownedContextReadiness } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createAgent, executeToolCalls, type AgentDeps, type AgentConfig } from '../src/index.ts'
 import { localTestGeneration } from './fixtures/generation.ts'
