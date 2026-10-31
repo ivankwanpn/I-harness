@@ -69,7 +69,7 @@ it('retains the acquisition record while the original task lease is suspended', 
   const documents = createDocuments(backend, ownership, () => {}, undefined, { captureParent: document => managed.captureParent(document), validator: taskDocumentStorageContract, open: scope => createTaskDocumentObservation(root, join(root, `${scope.key}.doc.jsonl`), scope) })
   try {
     await mutations.create({ sessionId: 'parent' }); const parent = await managed.open('parent'), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-    const original = ownership.acquireLease; ownership.acquireLease = async id => { if (id === 'doc:task-parent') { entered.resolve(); await release.promise }; return original(id) }
+    const original = ownership.acquireDocumentLease; ownership.acquireDocumentLease = async id => { if (id === 'task-parent') { entered.resolve(); await release.promise }; return original(id) }
     const begin = documents.taskOperations!.begin(documents.taskOperations!.parent(parent)); void begin.catch(() => {})
     await entered.promise; let wrote = false
     const writing = documents.putDocumentStrict('task-parent', { formatVersion: 2, tasks: [], notifications: [] }).then(() => { wrote = true })
@@ -131,13 +131,13 @@ it('retains the original failed-begin pin cleanup with falsey acquisition and cl
   const documents = createDocuments(backend, ownership, () => {}, undefined, { captureParent: document => managed.captureParent(document), validator: taskDocumentStorageContract, open: scope => createTaskDocumentObservation(root, join(root, `${scope.key}.doc.jsonl`), scope) })
   try {
     await mutations.create({ sessionId: 'parent' }); const parent = await managed.open('parent'), token = documents.taskOperations!.parent(parent)
-    const pin = ownership.pinOwnership, lease = ownership.acquireLease; let releaseFails = true
+    const pin = ownership.pinOwnership, lease = ownership.acquireDocumentLease; let releaseFails = true
     ownership.pinOwnership = async id => { const claim = await pin(id), release = claim.release; claim.release = async () => { if (releaseFails) throw false; await release() }; return claim }
-    ownership.acquireLease = async id => { if (id === 'doc:task-parent') throw null; return lease(id) }
+    ownership.acquireDocumentLease = async id => { if (id === 'task-parent') throw null; return lease(id) }
     let error: unknown; try { await documents.taskOperations!.begin(token) } catch (caught) { error = caught }
     expect((error as Error).cause).toBeNull(); expect((error as Error & { cleanupCause: unknown }).cleanupCause).toBe(false)
     const cleanup = documents.taskOperations!.cleanupFor(error)!; await expect(cleanup.retry()).rejects.toBe(false)
-    releaseFails = false; await cleanup.retry(); ownership.pinOwnership = pin; ownership.acquireLease = lease
+    releaseFails = false; await cleanup.retry(); ownership.pinOwnership = pin; ownership.acquireDocumentLease = lease
     const operation = await documents.taskOperations!.begin(token); await operation.close()
   } finally { await managed.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }) }
 })
@@ -196,8 +196,8 @@ it('retains failed close debt and permanently abandons its read', async () => {
   const documents=createDocuments(backend,ownership,()=>{},latches,{captureParent:document=>managed.captureParent(document),validator:taskDocumentStorageContract,open:scope=>createTaskDocumentObservation(root,join(root,`${scope.key}.doc.jsonl`),scope)})
   try {
     await mutations.create({sessionId:'parent'}); const parent=await managed.open('parent'); await writeFile(join(root,'task-parent.doc.jsonl'),'{"formatVersion":2,"tasks":[],"notifications":[]}')
-    const original=ownership.acquireLease; let fail=true
-    ownership.acquireLease=async key=>{const lease=await original(key); return {get held(){return lease.held}, async release(){if(fail) throw null; await lease.release()}}}
+    const original=ownership.acquireDocumentLease; let fail=true
+    ownership.acquireDocumentLease=async key=>{const lease=await original(key); return {get held(){return lease.held}, async release(){if(fail) throw null; await lease.release()}}}
     const op=await documents.taskOperations!.begin(documents.taskOperations!.parent(parent)), observed=await op.observe(); if(observed.kind!=='present') throw Error('missing')
     await op.confirm(observed.witness); const read=op.prepareReadHandoff(observed.witness)
     await expect(op.close()).rejects.toBeNull(); read.abandon(); expect(()=>read.consume()).toThrow(); await expect(documents.taskOperations!.joinTaskDocumentIO()).rejects.toThrow()

@@ -1,3 +1,4 @@
+import { associateArtifactPaths } from '@i-harness/session-persistence/internal/artifact-path'
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
@@ -505,6 +506,19 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       if (!current || !('value' in current) || current.value !== original.value) throw new Error('PROCESS_READ_UNAVAILABLE')
     }
   }
+  associateArtifactPaths(backend, Object.freeze({
+    root() { assertOriginal(); return rootPath },
+    async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
+    session(id: string) { assertOriginal(); return filePath(id) },
+    document(key: string) { assertOriginal(); return docPath(key) },
+    taskForParent(id: string) { assertOriginal(); return docPath('task-' + id) },
+    async prepareDocumentParents(key: string) {
+      assertOriginal(); await assertNotDeleted('document', key); assertOriginal()
+      await mkdir(rootPath, { recursive: true }); assertOriginal()
+      await mkdir(dirname(docPath(key)), { recursive: true }); assertOriginal()
+    },
+    assertOriginal,
+  }))
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
     async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
   function openOwnedTask(scope: HeldTaskDocumentScope, initialize: boolean): TaskDocumentBackendSession {

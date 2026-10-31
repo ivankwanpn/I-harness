@@ -19,10 +19,10 @@ const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'ab
 const signalAddListener = EventTarget.prototype.addEventListener
 const signalRemoveListener = EventTarget.prototype.removeEventListener
 export function assertOutsideTaskDocumentSessionOperation(ownership: Ownership, id: string) {
-  for (let context = methodContext.getStore(); context; context = context.parent) if (context.ownership === ownership && context.id === id) throw new Error('TASK_DOCUMENT_CONFLICT')
+  for (let context = methodContext.getStore(); context; context = context.parent) if (context.ownership === ownership && ownership.exclusionScope([context.id], [context.key]).keys.some(key => ownership.exclusionScope([id], []).keys.includes(key))) throw new Error('TASK_DOCUMENT_CONFLICT')
 }
 export function assertOutsideTaskDocumentOperation(owner: object, ids: readonly string[], keys: readonly string[], all = false) {
-  for (let context = methodContext.getStore(); context; context = context.parent) if (context.owner === owner && (all || ids.includes(context.id) || keys.includes(context.key))) throw new Error('TASK_DOCUMENT_CONFLICT')
+  for (let context = methodContext.getStore(); context; context = context.parent) if (context.owner === owner && (all || context.ownership.exclusionScope([context.id], [context.key]).keys.some(key => context.ownership.exclusionScope(ids, keys).keys.includes(key)))) throw new Error('TASK_DOCUMENT_CONFLICT')
 }
 export function createTaskDocumentOperations(ownership: Ownership, admission: ReturnType<typeof createBindingObservations>, config: TaskDocumentConfiguration, enqueue: <T>(run: () => Promise<T>) => Promise<T>, processLatches?: ReturnType<typeof createProcessReadLatches>) {
   const parents = new WeakMap<object, Parent>(), failures = new WeakMap<object, { retry(): Promise<void> }>()
@@ -48,7 +48,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
   async function begin(this: unknown, token: object, options?: { signal?: AbortSignal }): Promise<Operation> {
     if (this !== operations) throw new TypeError('Invalid task operations receiver')
     const captured = parents.get(token); if (!captured || !ownership.lockEnabled || types.isProxy(token)) return fail()
-    const pinOwnership = method(ownership, 'pinOwnership'), acquireLease = method(ownership, 'acquireLease')
+    const pinOwnership = method(ownership, 'pinOwnership'), acquireLease = method(ownership, 'acquireDocumentLease')
     if (options !== undefined && (!options || typeof options !== 'object' || types.isProxy(options) || ![Object.prototype, null].includes(Object.getPrototypeOf(options)) || Reflect.ownKeys(options).some(key => key !== 'signal'))) throw new TypeError('Invalid task operation options')
     const signalField = options && Object.getOwnPropertyDescriptor(options, 'signal')
     if (signalField && (!('value' in signalField) || !signalField.enumerable)) throw new TypeError('Invalid task operation signal')
@@ -83,7 +83,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
         if (writeAdmission) { writeAdmission.finish(writeResult?.kind === 'committed' || writeResult?.kind === 'conflict' || writeResult?.kind === 'not-issued' ? 'settled' : 'unknown'); writeAdmission = undefined }
         if (lease) { await releaseLease!(); lease = undefined }
         if (pin) { await releasePin!(); pin = undefined }
-        closed = true; if (readPhase !== 'armed') retireRecord()
+        if (readPhase !== 'armed') retireRecord(); closed = true
       })
       void cleanup.then(() => { cleanupPending = false }, () => { cleanupPending = false })
       return cleanup
@@ -101,7 +101,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     acquire = enqueue(async () => {
       await registration.join()
       active(); pin = await pinOwnership(captured.id); releasePin = method(pin, 'release'); active()
-      lease = await acquireLease(`doc:task-${captured.id}`); releaseLease = method(lease, 'release'); active()
+      lease = await acquireLease(`task-${captured.id}`); releaseLease = method(lease, 'release'); active()
       const scope = issueHeldTaskDocumentScope(ownership, captured.id, pin, { assertActive: active })
       session = open(scope); rawObserve = method(session, 'observe'); rawConfirm = method(session, 'confirm'); settleResources = method(session, 'settleResources'); if (Object.hasOwn(session, 'stageWrite')) rawStage = method(session, 'stageWrite'); sessionDescriptors = Object.getOwnPropertyDescriptors(session); active()
     })

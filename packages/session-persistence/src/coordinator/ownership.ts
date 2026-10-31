@@ -1,4 +1,7 @@
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
+import { createArtifactPathOwner } from '@i-harness/fs-lock/internal/artifact-path'
+import { resolve } from 'node:path'
+import { artifactPathsFor, artifactScope, type ArtifactCapture } from './artifact-path-association.ts'
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertOutsideTaskDocumentSessionOperation } from './task-document-operation.ts'
@@ -29,95 +32,155 @@ export function captureHeldOwnershipClaim(owner: Ownership, id: string, claim: C
 
 /** Claims belong to one slot incarnation; temporary cleanup cannot retire a live adopter. */
 export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, opts?: CoordinatorOptions) {
+  const artifacts = artifactPathsFor(backend as PersistenceBackend)
+  const live = new Map<string, { resources: string[]; captures: ArtifactCapture[] }>()
   const lockEnabled = opts?.lock?.enabled ?? false
   const resolvedLockRoot = opts?.lock?.lockRoot ?? backend.lockRoot ?? process.cwd()
-  type Slot = { lock?: SessionLock; live: boolean; claims: Set<object>; acquiring?: Promise<void>; releasing?: Promise<void>; debt?: unknown }
+  const lockPaths = artifacts && lockEnabled ? createArtifactPathOwner(resolve(resolvedLockRoot)) : undefined
+  const acquisitionDebt = new Set<SessionLock>()
+  type DocumentLeaseDebt = { lease?: SessionLock; guard: Awaited<ReturnType<typeof borrowResource>> }
+  const documentLeaseDebt = new Set<DocumentLeaseDebt>()
+  type Slot = { lock?: SessionLock; live: Set<string>; claims: Set<object>; acquiring?: Promise<void>; releasing?: Promise<void>; debt?: { cause: unknown } }
   const slots = new Map<string, Slot>()
   const sessionOperations = new Map<string, Promise<void>>()
   type SessionContext = { id: string; active: boolean; parent?: SessionContext }
   const sessionContext = new AsyncLocalStorage<SessionContext>()
   const claims = new WeakMap<object, ClaimRecord>()
+  const sameSession = (a: string, b: string) => artifactScope(artifacts, [a], []).keys[0] === artifactScope(artifacts, [b], []).keys[0]
 
   async function acquireLease(leaseId: string): Promise<SessionLock> {
-    const raw = await acquireSessionLock({ lockPath: lockPathFor(resolvedLockRoot, leaseId), retryMs: opts?.acquireRetryMs, deadlineMs: opts?.acquireDeadlineMs })
-    let debt: unknown, failed = false
-    return {
-      get held() { return raw.held },
+    const lockPath = lockPathFor(resolvedLockRoot, leaseId), before = lockPaths?.capture(lockPath)
+    const raw = await acquireSessionLock({ lockPath, retryMs: opts?.acquireRetryMs, deadlineMs: opts?.acquireDeadlineMs })
+    let current: ArtifactCapture | undefined, debt: unknown, failed = false
+    const lease: SessionLock = {
+      get held() { current?.assertCurrent(); return raw.held },
       async release() {
-        // Native release can consume its held bit before failing. A later no-op
-        // proves nothing; preserve that exact unresolved disposal permanently.
         if (failed && !raw.held) throw debt
         try { await raw.release(); failed = false; debt = undefined }
         catch (error) { failed = true; debt = error; throw error }
       },
     }
+    try {
+      current = lockPaths?.capture(lockPath)
+      if (current && current.kind !== 'ready') throw Error('Original lock directory unavailable')
+      if (before?.kind === 'ready') before.assertCurrent()
+    } catch (error) {
+      try { await lease.release() } catch (cleanup) { acquisitionDebt.add(lease); throw new AggregateError([error, cleanup], 'Lock namespace cleanup failed') }
+      throw error
+    }
+    return lease
   }
   async function withSessionOperation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
     assertOutsideTaskDocumentSessionOperation(owner, sessionId); assertOutsideTaskTransitionSession(owner, sessionId)
-    const previous = sessionOperations.get(sessionId) ?? Promise.resolve()
+    const operationKey = artifactScope(artifacts, [sessionId], []).keys[0]!
+    const previous = sessionOperations.get(operationKey) ?? Promise.resolve()
     const gate = Promise.withResolvers<void>()
-    sessionOperations.set(sessionId, gate.promise)
+    sessionOperations.set(operationKey, gate.promise)
     await previous
     const context: SessionContext = { id: sessionId, active: true, parent: sessionContext.getStore() }
     try { return await sessionContext.run(context, operation) }
-    finally { context.active = false; gate.resolve(); if (sessionOperations.get(sessionId) === gate.promise) sessionOperations.delete(sessionId) }
+    finally { context.active = false; gate.resolve(); if (sessionOperations.get(operationKey) === gate.promise) sessionOperations.delete(operationKey) }
   }
   async function dispose(id: string, slot: Slot): Promise<void> {
-    if (slot.live || slot.claims.size) return
+    if (slot.live.size || slot.claims.size) return
     if (slot.releasing) return slot.releasing
     const flight = (async () => {
       if (slot.acquiring) await slot.acquiring
-      if (slot.live || slot.claims.size) return
+      if (slot.live.size || slot.claims.size) return
       if (slot.lock) {
         try { await slot.lock.release(); slot.debt = undefined }
-        catch (error) { slot.debt = error; throw error }
+        catch (error) { slot.debt = { cause: error }; throw error }
       }
       if (slots.get(id) === slot) slots.delete(id)
     })()
     slot.releasing = flight
     try { await flight } finally { if (slot.releasing === flight) slot.releasing = undefined }
   }
-  async function borrowOwnership(id: string) {
-    if (!lockEnabled) return { assertHeld() {}, retainLive() {}, async release() {} }
+
+  async function borrowResource(id: string) {
     let slot = slots.get(id)
     while (slot?.releasing) { await slot.releasing; slot = slots.get(id) }
-    if (slot?.debt) throw slot.debt
-    if (!slot) { slot = { live: false, claims: new Set() }; slots.set(id, slot) }
+    if (slot?.debt) throw slot.debt.cause
+    if (!slot) { slot = { live: new Set(), claims: new Set() }; slots.set(id, slot) }
     const original = slot, claim = {}
     original.claims.add(claim)
-    if (!original.lock && !original.acquiring) {
-      original.acquiring = acquireLease(id).then(lock => { original.lock = lock }).finally(() => { original.acquiring = undefined })
-    }
+    if (!original.lock && !original.acquiring) original.acquiring = acquireLease(id).then(lock => { original.lock = lock }).finally(() => { original.acquiring = undefined })
     try { if (original.acquiring) await original.acquiring }
-    catch (error) { original.claims.delete(claim); if (!original.claims.size && !original.live && slots.get(id) === original) slots.delete(id); throw error }
+    catch (error) { original.claims.delete(claim); if (!original.claims.size && !original.live.size && slots.get(id) === original) slots.delete(id); throw error }
     let retired = false
-    const result = {
+    return {
       assertHeld() { if (retired || slots.get(id) !== original || !original.lock?.held || original.debt) throw new Error('Exclusive ownership claim is unavailable') },
-      retainLive() { if (retired || !original.lock?.held || original.debt) throw new Error('Cannot retain a retired ownership claim'); original.live = true },
-      async release() {
-        if (!retired) { retired = true; original.claims.delete(claim) }
-        await dispose(id, original)
-      },
+      retainLive(logical: string) { this.assertHeld(); original.live.add(logical) },
+      async release() { if (!retired) { retired = true; original.claims.delete(claim) }; await dispose(id, original) },
+    }
+  }
+  async function borrowBundle(id: string, document: boolean): Promise<Claim> {
+    if (!lockEnabled) return { assertHeld() {}, retainLive() {}, async release() {} }
+    if (artifacts) { if (document) await artifacts.prepareDocument(id); else await artifacts.prepareSession(id) }
+    const captures = artifacts ? (document ? [artifacts.document(id)] : [artifacts.session(id), artifacts.taskForParent(id)]) : []
+    const resources = [...new Set(artifacts ? captures.map(c => { if (c.kind !== 'ready') throw Error('Artifact preparation required'); return 'artifact-ownership:' + c.key }) : [document ? 'legacy-document:' + id : id])].sort()
+    const held: Awaited<ReturnType<typeof borrowResource>>[] = []
+    const check = () => { for (const capture of captures) capture.assertCurrent(); for (const resource of held) resource.assertHeld() }
+    try { for (const resource of resources) { held.push(await borrowResource(resource)); check() } }
+    catch (error) { const errors: unknown[] = []; for (const resource of held.reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length) throw new AggregateError([error,...errors], 'Ownership acquisition cleanup failed'); throw error }
+    let retired = false
+    const result: Claim = {
+      assertHeld() { if (retired) throw Error('Ownership claim retired'); check() },
+      retainLive() { if (document) throw Error('Document pin cannot retain session ownership'); this.assertHeld(); if (!live.has(id)) { for (const resource of held) resource.retainLive(id); live.set(id, { resources, captures }) } },
+      async release() { retired = true; const errors: unknown[] = []; for (const resource of [...held].reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length) throw new AggregateError(errors, 'Ownership bundle cleanup failed') },
     }
     claims.set(result, { id, claim: result, assertHeld: result.assertHeld, retainLive: result.retainLive, release: result.release })
     return result
+  }
+  const borrowOwnership = (id: string) => borrowBundle(id, false)
+  async function disposeDocumentLease(record: DocumentLeaseDebt) {
+    if (record.lease) { await record.lease.release(); record.lease = undefined }
+    await record.guard.release()
+    documentLeaseDebt.delete(record)
+  }
+  async function acquireDocumentLease(key: string) {
+    if (!artifacts) return acquireLease('doc:' + key)
+    await artifacts.prepareDocument(key)
+    const capture = artifacts.document(key)
+    if (capture.kind !== 'ready') throw Error('Document identity unavailable')
+    const record: DocumentLeaseDebt = { guard: await borrowResource('artifact-ownership:' + capture.key) }
+    documentLeaseDebt.add(record)
+    try {
+      capture.assertCurrent()
+      record.lease = await acquireLease('artifact-document-lease:' + capture.key)
+      capture.assertCurrent(); record.guard.assertHeld()
+    } catch (error) { try { await disposeDocumentLease(record) } catch (cleanup) { throw new AggregateError([error, cleanup], 'Document identity cleanup failed') }; throw error }
+    const lease = record.lease!
+    return { get held() { capture.assertCurrent(); return lease.held }, release: () => disposeDocumentLease(record) }
   }
   async function ensureOwnership(id: string) {
     const claim = await borrowOwnership(id)
     try { claim.retainLive() } finally { await claim.release() }
   }
   async function releaseOwnershipUnlocked(id: string) {
-    const slot = slots.get(id)
-    if (!slot) return
-    slot.live = false
-    await dispose(id, slot)
+    const adoption = live.get(id)
+    if (!adoption) return
+    live.delete(id)
+    const errors: unknown[] = []
+    for (const key of [...adoption.resources].reverse()) { const slot = slots.get(key); if (!slot) continue; slot.live.delete(id); try { await dispose(key, slot) } catch (e) { errors.push(e) } }
+    if (errors.length) throw new AggregateError(errors, 'Live ownership cleanup failed')
+  }
+  function heldLive(id: string) { const record = live.get(id); if (!record) return false; for (const c of record.captures) c.assertCurrent(); return record.resources.every(key => { const s = slots.get(key); return s?.lock?.held && !s.debt && !s.releasing }) }
+  function heldBundle(id: string) {
+    if (!lockEnabled) return false
+    const captures = artifacts ? [artifacts.session(id), artifacts.taskForParent(id)] : []
+    for (const c of captures) c.assertCurrent()
+    const resources = artifacts ? captures.map(c => c.kind === 'ready' ? 'artifact-ownership:' + c.key : '') : [id]
+    return resources.every(key => { const slot = slots.get(key); return !!slot?.lock?.held && !slot.debt && !slot.releasing })
   }
   const owner = {
-    assertHeld(id: string) { if (!lockEnabled || !slots.get(id)?.lock?.held || slots.get(id)?.debt) throw Object.assign(new Error('Exclusive managed ownership is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' }) },
+    assertHeld(id: string) { if (!lockEnabled || !heldBundle(id)) throw Object.assign(new Error('Exclusive managed ownership is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' }) },
+    artifacts, acquireDocumentLease, pinDocumentOwnership: (key: string) => borrowBundle(key, true),
+    exclusionScope: (ids: readonly string[], keys: readonly string[]) => artifactScope(artifacts, ids, keys),
     lockEnabled, acquireLease, withSessionOperation, ensureOwnership, borrowOwnership,
     captureActiveSessionOperation(id: string) {
       let original = sessionContext.getStore()
-      while (original && (!original.active || original.id !== id)) original = original.parent
+      while (original && (!original.active || !sameSession(original.id, id))) original = original.parent
       if (!original) throw new Error('Session operation admission required')
       const captured = original
       const token = Object.freeze({ assertCurrent() {
@@ -128,15 +191,12 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
       } })
       return token
     },
-    assertOutsideSessionOperation(id: string) { for (let current = sessionContext.getStore(); current; current = current.parent) if (current.active && current.id === id) throw new Error('Session operation reentry conflict') },
+    assertOutsideSessionOperation(id: string) { for (let current = sessionContext.getStore(); current; current = current.parent) if (current.active && sameSession(current.id, id)) throw new Error('Session operation reentry conflict') },
     pinOwnership: borrowOwnership, releaseOwnershipUnlocked,
-    ownerOf: (id: string) => slots.get(id)?.lock?.held === true,
-    hasLiveOwnership(id: string) {
-      const slot = slots.get(id)
-      return slot?.live === true && slot.lock?.held === true && slot.debt === undefined && !slot.releasing
-    },
+    ownerOf: heldBundle,
+    hasLiveOwnership: heldLive,
     pendingOperations: () => [...sessionOperations.values()],
-    releaseHeldLocks: () => [...slots.keys()].map(id => Promise.resolve().then(() => releaseOwnershipUnlocked(id))),
+    releaseHeldLocks: () => [Promise.resolve().then(async () => { const errors: unknown[] = []; for (const record of documentLeaseDebt) try { await disposeDocumentLease(record) } catch (e) { errors.push(e) }; for (const lease of acquisitionDebt) try { await lease.release(); acquisitionDebt.delete(lease) } catch (e) { errors.push(e) }; for (const id of [...live.keys()]) try { await releaseOwnershipUnlocked(id) } catch (e) { errors.push(e) }; for (const [id, slot] of slots) try { await dispose(id, slot) } catch (e) { errors.push(e) }; try { artifacts?.settleResources(); lockPaths?.settleResources() } catch (e) { errors.push(e) }; if (errors.length) throw new AggregateError(errors, 'Ownership cleanup unresolved') })],
   }
   ownerClaims.set(owner, claims)
   return owner

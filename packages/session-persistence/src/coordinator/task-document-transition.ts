@@ -48,10 +48,10 @@ export function runTaskTransitionDrain<T>(ownership: Ownership, id: string, work
   return transitionContext.exit(() => ownership.withSessionOperation(id, () => transitionContext.run(context, work)))
 }
 export function assertOutsideTaskTransition(admission: object, ids: readonly string[], keys: readonly string[], all = false) {
-  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.admission === admission && (all || ids.includes(current.id) || keys.includes(current.key))) throw new Error('TASK_TRANSITION_CONFLICT')
+  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.admission === admission && (all || current.ownership.exclusionScope([current.id], [current.key]).keys.some(key => current.ownership.exclusionScope(ids, keys).keys.includes(key)))) throw new Error('TASK_TRANSITION_CONFLICT')
 }
 export function assertOutsideTaskTransitionSession(ownership: Ownership, id: string) {
-  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.ownership === ownership && current.id === id) throw new Error('TASK_TRANSITION_CONFLICT')
+  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.ownership === ownership && ownership.exclusionScope([current.id], [current.key]).keys.some(key => ownership.exclusionScope([id], []).keys.includes(key))) throw new Error('TASK_TRANSITION_CONFLICT')
 }
 /** Original Documents owner, entered only from its finite creation operation. */
 export function createTaskDocumentTransitions(ownership: Ownership, admission: ReturnType<typeof createBindingObservations>, config: TaskTransitionConfiguration, priorDocuments: () => Promise<void>, latches?: ReturnType<typeof createProcessReadLatches>) {
@@ -138,7 +138,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
         await transitionContext.exit(() => ownership.withSessionOperation(id, () => transitionContext.run(context, async () => {
           queue = ownership.captureActiveSessionOperation(id); guard()
           if (!claim) { claim = await ownership.borrowOwnership(id); releaseClaim = method(claim,'release'); retainClaim = method(claim,'retainLive') }; guard()
-          if (!lease) { lease = await ownership.acquireLease('doc:' + key); releaseLease = method(lease,'release') }; guard()
+          if (!lease) { lease = await ownership.acquireDocumentLease(key); releaseLease = method(lease,'release') }; guard()
           const ensureTask = async () => {
             scope ??= issueHeldTaskDocumentScope(ownership, id, claim!, { assertActive: guard })
             if (!task) { task = open(scope); taskFields = Object.getOwnPropertyDescriptors(task); observeTask = method(task,'observe'); confirmTask = method(task,'confirm'); initializeTask = method(task,'stageInitialize'); settleTask = method(task,'settleResources') }
@@ -300,7 +300,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
       flight = Promise.resolve().then(async () => {
         await openOwner()
         await runQueue(async () => {
-          if (!mode) throw new Error('TASK_TRANSITION_UNSUPPORTED'); guard(); if (!lease) { lease = await ownership.acquireLease('doc:' + key); releaseLease = method(lease,'release') }; guard()
+          if (!mode) throw new Error('TASK_TRANSITION_UNSUPPORTED'); guard(); if (!lease) { lease = await ownership.acquireDocumentLease(key); releaseLease = method(lease,'release') }; guard()
           scope ??= issueHeldTaskDocumentScope(ownership,id,claim!,{assertActive:guard})
           if (!task) { task = open(scope); taskFields = Object.getOwnPropertyDescriptors(task); observeTask = method(task,'observe'); confirmTask = method(task,'confirm'); initializeTask = method(task,'stageInitialize'); settleTask = method(task,'settleResources') }
           held ??= heldFactOwner({ sessionId:id, incarnation:randomUUID() },ownership,()=>claim!.assertHeld())
