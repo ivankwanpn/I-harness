@@ -59,6 +59,9 @@ it('retains the original cold checked target for finite inspection without makin
       original = observation.document
       expect(observation.document.view).toBe(observation.view)
       expect(observation.view.formatVersion).toBe(14)
+      expect(observation.metadata).toEqual(JSON.parse(f.raw.toString().split('\n')[0]!))
+      expect(Object.isFrozen(observation.metadata)).toBe(true)
+      expect(Object.isFrozen(observation.metadata.journal)).toBe(true)
       expect(observation.receipt.invocation).toEqual(f.route.request.invocation)
       expect(observation.receipt.seedLength).toBe(observation.facts.seedLength)
       expect(observation.prefix.eventCount).toBe(observation.view.events.length)
@@ -108,6 +111,9 @@ it.skipIf(!predecessor)('retains the actual predecessor birth while its owned cu
     if (result.kind !== 'qualification-required') throw Error('Missing original13 target')
     await selected.useColdSelectedTarget(coordinator, result.target, async value => {
       expect(value.view.formatVersion).toBe(14)
+      expect(value.metadata).toEqual(JSON.parse((await readFile(join(root, 'target.jsonl'), 'utf8')).split('\n')[0]!))
+      expect(value.metadata.formatVersion).toBe(14)
+      expect(Object.isFrozen(value.metadata)).toBe(true)
       expect(JSON.parse(value.birth.stage.headerBytes).formatVersion).toBe(13)
       expect(value.birth.stage).toEqual(stage)
       value.assertCurrent()

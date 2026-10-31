@@ -786,7 +786,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       const doc=attach(id,owned,buildSession(meta,history.events),history.prefix)
       await owned.control!.bindSelected!();check()
       owned.selected!.resultReceipt=Object.freeze({version:2,invocation:birth.stage.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:completion.dependencyClosureDigest,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
-      const inspection=createColdSelectedInspection(owned,route,birth,history.prefix,{
+      const inspection=createColdSelectedInspection(owned,route,birth,history.prefix,meta,{
         assertCurrent:check,assertOutside:()=>assertOutsideCapture(id),settle:()=>settleCapture(owned),
         async enter<T>(work:()=>Promise<T>):Promise<T>{const scope={id,active:true};try{return await callbackScope.run(scope,work)}finally{scope.active=false}},
       })
