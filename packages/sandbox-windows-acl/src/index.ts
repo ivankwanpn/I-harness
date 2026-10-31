@@ -54,7 +54,10 @@ import type { NativePtr, Win32Bindings } from './ffi.ts'
 import { NativeInitOwner, NativeInitializationFailure, NativeCleanupFailure } from './init-owner.ts'
 import { AclWriteGrant } from './grant.ts'
 import { assertPrivateTempDisjoint, assertTempRootOutsideWorkspace } from './path-boundary.ts'
-import { buildCommandLine, drainPipe, spawnSandboxed, spawnSandboxedInherited, waitForExit } from './spawn.ts'
+import { buildCommandLine, spawnSandboxedInherited, waitForExit } from './spawn.ts'
+import { createPipeChildOwner, type PipeChildOwner } from './pipe-child.ts'
+import { logonSidText } from './pipe-sid.ts'
+import { acquireWaitDrainBridgeClient } from './native-wait-bridge.ts'
 import { createRestrictedToken, findLogonSid, makeWellKnownSid, openCurrentProcessToken, setTokenDefaultDaclGrant } from './token.ts'
 import { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
 import * as abi from './win32-abi.ts'
@@ -124,7 +127,7 @@ export interface AclSandboxSpawnOptions {
   /** Working directory; defaults to the caller's cwd. */
   cwd?: string
   /**
-   * 'pipe' (default): capture stdout/stderr via anonymous pipes.
+   * 'pipe' (default): capture stdout/stderr via overlapped output pipes.
    * 'inherit': the child inherits the caller's stdio directly (runner usage —
    * bytes flow straight through), always wrapped in a kill-on-close job so the
    * child dies with the caller; stdout/stderr in the result are empty.
@@ -181,6 +184,8 @@ export class AclSandbox {
   private ready = false
   private closing = false
   private disposal: Promise<void> | undefined
+  private logonSid: string | undefined
+  private readonly pipeChildren = new Set<PipeChildOwner>()
   private grantedPaths: Array<{ path: string; sidPtr: NativePtr }> = []
 
   constructor(options: AclSandboxOptions) {
@@ -288,6 +293,7 @@ export class AclSandbox {
         }
       }
       const logonSid = findLogonSid(api, currentToken, owned)
+      this.logonSid = logonSidText(owned, logonSid)
       const worldSid = makeWellKnownSid(api, abi.WinWorldSid, owned)
       const writeSids = [...this.writeSidPtrs, this.tempWriteSidPtr].filter((sid): sid is NativePtr => sid !== undefined)
       const restrictedToken = createRestrictedToken(
@@ -328,11 +334,14 @@ export class AclSandbox {
    * @param options - the program, argv/cwd, and stdio shape.
    * @returns the running child.
    */
-  spawn(options: AclSandboxSpawnOptions): AclSandboxChild {
+  spawn(options: AclSandboxSpawnOptions & { stdio: 'inherit' }): AclSandboxChild
+  spawn(options: AclSandboxSpawnOptions & { stdio?: 'pipe' }): Promise<AclSandboxChild>
+  spawn(options: AclSandboxSpawnOptions): AclSandboxChild | Promise<AclSandboxChild>
+  spawn(options: AclSandboxSpawnOptions): AclSandboxChild | Promise<AclSandboxChild> {
     const api = this.api
     const token = this.token
     if (!this.ready || this.closing || api === undefined || token === undefined) throw new Error('AclSandbox is not initialized: call init() first')
-    const args = options.args ?? []
+    const args = [...(options.args ?? [])]
     const cwd = options.cwd ?? process.cwd()
 
     if (options.stdio === 'inherit') {
@@ -349,23 +358,21 @@ export class AclSandbox {
       }
     }
 
-    const native = spawnSandboxed(api, token, { command: options.command, args, cwd, argumentEncoding: options.argumentEncoding })
-    const stdout = drainPipe(api, native.stdoutRead)
-    const stderr = drainPipe(api, native.stderrRead)
-    // waitForExit is deliberately NOT started here: WaitForSingleObject blocks
-    // the thread and would starve the drains while the child is still running
-    // (pipe-buffer deadlock). The drains resolve only after the child closed
-    // its pipe ends — by then the wait returns immediately.
-    let exitCodePromise: Promise<number> | undefined
-    return {
-      pid: native.pid,
-      wait: async () => {
-        const stdoutBuffer = await stdout
-        const stderrBuffer = await stderr
-        exitCodePromise ??= Promise.resolve(waitForExit(api, native.process))
-        return { stdout: stdoutBuffer, stderr: stderrBuffer, exitCode: await exitCodePromise }
-      },
-    }
+    if (this.logonSid === undefined) throw new Error('AclSandbox logon SID unavailable')
+    buildCommandLine(options.command, args, options.argumentEncoding)
+    const record = createPipeChildOwner(Object.freeze({command:options.command, args:Object.freeze(args), cwd, argumentEncoding:options.argumentEncoding}), {
+      api, token, logonSid:this.logonSid,
+      // Closing fences new admission. Already admitted records retain the
+      // original token/grants until disposal has joined them.
+      assertLaunchCurrent: () => { if (this.api !== api || this.token !== token) throw new Error('AclSandbox original launch owner retired') },
+      acquireWaitClient: () => acquireWaitDrainBridgeClient(),
+    })
+    this.pipeChildren.add(record) // Original owner precedes every acquisition.
+    const result = record.start()
+    void result.then(child => child.wait(), () => record.joinCleanup()).finally(() => {
+      if (!record.pending()) this.pipeChildren.delete(record)
+    }).catch(() => {})
+    return result
   }
 
   /**
@@ -374,7 +381,7 @@ export class AclSandbox {
    * failure.
    */
   dispose(): void {
-    if (this.initializing) throw new Error('AclSandbox initialization active: use disposeAsync()')
+    if (this.initializing || this.disposal || [...this.pipeChildren].some(child => child.pending())) throw new Error('AclSandbox work active: use disposeAsync()')
     this.closing = true
     this.finalizeInitialization()
   }
@@ -383,6 +390,12 @@ export class AclSandbox {
     if (this.disposal) return this.disposal
     const attempt = (async () => {
       if (this.initialization) await this.initialization.catch(() => {})
+      const children = [...this.pipeChildren]
+      const results = await Promise.allSettled(children.map(child => child.joinCleanup()))
+      for (const child of children) if (!child.pending()) this.pipeChildren.delete(child)
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      if (failures.length) throw new AggregateError(failures, 'AclSandbox children retain cleanup debt')
+      if (this.pipeChildren.size) throw new Error('AclSandbox children remain owned')
       this.finalizeInitialization()
     })()
     this.disposal = attempt
@@ -404,6 +417,7 @@ export class AclSandbox {
     this.initOwner?.cleanup()
     this.api = undefined
     this.token = undefined
+    this.logonSid = undefined
     this.writeSidPtr = undefined
     this.writeSidPtrs = []
     this.tempWriteSidPtr = undefined
