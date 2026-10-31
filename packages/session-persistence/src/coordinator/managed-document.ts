@@ -1,3 +1,4 @@
+import type { createColdExecutionWrites } from './cold-execution-writes.ts';
 import { createDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
 import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
 import type { BootstrapDocumentControl } from './bootstrap-types.ts';
@@ -85,7 +86,7 @@ export function retainSelectedSourceRead(document:ManagedDocument,ownership:Owne
 }
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
-export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}): ManagedDocument & {
+export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>): ManagedDocument & {
     assertObservable(): void;
 } {
     const state = (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }), incarnation = randomUUID();
@@ -211,6 +212,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
         return { results: current.entries.map(() => outcome), observe: false };
     };
+    const observeInstalled = (events: Pending['events']) => {
+        state.observe(events, report);
+        if (events.some(event => ['code/cell', 'code/output', 'code/call', 'code/dispatch', 'code/result'].includes(event.type))) executionChanges?.committed(id);
+    };
     const reportCleanup = () => {
         try {
             void Promise.resolve(report(new Error('Managed journal file close failed after sync'))).catch(() => {});
@@ -286,7 +291,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 for (const [index, entry] of current.entries.entries())
                     entry.resolve(completed.results[index]!);
                 if (completed.observe)
-                    state.observe(current.events, report);
+                    observeInstalled(current.events);
                 if (completed.cleanupDiagnostic) reportCleanup();
             }
         }
@@ -504,7 +509,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
             }
             if (completed.observe)
-                state.observe(current.events, report);
+                observeInstalled(current.events);
             if (completed.cleanupDiagnostic) reportCleanup();
             if (!pending) {
                 quarantined = false;

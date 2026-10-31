@@ -56,7 +56,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   const coldWrites = createColdExecutionWrites()
   const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations, processLatches, documents.taskTransitions, transitionStorage ? async (id, events) => { if (isTaskTransitionDrain(ownership, id)) await runTaskTransitionDrain(ownership, id, () => mutations.appendQueuedDrainUnlocked(id, events)); else await loads.transitionLoad(id, (check, markIssue) => mutations.appendTransitionUnlocked(id, events, check, markIssue), true) } : undefined, coldWrites)
   loads = createLoads(backend, ownership, mutations, processLatches, documents.taskTransitions)
-  managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations, processLatches, id => observations.assertOutsideOwnedOperations([id]), id => observations.revokeOwnedDocumentOperations(id), documents.taskTransitions)
+  managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations, processLatches, id => observations.assertOutsideOwnedOperations([id]), id => observations.revokeOwnedDocumentOperations(id), documents.taskTransitions, coldWrites)
   const lifecycle = createLifecycle(backend, ownership, mutations, documents, managed, processLatches)
 
   async function retire<T>(id: string, run: () => Promise<T>) {
