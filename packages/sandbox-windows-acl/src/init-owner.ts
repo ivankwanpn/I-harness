@@ -1,7 +1,7 @@
 import koffi from 'koffi'
 import { allocBytes, allocPtrSlot, allocUint32, decodePtr, encodeUint32, isNullPtr, isInvalidHandle, throwLastError, throwWin32, type NativePtr, type Win32Bindings } from './ffi.ts'
 
-type Entry = { done: boolean; unknown?: boolean; unknownError?: unknown; domain: 'heap' | 'handle' | 'local' | 'control'; value?: NativePtr; scope?: NativeInitOwner; release(): void }
+type Entry = { done: boolean; unknown?: boolean; unknownError?: unknown; domain: 'heap' | 'handle' | 'local' | 'control'; value?: NativePtr; scope?: NativeInitOwner; release(retained?: Entry): void }
 export class NativeReleaseUnknown extends Error {
   readonly outcome = 'unknown'
   constructor(name: string, cause: unknown) { super(`${name} release outcome unknown; original resource remains pinned`, { cause }) }
@@ -25,6 +25,14 @@ export class NativeInitOwner {
     const assert = () => { current(); if (!entry || entry.done || entry.unknown) throw new Error('original heap resource is not live') }
     assert()
     return assert
+  }
+  /** Finite borrow of an exact still-live handle entry, including reuse checks. */
+  captureHandleCurrent(value: NativePtr) {
+    const matches = this.entries.filter(entry => entry.domain === 'handle' && entry.value === value)
+    if (matches.length !== 1) throw new Error('original handle is absent or ambiguous after reuse')
+    const entry = matches[0]!, current = this.captureCurrent()
+    const assert = () => { current(); if (entry.done || entry.unknown) throw new Error('original handle is not live') }
+    assert(); return assert
   }
   /** Register before BOOL initialization; VOID deletion is acknowledged only on return. */
   voidControl(initializeName: string, initialize: () => number, releaseName: string, release: () => void) {
@@ -58,11 +66,11 @@ export class NativeInitOwner {
   }
   scope() { const scope = new NativeInitOwner(this.api); const entry = this.own(() => scope.cleanup()) as Entry; entry.scope = scope; return scope }
   cleanupScopes() { for (const entry of [...this.entries].reverse()) if (entry.scope) this.retire(entry) }
-  private retire(entry: Entry) {
+  private retire(entry: Entry, retained?: Entry) {
     if (entry.done) return
     this.retirementRevision++
     if (entry.unknown) throw entry.unknownError
-    entry.release()
+    entry.release(retained)
     entry.done = true
   }
   private consume(entry: Entry, name: string, invoke: () => unknown, classify: (result: unknown) => 'released' | 'not-released' | 'unknown', fail: () => never) {
@@ -80,7 +88,7 @@ export class NativeInitOwner {
     const entry = this.own(() => this.consume(entry, 'koffi.free', () => koffi.free(value), result => result === undefined ? 'released' : 'unknown', () => { throw new Error('unreachable heap failure status') }), value, 'heap')
     return value
   }
-  private own(release: () => void, value?: NativePtr, domain: Entry['domain'] = 'control') { const entry = { release, value, domain, done: false }; this.entries.push(entry); return entry }
+  private own(release: (retained?: Entry) => void, value?: NativePtr, domain: Entry['domain'] = 'control') { const entry = { release, value, domain, done: false }; this.entries.push(entry); return entry }
   bytes(size: number) { const value = allocBytes(size); if (isNullPtr(value)) throw new Error('native allocation failed'); return this.heap(value) }
   slot() { const value = allocPtrSlot(); if (isNullPtr(value)) throw new Error('native allocation failed'); this.heap(value); koffi.encode(value, 'void *', null); return value }
   uint32() { const value = allocUint32(); if (isNullPtr(value)) throw new Error('native allocation failed'); this.heap(value); encodeUint32(value, 0); return value }
@@ -105,11 +113,17 @@ export class NativeInitOwner {
       if (kind === 'handle') this.consume(entry, 'CloseHandle', () => this.api.closeHandle(pointer), boolAck, () => throwLastError(this.api, 'CloseHandle', name))
       else this.consume(entry, 'LocalFree', () => this.api.localFree(pointer), result => result === null || result === 0n ? 'released' : result === pointer ? 'not-released' : 'unknown', () => throwLastError(this.api, 'LocalFree', name))
     }, undefined, kind)
-    const value = (): NativePtr | null => {
-      if (!decoded) { pointer = decodePtr(slot); if (pointer === null && (!nullable || state !== 'success')) throw new Error(`${name} output acquisition unresolved`); entry.value = pointer ?? undefined; decoded = true }
+    const value = (check?: () => void): NativePtr | null => {
+      check?.()
+      if (!decoded) {
+        const candidate = decodePtr(slot); check?.()
+        if (kind === 'handle' ? isInvalidHandle(candidate) : candidate === null && (!nullable || state !== 'success')) throw new Error(`${name} output acquisition unresolved`)
+        pointer = candidate; entry.value = pointer ?? undefined; decoded = true
+      }
       return pointer
     }
     const result = issue()
+    if (!statusReturn && boolAck(result) === 'unknown') throw new Error(`${name} outcome unknown`)
     if (statusReturn ? result !== 0 : result === 0) {
       state = 'failed'
       const code = statusReturn ? result : this.api.getLastError()
@@ -120,7 +134,7 @@ export class NativeInitOwner {
     // Cleanup still recovers through value() on the original owner; only this
     // initial post-issue native read requires the original finite-use session.
     current()
-    return value()
+    return value(current)
   }
   /** Two handle outputs share one native issue; both entries precede that issue. */
   outputHandlePair(first: NativePtr, second: NativePtr, name: string, issue: () => number): [NativePtr, NativePtr] {
@@ -130,25 +144,41 @@ export class NativeInitOwner {
     const entries: Entry[] = []
     const add = (slot: NativePtr) => {
       let value: NativePtr | null = null
+      const decode = (check?: () => void) => {
+        check?.()
+        if (value === null) {
+          const candidate = decodePtr(slot); check?.()
+          if (isInvalidHandle(candidate)) throw new Error(`${name} output unresolved`)
+          value = candidate; entry.value = candidate!
+        }
+        check?.(); return value!
+      }
       const entry = this.own(() => {
         if (state === 'failed') return
         if (state === 'unknown') throw new Error(`${name} outcome unknown`)
-        if (value === null) { value = decodePtr(slot); if (isInvalidHandle(value)) throw new Error(`${name} output unresolved`); entry.value = value! }
-        this.consume(entry, 'CloseHandle', () => this.api.closeHandle(value!), boolAck, () => throwLastError(this.api, 'CloseHandle', name))
+        const pointer = decode()
+        this.consume(entry, 'CloseHandle', () => this.api.closeHandle(pointer), boolAck, () => throwLastError(this.api, 'CloseHandle', name))
       }, undefined, 'handle')
       entries.push(entry)
-      return () => { if (value === null) { value = decodePtr(slot); if (isInvalidHandle(value)) throw new Error(`${name} output unresolved`); entry.value = value! } return value! }
+      return decode
     }
     this.retirementGate(first, () => { if (entries.some(entry => !entry.done)) throw new Error(`${name} outputs unresolved`) })
     this.retirementGate(second, () => { if (entries.some(entry => !entry.done)) throw new Error(`${name} outputs unresolved`) })
     const readFirst = add(first), readSecond = add(second)
+    // This pair alone owns independent output disposal. A failed sibling must
+    // not prevent safe cleanup, but both slots stay gated until all outputs ack.
+    this.own(retained => {
+      const errors: unknown[] = []
+      for (const entry of [...entries].reverse()) if (entry !== retained) try { this.retire(entry) } catch (error) { errors.push(error) }
+      if (errors.length) throw new AggregateError(errors, `${name} outputs unresolved or outcome unknown`, { cause: errors[0] })
+    })
     firstCurrent(); secondCurrent()
     const result = issue()
     if (boolAck(result) === 'unknown') throw new Error(`${name} outcome unknown`)
     if (result === 0) { state = 'failed'; throwLastError(this.api, name) }
     state = 'success'
     firstCurrent(); secondCurrent()
-    return [readFirst(), readSecond()]
+    const check = () => { firstCurrent(); secondCurrent() }; const values: [NativePtr, NativePtr] = [readFirst(check), readSecond(check)]; check(); return values
   }
   release(value: NativePtr, domain: Entry['domain']) {
     const entry = [...this.entries].reverse().find(entry => !entry.done && entry.value === value && entry.domain === domain)
@@ -160,7 +190,7 @@ export class NativeInitOwner {
     if (retained?.unknown) throw retained.unknownError
     for (const entry of [...this.entries].reverse()) {
       if (entry.done || entry === retained) continue
-      this.retire(entry)
+      this.retire(entry, retained)
     }
   }
   transfer(value: NativePtr) { this.cleanup(value); const entry = [...this.entries].reverse().find(entry => !entry.done && entry.value === value); if (entry?.unknown) throw entry.unknownError; if (entry) entry.done = true }
@@ -209,4 +239,3 @@ export function withInitOwner<T extends NativePtr | void>(api: Win32Bindings, su
     throw error
   }
 }
-
