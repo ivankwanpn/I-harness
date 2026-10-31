@@ -32,6 +32,7 @@ import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 import { createColdSelectedInspection, type ColdSelectedTarget, type ColdSelectedObservation } from './cold-selected-target.ts'
 
 export interface ManagedEntry {
+  metadataRevision?: object;
   coldSelected?: ReturnType<typeof createColdSelectedInspection>;
   selected?: {cold?:true;route:SelectedResultsRoute;identity:object;taskBarrier?:ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;

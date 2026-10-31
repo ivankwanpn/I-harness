@@ -1,3 +1,5 @@
+import { assertSelectedCurrentHeader } from './selected-current-header.ts'
+import { resolveSelectedBirth } from './selected-birth.ts'
 import { readdir, rename, stat, lstat } from 'node:fs/promises'
 import type { BigIntStats } from 'node:fs'
 import { basename, dirname } from 'node:path'
@@ -290,11 +292,17 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     const captured=selectedOperation(id,owner,route,operation)
     const original=JSON.parse(captured.headerBytes.toString('utf8'))
     if(liveVersion!==original.formatVersion && !(original.formatVersion===13 && liveVersion===14))throw new TypeError('Selected header version changed')
-    const liveHeader=liveVersion===original.formatVersion?captured.headerBytes:Buffer.from(canonicalJsonData({...original,formatVersion:liveVersion})+'\n')
+    let liveHeader:Buffer|undefined
     return tracked(id,owner,async ledger=>{
       const guard=()=>scope(id,owner),path=filePath(id)
       try {
         guard();await assertNotDeleted('session',id)
+        const birth=await resolveSelectedBirth(path,id,assertNotDeleted,{
+          stage:{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard},
+          async readJournal(){const resource=await acquire(ledger,path,'r');try{guard();const raw=await resource.handle.readFile();guard();return raw}finally{await close(ledger,resource)}}
+        });guard()
+        if(!birth||!Buffer.from(canonicalJsonData(birth.stage)+'\n').equals(captured.stageBytes))return {kind:'conflict'}
+
         const sameRevision=(a:BigIntStats,b:BigIntStats)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs
         const parents=async()=>{
           const chain:string[]=[];let parent=dirname(path),foundRoot=false
@@ -328,16 +336,21 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
           const read=async()=>{
             await current();const before=await resource.handle.stat({bigint:true});guard()
             if(!before.isFile()||!sameRevision(originalPath,before))throw Error('Selected header handle changed')
-            const value=Buffer.alloc(liveHeader.length);let offset=0
-            while(offset<value.length){const result=await resource.handle.read(value,offset,value.length-offset,offset);guard();if(!result.bytesRead)break;offset+=result.bytesRead}
+            const value=Buffer.alloc(65536);let offset=0
+            while(offset<value.length){const result=await resource.handle.read(value,offset,value.length-offset,offset);guard();if(!result.bytesRead)break;offset+=result.bytesRead;if(value.subarray(0,offset).includes(10))break}
             const after=await resource.handle.stat({bigint:true});guard();await current()
             if(!sameRevision(originalPath,after))throw Error('Selected header revision changed')
-            return offset===value.length&&value.equals(liveHeader)
+            const end=value.subarray(0,offset).indexOf(10)
+            if(end<0)throw TypeError('Invalid bounded selected header')
+            const header=value.subarray(0,end+1),meta=assertSelectedCurrentHeader(birth.stage,JSON.parse(header.toString('utf8')))
+            if(meta.formatVersion!==liveVersion)return false
+            if(!liveHeader){liveHeader=Buffer.from(header);return true}
+            return header.equals(liveHeader)
           }
           if(!await read())return {kind:'conflict'}
           await resource.handle.sync();guard();if(!await read())return {kind:'conflict'}
         } finally { await close(ledger,resource) }
-        await current();return {kind:'committed',headerDigest:rawHeaderDigest(liveHeader)}
+        await current();return {kind:'committed',headerDigest:rawHeaderDigest(liveHeader!)}
       } catch(error) { ledger.diagnostics.push(error);return {kind:'unknown'} }
     })
   }

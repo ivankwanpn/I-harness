@@ -21,6 +21,7 @@ import * as selected from '../../session-persistence/src/selected-source-owner.t
 import { selectedBootstrapPaths } from '../src/backend/selected-results-route-path.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+import { serializeHeader, snapshotMetadataUpdate } from '../src/format.ts'
 
 async function fixture() {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'cold-cap-'))
@@ -118,6 +119,11 @@ it.skipIf(!predecessor)('retains the actual predecessor birth while its owned cu
       expect(value.birth.stage).toEqual(stage)
       value.assertCurrent()
     })
+    await coordinator.closeManagedDocument('target')
+    expect(await coordinator.updateMeta('target',{title:'predecessor current title'})).toMatchObject({formatVersion:14,title:'predecessor current title'})
+    const fresh=await selected.inspectColdSelectedTarget(coordinator,route)
+    if(fresh.kind!=='qualification-required')throw Error('Missing edited predecessor')
+    await selected.useColdSelectedTarget(coordinator,fresh.target,async value=>{expect(value.metadata.title).toBe('predecessor current title');expect(value.birth.stage).toEqual(stage);value.assertCurrent()})
     const current = await readFile(join(root, 'target.jsonl'))
     expect(current.subarray(current.indexOf(10) + 1)).toEqual(original.subarray(original.indexOf(10) + 1))
     expect(await readFile(join(root, stageName))).toEqual(stageBytes)
@@ -225,4 +231,66 @@ it.each(['clean','cleanup-debt'] as const)('closes the exact document attached d
   expect(registry!.has('ordinary')).toBe(false);expect(resolved!.has('ordinary')).toBe(false);await opened.close();expect(attempts).toBe(mode==='cleanup-debt'?2:1)
   if(mode==='clean'){read.mockRestore();const next=await coordinator.openManagedDocument('ordinary');expect(next).not.toBe(opened);next.assertReady();await opened.close();next.assertReady()}
  }finally{fail=false;leave.resolve();prefixGate.path='';prefixGate.armed=false;await opening?.catch(()=>{});await closing;await coordinator.close();map.mockRestore();read.mockRestore();leaf.mockRestore();factory.mockRestore()}
+})
+
+
+it('updates completed selected metadata through the original coordinator and cold binding', async()=>{
+ const f=await fixture();try{
+  const stagePath=selectedBootstrapPaths(f.path,f.route).stage,stage=await readFile(stagePath),body=f.raw.subarray(f.raw.indexOf(10)+1)
+  let old:Awaited<ReturnType<typeof selected.inspectColdSelectedTarget>>|undefined
+  for(const patch of [{title:'Live selected title'},{archived:true},{archived:false,workspaceId:'workspace',modelSelection:{provider:'route',model:'model',protocol:'openai-responses' as const,reasoningEffort:'high'}}]){
+  const updated=await f.coordinator.updateMeta('target',patch)
+  expect(updated).toMatchObject(patch)
+  const current=await readFile(f.path);expect(current.subarray(current.indexOf(10)+1)).toEqual(body);expect(await readFile(stagePath)).toEqual(stage)
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);expect(result.kind).toBe('qualification-required');if(result.kind!=='qualification-required')throw Error('Missing live metadata target')
+  if(old?.kind==='qualification-required')await expect(selected.useColdSelectedTarget(f.coordinator,old.target,async()=>{})).rejects.toThrow()
+  await selected.useColdSelectedTarget(f.coordinator,result.target,async value=>{
+   expect(value.metadata).toMatchObject(patch);expect(value.metadata.title).toBe('Live selected title');value.assertCurrent();expect(()=>value.document.assertReady()).toThrow()
+   await expect(f.coordinator.updateMeta('target',{title:'self'})).rejects.toThrow();value.assertCurrent()
+  })
+  await expect(f.coordinator.updateMeta('target',{title:'unready'})).rejects.toThrow()
+  expect(await readFile(f.path)).toEqual(current)
+  await f.coordinator.closeManagedDocument('target');old=result
+  }
+ }finally{await f.coordinator.close()}
+})
+
+it.each(['formatVersion','journal','semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion','sessionId','createdAt'])('refuses protected selected metadata patches before publication: %s',async key=>{
+ const f=await fixture();try{
+  const original=JSON.parse(f.raw.subarray(0,f.raw.indexOf(10)).toString()),stagePath=selectedBootstrapPaths(f.path,f.route).stage,stage=await readFile(stagePath)
+   for(const patch of [{[key]:null},Object.defineProperty({},key,{enumerable:true,get(){throw Error('protected getter')}}),{toJSON(){const next={...original};if(Object.hasOwn(next,key))delete next[key];else next[key]=1;return next}},{get title(){original.semanticSeed.operationId='forged';return 'smuggled'},semanticSeed:original.semanticSeed}]){
+    await expect(f.coordinator.updateMeta('target',patch as never)).rejects.toThrow()
+    expect(await readFile(f.path)).toEqual(f.raw);expect(await readFile(stagePath)).toEqual(stage)
+    await f.coordinator.close()
+    f.coordinator=createJsonlTaskTransitionCoordinator(f.root,{lock:{enabled:true}},taskDocumentStorageContract)
+   }
+  const current=JSON.parse(f.raw.subarray(0,f.raw.indexOf(10)).toString())
+  expect(await f.coordinator.updateMeta('target',{semanticSeed:current.semanticSeed,toJSON(){return {...current,title:'serialized title'}}} as never)).toMatchObject({title:'serialized title'})
+ }finally{await f.coordinator.close()}
+})
+
+it('keeps the generic serializer closed and preserves exact torn bytes at the original selected backend boundary',async()=>{
+ const f=await fixture();try{
+  const meta=JSON.parse(f.raw.subarray(0,f.raw.indexOf(10)).toString())
+  expect(()=>serializeHeader(meta)).toThrow('Legacy header writer')
+  expect(()=>snapshotMetadataUpdate(meta,{title:'generic'})).toThrow('Legacy header writer')
+  await f.coordinator.create({sessionId:'ordinary'})
+  expect(await f.coordinator.updateMeta('ordinary',{title:'ordinary title',workspaceId:'workspace'})).toMatchObject({title:'ordinary title',workspaceId:'workspace'})
+  const backend=createJsonlBackend(f.root),torn=Buffer.concat([f.raw,Buffer.from([0x7b,0xff,0x00])])
+  await writeFile(f.path,torn)
+  expect(await backend.updateMeta('target',{title:'backend exact body'})).toMatchObject({title:'backend exact body'})
+  const current=await readFile(f.path)
+  expect(current.subarray(current.indexOf(10)+1)).toEqual(torn.subarray(torn.indexOf(10)+1))
+ }finally{await f.coordinator.close()}
+})
+
+it.each(['stage','immutable','frame'] as const)('refuses supported metadata publication after original birth corruption: %s',async mode=>{
+ const f=await fixture();try{
+  if(mode==='stage')await writeFile(selectedBootstrapPaths(f.path,f.route).stage,'{}')
+  else if(mode==='immutable'){const end=f.raw.indexOf(10),meta=JSON.parse(f.raw.subarray(0,end).toString());meta.createdAt='changed';await writeFile(f.path,Buffer.concat([Buffer.from(JSON.stringify(meta)+'\n'),f.raw.subarray(end+1)]))}
+  else {const raw=Buffer.from(f.raw);raw[raw.length-3]=0;await writeFile(f.path,raw)}
+  const before=await readFile(f.path),stage=await readFile(selectedBootstrapPaths(f.path,f.route).stage)
+  await expect(f.coordinator.updateMeta('target',{title:'refused'})).rejects.toThrow()
+  expect(await readFile(f.path)).toEqual(before);expect(await readFile(selectedBootstrapPaths(f.path,f.route).stage)).toEqual(stage)
+ }finally{await f.coordinator.close()}
 })

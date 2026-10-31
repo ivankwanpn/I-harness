@@ -9,7 +9,9 @@ import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact
 import { upgradeFactJournal, stageOwnedUpgrade } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
+import { ordinaryStageIO } from './backend/bootstrap-stage.ts'
 import { createBootstrapCaptureIO } from './backend/bootstrap-capture-io.ts'
+import { resolveSelectedBirth, snapshotSelectedMetadataUpdate } from './backend/selected-birth.ts'
 import { createSelectedFactJournalBackend } from './backend/selected-fact-journal.ts'
 import { createJsonlProcessReadCapability } from './backend/process-read.ts'
 import { assembleSessionCoordinatorWithProcessStorage, type TaskTransitionBackendSession, type TaskTransitionConfiguration } from '@i-harness/session-persistence/internal/process-read-assembly'
@@ -413,17 +415,15 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       // (a torn tail is preserved as-is, repair's business). Atomic temp +
       // rename (putDocument pattern) — a concurrent reader sees either the
       // old or the new file, never a truncated one.
-      const text = await readFile(path, "utf-8")
-      const lines = text.split("\n")
-      if (lines.length === 0 || lines[0]!.trim() === "") {
-        throw new Error(`empty session file: ${sessionId}`)
-      }
-      const previous = parseHeader(lines[0]!)
-      const snapshot = snapshotMetadataUpdate(previous, patch)
-      const out = lines.slice()
-      out[0] = snapshot.line
+      const raw = await readFile(path), end=raw.indexOf(10)
+      if(end<0||end+1>65536||!raw.subarray(0,end).toString('utf8').trim())throw new Error(`empty session file: ${sessionId}`)
+      const previous=parseHeader(raw.subarray(0,end).toString('utf8'))
+      const birth=previous.semanticSeed?.version===3 ? await resolveSelectedBirth(path,sessionId,assertNotDeleted,{stage:ordinaryStageIO(path),readJournal:()=>readFile(path)}) : undefined
+      // Bind the rewrite to the same observed bytes, including the real resolver reread.
+      if(birth&&!(await readFile(path)).equals(raw))throw TypeError('Selected journal changed during metadata update')
+      const snapshot=birth ? snapshotSelectedMetadataUpdate(birth,patch) : snapshotMetadataUpdate(previous,patch)
       const tmp = `${path}.${randomUUID()}.tmp`
-      await writeFile(tmp, out.join("\n"), { encoding: "utf-8" })
+      await writeFile(tmp, Buffer.concat([Buffer.from(snapshot.line+'\n'),raw.subarray(end+1)]))
       await rename(tmp, path)
       return snapshot.meta
     },

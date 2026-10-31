@@ -30,10 +30,11 @@ export function createColdSelectedInspection(entry: ManagedEntry, route: Selecte
   const target: ColdSelectedTarget = Object.freeze({ kind: 'cold-selected-target' })
   // Preserve the genuine checked object identity; these are already checked JSON.
   freezeJsonData(birth); freezeJsonData(prefix); freezeJsonData(receipt); freezeJsonData(metadata)
+  const revision=entry.metadataRevision
   const view = document.view, eventCount = view.events.length, header = view.header
   const check = () => {
     lifecycle.assertCurrent()
-    if (entry.selected !== selected || entry.document !== document || document.view !== view
+    if (entry.metadataRevision !== revision || entry.selected !== selected || entry.document !== document || document.view !== view
       || selected.resultReceipt !== receipt || entry.ready || view.events.length !== eventCount || view.header !== header
       || !selected.taskBarrier?.completed || !entry.captureIO?.settled || entry.captureIO.released || entry.captureIO.releasing) throw new FactRecoveryRequiredError()
     entry.captureIO.held.assertHeld()

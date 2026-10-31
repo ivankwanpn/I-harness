@@ -1,3 +1,4 @@
+import { selectedImmutableHeaderKeys } from './metadata-snapshot.ts'
 import { basename, dirname, join } from 'node:path'
 import { types } from 'node:util'
 import { canonicalJsonData, freezeJsonData, isStrictFactData } from '@i-harness/core-session'
@@ -8,7 +9,7 @@ import type { StageLookupIO } from './bootstrap-stage.ts'
 export type SelectedStageExpectation = {kind:'route';route:SelectedResultsRoute}|{kind:'header';meta:SessionMeta}
 export type SelectedStageLookup = {kind:'absent'}|{kind:'reserved';route:SelectedResultsRoute;reservation:SelectedResultsReservationV1;exactBytes:Uint8Array;promotionBytes?:Uint8Array}|{kind:'full';route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2;exactBytes:Uint8Array}|{kind:'unavailable'|'conflict';present:boolean}
 const same=(a:unknown,b:unknown)=>canonicalJsonData(a)===canonicalJsonData(b)
-const headerFields=['formatVersion','sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'] as const
+const headerFields=selectedImmutableHeaderKeys
 function ownData(input:unknown,key:string,optional=false):any {
  if(!input||typeof input!=='object'||types.isProxy(input))throw TypeError('Expected data object')
  const field=Object.getOwnPropertyDescriptor(input,key)

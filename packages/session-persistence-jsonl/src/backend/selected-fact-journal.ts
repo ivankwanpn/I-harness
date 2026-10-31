@@ -2,6 +2,7 @@ import { stat, type FileHandle } from 'node:fs/promises'
 import { types } from 'node:util'
 import { canonicalJsonData, readFactJournal, isStrictFactData, decodeFactBatch, encodeFactBatch, validJournalPrefix } from '@i-harness/core-session'
 import { isHeldFactOwner, captureSelectedResultsRoute, type HeldFactOwner, type SelectedResultsRoute, type SelectedResultsHeaderStageV2 } from '@i-harness/session-persistence'
+import { assertSelectedCurrentHeader } from './selected-current-header.ts'
 import { resolveSelectedBirth } from './selected-birth.ts'
 import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
 import { bootstrapNamespace } from './bootstrap-stage.ts'
@@ -17,7 +18,9 @@ const same=(a:unknown,b:unknown)=>canonicalJsonData(a)===canonicalJsonData(b)
 function matchesBirth(raw:Buffer,end:number,meta:ReturnType<typeof parseHeader>,data:ScopeData) {
  const original=JSON.parse(data.stage.headerBytes)
  const header=original.formatVersion===13 && meta.formatVersion===14 ? canonicalJsonData({...original,formatVersion:14})+'\n' : data.stage.headerBytes
- if(!raw.subarray(0,end+1).equals(Buffer.from(header)))return false
+ if(end<0||end+1>65536)return false
+ if(data.capturedFrames){if(!raw.subarray(0,end+1).equals(Buffer.from(header)))return false}
+ else {try{assertSelectedCurrentHeader(data.stage,JSON.parse(raw.subarray(0,end).toString('utf8')))}catch{return false}}
  return raw.subarray(end+1,end+1+data.birthBody.length).equals(data.birthBody)
 }
 const byteLength=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),'length')!.get!
