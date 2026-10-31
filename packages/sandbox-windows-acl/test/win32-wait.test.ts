@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   setupFailure: undefined as unknown, failSetup: false, failBinding: false, failAlloc: false, registerThrows: false, decoded: 77n, nativeCalls: 0, freeFails: 0, registered: 1, decodeFails: 0, releaseFails: 0, frees: 0, releases: 0,
-  callback: undefined as (() => void) | undefined,
+  immediate: false, callback: undefined as (() => void) | undefined,
   nativeArguments: [] as unknown[],
   prototypeArguments: [] as unknown[],
 }))
@@ -14,12 +14,12 @@ vi.mock('koffi', () => ({ default: {
   free: () => { if(state.freeFails-- > 0) throw new Error('slot free held'); state.frees++ },
   register: (callback: () => void) => { state.callback = callback; return 20n },
   unregister: () => { state.releases++; if (state.releaseFails-- > 0) throw new Error('callback release failed') },
-  load: () => { if(state.failSetup) throw state.setupFailure; return { func: (_abi: string, name: string) => { if(state.failBinding) throw state.setupFailure; return name === 'GetLastError' ? () => 5 : (...args: unknown[]) => { state.nativeCalls++; state.nativeArguments = args; if(state.registerThrows) throw state.setupFailure; return state.registered } } } },
+  load: () => { if(state.failSetup) throw state.setupFailure; return { func: (_abi: string, name: string) => { if(state.failBinding) throw state.setupFailure; return name === 'GetLastError' ? () => 5 : (...args: unknown[]) => { state.nativeCalls++; state.nativeArguments = args; if(state.immediate) state.callback!(); if(state.registerThrows) throw state.setupFailure; return state.registered } } } },
 } }))
 import { registerWin32Wait, registerWin32WaitWithReservation } from '../src/win32-wait.ts'
 import type { NativePtr } from '../src/ffi.ts'
 function provider(unregister: (handle: NativePtr) => Promise<number>) { return { reserve: () => ({ unregister: async (handle: NativePtr) => ({ status: await unregister(handle), acknowledge: async () => {} }), release: () => {}, rejoin: () => {} }) } }
-beforeEach(() => { state.failSetup = false; state.failBinding = false; state.failAlloc = false; state.registerThrows = false; state.decoded = 77n; state.setupFailure = undefined; state.nativeCalls = 0; state.freeFails = 0; state.registered = 1; state.decodeFails = 0; state.releaseFails = 0; state.frees = 0; state.releases = 0 })
+beforeEach(() => { state.immediate = false; state.failSetup = false; state.failBinding = false; state.failAlloc = false; state.registerThrows = false; state.decoded = 77n; state.setupFailure = undefined; state.nativeCalls = 0; state.freeFails = 0; state.registered = 1; state.decodeFails = 0; state.releaseFails = 0; state.frees = 0; state.releases = 0 })
 
 it('uses BOOLEAN callback ABI and one-shot infinite wait, retaining native slot until ACK', async () => {
   let ack!: (code: number) => void
@@ -179,3 +179,32 @@ it('unknown native registration with no recoverable outslot stays active and pre
   await expect(f.client.release()).rejects.toThrow(/unresolved/)
   expect(state.nativeCalls).toBe(1);expect(f.drains()).toBe(0);expect(f.reserves()).toBe(1);expect(state.frees+state.releases).toBe(0)
 })
+
+it('setup completes while the root signal remains pending, and ignores late callback after close', async () => {
+  const wait = registerWin32WaitWithReservation(42n as NativePtr, provider(async () => 0).reserve())
+  let signalled = false; void wait.signalled.then(() => { signalled = true })
+  await wait.setup; expect(signalled).toBe(false)
+  await wait.close(); state.callback!(); await Promise.resolve(); expect(signalled).toBe(false)
+})
+it('setup succeeds even when the callback already fired', async () => {
+  state.immediate = true
+  const wait = registerWin32WaitWithReservation(42n as NativePtr, provider(async () => 0).reserve())
+  await wait.setup; await wait.signalled; await wait.close()
+})
+it('setup reports original known failure and retains close ownership', async () => {
+  state.registered = 0
+  const wait = registerWin32WaitWithReservation(42n as NativePtr, provider(async () => 0).reserve())
+  const signal = wait.signalled.catch(value => value)
+  const error = await wait.setup.catch(value => value)
+  expect(await signal).toBe(error)
+  expect(error).toMatchObject({ api: 'RegisterWaitForSingleObject' }); await wait.close()
+})
+it('setup reports exact falsey unknown registration failure', async () => {
+  state.registerThrows = true; state.setupFailure = null; state.decoded = 0n
+  const wait = registerWin32WaitWithReservation(42n as NativePtr, provider(async () => 0).reserve())
+  const signal = wait.signalled.catch(value => value)
+  await expect(wait.setup).rejects.toBeNull(); expect(await signal).toBeNull()
+  await expect(wait.close()).rejects.toMatchObject({ errors: [null, expect.objectContaining({ outcome: 'unknown' })] })
+})
+
+

@@ -76,7 +76,10 @@ function constructWin32Wait(handle: NativePtr, reservation: WaitDrainReservation
       reservation.release()
     },
   })
+  const setup = registrationFailed ? Promise.reject(registrationFailure) : Promise.resolve()
+  void setup.catch(() => {})
   return {
+    setup,
     signalled: registrationFailed ? Promise.reject(registrationFailure) : wait.signalled,
     close() {
       return wait.close().catch(cleanup => {
@@ -84,5 +87,7 @@ function constructWin32Wait(handle: NativePtr, reservation: WaitDrainReservation
         throw cleanup
       })
     },
-  }
+  } as const
 }
+
+
