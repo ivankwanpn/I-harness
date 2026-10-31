@@ -22,7 +22,7 @@ const signalAddListener = EventTarget.prototype.addEventListener
 const signalRemoveListener = EventTarget.prototype.removeEventListener
 const isAborted = (signal?: AbortSignal): boolean => signal === undefined ? false : Reflect.apply(signalAborted, signal, [])
 
-export interface ObservationCleanupHandle { retry(): Promise<void> }
+export interface ObservationCleanupHandle { retry(operation?: RetainedCleanupOperation): Promise<void> }
 const cleanupOwners = new WeakMap<SessionCoordinator, (error: unknown) => ObservationCleanupHandle | undefined>()
 /** Private lifecycle link; never a property on the public coordinator. */
 export function associateObservationCleanupOwner(coordinator: SessionCoordinator, lookup: (error: unknown) => ObservationCleanupHandle | undefined): void { cleanupOwners.set(coordinator, lookup) }

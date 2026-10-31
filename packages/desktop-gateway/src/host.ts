@@ -1,3 +1,4 @@
+import { createRetainedCleanupOperation, finishRetainedCleanupOperation, closeCoordinatorWithRetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
 import { createAgentProcessReadRunner } from './agent-process-read.ts'
 import type { ContextResultRef } from "@i-harness/context-output"
 import type { ManagedArtifactRef } from "@i-harness/core-session"
@@ -54,6 +55,7 @@ import { createProjectContentSearch } from "./project-content-search.ts"
 import { createSessionManagementFence } from "./session-management-fence.ts"
 import { createConversationResultReader } from './result-reader.ts'
 import { createCodeModeSettings, createDesktopExecution } from "./execution.ts"
+import { createExecutionHostObservation } from "./execution-host-observation.ts"
 import { createAgentProcesses } from "./agent-processes.ts"
 import { createDesktopDiagnostics } from "./environment-diagnostics.ts"
 import { createApprovalRulesAdapter } from "./approval-rules.ts"
@@ -405,12 +407,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     return state.status === "ready" ? (await service.assemblyFor(id)).session : await createDurableSessionLoader(coordinator)(id)
   } })
   const execution = createDesktopExecution(coordinator, service)
+  const executionObservation = createExecutionHostObservation(coordinator, projects, service, execution)
   const conversationRead = createConversationResultReader(coordinator, service, isConversation, fence)
   const agentProcesses = createAgentProcesses(coordinator, service, { runRead: createAgentProcessReadRunner({ coordinator, service, isConversation, fence, resultReadScopeFor: projects.resultReadScopeFor, readResultPage: conversationRead }) })
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
     workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), modelWait: createModelWaitSettings(settingsPath), codeSettings, approvalRules, usageStats,
     assertSession: async id => { const { meta } = await coordinator.profile(id); if (!await isConversation(id, meta)) throw new Error("Conversation unavailable") },
+    executionObservation,
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
     diagnostics: createDesktopDiagnostics(service, { shell: agentShell }),
@@ -521,8 +525,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
     close: () => {
       assertOutsideForkController(coordinator)
+      executionObservation.fence()
       if (shutdownComplete) return Promise.resolve()
       if (closing) return closing
+      const cleanupOperation = createRetainedCleanupOperation()
       shutdownRequested = true
       let pluginFenceFailure: { cause: unknown } | undefined
       try { stopPluginObserver.dispose() } catch (cause) { pluginFenceFailure = { cause } }
@@ -544,12 +550,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("input", () => input.close())
         await once("project content search", () => projectContentSearch.close())
         await once("router", () => router.close())
+        await once("execution observation", () => executionObservation.close(cleanupOperation))
         await once('fork controller',()=>forkController.close())
         await once("coding plans", () => codingPlans.close())
         await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())
         await once('instruction subscriptions', () => instructions.close())
-        const forksJoined=cleaned.has('router')&&cleaned.has('fork controller')
+        const forksJoined=cleaned.has('router')&&cleaned.has('fork controller')&&cleaned.has('execution observation')
         if(forksJoined)await once("projects", () => projects.close())
         await once("review", () => review.close())
         if(forksJoined)await once("workflow", () => workflow.close())
@@ -565,11 +572,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         if (cleaned.has('trust watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
-        if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => coordinator.close())
+        if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => closeCoordinatorWithRetainedCleanupOperation(coordinator, cleanupOperation))
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),
           `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)
         shutdownComplete = true
-      })()
+      })().finally(() => finishRetainedCleanupOperation(cleanupOperation))
       closing = attempt
       void attempt.finally(() => { if (closing === attempt) closing = undefined }).catch(() => {})
       return attempt

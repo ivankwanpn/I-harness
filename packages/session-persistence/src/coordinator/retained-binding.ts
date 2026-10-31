@@ -18,19 +18,24 @@ export interface RetainedExistingBinding {
 }
 export interface RetainedBindingRequest { sessionId: string; signal?: AbortSignal }
 const issuedReferences = new WeakMap<object, { issuer: object; preflight(): void; request(reason: unknown): Promise<void>; observe(listener: (operation: RetainedCleanupOperation) => void | Promise<void>): () => void }>()
-const coordinatorIssuers = new WeakMap<SessionCoordinator, object>()
+const coordinatorIssuers = new WeakMap<SessionCoordinator, { issuer: object; preflight(ids?: readonly string[]): void }>()
+export function preflightRetainedCoordinatorFor(coordinator: SessionCoordinator, ids?: readonly string[]): void {
+  const owner = coordinatorIssuers.get(coordinator)
+  if (!owner) throw new Failure('invalid')
+  owner.preflight(ids)
+}
 export function assertRetainedBindingReference(reference: RetainedExistingBinding): void {
   if (!issuedReferences.has(reference)) throw new Failure('invalid')
   reference.assertCurrent()
 }
 export function assertRetainedBindingReferenceFor(coordinator: SessionCoordinator, reference: RetainedExistingBinding): void {
   const original = issuedReferences.get(reference)
-  if (!original || coordinatorIssuers.get(coordinator) !== original.issuer) throw new Failure('invalid')
+  if (!original || coordinatorIssuers.get(coordinator)?.issuer !== original.issuer) throw new Failure('invalid')
   reference.assertCurrent()
 }
 export function preflightRetainedBindingReleaseFor(coordinator: SessionCoordinator, reference: RetainedExistingBinding): void {
   const original = issuedReferences.get(reference)
-  if (!original || coordinatorIssuers.get(coordinator) !== original.issuer) throw new Failure('invalid')
+  if (!original || coordinatorIssuers.get(coordinator)?.issuer !== original.issuer) throw new Failure('invalid')
   original.preflight()
 }
 /** Private lifecycle observation on the exact original reference. */
@@ -40,7 +45,7 @@ export function observeRetainedBindingRetirementFor(coordinator: SessionCoordina
 }
 export function requestRetainedReferenceRetirementFor(coordinator: SessionCoordinator, reference: RetainedExistingBinding, reason: unknown): Promise<void> {
   const original = issuedReferences.get(reference)
-  if (!original || coordinatorIssuers.get(coordinator) !== original.issuer) throw new Failure('invalid')
+  if (!original || coordinatorIssuers.get(coordinator)?.issuer !== original.issuer) throw new Failure('invalid')
   return original.request(reason)
 }
 type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
@@ -93,7 +98,7 @@ export function createRetainedBindings(
   const issuer = Object.freeze({})
   let associated = false
   let domain: object = issuer
-  const failures = new WeakMap<object, { retry(): Promise<void> }>()
+  const failures = new WeakMap<object, { retry(operation?: RetainedCleanupOperation): Promise<void> }>()
   const contexts = new AsyncLocalStorage<readonly Context[]>()
   let charged = 0
   const matches = (owner: Owner, ids: readonly string[], keys: readonly string[], all: boolean) => all || ids.includes(owner.id) || keys.includes(owner.key)
@@ -266,10 +271,10 @@ export function createRetainedBindings(
       }
       catch (cleanup) {
         const failure = new AggregateError([error, cleanup], 'Retained binding acquisition and cleanup failed')
-        failures.set(failure, Object.freeze({ async retry() {
-          preflight([id], [key]); original.assertOutside([id], [key])
-          const retry = createRetainedCleanupOperation()
-          try { await select(owner, retry) } finally { finishRetainedCleanupOperation(retry) }
+        failures.set(failure, Object.freeze({ async retry(operation?: RetainedCleanupOperation) {
+          preflight([id], [key]); original.assertOutside([id], [key]); assertOutsideRetirementSink(domain)
+          const retry = operation ?? createRetainedCleanupOperation()
+          try { await select(owner, retry) } finally { if (!operation) finishRetainedCleanupOperation(retry) }
         } }))
         throw failure
       }
@@ -356,7 +361,7 @@ export function createRetainedBindings(
   return { acquire, preflight(ids: readonly string[], keys: readonly string[], all = false) { preflight(ids, keys, all); assertOutsideRetirementSink(domain) }, retire,
     associateCoordinator(coordinator: SessionCoordinator) {
       if (associated || coordinatorIssuers.has(coordinator)) throw new TypeError('Retained owner already associated')
-      associated = true; domain = coordinator; coordinatorIssuers.set(coordinator, issuer)
+      associated = true; domain = coordinator; coordinatorIssuers.set(coordinator, { issuer, preflight(ids) { preflight(ids ?? [], [], ids === undefined); assertOutsideRetirementSink(domain) } })
     },
     cleanupForError(error: unknown) { return error !== null && typeof error === 'object' ? failures.get(error) : undefined } }
 }
