@@ -4,6 +4,7 @@ import type { SessionMeta, SelectedResultsHeaderStageV2 } from '@i-harness/sessi
 import { readFile } from 'node:fs/promises'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import { selectedResultsPreparationFacts } from '../../../session-persistence/src/coordinator/selected-results-preparation.ts'
+import { SELECTED_RESULTS_HEADER_MAX_BYTES } from '../../../session-persistence/src/coordinator/selected-results-header.ts'
 import { parseHeader } from '../format.ts'
 import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
 import { ordinaryStageIO } from './bootstrap-stage.ts'
@@ -13,7 +14,11 @@ const originalReads=new WeakMap<object,{stage:SelectedResultsHeaderStageV2;meta:
 /** Only a genuine stable resolution can select the private V3 snapshot path. */
 export function snapshotSelectedMetadataUpdate(read:object,patch:Partial<SessionMeta>) {
  const original=originalReads.get(read);if(!original)throw TypeError('Original selected read required')
- return captureMetadataUpdate(original.meta,patch,meta=>{const line=JSON.stringify(meta);assertSelectedCurrentHeader(original.stage,JSON.parse(line));return line})
+ return captureMetadataUpdate(original.meta,patch,meta=>{
+  const line=JSON.stringify(meta)
+  if(Buffer.byteLength(line+'\n','utf8')>SELECTED_RESULTS_HEADER_MAX_BYTES)throw TypeError('Selected header exceeds byte limit')
+  assertSelectedCurrentHeader(original.stage,JSON.parse(line));return line
+ })
 }
 
 /** Read-only resolution: never repairs an incomplete birth or a torn suffix. */
@@ -22,7 +27,7 @@ export async function resolveSelectedBirth(path: string, id: string, assertNotDe
  let raw: Buffer
  try { raw=await io.readJournal() } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code==='ENOENT') { await assertNotDeleted('session',id); return undefined } throw error }
  const end=raw.indexOf(10)
- if(end<0 || end+1>65536) throw new TypeError('Invalid managed header')
+ if(end<0 || end+1>SELECTED_RESULTS_HEADER_MAX_BYTES) throw new TypeError('Invalid managed header')
  const meta=parseHeader(raw.subarray(0,end).toString('utf8'))
  if(!meta.semanticSeed) { await assertNotDeleted('session',id); return undefined }
  if(meta.sessionId!==id || meta.semanticSeed.version!==3 || !meta.journal) throw new TypeError('Selected birth required')

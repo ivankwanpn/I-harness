@@ -1,6 +1,7 @@
 import * as factOwners from '../../session-persistence/src/coordinator/fact-owner.ts'
 const prefixGate=vi.hoisted(()=>({path:'',armed:false,gate:undefined as Promise<void>|undefined,entered:undefined as (()=>void)|undefined}))
-vi.mock('node:fs/promises',async original=>{const real=await original<typeof import('node:fs/promises')>();return {...real,async readFile(...args:Parameters<typeof real.readFile>){const bytes=await real.readFile(...args);if(prefixGate.armed&&String(args[0])===prefixGate.path){prefixGate.armed=false;prefixGate.entered?.();await prefixGate.gate}return bytes}}})
+const metadataPublication=vi.hoisted(()=>({path:'',writes:0,renames:0}))
+vi.mock('node:fs/promises',async original=>{const real=await original<typeof import('node:fs/promises')>();return {...real,async readFile(...args:Parameters<typeof real.readFile>){const bytes=await real.readFile(...args);if(prefixGate.armed&&String(args[0])===prefixGate.path){prefixGate.armed=false;prefixGate.entered?.();await prefixGate.gate}return bytes},async writeFile(...args:Parameters<typeof real.writeFile>){if(metadataPublication.path&&String(args[0]).startsWith(metadataPublication.path+'.'))metadataPublication.writes++;return real.writeFile(...args)},async rename(...args:Parameters<typeof real.rename>){if(metadataPublication.path&&String(args[1])===metadataPublication.path)metadataPublication.renames++;return real.rename(...args)}}})
 import * as managedLeaf from '../../session-persistence/src/coordinator/managed-document.ts'
 import { createJsonlBackend } from '../src/index.ts'
 import { composeJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
@@ -16,12 +17,13 @@ import { decodeFactBatch, encodeFactBatch } from '@i-harness/core-session'
 import { codecSeed, codecPage, codecRow, sealCodecSeed } from '../../core-session/test/fixtures/selected-results.ts'
 import { createSelectedResultsIntent, readSelectedResultsCore } from '../../session-persistence/src/selected-results-fork-contract.ts'
 import { compileSelectedResultsSemanticSeed } from '../../session-persistence/src/semantic-seed.ts'
-import { buildSelectedResultsHeader } from '../../session-persistence/src/coordinator/selected-results-header.ts'
+import { buildSelectedResultsHeader, SELECTED_RESULTS_HEADER_MAX_BYTES } from '../../session-persistence/src/coordinator/selected-results-header.ts'
 import * as selected from '../../session-persistence/src/selected-source-owner.ts'
 import { selectedBootstrapPaths } from '../src/backend/selected-results-route-path.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { serializeHeader, snapshotMetadataUpdate } from '../src/format.ts'
+
 
 async function fixture() {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'cold-cap-'))
@@ -292,5 +294,50 @@ it.each(['stage','immutable','frame'] as const)('refuses supported metadata publ
   const before=await readFile(f.path),stage=await readFile(selectedBootstrapPaths(f.path,f.route).stage)
   await expect(f.coordinator.updateMeta('target',{title:'refused'})).rejects.toThrow()
   expect(await readFile(f.path)).toEqual(before);expect(await readFile(selectedBootstrapPaths(f.path,f.route).stage)).toEqual(stage)
+ }finally{await f.coordinator.close()}
+})
+
+it.each(['ascii','multibyte','newline','toJSON'] as const)('SLM-R2 rejects oversized detached UTF-8 header before publication: %s',async mode=>{
+ const f=await fixture();try{
+  const meta=JSON.parse(f.raw.subarray(0,f.raw.indexOf(10)).toString()),stagePath=selectedBootstrapPaths(f.path,f.route).stage,stage=await readFile(stagePath)
+  const emptyBytes=Buffer.byteLength(JSON.stringify({...meta,title:''})+'\n','utf8'),room=SELECTED_RESULTS_HEADER_MAX_BYTES-emptyBytes
+  const title=mode==='multibyte'?'界'.repeat(Math.ceil(room/3)+1):mode==='newline'?'x'.repeat(room+1):'x'.repeat(SELECTED_RESULTS_HEADER_MAX_BYTES)
+  const line=JSON.stringify({...meta,title})
+  expect(Buffer.byteLength(line+'\n','utf8')).toBeGreaterThan(SELECTED_RESULTS_HEADER_MAX_BYTES)
+  if(mode==='multibyte')expect(line.length+1).toBeLessThan(SELECTED_RESULTS_HEADER_MAX_BYTES)
+  if(mode==='newline')expect(Buffer.byteLength(line,'utf8')).toBe(SELECTED_RESULTS_HEADER_MAX_BYTES)
+  const patch=mode==='toJSON'?{title:'short',toJSON(){return {...meta,title}}}:{title}
+  metadataPublication.path=f.path;metadataPublication.writes=metadataPublication.renames=0
+  await expect(f.coordinator.updateMeta('target',patch as never)).rejects.toThrow()
+  expect(metadataPublication.writes).toBe(0);expect(metadataPublication.renames).toBe(0)
+  metadataPublication.path=''
+  expect(await readFile(f.path)).toEqual(f.raw);expect(await readFile(stagePath)).toEqual(stage)
+  // The original transition can conservatively poison its local failed attempt;
+  // retire it before testing the preserved persisted target with a fresh owner.
+  await f.coordinator.close();f.coordinator=createJsonlTaskTransitionCoordinator(f.root,{lock:{enabled:true}},taskDocumentStorageContract)
+  const old=await selected.inspectColdSelectedTarget(f.coordinator,f.route)
+  if(old.kind!=='qualification-required')throw Error('Rejected metadata damaged cold target')
+  await selected.useColdSelectedTarget(f.coordinator,old.target,async value=>{expect(value.metadata.title).toBe(meta.title);value.assertCurrent()})
+  await f.coordinator.closeManagedDocument('target')
+  expect(await f.coordinator.updateMeta('target',{title:'corrective valid title'})).toMatchObject({title:'corrective valid title'})
+  const fresh=await selected.inspectColdSelectedTarget(f.coordinator,f.route)
+  if(fresh.kind!=='qualification-required')throw Error('Missing corrected target')
+  await selected.useColdSelectedTarget(f.coordinator,fresh.target,async value=>{expect(value.metadata.title).toBe('corrective valid title');value.assertCurrent()})
+  const raw=await readFile(f.path);expect(raw.subarray(raw.indexOf(10)+1)).toEqual(f.raw.subarray(f.raw.indexOf(10)+1));expect(await readFile(stagePath)).toEqual(stage)
+ }finally{metadataPublication.path='';await f.coordinator.close()}
+})
+
+it.each(['x','界'])('SLM-R2 accepts the exact UTF-8 line boundary including LF: %s',async character=>{
+ const f=await fixture();try{
+  const meta=JSON.parse(f.raw.subarray(0,f.raw.indexOf(10)).toString()),room=SELECTED_RESULTS_HEADER_MAX_BYTES-Buffer.byteLength(JSON.stringify({...meta,title:''})+'\n','utf8')
+  const width=Buffer.byteLength(character,'utf8'),title=character.repeat(Math.floor(room/width))+'x'.repeat(room%width)
+  expect(await f.coordinator.updateMeta('target',{title})).toMatchObject({title})
+  const raw=await readFile(f.path);expect(raw.indexOf(10)+1).toBe(SELECTED_RESULTS_HEADER_MAX_BYTES)
+  expect(raw.subarray(raw.indexOf(10)+1)).toEqual(f.raw.subarray(f.raw.indexOf(10)+1))
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route)
+  if(result.kind!=='qualification-required')throw Error('Exact boundary not readable')
+  await selected.useColdSelectedTarget(f.coordinator,result.target,async value=>{expect(value.metadata.title).toBe(title);value.assertCurrent()})
+  await f.coordinator.closeManagedDocument('target')
+  expect(await f.coordinator.updateMeta('target',{title:'small title'})).toMatchObject({title:'small title'})
  }finally{await f.coordinator.close()}
 })
