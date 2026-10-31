@@ -8,7 +8,7 @@ import type { createDesktopExecution } from './execution.ts'
 type Notice = { kind: 'invalidate' | 'retired'; epoch: string; revision: number }
 /** Private composition of original owners. No wire authority or timer. */
 export function createExecutionHostObservation(coordinator: SessionCoordinator, projects: Pick<ReturnType<typeof createProjectScopeBroker>, 'observeExecutionBinding'>, service: Pick<SessionService, 'liveAssembly' | 'onExecutionSurfaceLifecycle'>, execution: ReturnType<typeof createDesktopExecution>) {
-  type Owned = { preflight(): void; fence(): void; drain(operation: RetainedCleanupOperation, retry?: boolean): Promise<void>; settleRetirement(): Promise<void>; settleExternalClose(): Promise<void> }
+  type Owned = { preflight(): void; fence(): void; drain(operation: RetainedCleanupOperation, retry?: boolean): Promise<void>; settleRetirement(): Promise<void>; settleNotice(): Promise<void>; settleExternalClose(): Promise<void> }
   const leases = new Set<Owned>()
   let closing = false, closeFlight: Promise<void> | undefined
   const failures = (results: PromiseSettledResult<unknown>[]) => results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
@@ -20,7 +20,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
     lease.fence()
     const operation = createRetainedCleanupOperation()
     return (async () => {
-      try { const resource = await Promise.allSettled([lease.drain(operation, retry)]); const sinks = await Promise.allSettled([lease.settleRetirement(), joinRetainedRetirementSinks(operation)]); raise([...failures(resource), ...failures(sinks)]) }
+      try { const resource = await Promise.allSettled([lease.drain(operation, retry)]); const sinks = await Promise.allSettled([lease.settleRetirement(), lease.settleNotice(), joinRetainedRetirementSinks(operation)]); raise([...failures(resource), ...failures(sinks)]) }
       finally { finishRetainedCleanupOperation(operation) }
     })()
   }
@@ -38,6 +38,11 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
       let externalClose: Promise<void> | undefined, retirementFlight: Promise<void> | undefined, resourcesClean = false
       let read: Promise<unknown> | undefined, drainFlight: Promise<void> | undefined, noticePending = false
       let noticeError: { error: unknown } | undefined
+      type NoticeCompletion = { done: Promise<void>; observed: boolean; outcome?: { ok: true } | { ok: false; error: unknown } }
+      let retiredCompletion: NoticeCompletion | undefined
+      const forgetCompleted = () => {
+        if (resourcesClean && !retirementFlight && !externalClose && (!retiredCompletion || retiredCompletion.outcome?.ok || retiredCompletion.observed)) leases.delete(lease)
+      }
       const disposers: { dispose(): void; done: boolean }[] = []
       const add = (dispose: (() => void) | undefined) => { if (dispose) disposers.push({ dispose, done: false }) }
       const reliable = () => !terminalSource && (!source || (typeof source.onExecutionSurfaceChanged === 'function' && source.executionSurfaceState?.() === 'available'))
@@ -46,16 +51,28 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
         active = false
         if (reference) {
           // Original nonwaiting ticket is safe even inside a real retained read.
-          retirementFlight = requestRetainedReferenceRetirementFor(coordinator, reference, 'Execution source retired')
-          void retirementFlight.then(() => { if (resourcesClean) leases.delete(lease) }, () => {})
+          const pending = requestRetainedReferenceRetirementFor(coordinator, reference, 'Execution source retired')
+          retirementFlight = pending
+          void pending.then(() => { if (retirementFlight === pending) retirementFlight = undefined; forgetCompleted() }, () => {})
         }
       }
       const notify = (kind: Notice['kind'], operation?: RetainedCleanupOperation) => {
         const invoke = (): void | Promise<void> => { try {
           const returned = (sink as (notice: Notice) => unknown)({ kind, epoch, revision })
-          if (returned && typeof (returned as PromiseLike<unknown>).then === 'function') return Promise.resolve(returned).then(() => {}, error => { noticeError = { error }; terminate(); throw error })
+          if (returned && typeof (returned as PromiseLike<unknown>).then === 'function') return Promise.resolve(returned).then(() => {}, error => { if (kind !== 'retired') noticeError = { error }; terminate(); throw error })
         } catch (error) { noticeError = { error }; terminate(); throw error } }
-        if (operation) { void runRetainedRetirementSink(operation, coordinator, lease, invoke).catch(() => {}); return }
+        if (operation) {
+          // Publish local completion before invoking the original sink. Resource
+          // drain never waits this record; independent full boundaries do.
+          const result = Promise.withResolvers<void>()
+          const record: NoticeCompletion = { done: result.promise, observed: false }
+          retiredCompletion = record; void record.done.catch(() => {})
+          try {
+            const original = runRetainedRetirementSink(operation, coordinator, lease, invoke)
+            void original.then(() => { record.outcome = { ok: true }; result.resolve(); forgetCompleted() }, error => { record.outcome = { ok: false, error }; result.reject(error) })
+          } catch (error) { record.outcome = { ok: false, error }; result.reject(error) }
+          return
+        }
         try { void Promise.resolve(invoke()).catch(() => {}) } catch { /* stored on this owned record; original ticket drives cleanup */ }
       }
       const dirty = () => {
@@ -69,7 +86,12 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
         preflight() { preflightRetainedCoordinatorFor(coordinator, [sessionId]); if (reference) preflightRetainedBindingReleaseFor(coordinator, reference) },
         fence() { active = false },
         async settleExternalClose() { await externalClose },
-        async settleRetirement() { const pending = retirementFlight; try { await pending } finally { if (retirementFlight === pending) retirementFlight = undefined } },
+        async settleRetirement() { const pending = retirementFlight; try { await pending } finally { if (retirementFlight === pending) retirementFlight = undefined; forgetCompleted() } },
+        async settleNotice() {
+          const record = retiredCompletion
+          if (!record || record.observed) return
+          try { await record.done } finally { record.observed = true; forgetCompleted() }
+        },
         drain(operation: RetainedCleanupOperation, retry = true): Promise<void> {
           active = false
           if (drainFlight) return drainFlight
@@ -85,7 +107,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
             const errors = failures(await Promise.allSettled(jobs))
             if (noticeError) { errors.unshift(noticeError.error); noticeError = undefined }
             resourcesClean = !errors.length
-            if (resourcesClean && !retirementFlight && !externalClose) leases.delete(lease)
+            forgetCompleted()
             raise(errors)
           })().then(deferred.resolve, deferred.reject).finally(() => { drainFlight = undefined })
           return deferred.promise
@@ -94,7 +116,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
           try { lease.preflight(); assertOutsideRetirementSink(coordinator) } catch (error) { return Promise.reject(error) }
           if (externalClose) return externalClose
           const flight = outer(lease); externalClose = flight
-          void flight.finally(() => { if (externalClose === flight) externalClose = undefined; if (resourcesClean && !retirementFlight) leases.delete(lease) }).catch(() => {})
+          void flight.finally(() => { if (externalClose === flight) externalClose = undefined; forgetCompleted() }).catch(() => {})
           return flight
         },
         async snapshot(options: { offset?: number; limit?: number } = {}) {
@@ -144,7 +166,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
       if (closeFlight) return closeFlight
       const operation = supplied ?? createRetainedCleanupOperation()
       const flight = (async () => {
-        try { const selected = [...leases]; const resources = failures(await Promise.allSettled(selected.map(lease => lease.drain(operation)))); const sinks = failures(await Promise.allSettled([...selected.map(lease => lease.settleRetirement()), ...selected.map(lease => lease.settleExternalClose()), joinRetainedRetirementSinks(operation)])); raise([...resources, ...sinks]) }
+        try { const selected = [...leases]; const resources = failures(await Promise.allSettled(selected.map(lease => lease.drain(operation)))); const sinks = failures(await Promise.allSettled([...selected.map(lease => lease.settleRetirement()), ...selected.map(lease => lease.settleNotice()), ...selected.map(lease => lease.settleExternalClose()), joinRetainedRetirementSinks(operation)])); raise([...resources, ...sinks]) }
         finally { if (!supplied) finishRetainedCleanupOperation(operation) }
       })()
       closeFlight = flight; void flight.finally(() => { if (closeFlight === flight) closeFlight = undefined }).catch(() => {})

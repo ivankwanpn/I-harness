@@ -61,3 +61,46 @@ it('retains partial genuine acquisition cleanup debt without an implicit retry b
     await owner.close(); expect(state.releases).toBe(3)
   } finally { state.profileFail = false; state.fail = false; await owner.close(); await broker.close(); await service.close(); await c.close(); await foreign.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+it.each([
+  ['broker', 'fulfilled', 'owner'], ['broker', 'undefined', 'owner'], ['broker', 'false', 'owner'], ['broker', 'settled-false', 'owner'],
+  ['reference', 'fulfilled', 'owner'], ['reference', 'undefined', 'owner'], ['reference', 'false', 'owner'], ['reference', 'settled-false', 'owner'],
+  ['broker', 'fulfilled', 'lease'], ['broker', 'false', 'lease'],
+] as const)('joins natural %s retirement notice (%s) from an independent %s close', async (trigger, outcome, boundary) => {
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'adapter-natural-notice-'))
+  const options = { lock: { enabled: true, lockRoot: root }, acquireRetryMs: 1, acquireDeadlineMs: 25 }
+  const c = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), options, taskDocumentStorageContract), foreign = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), options, taskDocumentStorageContract)
+  const service = createSessionService({ workspace: root, coordinator: c, modelPolicy: 'test-mock' }), broker = createProjectScopeBroker(c, root), owner = createExecutionHostObservation(c, broker, service, createDesktopExecution(c, service))
+  const entered = Promise.withResolvers<void>(), gate = Promise.withResolvers<void>()
+  let calls = 0, otherCalls = 0, retiring: Promise<unknown> | undefined, closing: Promise<unknown> | undefined
+  try {
+    for (const id of ['s', 't']) { await c.create({ sessionId: id }); await c.releaseOwnership(id) }
+    state.target = lockPathFor(root, 'doc:desktop-session-project-' + createHash('sha256').update('s').digest('hex')); state.releases = 0; state.fail = false; state.profileFail = false
+    const lease = await owner.subscribe('s', async notice => { if (notice.kind === 'retired') { calls++; entered.resolve(); await gate.promise } })
+    await owner.subscribe('t', notice => { if (notice.kind === 'retired') otherCalls++ })
+    // No lease.close precedes this original producer retirement.
+    retiring = trigger === 'broker' ? broker.configureReferences([]) : c.releaseOwnership('s'); void retiring.catch(() => {})
+    await entered.promise
+    // Foreign native ownership proves original resources have actually gone,
+    // while the asynchronous notice and its initiating operation remain held.
+    await foreign.adoptOwnership('s'); await foreign.releaseOwnership('s'); expect(state.releases).toBe(1)
+    if (outcome === 'settled-false') { gate.reject(false); await Promise.allSettled([retiring]) }
+    let closed = false
+    closing = (boundary === 'lease' ? lease.close() : owner.close()).then(() => { closed = true }, error => { closed = true; throw error }); void closing.catch(() => {})
+    await new Promise(resolve => setImmediate(resolve)); if (outcome !== 'settled-false') expect(closed).toBe(false)
+    await foreign.adoptOwnership('t'); await foreign.releaseOwnership('t')
+    await expect(lease.snapshot()).rejects.toThrow()
+    if (outcome === 'fulfilled') gate.resolve()
+    else gate.reject(outcome === 'undefined' ? undefined : false)
+    const results = await Promise.allSettled([retiring, closing])
+    const flatten = (error: unknown): unknown[] => error instanceof AggregateError ? error.errors.flatMap(flatten) : [error]
+    if (outcome === 'fulfilled') expect(results.every(result => result.status === 'fulfilled')).toBe(true)
+    else for (const result of results) { expect(result.status).toBe('rejected'); if (result.status === 'rejected') expect(flatten(result.reason)).toContain(outcome === 'undefined' ? undefined : false) }
+    expect(calls).toBe(1); expect(otherCalls).toBe(1); expect(state.releases).toBe(1)
+    await owner.close(); expect(calls).toBe(1); expect(state.releases).toBe(1)
+  } finally {
+    gate.resolve(); await Promise.allSettled([retiring, closing].filter(Boolean) as Promise<unknown>[])
+    state.fail = false; state.profileFail = false
+    await owner.close(); await broker.close(); await service.close(); await c.close(); await foreign.close(); await rm(root, { recursive: true, force: true })
+  }
+})

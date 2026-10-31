@@ -320,3 +320,22 @@ it('joins an asynchronously settling original unsubscribe before reporting lease
     gate.resolve(); await closing
   } finally { gate.resolve(); await f.close() }
 })
+
+it('reclaims a successful original nonwaiting read-retirement ticket and all 32 slots without unsubscribe', async () => {
+  const f = await fixture(), acquire = f.c.retainExistingSessionBindingObservation!.bind(f.c), retired = Promise.withResolvers<void>()
+  f.c.retainExistingSessionBindingObservation = (request, callback) => acquire(request, async operation => { await callback(operation); retired.resolve() })
+  const execution = createDesktopExecution(f.c, f.service), original = execution.read.bind(execution)
+  let fail = true
+  execution.read = async (...args) => { const value = await original(...args); if (fail) throw false; return value }
+  const owner = createExecutionHostObservation(f.c, f.broker, f.service, execution)
+  try {
+    const old = await owner.subscribe('s', () => {})
+    await expect(old.snapshot()).rejects.toBe(false)
+    await retired.promise; await new Promise(resolve => setImmediate(resolve))
+    fail = false
+    const leases = []
+    for (let index = 0; index < 32; index++) leases.push(await owner.subscribe('s', () => {}))
+    expect(leases).toHaveLength(32)
+    await owner.close()
+  } finally { await owner.close(); await f.close() }
+})
