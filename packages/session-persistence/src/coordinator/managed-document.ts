@@ -62,6 +62,10 @@ export interface ManagedReadyObservation {
 export type SelectedSourceRead = ManagedReadyObservation & { readonly header: SessionView['header']; unsubscribe():void };
 type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'; from: number; to: number; events: SessionView['events'] };
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
+const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
+export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
+    return executionStatuses.get(document)?.() ?? 'unavailable';
+}
 const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
 export function captureManagedProcessRead(document: ManagedDocument, ownership: Ownership, documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture {
     const original = readyOwners.get(document);
@@ -118,6 +122,13 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         if (closed)
             throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
     });
+    const executionStatus = (): 'available' | 'unavailable' | 'retired' => {
+        if (closing || closed) return 'retired';
+        if (!bootstrapReady || quarantined || sourceFault || recoveryHolds.size) return 'unavailable';
+        try { held.assertHeld(); return 'available'; } catch { return 'unavailable'; }
+    };
+    let publishedStatus = executionStatus();
+    const publishExecutionStatus = () => { const next = executionStatus(); if (next !== publishedStatus) { publishedStatus = next; executionChanges?.invalidated(id); } };
     type SelectedScope=Readonly<{kind:'selected-lane'}>
     const selectedJournal=(backend as PersistenceBackend & {selectedJournal?:{
       resolveCheckedBirth(id:string,owner:typeof held):Promise<unknown>;bindCheckedBirthLane(id:string,owner:typeof held,birth:unknown):SelectedScope;
@@ -146,6 +157,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const failQueued = () => {
         fenceFault();
         quarantined = true;
+        publishExecutionStatus();
         invalidateSelected();
         capacity.stop('FACT_RECOVERY_REQUIRED');
         for (const entry of queue.splice(0)) {
@@ -157,6 +169,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         assertTaskOutside();
         fenceFault();
         sourceFault = true;
+        publishExecutionStatus();
         invalidateSelected();
         capacity.blockOptional('FACT_RECOVERY_REQUIRED');
         for (let index = queue.length - 1; index >= 0; index--) {
@@ -370,6 +383,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             let outcome: 'settled' | 'unknown' = 'unknown';
             try {
                 closing = true;
+                publishExecutionStatus();
                 invalidateSelected();
                 deliveryControl.retire();
                 capacity.revokeNewWork();
@@ -459,14 +473,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                             assertTaskOutside();
                             if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
                             if (!recoveryWitnesses.has(source)) { const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); if (token) recoveryWitnesses.set(source, token); }
-                            recoveryHolds.add(source); invalidateSelected(); capacity.holdOptional(source);
+                            recoveryHolds.add(source); publishExecutionStatus(); invalidateSelected(); capacity.holdOptional(source);
                             for (let index = queue.length - 1; index >= 0; index--) {
                                 const entry = queue[index]!; if (entry.authorization.required) continue;
                                 queue.splice(index, 1); entry.ticket.release(); entry.resolve({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' });
                             }
                         },
-                        releaseRecovery() { assertTaskOutside(); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) },
-                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) }, reconcilePending, checkpointOwner);
+                        releaseRecovery() { assertTaskOutside(); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() },
+                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() }, reconcilePending, checkpointOwner);
                     required.source = source;
                     bindFactSettlementSource(state.view, document, source, id);
                     sourceDrains.set(source, { action, finished: () => finished, closeRequested: false });
@@ -527,6 +541,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 // One original frame owns one reconciliation witness, including
                 // concurrent callers and repeated uncertain attempts.
                 if (!witness.users && (!original || pending !== original)) witness.token?.end(outcome);
+                publishExecutionStatus();
             }
         },
         async drain() {
@@ -593,7 +608,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             } catch(error) { try{await settleSelected()}catch(cleanup){throw new AggregateError([error,cleanup],'Selected document acquisition cleanup unresolved')}throw error; }
         })();
         selectedBindFlight=flight;void flight.finally(()=>{if(selectedBindFlight===flight)selectedBindFlight=undefined}).catch(()=>{});return flight;
-    }, ready() { if(bootstrap.selected&&!selectedLane)throw new FactRecoveryRequiredError();bootstrapReady = true; },
+    }, ready() { if(bootstrap.selected&&!selectedLane)throw new FactRecoveryRequiredError();bootstrapReady = true; publishExecutionStatus(); },
         async admit(phase, events, guards) {
             assertTaskOutside();
             const assertSource = () => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }); guards.assertCurrent(); };
@@ -609,6 +624,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             } finally { selectedAdmissions--; }
         }
     });
+    executionStatuses.set(document, executionStatus);
     state.bindOwner(document);
     const originalReady = document.assertReady, originalView = state.view;
     readyOwners.set(document, { ownership, captureProcess(documentKeys, checkEntry) {

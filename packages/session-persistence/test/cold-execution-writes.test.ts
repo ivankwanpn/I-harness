@@ -7,7 +7,7 @@ import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persis
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { observeColdExecutionWrites } from '../src/coordinator/cold-execution-writes.ts'
 
-it('signals only completed cold appends, isolates listeners, and stops on unsubscribe', async () => {
+it('signals repair admission and completed cold append, isolates listeners, and stops on unsubscribe', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cold-feed-'))
   const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
@@ -16,10 +16,10 @@ it('signals only completed cold appends, isolates listeners, and stops on unsubs
     const off = observeColdExecutionWrites(coordinator, id => seen.push(id))
     const offThrow = observeColdExecutionWrites(coordinator, () => { throw Error('consumer') })
     await coordinator.append('s', [{ type: 'plan/mode', mode: 'on' }])
-    expect(seen).toEqual(['s'])
+    expect(seen).toEqual(['s', 's'])
     off(); offThrow()
     await coordinator.append('s', [{ type: 'plan/mode', mode: 'off' }])
-    expect(seen).toEqual(['s'])
+    expect(seen).toEqual(['s', 's'])
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 

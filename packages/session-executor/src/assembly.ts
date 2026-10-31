@@ -1,3 +1,4 @@
+import { managedExecutionStatus } from '@i-harness/session-persistence/internal/retained-inspection'
 import { summaryFactory, composeCompactConfig } from './context-composition.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
@@ -1685,6 +1686,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       revokeNewWork() { retireExecutionSurface(); managedDocument?.revokeNewWork() },
       onExecutionSurfaceChanged(listener) { executionSurfaceListeners.add(listener); return () => { executionSurfaceListeners.delete(listener) } },
       executionSurfaceState: () => executionSurfaceRetired ? 'retired'
+        : managedDocument && managedExecutionStatus(managedDocument) !== 'available' ? managedExecutionStatus(managedDocument)
         : !codeModeMount ? 'available'
         : !codeModeMount.onSurfaceChanged || !codeModeMount.surfaceState ? 'unavailable' : codeModeMount.surfaceState(),
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
