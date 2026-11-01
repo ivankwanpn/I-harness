@@ -1,4 +1,5 @@
 import { bindPreparedTaskLaunchLeaf, type OriginalTaskCaller } from '@i-harness/core-tools/internal/task-caller'
+import { parseTaskHistorySelection } from './child/task-history.ts'
 import { taskLaunchPortFor } from './task/launch-slots.ts'
 export { taskBodyPreview as childResultPreview, readTaskResultPage } from "./task/result.ts"
 export type { TaskResultStore, RetainedTaskResult, TaskResultBody, TaskResultPage, TaskResultPageArgs } from "./task/result.ts"
@@ -274,7 +275,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       const caller:OriginalTaskCaller|undefined=launchEntry.enter(exec)
       if(!caller)throw Error('Original prepared task caller unavailable')
       const args=caller.call.args as {fork_turns?:unknown;agent_type?:string}
-      if(args.fork_turns!==undefined&&args.fork_turns!=='none'&&args.fork_turns!=='all'||args.agent_type==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)return
+      parseTaskHistorySelection(args.fork_turns)
+      if(args.agent_type==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)return
       if(!opts.prepareTaskChild||!opts.persist?.coordinator.bootstrapChildTargetWithCapture||!opts.persist.coordinator.resumeChildTarget)throw Error('Original task child host unavailable')
       if(caller.context.view!==opts.parentSession||caller.context.factOwner!==factOwner||caller.context.context!==ctx||caller.identity.parentSessionId!==ownedTask.stateId)throw Error('Foreign original task caller')
       ownedTask.operations.assertTaskV3Parent(ownedTask.parent,ownedTask.stateId)
