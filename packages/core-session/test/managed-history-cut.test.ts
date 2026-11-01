@@ -24,3 +24,20 @@ it('the original immutable factory retains an append-tolerant nominal cut withou
   expect(()=>state.bindOwner({})).toThrow()
   assertManagedHistoryCut(cut,state.view,owner,'source')
 })
+
+it('never installs a replaced pushed deleted or retained-alias stage row',()=>{
+  const state=createManagedSessionState({formatVersion:14,events:[]} as Session,{sessionId:'source'}),owner={}
+  state.bindOwner(owner)
+  const cut=captureManagedHistoryCut(state.view,owner,'source')
+  const input:Session['events']=[{type:'turn/start',seq:0}]
+  const staged=state.stage(input),exposed=staged.events as Session['events']
+  expect(()=>Object.defineProperty(staged,'events',{value:[{type:'user/message',text:'rebound array',seq:0}]})).toThrow()
+  expect(()=>{exposed[0]={type:'user/message',text:'unvalidated',seq:0}}).toThrow()
+  expect(()=>exposed.push({type:'turn/end',seq:1})).toThrow()
+  expect(()=>{delete exposed[0]}).toThrow()
+  expect(()=>{(exposed[0] as {type:string}).type='turn/end'}).toThrow()
+  input[0]={type:'user/message',text:'retained input alias',seq:0}
+  staged.install();staged.install()
+  expect(state.view.events).toEqual([{type:'turn/start',seq:0}])
+  assertManagedHistoryCut(cut,state.view,owner,'source')
+})

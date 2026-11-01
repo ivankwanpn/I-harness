@@ -108,8 +108,12 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
       }
       validateDeliveryFrame(prepared, view.formatVersion)
       const staged = index.stage(prepared)
+      // Keep the validated installation array private and immutable. Exposing
+      // it allowed a caller to substitute a row after index validation.
+      Object.freeze(prepared)
+      const exposed = Object.freeze([...prepared])
       let installed = false
-      return { events: prepared, install() {
+      return Object.freeze({ events: exposed, install() {
         if (installed) return
         // stage is non-mutating. Both operations below are synchronous and use
         // only owned data; observers are explicitly outside this capability.
@@ -117,7 +121,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
         for (const event of prepared) events.push(event)
         for (const [id, pending] of changed) { if (pending) pendingInputs.add(id); else pendingInputs.delete(id) }
         installed = true
-      } }
+      } })
     },
     observe(suffix: readonly SessionEvent[], report: (error: unknown) => void) {
       const observers = subscribers.get(view)
