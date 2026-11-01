@@ -7,10 +7,17 @@ import { createWorkerEvents } from './runtime/worker-events.js'
 import { createAdmission } from './runtime/admission.js'
 import { instructionReplan } from '@i-harness/core-tools'
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
-import { createCellFinalizations, bindOriginalOutputLifetime, type OriginalCellFinalization } from './finalization.ts'
+import { createCellFinalizations, type OriginalCellFinalization } from './finalization.ts'
 
 type WorkerAcquisition = 'unknown' | 'not-acquired' | 'acquired'
 const workerAcquisitions = new WeakMap<OriginalCellFinalization, () => WorkerAcquisition>()
+interface OriginalOutputLifetime { accepted:number;truncated:boolean;policyRefusal?:true;instructionReplan?:true }
+const outputLifetimes = new WeakMap<OriginalCellFinalization, () => Readonly<OriginalOutputLifetime>>()
+export function readOriginalOutputLifetime(handle:OriginalCellFinalization):Readonly<OriginalOutputLifetime> {
+  const read=outputLifetimes.get(handle)
+  if(!read)throw new Error('Original runtime output lifetime unavailable')
+  return read()
+}
 export function readOriginalWorkerAcquisition(handle: OriginalCellFinalization): WorkerAcquisition {
   const read=workerAcquisitions.get(handle)
   if(!read)throw new Error('Original runtime worker acquisition unavailable')
@@ -48,8 +55,10 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
         if (failures.length) throw new AggregateError(failures.map(value => value.reason), 'Original Code invocations incomplete')
       }
       endings.delete(id)
-    }, handle=>{workerAcquisitions.set(handle,()=>acquisition)})
-    bindOriginalOutputLifetime(handle, () => ({ accepted: original()?.lifetimeOutput?.accepted ?? 0, truncated: original()?.lifetimeOutput?.truncated ?? false,policyRefusal:original()?.policyRefusal,instructionReplan:original()?.instructionReplan }))
+    }, handle=>{
+      workerAcquisitions.set(handle,()=>acquisition)
+      outputLifetimes.set(handle,()=>Object.freeze({ accepted: original()?.lifetimeOutput?.accepted ?? 0, truncated: original()?.lifetimeOutput?.truncated ?? false,policyRefusal:original()?.policyRefusal,...original()?.instructionReplan?{instructionReplan:true as const}:{} }))
+    })
     void end.promise.then(() => handle.settle()).catch(() => {})
     return { abandon() { acquisition = 'not-acquired'; end.resolve() }, acquired() { acquisition = 'acquired' } }
   })
