@@ -1,3 +1,4 @@
+import { createArtifactCurrentGuard } from './artifact-path-association.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
 import type { SessionMeta } from './types.ts'
@@ -48,10 +49,10 @@ export function runTaskTransitionDrain<T>(ownership: Ownership, id: string, work
   return transitionContext.exit(() => ownership.withSessionOperation(id, () => transitionContext.run(context, work)))
 }
 export function assertOutsideTaskTransition(admission: object, ids: readonly string[], keys: readonly string[], all = false) {
-  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.admission === admission && (all || ids.includes(current.id) || keys.includes(current.key))) throw new Error('TASK_TRANSITION_CONFLICT')
+  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.admission === admission && (all || current.ownership.exclusionScope([current.id], [current.key]).keys.some(key => current.ownership.exclusionScope(ids, keys).keys.includes(key)))) throw new Error('TASK_TRANSITION_CONFLICT')
 }
 export function assertOutsideTaskTransitionSession(ownership: Ownership, id: string) {
-  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.ownership === ownership && current.id === id) throw new Error('TASK_TRANSITION_CONFLICT')
+  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.ownership === ownership && ownership.exclusionScope([current.id], [current.key]).keys.some(key => ownership.exclusionScope([id], []).keys.includes(key))) throw new Error('TASK_TRANSITION_CONFLICT')
 }
 /** Original Documents owner, entered only from its finite creation operation. */
 export function createTaskDocumentTransitions(ownership: Ownership, admission: ReturnType<typeof createBindingObservations>, config: TaskTransitionConfiguration, priorDocuments: () => Promise<void>, latches?: ReturnType<typeof createProcessReadLatches>) {
@@ -104,7 +105,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     const key = `task-${id}`, identity = Object.freeze({})
     latches?.assertUnpoisoned(id, [key])
     const assertOutside = () => { for (let current = transitionContext.getStore(); current; current = current.parent) if (current.identity === identity) conflict() }
-    const guard = () => { if (revoked || closed) conflict(); ticket.assertCurrent(); assertConfig(); latches?.assertUnpoisoned(id, [key]); queue?.assertCurrent(); claim?.assertHeld(); if (lease && !lease.held) conflict(); if (task && taskFields) assertMethods(task,taskFields,['observe','confirm','stageInitialize','settleResources']); if (write && writeFields) assertMethods(write,writeFields,['issue','reconcile','retry','outcome']); if (header && headerFields && headerWriteFields) { assertMethods(header,headerFields,['handle','settle']); assertMethods(header.handle,headerWriteFields,['issue','reconcile','retry','outcome']) } }
+    const guard = createArtifactCurrentGuard(() => { if (revoked || closed) conflict(); ticket.assertCurrent(); assertConfig(); latches?.assertUnpoisoned(id, [key]); queue?.assertCurrent(); claim?.assertHeld(); if (lease && !lease.held) conflict(); if (task && taskFields) assertMethods(task,taskFields,['observe','confirm','stageInitialize','settleResources']); if (write && writeFields) assertMethods(write,writeFields,['issue','reconcile','retry','outcome']); if (header && headerFields && headerWriteFields) { assertMethods(header,headerFields,['handle','settle']); assertMethods(header.handle,headerWriteFields,['issue','reconcile','retry','outcome']) } })
     const closeAttempt = () => {
       if (cleanup) return cleanup
       pendingCleanup = true
@@ -138,7 +139,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
         await transitionContext.exit(() => ownership.withSessionOperation(id, () => transitionContext.run(context, async () => {
           queue = ownership.captureActiveSessionOperation(id); guard()
           if (!claim) { claim = await ownership.borrowOwnership(id); releaseClaim = method(claim,'release'); retainClaim = method(claim,'retainLive') }; guard()
-          if (!lease) { lease = await ownership.acquireLease('doc:' + key); releaseLease = method(lease,'release') }; guard()
+          if (!lease) { lease = await ownership.acquireDocumentLease(key); releaseLease = method(lease,'release') }; guard()
           const ensureTask = async () => {
             scope ??= issueHeldTaskDocumentScope(ownership, id, claim!, { assertActive: guard })
             if (!task) { task = open(scope); taskFields = Object.getOwnPropertyDescriptors(task); observeTask = method(task,'observe'); confirmTask = method(task,'confirm'); initializeTask = method(task,'stageInitialize'); settleTask = method(task,'settleResources') }
@@ -164,7 +165,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           await ensureTask()
           const taskScope=scope as HeldTaskDocumentScope, taskObservation=observation as Awaited<ReturnType<TaskTransitionBackendSession['observe']>>
           if (recover) {
-            historyHeld ??= heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim!.assertHeld()); trackHeader(id,historyHeld)
+            historyHeld ??= heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>claim!.assertHeld())); trackHeader(id,historyHeld)
             if (historyAttempted && hasHeaderDebt(id,historyHeld)) await settleHeader(id,historyHeld); if (historyAttempted && historyReader?.hasDebt() && history) await historyReader.retryResources(); if (historyAttempted && !history && historyReader) { await historyReader.settleResources(); historyReader = undefined }
             historyAttempted = true; historyReader ??= openHistory(taskScope,historyHeld); history ??= await historyReader.observe(); guard(); if (!header) { await history.assertCurrent(); guard() }
           } else { proof ??= await observeFresh(taskScope); guard() }
@@ -292,7 +293,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
       if (ownerReady) return Promise.resolve(); if (ownerFlight) return ownerFlight
       ownerFlight = Promise.resolve().then(async () => {
         await ticket.join(); await priorDocuments()
-        await runQueue(async () => { if (!claim) { claim = await ownership.pinOwnership(id); releaseClaim = method(claim,'release') }; guard(); held ??= heldFactOwner({ sessionId:id, incarnation:randomUUID() },ownership,()=>claim!.assertHeld()); trackHeader(id,held); ownerReady = true })
+        await runQueue(async () => { if (!claim) { claim = await ownership.pinOwnership(id); releaseClaim = method(claim,'release') }; guard(); held ??= heldFactOwner({ sessionId:id, incarnation:randomUUID() },ownership,createArtifactCurrentGuard(()=>claim!.assertHeld())); trackHeader(id,held); ownerReady = true })
       }); void ownerFlight.then(() => { ownerFlight = undefined }, () => { ownerFlight = undefined }); return ownerFlight
     }
     const prepare = () => {
@@ -300,10 +301,10 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
       flight = Promise.resolve().then(async () => {
         await openOwner()
         await runQueue(async () => {
-          if (!mode) throw new Error('TASK_TRANSITION_UNSUPPORTED'); guard(); if (!lease) { lease = await ownership.acquireLease('doc:' + key); releaseLease = method(lease,'release') }; guard()
+          if (!mode) throw new Error('TASK_TRANSITION_UNSUPPORTED'); guard(); if (!lease) { lease = await ownership.acquireDocumentLease(key); releaseLease = method(lease,'release') }; guard()
           scope ??= issueHeldTaskDocumentScope(ownership,id,claim!,{assertActive:guard})
           if (!task) { task = open(scope); taskFields = Object.getOwnPropertyDescriptors(task); observeTask = method(task,'observe'); confirmTask = method(task,'confirm'); initializeTask = method(task,'stageInitialize'); settleTask = method(task,'settleResources') }
-          held ??= heldFactOwner({ sessionId:id, incarnation:randomUUID() },ownership,()=>claim!.assertHeld())
+          held ??= heldFactOwner({ sessionId:id, incarnation:randomUUID() },ownership,createArtifactCurrentGuard(()=>claim!.assertHeld()))
           trackHeader(id,held); const retrying = attempted; if (retrying && hasHeaderDebt(id,held)) await settleHeader(id,held); if (retrying && proof && historyReader?.hasDebt()) await historyReader.retryResources(); if (retrying && !proof && historyReader) { await historyReader.settleResources(); historyReader = undefined }; attempted = true
           if (!proof) { if (mode === 'new') proof = await observeBootstrap(scope,route,held); else { historyReader = mode === 'completed' ? openBootstrapHistory(scope,route,held) : openHistory(scope,held); proof = await historyReader.observe() } }; guard()
           observation ??= await observeTask!(); guard()

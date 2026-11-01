@@ -1,3 +1,4 @@
+import { createArtifactCurrentGuard } from './artifact-path-association.ts'
 import { captureChildBootstrapCaptureRequest, type ChildBootstrapCaptureRequest, type ChildBootstrapCaptureInspection, type OwnedCaptureReservation, type OwnedCaptureInspection } from './child-bootstrap-intent.ts'
 import { captureBootstrapRoute, captureBootstrapCaptureRoute, encodeOwnedCaptureReservation, routeForReservation, routeInvocation, validateOwnedCaptureStage, type BootstrapRoute, type BootstrapCaptureRoute } from './bootstrap-route.ts'
 import { randomUUID } from 'node:crypto'
@@ -148,7 +149,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(entry.captureIO)return entry.captureIO
     const id=(entry.bootstrap?.invocation??entry.selected!.route.request.invocation).targetSessionId, existing=entry.bootstrap?.taskBarrier
     const claim=existing ? existing.transferClaim() : await ownership.pinOwnership(id)
-    const held=existing ? existing.held() : heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim.assertHeld())
+    const held=existing ? existing.held() : heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>claim.assertHeld()))
     const bundle:NonNullable<ManagedEntry['captureIO']>={claim,held,issuer:undefined!,settled:true,released:false}
     bundle.issuer=issuingFactOwner(held,()=>{if(!bundle.activeIssue)throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'});bundle.activeIssue()})
     entry.captureIO=bundle;return bundle
@@ -175,7 +176,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         await backend.checkBootstrapCaptureRoot!()
         if(captureClosed)throw new Error('Capture inspection closed')
         item.claim=await ownership.pinOwnership(request.invocation.targetSessionId)
-        item.held=heldFactOwner({sessionId:request.invocation.targetSessionId,incarnation:randomUUID()},ownership,()=>item.claim!.assertHeld())
+        item.held=heldFactOwner({sessionId:request.invocation.targetSessionId,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>item.claim!.assertHeld()))
         if(captureClosed)throw new Error('Capture inspection closed')
         item.ioStarted=true
         result=await ownership.withSessionOperation(request.invocation.targetSessionId,()=>route.protocol==='child-v1'?backend.bootstrapRoutes!.readCapture(request.invocation.targetSessionId,item.held!,route):backend.readBootstrapCapture!(request.invocation.targetSessionId,item.held!,request as BootstrapCaptureRequest))

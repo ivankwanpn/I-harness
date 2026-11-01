@@ -3,6 +3,14 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 const io = vi.hoisted(() => ({ reads: 0, scans: 0, opens: 0 }))
+const journal = vi.hoisted(()=>({unknown:false}))
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async original=>{
+ const module=await original<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>()
+ return {...module,createFactJournalBackend(...args:Parameters<typeof module.createFactJournalBackend>){
+  const original=module.createFactJournalBackend(...args)
+  return {...original,async appendOwnedBatch(...values:Parameters<typeof original.appendOwnedBatch>){const result=await original.appendOwnedBatch(...values);return journal.unknown?{kind:'unknown' as const,key:values[3].key}:result}}
+ }}
+})
 vi.mock('node:fs/promises', async original => { const fs = await original<typeof import('node:fs/promises')>(); return { ...fs,
  readFile: (...args: Parameters<typeof fs.readFile>) => { io.reads++; return fs.readFile(...args) },
  readdir: (...args: Parameters<typeof fs.readdir>) => { io.scans++; return fs.readdir(...args) },
@@ -38,13 +46,13 @@ it('keeps actual private cold observation passive under one pre-construction clo
     await finite(live.close()); reads.forEach(read => read.mockClear()); const retiredBaseline = notices.length
     await vi.advanceTimersByTimeAsync(600_000)
     expect(notices).toHaveLength(retiredBaseline); expect(modelCalls).toBe(0); reads.forEach(read => expect(read).not.toHaveBeenCalled()); expect(vi.getTimerCount()).toBe(0)
-    const assembly = service.liveAssembly('s')!, doc = assembly.managedDocument!, action = doc.beginAction(), append = backend.appendOwnedBatch!
+    const assembly = service.liveAssembly('s')!, doc = assembly.managedDocument!, action = doc.beginAction()
     const active = await finite(owner.subscribe('s', notice => notices.push(notice.kind)))
-    backend.appendOwnedBatch = async (...args) => { await append(...args); return { kind: 'unknown', key: args[3].key } }
+    journal.unknown=true
     const pending = await finite(action.facts.code.record({type:'code/cell',cellId:'idle-recovered',state:'started'}))
     expect(pending.kind).toBe('unknown'); await expect(active.snapshot()).rejects.toThrow(); await finite(active.close())
     if(pending.kind!=='unknown') throw Error('unknown required')
-    backend.appendOwnedBatch = append; expect((await finite(doc.reconcile(pending.key))).kind).toBe('committed')
+    journal.unknown=false; expect((await finite(doc.reconcile(pending.key))).kind).toBe('committed')
     const recovered = await finite(owner.subscribe('s', notice => notices.push(notice.kind)))
     expect(recovered.epoch).not.toBe(active.epoch); expect((await finite(recovered.snapshot())).kind).toBe('snapshot')
     async function idle() {
@@ -53,5 +61,5 @@ it('keeps actual private cold observation passive under one pre-construction clo
       expect(notices).toHaveLength(baseline); expect(modelCalls).toBe(0); reads.forEach(read=>expect(read).not.toHaveBeenCalled()); expect(io).toEqual({reads:0,scans:0,opens:0}); expect(vi.getTimerCount()).toBe(0)
     }
     await idle(); doc.revokeNewWork(); await expect(recovered.snapshot()).rejects.toThrow(); await finite(recovered.close()); action.finish(); await idle()
-  } finally { try { await finite(cleanup()) } finally { vi.useRealTimers() } }
+  } finally { journal.unknown=false;try { await finite(cleanup()) } finally { vi.useRealTimers() } }
 }, 15000)

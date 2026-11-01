@@ -1,22 +1,26 @@
 /** Request-local mutation witnesses. This registry never delays a writer. */
-export function createProcessReadLatches() {
+export function createProcessReadLatches(scope: (ids: readonly string[], keys: readonly string[]) => { keys: string[]; assertCurrent(): void } = (ids, keys) => ({ keys: [...ids.map(id => 'session:' + id), ...keys.map(key => 'document:' + key)], assertCurrent() {} })) {
     type Mutation = { sessionIds: readonly string[]; documentKeys: readonly string[]; kind: 'managed-append' | 'other'; managedOwner?: object };
     type Capture = { sessionId: string; documentKeys: readonly string[]; mode: 'cold' | 'managed'; managedOwner?: object };
-    type Reader = { input: Capture; invalid: boolean; retired: boolean; verified: boolean };
+    type Reader = { resources: ReturnType<typeof scope>; input: Capture; invalid: boolean; retired: boolean; verified: boolean };
     const readers = new Set<Reader>(), active = new Set<Mutation>();
+    const mutationResources = new WeakMap<Mutation, ReturnType<typeof scope>>();
+    const poisoned = new Set<string>();
     const poisonedSessions = new Set<string>(), poisonedDocuments = new Set<string>();
     let closed = false;
-    const matches = (m: Mutation, r: Reader) => m.sessionIds.includes(r.input.sessionId) || m.documentKeys.some(key => r.input.documentKeys.includes(key));
+    const matches = (m: Mutation, r: Reader) => mutationResources.get(m)!.keys.some(key => r.resources.keys.includes(key));
     const compatible = (m: Mutation, r: Reader) => !r.verified && r.input.mode === 'managed' && !!r.input.managedOwner
         && m.kind === 'managed-append' && m.managedOwner === r.input.managedOwner
-        && m.sessionIds.includes(r.input.sessionId) && !m.documentKeys.some(key => r.input.documentKeys.includes(key));
+        && scope(m.sessionIds, []).keys.some(key => scope([r.input.sessionId], []).keys.includes(key))
+        && !scope(m.sessionIds, m.documentKeys).keys.some(key => scope([], r.input.documentKeys).keys.includes(key));
     const denied = () => { throw new Error('PROCESS_READ_UNAVAILABLE'); };
     return {
         assertUnpoisoned(sessionId: string, documentKeys: readonly string[]) {
-            if (closed || poisonedSessions.has(sessionId) || documentKeys.some(key => poisonedDocuments.has(key))) denied();
+            if (closed || poisoned.size > 0 && scope([sessionId], documentKeys).keys.some(key => poisoned.has(key))) denied();
         },
         beginMutation(input: Mutation) {
             const mutation: Mutation = { ...input, sessionIds: [...new Set(input.sessionIds)], documentKeys: [...new Set(input.documentKeys)] };
+            mutationResources.set(mutation, scope(input.sessionIds, input.documentKeys));
             active.add(mutation);
             for (const reader of readers) if (matches(mutation, reader) && !compatible(mutation, reader)) reader.invalid = true;
             let ended = false;
@@ -26,6 +30,7 @@ export function createProcessReadLatches() {
                 ended = true;
                 active.delete(mutation);
                 if (outcome === 'unknown') {
+                    for (const key of mutationResources.get(mutation)!.keys) poisoned.add(key);
                     for (const id of mutation.sessionIds) poisonedSessions.add(id);
                     for (const key of mutation.documentKeys) poisonedDocuments.add(key);
                     for (const reader of readers) if (matches(mutation, reader)) reader.invalid = true;
@@ -34,9 +39,10 @@ export function createProcessReadLatches() {
             return token;
         },
         capture(input: Capture) {
-            const reader: Reader = { input: { ...input, documentKeys: [...new Set(input.documentKeys)] }, invalid: false, retired: false, verified: false };
+            const reader: Reader = { resources: scope([input.sessionId], input.documentKeys), input: { ...input, documentKeys: [...new Set(input.documentKeys)] }, invalid: false, retired: false, verified: false };
             const assertCurrent = () => {
-                if (closed || reader.invalid || reader.retired || poisonedSessions.has(reader.input.sessionId)
+                reader.resources.assertCurrent();
+                if (closed || reader.invalid || reader.retired || reader.resources.keys.some(key => poisoned.has(key)) || poisonedSessions.has(reader.input.sessionId)
                     || reader.input.documentKeys.some(key => poisonedDocuments.has(key))
                     || [...active].some(m => matches(m, reader))) { reader.invalid = true; denied(); }
             };

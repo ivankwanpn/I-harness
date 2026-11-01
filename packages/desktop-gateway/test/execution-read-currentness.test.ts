@@ -2,6 +2,8 @@ import { expect, it, vi } from "vitest"
 import { mkdtemp, rm, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+const profileGate=vi.hoisted(()=>({path:'',blocked:false,entered:undefined as (()=>void)|undefined,release:undefined as Promise<void>|undefined}))
+vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,async readFile(...args:Parameters<typeof fs.readFile>){const value=await fs.readFile(...args);if(profileGate.blocked&&String(args[0])===profileGate.path){profileGate.entered?.();await profileGate.release}return value}}})
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
 const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
@@ -209,26 +211,25 @@ it('uses the retained profile port inside the real cold execution read', async (
 
 it('denies a held real retained profile after release and permits a fresh reference and manual read', async () => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'ih-held-retained-profile-'))
-  const backend = createJsonlBackend(root), original = backend.profile.bind(backend), entered = latch(), held = latch()
-  let blocked = false
+  const backend = createJsonlBackend(root), entered = latch(), held = latch()
+  profileGate.path=join(root,'s.jsonl');profileGate.entered=entered.release;profileGate.release=held.promise
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true, lockRoot: root } })
   const service = { liveAssembly: vi.fn(() => undefined) }, snapshot = vi.spyOn(coordinator, 'snapshot'), ordinary = vi.spyOn(coordinator, 'profile')
   try {
     await coordinator.create({ sessionId: 's' }); await coordinator.releaseOwnership('s')
-    backend.profile = async id => { const value = await original(id); if (blocked) { entered.release(); await held.promise }; return value }
     const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
     const read = createDesktopExecution(coordinator, service).read
-    blocked = true
+    profileGate.blocked = true
     const pending = ref.withRead(profile => read('s', {}, () => ref.assertCurrent(), profile)); void pending.catch(() => {})
     await entered.promise
     const releasing = ref.release(); void releasing.catch(() => {})
     expect(() => ref.assertCurrent()).toThrow()
     held.release(); await expect(pending).rejects.toThrow(); await releasing
     expect(service.liveAssembly).not.toHaveBeenCalled(); expect(snapshot).not.toHaveBeenCalled(); expect(ordinary).not.toHaveBeenCalled()
-    blocked = false
+    profileGate.blocked = false
     const fresh = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
     expect((await fresh.withRead(profile => read('s', {}, () => fresh.assertCurrent(), profile))).total).toBe(0)
     await fresh.release()
     ordinary.mockClear(); expect((await read('s')).total).toBe(0); expect(ordinary).toHaveBeenCalledOnce()
-  } finally { held.release(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { profileGate.blocked=false;held.release(); await coordinator.close(); await rm(root, { recursive: true, force: true });profileGate.path='';profileGate.entered=undefined;profileGate.release=undefined }
 })

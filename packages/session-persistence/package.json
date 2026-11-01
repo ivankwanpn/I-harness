@@ -10,7 +10,8 @@
     "./internal/process-read-context": "./src/process-read-context.ts",
     "./internal/task-document-operations": "./src/task-document-internal.ts",
     "./internal/selected-source-owner": "./src/selected-source-owner.ts",
-    "./internal/retained-inspection": "./src/retained-inspection-internal.ts"
+    "./internal/retained-inspection": "./src/retained-inspection-internal.ts",
+    "./internal/artifact-path": "./src/artifact-path-internal.ts"
   },
   "scripts": {
     "test": "vitest run",

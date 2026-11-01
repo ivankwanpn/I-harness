@@ -54,7 +54,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   const maxDelayMs = opts?.maxDelayMs ?? 200
   const ownership = createOwnership(backend, opts)
   let managed: ReturnType<typeof createManagedDocuments>
-  const processLatches = storage ? createProcessReadLatches() : undefined
+  const processLatches = storage ? createProcessReadLatches(ownership.exclusionScope) : undefined
   const documents = createDocuments(backend, ownership, report, processLatches, taskStorage && { ...taskStorage, captureParent: document => managed.captureParent(document) }, transitionStorage)
   const observations = documents.observations
   let loads: ReturnType<typeof createLoads>

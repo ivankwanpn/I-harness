@@ -31,7 +31,7 @@ export function observationCleanupFor(coordinator: SessionCoordinator, error: un
 /** Private Documents-owned scope admission. No project policy is interpreted here. */
 export function createBindingObservations(
   backend: Pick<PersistenceBackend, 'putDocument'|'getDocument'> & Partial<Pick<PersistenceBackend, 'profile'|'readDocumentObserved'|'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'confirmBootstrapFrames'|'appendOwnedBatch'|'reconcileOwnedBatch'>>,
-  ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'>>,
+  ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'|'acquireDocumentLease'|'exclusionScope'>>,
 ) {
   type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
   type Lock = Awaited<ReturnType<Ownership['acquireLease']>>
@@ -45,14 +45,39 @@ export function createBindingObservations(
   type OwnedDocument = { id: string; key: string; revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside(): void; closing: boolean; writing: boolean; bootstrapEntry?: object }
   const ownedDocuments = new Set<OwnedDocument>()
   const cleanupErrors = new WeakMap<object, ObservationCleanupHandle>()
-  const pendingIds = new Map<string, number>(), pendingKeys = new Map<string, number>(), deletedIds = new Set<string>(), deletedKeys = new Set<string>()
-  const unknownDocumentKeys = new Set<string>()
-  const retiringIds = new Map<string, number>()
+  const physical = (ids: readonly string[], keys: readonly string[]) => ownership.exclusionScope?.(ids, keys) ?? { keys: [...ids.map(id => 'session:' + id), ...keys.map(key => 'document:' + key)], assertCurrent() {} }
+  const snapshots = new WeakMap<object, ReturnType<typeof physical>>()
+  function snapshot(record: object, ids: readonly string[], keys: readonly string[]) {
+    let captured = snapshots.get(record)
+    if (!captured || ('ready' in captured && captured.ready === false)) { captured = physical(ids, keys); snapshots.set(record, captured) }
+    else captured.assertCurrent()
+    return captured.keys
+  }
+  const ledgerSnapshots = new WeakMap<object, Map<string, object>>()
+  function ledger(store: object, value: string, session: boolean) {
+    let entries=ledgerSnapshots.get(store); if(!entries){entries=new Map();ledgerSnapshots.set(store,entries)}
+    let record=entries.get(value);if(!record){record={};entries.set(value,record)}
+    return snapshot(record,session?[value]:[],session?[]:[value])
+  }
+  const overlap = (a: readonly string[], b: readonly string[]) => a.some(key => b.includes(key))
+  const equalDocument = (a: string, b: string) => overlap(physical([], [a]).keys, physical([], [b]).keys)
+  const pendingSessionValues = new Map<string, number>(), pendingDocumentValues = new Map<string, number>()
+  const deletedSessionValues = new Set<string>(), deletedDocumentValues = new Set<string>()
+  function counter(values: Map<string, number>, session: boolean) { return {
+    has(value: string) { if (!pendingSessionValues.size && !pendingDocumentValues.size) return false; const keys = physical(session ? [value] : [], session ? [] : [value]).keys; return [...pendingSessionValues.keys()].some(id => overlap(keys, ledger(pendingSessionValues, id, true))) || [...pendingDocumentValues.keys()].some(key => overlap(keys, ledger(pendingDocumentValues, key, false))) },
+    get: (value: string) => values.get(value), set: (value: string, count: number) => { if(!values.has(value))ledger(values,value,session);return values.set(value,count) }, delete: (value: string) => {ledgerSnapshots.get(values)?.delete(value);return values.delete(value)},
+  } }
+  function deleted(values: Set<string>, session: boolean) { return { add: (value: string) => {ledger(values,value,session);return values.add(value)}, has(value: string) { if (!deletedSessionValues.size && !deletedDocumentValues.size) return false; const keys = physical(session ? [value] : [], session ? [] : [value]).keys; return [...deletedSessionValues].some(id => overlap(keys, ledger(deletedSessionValues, id, true))) || [...deletedDocumentValues].some(key => overlap(keys, ledger(deletedDocumentValues, key, false))) } } }
+  const pendingIds = counter(pendingSessionValues, true), pendingKeys = counter(pendingDocumentValues, false), deletedIds = deleted(deletedSessionValues, true), deletedKeys = deleted(deletedDocumentValues, false)
+  const unknownDocumentValues = new Set<string>()
+  const unknownDocumentKeys = { add: (key: string) => {ledger(unknownDocumentValues,key,false);return unknownDocumentValues.add(key)}, has(key: string) { if (!unknownDocumentValues.size) return false; const query = physical([], [key]).keys; return [...unknownDocumentValues].some(value => overlap(ledger(unknownDocumentValues,value,false),query)) } }
+  const retiringValues = new Map<string, number>()
+  const retiringIds = { get: (id: string) => retiringValues.get(id), set: (id: string, count: number) => {if(!retiringValues.has(id))ledger(retiringValues,id,true);return retiringValues.set(id,count)}, delete: (id: string) => {ledgerSnapshots.get(retiringValues)?.delete(id);return retiringValues.delete(id)}, has(id: string) { if (!retiringValues.size) return false; const query = physical([id], []).keys; return [...retiringValues.keys()].some(other => overlap(query, ledger(retiringValues,other,true))) } }
   const pendingMutations = new Set<{ keys: readonly string[]; done: Promise<'settled' | 'unknown'> }>()
   let closed = false
   const bindingKey = (id: string) => `desktop-session-project-${createHash('sha256').update(id).digest('hex')}`
-  const intersects = (scope: Scope, ids: readonly string[], keys: readonly string[]) => ids.some(id => scope.ids.has(id)) || keys.some(key => scope.keys.has(key))
-  const ownedIntersects = (scope: OwnedDocument, ids: readonly string[], keys: readonly string[]) => ids.includes(scope.id) || keys.includes(scope.key)
+  const intersects = (scope: Scope, ids: readonly string[], keys: readonly string[]) => overlap(snapshot(scope, [...scope.ids], [...scope.keys]), physical(ids, keys).keys)
+  const ownedIntersects = (scope: OwnedDocument, ids: readonly string[], keys: readonly string[]) => overlap(snapshot(scope, [scope.id], [scope.key]), physical(ids, keys).keys)
   const retained = createRetainedBindings(backend, ownership, {
     key: bindingKey,
     assertOutside(ids, keys) {
@@ -73,7 +98,7 @@ export function createBindingObservations(
     if (closed || deletedIds.has(id) || deletedKeys.has(key) || pendingIds.has(id) || pendingKeys.has(key) || retiringIds.has(id)
       || [...scopes].some(scope => intersects(scope, [id], [key])) || [...ownedDocuments].some(scope => ownedIntersects(scope, [id], [key]))) throw new Failure('conflict')
     const entry: OwnedDocument = { id, key, revoke: operations.revoke, close: operations.close, retryClose: operations.retryClose, assertOutside: operations.assertOutside ?? (() => {}), closing: false, writing: false }
-    ownedDocuments.add(entry)
+    snapshot(entry, [entry.id], [entry.key]); ownedDocuments.add(entry)
     const cleanupOperation = createRetainedCleanupOperation()
     const retired = retained.retire([id], [key], cleanupOperation)
     const joined = Promise.all(retired).then(() => {})
@@ -98,10 +123,10 @@ export function createBindingObservations(
   function beginTaskTransition(id: string, operations: { revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside?(): void }) {
     const key = `task-${id}`
     assertOutsideTaskDocumentOperation(taskContextIdentity, [id], [key]); assertOutsideTaskTransition(taskContextIdentity, [id], [key])
-    const ownedWrites = [...ownedDocuments].filter(scope => scope.key === key && scope.writing).length
-    const priorMutations = [...pendingMutations].filter(record => record.keys.includes(key))
-    const recordedKeys = priorMutations.reduce((sum, record) => sum + record.keys.filter(value => value === key).length, 0)
-    if (closed || deletedIds.has(id) || deletedKeys.has(key) || unknownDocumentKeys.has(key) || pendingIds.has(id) || (pendingKeys.get(key) ?? 0) !== ownedWrites + recordedKeys || retiringIds.has(id) || [...ownedDocuments].some(scope => scope.key === key && !scope.writing && scope.closing)) throw new Failure('conflict')
+    const ownedWrites = [...ownedDocuments].filter(scope => equalDocument(scope.key, key) && scope.writing).length
+    const priorMutations = [...pendingMutations].filter(record => record.keys.some(value => equalDocument(value, key)))
+    const recordedKeys = priorMutations.reduce((sum, record) => sum + record.keys.filter(value => equalDocument(value, key)).length, 0)
+    if (closed || deletedIds.has(id) || deletedKeys.has(key) || unknownDocumentKeys.has(key) || pendingIds.has(id) || [...pendingDocumentValues].reduce((sum, [value, count]) => sum + (equalDocument(value, key) ? count : 0), 0) !== ownedWrites + recordedKeys || retiringIds.has(id) || [...ownedDocuments].some(scope => equalDocument(scope.key, key) && !scope.writing && scope.closing)) throw new Failure('conflict')
     if (!operations || typeof operations !== 'object' || utilTypes.isProxy(operations)) throw new TypeError('Invalid transition operation')
     const captured = Object.getOwnPropertyDescriptors(operations)
     for (const name of ['revoke', 'close', 'retryClose'] as const) if (!captured[name] || !('value' in captured[name]!) || typeof captured[name]!.value !== 'function') throw new TypeError('Invalid transition operation')
@@ -109,10 +134,10 @@ export function createBindingObservations(
     const prior = admitMutation([id], [key], false, [])
     let revoked = false, finished = false, joining: Promise<void> | undefined
     const entry: OwnedDocument = { id, key, revoke() { revoked = true; call('revoke') }, close() { return call('close') as Promise<void> }, retryClose() { return call('retryClose') as Promise<void> }, assertOutside() { call('assertOutside') }, closing: false, writing: false }
-    ownedDocuments.add(entry)
+    snapshot(entry, [entry.id], [entry.key]); ownedDocuments.add(entry)
     const ticket = Object.freeze({
       join() { if (this !== ticket || finished) return Promise.reject(new Failure('conflict')); return joining ??= Promise.all([prior.join(), ...priorMutations.map(async record => { if (await record.done !== 'settled') throw new Failure('unavailable') })]).then(() => {}) },
-      assertCurrent() { if (this !== ticket || finished || revoked || closed || !ownedDocuments.has(entry)) throw new Failure('revoked'); for (const name of ['revoke', 'close', 'retryClose', 'assertOutside'] as const) { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations, name); if (!expected && !now && name === 'assertOutside') continue; if (!expected || !now || !('value' in expected) || !('value' in now) || now.value !== expected.value) throw new TypeError('Changed transition operation') } },
+      assertCurrent() { if (this !== ticket || finished || revoked || closed || !ownedDocuments.has(entry)) throw new Failure('revoked'); snapshot(entry, [entry.id], [entry.key]); for (const name of ['revoke', 'close', 'retryClose', 'assertOutside'] as const) { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations, name); if (!expected && !now && name === 'assertOutside') continue; if (!expected || !now || !('value' in expected) || !('value' in now) || now.value !== expected.value) throw new TypeError('Changed transition operation') } },
       finish(outcome: 'settled' | 'unknown') { if (this !== ticket || finished) throw new TypeError('Invalid transition ticket'); finished = true; ownedDocuments.delete(entry); prior.finish(outcome) },
     })
     return ticket
@@ -123,12 +148,12 @@ export function createBindingObservations(
     const captured = Object.getOwnPropertyDescriptors(operations)
     for (const name of ['revoke','close','retryClose','assertOutside'] as const) if (!captured[name] || !('value' in captured[name]!) || typeof captured[name]!.value !== 'function') throw new TypeError('Invalid bootstrap transition operation')
     const call = (name: 'revoke'|'close'|'retryClose'|'assertOutside'): unknown => { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations,name); if (!expected || !now || !('value' in expected) || !('value' in now) || now.value !== expected.value || typeof expected.value !== 'function') throw new TypeError('Changed bootstrap transition operation'); return Reflect.apply(expected.value,operations,[]) }
-    const priorMutations = [...pendingMutations].filter(record => record.keys.includes(key))
+    const priorMutations = [...pendingMutations].filter(record => record.keys.some(value => equalDocument(value, key)))
     const prior = admitMutation([id], [key], false, allowed)
     let revoked = false, finished = false, joining: Promise<void> | undefined
     const owned: OwnedDocument = { id, key, bootstrapEntry: entryObject, writing: false, closing: false,
       revoke() { revoked = true; call('revoke') }, close() { return call('close') as Promise<void> }, retryClose() { return call('retryClose') as Promise<void> }, assertOutside() { call('assertOutside') } }
-    ownedDocuments.add(owned)
+    snapshot(owned, [owned.id], [owned.key]); ownedDocuments.add(owned)
     const ticket = Object.freeze({
       join() { if (this !== ticket || finished) return Promise.reject(new Failure('conflict')); return joining ??= Promise.all([prior.join(), ...priorMutations.map(async record => { if (await record.done !== 'settled') throw new Failure('unavailable') })]).then(() => {}) },
       assertCurrent() { if (this !== ticket || finished || revoked || closed || !ownedDocuments.has(owned)) throw new Failure('revoked'); assertOriginalBootstrapEntry(entryObject,id); for (const name of ['revoke','close','retryClose','assertOutside'] as const) { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations,name); if (!expected || !now || !('value' in expected) || !('value' in now) || expected.value !== now.value) throw new TypeError('Changed bootstrap transition operation') } },
@@ -154,7 +179,7 @@ export function createBindingObservations(
   }
   function assertOutsideOwnedOperations(ids: readonly string[] = [], keys: readonly string[] = [], all = false) { retained.preflight(ids, keys, all); assertOutsideTaskDocumentOperation(taskContextIdentity, ids, keys, all); assertOutsideTaskTransition(taskContextIdentity, ids, keys, all); for (const scope of ownedDocuments) if (all || ownedIntersects(scope, ids, keys)) scope.assertOutside() }
   function revokeOwnedDocumentOperations(id: string) {
-    const affected = [...ownedDocuments].filter(scope => scope.id === id)
+    const affected = [...ownedDocuments].filter(scope => ownedIntersects(scope, [id], []))
     for (const scope of affected) scope.assertOutside()
     for (const scope of affected) { scope.revoke(); scope.closing = true }
     const joined = Promise.allSettled(affected.map(scope => scope.close())).then(results => { const errors = results.flatMap(row => row.status === 'rejected' ? [row.reason] : []); if (errors.length) throw new AggregateError(errors, 'Task document cleanup unresolved') })
@@ -171,14 +196,14 @@ export function createBindingObservations(
     if (retiringIds.has(original.targetSessionId)) throw new Failure('conflict')
     const allowed: Scope[] = []
     for (const scope of context.getStore() ?? []) {
-      if (!scope.ids.has(original.targetSessionId)) continue
+      if (!intersects(scope, [original.targetSessionId], [])) continue
       if (scope.state !== 'active' || isAborted(scope.signal) || closed) throw new Failure('revoked')
       if (scope.kind !== 'fork' || canonicalJsonData(original) !== canonicalJsonData(scope.target)) throw new Failure('conflict')
       allowed.push(scope)
     }
     // Only this callback's captured original target is exempt. All other
     // observations of this identity revoke/join before the original owner runs.
-    const retained = [...ownedDocuments].filter(scope => scope.id === original.targetSessionId && !!scope.bootstrapEntry)
+    const retained = [...ownedDocuments].filter(scope => ownedIntersects(scope, [original.targetSessionId], []) && !!scope.bootstrapEntry)
     const admission = admitMutation([original.targetSessionId], [], false, allowed, retained)
     const current = { id: original.targetSessionId, invocation: original, allowed, active: true }
     try { await admission.join(); return await bootstrapContext.run(current, run) } finally { current.active = false; admission.finish() }
@@ -382,8 +407,9 @@ export function createBindingObservations(
     const completion = Promise.withResolvers<void>()
     const scope: Scope = { ...(captured.kind === 'fork' ? { kind: 'fork', target: captured.target } as const : { kind: 'existing-read' } as const), ids: new Set(ids), keys: new Set(keys), state: 'acquiring', pins: [], locks: [], done: completion.promise, signal, callbackFinished: false }
     scope.done.catch(() => {})
-    scopes.add(scope)
+    snapshot(scope, [...scope.ids], [...scope.keys]); scopes.add(scope)
     function guard(active = false) {
+      snapshot(scope, [...scope.ids], [...scope.keys])
       if (closed || isAborted(signal) || scope.state === 'revoked' || scope.state === 'releasing' || scope.state === 'done' || active && scope.state !== 'active') throw new Failure('revoked')
       for (const pin of scope.pins) try { pin.assertHeld() } catch (cause) { throw new Failure('revoked', { cause }) }
       if (scope.locks.some(lock => !lock.held)) throw new Failure('revoked')
@@ -404,6 +430,7 @@ export function createBindingObservations(
       for (const lock of [...scope.locks].reverse()) {
         try { await lock.release(); scope.locks.splice(scope.locks.indexOf(lock), 1) } catch (error) { failures.push(error) }
       }
+      if (failures.length) throw new AggregateError(failures, 'Failed to release binding observation leases')
       for (const pin of [...scope.pins].reverse()) {
         try { await pin.release(); scope.pins.splice(scope.pins.indexOf(pin), 1) } catch (error) { failures.push(error) }
       }
@@ -427,7 +454,7 @@ export function createBindingObservations(
         Reflect.apply(signalAddListener, signal, ['abort', aborted, { once: true }])
       }
       for (const id of ids) { scope.pins.push(await ownership.pinOwnership!(id)); guard() }
-      for (const key of keys) { scope.locks.push(await ownership.acquireLease(`doc:${key}`)); guard() }
+      for (const key of keys) { scope.locks.push(await (ownership.acquireDocumentLease ? ownership.acquireDocumentLease(key) : ownership.acquireLease(`doc:${key}`))); guard() }
       const metadata = new Map<string, SessionMeta>(), bindings = new Map<string, ObservedDocument>()
       for (const id of existing) {
         await ownership.withSessionOperation!(id, async () => {

@@ -7,6 +7,7 @@ import { lockPathFor } from '@i-harness/fs-lock'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createTaskDocumentObservation } from '../../session-persistence-jsonl/src/backend/task-document-observation.ts'
+import { artifactPathsFor } from '../src/coordinator/artifact-path-association.ts'
 import { createOwnership } from '../src/coordinator/ownership.ts'
 import { createDocuments } from '../src/coordinator/documents.ts'
 import { createMutations } from '../src/coordinator/mutations.ts'
@@ -122,7 +123,7 @@ it('retains its genuine parent claim while original native document lease releas
   const f = await fixture(() => {}), pin = f.ownership.pinOwnership
   let originalPin: Awaited<ReturnType<typeof pin>> | undefined
   f.ownership.pinOwnership = async id => { const claim = await pin(id); originalPin = claim; return claim }
-  faults.leasePath = lockPathFor(f.root, 'doc:task-parent'); faults.filePath = join(f.root, 'task-parent.doc.jsonl'); faults.fileCloses = 0
+  faults.leasePath = lockPathFor(f.root, 'artifact-document-lease:' + (artifactPathsFor(createJsonlBackend(f.root))!.document('task-parent') as {key:string}).key); faults.filePath = join(f.root, 'task-parent.doc.jsonl'); faults.fileCloses = 0
   try {
     const token = f.operations.parent(f.parent), operation = await f.operations.begin(token), observed = await operation.observe()
     expect(observed.kind).toBe('present'); expect(faults.fileCloses).toBe(1)

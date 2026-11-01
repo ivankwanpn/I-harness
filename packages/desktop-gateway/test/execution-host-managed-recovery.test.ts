@@ -2,6 +2,23 @@ import { expect, it, vi } from 'vitest';
 import { mkdtemp, rm, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 const injection = vi.hoisted(() => ({ install: false, marker: Error('original install seam'), attempts: 0, installed: 0 }));
+const journal=vi.hoisted(()=>({mode:undefined as 'committed'|'absent'|'install-failed'|undefined,unresolved:true,reconciles:0}))
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async original=>{
+ const module=await original<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>()
+ return {...module,createFactJournalBackend(...args:Parameters<typeof module.createFactJournalBackend>){
+  const original=module.createFactJournalBackend(...args)
+  return {...original,
+   async appendOwnedBatch(...values:Parameters<typeof original.appendOwnedBatch>){
+    if(journal.mode==='absent'){values[1].beforeIssue();return {kind:'unknown' as const,key:values[3].key}}
+    const result=await original.appendOwnedBatch(...values);return journal.mode==='committed'?{kind:'unknown' as const,key:values[3].key}:result
+   },
+   async reconcileOwnedBatch(...values:Parameters<typeof original.reconcileOwnedBatch>){
+    if(journal.mode){journal.reconciles++;if(journal.unresolved)return {kind:'unknown' as const,key:values[3].key}}
+    return original.reconcileOwnedBatch(...values)
+   }
+  }
+ }}
+})
 vi.mock('node:fs/promises', async (original) => { const fs = await original<typeof import('node:fs/promises')>(); return { ...fs, readFile: vi.fn(fs.readFile), rename: vi.fn(fs.rename) }; });
 vi.mock('@i-harness/core-session', async (original) => {
     const core = await original<typeof import('@i-harness/core-session')>();
@@ -24,6 +41,7 @@ import { createProjectScopeBroker } from '../src/project-scope.ts';
 import { createDesktopExecution } from '../src/execution.ts';
 import { createExecutionHostObservation } from '../src/execution-host-observation.ts';
 async function setup() {
+    journal.mode=undefined;journal.unresolved=true;journal.reconciles=0
     const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'managed-host-')), backend = createJsonlBackend(root);
     const c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true, lockRoot: root } }, taskDocumentStorageContract);
     const service = createSessionService({ workspace: root, coordinator: c, modelPolicy: 'test-mock' }), broker = createProjectScopeBroker(c, root);
@@ -81,15 +99,10 @@ it('resets an actual retained profile overlapping managed output, then reads exa
     }
 });
 it.each(['committed', 'absent', 'install-failed'] as const)('retires a real host on %s uncertainty and restores only a fresh epoch after original reconciliation', async (mode) => {
-    const x = await setup(), append = x.backend.appendOwnedBatch!, reconciler = x.backend.reconcileOwnedBatch!, baseline = x.doc.view.events.length;
+    const x = await setup(), baseline = x.doc.view.events.length;
     const status: string[] = [], off = observeColdExecutionWrites(x.c, () => { const state = managedExecutionStatus(x.doc); status.push(state); if (state === 'available')
         x.doc.assertReady(); });
-    let reconciles = 0, unresolved = true;
-    x.backend.reconcileOwnedBatch = async (...args) => { reconciles++; return unresolved ? { kind: 'unknown', key: args[3].key } : reconciler(...args); };
-    x.backend.appendOwnedBatch = async (...args) => { if (mode === 'absent') {
-        args[1].beforeIssue();
-        return { kind: 'unknown', key: args[3].key };
-    } ; const result = await append(...args); return mode === 'committed' ? { kind: 'unknown', key: args[3].key } : result; };
+    journal.mode=mode
     try {
         injection.install = mode === 'install-failed';
         injection.attempts = 0;
@@ -112,14 +125,14 @@ it.each(['committed', 'absent', 'install-failed'] as const)('retires a real host
         expect(retry.kind).toBe(mode === 'install-failed' ? 'recovery-required' : 'unknown');
         expect(status).toEqual(['unavailable']);
         expect(x.doc.view.events).toHaveLength(baseline);
-        unresolved = false;
+        journal.unresolved = false;
         injection.install = false;
         const recovered = await x.doc.reconcile(key);
         expect(recovered.kind).toBe(mode === 'absent' ? 'absent' : 'committed');
         expect(status).toEqual(mode === 'absent' ? ['unavailable', 'available'] : ['unavailable', 'unavailable', 'available']);
         expect(x.doc.view.events).toHaveLength(baseline + (mode === 'absent' ? 0 : 1));
         expect((await x.doc.reconcile(key)).kind).toBe('not-issued');
-        expect(reconciles).toBe(mode === 'install-failed' ? 0 : 2);
+        expect(journal.reconciles).toBe(mode === 'install-failed' ? 0 : 2);
         if (mode === 'install-failed') {
             expect(recovered).toMatchObject({ receipt });
             expect(injection.attempts).toBe(3);
