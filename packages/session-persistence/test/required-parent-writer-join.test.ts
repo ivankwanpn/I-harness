@@ -18,13 +18,13 @@ import { isInsideOriginalSettlementClose, captureOriginalSettlementCloseAck } fr
 import { captureManagedRequiredParent } from '../src/coordinator/managed-document.ts'
 
 const terminal = { type:'context/recovery' as const, version:1 as const, ownerSessionId:'parent', recoveryId:'original', logicalStepSeq:0, bindingFingerprint:'a'.repeat(64), rejectedInputFingerprint:'b'.repeat(64), state:'blocked' as const, retryConsumed:true }
-async function fixture(onDrain?:(source:import('@i-harness/core-session').SettlementFacts)=>Promise<void>){
+async function fixture(onDrain?:(source:import('@i-harness/core-session').SettlementFacts)=>Promise<void>,onRevoke?:()=>void){
  cut.run=undefined;cut.native=undefined;cut.statFailure=undefined;const root=await mkdtemp(join(tmpdir(),'ih-required-writer-')),backend=createJsonlBackend(root),opts={lock:{enabled:true}}
  const ownership=createOwnership(backend,opts),mutations=createMutations(backend,ownership,200,()=>{}),loads=createLoads(backend,ownership,mutations)
- const managed=createManagedDocuments(backend,ownership,loads.loadOwned,opts,()=>{},mutations)
+ const managed=createManagedDocuments(backend,ownership,loads.loadOwned,opts,()=>{},mutations,undefined,undefined,async()=>{onRevoke?.()})
  await mutations.create({sessionId:'parent'});const document=await managed.open('parent');const action=document.beginAction(),source=action.registerSettlementSource(async()=>{await onDrain?.(source)})
  const parent=captureManagedRequiredParent(document,ownership,source)
- return {root,backend,ownership,document,action,source,parent,async close(){cut.run=undefined;cut.native=undefined;cut.statFailure=undefined;action.finish();await managed.close();await Promise.all(ownership.releaseHeldLocks())}}
+ return {root,backend,ownership,document,action,source,parent,captureOrdinaryParent:()=>managed.captureParent(document),async close(){cut.run=undefined;cut.native=undefined;cut.statFailure=undefined;action.finish();await managed.close();await Promise.all(ownership.releaseHeldLocks())}}
 }
 it('joins only the held original other-source issued batch and rechecks strict readiness',async()=>{
  const f=await fixture(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
@@ -158,4 +158,15 @@ it('original direct close fences admission before joining its source even if pub
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),f=await fixture(async()=>{entered.resolve();await release.promise}),originalClose=f.document.close.bind(f.document),revoke=f.document.revokeNewWork
  let replacementCalls=0;f.document.revokeNewWork=()=>{replacementCalls++};f.action.finish();const closing=originalClose();void closing.catch(()=>{})
  try{await entered.promise;expect(()=>f.document.assertReady()).toThrow();expect(replacementCalls).toBe(0)}finally{f.document.revokeNewWork=revoke;revoke();release.resolve();await closing;await f.close()}
+})
+
+it('marks the original attached entry before synchronous Task revocation port reentry',async()=>{
+ let captureParent:(()=>unknown)|undefined,failing=true,drains=0,portCalls=0;const admitted:unknown[]=[],refused:unknown[]=[]
+ const f=await fixture(async()=>{drains++;if(failing)throw false},()=>{portCalls++;try{admitted.push(captureParent!())}catch(error){refused.push(error)}})
+ captureParent=f.captureOrdinaryParent;f.captureOrdinaryParent().assertCurrent();const ack=captureOriginalSettlementCloseAck(f.source)!,close=f.document.close.bind(f.document),before=await readFile(join(f.root,'parent.jsonl'));let acknowledged=false;void ack.then(()=>{acknowledged=true});f.action.finish()
+ try{
+  let failed=false,cause:unknown;await close().catch(error=>{failed=true;cause=error});expect(failed).toBe(true);expect(portCalls).toBeGreaterThan(0);expect(admitted).toEqual([]);expect(refused).toHaveLength(portCalls);expect(refused.map(error=>(error as {code?:string}).code)).toEqual(['FACT_RECOVERY_REQUIRED','FACT_CLOSED'])
+  expect(cause).toBeInstanceOf(AggregateError);const originalFailure=(cause as AggregateError).errors[0] as Error;expect(originalFailure).toMatchObject({code:'FACT_RECOVERY_REQUIRED'});expect(((originalFailure.cause as AggregateError).errors[0] as AggregateError).errors).toEqual([false])
+  expect(drains).toBe(1);expect(acknowledged).toBe(false);f.source.assertHeld();failing=false;await close();await ack;expect(acknowledged).toBe(true);expect(drains).toBe(2);expect(admitted).toEqual([]);expect(await readFile(join(f.root,'parent.jsonl'))).toEqual(before)
+ }finally{failing=false;await f.source.close();await f.close()}
 })

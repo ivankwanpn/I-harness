@@ -52,6 +52,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       let outcome:'settled'|'unknown'='unknown'
       const flight=(async()=>{
         try {
+          markManagedEntryRevoked(entry)
           revokeAttached()
           await entry.flight?.catch(()=>{})
           await bootstrap.settleCapture(entry)
