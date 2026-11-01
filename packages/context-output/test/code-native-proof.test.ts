@@ -12,9 +12,9 @@ import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import * as owner from '../src/service.ts'
 
-async function fixture(effect:()=>void=()=>{},operationId='op') {
+async function fixture(effect:()=>void=()=>{},operationId='op',source:{sourceId:string;path?:string;revision?:string;readonly?:boolean}={sourceId:'source'}) {
  const service=owner.createContextOutputService({root:await mkdtemp(join(process.env.IH_CONFIG_DIR!,'native-causal-')),workspaceId:'w'})
- const input={operationId,sessionId:'s',callId:'c',documentId:'document',source:{sourceId:'source'}}
+ const input={operationId,sessionId:'s',callId:'c',documentId:'document',source}
  const scope=service.registerResultScope(input,()=>{effect();return true}),sink=await service.beginResult(scope,'code-output-manifest-v1')
  await sink.write(Buffer.from('native original'));const result=await sink.finish('complete')
  if(result.kind!=='committed')throw Error('Expected original native operation')
@@ -37,6 +37,34 @@ it('refuses replaced method getters without invoking them and rejects currentnes
   effect=()=>{f.sink.finish=async()=>({kind:'recovery-required',operationId:'forged'})}
   expect(()=>owner.captureConfirmedCodeManifest(f.service,f.scope,f.sink,f.expected)).toThrow()
  }finally{effect=()=>{};Object.defineProperty(f.service,'beginResult',serviceMethod);Object.defineProperty(f.sink,'finish',sinkMethod);await f.service.close()}
+})
+it.each(['nested-extra','map-extra','wrong-path','wrong-readonly'] as const)('refuses noncontract runtime-JS source history without weakening current native proof: %s',async kind=>{
+ const source={sourceId:'source'}
+ Object.defineProperty(source,kind==='wrong-path'?'path':kind==='wrong-readonly'?'readonly':'extra',{enumerable:true,value:kind==='map-extra'?new Map([['unbounded','payload']]):kind==='wrong-readonly'?'false':{mutable:'payload'}})
+ const f=await fixture(()=>{},'op',source)
+ try{
+  await f.service.confirmResultOwner(f.scope,f.expected.ref)
+  // Existing current native query is not redefined by the new history profile.
+  expect(owner.captureConfirmedCodeManifest(f.service,f.scope,f.sink,{...f.expected,source:{sourceId:'source'}})).toBeDefined()
+  const adapter=owner.captureOriginalCodeManifestAdapter(f.service,f.scope)
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,f.sink,{...f.expected,source:{sourceId:'source'}})).toThrow()
+ }finally{await f.service.close()}
+})
+it('preserves every supported scalar source field and cannot mutate later historical reads',async()=>{
+ const source={sourceId:'source',path:'C:/original',revision:'original-revision',readonly:false},f=await fixture(()=>{},'op',source)
+ try{
+  await f.service.confirmResultOwner(f.scope,f.expected.ref)
+  const receipt=owner.captureCodeManifestConfirmation(owner.captureOriginalCodeManifestAdapter(f.service,f.scope),f.sink,f.expected)
+  const first=owner.readCodeManifestConfirmationHistory(receipt)
+  expect(first.source).toEqual(source)
+  expect(Reflect.set(first.source,'path','changed')).toBe(false)
+  expect(Reflect.set(first.ref,'id','changed')).toBe(false)
+  source.path='caller changed'
+  const second=owner.readCodeManifestConfirmationHistory(receipt)
+  expect(second.source).toEqual({sourceId:'source',path:'C:/original',revision:'original-revision',readonly:false})
+  expect(second.source).not.toBe(first.source);expect(second.ref).not.toBe(first.ref)
+  await f.service.close();expect(owner.readCodeManifestConfirmationHistory(receipt)).toEqual(second)
+ }finally{await f.service.close()}
 })
 it('keeps confirmation proof nominal to its original service and refuses foreign refs or late closed lookup',async()=>{
  const f=await fixture(),other=await fixture(()=>{},'foreign')
@@ -63,6 +91,8 @@ it.each([false,true])('requires the actual original native confirmation cleanup 
  const f=await fixture(),entered=Promise.withResolvers<void>(),gate=Promise.withResolvers<void>()
  await f.service.confirmResultOwner(f.scope,f.expected.ref)
  const historical=owner.captureConfirmedCodeManifest(f.service,f.scope,f.sink,f.expected)
+ const adapter=owner.captureOriginalCodeManifestAdapter(f.service,f.scope)
+ const receipt=owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)
  native.armed=true;native.fail=fail;native.entered=entered.resolve;native.gate=gate.promise;native.releases=0
  let confirming:Promise<void>|undefined
  try{
@@ -71,6 +101,8 @@ it.each([false,true])('requires the actual original native confirmation cleanup 
   expect(native.releases).toBe(1)
   expect(()=>owner.captureConfirmedCodeManifest(f.service,f.scope,f.sink,f.expected)).toThrow()
   expect(()=>owner.readConfirmedCodeManifest(f.service,historical)).toThrow()
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)).toThrow()
+  expect(owner.readCodeManifestConfirmationHistory(receipt)).toMatchObject(f.expected)
   gate.resolve()
   if(fail){
    await expect(confirming).rejects.toBe(false)
@@ -123,4 +155,25 @@ it('does not qualify a pending or falsey failed original confirmation', async ()
   await confirming
   expect(owner.readConfirmedCodeManifest(service,owner.captureConfirmedCodeManifest(service,scope,sink,expected))).toMatchObject(expected)
  } finally { fail=false; await service.close() }
+})
+
+it('retains detached confirmation history after original source expiry',async()=>{
+ let held=true;const f=await fixture(()=>{if(!held)throw Error('expired')})
+ try{
+  const adapter=owner.captureOriginalCodeManifestAdapter(f.service,f.scope)
+  expect(()=>owner.captureOriginalCodeManifestAdapter({...f.service},f.scope)).toThrow()
+  expect(()=>owner.captureOriginalCodeManifestAdapter(f.service,{...f.scope})).toThrow()
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)).toThrow()
+  await f.service.confirmResultOwner(f.scope,f.expected.ref)
+  const receipt=owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,{...f.sink},f.expected)).toThrow()
+  expect(owner.readCodeManifestConfirmationHistory(receipt)).toMatchObject(f.expected)
+  expect(()=>owner.captureCodeManifestConfirmation({...adapter},f.sink,f.expected)).toThrow()
+  expect(()=>owner.readCodeManifestConfirmationHistory({...receipt})).toThrow()
+  held=false
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)).toThrow()
+  expect(owner.readCodeManifestConfirmationHistory(receipt)).toMatchObject(f.expected)
+  await f.service.close()
+  expect(owner.readCodeManifestConfirmationHistory(receipt)).toMatchObject(f.expected)
+ }finally{held=true;await f.service.close()}
 })

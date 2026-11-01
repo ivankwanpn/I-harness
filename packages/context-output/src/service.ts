@@ -1,6 +1,6 @@
 import { associateManagedResultRefusal } from './artifact/result-capabilities.ts'
 import { captureResultTargetIds } from '../../session-persistence/src/coordinator/result-revocation-data.ts'
-import { fields } from './artifact/transfer-codec.ts'
+import { fields, captureTarget } from './artifact/transfer-codec.ts'
 import { createArtifactQualificationIO } from './artifact/qualification-io.ts'
 import { canonicalJsonData } from '@i-harness/core-session'
 import { originalResultRevocationFor, issueOriginalResultRevocationScope, type OriginalResultRevocationTicket } from '../../session-persistence/src/coordinator/result-revocation.ts'
@@ -24,6 +24,45 @@ import type { ContextAccess, ContextOutputOptions, ContextOutputService, Context
 import { createArtifactOwnership } from './artifact/ownership.ts'
 type CodeManifestQuery = ReturnType<typeof createArtifactOwnership>['captureConfirmedCodeManifest']
 const codeManifestQueries = new WeakMap<ContextOutputService, CodeManifestQuery>()
+const codeManifestScopeQueries = new WeakMap<ContextOutputService, (scope:Parameters<CodeManifestQuery>[0])=>void>()
+declare const codeManifestAdapterBrand: unique symbol, codeManifestReceiptBrand: unique symbol
+export type OriginalCodeManifestAdapter = Readonly<{[codeManifestAdapterBrand]:true}>
+export type OriginalCodeManifestReceipt = Readonly<{[codeManifestReceiptBrand]:true}>
+const codeManifestAdapters = new WeakMap<OriginalCodeManifestAdapter,{service:ContextOutputService;scope:Parameters<CodeManifestQuery>[0]}>()
+const codeManifestHistory = new WeakMap<OriginalCodeManifestReceipt,ReturnType<CodeManifestQuery>>()
+function copyCodeManifestHistory(snapshot:ReturnType<CodeManifestQuery>):ReturnType<CodeManifestQuery> {
+  // The existing source codec rejects extras and non-scalar optional fields
+  // before history can retain any arbitrary nested object from a live owner.
+  captureTarget({source:snapshot.source,revision:'confirmation-history'})
+  if(Buffer.byteLength(canonicalJsonData(snapshot))>65536)throw new Error('Original confirmation metadata exceeds limit')
+  const {source,ref}=snapshot
+  return Object.freeze({operationId:snapshot.operationId,sessionId:snapshot.sessionId,callId:snapshot.callId,
+    source:Object.freeze({sourceId:source.sourceId,...source.path!==undefined?{path:source.path}:{},...source.revision!==undefined?{revision:source.revision}:{},...source.readonly!==undefined?{readonly:source.readonly}:{}}),
+    ref:Object.freeze({version:ref.version,id:ref.id,revision:ref.revision,codec:ref.codec,encodedBytes:ref.encodedBytes,contentDigest:ref.contentDigest,completeness:ref.completeness})})
+}
+export function captureOriginalCodeManifestAdapter(service:ContextOutputService, scope:Parameters<CodeManifestQuery>[0]):OriginalCodeManifestAdapter {
+  const query=codeManifestScopeQueries.get(service)
+  if(!query)throw new Error('Original context output service required')
+  query(scope)
+  const adapter=Object.freeze({}) as OriginalCodeManifestAdapter
+  codeManifestAdapters.set(adapter,{service,scope})
+  return adapter
+}
+export function captureCodeManifestConfirmation(adapter:OriginalCodeManifestAdapter, sink:Parameters<CodeManifestQuery>[1], expected:Parameters<CodeManifestQuery>[2]):OriginalCodeManifestReceipt {
+  const original=codeManifestAdapters.get(adapter)
+  if(!original)throw new Error('Original manifest adapter required')
+  const query=codeManifestQueries.get(original.service)
+  if(!query)throw new Error('Original context output service required')
+  const snapshot=copyCodeManifestHistory(query(original.scope,sink,expected))
+  const receipt=Object.freeze({}) as OriginalCodeManifestReceipt
+  codeManifestHistory.set(receipt,snapshot)
+  return receipt
+}
+export function readCodeManifestConfirmationHistory(receipt:OriginalCodeManifestReceipt) {
+  const snapshot=codeManifestHistory.get(receipt)
+  if(!snapshot)throw new Error('Original confirmation receipt required')
+  return copyCodeManifestHistory(snapshot)
+}
 declare const confirmedCodeManifestBrand: unique symbol
 export type OriginalConfirmedCodeManifest = Readonly<{[confirmedCodeManifestBrand]:true}>
 const codeManifestProofs=new WeakMap<OriginalConfirmedCodeManifest,{service:ContextOutputService;args:Parameters<CodeManifestQuery>}>()
@@ -745,6 +784,11 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     if(querying)throw new Error('Original manifest query reentry unavailable')
     assertManifestService();querying=true
     try{const result=artifacts.captureConfirmedCodeManifest(...args);assertManifestService();return result}finally{querying=false}
+  })
+  codeManifestScopeQueries.set(service, scope => {
+    if(querying)throw new Error('Original manifest query reentry unavailable')
+    assertManifestService();querying=true
+    try{artifacts.assertOriginalManifestScope(scope);assertManifestService()}finally{querying=false}
   })
   return service
 }

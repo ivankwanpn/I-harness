@@ -206,6 +206,11 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       if(confirming.get(scope)===1)confirmed.set(scope, structuredClone(originalRef))
     }finally{confirming.set(scope,(confirming.get(scope)??1)-1)}
   }
+  function assertOriginalManifestScope(scope: ResultArtifactScope) {
+    const registered=scopes.get(scope)
+    const check=()=>{if(!registered||scopes.get(scope)!==registered||closing||closed||deletedDocuments.has(registered.owner.sessionId)||deletedDocuments.has(registered.owner.documentId??registered.owner.sessionId))throw new Error('Original manifest scope unavailable')}
+    check(); const current=registered!.current(); check(); if(current!==true)throw new Error('Original manifest scope unavailable')
+  }
   function captureConfirmedCodeManifest(scope: ResultArtifactScope, sink: ResultArtifactSink, expected: {operationId:string;sessionId:string;callId:string;source:{sourceId:string};ref:ManagedArtifactRef}) {
     const registered = scopes.get(scope)
     if (!registered || sinks.get(scope) !== sink) throw new Error('Original scope and sink required')
@@ -227,7 +232,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     return Object.freeze({operationId:registered.owner.operationId,sessionId:registered.owner.sessionId,callId:registered.owner.callId,source:Object.freeze({...registered.owner.source}),ref:Object.freeze({...ref})})
   }
   const transfers = createSeedDependencyTransfer({ root, options, directory, quota, mutate, membership, authorized, available: document => !closed && !deletedDocuments.has(document) })
-  return { ...transfers, captureConfirmedCodeManifest, passiveReleaseInventory(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, documents: readonly string[], io: import('./qualification-io.ts').ArtifactQualificationIO) { mutations.assertTurn(turn); return passiveManagedReleaseInventory(root, options.workspaceId, documents, io, () => mutations.assertTurn(turn)) }, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, readCodeOutputResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
+  return { ...transfers, assertOriginalManifestScope, captureConfirmedCodeManifest, passiveReleaseInventory(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, documents: readonly string[], io: import('./qualification-io.ts').ArtifactQualificationIO) { mutations.assertTurn(turn); return passiveManagedReleaseInventory(root, options.workspaceId, documents, io, () => mutations.assertTurn(turn)) }, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, readCodeOutputResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
     checkQuota: () => mutate(() => requireSpace(root, quota(), 0)),
     reconcileResult: (operationId: string, id: string) => mutate(async () => {
       if (closed) throw new Error('Artifact owner closed')
