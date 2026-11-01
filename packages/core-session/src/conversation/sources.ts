@@ -7,6 +7,7 @@ import type { ConversationPayloadReader } from './payload.ts'
 export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number }; readPayload?: ConversationPayloadReader; coordinates?: ConversationSourceCoordinateView } = {}) {
   const coordinates = options.coordinates === undefined ? undefined : coordinateViews.get(options.coordinates)
   if (options.coordinates && (!coordinates || !coordinates.current() || options.coordinates.eventCount !== archive.length)) throw new TypeError('Invalid or stale source coordinates')
+  const assertCurrent = () => { if (coordinates && !coordinates.current()) throw new TypeError('Stale source coordinates') }
   const seqAt = (index: number) => coordinates ? coordinates.seqs[index] : archive.get(index).seq
   const counts = new Map<number, number>()
   const valid = (seq: unknown): seq is number => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0
@@ -22,7 +23,7 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
   }
   const cache = new Map<string, ConversationSourceRef>()
   const ref = (eventIndex: number, part: string): ConversationSourceRef => {
-    if (coordinates && !coordinates.current()) throw new TypeError('Stale source coordinates')
+    assertCurrent()
     const key = `${eventIndex}:${part}`
     let source = cache.get(key)
     if (source) return source
@@ -40,6 +41,7 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     if (code && !(options.candidate && index >= options.candidate.baseCount)) diagnostics.push({ code, sourceIds: [ref(index, "event").id] })
   }
   const provenance = (eventIndex: number, part: string, admissionIndex?: number): ConversationProvenance => {
+    assertCurrent()
     const event = archive.get(eventIndex)
     const source = ref(eventIndex, part)
     const evidence = [source]
@@ -82,7 +84,7 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
   function isInherited(index: number): boolean {
     return (options.header?.parentSession !== undefined || options.header?.semanticSeed !== undefined) && index < (options.header.seedLength ?? 0)
   }
-  return { ref, provenance, indexOfSeq: (seq: number) => positions.get(seq) ?? -1 }
+  return { ref, provenance, indexOfSeq: (seq: number) => { assertCurrent(); return positions.get(seq) ?? -1 } }
 }
 
 /** Existing Session consumer entry, backed by the same archive source owner. */
