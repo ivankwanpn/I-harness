@@ -5,11 +5,12 @@ import { createListeners } from "./listeners.ts"
 import { createWaterfalls } from "./waterfall.ts"
 import { createCascades } from "./cascade.ts"
 import { createPluginLifecycle } from "./dispose.ts"
+import {associateExecutionHookScope} from '../execution-hooks.ts'
 
 export function createScope(
   parentStore: ServiceStore | null,
   parentScope: InternalScope | null,
-  parentEmit: (event: string, payload: unknown) => Promise<unknown>,
+  parentEmit: (event: string, payload: unknown,current?:()=>void) => Promise<unknown>,
 ): PluginContext {
   const { store, services } = createServices(parentStore)
   const scopes = new Set<PluginContext>()
@@ -43,9 +44,9 @@ export function createScope(
         scopes.delete(ctx)
       },
     },
-    on: listeners.register,
-    emit: listeners.emit,
-    waterfall: waterfall.register,
+    on: (event,handler)=>listeners.register(event,handler),
+    emit: (event,payload)=>listeners.emit(event,payload),
+    waterfall: (event,handler)=>waterfall.register(event,handler),
     cascade: cascades.dispatch,
     onCascade: cascades.register,
     guard: listeners.guard,
@@ -56,5 +57,6 @@ export function createScope(
     unmount: lifecycle.unmount,
   }
 
+  associateExecutionHookScope(ctx,{parent:parentScope,surface(event){const plain=listeners.surface(event),chain=waterfall.surface(event);return {version:plain.version+':'+chain.version,compatible:plain.compatible&&chain.compatible}},on:(event,handler)=>listeners.register(event,handler,true),waterfall:(event,handler)=>waterfall.register(event,handler,true),emit:listeners.emit})
   return ctx
 }

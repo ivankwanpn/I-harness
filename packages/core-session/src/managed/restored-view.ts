@@ -1,3 +1,6 @@
+import { captureRewrites,type ConversationRewriteDraft,type ConversationCandidate } from '../conversation/candidate.ts';
+import {extendConversationSourceCoordinates} from '../conversation/sources.ts';
+import {extendPruneDependencyView} from '../projection/pruning.ts';
 import { captureOriginalRestorationSource } from './restoration-source.ts';
 import type { SessionEventView, EncodedFactBatch, FactReceipt } from './types.ts';
 import type { ConversationPayloadCapture } from '../conversation/payload.ts';
@@ -229,9 +232,9 @@ type PreparedPayload = {
     coordinates: ReturnType<Candidate['sources']['read']>;
     state: object;
 };
-async function hydratePreparation(owned: Candidate, current: () => void): Promise<PreparedPayload> {
+async function hydratePreparation(owned: Candidate, current: () => void, prospective?:{history:ReturnType<Candidate['index']['history']>;coordinates:ReturnType<Candidate['sources']['read']>;prune:ReturnType<Candidate['prune']['read']>;read:(index:number)=>Promise<SessionEventView>}): Promise<PreparedPayload> {
     current();
-    const history = owned.index.history(), facts = owned.index.resultFacts(), coordinates = owned.sources.read(), pruneView = owned.prune.read();
+    const history = prospective?.history??owned.index.history(), facts = owned.index.resultFacts(), coordinates = prospective?.coordinates??owned.sources.read(), pruneView = prospective?.prune??owned.prune.read();
     const wanted = new Set<number>(), callIds = new Set<string>();
     if (history.current)
         wanted.add(history.current.index);
@@ -256,7 +259,7 @@ async function hydratePreparation(owned: Candidate, current: () => void): Promis
     const prunedCalls = selectPruneDependencies(pruneView, callIds);
     const read = async (index: number) => {
         current();
-        const event = await owned.source.readEvent(index);
+        const event = await (prospective?prospective.read(index):owned.source.readEvent(index));
         current();
         return event;
     };
@@ -350,3 +353,24 @@ export function readRestoredBudget(lease: PreparedConversationArchive, ownerSess
 }
 
 export function readRestoredGenerations(lease:PreparedConversationArchive){const prepared=preparations.get(lease);if(!prepared)failure('CONVERSATION_PREPARATION_INVALID');prepared.current();return readConversationGenerations(prepared.candidate.index)}
+
+/** Immediate prospective projection on the SAME original validation index. */
+export async function previewRestoredConversationCandidate(lease:PreparedConversationArchive,rewrites:readonly ConversationRewriteDraft[],options:{candidateId:string;ownerSessionId:string;capturePayload?:ConversationPayloadCapture;assertCurrent?:()=>void}):Promise<ConversationCandidate&{assertCurrent():void}>{
+ const prepared=preparations.get(lease);if(!prepared)failure('CONVERSATION_PREPARATION_INVALID')
+ const extra=options.assertCurrent,ownerSessionId=options.ownerSessionId,candidateId=options.candidateId,capturePayload=options.capturePayload;
+ const current=()=>{prepared.current();extra?.();prepared.current()};current()
+ const owned=prepared.candidate;if(ownerSessionId!==owned.sessionId)failure('CONVERSATION_RESTORATION_OWNER_MISMATCH')
+ const id=candidateId;if(typeof id!=='string'||!id.length||id.length>256)throw new TypeError('Invalid conversation candidate id')
+ let stage:Awaited<ReturnType<typeof prepareConversationAppend>>|undefined,primary:unknown,failed=false,result:ConversationCandidate|undefined
+ try{
+ const count=owned.index.eventCount,suffix=captureRewrites(rewrites,count);current()
+ const read=async(index:number)=>{current();const value=index>=count?suffix[index-count]!:await owned.source.readEvent(index);current();return value}
+ stage=await prepareConversationAppend(owned.index,suffix,read,current);current()
+ const payload=await hydratePreparation(owned,current,{history:stage.history(),coordinates:extendConversationSourceCoordinates(prepared.coordinates,suffix),prune:extendPruneDependencyView(owned.prune.read(),suffix),read});current()
+ const archive={length:count+suffix.length,get(index:number){current();const event=index>=count?suffix[index-count]:payload.full.get(index);if(!event)failure('CONVERSATION_PAYLOAD_NOT_PREPARED');return event}}
+ const projection=renderConversationItems(archive,stage.history(),{ownerSessionId,capturePayload,header:owned.source.header,candidate:{id,baseCount:count},sourceCoordinates:payload.coordinates,pruneSubstitutes:payload.substitutes,prunedResults:payload.pruned});current()
+ result=Object.freeze({kind:'candidate',candidateId:id,sourceEventCount:count,projectedEventCount:archive.length,projection})
+ }catch(error){failed=true;primary=error}
+ const cleanup:unknown[]=[];try{stage?.discard()}catch(error){cleanup.push(error)}try{await owned.source.settle()}catch(error){cleanup.push(error)}
+ if(cleanup.length)throw new AggregateError([...(failed?[primary]:[]),...cleanup],'Conversation preview cleanup failed');if(failed)throw primary;current();return Object.freeze({...result!,assertCurrent:current})
+}

@@ -93,3 +93,10 @@ export function selectPruneDependencies(view: ConversationPruneDependencyView, s
   for (const callId of selectedCallIds) { check(); if (state!.positions.has(callId)) selected.add(callId) }
   check(); return selected
 }
+
+/** Prospective original dependency metadata only, never prune payload retention. */
+export function extendPruneDependencyView(view:ConversationPruneDependencyView,events:readonly SessionEventView[]):ConversationPruneDependencyView {
+ const original=pruneViews.get(view);if(!original||!original.current())throw new TypeError('Invalid or stale prune dependency view')
+ const positions=new Map(original.positions);events.forEach((event,offset)=>{if(event.type==='compaction/prune')event.pruned?.forEach((record,recordIndex)=>positions.set(record.callId,{eventIndex:view.eventCount+offset,recordIndex,seq:event.seq}))})
+ const result=Object.freeze({eventCount:view.eventCount+events.length}) as ConversationPruneDependencyView;pruneViews.set(result,{positions,current:()=>original.current()});return result
+}

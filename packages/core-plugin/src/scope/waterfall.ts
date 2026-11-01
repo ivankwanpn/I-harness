@@ -7,12 +7,13 @@ interface OwnedWaterfall {
 }
 
 export function createWaterfalls(getMountingPlugin: () => string | null) {
-  const waterfalls = new Map<string, WaterfallHandler[]>()
+  const waterfalls = new Map<string, {handler:WaterfallHandler;executionAware:boolean}[]>()
+  const revisions=new Map<string,number>()
   const pluginWaterfalls = new Map<string, OwnedWaterfall[]>()
 
-  function registerWaterfall(event: string, handler: WaterfallHandler): void {
+  function registerWaterfall(event: string, handler: WaterfallHandler,executionAware=false): void {
     const list = waterfalls.get(event) ?? []
-    list.push(handler)
+    list.push({handler,executionAware});revisions.set(event,(revisions.get(event)??0)+1)
     waterfalls.set(event, list)
     const mountingPlugin = getMountingPlugin()
     if (mountingPlugin !== null) {
@@ -33,8 +34,10 @@ export function createWaterfalls(getMountingPlugin: () => string | null) {
     event: string,
     handlers: WaterfallHandler[],
     payload: unknown,
+    current?:()=>void,
   ): Promise<unknown> {
     const run = async (i: number, p: unknown): Promise<unknown> => {
+      current?.()
       if (i >= handlers.length) return p
       let nextCalled = false
       const next = (pp: unknown): unknown | Promise<unknown> => {
@@ -58,8 +61,8 @@ export function createWaterfalls(getMountingPlugin: () => string | null) {
     for (const { event, handler } of pluginWaterfalls.get(name) ?? []) {
       const list = waterfalls.get(event)
       if (list) {
-        const index = list.indexOf(handler)
-        if (index !== -1) list.splice(index, 1)
+        const index = list.findIndex(entry=>entry.handler===handler)
+        if (index !== -1) {list.splice(index, 1);revisions.set(event,(revisions.get(event)??0)+1)}
       }
     }
     pluginWaterfalls.delete(name)
@@ -67,8 +70,9 @@ export function createWaterfalls(getMountingPlugin: () => string | null) {
 
   return {
     register: registerWaterfall,
-    snapshot: (event: string): WaterfallHandler[] => [...(waterfalls.get(event) ?? [])],
+    snapshot: (event: string): WaterfallHandler[] => (waterfalls.get(event) ?? []).map(entry=>entry.handler),
     run: runWaterfall,
     reclaim,
+    surface:(event:string)=>({version:revisions.get(event)??0,compatible:(waterfalls.get(event)??[]).every(entry=>entry.executionAware)}),
   }
 }

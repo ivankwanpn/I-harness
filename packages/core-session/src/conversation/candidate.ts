@@ -9,8 +9,8 @@ import { createConversationValidationIndex } from './validation.ts'
 
 type RewriteEvent = Extract<SessionEvent, { type: 'compaction/replacement' | 'compaction/prune' | 'compaction/reset' }>
 type WithoutSeq<T> = T extends unknown ? Omit<T, 'seq'> & { readonly seq?: never } : never
-type ConversationRewriteDraft = DeepReadonly<WithoutSeq<RewriteEvent>>
-interface ConversationCandidate {
+export type ConversationRewriteDraft = DeepReadonly<WithoutSeq<RewriteEvent>>
+export interface ConversationCandidate {
   readonly kind: 'candidate'
   readonly candidateId: string
   readonly sourceEventCount: number
@@ -19,7 +19,7 @@ interface ConversationCandidate {
 }
 
 /** Strict proposal data precedes capture: no getter, toJSON or sparse slots. */
-function captureRewrites(rewrites: readonly ConversationRewriteDraft[], baseCount: number): readonly SessionEventView[] {
+export function captureRewrites(rewrites: readonly ConversationRewriteDraft[], baseCount: number): readonly SessionEventView[] {
   const invalid = () => { throw new TypeError('Invalid conversation rewrite proposal') }
   if (!isStrictFactData(rewrites) || !Array.isArray(rewrites) || !rewrites.length) invalid()
   const pending: unknown[] = [rewrites]

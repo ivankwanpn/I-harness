@@ -1,0 +1,19 @@
+import type {PluginContext,Listener,WaterfallHandler} from './types.ts'
+const events=['agent/pre-step','agent/step','agent/stop'] as const
+type ScopePorts={parent:object|null;surface(event:string):Readonly<{version:string;compatible:boolean}>;on(event:string,handler:Listener):void;waterfall(event:string,handler:WaterfallHandler):void;emit(event:string,payload:unknown,current:()=>void):Promise<unknown>}
+const scopes=new WeakMap<object,{ports:ScopePorts;fields:PropertyDescriptorMap}>(),channels=new WeakMap<object,PluginContext>(),surfaces=new WeakMap<object,{channel:object;current():void}>()
+/** Installed only by the original scope, over its original registration lists. */
+export function associateExecutionHookScope(context:PluginContext,ports:ScopePorts){if(scopes.has(context))throw TypeError('Original hook scope already associated');scopes.set(context,{ports,fields:Object.getOwnPropertyDescriptors(context)})}
+export function onExecutionEvent(context:PluginContext,event:string,handler:Listener){const original=scopes.get(context);if(!original)throw TypeError('Original hook scope required');original.ports.on(event,handler)}
+export function waterfallExecutionEvent(context:PluginContext,event:string,handler:WaterfallHandler){const original=scopes.get(context);if(!original)throw TypeError('Original hook scope required');original.ports.waterfall(event,handler)}
+export interface ExecutionHookChannel {readonly context:PluginContext;capture():object;assertCurrent(surface:object):void;emit(event:typeof events[number],payload:unknown,surface?:object):Promise<unknown>}
+export function isExecutionHookChannel(channel:object,context:PluginContext){return channels.get(channel)===context}
+export function captureExecutionHookChannel(context:PluginContext):ExecutionHookChannel{
+ const original=scopes.get(context)?.ports;if(!original)throw TypeError('Original hook scope required')
+ const chain:{scope:object;ports:ScopePorts;fields:PropertyDescriptorMap}[]=[];for(let scope:object|null=context;scope;){const record=scopes.get(scope);if(!record)throw TypeError('Original ancestor hook scope required');chain.push({scope,...record});scope=record.ports.parent}
+ const checkScope=()=>{for(const {scope,fields}of chain)for(const key of ['on','waterfall','emit','parentScope'])if(Object.getOwnPropertyDescriptor(scope,key)?.value!==fields[key]?.value)throw TypeError('Original execution hook scope changed')}
+ const capture=()=>{checkScope();const expected=chain.map(({ports})=>events.map(event=>{const current=ports.surface(event);if(!current.compatible)throw Object.assign(Error('EXECUTION_HOOK_FULL_SESSION_REQUIRED'),{code:'EXECUTION_HOOK_FULL_SESSION_REQUIRED'});return current.version}));const surface=Object.freeze({});surfaces.set(surface,{channel,current(){checkScope();for(const [index,{ports}]of chain.entries())for(const [position,event]of events.entries())if(ports.surface(event).version!==expected[index]![position])throw Object.assign(Error('EXECUTION_HOOK_SURFACE_CHANGED'),{code:'EXECUTION_HOOK_SURFACE_CHANGED'})}});return surface}
+ const current=(surface:object)=>{const record=surfaces.get(surface);if(!record||record.channel!==channel)throw TypeError('Original execution hook surface required');record.current()}
+ const channel:ExecutionHookChannel=Object.freeze({context,capture(){if(this!==channel)throw TypeError('Original hook channel receiver required');return capture()},assertCurrent(surface:object){if(this!==channel)throw TypeError('Original hook channel receiver required');current(surface)},async emit(event:typeof events[number],payload:unknown,surface?:object){if(this!==channel||!events.includes(event))throw TypeError('Original lifecycle event required');const selected=surface??capture();current(selected);return original.emit(event,payload,()=>current(selected))}})
+ channels.set(channel,context);capture();return channel
+}

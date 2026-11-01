@@ -12,6 +12,9 @@ import type {PreparedConversationArchive} from '../conversation/restoration-type
 declare const executionIdentity:unique symbol
 /** Original constructor identity, never a Session, read candidate or DTO. */
 export interface ManagedExecutionIdentity {readonly [executionIdentity]:never}
+declare const executionDomain:unique symbol
+/** Exact original consumer context paired with its genuine producer. */
+export interface ManagedExecutionDomain {readonly [executionDomain]:never;readonly identity:ManagedExecutionIdentity;readonly owner:ManagedExecutionOwner;readonly context:object;readonly sessionId:string;assertCurrent():void}
 /** Internal producer protocol; ownership checks/drain are required here. */
 export interface ManagedExecutionOwner {
   ownsAction(action:object):boolean
