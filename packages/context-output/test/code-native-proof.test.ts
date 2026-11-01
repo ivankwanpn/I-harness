@@ -63,6 +63,8 @@ it.each([false,true])('requires the actual original native confirmation cleanup 
  const f=await fixture(),entered=Promise.withResolvers<void>(),gate=Promise.withResolvers<void>()
  await f.service.confirmResultOwner(f.scope,f.expected.ref)
  const historical=owner.captureConfirmedCodeManifest(f.service,f.scope,f.sink,f.expected)
+ const adapter=owner.captureOriginalCodeManifestAdapter(f.service,f.scope)
+ const receipt=owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)
  native.armed=true;native.fail=fail;native.entered=entered.resolve;native.gate=gate.promise;native.releases=0
  let confirming:Promise<void>|undefined
  try{
@@ -71,6 +73,8 @@ it.each([false,true])('requires the actual original native confirmation cleanup 
   expect(native.releases).toBe(1)
   expect(()=>owner.captureConfirmedCodeManifest(f.service,f.scope,f.sink,f.expected)).toThrow()
   expect(()=>owner.readConfirmedCodeManifest(f.service,historical)).toThrow()
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)).toThrow()
+  expect(owner.readCodeManifestConfirmationHistory(receipt)).toMatchObject(f.expected)
   gate.resolve()
   if(fail){
    await expect(confirming).rejects.toBe(false)
@@ -123,4 +127,25 @@ it('does not qualify a pending or falsey failed original confirmation', async ()
   await confirming
   expect(owner.readConfirmedCodeManifest(service,owner.captureConfirmedCodeManifest(service,scope,sink,expected))).toMatchObject(expected)
  } finally { fail=false; await service.close() }
+})
+
+it('retains detached confirmation history after original source expiry',async()=>{
+ let held=true;const f=await fixture(()=>{if(!held)throw Error('expired')})
+ try{
+  const adapter=owner.captureOriginalCodeManifestAdapter(f.service,f.scope)
+  expect(()=>owner.captureOriginalCodeManifestAdapter({...f.service},f.scope)).toThrow()
+  expect(()=>owner.captureOriginalCodeManifestAdapter(f.service,{...f.scope})).toThrow()
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)).toThrow()
+  await f.service.confirmResultOwner(f.scope,f.expected.ref)
+  const receipt=owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,{...f.sink},f.expected)).toThrow()
+  expect(owner.readCodeManifestConfirmationHistory(receipt)).toMatchObject(f.expected)
+  expect(()=>owner.captureCodeManifestConfirmation({...adapter},f.sink,f.expected)).toThrow()
+  expect(()=>owner.readCodeManifestConfirmationHistory({...receipt})).toThrow()
+  held=false
+  expect(()=>owner.captureCodeManifestConfirmation(adapter,f.sink,f.expected)).toThrow()
+  expect(owner.readCodeManifestConfirmationHistory(receipt)).toMatchObject(f.expected)
+  await f.service.close()
+  expect(owner.readCodeManifestConfirmationHistory(receipt)).toMatchObject(f.expected)
+ }finally{held=true;await f.service.close()}
 })
