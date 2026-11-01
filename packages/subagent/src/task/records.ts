@@ -7,7 +7,7 @@ export class TaskRecords {
   readonly #byIdentity = new Map<string, TaskRecord>()
   readonly #byChild = new Map<string, TaskRecord>()
   readonly #originalDelivery = new WeakMap<TaskRecord, TaskRecord['delivery']>()
-  protectSubmission(task: TaskRecord): void {
+  protectSubmission(task: TaskRecord, deferBirth = false): void {
     if (this.#originalDelivery.has(task)) return
     this.#originalDelivery.set(task, task.delivery)
     const freeze = (value: unknown): void => {
@@ -15,6 +15,7 @@ export class TaskRecords {
     }
     if (task.childBirth) freeze(task.childBirth)
     for (const key of ['id','parentSessionId','toolCallId','callEventSeq','agentPath','description','prompt','agent','timeCreated','childBirth'] as const) {
+      if (deferBirth && key === 'childBirth') continue
       Object.defineProperty(task, key, { value: task[key], enumerable: Object.hasOwn(task, key), writable: false, configurable: false })
     }
   }

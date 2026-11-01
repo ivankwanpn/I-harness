@@ -1,3 +1,5 @@
+import { bindPreparedTaskLaunchLeaf, type OriginalTaskCaller } from '@i-harness/core-tools/internal/task-caller'
+import { taskLaunchPortFor } from './task/launch-slots.ts'
 export { taskBodyPreview as childResultPreview, readTaskResultPage } from "./task/result.ts"
 export type { TaskResultStore, RetainedTaskResult, TaskResultBody, TaskResultPage, TaskResultPageArgs } from "./task/result.ts"
 export { createJobRegistry } from "./jobs.ts"
@@ -207,7 +209,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     void pending.then(() => { settlingDeliverySources = undefined }, () => { settlingDeliverySources = undefined })
     return pending
   }
+  let launchEntry: ReturnType<typeof bindPreparedTaskLaunchLeaf> | undefined
+  let launchTool: import('@i-harness/core-tools').Tool | undefined
   const taskOwner = createTaskRegistry({
+    ...(ownedTask ? { launchContext: { view: opts.parentSession, factOwner, context: ctx, sessionId: ownedTask.stateId } } : {}),
     results: opts.results,
     reportPolicy: opts.reportPolicy,
     ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
@@ -255,6 +260,19 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
+    ...(ownedTask ? { taskLaunchCallerFor(exec: import('@i-harness/core-tools').ToolExec) {
+      assertRuntimeWork()
+      if(opts.persist?.parentSessionId!==ownedTask.stateId)throw Error('Original task lineage parent mismatch')
+      if(!launchEntry||parentRegistry.get('spawn_agent')!==launchTool)throw Error('Original mounted task leaf unavailable')
+      const caller:OriginalTaskCaller|undefined=launchEntry.enter(exec)
+      if(!caller)throw Error('Original prepared task caller unavailable')
+      const args=caller.call.args as {fork_turns?:unknown;agent_type?:string}
+      if(args.fork_turns!==undefined&&args.fork_turns!=='none'||args.agent_type==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)return
+      if(caller.context.view!==opts.parentSession||caller.context.factOwner!==factOwner||caller.context.context!==ctx||caller.identity.parentSessionId!==ownedTask.stateId)throw Error('Foreign original task caller')
+      ownedTask.operations.assertTaskV3Parent(ownedTask.parent,ownedTask.stateId)
+      const role=roles.get(args.agent_type??'general');if(!role)throw Error('Original role unavailable')
+      return taskLaunchPortFor(taskOwner).admit(caller,role)
+    }} : {}),
     residentActivation: opts.residentActivation,
     createInstructionContext: opts.createInstructionContext,
     generationFactoryFor: opts.generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
@@ -310,7 +328,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // already has — makes registerSubagent idempotent for repeat mounts.
   for (const originalTool of tools) {
     const tool = ownedTask ? { ...originalTool, async execute(...args: Parameters<typeof originalTool.execute>) { await ready; tasks.assertReady(); return originalTool.execute(...args) } } : originalTool
-    if (!parentRegistry.get(tool.name)) parentRegistry.register(tool)
+    if (!parentRegistry.get(tool.name)) {
+      if(ownedTask&&tool.name==='spawn_agent'){launchTool=tool;launchEntry=bindPreparedTaskLaunchLeaf(tool,tool.execute)}
+      parentRegistry.register(tool)
+    }
   }
   // M26-D2: the notification drain. admit = the host-injected A-plan admission
   // (ParentInputAdmission — run.ts backs it with the real SessionExecutor's

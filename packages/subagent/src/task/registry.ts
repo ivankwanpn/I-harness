@@ -1,3 +1,6 @@
+import { observeColdExecutionWrites } from '../../../session-persistence/src/coordinator/cold-execution-writes.ts'
+import { managedExecutionStatus } from '../../../session-persistence/src/coordinator/managed-document.ts'
+import { createTaskLaunchPort, type TaskLaunchPort } from './launch-slots.ts'
 import { stageTaskRestore } from './restore-stage.ts'
 import { associateColdBindings, assertColdTaskAdmission } from './cold-bindings.ts'
 import { isOwnedTaskContext } from './owned-context.ts'
@@ -12,7 +15,16 @@ import { associateTaskSaveOwner } from './save-owner.ts'
 import { TaskRecords } from "./records.ts"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
+  let stopObserving: (()=>void)|undefined
+  let launchPort: TaskLaunchPort | undefined
   const ownedTask = opts.ownedTask
+  if(opts.launchContext){
+    if(!ownedTask||!isOwnedTaskContext(ownedTask))throw Error('Original task launch parent required')
+    const document=opts.launchContext.factOwner as import('@i-harness/session-persistence').ManagedDocument
+    ownedTask.operations.assertParentSession(ownedTask.operations.parent(document),ownedTask.stateId)
+    const view=Object.getOwnPropertyDescriptor(document,'view')
+    if(!view||!('value'in view)||view.value!==opts.launchContext.view||opts.launchContext.sessionId!==ownedTask.stateId)throw Error('Foreign task launch parent')
+  }
   type State = { records: TaskRecords; notifications: TaskNotifications; version: 1 | 2 | 3; phase: 'pending' | 'ready' | 'poisoned' | 'retired'; failure?: { cause: unknown } }
   let currentState: State = { records: new TaskRecords(), notifications: new TaskNotifications(), version: opts.results ? 2 : 1, phase: ownedTask ? 'pending' : 'ready' }
   let coldBindings: ReadonlySet<string> = new Set()
@@ -44,6 +56,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
 
   function snapshot(): TaskProtocolDocument {
     assertReady()
+    launchPort?.assertSnapshot()
     // A loaded literal 1 remains literal until a subsequent result-aware save.
     if (currentState.version === 1 && opts.results) currentState.version = 2
     return {
@@ -127,6 +140,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
 
   function terminalize(input: TaskTerminalizeInput): boolean {
     assertReady()
+    launchPort?.retireTask(input.taskId, new Error('Task terminalized'))
     const task = currentState.records.get(input.taskId)
     if (!settleTaskRecord(task, input, resultOwner)) return false
     announceTerminal(task)
@@ -189,6 +203,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const ready = ownedTask ? loadOwned() : Promise.resolve()
   void ready.catch(() => {})
   function retireOwnedLoad(): void {
+    launchPort?.retireAll(new Error('Task launch owner retired'))
     if (!ownedTask) return
     if (currentState.phase !== 'poisoned') currentState = { ...currentState, phase: 'retired' }
     controller.abort(); handoff?.abandon()
@@ -197,7 +212,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     ready,
     assertReady,
     retireOwnedLoad,
-    async closeOwnedLoad() { await ready.catch(() => {}); await cleanupLoad(); await persistence.retireConsumers(); await persistence.flush() },
+    async closeOwnedLoad() { launchPort?.retireAll(new Error('Original slot owner closed'));stopObserving?.();stopObserving=undefined;await ready.catch(() => {}); await cleanupLoad(); await launchPort?.close(); await persistence.retireConsumers(); await persistence.flush() },
     bindForegroundHandoff(taskId) {
       assertReady()
       const task = currentState.records.get(taskId)
@@ -246,7 +261,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     submit(input) {
       assertReady()
       if (input.identity.callEventSeq !== undefined || input.identity.toolCallId !== undefined) {
-        assertColdTaskAdmission(registry, currentState.records.getByIdentity(input.identity)?.id)
+        const existing=currentState.records.getByIdentity(input.identity)
+        assertColdTaskAdmission(registry, existing?.id)
+        if(existing&&launchPort?.inspect(existing.id))throw Error('Original warm task slot admission required')
       }
       const { record, inserted } = currentState.records.submit(input, maxConcurrency)
       if (currentState.version === 3) currentState.records.protectSubmission(record)
@@ -284,6 +301,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       let cancelled = 0
       for (const t of tree) {
         if (t.outcome !== undefined) continue
+        launchPort?.retireTask(t.id, new Error(error))
         settleTaskRecord(t, { taskId: t.id, outcome: 'cancelled', error }, resultOwner)
         taskIds.push(t.id)
         cancelled += 1
@@ -334,6 +352,25 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     save,
     flushPersistence: async () => { assertReady(); await persistence.flush() },
   }
+  if (ownedTask && opts.launchContext) launchPort = createTaskLaunchPort(registry, opts.launchContext, {
+    current(record) { assertReady();if(record&&currentState.records.get(record.id)!==record)throw Error('Original slot task replaced'); ownedTask.operations.assertTaskV3Parent(ownedTask.parent, opts.stateId!) },
+    insert: input => currentState.records.submit(input, maxConcurrency),
+    protect: record => currentState.records.protectSubmission(record, true),
+    accept(record) { const saving=save();publish(record);return saving },
+    bind(record,birth) {
+      assertReady();ownedTask.operations.assertTaskV3Parent(ownedTask.parent,opts.stateId!)
+      if(currentState.records.get(record.id)!==record||Object.hasOwn(record,'childBirth')||!Object.isExtensible(record))throw Error('Original warm task birth unavailable')
+      const captured=birth
+      const document=snapshot();document.formatVersion=3;document.tasks=document.tasks.map(task=>task.id===record.id?{...task,childBirth:captured}:task)
+      validateTaskDocument(document)
+      const freeze=(value:unknown):void=>{if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value)}};freeze(captured)
+      Object.defineProperty(record,'childBirth',{value:captured,enumerable:true,writable:false,configurable:false});currentState.version=3
+      return persistence.captureBindingSave()
+    },
+  })
+  if(ownedTask&&opts.launchContext)stopObserving=observeColdExecutionWrites(ownedTask.coordinator,id=>{
+    if(id===ownedTask.stateId&&managedExecutionStatus(opts.launchContext!.factOwner as import('@i-harness/session-persistence').ManagedDocument)==='retired')launchPort?.retireAll(new Error('Original task parent retired'))
+  })
   associateTaskSaveOwner(registry, persistence)
   associateColdBindings(registry, () => coldBindings)
   return registry

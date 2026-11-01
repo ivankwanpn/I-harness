@@ -20,8 +20,9 @@ export function spawnObservation(base: SpawnIdentity, task: TaskRecord) {
 
 /** Retains the original start disposition, publication identity and real end.
  * Passive outcome reads never join a still-running child. */
-export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void) {
+export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void, retainAction?: (action: ReturnType<FactOwner['beginAction']>) => void) {
   const action = owner.beginAction(signal)
+  retainAction?.(action)
   let start: CapturedActionFact<ProducerFactOutcome> | undefined
   let terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined
   let terminalEvent: Readonly<Extract<SessionEvent, { type: 'subagent/end' }>> | undefined

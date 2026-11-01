@@ -94,17 +94,29 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       // nothing durable: below this line the call submits a task record and
       // appends `subagent/start`, and a refusal that had already done that would
       // leave an accepted task with no child behind it.
-      const declared = declaredRoleModel(role, deps)
-      if (subagentModelSelectionGated(deps, declared)) throw subagentModelSelectionDisabled(role.name)
       const turns = parseForkTurns(args.fork_turns)
-      const delivery = args.background === false ? "tool" : "parent"
-      // M26-D1 三元 identity（exact-semantics 表）：callEventSeq 唯一；toolCallId 隨身。
       const identity: TaskIdentity = {
         parentSessionId: exec?.sessionId ?? deps.childSessions?.parentSessionId ?? "",
         ...(exec?.callEventSeq !== undefined ? { callEventSeq: exec.callEventSeq } : {}),
         ...(exec?.callId !== undefined ? { toolCallId: exec.callId } : {}),
       }
       assertInitialTaskAdmission(deps.tasks, identity)
+      const admitted=deps.taskLaunchCallerFor?.(exec)
+      if(admitted){
+        if(admitted.kind==='new')admitted.slot.start(()=>{
+          const declared=admitted.slot.captureSelection(()=>declaredRoleModel(admitted.slot.role,deps))
+          if(subagentModelSelectionGated(deps,declared))throw subagentModelSelectionDisabled(admitted.slot.role.name)
+          const retained=exec.retainOutcome?.()
+          admitted.slot.keep({async close(){retained?.unavailable()}})
+          const source=createSpawnSource(subagentFactOwner(deps.parentSession,deps.factOwner),exec.abortSignal,retained,args.background!==false,undefined,undefined,action=>admitted.slot.keep({async close(){action.finish()}}))
+          return {async close(){try{await source.releaseUnused()}finally{source.finish()}}}
+        })
+        return admitted.slot.flight
+      }
+      const declared=declaredRoleModel(role,deps)
+      if(subagentModelSelectionGated(deps,declared))throw subagentModelSelectionDisabled(role.name)
+      const delivery = args.background === false ? "tool" : "parent"
+      // M26-D1 三元 identity（exact-semantics 表）：callEventSeq 唯一；toolCallId 隨身。
       let unregisterDelivery: (() => void) | undefined
       const source = createSpawnSource(subagentFactOwner(deps.parentSession, deps.factOwner), exec.abortSignal, exec.retainOutcome?.(), args.background !== false,
         () => { unregisterDelivery?.(); deps.onTaskTerminalCommitted?.() }, deps.onTaskTerminalRecovery)
