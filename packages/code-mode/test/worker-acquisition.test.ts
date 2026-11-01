@@ -54,4 +54,3 @@ it.each(['constructor', 'attach'] as const)('records the original Worker acquisi
     expect(finalization.readOriginalWorkerAcquisition(handle)).toBe(mode==='constructor'?'not-acquired':'acquired')
   } finally { off();await runtime.dispose() }
 })
-
