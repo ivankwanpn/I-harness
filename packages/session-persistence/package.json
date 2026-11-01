@@ -13,6 +13,7 @@
     "./internal/retained-inspection": "./src/retained-inspection-internal.ts",
     "./internal/archive-read": "./src/archive-read-internal.ts",
     "./internal/artifact-path": "./src/artifact-path-internal.ts",
+    "./internal/native-fact-writer": "./src/native-fact-writer-internal.ts",
     "./internal/deletion-preparation": "./src/deletion-preparation-internal.ts",
     "./internal/project-binding-write": "./src/project-binding-write-internal.ts",
     "./internal/result-ordering": "./src/result-ordering-internal.ts"

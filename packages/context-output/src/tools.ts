@@ -51,8 +51,12 @@ export function createContextOutputTools(service: ContextOutputService, options?
         refId: { type: 'string', description: 'Opaque immutable context reference ID.' }, offset: { type: 'integer', minimum: 0 }, maxBytes: { type: 'integer', minimum: 1 },
         ref: managedRefSchema,
         viaCatalog: managedRefSchema,
-        cursor: { anyOf:[{ type: 'object', properties: { recordOffset: { type: 'integer', minimum: 0 }, sliceOffset: { type: 'integer', minimum: 0 } }, required: ['recordOffset', 'sliceOffset'], additionalProperties: false },
-          {type:'object',properties:{artifactId:{type:'string'},revision:{type:'string'},cellId:{type:'string'},sourceId:{type:'string'},offset:{type:'integer',minimum:0}},required:['artifactId','revision','cellId','sourceId','offset'],additionalProperties:false}] },
+        // The common tool schema supports objects, not union keywords. The
+        // original codec boundary below requires the exact matching cursor.
+        cursor: { type: 'object', description: 'Return the complete nextCursor unchanged. Exec frames use recordOffset and sliceOffset; Code output uses artifactId, revision, cellId, sourceId and offset. Do not mix the two shapes.', properties: {
+          recordOffset: { type: 'integer', minimum: 0 }, sliceOffset: { type: 'integer', minimum: 0 },
+          artifactId: { type: 'string' }, revision: { type: 'string' }, cellId: { type: 'string' }, sourceId: { type: 'string' }, offset: { type: 'integer', minimum: 0 },
+        }, additionalProperties: false },
         textView: { type: 'boolean' },
       }, additionalProperties: false },
       async execute(args, exec) {

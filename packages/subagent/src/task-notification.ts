@@ -1,6 +1,7 @@
 import type { TaskOutcome, TaskRegistry } from "./task-protocol.ts"
 import type { DeliveryAdmissionReceipt, DeliveryLaunchPreparation, InputDisplay, SubagentDeliveryEvidence, ProducerFactOutcome } from "@i-harness/core-session"
 import { boundedNotification, type ReportPolicy } from "./report-policy.ts"
+import { originalTaskSaveDependency, originalTaskAcknowledgmentRecovery } from './task/persistence.ts'
 
 /**
  * R-A1 (A-plan) 輸入接納契約 —— 本計畫（R-D2）消費的單一輸入接納面。
@@ -52,7 +53,7 @@ export class DeliverySourcesError extends AggregateError {
   constructor(errors: readonly unknown[]) {
     const original = errors.flatMap(error => error instanceof DeliverySourcesError ? error.errors : [error])
     super(original, 'Original delivery sources require settlement')
-    this.retryable = original.some(error => error instanceof OriginalTerminalRecoveryError)
+    this.retryable = original.some(error => error instanceof OriginalTerminalRecoveryError||originalTaskAcknowledgmentRecovery(error)!==undefined)
   }
 }
 
@@ -73,6 +74,7 @@ export function renderTaskNotification(state: TaskOutcome, taskId: string, descr
 }
 
 export interface NotificationDrainOptions {
+  current?:()=>boolean
   reconcileSources?: () => Promise<void>
   evidence?: (taskId: string) => { evidence: SubagentDeliveryEvidence; expectedInputId: string } | undefined
   reportPolicy?: ReportPolicy
@@ -102,13 +104,19 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
       const run = async () => {
         const failures: unknown[] = []
         try { await opts.reconcileSources?.() } catch (error) { failures.push(error) }
+        if(opts.current?.()===false){if(failures.length)throw failures[0];return 0}
         if (!opts.admit?.admitTaskDelivery || !opts.evidence) {
           if (failures.length) throw failures[0]
           return 0
         }
         let delivered = 0
         let changed = false
-        for (const n of opts.tasks.notifications()) {
+        let notifications:ReturnType<TaskRegistry['notifications']>
+        try { notifications=opts.tasks.notifications() } catch(readinessError) {
+          if(failures.length){const original=failures.flatMap(error=>error instanceof DeliverySourcesError?[...error.errors]:[error]);throw new DeliverySourcesError([...original,readinessError])}
+          throw readinessError
+        }
+        for (const n of notifications) {
           if (opts.tasks.get(n.submissionId)?.publication === 'unqualified') continue
           const candidate = n.status === "pending" || n.status === "error"
           if (!candidate) continue
@@ -165,7 +173,7 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
         // assert exactly one *.jsonl per store dir. Save only when a row moved.
         // Persist row observations before returning the original retry
         // disposition to the host. Save failure cannot hide receiver debt.
-        if (changed) try { await opts.tasks.save() } catch (error) { failures.push(error) }
+        if (changed) try { await opts.tasks.save() } catch (error) { const original=originalTaskSaveDependency(error);failures.push(original?original.cause:error) }
         if (failures.length === 1) throw failures[0]
         if (failures.length) throw new DeliverySourcesError(failures)
         return delivered

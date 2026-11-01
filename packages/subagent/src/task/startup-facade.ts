@@ -1,3 +1,4 @@
+import {forwardRequiredTaskRegistry} from './required-settlement.ts'
 import type { TaskRegistry } from './types.ts'
 import { associateTaskSaveFacade } from './save-owner.ts'
 import { forwardColdBindings } from './cold-bindings.ts'
@@ -28,5 +29,6 @@ export function createTaskStartupFacade(owner: TaskRegistry, assertWork: () => v
   }
   associateTaskSaveFacade(facade, owner)
   forwardColdBindings(facade, owner)
+  forwardRequiredTaskRegistry(facade,owner)
   return Object.freeze(facade)
 }

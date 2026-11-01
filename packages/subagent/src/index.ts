@@ -1,3 +1,5 @@
+import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
+import {forwardTableProjection} from './runtime-projection.ts'
 import { bindPreparedTaskLaunchLeaf, type OriginalTaskCaller } from '@i-harness/core-tools/internal/task-caller'
 import { taskLaunchPortFor } from './task/launch-slots.ts'
 export { taskBodyPreview as childResultPreview, readTaskResultPage } from "./task/result.ts"
@@ -144,6 +146,7 @@ export interface RegisterSubagentResult {
   flushPersistence(): Promise<void>
   drainParentNotifications(): Promise<void>
   settleParentDeliverySources(): Promise<void>
+  settleParentDeliveryJournalDebt(): Promise<void>
   dispose(): Promise<void>
   // M26-D1: the durable task protocol registry (records + notification
   // outbox) behind this mount. With persistence the ready chain already
@@ -197,7 +200,13 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // dirties the existing drain after host activation. Original terminal/task
   // commitment still supplies the decisive handoff signal.
   let notifDrainHook: (() => void) | undefined
-  const deliverySources = new Map<string, { reconcileTerminal(): Promise<void> }>()
+  const deliverySources = new Map<string, { reconcileTerminal(): Promise<void>;reconcileCapturedJournalDebt?():Promise<void> }>()
+  const journalSources=new WeakMap<object,{method:()=>Promise<void>}>()
+  let settlingDeliveryJournalDebt:Promise<void>|undefined
+  function settleParentDeliveryJournalDebt():Promise<void>{
+    if(settlingDeliveryJournalDebt)return settlingDeliveryJournalDebt
+    const pending=(async()=>{const rows=await Promise.allSettled([...deliverySources].map(async([id,source])=>{const original=journalSources.get(source);if(deliverySources.get(id)!==source||!original)return;const field=Object.getOwnPropertyDescriptor(source,'reconcileCapturedJournalDebt');if(!field||!('value'in field)||field.value!==original.method)throw new TypeError('Changed original journal source');await Reflect.apply(original.method,source,[])}));const errors=rows.flatMap(row=>row.status==='rejected'?[row.reason]:[]);if(errors.length)throw new DeliverySourcesError(errors)})();settlingDeliveryJournalDebt=pending;void pending.then(()=>{if(settlingDeliveryJournalDebt===pending)settlingDeliveryJournalDebt=undefined},()=>{if(settlingDeliveryJournalDebt===pending)settlingDeliveryJournalDebt=undefined});return pending
+  }
   let settlingDeliverySources: Promise<void> | undefined
   function settleParentDeliverySources(): Promise<void> {
     if (settlingDeliverySources) return settlingDeliverySources
@@ -257,6 +266,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
         }
         Object.defineProperty(facade, name, { value: method, enumerable: true })
       }
+      if(kind==='table')forwardTableProjection(facade as unknown as import('./agent-table.ts').AgentTable,()=>mountedRuntime.table)
       return facade
     }
     jobs = guarded('jobs', jobs, ['registerJob', 'updateJob', 'kill'])
@@ -317,6 +327,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     onTaskTerminalCommitted: () => { notifDrainHook?.() },
     onTaskTerminalRecovery: () => { opts.parentNotify?.wake(opts.persist?.parentSessionId ?? '') },
     registerDeliverySource(taskId, source) {
+      const journal=Object.getOwnPropertyDescriptor(source,'reconcileCapturedJournalDebt');if(journal){if(!('value'in journal)||typeof journal.value!=='function')throw new TypeError('Invalid original journal source');journalSources.set(source,{method:journal.value})}
       const original = deliverySources.get(taskId)
       if (original && original !== source) throw new Error('Original delivery source cannot be replaced')
       deliverySources.set(taskId, source)
@@ -348,6 +359,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // was cancelled (R-D3 opencode rule). One drain instance per mount; it is
   // activated only after the host publishes its actual receiver lane.
   const notifDrain = createNotificationDrain({
+    current:()=>!notificationsRetired&&(!opts.factOwner||managedExecutionStatus(opts.factOwner as ManagedDocument)!=='retired'),
     reconcileSources: settleParentDeliverySources,
     reportPolicy: opts.reportPolicy,
     tasks,
@@ -475,6 +487,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     followupGeneration: followupDepsWithRebuild(subagentDeps).openGeneration,
     ready, tasks,
     settleParentDeliverySources,
+    settleParentDeliveryJournalDebt,
     async drainParentNotifications() {
       if (notificationsRetired) return
       await ready

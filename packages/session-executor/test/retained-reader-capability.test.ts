@@ -1,16 +1,16 @@
 import { expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createContextOutputService } from '../../context-output/src/index.ts'
 import { createTaskRegistry, SHIPPING_REPORT_POLICY, taskDocKey, type TaskProtocolDocument } from '@i-harness/subagent'
 import { createTaskResultRetention } from '../src/lifecycle/task-result-retention.ts'
 
 async function retainedTask() {
-  const root = await mkdtemp(join(tmpdir(), 'task-reader-'))
-  let coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'task-reader-'))
+  let coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const service = createContextOutputService({ root: join(root, 'results'), workspaceId: 'w' })
   await coordinator.create({ sessionId: 'parent' })
   // A real captured source is what makes current-read authorization apply.
@@ -31,7 +31,7 @@ async function retainedTask() {
 
 it('distinguishes a real reader from an adapter object that has no ContextOutput service', async () => {
   const { root, revision } = await retainedTask()
-  let coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  let coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   let service: ReturnType<typeof createContextOutputService> | undefined
   try {
     const document = await coordinator.getDocument(taskDocKey('parent')) as TaskProtocolDocument
@@ -60,7 +60,7 @@ it('distinguishes a real reader from an adapter object that has no ContextOutput
 
 it('keeps the descriptor but refuses a revoked current reader', async () => {
   const { root, revision } = await retainedTask()
-  let coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  let coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const revoked = createContextOutputService({ root: join(root, 'results'), workspaceId: 'w', authorizeResult: async () => false })
   try {
     const document = await coordinator.getDocument(taskDocKey('parent')) as TaskProtocolDocument

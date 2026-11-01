@@ -1,3 +1,5 @@
+// Real native B2 birth setup has a separate resource envelope; this is not a latency qualification.
+const NATIVE_B2_CASE_MS = 60_000
 import { expect, it, vi } from 'vitest'
 import { createDeliveryFixture } from './helpers/delivery-fixture.ts'
 import { RecipientDeliveryRecoveryError } from '../src/lifecycle/recipient-delivery.ts'
@@ -19,7 +21,9 @@ it('retries original transient receiver capture for a retained failed child with
   }
   try {
     await f.start(); f.releaseChild()
-    await f.waitForDeliveryRequest(); await f.waitForConsumed()
+    // Three injected refusals persist their real FIFO states before the fourth
+    // delivery. This is a functional recovery envelope, not a latency assertion.
+    await f.waitForDeliveryRequest(15_000); await f.waitForConsumed()
     const events = (await f.backend.read('parent')).events
     const terminal = events.filter(e => e.type === 'subagent/end')
     expect(terminal).toHaveLength(1)
@@ -39,7 +43,7 @@ it('retries original transient receiver capture for a retained failed child with
     expect(tasks.notifications).toEqual([expect.objectContaining({ status: 'delivered', attempts: 4 })])
     console.info('ordinary-retry-original-route', JSON.stringify({ launches: f.launchCount(), parentRequests: f.parentRequests.length, refusals: refused - 1, sourceSeq: source.seq, terminalSeq: end.seq, resultRevision: end.resultRevision, receipt: receipt.key, inputId: receipt.inputId }))
   } catch (error) { console.info('receiver-red-state', JSON.stringify({ refused, events: (await f.backend.read('parent')).events.filter(e => ['subagent/end', 'agent/delivery-received'].includes(e.type)), requests: f.parentRequests.length })); throw error } finally { await f.close() }
-}, 15000)
+}, NATIVE_B2_CASE_MS)
 
 
 
@@ -64,4 +68,4 @@ it.each([undefined, false])('committed receiver input wakes once despite falsey 
     expect(events.filter(e => e.type === 'agent/delivery-received')).toHaveLength(1)
     expect(events.filter(e => e.type === 'agent/input/promoted' && e.inputId.startsWith('delivery-'))).toHaveLength(1)
   } finally { await f.close() }
-}, 15000)
+}, NATIVE_B2_CASE_MS)

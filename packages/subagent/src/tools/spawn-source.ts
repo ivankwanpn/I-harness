@@ -1,3 +1,7 @@
+import {registerOriginalSpawnRun,projectOriginalSpawnJob} from './source-run.ts'
+import {isInsideOriginalSettlementClose,captureOriginalSettlementCloseAck,managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
+import {bindRequiredTaskSettlement,type RequiredTaskSettlement} from '../task/required-settlement.ts'
+import type {TaskTerminalizeInput} from '../task/types.ts'
 import { committedFactSeqs, FactRecoveryRequiredError, type CapturedActionFact, type CapturedSettlementFact, type FactOwner, type ProducerFactOutcome, type SessionEvent, type SubagentDeliveryLaunchDraft } from '@i-harness/core-session'
 import type { RetainedOutcomeSink } from '@i-harness/core-tools'
 import type { TaskRecord } from '../task-protocol.ts'
@@ -21,6 +25,8 @@ export function spawnObservation(base: SpawnIdentity, task: TaskRecord) {
 /** Retains the original start disposition, publication identity and real end.
  * Passive outcome reads never join a still-running child. */
 export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void, retainUnused?: (cleanup: { close(): Promise<void> }) => void) {
+  let requiredTask:RequiredTaskSettlement|undefined,requiredRun:{project:import('../runtime-projection.ts').TerminalProjection;entry:import('../agent-table.ts').ChildAgentEntry;run:Promise<unknown>}|undefined
+  const producer=Promise.withResolvers<TaskTerminalizeInput>();let producerInput:TaskTerminalizeInput|undefined;
   const action = owner.beginAction(signal)
   let closeAcquired: (() => Promise<void>) | undefined
   let unused = false
@@ -40,6 +46,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   let taskSave: (() => Promise<void>) | undefined
   let saving: Promise<void> | undefined
   let taskSaved = false, terminalSaved = false, retainPublished = false
+  let sourceReleased=false
   let resultPublished = false
   let terminalSignalled = false
   let recoverySignalled = false, terminalOutcome: ProducerFactOutcome | undefined
@@ -51,13 +58,21 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   void terminalReady.promise.catch(() => {})
   let captureFailure: Readonly<{ cause: unknown; observedOutcome?: unknown }> | undefined
   let prepareEnd: (() => Promise<{ event: Extract<SessionEvent, { type: 'subagent/end' }>; output?: ReturnType<typeof spawnObservation> }>) | undefined
+  let requiredPrepareEnd:NonNullable<typeof prepareEnd>|undefined
   let preparingEnd: Promise<void> | undefined
   let terminalSettlement: Promise<void> | undefined
+
+  let localProjection:Promise<void>|undefined
+  const projectRequiredTerminal=()=>{
+    const pending=localProjection??=(async()=>{if(requiredTask){const original=await requiredTask.settle();requiredTask.assertProjectionCurrent();if(requiredRun)await requiredRun.project(original);else await projectOriginalSpawnJob(originalPublished,original);requiredTask.assertProjectionCurrent()}})()
+    void pending.catch(()=>{if(localProjection===pending)localProjection=undefined});return pending
+  }
 
   const prepareTerminal = async () => {
     if (terminal || !prepareEnd) return
     const pending = preparingEnd ??= (async () => {
       const prepared = await prepareEnd!()
+      await projectRequiredTerminal()
       terminalEvent ??= Object.freeze({ ...prepared.event })
       terminal ??= source.delivery.capture(terminalEvent)
       terminalOutput ??= prepared.output
@@ -89,7 +104,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     try { await pending } finally { if (saving === pending) saving = undefined }
   }
   const completed = () => {
-    if (terminalSaved && taskSaved && (handoff?.kind !== 'parent' || handoffReleased) && !terminalSignalled) {
+    if (terminalSaved && taskSaved && (!requiredTask||sourceReleased) && (handoff?.kind !== 'parent' || handoffReleased) && !terminalSignalled) {
       terminalSignalled = true
       try { onTerminalCommitted?.() } catch { /* Observers cannot replace the original outcome. */ }
     }
@@ -110,12 +125,12 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   const settleTerminalOnce = async () => {
     await prepareTerminal()
     if (captureFailure || !terminal) throw Object.assign(new FactRecoveryRequiredError(), { cause: captureFailure })
-    const results = await Promise.allSettled([
-      terminalSaved ? Promise.resolve() : terminal.reconcile().then(outcome => { terminalOutcome = outcome; committedFactSeqs(outcome); terminalSaved = true }),
-      saveTask(),
-    ])
+    // The original Task acknowledgment is a prerequisite of first end issuance.
+    await saveTask()
+    const results=await Promise.allSettled([terminalSaved?Promise.resolve():terminal.reconcile().then(outcome=>{terminalOutcome=outcome;committedFactSeqs(outcome);terminalSaved=true})])
     const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
     if (errors.length) throw terminalFailure(errors)
+    if(requiredTask)await requiredTask.release()
     completed()
   }
   const settleTerminal = () => {
@@ -124,11 +139,14 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     return pending
   }
   const source = action.registerSettlementSource(async () => {
-    if (!unused) await settleTerminal()
+    if (!unused) {if(requiredTask){prepareEnd??=requiredPrepareEnd;if(!producerInput)requiredRun?.entry.controller.abort()}await settleTerminal()}
   }, reconcileStart)
+  const originalSourceClose=source.close.bind(source)
+  const originalCloseAck=captureOriginalSettlementCloseAck(source)
+  if(originalCloseAck)void originalCloseAck.then(()=>{sourceReleased=true;completed()}).catch(cause=>{captureFailure=Object.freeze({cause})})
   let closing: Promise<void> | undefined
   const closeSource = () => {
-    const pending = closing ??= source.close()
+    const pending = closing ??= originalSourceClose().then(async()=>{if(originalCloseAck)await originalCloseAck;sourceReleased=true;completed()})
     void pending.catch(() => { if (closing === pending) closing = undefined })
     return pending
   }
@@ -138,8 +156,30 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     if (terminal || prepareEnd) await settleTerminal()
     publishResult()
   })
-  return {
+  const result = {
+    async bindRequiredTask(registry:TaskRegistry,task:TaskRecord) {
+      requiredTask=await bindRequiredTaskSettlement(registry,task,source,async()=>{const input=await producer.promise;if(!requiredRun){if(published||input.outcome==='completed')throw Error('Original required run unavailable')}else if(requiredRun.entry.path!==task.agentPath)throw Error('Original required run replaced');return input})
+      if(requiredTask){taskSave=async()=>{await requiredTask!.settle()};requiredPrepareEnd=async()=>{const settled=await requiredTask!.settle();return {event:{type:'subagent/end',version:1,taskId:task.id,outcome:settled.outcome!,...(settled.result?.kind==='retained'?{envelope:settled.result.envelope,resultRevision:settled.result.revision}:{}),...(settled.resultText!==undefined?{resultText:settled.resultText}:{}),...(settled.error!==undefined?{error:settled.error}:{})},...(base?{output:spawnObservation(base,settled as TaskRecord)}:{})}}}
+    },
+    hasRequiredTask(){return requiredTask!==undefined},
+    async terminalizeOriginal(input:TaskTerminalizeInput){
+      if(!requiredTask)return undefined;if(!producerInput){producerInput=Object.freeze({...input});producer.resolve(producerInput)}prepareEnd??=requiredPrepareEnd
+      try{return await requiredTask.settle()}catch(cause){const recovery=requiredTask.acknowledgmentRecovery(cause);if(recovery&&!recoverySignalled&&managedExecutionStatus(owner as import('@i-harness/session-persistence').ManagedDocument)!=='retired'){recoverySignalled=true;try{onTerminalRecovery?.()}catch{}}throw recovery??cause}
+    },
+    async reconcileCapturedJournalDebt(){
+      if(this!==result)throw new TypeError('Foreign original journal source')
+      if(!terminal||terminalSaved)return
+      if(isInsideOriginalSettlementClose(source))throw new FactRecoveryRequiredError()
+      source.assertHeld()
+      let outcome=await terminal.observe()
+      if(outcome.kind==='unknown'||outcome.kind==='recovery-required')outcome=await terminal.reconcile()
+      terminalOutcome=outcome
+      try{committedFactSeqs(outcome);terminalSaved=true}catch(cause){if(outcome.kind==='unknown'||outcome.kind==='recovery-required')throw new OriginalTerminalRecoveryError(outcome,cause);throw cause}
+    },
     async reconcileTerminal() {
+      // The original close already owns its retained cleanup driver. Joining
+      // that same close from its own drain would wait on this invocation.
+      if (isInsideOriginalSettlementClose(source)) return
       if (handoffConsumerPending) return
       if (handoff?.kind === 'parent' && !handoffAcknowledged) {
         await handoff.save.retry(); handoff.save.assertHandoff(); handoff.save.release(); handoffAcknowledged = true; handoffReleased = true
@@ -147,7 +187,15 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       if (handoff?.kind === 'parent' && handoffAcknowledged && !handoffReleased) { handoff.save.assertHandoff(); handoff.save.release(); handoffReleased = true }
       // Resume the retained preparation owned by this original invocation. Its
       // registry consumer retries the exact captured save before end capture.
-      if (terminalSaved && taskSaved) { completed(); return }
+      if (terminalSaved && taskSaved) { if(requiredTask){await requiredTask.release();await closeSource()}completed(); return }
+      // Discovery can retry an existing terminal capture. It cannot start or
+      // join nonterminal body/Task preparation; explicit close owns that debt.
+      if (requiredTask && !terminal) {
+        let recovered:Readonly<TaskRecord>|undefined
+        try{recovered=await requiredTask.recoverCapturedAcknowledgment()}catch(cause){throw requiredTask.acknowledgmentRecovery(cause)??cause}
+        if(!recovered)return
+        await settleTerminal();terminalReady.resolve();await closeSource();return
+      }
       if (!terminal && prepareEnd) {
         if (terminalSettlement) try { await terminalSettlement } catch { /* Resume the same preparation below. */ }
         await settleTerminal(); terminalReady.resolve(); await closeSource(); return
@@ -156,7 +204,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       source.assertHeld()
       if (terminalSettlement) {
         try { await terminalSettlement } catch { /* Reconcile the same captured terminal and save below. */ }
-        if (terminalSaved && taskSaved) { completed(); return }
+        if (terminalSaved && taskSaved) { if(requiredTask){await requiredTask.release();await closeSource()}completed(); return }
       }
       let outcome = await terminal.observe()
       if (outcome.kind === 'unknown' || outcome.kind === 'recovery-required') outcome = await terminal.reconcile()
@@ -213,7 +261,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       try { retained?.observed() } catch (cause) { captureFailure = Object.freeze({ cause, observedOutcome: published }) }
     },
     hasPublished() { return published !== undefined },
-    assertLaunch() { action.assertOpen() },
+    assertLaunch() { if(result.published!==originalPublished)throw new FactRecoveryRequiredError();action.assertOpen() },
     settlementHeld() { try { source.assertHeld(); return true } catch { return false } },
     identity,
     async releaseUnused() { unused = true; await closeSource() },
@@ -223,6 +271,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       action.assertOpen()
     },
     async end(event: Extract<SessionEvent, { type: 'subagent/end' }>, output?: ReturnType<typeof spawnObservation>) {
+      await projectRequiredTerminal()
       terminalEvent ??= Object.freeze({ ...event })
       terminal ??= source.delivery.capture(terminalEvent)
       terminalOutput ??= output
@@ -254,4 +303,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     },
     finish() { action.finish() },
   }
+  const originalPublished=result.published
+  registerOriginalSpawnRun(result.published,()=>requiredTask!==undefined,(entry,run,project)=>{if(requiredRun)throw Error('Original spawn run replaced');requiredRun={entry,run,project}},()=>requiredTask!.assertProjectionCurrent(),projectRequiredTerminal)
+  return result
 }

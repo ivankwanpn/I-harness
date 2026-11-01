@@ -22,7 +22,7 @@ export interface SubagentToolDeps extends RoleModelHost {
   notificationNamespace?: string
   onTaskTerminalCommitted?: () => void
   onTaskTerminalRecovery?: () => void
-  registerDeliverySource?(taskId: string, source: { reconcileTerminal(): Promise<void> }): () => void
+  registerDeliverySource?(taskId: string, source: { reconcileTerminal(): Promise<void>;reconcileCapturedJournalDebt?():Promise<void> }): () => void
   reportPolicy?: ReportPolicy
   table: AgentTable
   jobs: JobRegistry
