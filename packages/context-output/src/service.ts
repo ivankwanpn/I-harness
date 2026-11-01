@@ -16,6 +16,17 @@ import type { IndexedLegacyContext } from './legacy/index-lifecycle.ts'
 import { commitment } from './legacy/fork-codec.ts'
 import type { LegacyReadObservation, LegacyReadQuery, LegacySearchQuery } from './legacy/fork-types.ts'
 import { createSelectedMetadata } from './legacy/selected-metadata.ts'
+import type { createSeedDependencyTransfer } from './artifact/bootstrap-transfer.ts'
+
+type ColdManagedOwner = Pick<ReturnType<typeof createSeedDependencyTransfer>, 'acquireColdManagedQualification' | 'revokeColdTransfers'>
+const coldManagedOwners = new WeakMap<ContextOutputService, ColdManagedOwner>()
+export function acquireColdManagedQualification(service: ContextOutputService, ...args: Parameters<ColdManagedOwner['acquireColdManagedQualification']>) {
+  const original = coldManagedOwners.get(service); if (!original) throw Error('Original context service required')
+  return original.acquireColdManagedQualification(...args)
+}
+export function revokeColdManagedQualifications(service: ContextOutputService, ids?: readonly string[]) {
+  const original = coldManagedOwners.get(service); if (!original) throw Error('Original context service required'); original.revokeColdTransfers(ids)
+}
 
 const artifactSettlement=new WeakMap<ContextOutputService,(scope:SeedDependencyTransferScope)=>Promise<void>>()
 export function settleSeedDependencyTransferIO(service:ContextOutputService,scope:SeedDependencyTransferScope){const settle=artifactSettlement.get(service);if(!settle)throw Error('Original artifact service required');return settle(scope)}
@@ -46,6 +57,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes, owner)
   let unsubscribeDeletions: (() => void) | undefined
   const releaseDocuments = async (documents: readonly string[]) => {
+    artifacts.revokeColdTransfers(documents)
     for(const reader of selectedReaders)if(documents.includes(selectedReaderIds.get(reader)!))reader.revoke()
     for (const id of documents) legacy.retire(id)
     const managed = artifacts.releaseDocuments(documents)
@@ -411,6 +423,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     async clear(sessionId) {
       if (closed || closing) throw new Error('Context output is closed')
       if (sessionId !== undefined) identity(sessionId, 'sessionId')
+      artifacts.revokeColdTransfers(sessionId === undefined ? undefined : [sessionId])
       for(const reader of selectedReaders)if(sessionId===undefined||selectedReaderIds.get(reader)===sessionId)reader.revoke()
       legacy.retire(sessionId)
       await cleanupTransition([sessionId], async () => {
@@ -453,6 +466,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     },
   }
   artifactSettlement.set(service,artifacts.settleSeedDependencyTransfer)
+  coldManagedOwners.set(service, { acquireColdManagedQualification(...args) { assertOpen(); return artifacts.acquireColdManagedQualification(...args) }, revokeColdTransfers: artifacts.revokeColdTransfers })
   selectedLegacyOwners.set(service,legacy.selected)
   selectedMetadataOwners.set(service,{cleanupForError(error){for(const debt of selectedAcquisitionDebts)if(debt.failure===error)return debt.cleanup;for(const reader of selectedReaders){const cleanup=reader.cleanupForError(error);if(cleanup)return cleanup}},async acquire(observation){
     assertOpen()

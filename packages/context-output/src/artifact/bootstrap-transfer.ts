@@ -1,7 +1,8 @@
 import { createArtifactQualificationIO, type ArtifactQualificationIO } from './qualification-io.ts'
 import { mkdir } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { canonicalJsonData, type BootstrapDependencyRequest, type BootstrapDependencyOutcome, type ManagedArtifactRef } from '@i-harness/core-session'
+import { canonicalJsonData, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, type BootstrapDependencyRequest, type BootstrapDependencyOutcome, type ManagedArtifactRef } from '@i-harness/core-session'
+import { failuresTogether, type WorkspaceMutationCleanup } from '../workspace-mutation.ts'
 import type { ContextAccess, ContextOutputOptions } from '../types.ts'
 import { confirmAtomicJson, continueAtomicJson, createAtomicJsonPublication, ownedPath, type ImmutableMetadataOutcome } from './io.ts'
 import { createDependencyMembership, validTransferMembership, type TransferMembership } from './dependency-membership.ts'
@@ -15,12 +16,13 @@ import { captureHost, captureRequest, captureTarget, TransferBlocked, type SeedD
 import { canonicalCompare, createTransferClosure } from './transfer-closure.ts'
 export type { SeedDependencyHostAccess, SeedDependencyTransferBinding, SeedDependencyTransferScope } from './transfer-codec.ts'
 
-interface Registration { io:ArtifactQualificationIO; access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
+interface Registration { passiveOnly?: boolean; io:ArtifactQualificationIO; access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
+export interface ColdManagedQualification { qualify(): Promise<void>; sealWhileActive(): void; settle(): Promise<void>; assertSettledCurrent(): void; revoke(): void; close(): Promise<void> }
 interface SourceRelation { ref: ManagedArtifactRef; viaCatalog?: ManagedArtifactRef }
 interface Publication { path: string; value: ArtifactPin | TransferMembership | { version: 1; sessionId: string; revision: string; pinId: string }; relations: Set<SourceRelation> }
 export function createSeedDependencyTransfer(deps: {
   root: string; options: ContextOutputOptions; directory(id: string): string; quota(): number;
-  mutate<T>(work: () => Promise<T>): Promise<T>;
+  mutate<T>(work: () => Promise<T>, retain?: (cleanup: WorkspaceMutationCleanup) => void): Promise<T>;
   available(document: string): boolean;
   authorized(access: ContextAccess, ref: ManagedArtifactRef, viaCatalog?: ManagedArtifactRef, verifyOriginalCatalog?: boolean): Promise<ArtifactOperation>;
   membership: ReturnType<typeof createDependencyMembership>;
@@ -30,6 +32,7 @@ export function createSeedDependencyTransfer(deps: {
   // Original publication IO cleanup only; this collection grants no authority.
   const qualificationIO = new Set<ArtifactQualificationIO>()
   const publicationIO = new Set<ReturnType<typeof createAtomicJsonPublication>>()
+  const coldQualifications = new Set<{ ids: readonly string[]; revoke(): void; close(): Promise<void> }>()
   // The WeakMap scope retains identity. Only active/debt IO needs strong cleanup ownership.
   function retireEmptyQualification(io:ArtifactQualificationIO){try{io.assertSettled();qualificationIO.delete(io)}catch{/* original active cleanup debt stays reachable */}}
   async function settleQualification(io:ArtifactQualificationIO){qualificationIO.add(io);try{await io.settle()}finally{retireEmptyQualification(io)}}
@@ -43,11 +46,12 @@ export function createSeedDependencyTransfer(deps: {
   function metadataOutcome(result: ImmutableMetadataOutcome): void {
     if (result.kind !== 'confirmed') throw new TransferBlocked(result.kind === 'conflict' ? 'conflict' : result.kind === 'absent' || result.kind === 'not-issued' ? 'unavailable' : 'unknown')
   }
-  function invoke(scope: SeedDependencyTransferScope, input: BootstrapDependencyRequest, caller: (() => boolean) | undefined): Promise<BootstrapDependencyOutcome> {
+  function invoke(scope: SeedDependencyTransferScope, input: BootstrapDependencyRequest, caller: (() => boolean) | undefined, retain?: (cleanup: WorkspaceMutationCleanup) => void): Promise<BootstrapDependencyOutcome> {
     let registration: Registration, request: BootstrapDependencyRequest
     try {
       const held = scopes.get(scope); if (!held) throw new TransferBlocked('unavailable')
-      registration = held; request = captureRequest(input, held.access.binding)
+      if (held.passiveOnly && caller !== undefined) throw new TransferBlocked('policy')
+      registration = held; request = captureRequest(input, held.access.binding, held.passiveOnly)
       const encoded = canonicalJsonData(request)
       if (held.request !== undefined && held.request !== encoded) throw new TransferBlocked('conflict')
       held.request ??= encoded
@@ -213,16 +217,73 @@ export function createSeedDependencyTransfer(deps: {
         // No source callbacks in PASSIVE. NEW must renew all direct and via
         // relations after the last publication/integrity await before success.
         await renew(sourceRelations.values())
-        registration.io.assertSettled();check(); return { kind: 'confirmed', closureDigest: closure.finish() }
+        registration.io.assertSettled();check(); return { kind: 'confirmed', closureDigest: request.artifacts.length ? closure.finish() : EMPTY_SEMANTIC_DEPENDENCY_DIGEST }
       } catch (cause) {
         return { kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : (cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT' ? 'unavailable' : 'unknown' }
       } finally {retireEmptyQualification(registration.io)}
-    })
+    }, retain)
   }
-  return { registerSeedDependencyTransfer,
-    closeTransferAdmission(){qualificationClosing=true},
+  function acquireColdManagedQualification(access: SeedDependencyHostAccess, input: BootstrapDependencyRequest, expectedClosure: string): ColdManagedQualification {
+    if (qualificationClosing || !/^[a-f0-9]{64}$/.test(expectedClosure)) throw Error('Cold managed qualification unavailable')
+    const scope = registerSeedDependencyTransfer(access), registration = scopes.get(scope)!
+    registration.passiveOnly = true
+    const request = captureRequest(input, registration.access.binding, true), encoded = canonicalJsonData(request)
+    let qualified = false, sealed = false, settled = false, closed = false, target: string | undefined
+    let qualification: Promise<void> | undefined, settlement: Promise<void> | undefined, closing: Promise<void> | undefined
+    const turns: WorkspaceMutationCleanup[] = []
+    const independent = () => {
+      if (closed || qualificationClosing || registration.revoked || scopes.get(scope) !== registration || !deps.available(request.targetSessionId) || !deps.available(registration.access.binding.targetDocumentId)) throw Error('Cold managed qualification revoked')
+      if (registration.request !== encoded || target !== registration.target) throw Error('Cold managed registration changed')
+    }
+    const cleanup = async () => {
+      const failures: unknown[] = []
+      try { await settleQualification(registration.io) } catch (failure) { failures.push(failure) }
+      for (const turn of turns) try { await turn.close(); turn.assertSettled() } catch (failure) { failures.push(failure) }
+      failuresTogether(failures, 'Cold managed original cleanup unresolved')
+    }
+    const record = { ids: [request.targetSessionId, registration.access.binding.targetDocumentId], revoke() { registration.revoked = true }, close: () => handle.close() }
+    const handle: ColdManagedQualification = Object.freeze({
+      qualify() {
+        if (this !== handle) throw TypeError('Invalid cold managed receiver')
+        if (qualification) return qualification
+        if (closed || registration.revoked || qualificationClosing) return Promise.reject(Error('Cold managed qualification revoked'))
+        qualification = invoke(scope, request, undefined, turn => { turns.push(turn) }).then(outcome => {
+          if (outcome.kind !== 'confirmed' || outcome.closureDigest !== expectedClosure) throw Error('Cold managed closure unavailable')
+          qualified = true
+        }); void qualification.catch(() => {}); return qualification
+      },
+      sealWhileActive() {
+        if (this !== handle || !qualified || closed || registration.revoked || qualificationClosing) throw Error('Cold managed qualification unverified')
+        registration.access.assertTargetCurrent()
+        if (captureTarget(registration.access.targetScope()) !== registration.target) throw Error('Cold managed target changed')
+        target = registration.target; independent(); sealed = true
+      },
+      settle() {
+        if (this !== handle) throw TypeError('Invalid cold managed receiver')
+        if (settlement) return settlement
+        const flight = (async () => { if (!qualification) throw Error('Cold managed qualification unused'); await qualification; if (!sealed) throw Error('Cold managed qualification unsealed'); await cleanup(); independent(); settled = true })()
+        settlement = flight; void flight.finally(() => { if (settlement === flight) settlement = undefined }).catch(() => {}); return flight
+      },
+      assertSettledCurrent() {
+        if (this !== handle || !qualified || !sealed || !settled || settlement || closing) throw Error('Cold managed qualification unsettled')
+        independent(); registration.io.assertSettled(); for (const turn of turns) turn.assertSettled()
+      },
+      revoke() { if (this !== handle) throw TypeError('Invalid cold managed receiver'); record.revoke() },
+      close() {
+        if (this !== handle) throw TypeError('Invalid cold managed receiver')
+        if (closed) return Promise.resolve(); if (closing) return closing
+        record.revoke()
+        const flight = (async () => { await qualification?.catch(() => {}); await settlement?.catch(() => {}); await cleanup(); closed = true; coldQualifications.delete(record) })()
+        closing = flight; void flight.finally(() => { if (closing === flight) closing = undefined }).catch(() => {}); return flight
+      },
+    })
+    coldQualifications.add(record); return handle
+  }
+  return { registerSeedDependencyTransfer, acquireColdManagedQualification,
+    revokeColdTransfers(ids?: readonly string[]) { for (const record of coldQualifications) if (!ids || record.ids.some(id => ids.includes(id))) record.revoke() },
+    closeTransferAdmission(){qualificationClosing=true;for(const record of coldQualifications)record.revoke()},
     settleSeedDependencyTransfer(scope:SeedDependencyTransferScope){const registration=scopes.get(scope);if(!registration)throw Error('Original artifact transfer scope required');return deps.mutate(()=>settleQualification(registration.io))},
-    async closeTransfers() { const results=await Promise.allSettled([...qualificationIO].map(settleQualification).concat([...publicationIO].map(original=>original.close())));const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(failures.length)throw new AggregateError(failures,'Original transfer IO cleanup failed') },
+    async closeTransfers() { const results=await Promise.allSettled([...coldQualifications].map(record=>record.close()).concat([...qualificationIO].map(settleQualification),[...publicationIO].map(original=>original.close())));const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(failures.length)throw new AggregateError(failures,'Original transfer IO cleanup failed') },
     confirmSeedDependencies: (scope: SeedDependencyTransferScope, request: BootstrapDependencyRequest, current: () => boolean): Promise<BootstrapDependencyOutcome> => typeof current === 'function' ? invoke(scope, request, current) : Promise.resolve({ kind: 'blocked', reason: 'conflict' }),
     reconcileSeedDependencies: (scope: SeedDependencyTransferScope, request: BootstrapDependencyRequest) => invoke(scope, request, undefined) }
 }

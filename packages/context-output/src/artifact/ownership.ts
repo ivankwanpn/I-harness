@@ -16,7 +16,7 @@ import { confirmArtifactOwner, type OwnerConfirmation } from './owner-confirmati
 import { createDependencyMembership, dependencyEntries, sameArtifactRef, type DependencyRegistration } from './dependency-membership.ts'
 import { createSeedDependencyTransfer } from './bootstrap-transfer.ts'
 import { TransferBlocked } from './transfer-codec.ts'
-import { failuresTogether, type WorkspaceMutationOwner } from '../workspace-mutation.ts'
+import { failuresTogether, type WorkspaceMutationOwner, type WorkspaceMutationCleanup } from '../workspace-mutation.ts'
 
 export function createArtifactOwnership(options: ContextOutputOptions, quota: () => number, mutations: WorkspaceMutationOwner) {
   const root = resolve(options.root, 'context-output', sha(options.workspaceId)), managed = resolve(root, 'managed-v1')
@@ -28,8 +28,8 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
   const writers = new Set<OwnedArtifactSink>()
   const directory = (id: string) => { if (!/^ctxv1_[a-f0-9]{64}$/.test(id)) throw new Error('Artifact reference unavailable'); return resolve(managed, id) }
   const membership = createDependencyMembership(root, options.workspaceId, directory, quota)
-  const mutate = <T>(work: () => Promise<T>): Promise<T> => closing || closed
-    ? Promise.reject(new Error('Artifact owner closed')) : mutations.mutate(work)
+  const mutate = <T>(work: () => Promise<T>, retain?: (cleanup: WorkspaceMutationCleanup) => void): Promise<T> => closing || closed
+    ? Promise.reject(new Error('Artifact owner closed')) : mutations.mutate(work, retain)
   function registerResultScope(owner: ArtifactOwner, current: () => boolean): ResultArtifactScope {
     if (closing || closed || deletedDocuments.has(owner.sessionId) || deletedDocuments.has(owner.documentId ?? owner.sessionId)) throw new Error('Artifact source closed or deleted')
     identity(owner.operationId, 'operationId'); identity(owner.sessionId, 'sessionId'); identity(owner.callId, 'callId')

@@ -5,7 +5,7 @@ import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { inspectSelectedTarget } from '@i-harness/session-persistence/internal/selected-source-owner'
 import { canonicalJsonData } from '@i-harness/core-session'
 import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
-import { acquireSelectedMetadata as acquireCoreSelectedMetadata, selectedMetadataCleanupFor,selectedLegacyTransferFor } from '../../../context-output/src/service.ts'
+import { acquireSelectedMetadata as acquireCoreSelectedMetadata, selectedMetadataCleanupFor,selectedLegacyTransferFor, acquireColdManagedQualification as acquireCoreColdManagedQualification, revokeColdManagedQualifications } from '../../../context-output/src/service.ts'
 
 type ServiceOptions = Parameters<typeof createContextOutputService>[0]
 type Policy = Omit<ServiceOptions, 'authorizeResult'> & {
@@ -91,5 +91,9 @@ export function createProcessAwareResultService(policy: Policy) {
     const owner=selectedLegacyTransferFor(service),scope=owner.register(capture)
     return Object.freeze({assertCurrent:()=>owner.assertCurrent(scope),confirm:()=>owner.confirm(scope),reconcile:()=>owner.reconcile(scope),close:()=>owner.closeScope(scope)})
   }
-  return { service, acquireSelectedLegacyTransfer, withPage: bridge.withPage.bind(bridge), acquireSelectedMetadata, selectedMetadataCleanupFor:(error:unknown)=>selectedMetadataCleanupFor(service,error), retireBridge() { retired = true } }
+  const acquireColdManagedQualification = (...args: Parameters<typeof acquireCoreColdManagedQualification> extends [unknown, ...infer A] ? A : never) => {
+    if (retired) throw Error('Original result service retired')
+    assertMethods(); return acquireCoreColdManagedQualification(service, ...args)
+  }
+  return { service, acquireColdManagedQualification, acquireSelectedLegacyTransfer, withPage: bridge.withPage.bind(bridge), acquireSelectedMetadata, selectedMetadataCleanupFor:(error:unknown)=>selectedMetadataCleanupFor(service,error), retireBridge() { retired = true; revokeColdManagedQualifications(service) } }
 }

@@ -7,6 +7,23 @@ import { createWorkspaceMutationOwner, type WorkspaceMutationTurn } from '../src
 import { ContextStore } from '../src/store.ts'
 import { createLegacyUseGate } from '../src/legacy/use-gate.ts'
 
+it.each([false, true])('registers exact finite turn cleanup before acquisition without reacquiring (consumed=%s)', async consumed => {
+  const root = await mkdtemp(resolve(tmpdir(), 'workspace-exact-')), owner = createWorkspaceMutationOwner({ root, workspaceId: 'w' })
+  const acquire = locking.acquireSessionLock; let original: locking.SessionLock | undefined, cleanup: any, releases = 0
+  const spy = vi.spyOn(locking, 'acquireSessionLock').mockImplementation(async options => {
+    expect(cleanup).toBeDefined(); expect(() => cleanup.assertSettled()).toThrow()
+    const lease = original = await acquire(options)
+    return { get held() { return lease.held }, async release() { releases++; if (releases === 1) { if (consumed) await lease.release(); throw undefined }; await lease.release() } }
+  })
+  try {
+    await expect((owner.mutate as any)(async () => 1, (original: any) => { cleanup = original })).rejects.toBeUndefined()
+    expect(cleanup).toBeDefined(); expect(() => cleanup.assertSettled()).toThrow()
+    if (consumed) { await expect(cleanup.close()).rejects.toBeUndefined(); expect(() => cleanup.assertSettled()).toThrow(); expect(releases).toBe(1) }
+    else { await cleanup.close(); cleanup.assertSettled(); expect(releases).toBe(2) }
+    expect(spy).toHaveBeenCalledTimes(1)
+  } finally { spy.mockRestore(); await original?.release(); await owner.close().catch(() => {}); await rm(root, { recursive: true, force: true }) }
+})
+
 it('requires actual owner tokens, expires them, and rejects own-tail waits/reentry promptly', async () => {
   const root = await mkdtemp(resolve(tmpdir(), 'workspace-turn-'))
   const owner = createWorkspaceMutationOwner({ root, workspaceId: 'w' }), foreign = createWorkspaceMutationOwner({ root, workspaceId: 'other' })

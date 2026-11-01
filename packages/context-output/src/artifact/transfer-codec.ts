@@ -63,11 +63,11 @@ export function validOwner(value: unknown): value is ArtifactOwner {
 }
 /** Same closed artifact/use/address rules as the seed codec. The request has
  * no origin table or groups, so it cannot claim to validate the whole seed. */
-export function captureRequest(value: BootstrapDependencyRequest, binding: SeedDependencyTransferBinding): BootstrapDependencyRequest {
+export function captureRequest(value: BootstrapDependencyRequest, binding: SeedDependencyTransferBinding, allowEmpty = false): BootstrapDependencyRequest {
   fields(value, ['operationId', 'targetSessionId', 'manifestDigest', 'sourceSessionId', 'artifacts'])
   if (!isMetadataData(value)) throw new TransferBlocked('conflict')
   for (const key of ['operationId', 'targetSessionId', 'manifestDigest', 'sourceSessionId'] as const) if (value[key] !== binding[key]) throw new TransferBlocked('conflict')
-  if (!Array.isArray(value.artifacts) || !value.artifacts.length) throw new TransferBlocked('unavailable')
+  if (!Array.isArray(value.artifacts) || !allowEmpty && !value.artifacts.length) throw new TransferBlocked('unavailable')
   const identities = new Set<string>(), count = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
   for (const artifact of value.artifacts) {
     fields(artifact, ['ref', 'origins', 'uses'])
