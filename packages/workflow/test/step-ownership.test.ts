@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { resolve } from 'node:path'
 import { createExecutionLease } from '../../sandbox/src/index.ts'
 import { compileExecutionPolicy } from '../../sandbox-policy/src/index.ts'
-import { createExecServiceWithReservation, createWorkflowStepFactory } from '../../exec/src/service.ts'
+import { createExecServiceWithReservation, createWorkflowStepFactory, isWorkflowStepPending } from '../../exec/src/service.ts'
 import { createWorkflowExecutor, createWorkflowJobStore } from '../src/runner.ts'
 import { createExecFrameCapture } from '../../output-retention/src/index.ts'
 
@@ -75,4 +75,30 @@ it('unstarted joins refuse, discard is no-dispatch and original running join can
   const active=factory.create({argv:['controlled']});const running=active.run();expect(active.run()).toBe(running)
   f.root.resolve({exitCode:0});await running;expect(await active.join()).toMatchObject({kind:'clean',execution:'dispatched',retained:'unsupported'})
   active.release();await f.pair.service.dispose()
+})
+
+it('live registry retains unresolved failed launch but removes only the acknowledged recovered step',async()=>{
+ const f=setup(true),factory=createWorkflowStepFactory(f.pair,c=>c)
+ const step=factory.create({argv:['controlled']}),other=factory.create({argv:['other']})
+ try{
+  await step.run().catch(()=>{});expect((await step.join()).kind).toBe('recovery-required')
+  expect(isWorkflowStepPending(step)).toBe(true);expect(isWorkflowStepPending(other)).toBe(true)
+  expect(()=>step.release()).toThrow('not acknowledged');expect(isWorkflowStepPending(step)).toBe(true)
+  f.release();expect((await step.reconcile()).kind).toBe('clean')
+  expect(isWorkflowStepPending(step)).toBe(true)
+  step.release();expect(isWorkflowStepPending(step)).toBe(false);expect(isWorkflowStepPending(other)).toBe(true)
+  expect(f.commits()).toBe(1);other.discard();other.release()
+ }finally{f.release();await f.pair.service.dispose()}
+})
+
+it('live registry releases original recovered frame capture after acknowledgement without disposing service',async()=>{
+ let available=false,begins=0
+ const f=setup(false,{retention:{begin({sourceId}){begins++;return createExecFrameCapture({sourceId,openArtifact:async()=>({async write(){},async reconcileWrite(){return'ready'},async finish(){return available?{kind:'refused',reason:'storage-refused',observedEncodedBytes:0}:{kind:'recovery-required',operationId:'same'}},async reconcile(){throw Error('unused')}})})},observe:c=>c.settle()}})
+ const step=createWorkflowStepFactory(f.pair,c=>c).create({argv:['controlled']})
+ try{
+  f.root.resolve({exitCode:0});await step.run();expect((await step.join()).kind).toBe('recovery-required')
+  expect(isWorkflowStepPending(step)).toBe(true);expect(()=>step.release()).toThrow('not acknowledged')
+  available=true;expect(await step.reconcile()).toMatchObject({kind:'clean',retained:'unavailable'})
+  step.release();expect(isWorkflowStepPending(step)).toBe(false);expect(begins).toBe(1);expect(f.commits()).toBe(1)
+ }finally{available=true;await f.pair.service.dispose()}
 })

@@ -401,6 +401,17 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       const entry=reservations.get(handle)
       if(!entry||entry.state!=='reserved'||entry.delivery||entry.step||disposed||!isOriginalStepBinding(step))throw new Error('Original step unavailable')
       entry.step=step
+      return Object.freeze({
+        pending: () => pendingInstances.get(entry.instanceId) === entry,
+        acknowledge(original: CaptureAttempt) {
+          const pending = pendingInstances.get(entry.instanceId)
+          if (entry.step !== step || entry.state !== 'started' || entry.attempt !== original
+            || !original.isClean() || pending !== undefined && pending !== entry)
+            throw new Error('Original step cleanup acknowledgement mismatch')
+          if (pending === entry) pendingInstances.delete(entry.instanceId)
+          entry.attempt = undefined; entry.step = undefined; entry.state = 'released'
+        },
+      })
     },
     attachDelivery(handle: object, delivery: import('../direct-delivery.ts').OriginalExecDeliveryOwner) {
       if(this!==port)throw new Error('Invalid reservation port receiver')

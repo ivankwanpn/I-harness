@@ -8,6 +8,13 @@ export interface OriginalStepBinding {
   failed(attempt: CaptureAttempt | undefined, cause: unknown): void
 }
 const bindings = new WeakSet<object>(), factories = new WeakSet<object>()
+const pendingSteps = new WeakMap<object, () => boolean>()
+/** Passive original-registry observation; never cleanup authority. */
+export function isWorkflowStepPending(step: OwnedWorkflowStep): boolean {
+  const pending = pendingSteps.get(step)
+  if (!pending) throw new Error('Original Workflow step required')
+  return pending()
+}
 export const isOriginalStepBinding = (value: object) => bindings.has(value)
 export const isWorkflowStepFactory = (value: object) => factories.has(value)
 export type StepOwnership = { kind: 'clean'; execution: 'not-dispatched' | 'dispatched' | 'unknown'; retained: 'ready' | 'unavailable' | 'unsupported' }
@@ -22,7 +29,7 @@ export interface OwnedWorkflowStep {
 export interface WorkflowStepFactory { create(command: ExecCommand): OwnedWorkflowStep }
 interface Port {
   reserve(): object
-  attachStep(handle: object, binding: OriginalStepBinding): void
+  attachStep(handle: object, binding: OriginalStepBinding): { pending(): boolean; acknowledge(attempt: CaptureAttempt): void }
   release(handle: object): void
   start(handle: object, command: ExecCommand, mode: 'foreground'): Promise<unknown>
 }
@@ -49,7 +56,7 @@ export function constructWorkflowStepFactory(port: Port, scope: (command: ExecCo
       bound(original: Capture) { if (this !== binding) throw new Error('Foreign step binding'); capture = original; phase = 'native-bound' },
       failed(original: CaptureAttempt | undefined, cause: unknown) { if (this !== binding) throw new Error('Foreign step binding'); attempt ??= original; failures.push({ cause }) },
     })
-    bindings.add(binding); port.attachStep(reservation, binding)
+    bindings.add(binding); const registry = port.attachStep(reservation, binding)
     async function observe(retry: boolean): Promise<StepOwnership> {
       if (released) return last!
       if (discarded) return acknowledge('not-dispatched', 'unsupported')
@@ -90,9 +97,13 @@ export function constructWorkflowStepFactory(port: Port, scope: (command: ExecCo
       discard() { if (this !== step || running || discarded || released) throw new Error('Workflow step cannot discard'); port.release(reservation); discarded = true; acknowledge('not-dispatched', 'unsupported') },
       release() {
         if (this !== step || !cleanAcknowledged || (!discarded && !runFinished)) throw new Error('Workflow step cleanup not acknowledged')
+        // The constructor validates this exact attempt before dropping its own
+        // strong registry reference. A returned observation cannot grant ACK.
+        if (attempt) registry.acknowledge(attempt)
         released = true; attempt = undefined; capture = undefined; settleFrames = undefined; running = undefined; failures.length = 0
       },
     })
+    pendingSteps.set(step, registry.pending)
     return step
   } })
   factories.add(factory)
