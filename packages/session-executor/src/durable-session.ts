@@ -13,6 +13,7 @@ export function createExecutorExecutionCache(options: { coordinator: SessionCoor
   const assert = (id: string) => { if(closed)throw Error('Execution cache closed');options.assertOpen?.(id) }
   const cache = {
     get(id: string): Promise<Entry> {
+      if(this!==cache)return Promise.reject(new TypeError('Original execution cache required'))
       try { assert(id) } catch(cause) { return Promise.reject(cause) }
       const existing=rows.get(id)
       if(existing)return existing.closing?Promise.reject(Error('Execution entry closed')):existing.publication!
@@ -28,6 +29,7 @@ export function createExecutorExecutionCache(options: { coordinator: SessionCoor
       return row.publication
     },
     close(id: string): Promise<void> {
+      if(this!==cache)return Promise.reject(new TypeError('Original execution cache required'))
       const row=rows.get(id);if(!row)return Promise.resolve()
       row.closing=true;row.execution?.revokeNewWork()
       if(row.closed)return Promise.resolve()
@@ -44,9 +46,10 @@ export function createExecutorExecutionCache(options: { coordinator: SessionCoor
       row.close=pending;void pending.catch(()=>{if(row.close===pending)row.close=undefined})
       return pending
     },
-    async closeAll() { closed=true;const results=await Promise.allSettled([...rows.keys()].map(id=>cache.close(id)));const failed=results.filter((r):r is PromiseRejectedResult=>r.status==='rejected');if(failed.length)throw new AggregateError(failed.map(r=>r.reason),'Execution cache cleanup incomplete') },
+    releaseClosed(id:string) { if(this!==cache)throw TypeError('Original execution cache required');const row=rows.get(id);if(!row?.closed)throw Error('Original execution closure not acknowledged');rows.delete(id) },
+    async closeAll() { if(this!==cache)throw TypeError('Original execution cache required');closed=true;const results=await Promise.allSettled([...rows.keys()].map(id=>cache.close(id)));const failed=results.filter((r):r is PromiseRejectedResult=>r.status==='rejected');if(failed.length)throw new AggregateError(failed.map(r=>r.reason),'Execution cache cleanup incomplete') },
   }
-  return cache
+  return Object.freeze(cache)
 }
 
 // Different adapters in one host share an in-flight owned load. Retaining only

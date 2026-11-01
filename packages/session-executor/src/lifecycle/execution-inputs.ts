@@ -65,5 +65,5 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
       }
     },
   }
-  return { inbox, facts, close: ()=>source.close() }
+  return Object.freeze({ inbox:Object.freeze(inbox), facts, close: ()=>source.close() })
 }

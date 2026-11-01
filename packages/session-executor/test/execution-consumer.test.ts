@@ -15,7 +15,8 @@ const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
 afterEach(async()=>{probe.lose=false;for(const owner of coordinators.splice(0))await owner.close();probe.appends=0;probe.allowPublic=false})
 async function setup(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'executor-private-'));const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'owner'});return{backend,coordinator,cache:createExecutorExecutionCache({coordinator})}}
 it('private execution cache coalesces original acquisition and never builds a public Session',async()=>{
- const {cache}=await setup(),a=cache.get('owner'),b=cache.get('owner');expect(a).toBe(b)
+ const {cache}=await setup();await expect(cache.get.call({...cache},'owner')).rejects.toThrow('Original execution cache')
+ const a=cache.get('owner'),b=cache.get('owner');expect(a).toBe(b)
  const owned=await a;expect(Object.hasOwn(owned.execution.owner,'view')).toBe(false);expect(owned.execution.observe().eventCount).toBe(0)
  await cache.close('owner');await expect(cache.get('owner')).rejects.toThrow('closed')
 })
@@ -33,6 +34,13 @@ it('close installed synchronously prevents late private publication and original
  const {cache}=await setup(),pending=cache.get('owner');void pending.catch(()=>{})
  const closed=cache.close('owner');await expect(pending).rejects.toThrow('closed');await closed
  await expect(cache.get('owner')).rejects.toThrow('closed')
+})
+it('only acknowledged closure allows a fresh execution incarnation in the same cache',async()=>{
+ const {cache}=await setup(),first=await cache.get('owner')
+ expect(()=>cache.releaseClosed('owner')).toThrow()
+ await cache.close('owner');cache.releaseClosed('owner')
+ const next=await cache.get('owner');expect(next.execution.identity).not.toBe(first.execution.identity)
+ expect(()=>first.execution.observe()).toThrow();await cache.close('owner')
 })
 it('private generation consumes original folds and emits original acknowledged R5 facts without a view',async()=>{
  const {cache}=await setup(),owned=await cache.get('owner'),seq=await owned.inputs.inbox.admit({inputId:'first',text:'original',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}})
