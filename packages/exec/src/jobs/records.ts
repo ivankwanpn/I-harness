@@ -2,7 +2,7 @@ import type { ExecutionSettlement, StopReason } from "@i-harness/sandbox"
 import { randomUUID } from 'node:crypto'
 import type { ExecutionSupervisor } from "../execution-supervisor.ts"
 import type { ExecExecutionHost, NativeExecService, ExecServiceOptions, NativeJobIdentity } from "../index.ts"
-import type { Capture } from "../capture/contracts.ts"
+import type { Capture, CaptureAttempt } from "../capture/contracts.ts"
 import type { Job } from "./contracts.ts"
 import { createCaptureFactory } from "../capture/output.ts"
 import { createTransportLaunch } from "../transport-launch.ts"
@@ -31,21 +31,28 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   const captureInstances = new WeakMap<Capture, string>()
   // Only pending/captured ownership lives here. Publication transfers the token
   // to the existing job registry; terminal foreground observations release it.
-  const pendingInstances = new Set<string>()
+  type Reservation = { instanceId: string; state: 'reserved' | 'started' | 'released'; attempt?: CaptureAttempt }
+  const pendingInstances = new Map<string, Reservation>()
+  const captureAttempts = new WeakMap<Capture, CaptureAttempt>()
   let nextJob = 0
   let disposed = false
+  let disposal: Promise<void> | undefined
+  let hostDisposed = false
 
   const { launchTransport, canAccess } = createTransportLaunch(options, host, supervisor, () => disposed)
-  const createCapture = createCaptureFactory(options, supervisor, launchTransport)
-  const retention = createJobRetention(options.resultRetention, capture => captureJobs.get(capture), publishCollection)
-  const reservations = new WeakMap<object, { instanceId: string; state: 'reserved' | 'started' | 'released' }>()
+  const resultRetention = options.resultRetention
+  const retention = createJobRetention(resultRetention, capture => captureJobs.get(capture), publishCollection)
+  const factory = createCaptureFactory(options, supervisor, launchTransport, retention, resultRetention)
+  type MakeCapture = (command: import('../index.ts').ExecCommand, optionsForRun?: import('../index.ts').ExecStreamRunOptions, background?: boolean, promotable?: boolean) => Promise<Capture>
+  const reservations = new WeakMap<object, Reservation>()
   function reserve(): object {
     if (disposed) throw new Error('Exec service disposed')
     const instanceId = randomUUID()
     if (pendingInstances.has(instanceId) || [...jobs.values()].some(job => job.instanceId === instanceId)) throw new Error('Native job instance collision')
-    pendingInstances.add(instanceId)
+    const entry: Reservation = { instanceId, state: 'reserved' }
+    pendingInstances.set(instanceId, entry)
     const handle = Object.freeze({})
-    reservations.set(handle, { instanceId, state: 'reserved' })
+    reservations.set(handle, entry)
     return handle
   }
   function consume(handle: object) {
@@ -59,14 +66,26 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     if (!entry || entry.state !== 'reserved') throw new Error('Original reservation unavailable')
     entry.state = 'released'; pendingInstances.delete(entry.instanceId)
   }
-  async function captureReserved(entry: { instanceId: string }, ...args: Parameters<typeof createCapture>) {
+  async function captureReserved(entry: Reservation, ...args: Parameters<MakeCapture>) {
+    let captured = false
     try {
-      const capture = await createCapture(...args)
+      const attempt = factory.prepare(...args)
+      entry.attempt = attempt
+      const capture = await attempt.start()
+      captured = true
+      captureAttempts.set(capture, attempt)
+      if (disposed) throw new Error('Exec service disposed')
       captureInstances.set(capture, entry.instanceId)
       return retention.track(capture)
-    } catch (error) { pendingInstances.delete(entry.instanceId); throw error }
+    } catch (error) {
+      let cleanup: { cause: unknown } | undefined
+      if (captured && entry.attempt) try { await entry.attempt.fail(error) } catch (cause) { cleanup = { cause } }
+      if (!entry.attempt || entry.attempt.isClean()) pendingInstances.delete(entry.instanceId)
+      if (cleanup) throw new AggregateError([error, cleanup.cause], 'Capture publication and cleanup failed')
+      throw error
+    }
   }
-  const makeCapture: typeof createCapture = (...args) => captureReserved(consume(reserve()), ...args)
+  const makeCapture: MakeCapture = (...args) => captureReserved(consume(reserve()), ...args)
   const { observe, record } = retention
 
   const run = createJobObservation({ makeCapture, registerJob, releaseCapture, isDisposed: () => disposed, observe })
@@ -75,12 +94,14 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     if (captureJobs.has(capture)) return
     const instanceId = captureInstances.get(capture)
     const release = () => { if (instanceId && !captureJobs.has(capture)) pendingInstances.delete(instanceId) }
+    if (captureAttempts.get(capture)?.isClean()) { release(); return }
     // Observation failures can precede native settlement. Keep their token
     // reserved until the exact original capture settles; incomplete cleanup
     // stays owned until successful service disposal.
-    void capture.complete.then(release, async () => {
-      try { if ((await capture.execution.handle.settled).kind === 'settled') release() }
-      catch { /* The original native owner still holds unresolved cleanup. */ }
+    void capture.complete.catch(() => {}).then(async () => {
+      const attempt = captureAttempts.get(capture)
+      try { await attempt?.retryCleanup(); if (attempt?.isClean()) release() }
+      catch { /* The original attempt still owns native/output cleanup debt. */ }
     })
   }
 
@@ -91,12 +112,16 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   }
 
   function registerJob(capture: Capture): NativeJobIdentity {
+    if (disposed) throw new Error('Exec service disposed')
     const existing = captureJobs.get(capture)
     if (existing) return existing.nativeJob
     const instanceId = captureInstances.get(capture)
     if (!instanceId || !pendingInstances.has(instanceId)) throw new Error('Missing original native job instance')
     if ([...jobs.values()].some(job => job.instanceId === instanceId)) throw new Error('Native job instance collision')
     const id = "bash-" + (++nextJob)
+    // Read fallible native getters before publication transfers pending ownership.
+    const nativeHandle = capture.execution.handle
+    const rootExited = nativeHandle.rootExited, settled = nativeHandle.settled
     const nativeJob: NativeJobIdentity = Object.freeze({ version: 1, instanceId, jobId: id,
       ownerSessionId: capture.execution.policy.owner.sessionId, sourceId: `process:${capture.execution.id}` })
     const job: Job = { id, instanceId, nativeJob, capture, status: "running", owner: capture.execution.policy.owner, listeners: new Set() }
@@ -104,8 +129,8 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     captureJobs.set(capture, job)
     pendingInstances.delete(instanceId)
     publishCollection()
-    void capture.execution.handle.rootExited.then(root => { job.root = root; publish(job) }, cause => { job.failure = String(cause); publish(job) })
-    void capture.execution.handle.settled.then(settlement => {
+    void rootExited.then(root => { job.root = root; publish(job) }, cause => { job.failure = String(cause); publish(job) })
+    void settled.then(settlement => {
       job.settlement = settlement
       if (settlement.kind === "incomplete") {
         job.status = "running"
@@ -167,7 +192,11 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   const service: NativeExecService = {
     supportsNativeJobKill: true,
     run: run as NativeExecService["run"],
-    async runBackground(command) { const capture = await makeCapture(command, undefined, true); const nativeJob = registerJob(capture); return { jobId: nativeJob.jobId, nativeJob } },
+    async runBackground(command) {
+      const capture = await makeCapture(command, undefined, true)
+      try { const nativeJob = registerJob(capture); return { jobId: nativeJob.jobId, nativeJob } }
+      catch (cause) { await captureAttempts.get(capture)?.fail(cause); releaseCapture(capture); throw cause }
+    },
     getJobView(jobId) {
       const job = jobs.get(jobId)
       if (!job || disposed || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
@@ -301,20 +330,30 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       return "cancellation-requested"
     },
     launchTransport, cancelExecution,
-    async dispose() {
+    dispose() {
       disposed = true
-      publishCollection(); collection.clear()
-      let unresolved: string[] = []
-      try {
-        await supervisor.dispose()
-        // Close join: still-unknown settlements get one honest retry on their
-        // original capture before the producer-side services are torn down.
-        await Promise.allSettled([...jobs.values()].map(job => job.capture.complete))
-        unresolved = await retention.drain()
-        await host.dispose?.()
-      } finally { for (const job of jobs.values()) job.listeners.clear() }
-      if (unresolved.length) throw Object.assign(new Error("Result retention still requires recovery: " + unresolved.join(",")), { code: "ARTIFACT_RECOVERY_REQUIRED" })
-      pendingInstances.clear()
+      if (disposal) return disposal
+      // Store before callbacks/host code can synchronously reenter dispose.
+      const attempt = Promise.resolve().then(async () => {
+        publishCollection(); collection.clear()
+        const native = Promise.resolve().then(() => supervisor.dispose())
+        const attempts = new Set([...pendingInstances.values()].flatMap(entry => entry.attempt ? [entry.attempt] : []))
+        for (const job of jobs.values()) { const owner = captureAttempts.get(job.capture); if (owner) attempts.add(owner) }
+        const outcomes = await Promise.allSettled([native, ...[...attempts].map(owner => owner.retire())])
+        const failures = outcomes.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : [])
+        let unresolved: string[] = []
+        try { unresolved = await retention.drain() } catch (cause) { failures.push(cause) }
+        if (unresolved.length) failures.push(Object.assign(new Error('Result retention still requires recovery: ' + unresolved.join(',')), { code: 'ARTIFACT_RECOVERY_REQUIRED' }))
+        for (const [id, entry] of pendingInstances) if (entry.attempt?.isClean()) pendingInstances.delete(id)
+        for (const job of jobs.values()) job.listeners.clear()
+        if (failures.length) throw Object.assign(new AggregateError(failures,
+          'Exec service disposal failed' + (unresolved.length ? ': Result retention still requires recovery: ' + unresolved.join(',') : '')),
+          unresolved.length ? { code: 'ARTIFACT_RECOVERY_REQUIRED' } : {})
+        if (!hostDisposed) { await host.dispose?.(); hostDisposed = true }
+      })
+      disposal = attempt
+      void attempt.catch(() => { if (disposal === attempt) disposal = undefined })
+      return attempt
     },
   }
   const port = Object.freeze({
@@ -336,11 +375,13 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       if (this !== port) throw new Error('Invalid reservation port receiver')
       const entry = consume(handle)
       let captured = false
-      const reservedCapture: typeof createCapture = (...args) => { captured = true; return captureReserved(entry, ...args) }
+      const reservedCapture: MakeCapture = (...args) => { captured = true; return captureReserved(entry, ...args) }
       try {
         if (mode === 'background') {
           const capture = await reservedCapture(command, undefined, true)
-          const nativeJob = registerJob(capture)
+          let nativeJob: NativeJobIdentity
+          try { nativeJob = registerJob(capture) }
+          catch (cause) { await captureAttempts.get(capture)?.fail(cause); releaseCapture(capture); throw cause }
           return { jobId: nativeJob.jobId, nativeJob }
         }
         if (mode !== 'foreground') throw new Error('Invalid reservation mode')

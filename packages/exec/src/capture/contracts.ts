@@ -13,3 +13,12 @@ export type Capture = {
   output(): { stdout: CollectResult; stderr: CollectResult }
   diagnostics(): { outputAbandoned: boolean; discardedOutputBytes: number } | undefined
 }
+
+/** Private original owner, installed in the reservation before start. */
+export interface CaptureAttempt {
+  start(): Promise<Capture>
+  fail(cause: unknown): Promise<void>
+  retire(): Promise<void>
+  retryCleanup(): Promise<void>
+  isClean(): boolean
+}
