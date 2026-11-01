@@ -6,12 +6,14 @@ import type { PreparedCall, Tool, ToolExec } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
 
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
-export interface PreparedShellBodyClaim {
+interface PreparedBodyClaim {
   readonly context: ToolExecutionOwnerContext
   readonly source: SettlementFacts<ProducerFactOutcome>
   readonly exec: ToolExec
   assertCurrent(): void
   consume(): void
+}
+export interface PreparedShellBodyClaim extends PreparedBodyClaim {
   takeExecSourceIssuer(): import('../model-origin.ts').OriginalExecSourceIssuer | undefined
   hasExecSourceIssuer(): boolean
 }
@@ -136,4 +138,35 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
     return claim
   } })
   return entry
+}
+
+export interface OriginalTaskCaller extends PreparedBodyClaim {
+  readonly call: Readonly<PreparedCall['call']>
+  readonly identity: Readonly<{ parentSessionId: string; callEventSeq?: number; toolCallId?: string }>
+}
+const taskCallers = new WeakSet<object>()
+export function assertOriginalTaskCaller(caller: OriginalTaskCaller): void {
+  if (!taskCallers.has(caller)) throw new TypeError('Original task caller required')
+  caller.assertCurrent()
+}
+/** Task proof deliberately permits Code Mode and same-view prepared nesting. */
+export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
+ const entry=Object.freeze({enter(exec:ToolExec):OriginalTaskCaller|undefined {
+  if(this!==entry)throw new TypeError('Foreign task leaf receiver')
+  const body=byExec.get(exec),frame=active.getStore()
+  if(!body){if(frame?.active)throw Error('Foreign prepared exec');return}
+  if(!frame?.active||frame.body!==body||body.tool!==tool||body.leaf!==leaf||body.call.name!=='spawn_agent')throw Error('Not the original prepared task body')
+  check(body,frame)
+  if(body.foreignContext)throw Error('Foreign prepared execution context')
+  if(body.claimed)throw Error('Prepared task body already claimed')
+  if(!body.context||!body.source||frame.domain!==body.context.view)return
+  const id=own(exec,'sessionId'),seq=own(exec,'callEventSeq'),callId=own(exec,'callId')
+  if(typeof id!=='string'||!id||seq!==undefined&&(!Number.isSafeInteger(seq)||(seq as number)<0)||callId!==undefined&&(typeof callId!=='string'||!callId))throw Error('Original task call identity unavailable')
+  const identity=Object.freeze({parentSessionId:id,...seq!==undefined?{callEventSeq:seq as number}:{},...callId!==undefined?{toolCallId:callId as string}:{}})
+  body.claimed=true;let consumed=false
+  const claim:OriginalTaskCaller=Object.freeze({context:body.context,source:body.source,exec,call:body.call,identity,
+   assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign task caller');check(body,frame)},
+   consume(){if(this!==claim)throw TypeError('Foreign task caller');check(body,frame);if(consumed)throw Error('Task caller consumed');consumed=true},
+  });taskCallers.add(claim);return claim
+ }});return entry
 }

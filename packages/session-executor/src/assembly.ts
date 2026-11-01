@@ -152,6 +152,7 @@ type RoleModelSelection = {
 }
 
 export interface AssemblyOptions {
+  prepareTaskChild?: import('@i-harness/subagent').PrepareTaskChild
   prepareExecDelivery?: import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery
   /** Constructor opt-in passive evidence only; no shipping activation. */
   passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
@@ -1316,6 +1317,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => (action, dependencies) =>
       createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, opts.passiveGeneration?{...dependencies,beforeDrain:dependencies?.beforeDrain??(async()=>{}),passiveGeneration:opts.passiveGeneration}:dependencies)
     const subagent = registerSubagent(ctx, tools, {
+      prepareTaskChild: opts.prepareTaskChild,
       residentActivation: residentActivation.ticket,
       createInstructionContext: childInstructionHost.create,
       results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),

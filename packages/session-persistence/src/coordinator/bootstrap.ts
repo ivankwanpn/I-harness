@@ -888,6 +888,28 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }finally{await settleCapture(entry)}}).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
     entry.flight=flight;return flight
   }
+  async function inspectRoute(invocation:BootstrapInvocation,route:BootstrapRoute):Promise<BootstrapInspection>{
+      const captured=captureBootstrapInvocation(invocation)
+      if(!backend.readBootstrapState)return {kind:'unavailable',invocation:captured,needsConfirmation:true}
+      try {
+        const original=documents.get(captured.targetSessionId),revocation=original?.revocation
+        const currentRead=()=>!captureClosed&&documents.get(captured.targetSessionId)===original&&original?.revocation===revocation&&!original?.revoked
+        if(route.protocol==='child-v1'&&!currentRead())return {kind:'unavailable',invocation:captured,needsConfirmation:true}
+        const state=await read(captured,route)
+        if(route.protocol==='child-v1'&&!currentRead())return {kind:'unavailable',invocation:captured,needsConfirmation:true}
+        if(state.kind==='absent')return {kind:'absent',invocation:captured,needsConfirmation:false}
+        if(state.foreign)return {kind:'conflict',invocation:captured,needsConfirmation:true}
+        let stage:BootstrapHeaderStage|undefined
+        if(state.stageBytes)try{stage=parseBootstrapHeaderStage(state.stageBytes)}catch{}
+        if(stage&&!sameBootstrapData(stageRoute(stage),route))return {kind:'conflict',invocation:captured,needsConfirmation:true}
+        const publication=publicationStatus(state,stage)
+        if(publication==='conflict')return {kind:'conflict',invocation:captured,needsConfirmation:true}
+        if(stage&&!sameBootstrapData(stage.invocation,captured)||state.meta?.semanticSeed&&(state.meta.semanticSeed.operationId!==captured.operationId||state.meta.semanticSeed.requestDigest!==captured.requestDigest)||state.meta&&state.meta.createdAt!==captured.createdAt)return {kind:'conflict',invocation:captured,needsConfirmation:true}
+        const digest=stage?manifest(stage):state.meta?.semanticSeed?.manifestDigest
+        const token:BootstrapResumeToken=digest?{version:1,invocation:captured,manifestDigest:digest,phase:readyState(state)?'completion':'header'}:{version:1,invocation:captured,phase:'header',manifest:'unknown'}
+        return {kind:stage&&publication==='valid'?(readyState(state)&&!state.torn?'ready':'reserved'):'unavailable',invocation:captured,token,needsConfirmation:true}
+      }catch{return {kind:'unavailable',invocation:captured,needsConfirmation:true}}
+  }
   const originalColdBootstrap=Object.freeze({capture(target:ColdSelectedTarget){if(this!==originalColdBootstrap)throw TypeError('Original cold bootstrap receiver required');const original=coldTargets.get(target);if(!original)throw TypeError('Original cold selected target required');return original.captureAccess()}})
   return {
     originalColdBootstrap,
@@ -904,24 +926,8 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       return start(field.value,guards,request)
     },
     resumeSemanticTarget:(invocation:BootstrapInvocation,guards:BootstrapGuards,original?:BootstrapRequest)=>start(invocation,guards,original),
-    async inspectBootstrap(invocation:BootstrapInvocation):Promise<BootstrapInspection> {
-      const captured=captureBootstrapInvocation(invocation)
-      if(!backend.readBootstrapState)return {kind:'unavailable',invocation:captured,needsConfirmation:true}
-      try {
-        const state=await read(captured)
-        if(state.kind==='absent')return {kind:'absent',invocation:captured,needsConfirmation:false}
-        if(state.foreign)return {kind:'conflict',invocation:captured,needsConfirmation:true}
-        let stage:BootstrapHeaderStage|undefined
-        if(state.stageBytes)try{stage=parseBootstrapHeaderStage(state.stageBytes)}catch{}
-        if(stage&&stageRoute(stage).protocol!=='public')return {kind:'conflict',invocation:captured,needsConfirmation:true}
-        const publication=publicationStatus(state,stage)
-        if(publication==='conflict')return {kind:'conflict',invocation:captured,needsConfirmation:true}
-        if(stage&&!sameBootstrapData(stage.invocation,captured)||state.meta?.semanticSeed&&(state.meta.semanticSeed.operationId!==captured.operationId||state.meta.semanticSeed.requestDigest!==captured.requestDigest)||state.meta&&state.meta.createdAt!==captured.createdAt)return {kind:'conflict',invocation:captured,needsConfirmation:true}
-        const digest=stage?manifest(stage):state.meta?.semanticSeed?.manifestDigest
-        const token:BootstrapResumeToken=digest?{version:1,invocation:captured,manifestDigest:digest,phase:readyState(state)?'completion':'header'}:{version:1,invocation:captured,phase:'header',manifest:'unknown'}
-        return {kind:stage&&publication==='valid'?(readyState(state)&&!state.torn?'ready':'reserved'):'unavailable',invocation:captured,token,needsConfirmation:true}
-      }catch{return {kind:'unavailable',invocation:captured,needsConfirmation:true}}
-    },
+    async inspectBootstrap(invocation:BootstrapInvocation):Promise<BootstrapInspection>{const captured=captureBootstrapInvocation(invocation);return inspectRoute(captured,{protocol:'public',invocation:captured})},
+    async inspectChildBootstrap(input:ChildBootstrapCaptureRequest):Promise<BootstrapInspection>{const request=captureChildBootstrapCaptureRequest(input);return inspectRoute(request.invocation,{protocol:'child-v1',request})},
   }
 }
 function importOutcome(value:unknown):value is import('./bootstrap-types.ts').BootstrapDependencyOutcome {

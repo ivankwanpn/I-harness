@@ -1,3 +1,6 @@
+import { observeColdExecutionWrites } from '../../../session-persistence/src/coordinator/cold-execution-writes.ts'
+import { managedExecutionStatus } from '../../../session-persistence/src/coordinator/managed-document.ts'
+import { createTaskLaunchPort, type TaskLaunchPort } from './launch-slots.ts'
 import { stageTaskRestore } from './restore-stage.ts'
 import { associateColdBindings, assertColdTaskAdmission } from './cold-bindings.ts'
 import { isOwnedTaskContext } from './owned-context.ts'
@@ -9,10 +12,20 @@ import { TaskResultOwner } from "./result.ts"
 import { TaskNotifications } from "./notifications.ts"
 import { TaskPersistence } from "./persistence.ts"
 import { associateTaskSaveOwner } from './save-owner.ts'
+import {captureTaskSnapshot} from '@i-harness/session-persistence/internal/task-document-operations'
 import { TaskRecords } from "./records.ts"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
+  let stopObserving: (()=>void)|undefined
+  let launchPort: TaskLaunchPort | undefined
   const ownedTask = opts.ownedTask
+  if(opts.launchContext){
+    if(!ownedTask||!isOwnedTaskContext(ownedTask))throw Error('Original task launch parent required')
+    const document=opts.launchContext.factOwner as import('@i-harness/session-persistence').ManagedDocument
+    ownedTask.operations.assertParentSession(ownedTask.operations.parent(document),ownedTask.stateId)
+    const view=Object.getOwnPropertyDescriptor(document,'view')
+    if(!view||!('value'in view)||view.value!==opts.launchContext.view||opts.launchContext.sessionId!==ownedTask.stateId)throw Error('Foreign task launch parent')
+  }
   type State = { records: TaskRecords; notifications: TaskNotifications; version: 1 | 2 | 3; phase: 'pending' | 'ready' | 'poisoned' | 'retired'; failure?: { cause: unknown } }
   let currentState: State = { records: new TaskRecords(), notifications: new TaskNotifications(), version: opts.results ? 2 : 1, phase: ownedTask ? 'pending' : 'ready' }
   let coldBindings: ReadonlySet<string> = new Set()
@@ -39,11 +52,18 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const maxConcurrency = opts.maxConcurrency ?? Infinity
   const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask)
   const retentionSaves = new WeakMap<TaskRecord, import('./persistence.ts').OwnedTaskSave>()
+  type RetentionIdentity={revision:string|undefined;fingerprint:string}
+  const acknowledgedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
+  const capturedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
+  const retentionIdentity=(task:TaskRecord):RetentionIdentity=>({revision:task.result?.revision,fingerprint:JSON.stringify(captureTaskSnapshot(task.result??null))})
+  const sameRetention=(identity:RetentionIdentity,task:TaskRecord)=>identity.revision===task.result?.revision&&identity.fingerprint===retentionIdentity(task).fingerprint
+  const retentionPrerequisites=new WeakMap<TaskRecord,()=>Promise<void>>()
   const retentionFlights = new WeakMap<TaskRecord, Promise<void>>()
   const save = async () => { assertReady(); await persistence.save() }
 
   function snapshot(): TaskProtocolDocument {
     assertReady()
+    launchPort?.assertSnapshot()
     // A loaded literal 1 remains literal until a subsequent result-aware save.
     if (currentState.version === 1 && opts.results) currentState.version = 2
     return {
@@ -88,13 +108,20 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     // The in-memory authoritative outcome is already complete. Persistence
     // failure changes delivery evidence only; it never reopens execution.
     if (!opts.coordinator || !opts.stateId) { task.retention = "memory"; return }
+    const acknowledged=acknowledgedRetention.get(task)
+    if(acknowledged){
+      if(!sameRetention(acknowledged,task))throw Error('Original saved task result changed')
+      return
+    }
     if (task.retention === "durable") return
     task.retention = "pending"
     try {
       const previous = retentionSaves.get(task)
-      const originalSave = previous ?? persistence.captureSave(true)
-      if (originalSave) { retentionSaves.set(task, originalSave); if (previous) await originalSave.retry(); else await originalSave.done; originalSave.assertHandoff() }
+      const captured=previous?capturedRetention.get(task)!:retentionIdentity(task)
+      const originalSave = previous ?? persistence.captureSave(true,retentionPrerequisites.get(task))
+      if (originalSave) { retentionSaves.set(task, originalSave);capturedRetention.set(task,captured); await completeOriginalRetention(task,originalSave,Boolean(previous));return }
       else await save()
+      if(!sameRetention(captured,task))throw Error('Original saved task result changed')
       if (task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'unavailable') {
         task.retention = 'failed'
         task.retentionError = task.result.envelope.retention.reason
@@ -102,7 +129,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         task.retention = "durable"
         delete task.retentionError
       }
-      originalSave?.release()
+      acknowledgedRetention.set(task,captured)
     } catch (error) {
       task.retention = "failed"
       task.retentionError = error instanceof Error ? error.message : String(error)
@@ -110,6 +137,27 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       throw error
     }
     publish(task)
+  }
+
+  async function completeOriginalRetention(task:TaskRecord,save:import('./persistence.ts').OwnedTaskSave,retry:boolean):Promise<void>{
+    if(currentState.records.get(task.id)!==task)throw Error('Original terminal task replaced')
+    const captured=capturedRetention.get(task);if(!captured)throw Error('Original terminal result identity unavailable')
+    if(retry)await save.retry();else await save.done
+    save.assertHandoff()
+    save.release();acknowledgedRetention.set(task,captured);retentionSaves.delete(task);capturedRetention.delete(task)
+    if(!sameRetention(captured,task))throw Error('Original saved task result changed')
+    if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else task.retention='durable'
+    publish(task)
+  }
+  function resumeOriginalRetention(task:TaskRecord):Promise<void>{
+    if(currentState.records.get(task.id)!==task)return Promise.reject(Error('Original terminal task replaced'))
+    const active=retentionFlights.get(task);if(active)return active
+    const acknowledged=acknowledgedRetention.get(task);if(acknowledged&&sameRetention(acknowledged,task))return Promise.resolve()
+    const save=retentionSaves.get(task)
+    if(!save)return retainResult(task.id)
+    const flight=completeOriginalRetention(task,save,true);retentionFlights.set(task,flight)
+    void flight.finally(()=>{if(retentionFlights.get(task)===flight)retentionFlights.delete(task)}).catch(()=>{})
+    return flight
   }
 
   function announceTerminal(t: TaskRecord, notify = true): void {
@@ -127,6 +175,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
 
   function terminalize(input: TaskTerminalizeInput): boolean {
     assertReady()
+    launchPort?.retireTask(input.taskId, new Error('Task terminalized'))
     const task = currentState.records.get(input.taskId)
     if (!settleTaskRecord(task, input, resultOwner)) return false
     announceTerminal(task)
@@ -189,6 +238,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const ready = ownedTask ? loadOwned() : Promise.resolve()
   void ready.catch(() => {})
   function retireOwnedLoad(): void {
+    launchPort?.retireAll(new Error('Task launch owner retired'))
     if (!ownedTask) return
     if (currentState.phase !== 'poisoned') currentState = { ...currentState, phase: 'retired' }
     controller.abort(); handoff?.abandon()
@@ -197,7 +247,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     ready,
     assertReady,
     retireOwnedLoad,
-    async closeOwnedLoad() { await ready.catch(() => {}); await cleanupLoad(); await persistence.retireConsumers(); await persistence.flush() },
+    async closeOwnedLoad() { launchPort?.retireAll(new Error('Original slot owner closed'));stopObserving?.();stopObserving=undefined;await ready.catch(() => {}); await cleanupLoad(); await launchPort?.close(); await persistence.retireConsumers(); await persistence.flush() },
     bindForegroundHandoff(taskId) {
       assertReady()
       const task = currentState.records.get(taskId)
@@ -246,7 +296,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     submit(input) {
       assertReady()
       if (input.identity.callEventSeq !== undefined || input.identity.toolCallId !== undefined) {
-        assertColdTaskAdmission(registry, currentState.records.getByIdentity(input.identity)?.id)
+        const existing=currentState.records.getByIdentity(input.identity)
+        assertColdTaskAdmission(registry, existing?.id)
+        if(existing&&launchPort?.inspect(existing.id))throw Error('Original warm task slot admission required')
       }
       const { record, inserted } = currentState.records.submit(input, maxConcurrency)
       if (currentState.version === 3) currentState.records.protectSubmission(record)
@@ -284,6 +336,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       let cancelled = 0
       for (const t of tree) {
         if (t.outcome !== undefined) continue
+        launchPort?.retireTask(t.id, new Error(error))
         settleTaskRecord(t, { taskId: t.id, outcome: 'cancelled', error }, resultOwner)
         taskIds.push(t.id)
         cancelled += 1
@@ -332,8 +385,31 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       for (const t of doc.tasks) publish(t)
     },
     save,
-    flushPersistence: async () => { assertReady(); await persistence.flush() },
+    // Cleanup joins original initialization/writes even after work is retired.
+    // Failed initialization retains its original rejection; no work is admitted.
+    flushPersistence: async () => { await ready; await persistence.flush() },
   }
+  if (ownedTask && opts.launchContext) launchPort = createTaskLaunchPort(registry, opts.launchContext, {
+    beforeResultIssue(record,before){assertReady();if(currentState.records.get(record.id)!==record)throw Error('Original task replaced');retentionPrerequisites.set(record,before)},
+    retainResult:resumeOriginalRetention,
+    current(record) { assertReady();if(record&&currentState.records.get(record.id)!==record)throw Error('Original slot task replaced'); ownedTask.operations.assertTaskV3Parent(ownedTask.parent, opts.stateId!) },
+    insert: input => currentState.records.submit(input, maxConcurrency),
+    protect: record => currentState.records.protectSubmission(record, true),
+    accept(record) { const saving=save();publish(record);return saving },
+    bind(record,birth) {
+      assertReady();ownedTask.operations.assertTaskV3Parent(ownedTask.parent,opts.stateId!)
+      if(currentState.records.get(record.id)!==record||Object.hasOwn(record,'childBirth')||!Object.isExtensible(record))throw Error('Original warm task birth unavailable')
+      const captured=birth
+      const document=snapshot();document.formatVersion=3;document.tasks=document.tasks.map(task=>task.id===record.id?{...task,childBirth:captured}:task)
+      validateTaskDocument(document)
+      const freeze=(value:unknown):void=>{if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value)}};freeze(captured)
+      Object.defineProperty(record,'childBirth',{value:captured,enumerable:true,writable:false,configurable:false});currentState.version=3
+      return persistence.captureBindingSave()
+    },
+  })
+  if(ownedTask&&opts.launchContext)stopObserving=observeColdExecutionWrites(ownedTask.coordinator,id=>{
+    if(id===ownedTask.stateId&&managedExecutionStatus(opts.launchContext!.factOwner as import('@i-harness/session-persistence').ManagedDocument)==='retired')launchPort?.retireAll(new Error('Original task parent retired'))
+  })
   associateTaskSaveOwner(registry, persistence)
   associateColdBindings(registry, () => coldBindings)
   return registry
