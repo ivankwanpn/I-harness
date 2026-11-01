@@ -1,3 +1,4 @@
+import { associateOriginalOrderingLedger } from '../result-ordering-internal.ts'
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
 import { originalHeldStateFor } from '@i-harness/fs-lock/internal/held-state'
 import { createArtifactPathOwner } from '@i-harness/fs-lock/internal/artifact-path'
@@ -8,24 +9,30 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { types as utilTypes } from 'node:util'
 import { assertOutsideTaskDocumentSessionOperation } from './task-document-operation.ts'
 import { assertOutsideTaskTransitionSession } from './task-document-transition.ts'
-import type { OriginalLegacyOrderingParticipant, OriginalOrderingRegistration, OriginalOrderingReservation } from './result-ordering-types.ts'
+import type { OriginalLegacyOrderingParticipant, OriginalOrderingRegistration, OriginalOrderingReservation, OriginalOrderingLedger, OriginalOrderingOrigin } from './result-ordering-types.ts'
 import { captureResultTargetIds } from './result-revocation-data.ts'
 
 type Claim = { assertHeld(): void; retainLive(): void; release(): Promise<void> }
 export interface OwnershipCleanup { assertSettled(): void; close(): Promise<void> }
 export interface OriginalOwnershipBatch { assertCovered(ids: readonly string[]): void; close(): Promise<void> }
-const batchOwners = new WeakMap<object, (ids: readonly string[], retain: (cleanup: OwnershipCleanup) => void) => Promise<OriginalOwnershipBatch>>()
+const batchOwners = new WeakMap<object, (ids: readonly string[], retain: (cleanup: OwnershipCleanup) => void, origin?: OriginalOrderingOrigin) => Promise<OriginalOwnershipBatch>>()
 const batchParticipants = new WeakMap<object, (participant: OriginalLegacyOrderingParticipant) => void>()
+const batchCoverage = new WeakMap<OriginalOwnershipBatch, { owner: object; assertCovered(ids: readonly string[]): void }>()
+export function assertOriginalOwnershipBatchCoverage(owner: Ownership, batch: OriginalOwnershipBatch, ids: readonly string[]): void {
+  const original = batchCoverage.get(batch)
+  if (!original || original.owner !== owner || utilTypes.isProxy(batch)) throw TypeError('Original same-owner batch required')
+  original.assertCovered(ids)
+}
 export function assertOriginalBatchParticipant(owner: Ownership, participant: OriginalLegacyOrderingParticipant) {
   const check = batchParticipants.get(owner)
   if (!check || utilTypes.isProxy(owner)) throw TypeError('Original batch participant required')
   check(participant)
 }
 /** Private original-owner entry; resource order is never supplied by a caller. */
-export function reserveOriginalOwnershipBatch(owner: Ownership, ids: readonly string[], retain: (cleanup: OwnershipCleanup) => void) {
+export function reserveOriginalOwnershipBatch(owner: Ownership, ids: readonly string[], retain: (cleanup: OwnershipCleanup) => void, origin?: OriginalOrderingOrigin) {
   const reserve = batchOwners.get(owner)
   if (!reserve || utilTypes.isProxy(owner)) throw TypeError('Original batch ownership required')
-  return reserve(ids, retain)
+  return reserve(ids, retain, origin)
 }
 type ClaimRecord = { readonly role: 'session' | 'document'; id: string; claim: Claim; assertHeld: Claim['assertHeld']; retainLive: Claim['retainLive']; release: Claim['release'] }
 const ownerClaims = new WeakMap<object, WeakMap<object, ClaimRecord>>()
@@ -93,11 +100,64 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   const pendingOrderingIdentities = new Set<object>()
   const orderingDebt = new Set<ReturnType<typeof orderingReservation>>()
   const orderingAttempts = new Set<OwnershipCleanup>()
+  type FiniteOrder = { origin: OriginalOrderingOrigin; ordinal: number; earlier: FiniteOrder[]; completion: PromiseWithResolvers<void>; started: boolean; exited: boolean; acknowledged: boolean; failure?: { cause: unknown } }
+  const finiteOrders = new Map<OriginalOrderingOrigin, FiniteOrder>(), allFiniteOrders = new WeakMap<object, FiniteOrder>(), finiteContext = new AsyncLocalStorage<OriginalOrderingOrigin>()
+  let orderOrdinal = 0
+  const orderRecord = (origin: OriginalOrderingOrigin) => { const record = allFiniteOrders.get(origin); if (!record || utilTypes.isProxy(origin)) throw TypeError('Original ordering origin required'); return record }
+  const outsideFinite = () => { const current = finiteContext.getStore(); if (current && finiteOrders.has(current)) throw Error('Original ordering operation reentry') }
+  const waitFor = (earlier: readonly FiniteOrder[]) => {
+    const pending = earlier.filter(record => !record.acknowledged)
+    if (!pending.length) return undefined
+    for (const record of pending) if (record.failure) throw record.failure.cause
+    const wait = Object.freeze({ async join() { if (this !== wait) throw TypeError('Original predecessor wait receiver required'); for (const record of pending) { if (record.acknowledged) continue; if (record.failure) throw record.failure.cause; await record.completion.promise; if (!record.acknowledged) throw Error('Original predecessor cleanup remains unresolved') } } })
+    return wait
+  }
+  const finiteOrdering: OriginalOrderingLedger = Object.freeze({
+    begin() {
+      if (this !== finiteOrdering) throw TypeError('Original ordering ledger receiver required')
+      outsideFinite(); for (const record of finiteOrders.values()) if (record.failure) throw record.failure.cause
+      if (!Number.isSafeInteger(orderOrdinal + 1)) throw Error('Original ordering capacity exceeded')
+      const origin = Object.freeze({}) as OriginalOrderingOrigin, completion = Promise.withResolvers<void>()
+      void completion.promise.catch(() => {})
+      const record: FiniteOrder = { origin, ordinal: ++orderOrdinal, earlier: [...finiteOrders.values()], completion, started: false, exited: false, acknowledged: false }
+      finiteOrders.set(origin, record); allFiniteOrders.set(origin, record); return origin
+    },
+    async run<T>(origin: OriginalOrderingOrigin, work: () => Promise<T>): Promise<T> {
+      if (this !== finiteOrdering) throw TypeError('Original ordering ledger receiver required')
+      const record = orderRecord(origin)
+      if (record.started || record.acknowledged || !finiteOrders.has(origin)) throw TypeError('Original finite ordering use required')
+      outsideFinite(); record.started = true
+      try { return await finiteContext.run(origin, work) }
+      catch (cause) { record.failure = { cause }; record.completion.reject(cause); throw cause }
+      finally { record.exited = true }
+    },
+    predecessors(origin: OriginalOrderingOrigin) {
+      if (this !== finiteOrdering) throw TypeError('Original ordering ledger receiver required')
+      const record = orderRecord(origin)
+      if (finiteContext.getStore() !== origin || !record.started || record.exited || record.acknowledged) throw TypeError('Original active ordering use required')
+      return waitFor(record.earlier)
+    },
+    beforeAcquisition(origin?: OriginalOrderingOrigin) {
+      if (this !== finiteOrdering) throw TypeError('Original ordering ledger receiver required')
+      if (!origin) { outsideFinite(); return waitFor([...finiteOrders.values()]) }
+      const record = orderRecord(origin)
+      if (finiteContext.getStore() !== origin || !record.started || record.exited || record.acknowledged || record.failure) throw TypeError('Original native acquisition origin required')
+      return waitFor(record.earlier.filter(prior => prior.ordinal < record.ordinal))
+    },
+    complete(origin: OriginalOrderingOrigin) {
+      if (this !== finiteOrdering) throw TypeError('Original ordering ledger receiver required')
+      const record = orderRecord(origin)
+      if (!record.exited) throw Error('Original finite ordering work remains active')
+      record.acknowledged = true; finiteOrders.delete(origin); record.completion.resolve()
+    },
+    hasPending() { if (this !== finiteOrdering) throw TypeError('Original ordering ledger receiver required'); return finiteOrders.size > 0 },
+    assertOutside() { if (this !== finiteOrdering) throw TypeError('Original ordering ledger receiver required'); outsideFinite() },
+  })
   let freshAcquisitions = 0, orderingIncarnation = {}
   function beginResultOrderingRegistration(identity: object): OriginalOrderingRegistration {
     if (!lockEnabled) throw Error('Original lock-enabled ordering required')
     const existing = orderingParticipants.get(identity)
-    if (!existing && (freshAcquisitions || orderingDebt.size || orderingAttempts.size || pendingOrderingIdentities.has(identity))) throw Error('Result ordering registration busy')
+    if (!existing && (freshAcquisitions || orderingDebt.size || orderingAttempts.size || finiteOrdering.hasPending() || pendingOrderingIdentities.has(identity))) throw Error('Result ordering registration busy')
     const token = {}; let finished = false
     if (!existing) { orderingPending.add(token); pendingOrderingIdentities.add(identity); orderingIncarnation = {} }
     const registration: OriginalOrderingRegistration = Object.freeze({ commit(participant: OriginalLegacyOrderingParticipant) {
@@ -232,7 +292,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     returned = resource; return resource
     } finally { done.resolve() }
   }
-  async function borrowBundle(id: string, document: boolean, retain?: (cleanup: OwnershipCleanup) => void, batchIds: readonly string[] = [id], batchCheck: () => void = () => {}): Promise<Claim> {
+  async function borrowBundle(id: string, document: boolean, retain?: (cleanup: OwnershipCleanup) => void, batchIds: readonly string[] = [id], batchCheck: () => void = () => {}, origin?: OriginalOrderingOrigin): Promise<Claim> {
     const held: Awaited<ReturnType<typeof borrowResource>>[] = []
     const acquisitions: OwnershipCleanup[] = []
     const done = Promise.withResolvers<void>(); let cleaned = false
@@ -261,6 +321,13 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     const entries = batchIds.map(id => ({ id, reuse: document ? undefined : live.get(id) ?? activeBundles.get(id)?.values().next().value }))
     for (const entry of entries) if (entry.reuse) checkBundle(entry.reuse)
     if (!document && entries.some(entry => !entry.reuse)) {
+      const predecessor = finiteOrdering.beforeAcquisition(origin)
+      if (predecessor) {
+        // Waiting is retained before any ordering debt or namespace/native issue.
+        orderingAttempts.add(originalCleanup)
+        for (const participant of orderingParticipants.values()) { if (participant.call('assertOutside') !== undefined) throw TypeError('Original ordering assertion must be synchronous'); participant.check() }
+        await predecessor.join(); batchCheck()
+      }
       if (orderingPending.size || orderingDebt.size) throw Error('Original result ordering unresolved')
       const incarnation = orderingIncarnation
       for (const participant of orderingParticipants.values()) { if (participant.call('assertOutside') !== undefined) throw TypeError('Original ordering assertion must be synchronous'); participant.check() }
@@ -412,13 +479,13 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     if (!lockEnabled || !artifacts || orderingPending.size || !original) throw Error('Original complete service registration required')
     for (const entry of orderingParticipants.values()) entry.check()
   })
-  batchOwners.set(owner, async (input, retain) => {
+  batchOwners.set(owner, async (input, retain, origin) => {
     if (!lockEnabled || !artifacts || typeof retain !== 'function') throw TypeError('Original canonical lock-enabled batch required')
     const ids = captureResultTargetIds(input)
     if (!ids.length) throw TypeError('Invalid original batch targets')
     const methods = orderingMethods(owner, ['pinOwnership', 'pinOwnershipRetained'])
     let cleanup: OwnershipCleanup | undefined, retired = false
-    const claim = await borrowBundle(ids[0]!, false, original => { cleanup = original; retain(original) }, ids, methods.check)
+    const claim = await borrowBundle(ids[0]!, false, original => { cleanup = original; retain(original) }, ids, methods.check, origin)
     methods.check(); claim.assertHeld()
     const batch: OriginalOwnershipBatch = Object.freeze({
       assertCovered(requested: readonly string[]) {
@@ -429,8 +496,10 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
       },
       async close() { if (this !== batch) throw TypeError('Original batch receiver required'); retired = true; await cleanup!.close(); cleanup!.assertSettled() },
     })
+    batchCoverage.set(batch, { owner, assertCovered: ids => batch.assertCovered(ids) })
     return batch
   })
+  associateOriginalOrderingLedger(owner, finiteOrdering)
   ownerClaims.set(owner, claims)
   return owner
 }

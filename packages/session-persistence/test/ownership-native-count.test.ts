@@ -1,5 +1,10 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { createProcessAwareResultService } from '../../session-executor/src/lifecycle/process-result-service.ts'
+import { createBindingObservations } from '../src/coordinator/binding-observation.ts'
+import { associateOriginalResultOrdering } from '../src/result-ordering-internal.ts'
+import { associateOriginalResultRevocation } from '../src/coordinator/result-revocation.ts'
 import { coldLegacyFixture } from '../../context-output/test/fixtures/cold-selected-legacy.ts'
-import { originalResultRevocationFor } from '../src/coordinator/result-revocation.ts'
+import { originalResultRevocationFor, captureOriginalRevocationDomain, beginOriginalRevocationOrdering, runOriginalRevocationOrdering, completeOriginalRevocationOrdering } from '../src/coordinator/result-revocation.ts'
 import { ContextStore, referenceId, digest } from '../../context-output/src/store.ts'
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -9,7 +14,11 @@ import { createSessionCoordinatorCore } from '../src/coordinator-factory.ts'
 import {beforeEach,describe,expect,it,vi} from 'vitest'
 import {win32 as path} from 'node:path'
 import type {Win32ArtifactApi} from '../../fs-lock/src/win32-artifact-api.ts'
-const input=vi.hoisted(()=>({api:undefined as Win32ArtifactApi|undefined,originalLock:true,originals:[] as import('../../fs-lock/src/index.ts').SessionLock[],countHeld:undefined as (()=>void)|undefined,heldHook:undefined as (()=>void)|undefined,heldResult:undefined as (()=>unknown)|undefined,failClose:false,failedPath:'',acquisitionOrder:[] as string[],acquireHook:undefined as undefined|((path:string)=>void),acquireWait:undefined as undefined|((path:string)=>Promise<void>),fileClose:undefined as undefined|((path:string,close:()=>Promise<void>)=>Promise<void>),bodyOpens:0,admission:undefined as undefined|import('../src/coordinator/result-revocation.ts').ResultRevocationAdmission,revocationScope:undefined as undefined|import('../src/coordinator/result-revocation.ts').OriginalResultRevocationScope,mutexCloses:0,mutexClosePaths:[] as string[],locks:new Map<string,object>()}))
+const input=vi.hoisted(()=>({owners:[] as import('../src/coordinator/ownership.ts').Ownership[],api:undefined as Win32ArtifactApi|undefined,originalLock:true,originals:[] as import('../../fs-lock/src/index.ts').SessionLock[],countHeld:undefined as (()=>void)|undefined,heldHook:undefined as (()=>void)|undefined,heldResult:undefined as (()=>unknown)|undefined,failClose:false,failedPath:'',acquisitionOrder:[] as string[],acquireHook:undefined as undefined|((path:string)=>void),acquireWait:undefined as undefined|((path:string)=>Promise<void>),fileClose:undefined as undefined|((path:string,close:()=>Promise<void>)=>Promise<void>),removeHook:undefined as undefined|((path:string,remove:()=>Promise<void>)=>Promise<void>),bodyOpens:0,admission:undefined as undefined|import('../src/coordinator/result-revocation.ts').ResultRevocationAdmission,revocationScope:undefined as undefined|import('../src/coordinator/result-revocation.ts').OriginalResultRevocationScope,mutexCloses:0,mutexClosePaths:[] as string[],locks:new Map<string,object>()}))
+vi.mock('../src/coordinator/ownership.ts',async original=>{
+ const module=await original<typeof import('../src/coordinator/ownership.ts')>()
+ return{...module,createOwnership(...args:Parameters<typeof module.createOwnership>){const owner=module.createOwnership(...args);input.owners.push(owner);return owner}}
+})
 // Observe only the genuine constructor-issued scope; do not replace its owner or port.
 vi.mock('../src/coordinator/result-revocation.ts',async original=>{
  const module=await original<typeof import('../src/coordinator/result-revocation.ts')>()
@@ -17,7 +26,7 @@ vi.mock('../src/coordinator/result-revocation.ts',async original=>{
 })
 vi.mock('node:fs/promises',async original=>{
  const fs=await original<typeof import('node:fs/promises')>()
- return{...fs,async open(...args:Parameters<typeof fs.open>){const name=String(args[0]);if(/(?:[\\/](?:body|index|leaves)|blobs[\\/]|index.sqlite$)/.test(name))input.bodyOpens++;const handle=await fs.open(...args),close=handle.close.bind(handle);handle.close=()=>input.fileClose?input.fileClose(name,close):close();return handle}}
+ return{...fs,async rm(...args:Parameters<typeof fs.rm>){if(input.removeHook)return input.removeHook(String(args[0]),()=>fs.rm(...args));return fs.rm(...args)},async open(...args:Parameters<typeof fs.open>){const name=String(args[0]);if(/(?:[\\/](?:body|index|leaves)|blobs[\\/]|index.sqlite$)/.test(name))input.bodyOpens++;const handle=await fs.open(...args),close=handle.close.bind(handle);handle.close=()=>input.fileClose?input.fileClose(name,close):close();return handle}}
 })
 vi.mock('@i-harness/fs-lock/internal/artifact-path',async()=>{
  const {createWin32ArtifactPathOwnerWithApi}=await import('../../fs-lock/src/win32-artifact-path.ts')
@@ -70,7 +79,7 @@ function fixture(pure:boolean,originalLock=true,taskPath?:(id:string)=>string){
  const delta=(before:ReturnType<typeof snapshot>)=>Object.fromEntries(Object.keys(counts).map(key=>[key,counts[key as keyof typeof counts]-before[key as keyof typeof counts]]))
  return{backend,owner,api,counts,snapshot,delta,directories,handles,onCallback(value:(()=>void)|undefined){if(pure&&value)throw Error('Unknown callback cannot enter pure constructor');callback=value}}
 }
-beforeEach(()=>{input.api=undefined;input.originalLock=true;input.originals=[];input.countHeld=undefined;input.heldHook=undefined;input.heldResult=undefined;input.failClose=false;input.failedPath='';input.acquisitionOrder=[];input.acquireHook=undefined;input.acquireWait=undefined;input.fileClose=undefined;input.bodyOpens=0;input.admission=undefined;input.revocationScope=undefined;input.mutexCloses=0;input.mutexClosePaths=[];input.locks.clear()})
+beforeEach(()=>{input.owners=[];input.api=undefined;input.originalLock=true;input.originals=[];input.countHeld=undefined;input.heldHook=undefined;input.heldResult=undefined;input.failClose=false;input.failedPath='';input.acquisitionOrder=[];input.acquireHook=undefined;input.acquireWait=undefined;input.fileClose=undefined;input.bodyOpens=0;input.removeHook=undefined;input.admission=undefined;input.revocationScope=undefined;input.mutexCloses=0;input.mutexClosePaths=[];input.locks.clear()})
 
 it.each(['replacement','lost'] as const)('refuses original slot held evidence %s before effects while original cleanup remains callable',async mode=>{
  const f=fixture(true),first=await f.owner.pinOwnership('source'),claim=await f.owner.pinOwnership('source');let substitutes=0,effects=0
@@ -234,6 +243,18 @@ it('rejects invalidation inside an unknown callback before the guarded consumer 
 })
 
 
+async function originalPreparationFixture(){
+ const f=fixture(true),coordinator=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}}),root=await mkdtemp(join(process.env.IH_RESULT_INTEGRITY_EVIDENCE_ROOT!,'passive-'))
+ const service=createContextOutputService({root,workspaceId:'w'});registerOriginalLegacyOrdering(service,coordinator)
+ return{...f,nativeOwner:input.owners.at(-1)!,coordinator,root,service,async close(){input.fileClose=undefined;await service.close();await coordinator.close();await rm(root,{recursive:true,force:true})}}
+}
+async function legacyMetadata(root:string,sessionId:string,callId:string,expiresAt:number,owners:readonly string[]){
+ const id=referenceId('w',sessionId,callId,'r'),directory=join(root,'context-output',digest('w'))
+ await mkdir(join(directory,'artifacts'),{recursive:true});await mkdir(join(directory,'owners'),{recursive:true})
+ const metadata=JSON.stringify({ref:{id,workspaceId:'w',sessionId,callId,label:'metadata only',revision:'r',bytes:1,originalBytes:1,complete:true,expiresAt}})
+ await writeFile(join(directory,'artifacts',id+'.json'),metadata);await writeFile(join(directory,'owners',id+'.json'),JSON.stringify(owners))
+ return{path:join(directory,'artifacts',id+'.json'),metadata}
+}
 describe('original revocation batch',()=>{
 it('acquires complete original session and Task resource sets in canonical batch order',async()=>{
  const f=fixture(true),ids=['z','a'];let cleanup:import('../src/coordinator/ownership.ts').OwnershipCleanup|undefined
@@ -293,18 +314,6 @@ it('refuses lower fresh resources without dropping a genuine healthy original bu
  try{await expect(reserveOriginalOwnershipBatch(f.owner,['a','z'],value=>{cleanup=value})).rejects.toThrow(/reordered/);expect(input.originals.length).toBe(before);claim.assertHeld();await cleanup!.close();claim.assertHeld()}finally{await claim.release()}
 })
 
-async function originalPreparationFixture(){
- const f=fixture(true),coordinator=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}}),root=await mkdtemp(join(process.env.IH_RESULT_INTEGRITY_EVIDENCE_ROOT!,'passive-'))
- const service=createContextOutputService({root,workspaceId:'w'});registerOriginalLegacyOrdering(service,coordinator)
- return{...f,coordinator,root,service,async close(){input.fileClose=undefined;await service.close();await coordinator.close();await rm(root,{recursive:true,force:true})}}
-}
-async function legacyMetadata(root:string,sessionId:string,callId:string,expiresAt:number,owners:readonly string[]){
- const id=referenceId('w',sessionId,callId,'r'),directory=join(root,'context-output',digest('w'))
- await mkdir(join(directory,'artifacts'),{recursive:true});await mkdir(join(directory,'owners'),{recursive:true})
- const metadata=JSON.stringify({ref:{id,workspaceId:'w',sessionId,callId,label:'metadata only',revision:'r',bytes:1,originalBytes:1,complete:true,expiresAt}})
- await writeFile(join(directory,'artifacts',id+'.json'),metadata);await writeFile(join(directory,'owners',id+'.json'),JSON.stringify(owners))
- return{path:join(directory,'artifacts',id+'.json'),metadata}
-}
 it('includes actual global expiry owners in session coverage and fixes the pass-two frontier',async()=>{
  const f=await originalPreparationFixture(),now=vi.spyOn(Date,'now').mockReturnValue(3000);let cleanup:OriginalResultRevocationPreparation|undefined
  try{
@@ -446,5 +455,204 @@ it.each(['getter','copy','proxy'] as const)('authenticates original revocation t
   admission.assertCovered(genuine,['s']);await f.coordinator.close();expect(()=>admission.assertCovered(genuine,['s'])).toThrow();expect(input.locks.size).toBe(0)
  }finally{await cleanup?.close();await f.close()}
 })
+
+})
+
+
+describe('original covered public clear',()=>{
+ it('refuses distinct original Ownership topology before public clear inventory or native waits',async()=>{
+  const f=await originalPreparationFixture(),other=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}})
+  try{
+   registerOriginalLegacyOrdering(f.service,other)
+   const before=input.originals.length;let refused=false
+   try{await f.service.clear('s')}catch(error){refused=error instanceof Error&&/topology|domain/i.test(error.message)}
+   expect({refused,acquisitions:input.originals.length-before}).toEqual({refused:true,acquisitions:0})
+  }finally{await other.close();await f.close()}
+ })
+ it('authenticates exact native domain before sharing and refuses alias owners by original identity',async()=>{
+  const f=await originalPreparationFixture(),other=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}})
+  try{
+   const first=originalResultRevocationFor(f.coordinator),second=originalResultRevocationFor(other),before=input.originals.length
+   expect(()=>captureOriginalRevocationDomain([first,second])).toThrow(/distinct original/i)
+   expect(()=>captureOriginalRevocationDomain([{...first}])).toThrow(/Original/i)
+   expect(input.originals.length).toBe(before)
+  }finally{await other.close();await f.close()}
+ })
+ it.each(['distinct-local','same-local'] as const)('joins every constructor-associated local admission with %s sharing in the same original owner',async mode=>{
+  const f=fixture(true),root=await mkdtemp(join(process.env.IH_RESULT_INTEGRITY_EVIDENCE_ROOT!,'shared-owner-')),service=createContextOutputService({root,workspaceId:'w'})
+  const make=(observations=createBindingObservations(f.backend,f.owner),admission=observations.createResultRevocationAdmission(f.owner))=>{
+   const unavailable=():never=>{throw Error('Unsupported operation on this constructor-associated admission facade')},unavailableAsync=async()=>unavailable()
+   const coordinator:import('../src/coordinator/types.ts').SessionCoordinator={
+    create:unavailableAsync,withSessionBindingObservation:observations.withSessionBindingObservation,async close(){await observations.closeAdmission()()},
+    bootstrapSemanticTarget:unavailableAsync,resumeSemanticTarget:unavailableAsync,inspectBootstrap:unavailableAsync,openManagedDocument:unavailableAsync,revokeManagedDocumentNewWork:unavailable,closeManagedDocument:unavailableAsync,
+    append:unavailableAsync,enqueue:unavailable,load:unavailableAsync,loadOwned:unavailableAsync,list:unavailableAsync,profile:unavailableAsync,updateMeta:unavailableAsync,flush:unavailableAsync,putDocument:unavailableAsync,getDocument:unavailableAsync,ownerOf:f.owner.ownerOf,adoptOwnership:unavailableAsync,releaseOwnership:unavailableAsync,
+   }
+   associateOriginalResultOrdering(coordinator,f.owner);associateOriginalResultRevocation(coordinator,admission,f.owner);registerOriginalLegacyOrdering(service,coordinator)
+   return{observations,coordinator,admission}
+  }
+  const a=make(),b=mode==='same-local'?make(a.observations,a.admission):make(),first=Promise.withResolvers<void>(),second=Promise.withResolvers<void>(),leaveFirst=Promise.withResolvers<void>(),leaveSecond=Promise.withResolvers<void>();let cleanup:OriginalResultRevocationPreparation|undefined
+  const hold=(record:ReturnType<typeof make>,entered:PromiseWithResolvers<void>,release:PromiseWithResolvers<void>)=>{let closed=false;const registration=record.observations.registerOwnedDocumentOperation('s','held-document',{revoke(){},assertOutside(){},async close(){if(closed)return;entered.resolve();await release.promise;closed=true;registration.unregister()},async retryClose(){await this.close()}});return registration}
+  hold(a,first,leaveFirst);if(mode==='distinct-local')hold(b,second,leaveSecond)
+  try{
+   const preparing=service.clear('s')
+   await first.promise;expect(input.acquisitionOrder.filter(path=>path.startsWith('C:\\store'))).toHaveLength(0);leaveFirst.resolve()
+   if(mode==='distinct-local'){await second.promise;expect(input.acquisitionOrder.filter(path=>path.startsWith('C:\\store'))).toHaveLength(0);leaveSecond.resolve()}
+   const result=await preparing
+   expect(result.results).toBe(0);expect(input.acquisitionOrder.filter(path=>path.startsWith('C:\\store'))).toHaveLength(2)
+  }finally{leaveFirst.resolve();leaveSecond.resolve();await cleanup?.close();await service.close();await a.coordinator.close();await b.coordinator.close();await rm(root,{recursive:true,force:true})}
+ })
+
+ it('connects public clear to the original covered Store continuation and canonical native claims',async()=>{
+  const f=await originalPreparationFixture(),apply=vi.spyOn(ContextStore.prototype,'applyCoveredClear')
+  try{
+   await f.service.configure({enabled:true});const ref=await f.service.capture({sessionId:'source',callId:'clear',label:'fixture',text:'original clear bytes',complete:true});if(!ref)throw Error('Original capture unavailable')
+   const before=input.acquisitionOrder.filter(path=>path.startsWith('C:\\store')).length
+   await f.service.clear('source')
+   expect(apply).toHaveBeenCalledTimes(1);expect(input.acquisitionOrder.filter(path=>path.startsWith('C:\\store')).length-before).toBe(2)
+   expect(input.locks.size).toBe(0)
+   await expect(f.service.read({sessionId:'source'},{refId:ref.id})).rejects.toThrow()
+   await f.service.close();expect(input.locks.size).toBe(0)
+  }finally{apply.mockRestore();await f.close()}
+ })
+
+ it('joins healthy clear and configure callers until original native cleanup acknowledges',async()=>{
+  const f=await originalPreparationFixture(),other=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}}),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),apply=vi.spyOn(ContextStore.prototype,'applyCoveredClear');let configured=false,second=false,closed=false
+  try{
+   await f.service.configure({enabled:true});const ref=await f.service.capture({sessionId:'source',callId:'queue',label:'queue',text:'queue bytes',complete:true});if(!ref)throw Error('Fixture unavailable')
+   input.acquireWait=async path=>{if(path.startsWith('C:\\store')){input.acquireWait=undefined;entered.resolve();await leave.promise}}
+   const first=f.service.clear('source');await entered.promise
+   expect(()=>registerOriginalLegacyOrdering(f.service,other)).toThrow(/topology.*busy/i)
+   const configure=f.service.configure({maxReadBytes:4096}).then(value=>{configured=true;expect(input.mutexClosePaths.filter(path=>path.startsWith('C:\\store')).length).toBeGreaterThanOrEqual(2);return value})
+   const next=f.service.clear('source').then(value=>{second=true;return value}),closing=f.service.close().then(()=>{closed=true})
+   await Promise.resolve();expect(configured).toBe(false);expect(second).toBe(false);expect(closed).toBe(false);expect(apply).not.toHaveBeenCalled()
+   leave.resolve();await Promise.all([first,configure,next,closing]);expect(closed).toBe(true);expect(configured).toBe(true);expect(second).toBe(true);expect(apply).toHaveBeenCalledTimes(2);expect(f.service.status().config.maxReadBytes).toBe(4096);expect(input.locks.size).toBe(0)
+  }finally{leave.resolve();input.acquireWait=undefined;apply.mockRestore();await other.close();await f.close()}
+ })
+ it('refuses own public clear operation reentry before publishing another transition',async()=>{
+  const f=await originalPreparationFixture();let entered=false
+  try{
+   await f.service.configure({enabled:true});await f.service.capture({sessionId:'source',callId:'reentry',label:'reentry',text:'reentry bytes',complete:true});const before=f.service.status().config.maxReadBytes
+   input.fileClose=async(path,close)=>{
+    if(!entered&&path.includes('artifacts')&&path.endsWith('.json')){entered=true;const count=input.originals.length;await expect(f.service.configure({maxReadBytes:4096})).rejects.toThrow(/reentry/);await expect(f.service.clear('other')).rejects.toThrow(/reentry/);expect(input.originals.length).toBe(count)}
+    await close()
+   }
+   await f.service.clear('source');expect(entered).toBe(true);expect(f.service.status().config.maxReadBytes).toBe(before);expect(input.locks.size).toBe(0)
+  }finally{input.fileClose=undefined;await f.close()}
+ })
+ it('keeps generic no-op public clear outside cold native topology',async()=>{
+  fixture(true);const root=await mkdtemp(join(process.env.IH_RESULT_INTEGRITY_EVIDENCE_ROOT!,'generic-clear-')),service=createContextOutputService({root,workspaceId:'w'})
+  try{const before=input.originals.length;expect((await service.clear()).results).toBe(0);expect(input.originals.length).toBe(before)}finally{await service.close();await rm(root,{recursive:true,force:true})}
+ })
+
+ it('preserves target grants after source-only clear and protects actual managed bodies',async()=>{
+  const f=await originalPreparationFixture()
+  try{
+   await f.service.configure({enabled:true});const ref=await f.service.capture({sessionId:'source',callId:'survivor',label:'survivor',text:'surviving bytes',complete:true});if(!ref)throw Error('Original capture unavailable')
+   await f.service.grant({sessionId:'source'},[ref.id],'target')
+   const scope=f.service.registerResultScope({operationId:'protected',sessionId:'managed',callId:'protected'},()=>true),sink=await f.service.beginResult(scope,'text-utf8-v1');await sink.write(Buffer.from('protected managed bytes'));const managed=await sink.finish('complete');if(managed.kind!=='committed')throw Error('Original managed result unavailable')
+   const body=join(f.root,'context-output',digest('w'),'managed-v1',managed.ref.id,'body'),before=await readFile(body)
+   const status=await f.service.clear('source');expect(status.protectedResults).toBe(1);expect(status.clearDisposition).toBe('protected');expect(await readFile(body)).toEqual(before)
+   expect((await f.service.read({sessionId:'target'},{refId:ref.id})).text).toBe('surviving bytes')
+   await f.service.clear('target');await expect(f.service.read({sessionId:'target'},{refId:ref.id})).rejects.toThrow();expect(await readFile(body)).toEqual(before)
+  }finally{await f.close()}
+ })
+ it('uses the actual pass-two expiry frontier without removing a later expired unclaimed result',async()=>{
+  const f=await originalPreparationFixture();let clock=Date.now();const now=vi.spyOn(Date,'now').mockImplementation(()=>clock)
+  const originalPrepare=ContextStore.prototype.prepareCoveredClear;let second:import('../../context-output/src/types.ts').ContextResultRef|undefined
+  const prepare=vi.spyOn(ContextStore.prototype,'prepareCoveredClear').mockImplementation(async function(this:ContextStore,...args:Parameters<ContextStore['prepareCoveredClear']>){const token=await originalPrepare.apply(this,args);clock=second!.expiresAt+1;return token})
+  try{
+   await f.service.configure({enabled:true});const first=await f.service.capture({sessionId:'old',callId:'old',label:'old',text:'old bytes',complete:true});if(!first)throw Error('Original first capture unavailable')
+   clock+=1000;second=await f.service.capture({sessionId:'late',callId:'late',label:'late',text:'late bytes',complete:true});if(!second)throw Error('Original second capture unavailable')
+   clock=first.expiresAt+1;await f.service.clear('unrelated')
+   const directory=join(f.root,'context-output',digest('w'))
+   await expect(readFile(join(directory,'blobs',first.id+'.txt'))).rejects.toHaveProperty('code','ENOENT')
+   expect((await readFile(join(directory,'blobs',second.id+'.txt'))).toString()).toBe('late bytes')
+   expect(prepare).toHaveBeenCalledTimes(1)
+  }finally{prepare.mockRestore();now.mockRestore();await f.close()}
+ })
+ it('retains original issued clear progress and cleanup debt without rediscovery or primitive replay',async()=>{
+  const f=await originalPreparationFixture(),apply=vi.spyOn(ContextStore.prototype,'applyCoveredClear');let removals=0
+  await f.service.configure({enabled:true});await f.service.capture({sessionId:'source',callId:'partial',label:'partial',text:'partial bytes',complete:true})
+  input.removeHook=async(path,remove)=>{await remove();if(path.includes('blobs')&&path.endsWith('.txt')){removals++;throw undefined}}
+  await expect(f.service.clear('source')).rejects.toBeUndefined();expect(removals).toBe(1);expect([...input.locks.keys()].some(path=>path.startsWith('C:\\store'))).toBe(true)
+  const native=input.originals.length;input.removeHook=undefined
+  await expect(f.service.clear('source')).rejects.toBeUndefined();await expect(f.service.configure({maxReadBytes:4096})).rejects.toBeUndefined();expect(input.originals.length).toBe(native);expect(apply).toHaveBeenCalledTimes(1);expect(removals).toBe(1)
+  await expect(f.service.close()).rejects.toBeUndefined();await expect(f.coordinator.close()).rejects.toThrow();expect(removals).toBe(1);expect([...input.locks.keys()].some(path=>path.startsWith('C:\\store'))).toBe(true)
+  apply.mockRestore();await rm(f.root,{recursive:true,force:true})
+ })
+
+ it('bounds actual pass-two inventory drift before any clear effect and retains the original finite request',async()=>{
+  const f=await originalPreparationFixture(),original=ContextStore.prototype.passiveInventory,apply=vi.spyOn(ContextStore.prototype,'applyCoveredClear');let reads=0,path=''
+  const inventory=vi.spyOn(ContextStore.prototype,'passiveInventory').mockImplementation(async function(this:ContextStore,...args:Parameters<ContextStore['passiveInventory']>){const result=await original.apply(this,args);if(path&&args[1]==='source'&&args.length===3&&++reads%2===1)await writeFile(path,JSON.stringify(['source','foreign-'+reads]));return result})
+  try{
+   await f.service.configure({enabled:true});const ref=await f.service.capture({sessionId:'source',callId:'drift',label:'drift',text:'drift bytes',complete:true});if(!ref)throw Error('Original capture unavailable')
+   path=join(f.root,'context-output',digest('w'),'owners',ref.id+'.json')
+   await expect(f.service.clear('source')).rejects.toThrow(/changed repeatedly/);expect(reads).toBe(6);expect(apply).not.toHaveBeenCalled();expect(input.locks.size).toBe(0)
+   const native=input.originals.length;await expect(f.service.clear('source')).rejects.toThrow(/changed repeatedly/);expect(reads).toBe(6);expect(input.originals.length).toBe(native)
+   expect((await readFile(join(f.root,'context-output',digest('w'),'blobs',ref.id+'.txt'))).toString()).toBe('drift bytes')
+  }finally{inventory.mockRestore();apply.mockRestore();await f.close()}
+ })
+
+ it('cancels the exact static constructor registration and preserves a falsey original failure',async()=>{
+  const f=await originalPreparationFixture();let cleanup:OriginalResultRevocationPreparation|undefined
+  try{
+   const before=input.originals.length;let failed=false,primary:unknown
+   try{createProcessAwareResultService({root:f.root,workspaceId:'w',orderingCoordinators:[f.coordinator],coordinatorFor:()=>f.coordinator,sourceFor:async()=>({sourceId:'unused'}),genericVisible:async()=>false,documentDeletions(){throw false}})}catch(cause){failed=true;primary=cause}
+   expect(failed).toBe(true);expect(primary).toBe(false);expect(input.originals.length).toBe(before)
+   const prepared=await prepareOriginalResultRevocation(f.service,f.coordinator,{kind:'session',sessionIds:['probe'],documents:[]},value=>{cleanup=value});prepared.assertCovered(['probe'])
+  }finally{await cleanup?.close();await f.close()}
+ })
+
+ it.each(['healthy','lost-cleanup'] as const)('orders two original services and clears before external fresh ownership dependency=%s',async mode=>{
+  const f=await originalPreparationFixture(),second=createContextOutputService({root:f.root,workspaceId:'second',config:{enabled:true}});registerOriginalLegacyOrdering(second,f.coordinator)
+  const trace=new AsyncLocalStorage<string>(),enteredA=Promise.withResolvers<void>(),leaveA=Promise.withResolvers<void>(),enteredB=Promise.withResolvers<void>(),leaveB=Promise.withResolvers<void>()
+  const paths=new Map<string,Set<string>>(),flags:boolean[]=[],originalInventory=ContextStore.prototype.passiveInventory;let heldA=false,heldB=false,bReadsBeforeAck=0,removals=0
+  const closed=(kind:string)=>{const keys=paths.get(kind);return keys?.size===2&&[...keys].every(path=>input.mutexClosePaths.includes(path))}
+  const inventory=vi.spyOn(ContextStore.prototype,'passiveInventory').mockImplementation(async function(this:ContextStore,...args:Parameters<ContextStore['passiveInventory']>){if(trace.getStore()==='B'&&!closed('A'))bReadsBeforeAck++;return originalInventory.apply(this,args)})
+  const results:Promise<unknown>[]=[]
+  try{
+   await f.service.configure({enabled:true});await f.service.capture({sessionId:'a',callId:'a',label:'a',text:'a bytes',complete:true});await second.capture({sessionId:'b',callId:'b',label:'b',text:'b bytes',complete:true})
+   input.acquireWait=async path=>{
+    const kind=trace.getStore();if(!kind||!path.startsWith('C:\\store'))return
+    let keys=paths.get(kind);if(!keys){keys=new Set();paths.set(kind,keys)};keys.add(path)
+    if(kind==='B'){flags.push(closed('A'));if(!heldB){heldB=true;enteredB.resolve();await leaveB.promise}}
+    if(kind==='fresh')flags.push(closed('A')&&closed('B'))
+    if(kind==='A'&&!heldA){heldA=true;enteredA.resolve();await leaveA.promise}
+   }
+   if(mode==='lost-cleanup')input.removeHook=async(path,remove)=>{await remove();if(trace.getStore()==='A'&&path.includes('blobs')&&path.endsWith('.txt')){removals++;throw false}}
+   const a=trace.run('A',()=>f.service.clear('a')).then(value=>({ok:true,value}),cause=>({ok:false,cause}));results.push(a);await enteredA.promise
+   const b=trace.run('B',()=>second.clear('b')).then(value=>({ok:true,value}),cause=>({ok:false,cause}));results.push(b)
+   const fresh=trace.run('fresh',()=>f.nativeOwner.pinOwnership('external-fresh')).then(claim=>({ok:true,claim}),cause=>({ok:false,cause}));results.push(fresh)
+   await new Promise<void>(resolve=>setImmediate(resolve));expect(bReadsBeforeAck).toBe(0);expect(paths.has('B')).toBe(false);expect(paths.has('fresh')).toBe(false)
+   leaveA.resolve()
+   if(mode==='healthy'){
+    const next=await Promise.race([enteredB.promise.then(()=>true),b.then(()=>false)]);expect(next).toBe(true);expect(paths.has('fresh')).toBe(false);leaveB.resolve()
+    const first=await a,other=await b,external=await fresh;expect(first.ok).toBe(true);expect(other.ok).toBe(true);expect(external.ok).toBe(true)
+    if('claim'in external){external.claim.assertHeld();await external.claim.release()}
+    expect(flags.length).toBeGreaterThan(0);expect(flags.every(Boolean)).toBe(true);expect(input.locks.size).toBe(0)
+   }else{
+    const first=await a,other=await b,external=await fresh
+    expect(first).toEqual({ok:false,cause:false});expect(other).toEqual({ok:false,cause:false});expect(external).toEqual({ok:false,cause:false});expect(removals).toBe(1);expect(paths.has('B')).toBe(false);expect(paths.has('fresh')).toBe(false)
+    input.removeHook=undefined;await f.nativeOwner.retryResultOrdering();const count=input.originals.length
+    await expect(f.nativeOwner.pinOwnership('retry-after-empty-waiter')).rejects.toBe(false);expect(input.originals.length).toBe(count)
+    await expect(f.service.close()).rejects.toBe(false);expect([...input.locks.keys()].some(path=>path.startsWith('C:\\store'))).toBe(true)
+   }
+  }finally{
+   leaveA.resolve();leaveB.resolve();input.acquireWait=undefined;input.removeHook=undefined;await Promise.allSettled(results);inventory.mockRestore()
+   if(mode==='healthy'){await second.close();await f.close()}
+   else{await second.close().catch(()=>{});await f.service.close().catch(()=>{});await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}
+  }
+ })
+ it('refuses copied stale and cancelled original ordering origins without granting through their context',async()=>{
+  const f=await originalPreparationFixture(),domain=captureOriginalRevocationDomain([originalResultRevocationFor(f.coordinator)]),origin=beginOriginalRevocationOrdering(domain);let effects=0
+  try{
+   await expect(runOriginalRevocationOrdering(domain,{...origin},async()=>{effects++})).rejects.toThrow(/Original/);expect(effects).toBe(0)
+   await expect(runOriginalRevocationOrdering(domain,origin,async()=>{await expect(f.nativeOwner.pinOwnership('nested-origin-fresh')).rejects.toThrow(/reentry/);throw false})).rejects.toBe(false)
+   const count=input.originals.length;await expect(f.nativeOwner.pinOwnership('cancelled-origin-fresh')).rejects.toBe(false);expect(input.originals.length).toBe(count)
+   completeOriginalRevocationOrdering(domain,origin)
+   await expect(runOriginalRevocationOrdering(domain,origin,async()=>{effects++})).rejects.toThrow(/Original/);expect(effects).toBe(0)
+   const claim=await f.nativeOwner.pinOwnership('after-original-cancel-ack');await claim.release()
+  }finally{await f.close()}
+ })
 
 })
