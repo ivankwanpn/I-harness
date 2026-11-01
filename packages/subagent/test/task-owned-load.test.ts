@@ -26,6 +26,7 @@ vi.mock('../../fs-lock/src/index.ts', async original => {
  }}
 })
 import { lockPathFor } from '../../fs-lock/src/index.ts'
+import { fixtureGenerationFor } from './generation-fixture.ts'
 import { registerSubagent } from '../src/index.ts'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
@@ -98,7 +99,7 @@ it.each(['retire','parent','mutation'] as const)('original close-to-install %s c
 })
 function mount(f:Awaited<ReturnType<typeof fixture>>, restored:boolean){
  const ctx=createContext(),registry=createToolRegistry(ctx),resolveModel=vi.fn(async()=>({status:'unconfigured' as const,reason:'unused'}))
- const mounted=registerSubagent(ctx,registry,{parentSession:f.document.view,factOwner:f.document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel,reportPolicy:SHIPPING_REPORT_POLICY,persist:{coordinator:f.coordinator,stateId:'parent',parentSessionId:'parent',parentSession:f.document.view},...(restored?{restoredState:{formatVersion:1 as const,roles:[],jobs:[{id:'subagent-1',owner:'root',kind:'subagent',label:'pending',status:'running' as const,output:'',terminal:false}],agentTable:[{path:'root/a',status:'waiting' as const,sessionId:'child',mailbox:['pending'],lastInboxSeq:0}]}}:{})})
+ const mounted=registerSubagent(ctx,registry,{generationFactoryFor:fixtureGenerationFor,parentSession:f.document.view,factOwner:f.document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel,reportPolicy:SHIPPING_REPORT_POLICY,persist:{coordinator:f.coordinator,stateId:'parent',parentSessionId:'parent',parentSession:f.document.view},...(restored?{restoredState:{formatVersion:1 as const,roles:[],jobs:[{id:'subagent-1',owner:'root',kind:'subagent',label:'pending',status:'running' as const,output:'',terminal:false}],agentTable:[{path:'root/a',status:'waiting' as const,sessionId:'child',mailbox:['pending'],lastInboxSeq:0}]}}:{})})
  return {mounted,resolveModel}
 }
 it.each([{restored:false,value:undefined},{restored:true,value:undefined},{restored:true,value:{formatVersion:1,tasks:[row,{...row,id:'task-2'}],notifications:[]}}])('actual startup %j has zero early producers',async ({restored,value})=>{
@@ -127,7 +128,7 @@ it('owned runtime mutation stays fenced while a restored mirror is still pending
  const f=await fixture({formatVersion:2,tasks:[],notifications:[]})
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
  try{
-  await f.tasks.ready;await f.coordinator.create({sessionId:'child',origin:'subagent',parentSession:'parent'})
+  await f.tasks.ready;await f.coordinator.create({sessionId:'child',origin:'subagent',parentSession:'parent',seedLength:0})
   const original=f.coordinator.openManagedDocument.bind(f.coordinator)
   const spy=vi.spyOn(f.coordinator,'openManagedDocument').mockImplementation(async id=>{if(id==='child'){entered.resolve();await release.promise}return original(id)})
   const {mounted}=mount(f,true);await entered.promise
@@ -139,3 +140,23 @@ it('owned runtime mutation stays fenced while a restored mirror is still pending
  }finally{release.resolve();await f.close()}
 })
 
+it.each([false,true])('genuine resident retirement with held save and parent revoked=%s drains original owners',async revoked=>{
+ const f=await fixture({formatVersion:2,tasks:[],notifications:[]})
+ try{
+  await f.tasks.ready;const {mounted}=mount(f,false);await mounted.ready
+  mounted.roles.register({name:'probe',description:'',systemPrompt:'probe',tools:[]})
+  await f.coordinator.create({sessionId:'child',origin:'subagent',parentSession:'parent',seedLength:0})
+  const child=await f.coordinator.openManagedDocument('child')
+  const entry={path:'root/resident',status:'waiting' as const,session:child.view,factOwner:child,sessionId:'child',roleName:'probe',controller:new AbortController(),mailbox:[] as string[]}
+  mounted.table.add(entry.path,entry)
+  expect(await mounted.ensureResident(entry,new AbortController())).toBe(true)
+  expect(mounted.agents.get('child')).toBeDefined();expect(mounted.table.get(entry.path)?.dispose).toBeTypeOf('function')
+  const task=mounted.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'held',description:'',prompt:'',agent:'probe',delivery:'tool'});await mounted.tasks.flushPersistence()
+  const handoff=mounted.tasks.bindForegroundHandoff(task.id)();if(handoff.kind!=='parent')throw new Error('missing original held save')
+  await handoff.save.done
+  const changes:boolean[]=[];mounted.table.subscribe(change=>{if(change.entry.closing)changes.push(true)})
+  if(revoked)f.document.revokeNewWork()
+  await mounted.dispose();expect(mounted.agents.get('child')).toBeUndefined();expect(mounted.table.get(entry.path)?.closing).toBe(true);expect(changes).toHaveLength(1)
+  expect(()=>handoff.save.assertHandoff()).toThrow();await mounted.dispose()
+ }finally{await f.close()}
+})

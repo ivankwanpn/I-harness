@@ -218,11 +218,18 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   const stagedRuntime = { jobs, table, roles }
   let mountedRuntime = stagedRuntime
   let runtimeWorkReady = !ownedTask
+  let runtimeRetiring = false
   if (ownedTask) {
     function guarded<T extends object>(kind: 'jobs' | 'table' | 'roles', original: T, names: readonly (keyof T)[]): T {
       const facade = { ...original }
       for (const name of names) {
         const method = (...args: unknown[]) => {
+          // Original resident retirement must retain its closing event after
+          // new work is fenced, without scheduling another persistence save.
+          const patch = args[2] as Partial<ChildAgentEntry> | undefined
+          if (runtimeRetiring && kind === 'table' && name === 'update' && patch?.closing === true && Reflect.ownKeys(patch).length === 1) {
+            return stagedRuntime.table.update(args[0] as string, args[1] as ChildAgentEntry, { closing: true })
+          }
           tasks.assertReady()
           if (!runtimeWorkReady) throw new Error('Owned runtime restoration pending')
           const target = mountedRuntime[kind] as T
@@ -357,6 +364,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   let factsFlushed = false, tasksFlushed = false, factsClosed = false, readyFailureReported = false
   function dispose(): Promise<void> {
     notificationsRetired = true
+    runtimeRetiring = true
     tasks.retireOwnedLoad()
     const owner = residentOwnerFor(subagentDeps)
     if (owner.inInvocation()) { owner.retire(); return refusedReentry() }
