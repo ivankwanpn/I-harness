@@ -107,7 +107,7 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
     if (body.permit) { checkIdentity(body); if (body.entered) throw new Error('Model body already entered'); body.permit.assertCurrent() }
     body.entered = true
     const frame:Frame={body,parent:body.permit ? undefined : active.getStore(),active:true,signal:own(body.exec,'abortSignal') as AbortSignal | undefined,
-      domain:body.managed?.domain.owner??(body.view && body.source && isOwnedSettlementSource(body.view,body.source)?body.context?.factOwner??body.view:undefined)}
+      domain:body.managed?.domain.owner??(body.view && body.source && isOwnedSettlementSource(body.view,body.source)?body.view:undefined)}
     return active.run(frame,async()=>{try{return await leaf.call(body.tool,body.call.args as never,body.exec)}finally{frame.active=false}})
   }
 }
