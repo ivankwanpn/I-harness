@@ -368,6 +368,22 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     let held=entry.captureIO?.held??heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>{})
     if(entry.captureIO)entry.captureIO.activeIssue=()=>{if (b.taskBarrier?.mode) b.taskBarrier.markHeaderIssued();current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
     try {
+      // Reconcile only the original completed Task14 birth; this path cannot issue work.
+      if (entry.document && b.stage && b.taskBarrier?.completed) {
+        if (b.pending) {
+          const pending = b.pending, key = 'key' in pending ? pending.key : 'receipt' in pending ? pending.receipt.key : undefined
+          if (!key) return blocked(entry)
+          const outcome = await entry.document.reconcile(key)
+          b.pending = outcome
+          if (outcome.kind !== 'committed') return blocked(entry)
+          b.pending = undefined
+        }
+        const state = await read(b.invocation,entry.route)
+        const publication = publicationStatus(state,b.stage)
+        if (publication === 'conflict') return {kind:'refused',reason:'conflict'}
+        if (publication !== 'valid' || !readyState(state)) return blocked(entry)
+        return await adopt(entry,state,guards,undefined,observation)
+      }
       await settleCapture(entry)
       await ownership.withSessionOperation(id,async()=>{mutations.assertWritableBootstrap(id);await ownership.ensureOwnership(id)})
       if (transitions) {
