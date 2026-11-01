@@ -11,9 +11,10 @@ import type { CapturedToolCall, ToolPrepareIdentity, NativePlan, NativeMutation,
 import { isDecision, mergeDecision } from "../approval/decision.ts"
 import { captureApproval } from "../approval/identity.ts"
 import type { createCatalog } from "./catalog.ts"
-import { createPreparedBodyInvoker, attachPreparedModelOrigin, type ToolExecutionOwnerContext } from './prepared-body.ts'
+import { createPreparedBodyInvoker, attachPreparedModelOrigin, type ToolExecutionOwnerConfiguration } from './prepared-body.ts'
 
-export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined, executionOwner?: ToolExecutionOwnerContext) {
+export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined, executionOwner?: ToolExecutionOwnerConfiguration) {
+  const domain=executionOwner&&'kind'in executionOwner?executionOwner.domain:undefined
   type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; executeBinding: ReturnType<typeof catalog.captureBinding>['executeBinding']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
   const captures = new WeakMap<CapturedToolCall, Capture>()
   const executions = new WeakMap<PreparedCall, () => Promise<unknown>>()
@@ -28,7 +29,8 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     return entry
   }
   function capture(input: ToolCall, identity: ToolPrepareIdentity = {}): CapturedToolCall {
-    assertToolSettlementScope(identity.session, identity.settlementSource)
+    assertToolSettlementScope(identity.session, identity.settlementSource,domain)
+    if(domain&&identity.sessionId!==undefined&&identity.sessionId!==domain.sessionId)throw Error('Foreign managed capture session')
     const call = captureToolCall(input)
     freezeArguments(call)
     const { tool, bindingGeneration, bindingValidation, planBinding, executeBinding } = catalog.captureBinding(call)
@@ -49,7 +51,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     }
     const handle: CapturedToolCall = Object.freeze({ kind: 'captured-tool-call' })
     captures.set(handle, { call, identity: Object.freeze({ ...identity }), tool, executeBinding, bindingGeneration, bindingValidation, native, concurrencySafe: tool.isConcurrencySafe === true, used: false })
-    registerCaptureOwner(handle, getRegistry())
+    registerCaptureOwner(handle, getRegistry(),domain)
     return handle
   }
   function inspectCapture(handle: CapturedToolCall) {
@@ -80,7 +82,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     if (entry.origin !== undefined && entry.origin !== origin) throw new Error('Native instruction origin mismatch')
     if (instructionsRequired && entry.native?.targets.some(t => t.mode === 'mutate') && (!entry.authority || !origin || entry.origin !== origin || !verifyOrigin?.(origin, handle))) throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'missing-origin', currentFingerprint: '' })
     const { call, identity, tool, executeBinding, bindingGeneration, bindingValidation } = entry
-    assertToolSettlementScope(identity.session, identity.settlementSource)
+    assertToolSettlementScope(identity.session, identity.settlementSource,domain)
     const commandDialect = tool.commandDialect?.(call.args)
     // Policy/hook identity comes only from the trusted host, never model JSON.
     const policyInput = { name: call.name, args: call.args,
@@ -184,8 +186,8 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
         settle() { entry.authority?.settle() },
       } satisfies NativeMutation))
     }
-    bindPreparedSettlement(prepared, identity?.settlementSource)
-    registerResultPrepared(prepared, identity?.settlementSource)
+    bindPreparedSettlement(prepared, identity?.settlementSource,domain)
+    registerResultPrepared(prepared, identity?.settlementSource,domain)
     registerInstructionExec(exec)
     // The callback stays private to this registry; hooks cannot replace the
     // executable, receiver, frozen arguments or exec through prepared metadata.
@@ -193,7 +195,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     return prepared
   }
 
-  function attachModelOrigin(prepared: PreparedCall, proof: object, take: import('../model-origin.ts').ConstructorModelOriginVerifier['take']) {
+  function attachModelOrigin(prepared: PreparedCall, proof: object, take: import('../model-origin.ts').ModelOriginTake) {
     if (!executions.has(prepared)) throw new Error('Foreign prepared execution')
     attachPreparedModelOrigin(prepared, getRegistry(), proof, take)
   }

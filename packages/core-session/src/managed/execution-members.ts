@@ -5,6 +5,7 @@ import type { FactOutcome, SessionEventView, FactReceipt } from './types.ts'
 
 interface CaptureRecord {
   identity?:object
+  source:object
   current(): void
   active: boolean
   sourceReleased: boolean
@@ -89,6 +90,7 @@ function constructHandle<T extends CapturedActionFact>(commands: T, current: () 
  * input source cannot retain every completed capture and its historical body.
  * Live handles retain their record; explicit pins retain theirs independently. */
 export function isExecutionMemberOf(capture:object,identity:object){return captures.get(capture)?.identity===identity}
+export function isExecutionCaptureSource(capture:object,source:object){return captures.get(capture)?.source===source}
 export function createExecutionMemberOwner(assertHeld: () => void,identity?:object) {
   const groups = new WeakMap<CapturedFactGroup, Set<CaptureRecord>>()
   const sources = new WeakMap<object, Set<WeakRef<CaptureRecord>>>()
@@ -109,7 +111,7 @@ export function createExecutionMemberOwner(assertHeld: () => void,identity?:obje
       assertHeld()
       if (!isOriginalCapturedFactGroup(group)) throw new TypeError('Original captured group required')
       const record: CaptureRecord = {
-        identity,
+        identity,source,
         active: true, pins: 0, sourceReleased: false, reference: undefined!,
         current() { assertHeld(); assertSource() },
         releaseIfDone() {

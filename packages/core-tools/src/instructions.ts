@@ -3,7 +3,9 @@ import { assertResultPrepared } from './registry/result-finalization.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 
 const captureOwners = new WeakMap<CapturedToolCall, ToolRegistry>()
-export function registerCaptureOwner(capture: CapturedToolCall, registry: ToolRegistry): void { captureOwners.set(capture, registry) }
+const captureDomains=new WeakMap<CapturedToolCall,import('@i-harness/core-session/internal/execution').ManagedExecutionDomain>()
+export function registerCaptureOwner(capture: CapturedToolCall, registry: ToolRegistry,domain?:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain): void { captureOwners.set(capture, registry);if(domain)captureDomains.set(capture,domain) }
+export function capturedManagedExecutionDomain(capture:CapturedToolCall){return captureDomains.get(capture)}
 export function capturedToolRegistry(capture: CapturedToolCall): ToolRegistry {
   const owner = capture && captureOwners.get(capture)
   if (!owner) throw new Error('Foreign tool capture')
