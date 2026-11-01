@@ -127,12 +127,15 @@ function createRuntimeContextEngine(readCurrent:()=>{readonly semanticDigest:str
     if(!accepting)throw Error('Runtime context closed')
     signal?.throwIfAborted();prepared!.assertCurrent()
     const archive=await prepared!.prepare(signal)
+    let primary:unknown,failed=false
     try{
       const current=()=>{if(!accepting)throw Error('Runtime context closed');signal?.throwIfAborted();prepared!.assertCurrent();archive.assertCurrent()}
       current()
       const floor=readRestoredConversation(archive,{ownerSessionId:prepared!.ownerSessionId}).projection.current
-      return await publish(record,flight,signal,retain,()=>{current();return floor},current)
-    }finally{await archive.settle()}
+      await publish(record,flight,signal,retain,()=>{current();return floor},current)
+    }catch(cause){failed=true;primary=cause}
+    try{await archive.settle()}catch(cleanup){if(failed)throw new AggregateError([primary,cleanup],'Runtime publication and original archive cleanup failed',{cause:primary});throw cleanup}
+    if(failed)throw primary
   }
   return {
     registerSection(name, getter) {

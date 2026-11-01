@@ -46,3 +46,24 @@ it('prepared runtime refuses missing support, copied ownership and reader getter
  Object.defineProperty(reader,'assertCurrent',{get(){callbacks++;throw Error('Replaced currentness')}})
  probe.appends=0;await expect(runtime.render()).rejects.toThrow('changed');expect(callbacks).toBe(0);expect(probe.appends).toBe(0)
 })
+it.each([undefined,false,null])('genuine archive double failure preserves falsey currentness then cleanup (%j)',async primary=>{
+ const {execution,domain}=await fixture();let held:import('@i-harness/core-session/internal/restoration').PreparedConversationArchive|undefined,fault=true,getters=0,ack=false,cleanupAttempts=0
+ const cleanup={original:'archive cleanup'},originalDelete=Set.prototype.delete
+ const spy=vi.spyOn(Set.prototype,'delete').mockImplementation(function(this:Set<unknown>,value:unknown){if(value===held){cleanupAttempts++;if(fault)throw cleanup}const deleted=originalDelete.call(this,value);if(value===held)ack=deleted;return deleted})
+ const runtime=createPreparedRuntimeContext({ownerSessionId:'owner',async prepare(){held=await execution.prepare();return held},assertCurrent(){domain.assertCurrent();if(held)throw primary}},createRuntimeContextSource(execution.owner));resources.push(()=>runtime.close());runtime.registerSection('actual',()=>{getters++;return'original'})
+ try{
+  const failure=await runtime.render().then(()=>{throw Error('Unexpected publication success')},cause=>cause)
+  expect(failure).toBeInstanceOf(AggregateError);expect(failure.errors).toHaveLength(2);expect(failure.errors[0]).toBe(primary);expect(failure.errors[1]).toBe(cleanup);expect(cleanupAttempts).toBe(1)
+  expect(probe.appends).toBe(0);expect(getters).toBe(1)
+  fault=false;await held!.settle();expect(ack).toBe(true);expect(cleanupAttempts).toBe(2);await runtime.settleOriginals();expect(getters).toBe(1);expect(probe.appends).toBe(0)
+ }finally{fault=false;try{await held?.settle()}finally{spy.mockRestore()}}
+})
+it('genuine unknown publication and archive cleanup both survive before same-source recovery',async()=>{
+ const {execution,domain}=await fixture();let held:import('@i-harness/core-session/internal/restoration').PreparedConversationArchive|undefined,fault=true,getters=0
+ const cleanup=false,originalDelete=Set.prototype.delete,spy=vi.spyOn(Set.prototype,'delete').mockImplementation(function(this:Set<unknown>,value:unknown){if(value===held&&fault)throw cleanup;return originalDelete.call(this,value)})
+ const runtime=createPreparedRuntimeContext({ownerSessionId:'owner',async prepare(){held=await execution.prepare();return held},assertCurrent(){domain.assertCurrent()}},createRuntimeContextSource(execution.owner));resources.push(()=>runtime.close());runtime.registerSection('actual',()=>{getters++;return'original'});probe.appends=0;probe.lose=true
+ try{const failure=await runtime.render().then(()=>{throw Error('Unexpected publication success')},cause=>cause)
+  expect(failure).toBeInstanceOf(AggregateError);expect(failure.errors[0]).toMatchObject({code:'FACT_RECOVERY_REQUIRED'});expect(failure.errors[1]).toBe(cleanup);expect(probe.appends).toBe(1)
+  fault=false;await held!.settle();await runtime.settleOriginals();expect(probe.appends).toBe(1);expect(getters).toBe(1)
+ }finally{fault=false;try{await held?.settle()}finally{spy.mockRestore()}}
+})
