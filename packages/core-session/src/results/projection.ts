@@ -7,6 +7,7 @@ import { resultData as data, resultScalars, closedResultMetadata } from './metad
 import { validManagedArtifactRef } from './validate.ts'
 import { validExecDeliveryEvent } from '../events/exec-delivery.ts'
 import { validWorkflowDeliveryEvent, workflowTerminalRef } from '../events/workflow-delivery.ts'
+import { validCodeDeliveryEvent, codeTerminalRef } from '../events/code-delivery.ts'
 
 export function resultText(envelope: ResultEnvelope): string {
   if (envelope.retention.kind === 'inline' && !envelope.dependencies) return stringifyJsonData(envelope.retention.value) ?? 'null'
@@ -19,6 +20,11 @@ export function resultDisposition(envelope: ResultEnvelope): 'unknown' | 'not-di
 }
 /** Only closed actual result slots create reference dependencies. */
 export function managedResultRefs(event: SessionEventView): readonly ManagedArtifactRef[] {
+  if (data(event,'type') === 'code/end') {
+    if (!validCodeDeliveryEvent(event) || event.type !== 'code/end') throw new TypeError('Invalid Code result reference')
+    const ref=codeTerminalRef(event)
+    return ref ? [ref] : []
+  }
   if (data(event, 'type') === 'workflow/end') {
     if (!validWorkflowDeliveryEvent(event) || event.type !== 'workflow/end') throw new TypeError('Invalid Workflow result reference')
     const ref = workflowTerminalRef(event)
