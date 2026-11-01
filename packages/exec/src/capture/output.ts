@@ -19,10 +19,11 @@ interface FrameOwner {
 export function createCaptureFactory(options: ExecServiceOptions, supervisor: ExecutionSupervisor,
   launchTransport: (request: ExecTransportRequest, automaticPromotion?: boolean) => Promise<SupervisedExecution>, frameOwner: FrameOwner,
   resultRetention: ExecServiceOptions['resultRetention']) {
-  function prepare(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background = false, promotable = false): CaptureAttempt {
+  function prepare(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background = false, promotable = false, delivery?: import('../direct-delivery.ts').OriginalExecDeliveryOwner): CaptureAttempt {
     // No acquisition or caller getters before the registry installs this owner.
     let flight: Promise<Capture> | undefined, cleanupFlight: Promise<void> | undefined
     let execution: SupervisedExecution | undefined, handle: TransportExecutionHandle | undefined
+    let nativeSettlement: ExecutionSettlement | undefined
     let failed: { cause: unknown } | undefined, retiring = false, clean = false
     let capture: Capture | undefined, frames: ExecFrameCapture | undefined
     let retention: ReturnType<typeof createCaptureRetention> | undefined
@@ -132,6 +133,7 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
           // Their own release result, never a missing registry row, proves retry.
           if (settlement.kind !== 'settled' && retryNative) settlement = await handle.release()
           nativeClean = settlement.kind === 'settled'
+          if(nativeClean)nativeSettlement=settlement
           if (settlement.kind !== 'settled') failures.push(new Error(`Execution cleanup incomplete: ${settlement.detail}`))
         } catch (cause) { failures.push(cause) }
       }
@@ -178,6 +180,9 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
         }
         // This assignment is the FIRST action on launch fulfillment. No handle,
         // command or option getter runs before the original attempt owns it.
+        if(delivery)await delivery.admit()
+        if(retiring)throw new Error('Exec service disposed')
+        delivery?.issued()
         execution = await launchTransport(request, promotable && !background && target !== "wsl")
         if (retiring) throw new Error('Exec service disposed')
         handle = execution.handle
@@ -285,6 +290,7 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
       }
     }
     const attempt: CaptureAttempt = Object.freeze({
+      disposition(){if(this!==attempt)throw new Error('Invalid capture attempt receiver');return {execution,frames,timedOut:stop==='timeout',settlement:nativeSettlement}},
       start() {
         if (this !== attempt) throw new Error('Invalid capture attempt receiver')
         // Publish flight before any caller getter or reentrant launch callback.

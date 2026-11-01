@@ -28,6 +28,8 @@ export interface ShellRetentionOptions {
 }
 
 export interface ShellToolDeps {
+  /** Constructor-held direct entry; never part of tool arguments or ToolExec. */
+  directEntry?: (tool: import('@i-harness/core-tools').Tool, leaf: import('@i-harness/core-tools').Tool['execute']) => { enter(exec: import('@i-harness/core-tools').ToolExec): Pick<ExecService,'run'|'runBackground'> | undefined }
   /** Assembly-captured WSL Bash binding, also used by explicit bash. */
   wslShell?: ResolvedAgentShell
   exec: ExecService

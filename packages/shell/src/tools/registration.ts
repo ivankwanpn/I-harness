@@ -10,6 +10,7 @@ export function registerShell(
   ctx: PluginContext,
   registry: { register(t: Tool): void },
   opts?: {
+    directEntry?: import("../types.ts").ShellToolDeps["directEntry"]
     wslShell?: ResolvedAgentShell
     agentShell?: () => ResolvedAgentShell
     timeoutMs?: number
@@ -37,6 +38,7 @@ export function registerShell(
   catch { exec = registerExec(ctx, { workspaceRoot: opts?.cwd ?? process.cwd(), sandbox: opts?.sandbox }) }
   const tools = createShellTools({
     exec,
+    directEntry: opts?.directEntry,
     ...(opts?.wslShell ? { wslShell: capturedShell(opts.wslShell) } : {}),
     ...(opts?.agentShell !== undefined ? { agentShell: opts.agentShell } : {}),
     timeoutMs: opts?.timeoutMs,
