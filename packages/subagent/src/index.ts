@@ -62,6 +62,7 @@ import { subagentFactOwner } from './facts.ts'
 import { residentOwnerFor, refusedReentry } from './followup/resident-lifetime.ts'
 import type { ManagedDocument } from '@i-harness/session-persistence'
 import { captureOwnedTaskContext } from './task/owned-context.ts'
+import { createTaskStartupFacade } from './task/startup-facade.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
   residentActivation?: import('./followup/activation.ts').ResidentInboxActivation
@@ -205,7 +206,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     void pending.then(() => { settlingDeliverySources = undefined }, () => { settlingDeliverySources = undefined })
     return pending
   }
-  const tasks = createTaskRegistry({
+  const taskOwner = createTaskRegistry({
     results: opts.results,
     reportPolicy: opts.reportPolicy,
     ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
@@ -219,6 +220,13 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   let mountedRuntime = stagedRuntime
   let runtimeWorkReady = !ownedTask
   let runtimeRetiring = false
+  let startupFailure: { cause: unknown } | undefined
+  function assertRuntimeWork(): void {
+    taskOwner.assertReady()
+    if (startupFailure) throw new Error('Owned runtime restoration failed', { cause: startupFailure.cause })
+    if (!runtimeWorkReady || runtimeRetiring) throw new Error('Owned runtime restoration pending or retired')
+  }
+  const tasks = ownedTask ? createTaskStartupFacade(taskOwner, assertRuntimeWork) : taskOwner
   if (ownedTask) {
     function guarded<T extends object>(kind: 'jobs' | 'table' | 'roles', original: T, names: readonly (keyof T)[]): T {
       const facade = { ...original }
@@ -230,8 +238,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
           if (runtimeRetiring && kind === 'table' && name === 'update' && patch?.closing === true && Reflect.ownKeys(patch).length === 1) {
             return stagedRuntime.table.update(args[0] as string, args[1] as ChildAgentEntry, { closing: true })
           }
-          tasks.assertReady()
-          if (!runtimeWorkReady) throw new Error('Owned runtime restoration pending')
+          assertRuntimeWork()
           const target = mountedRuntime[kind] as T
           return Reflect.apply(target[name] as (...args: unknown[]) => unknown, target, args)
         }
@@ -344,16 +351,20 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   }
   if (ownedTask) {
     ready = (async () => {
-      await tasks.ready
-      tasks.assertReady()
+      await taskOwner.ready
+      taskOwner.assertReady()
       const wired = wireSubagentPersistence(stagedRuntime, { ...opts.persist!, factOwner: opts.persist!.factOwner ?? opts.factOwner })
       factPersistence = wired
       mountedRuntime = wired
       if (opts.restoredState) emitRestoredJobTransitions(opts.persist!, opts.restoredState, jobs, wired.observe)
-      await tasks.qualifyRestoredResults()
-      await classifyRestoredTasks(tasks, opts.persist!.coordinator)
+      await taskOwner.qualifyRestoredResults()
+      await classifyRestoredTasks(taskOwner, opts.persist!.coordinator)
       await restoreMirrorsAndSweep(subagentDeps, wired.table, () => { runtimeWorkReady = true })
-    })()
+    })().catch(cause => {
+      runtimeWorkReady = false
+      startupFailure = { cause }
+      throw cause
+    })
   } else {
     if (opts.restoredState && opts.persist) emitRestoredJobTransitions(opts.persist, opts.restoredState, jobs, factPersistence?.observe)
     if (opts.persist) ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks)
@@ -365,7 +376,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   function dispose(): Promise<void> {
     notificationsRetired = true
     runtimeRetiring = true
-    tasks.retireOwnedLoad()
+    taskOwner.retireOwnedLoad()
     const owner = residentOwnerFor(subagentDeps)
     if (owner.inInvocation()) { owner.retire(); return refusedReentry() }
     if (disposeFlight) return disposeFlight
@@ -376,7 +387,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     owner.retire()
     // Release original consumer fences before any source/entry join can flush
     // a queued save behind them. The same flight retains read cleanup debt.
-    const taskClosing = tasks.closeOwnedLoad()
+    const taskClosing = taskOwner.closeOwnedLoad()
     void taskClosing.catch(() => {})
     const fenceEntries = () => { for (const entry of table.entries().values()) {
       if (!entryPhases.has(entry)) entryPhases.set(entry, { settled: false, disposed: false,

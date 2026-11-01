@@ -100,7 +100,7 @@ it.each(['retire','parent','mutation'] as const)('original close-to-install %s c
 function mount(f:Awaited<ReturnType<typeof fixture>>, restored:boolean){
  const ctx=createContext(),registry=createToolRegistry(ctx),resolveModel=vi.fn(async()=>({status:'unconfigured' as const,reason:'unused'}))
  const mounted=registerSubagent(ctx,registry,{generationFactoryFor:fixtureGenerationFor,parentSession:f.document.view,factOwner:f.document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel,reportPolicy:SHIPPING_REPORT_POLICY,persist:{coordinator:f.coordinator,stateId:'parent',parentSessionId:'parent',parentSession:f.document.view},...(restored?{restoredState:{formatVersion:1 as const,roles:[],jobs:[{id:'subagent-1',owner:'root',kind:'subagent',label:'pending',status:'running' as const,output:'',terminal:false}],agentTable:[{path:'root/a',status:'waiting' as const,sessionId:'child',mailbox:['pending'],lastInboxSeq:0}]}}:{})})
- return {mounted,resolveModel}
+ return {mounted,resolveModel,registry}
 }
 it.each([{restored:false,value:undefined},{restored:true,value:undefined},{restored:true,value:{formatVersion:1,tasks:[row,{...row,id:'task-2'}],notifications:[]}}])('actual startup %j has zero early producers',async ({restored,value})=>{
  const f=await fixture(value)
@@ -134,6 +134,13 @@ it('owned runtime mutation stays fenced while a restored mirror is still pending
   const {mounted}=mount(f,true);await entered.promise
   expect(()=>mounted.jobs.registerJob('root','subagent','too early')).toThrow('pending')
   expect(()=>mounted.roles.remove('general')).toThrow('pending')
+  await mounted.tasks.ready
+  expect(()=>mounted.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'early',description:'',prompt:'',agent:'general',delivery:'tool'})).toThrow('pending')
+  expect(()=>mounted.tasks.claim('task-1')).toThrow('pending')
+  expect(()=>mounted.tasks.terminalize({taskId:'task-1',outcome:'completed'})).toThrow('pending')
+  expect(()=>mounted.tasks.bindForegroundHandoff('task-1')).toThrow('pending')
+  await expect(mounted.tasks.save()).rejects.toThrow('pending')
+  expect(mounted.tasks.list()).toHaveLength(0);expect(mounted.tasks.notifications()).toHaveLength(0);expect(lastOriginalTaskSave(mounted.tasks)).toBeUndefined()
   release.resolve();await mounted.ready
   expect(mounted.jobs.registerJob('root','subagent','after restore').id).toBeTruthy()
   await mounted.dispose();spy.mockRestore()
@@ -158,5 +165,42 @@ it.each([false,true])('genuine resident retirement with held save and parent rev
   if(revoked)f.document.revokeNewWork()
   await mounted.dispose();expect(mounted.agents.get('child')).toBeUndefined();expect(mounted.table.get(entry.path)?.closing).toBe(true);expect(changes).toHaveLength(1)
   expect(()=>handoff.save.assertHandoff()).toThrow();await mounted.dispose()
+ }finally{await f.close()}
+})
+
+it('public task producers cannot enter the original qualification/classification await',async()=>{
+ const f=await fixture({formatVersion:2,tasks:[row],notifications:[]})
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ try{
+  await f.tasks.ready
+  const original=f.coordinator.snapshot!.bind(f.coordinator)
+  const spy=vi.spyOn(f.coordinator as typeof f.coordinator & {snapshot: NonNullable<typeof f.coordinator.snapshot>},'snapshot').mockImplementation(async id=>{entered.resolve();await release.promise;return original(id)})
+  const {mounted}=mount(f,false);await mounted.tasks.ready;await entered.promise
+  expect(()=>mounted.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'early',description:'',prompt:'',agent:'general',delivery:'tool'})).toThrow('pending')
+  expect(()=>mounted.tasks.claim('task-1','newchild')).toThrow('pending')
+  expect(()=>mounted.tasks.terminalize({taskId:'task-1',outcome:'completed'})).toThrow('pending')
+  await expect(mounted.tasks.save()).rejects.toThrow('pending')
+  expect(mounted.tasks.list()).toHaveLength(1);expect(mounted.tasks.notifications()).toHaveLength(0);expect(lastOriginalTaskSave(mounted.tasks)).toBeUndefined()
+  release.resolve();await mounted.ready
+  const live=mounted.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'live',description:'',prompt:'',agent:'general',delivery:'tool'})
+  expect(live.status).toBe('accepted');expect(live.outcome).toBeUndefined()
+  await mounted.tasks.flushPersistence();expect(mounted.tasks.get(live.id)?.outcome).toBeUndefined()
+  await mounted.dispose();spy.mockRestore()
+ }finally{release.resolve();await f.close()}
+})
+it.each([false,undefined])('post-install startup failure %s permanently fences the public task facade',async cause=>{
+ const f=await fixture({formatVersion:2,tasks:[row],notifications:[]})
+ try{
+  await f.tasks.ready
+  const spy=vi.spyOn(f.coordinator as typeof f.coordinator & {snapshot: NonNullable<typeof f.coordinator.snapshot>},'snapshot').mockRejectedValue(cause)
+  const {mounted}=mount(f,false);await mounted.tasks.ready;await expect(mounted.ready).rejects.toBe(cause)
+  expect(()=>mounted.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'denied',description:'',prompt:'',agent:'general',delivery:'tool'})).toThrow('failed')
+  expect(()=>mounted.tasks.claim('task-1')).toThrow('failed')
+  expect(()=>mounted.tasks.cancelTree('task-1')).toThrow('failed')
+  expect(()=>mounted.tasks.updateNotification('notif-1',{})).toThrow('failed')
+  await expect(mounted.tasks.save()).rejects.toThrow('failed')
+  await f.coordinator.putDocumentStrict!('unrelated',{})
+  expect(()=>mounted.tasks.terminalize({taskId:'task-1',outcome:'completed'})).toThrow('failed')
+  await expect(mounted.dispose()).rejects.toThrow();await mounted.dispose();spy.mockRestore()
  }finally{await f.close()}
 })
