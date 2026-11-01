@@ -48,7 +48,8 @@ export function createOriginalPassiveExecution(source?:PreparedModelRequest,medi
    original=reservations.get(reservation);if(!original)return
    const i=original.identity
    if(confirmation.semanticId!==i.semanticId||confirmation.payloadId!==i.payloadId||confirmation.payloadKind!==i.payloadKind){safely(original.observer,()=>original!.observer.unavailable('passive-candidate-mismatch'));original=undefined;return}
-   send=Object.freeze({...confirmation});safely(original.observer,()=>original!.observer.capture({kind:'handoff',identity:original!.identity,confirmation:send!,observedAt:Date.now(),...(attribution?{attribution}:{})}))
+   const {version,sendId,semanticId,payloadId,payloadKind}=confirmation
+   send=Object.freeze({version,sendId,semanticId,payloadId,payloadKind});safely(original.observer,()=>original!.observer.capture({kind:'handoff',identity:original!.identity,confirmation:send!,observedAt:Date.now(),...(attribution?{attribution}:{})}))
   },
   event(event:LLMStreamEvent){
    if(finished)return
