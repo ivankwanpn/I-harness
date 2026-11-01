@@ -37,7 +37,7 @@ export type IndexIssue = { code: 'CONTEXT_INDEX_UNAVAILABLE'; message: string; s
 export interface RebuildSink { add(ref: ContextResultRef, bytes: Buffer): void }
 export interface PendingCaptureIndex { commit(): void; publish(): void; discard(cause: unknown): Promise<void> }
 type Handle = { db: DatabaseSync; generation: symbol; closed: boolean; uncertain: boolean; disposition: 'retain'|'remove'; failure?: unknown }
-type State = 'absent' | 'ready' | 'building' | 'invalid' | 'debt'
+type State = 'absent' | 'ready' | 'building' | 'invalid' | 'debt' | 'retained'
 const unavailable = (message: string) => Object.assign(new Error(message), { code: 'CONTEXT_INDEX_UNAVAILABLE' })
 const full = (failure: unknown) => failure instanceof Error && /database or disk is full/i.test(failure.message)
 function safe(value: number): number { if (!Number.isSafeInteger(value) || value < 0) throw Error('Unsafe derived index allocation'); return value }
@@ -51,11 +51,12 @@ export class LegacyIndexLifecycle {
   private removing = false
   private readonly uses = new WeakSet<IndexUse>()
   private readonly path: string
+  private retained?: { schema: string; content?: string }
   constructor(private readonly ports: {
-    directory: string; assertTurn(turn: WorkspaceMutationTurn): void; assertLease: LegacyUseGate['assertLease']; physicalBytes(): Promise<number>
+    directory: string; assertTurn(turn: WorkspaceMutationTurn): void; assertLease: LegacyUseGate['assertLease']; physicalBytes(): Promise<number>; witness?(path: string, guard: () => void): Promise<string>
   }) { this.path = resolve(ports.directory, 'index.sqlite') }
   ready(): boolean { return this.state === 'ready' }
-  retirementPending(): boolean { return this.removing || !!this.handle && this.state !== 'ready' }
+  retirementPending(): boolean { return this.removing || !!this.handle && this.state !== 'ready' && this.state !== 'retained' }
   issue(): IndexIssue | undefined {
     if (this.problem) return this.problem
     if (!this.hintProblems.size) return undefined
@@ -90,11 +91,13 @@ export class LegacyIndexLifecycle {
     this.uses.add(use); return use
   }
   invalidate(cause: unknown): void {
+    this.retained = undefined
     if (this.handle) { this.handle.disposition = 'remove'; if (this.state !== 'debt') this.state = 'invalid' }
     this.capacity(`Derived context index unavailable: ${cause instanceof Error ? cause.message : String(cause)}`)
   }
   async retire(turn: WorkspaceMutationTurn, lease: LegacyUseLease): Promise<void> {
     this.assert(turn, lease)
+    this.retained = undefined
     this.removing = true
     this.state = 'debt'
     const original = this.handle
@@ -123,9 +126,53 @@ export class LegacyIndexLifecycle {
     const original = this.handle
     if (!original) { if (this.removing) await this.retire(turn, lease); return }
     if (this.removing || original.disposition === 'remove') return this.retire(turn, lease)
+    if (this.state === 'ready') this.retained = { schema: this.schema(original.db) }
     this.state = 'debt'
     this.closeOriginal(original)
-    this.state = 'absent'
+    this.state = 'retained'
+  }
+  private schema(db: DatabaseSync): string { return JSON.stringify(db.prepare('SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name').all()) }
+  private async noJournal(): Promise<boolean> {
+    for (const suffix of ['-journal', '-wal', '-shm']) {
+      try { await stat(this.path + suffix); return false }
+      catch (failure) { if ((failure as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw failure }
+    }
+    return true
+  }
+  async retainWitness(turn: WorkspaceMutationTurn, lease: LegacyUseLease): Promise<void> {
+    this.assert(turn, lease)
+    if (this.state !== 'retained' || !this.retained || !this.ports.witness) return
+    const retained = this.retained
+    if (!await this.noJournal()) { this.retained = undefined; return }
+    retained.content = await this.ports.witness(this.path, () => this.assert(turn, lease))
+    this.assert(turn, lease)
+  }
+  /** Existing exact bytes only; never schema creation or population reconstruction. */
+  async reopenRetained(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number): Promise<boolean> {
+    this.assert(turn, lease)
+    const retained = this.retained
+    if (this.state !== 'retained' || !retained?.content || !this.ports.witness) return false
+    let content: string
+    try { content = await this.ports.witness(this.path, () => this.assert(turn, lease)) }
+    catch (failure) {
+      if ((failure as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw failure
+      this.invalidate(Error('Retained derived file absent')); return false
+    }
+    if (content !== retained.content || !await this.noJournal()) { this.invalidate(Error('Retained derived file changed')); return false }
+    this.assert(turn, lease)
+    const db = new DatabaseSync(this.path), original: Handle = { db, generation: Symbol('resumed derived generation'), closed: false, uncertain: false, disposition: 'remove' }
+    this.handle = original; this.state = 'building'
+    try {
+      if (this.schema(db) !== retained.schema || this.scalar(db, 'journal_mode') !== 'delete' || Number(this.scalar(db, 'page_size')) !== 4096) throw Error('Retained derived schema/settings changed')
+      db.exec('PRAGMA temp_store=MEMORY; PRAGMA foreign_keys=ON')
+      if (Number(this.scalar(db, 'temp_store')) !== 2 || Number(this.scalar(db, 'foreign_keys')) !== 1) throw Error('Retained native settings unavailable')
+      const pages = Number(this.scalar(db, 'page_count'))
+      if (!Number.isSafeInteger(pages) || pages < 1 || await this.ports.physicalBytes() > quota) throw Error('Retained derived quota unavailable')
+      this.assert(turn, lease)
+      this.install(db, Math.max(pages, Math.floor((quota - await this.ports.physicalBytes() + (await stat(this.path)).size) / 4096)))
+      this.assert(turn, lease); original.disposition = 'retain'; this.state = 'ready'; this.retained = undefined
+      return true
+    } catch (failure) { this.invalidate(failure); throw failure }
   }
   private async envelope(quota: number, growth: number): Promise<{ ceiling: number; current: number }> {
     safe(quota); safe(growth)
