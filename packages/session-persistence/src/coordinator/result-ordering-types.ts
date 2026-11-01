@@ -11,3 +11,15 @@ export interface OriginalOrderingRegistration {
   commit(participant: OriginalLegacyOrderingParticipant): void
   cancel(): void
 }
+declare const originBrand: unique symbol
+export interface OriginalOrderingOrigin { readonly [originBrand]: true }
+/** Ordering only. Native authority still requires the original batch and claims. */
+export interface OriginalOrderingLedger {
+  begin(): OriginalOrderingOrigin
+  run<T>(origin: OriginalOrderingOrigin, work: () => Promise<T>): Promise<T>
+  predecessors(origin: OriginalOrderingOrigin): Readonly<{ join(): Promise<void> }> | undefined
+  beforeAcquisition(origin?: OriginalOrderingOrigin): Readonly<{ join(): Promise<void> }> | undefined
+  complete(origin: OriginalOrderingOrigin): void
+  hasPending(): boolean
+  assertOutside(): void
+}

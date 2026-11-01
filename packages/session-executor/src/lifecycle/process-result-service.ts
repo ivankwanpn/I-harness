@@ -25,9 +25,9 @@ export function lookupProcessResultService(service: ContextOutputService) { retu
 
 /** Creates the original service and its result authorization together. */
 export function createProcessAwareResultService(policy: Policy) {
-  const orderingIdentity = {}, registrations: ReturnType<typeof beginOriginalResultOrderingRegistration>[] = []
-  try { for (const coordinator of new Set(policy.orderingCoordinators)) registrations.push(beginOriginalResultOrderingRegistration(coordinator, orderingIdentity)) }
-  catch (failure) { for (const registration of registrations) registration.cancel(); throw failure }
+  const orderingIdentity = {}, registrations: { coordinator: SessionCoordinator; registration: ReturnType<typeof beginOriginalResultOrderingRegistration> }[] = []
+  try { for (const coordinator of new Set(policy.orderingCoordinators)) registrations.push({ coordinator, registration: beginOriginalResultOrderingRegistration(coordinator, orderingIdentity) }) }
+  catch (failure) { for (const { registration } of registrations) registration.cancel(); throw failure }
   const ordered = new Set(policy.orderingCoordinators)
   let retired = false
   const failScope = (id: string) => { try { lookupProcessReadContext(undefined!, id) } catch { /* Original context latches its denial. */ } }
@@ -57,8 +57,8 @@ export function createProcessAwareResultService(policy: Policy) {
     authorize: policy.authorize && (async (access, ref) => {
       try { if (context(access.sessionId)) { failScope(access.sessionId); throw new Error('PROCESS_READ_UNAVAILABLE') }; return await policy.authorize!(access, ref) } catch { return false }
     }),
-  }); if (policy.orderingCoordinators) requireOriginalLegacyOrdering(service); for (const registration of registrations) commitOriginalLegacyOrdering(service, registration) }
-  catch (failure) { for (const registration of registrations) registration.cancel(); throw failure }
+  }); if (policy.orderingCoordinators) requireOriginalLegacyOrdering(service); for (const { coordinator, registration } of registrations) commitOriginalLegacyOrdering(service, registration, coordinator) }
+  catch (failure) { for (const { registration } of registrations) registration.cancel(); throw failure }
   {
     const read = service.readResult.bind(service), exec = service.readExecResult.bind(service)
     const admitted = <T>(id: string, run: () => Promise<T>) => {

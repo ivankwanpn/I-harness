@@ -19,9 +19,12 @@ import { walkPages } from './legacy/fork-pages.ts'
 import { rowCommitment, transferDirectory } from './legacy/observed-read.ts'
 import { LegacyFundingBatchOwner, fundingPass, describeApplicationFunding, fundApplicationInBatch, sum, type FundingBatchContext, type FundingBatchScope } from './legacy/funding-batch.ts'
 import type { LegacyCommitment, LegacyPage, LegacyRoot, LegacyRow } from './legacy/fork-types.ts'
+import { assertOriginalRevocationCoverage, type OriginalRevocationCoverage } from '../../session-persistence/src/coordinator/result-revocation.ts'
 
 interface Artifact { ref: ContextResultRef; source?: ContextCapture['source'] }
 export interface LegacyStoreInventory { readonly identity: string; readonly targets: readonly string[]; readonly expired: readonly string[]; readonly recoveryRequired: boolean }
+declare const coveredClearBrand: unique symbol
+export interface OriginalCoveredClear { readonly [coveredClearBrand]: true }
 export function digest(value: string|Buffer): string { return createHash('sha256').update(value).digest('hex') }
 export function referenceId(workspaceId: string, sessionId: string, callId: string, revision: string): string {
   return `ctx_${digest(JSON.stringify([workspaceId, sessionId, callId, revision]))}`
@@ -63,7 +66,8 @@ export class ContextStore {
   private currency: object = Object.freeze({})
   private quiescing?: { cleanups: WorkspaceMutationCleanup[]; indexClosed: boolean; described: boolean; failed: boolean }
   private quiesceFlight?: Promise<void>
-  private readonly inventories = new WeakMap<LegacyStoreInventory, { artifacts: Map<string, Artifact>; owners: Map<string, Set<string>> }>()
+  private readonly inventories = new WeakMap<LegacyStoreInventory, { artifacts: Map<string, Artifact>; owners: Map<string, Set<string>>; roots: Map<string, LegacyRoot>; expiry: Map<string, LegacyCommitment>; cutoff: number; sessionId?: string }>()
+  private readonly coveredClears = new WeakMap<OriginalCoveredClear, { inventory: LegacyStoreInventory; coverage: OriginalRevocationCoverage; steps: Map<string, 'issued' | 'done'>; failed?: { cause: unknown }; complete: boolean }>()
   private readonly fundingBatch: LegacyFundingBatchOwner
   private readonly indexLeases = new WeakMap<IndexUse, LegacyUseLease>()
   private readonly ledger: OwnerLedger
@@ -118,10 +122,9 @@ export class ContextStore {
   async passiveInventory(turn: WorkspaceMutationTurn, sessionId?: string, cutoff = Date.now()): Promise<LegacyStoreInventory> {
     this.assertTurn(turn)
     if (!Number.isSafeInteger(cutoff) || cutoff < 0) throw Error('Invalid original expiry frontier')
-    const guard = () => this.assertTurn(turn), artifacts = new Map<string, Artifact>(), owners = new Map<string, Set<string>>()
+    const guard = () => this.assertTurn(turn), artifacts = new Map<string, Artifact>(), owners = new Map<string, Set<string>>(), roots = new Map<string, LegacyRoot>(), expiry = new Map<string, LegacyCommitment>()
     const targets = new Set<string>(sessionId === undefined ? [] : [sessionId]), expired: string[] = []
     let recoveryRequired = false
-    for await (const _ of this.legacyAuthorityRows(turn, true)) { /* original passive graph proof */ }
     const directory = resolve(this.directory, 'artifacts')
     if (await exists(directory)) for (const name of (await readdir(directory)).sort()) {
       guard()
@@ -136,18 +139,24 @@ export class ContextStore {
       if (artifact.ref.expiresAt <= cutoff) { expired.push(id); for (const target of membership) targets.add(target) }
       if (sessionId === undefined || membership.has(sessionId)) for (const target of membership) targets.add(target)
     }
+    const expiredSet = new Set(expired)
+    for await (const row of this.legacyAuthorityRows(turn, true)) {
+      const artifact = artifacts.get(row.refId)
+      if (artifact && expiredSet.has(row.refId) && same(commitment(artifact.ref), row)) expiry.set(row.refId, row)
+    }
     const namespace = resolve(this.directory, 'legacy-fork-v1')
     if (await exists(namespace)) for (const name of (await readdir(namespace)).sort()) {
       const path = resolve(namespace, name, 'plan.json')
       if (!await exists(path)) { recoveryRequired = true; continue }
       const root = checkRoot(await boundedJson(path, 65536, this.retireLegacyFile)); guard()
+      roots.set(resolve(namespace, name), root)
       if (!await exists(resolve(namespace, name, 'applied.json'))) recoveryRequired = true
       if (sessionId === undefined || root.binding.targetSessionId === sessionId) targets.add(root.binding.targetSessionId)
     }
     const identity = await originalNamespaceWitness(this, ['artifacts', 'owners', 'legacy-fork-v1', 'legacy-expiry-v1'], guard)
     await this.joinLegacyFiles(); guard()
     const inventory = Object.freeze({ identity, targets: Object.freeze([...targets].sort()), expired: Object.freeze(expired.sort()), recoveryRequired })
-    this.inventories.set(inventory, { artifacts, owners }); return inventory
+    this.inventories.set(inventory, { artifacts, owners, roots, expiry, cutoff, sessionId }); return inventory
   }
   /** Reacquire/requalify this original store; unchanged bodies are verified on use. */
   async resume(lease: LegacyUseLease, quota: number, signal?: AbortSignal): Promise<void> {
@@ -156,18 +165,22 @@ export class ContextStore {
     if (!this.suspended) return
     await this.owner!.mutate(async turn => {
       const inventory = await this.passiveInventory(turn)
-      if (this.originalsLoaded) {
-        if (inventory.recoveryRequired) { this.beforeResumeChange?.(); throw Error('Original resume requires covered recovery') }
-        if (inventory.identity !== this.retainedAuthority) {
-          this.beforeResumeChange?.()
-          this.currency = Object.freeze({})
-          const actual = this.inventories.get(inventory)!
-          this.artifacts = actual.artifacts; this.owners = actual.owners
-          this.index.invalidate(Error('Original authority changed while idle'))
-        } else await this.index.reopenRetained(turn, lease, quota)
-      }
+      await this.resumeOriginalInventory(turn, lease, quota, inventory)
       this.suspended = false
     })
+  }
+  private async resumeOriginalInventory(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number, inventory: LegacyStoreInventory): Promise<void> {
+    if (!this.inventories.has(inventory)) throw TypeError('Original resume inventory required')
+    if (this.originalsLoaded) {
+      if (inventory.recoveryRequired) { this.beforeResumeChange?.(); throw Error('Original resume requires covered recovery') }
+      if (inventory.identity !== this.retainedAuthority) {
+        this.beforeResumeChange?.()
+        this.currency = Object.freeze({})
+        const actual = this.inventories.get(inventory)!
+        this.artifacts = actual.artifacts; this.owners = actual.owners
+        this.index.invalidate(Error('Original authority changed while idle'))
+      } else await this.index.reopenRetained(turn, lease, quota)
+    }
   }
   /** Exact cleanup retry; a failed description never authorizes a fresh witness. */
   quiesce(lease: LegacyUseLease): Promise<void> {
@@ -703,6 +716,85 @@ export class ContextStore {
     try { await work() } catch (failure) { failures.push(failure) }
     try { await this.retireInvalidIndex(turn, lease) } catch (failure) { failures.push(failure) }
     failuresTogether(failures, 'Original cleanup and derived retirement failed')
+  }
+  async prepareCoveredClear(turn: WorkspaceMutationTurn, lease: LegacyUseLease, inventory: LegacyStoreInventory, coverage: OriginalRevocationCoverage): Promise<OriginalCoveredClear> {
+    const original = this.inventories.get(inventory)
+    if (!original) throw TypeError('Original covered inventory required')
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive'); assertOriginalRevocationCoverage(coverage, inventory.targets)
+    if (inventory.recoveryRequired) throw Error('Covered recovery unavailable')
+    for (const id of inventory.expired) if (!original.expiry.has(id)) {
+      const artifact = original.artifacts.get(id)!, base = expiryBase(this.directory, commitment(artifact.ref))
+      if (await exists(base + '.0') || await exists(base + '.1')) throw Error('Original legacy expiry has no confirmed transfer authority')
+      this.assertTurn(turn); assertOriginalRevocationCoverage(coverage, inventory.targets)
+    }
+    const operation = Object.freeze({}) as OriginalCoveredClear
+    this.coveredClears.set(operation, { inventory, coverage, steps: new Map(), complete: false }); return operation
+  }
+  assertCoveredClearSettled(operation: OriginalCoveredClear): void {
+    const original = this.coveredClears.get(operation)
+    if (!original) throw TypeError('Original covered clear required')
+    if (original.failed) { if (!original.steps.size) return; throw original.failed.cause }
+    if (!original.complete) throw Error('Original covered clear remains unresolved')
+  }
+  /** One original effect attempt. A rejected issued primitive is never replayed. */
+  async applyCoveredClear(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number, operation: OriginalCoveredClear): Promise<void> {
+    const progress = this.coveredClears.get(operation)
+    if (!progress) throw TypeError('Original covered clear required')
+    if (progress.failed) throw progress.failed.cause
+    if (progress.complete) return
+    try {
+    const snapshot = this.inventories.get(progress.inventory)!
+    const check = () => { this.assertTurn(turn); this.assertLease(lease, 'exclusive'); assertOriginalRevocationCoverage(progress.coverage, progress.inventory.targets) }
+    const step = async (key: string, effect: () => Promise<void>) => {
+      if (progress.steps.get(key) === 'done') return
+      if (progress.steps.has(key)) throw Error('Original covered primitive remains unresolved')
+      check(); progress.steps.set(key, 'issued')
+      try { await effect(); check(); progress.steps.set(key, 'done') }
+      catch (cause) { progress.failed = { cause }; throw cause }
+    }
+    check()
+    if (!this.originalsLoaded && !snapshot.artifacts.size && !snapshot.roots.size && !await exists(this.directory)) { check(); progress.complete = true; return }
+    // The passive preflight ruled out recovery. Original open still verifies
+    // every retained body before cache population; no hash/reader bypass.
+    await step('original-cache', async () => {
+      if (this.originalsLoaded) await this.resumeOriginalInventory(turn, lease, quota, progress.inventory)
+      else await this.open(turn, lease, quota, 'cleanup')
+      this.suspended = false
+    })
+    this.beforeAuthorityChange?.(snapshot.sessionId === undefined ? undefined : [snapshot.sessionId])
+    try { await this.cleanupIndex(turn, lease, async () => {
+    for (const [directory, root] of snapshot.roots) if (snapshot.sessionId === undefined || root.binding.targetSessionId === snapshot.sessionId) {
+      await step('revoke:' + directory, () => terminalSlots(this.directory, resolve(directory, 'revoke'), revokedTuple(root), check, this.retireLegacyFile))
+    }
+    for (const [id, tuple] of snapshot.expiry) {
+      await step('expiry:' + id, () => terminalSlots(this.directory, expiryBase(this.directory, tuple), expiredTuple(this.workspaceId, tuple), check, this.retireLegacyFile))
+    }
+    const expired = new Set(progress.inventory.expired)
+    for (const id of snapshot.artifacts.keys()) {
+      const prior = snapshot.owners.get(id)!, survivors = new Set(prior)
+      if (snapshot.sessionId !== undefined) survivors.delete(snapshot.sessionId)
+      const remove = snapshot.sessionId === undefined || expired.has(id) || !survivors.size
+      if (!remove && !prior.has(snapshot.sessionId!)) continue
+      const path = this.path('owners', id), next = remove ? new Set<string>() : survivors
+      await step('ledger:' + id, async () => {
+        check()
+        if (remove) { this.beforeAuthorityChange?.([...prior]); this.index.invalidate(Error('Canonical context removal')); this.owners.delete(id) }
+        else this.owners.delete(id)
+        if (await this.ledger.tracked(path)) await this.ledger.replace(path, next, remove ? 'remove' : 'clear:' + snapshot.sessionId, check)
+        else await atomicJson(path, [...next])
+        check(); const confirmed = (await readLedger(path, this.retireLegacyFile)).owners
+        if (!same([...confirmed], [...next])) throw Error('Original covered owner membership not confirmed')
+        if (!remove) this.owners.set(id, confirmed)
+      })
+      if (!remove) continue
+      for (const kind of ['blobs', 'artifacts'] as const) await step('remove:' + kind + ':' + id, () => rm(this.path(kind, id), { force: true }))
+      if (!await this.ledger.tracked(path)) await step('remove:owners:' + id, () => rm(path, { force: true }))
+      this.artifacts.delete(id)
+    }
+    }) } catch (cause) { progress.failed = { cause }; throw cause }
+    await step('original-index', async () => { await this.ensureIndex(turn, lease, quota) })
+    check(); progress.complete = true
+    } catch (cause) { progress.failed = { cause }; throw cause }
   }
   async clear(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number, sessionId?: string): Promise<void> {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive')

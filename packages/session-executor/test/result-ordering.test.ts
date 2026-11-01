@@ -1,17 +1,10 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { expect, it, vi } from 'vitest'
 const originalOwners = vi.hoisted(() => [] as import('../../session-persistence/src/coordinator/ownership.ts').Ownership[])
-const originalParticipants = vi.hoisted(() => [] as import('../../session-persistence/src/coordinator/result-ordering-types.ts').OriginalLegacyOrderingParticipant[])
 const originalArtifacts = vi.hoisted(() => [] as ReturnType<typeof import('../../context-output/src/artifact/ownership.ts').createArtifactOwnership>[])
 vi.mock('../../context-output/src/artifact/ownership.ts', async original => {
   const module = await original<typeof import('../../context-output/src/artifact/ownership.ts')>()
   return { ...module, createArtifactOwnership: (...args: Parameters<typeof module.createArtifactOwnership>) => { const owner = module.createArtifactOwnership(...args); originalArtifacts.push(owner); return owner } }
-})
-vi.mock('../../session-persistence/src/result-ordering-internal.ts', async original => {
-  const module = await original<typeof import('../../session-persistence/src/result-ordering-internal.ts')>()
-  return { ...module, beginOriginalResultOrderingRegistration: (...args: Parameters<typeof module.beginOriginalResultOrderingRegistration>) => {
-    const registration = module.beginOriginalResultOrderingRegistration(...args)
-    return { commit(participant: import('../../session-persistence/src/coordinator/result-ordering-types.ts').OriginalLegacyOrderingParticipant) { originalParticipants.push(participant); registration.commit(participant) }, cancel() { registration.cancel() } }
-  } }
 })
 vi.mock('../../session-persistence/src/coordinator/ownership.ts', async original => {
   const module = await original<typeof import('../../session-persistence/src/coordinator/ownership.ts')>()
@@ -73,8 +66,10 @@ it.each(['configure', 'clear'] as const)('joins the original queued %s transitio
   const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>(), native = locking.acquireSessionLock
   let configured = false
   const flags: boolean[] = []
+  // Observation only: clear now has its own legitimate native batch.
+  const acquisitionProbe = new AsyncLocalStorage<object>(), probeIdentity = {}
   const budget = ContextStore.prototype.configureDiskBudget
-  const clear = ContextStore.prototype.clear
+  const clear = ContextStore.prototype.applyCoveredClear
   try {
     await bridge.service.capture(capture)
     const producer = bridge.service.capture({ ...capture, callId: 'waiting' }, undefined, async () => { entered.resolve(); await leave.promise; return { text: 'waiting', complete: true } }).catch(error => error)
@@ -82,9 +77,9 @@ it.each(['configure', 'clear'] as const)('joins the original queued %s transitio
     const configure = operation === 'configure' ? bridge.service.configure({ maxDiskBytes: 32 * 1024 * 1024 }) : bridge.service.clear('absent')
     const probe = operation === 'configure'
       ? vi.spyOn(ContextStore.prototype, 'configureDiskBudget').mockImplementation(function (this: ContextStore, ...args) { configured = true; return budget.apply(this, args) })
-      : vi.spyOn(ContextStore.prototype, 'clear').mockImplementation(function (this: ContextStore, ...args) { configured = true; return clear.apply(this, args) })
-    vi.spyOn(locking, 'acquireSessionLock').mockImplementation(async options => { if (options.lockPath.startsWith(sessions)) flags.push(configured); return native(options) })
-    const claim = originalOwners.at(-1)!.pinOwnership('fresh')
+      : vi.spyOn(ContextStore.prototype, 'applyCoveredClear').mockImplementation(function (this: ContextStore, ...args) { configured = true; return clear.apply(this, args) })
+    vi.spyOn(locking, 'acquireSessionLock').mockImplementation(async options => { if (options.lockPath.startsWith(sessions) && acquisitionProbe.getStore() === probeIdentity) flags.push(configured); return native(options) })
+    const claim = acquisitionProbe.run(probeIdentity, () => originalOwners.at(-1)!.pinOwnership('fresh'))
     leave.resolve(); await producer
     const held = await claim; await configure
     expect(flags.length).toBeGreaterThan(0); expect(flags.every(Boolean)).toBe(true)
@@ -96,7 +91,7 @@ it('refuses the original transition context before clear enters any lower worksp
   const root = await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!, 'ordering-transition-self-'))
   const coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract), bridge = serviceFor(root, coordinator, 'w')
   const artifact = originalArtifacts.at(-1)!, count = artifact.protectedCount
-  const probe = vi.spyOn(artifact, 'protectedCount').mockImplementation(async () => { expect(() => originalParticipants.at(-1)!.assertOutside()).toThrow(/reentry/); return count() })
+  const probe = vi.spyOn(artifact, 'protectedCount').mockImplementation(async () => { await expect(originalOwners.at(-1)!.pinOwnership('nested-fresh')).rejects.toThrow(/reentry/); return count() })
   try { await bridge.service.clear('absent') } finally { probe.mockRestore(); await bridge.service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
@@ -105,7 +100,7 @@ it('refuses its original service job before a producer can wait for fresh owners
   const coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract), bridge = serviceFor(root, coordinator, 'w')
   try {
     expect(await bridge.service.capture(capture, undefined, async () => {
-      expect(() => originalParticipants.at(-1)!.assertOutside()).toThrow(/reentry/)
+      await expect(originalOwners.at(-1)!.pinOwnership('nested-fresh')).rejects.toThrow(/reentry/)
       return { text: capture.text, complete: true }
     })).toBeDefined()
   } finally { await bridge.service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
