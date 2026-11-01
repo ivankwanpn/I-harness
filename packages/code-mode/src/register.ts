@@ -12,6 +12,7 @@ import { createCodeModeEventFacts } from './event-facts.ts'
 import { createCodeOutputPublisher } from './output-facts.ts'
 import { observationOutput } from './observation-output.ts'
 import { originalObservationReplan } from './runtime/replan-observation.ts'
+import { captureOriginalCellFinalization, createCellFinalizations, type OriginalCellFinalization } from './finalization.ts'
 
 function declareObservationReplan(exec: ToolExec, out: import('./types.ts').CodeModeObservation) {
   const error = originalObservationReplan(out)
@@ -35,6 +36,8 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const surfaceListeners = new Set<() => void>()
   const surfaceChanged = () => { for (const listener of [...surfaceListeners]) { try { listener() } catch { /* Isolate consumers from publication. */ } } }
   const broker = createCodeModeBroker(ctx, tools, options, (cellId, detail) => runtime.replan(cellId, detail))
+  const finalizations = createCellFinalizations('cell-finalization')
+  const originalCells = new Map<string, { terminal: ReturnType<typeof Promise.withResolvers<void>>; fence: ReturnType<typeof Promise.withResolvers<void>>; broker?: Pick<OriginalCellFinalization, 'settle'> }>()
   const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged)
   const publishOutput = createCodeOutputPublisher(facts, options.retainText)
   const pendingFinishes = new Map<string, () => Promise<void>>()
@@ -74,9 +77,23 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       localTransitions++; surfaceChanged()
       try {
         if (event.type === "started") {
+          const terminal = Promise.withResolvers<void>()
+          const fence = Promise.withResolvers<void>()
+          void fence.promise.catch(() => {})
+          const cell: { terminal: typeof terminal; fence: typeof fence; broker?: Pick<OriginalCellFinalization, 'settle'> } = { terminal, fence }
+          originalCells.set(event.cellId, cell)
+          const runtimeOwner = captureOriginalCellFinalization(runtime, event.cellId)
+          const finalization = finalizations.reserve(event.cellId, async () => {
+            await terminal.promise
+            await fence.promise
+            await runtimeOwner.settle()
+            await cell.broker?.settle()
+            if (originalCells.get(event.cellId) === cell) originalCells.delete(event.cellId)
+          })
+          void terminal.promise.then(() => finalization.settle()).catch(() => {})
           try {
             await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
-            try { broker.startCell(event.cellId, event.origin.instructionOrigin); liveCells.add(event.cellId); event.instructionInstalled?.() }
+            try { cell.broker = broker.startCell(event.cellId, event.origin.instructionOrigin); liveCells.add(event.cellId); event.instructionInstalled?.() }
             catch (error) { installationFailed = true; throw error }
             surfaceChanged()
           } catch (error) {
@@ -84,7 +101,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
             let terminalDone = false, flight: Promise<void> | undefined
             const settle = () => {
               if (flight) return flight
-              const pending = (async () => { if (!terminalDone) { await facts.required(terminal); terminalDone = true }; await event.instructionAdmissionFailed?.(); admissionDebts.delete(event.cellId) })()
+              const pending = (async () => { if (!terminalDone) { await facts.required(terminal, undefined, () => cell.terminal.resolve()); terminalDone = true }; await event.instructionAdmissionFailed?.(); cell.fence.resolve(); admissionDebts.delete(event.cellId) })()
               flight = pending; void pending.catch(() => { if (flight === pending) flight = undefined }); return pending
             }
             admissionDebts.set(event.cellId, settle)
@@ -122,10 +139,10 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
           if (!nondurable) event.retainOutcome?.()
           await facts.required({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}), ...(event.instructionReplan ? { instructionReplan: event.instructionReplan } : {}) }, () => {
             if (!nondurable) committed()
-          })
+          }, () => { const cell = originalCells.get(event.cellId); cell?.terminal.resolve(); if (!nondurable) cell?.fence.resolve() })
           if (nondurable) {
-            try { if (event.status === 'completed') await options.flush?.(); committed() }
-            catch (error) { installationFailed = true; throw error }
+            try { if (event.status === 'completed') await options.flush?.(); committed(); originalCells.get(event.cellId)?.fence.resolve() }
+            catch (error) { originalCells.get(event.cellId)?.fence.reject(error); installationFailed = true; throw error }
           }
           if (needsFinish) {
             await finish()
@@ -172,7 +189,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     if (tools.get("code_exec") || tools.get("code_wait") || tools.get("code_status")) throw new Error("Code Mode tool names are already registered")
     tools.register(execTool); tools.register(waitTool); tools.register(statusTool)
   }
-  return {
+  const mount: CodeModeMount = {
     ready: () => ready,
     onSurfaceChanged(listener) { surfaceListeners.add(listener); return () => { surfaceListeners.delete(listener) } },
     surfaceState: () => disposed ? 'retired' : !initialized || localTransitions || installationFailed ? 'unavailable' : facts.observationState(),
@@ -204,6 +221,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
         for (const finish of pendingFinishes.values()) try { await finish() } catch (error) { errors.push(error) }
         if (brokerFailed) try { await broker.dispose() } catch (error) { errors.push(error === brokerFailure ? error : new AggregateError([brokerFailure, error], 'Original broker cleanup failed')) }
         try { await facts.close() } catch (error) { errors.push(error) }
+        try { await finalizations.drain() } catch (error) { errors.push(error) }
         if (errors.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(errors) })
         await runtime.dispose()
         if (tools.get("code_exec") === execTool) tools.unregister("code_exec")
@@ -216,4 +234,6 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       return pending
     },
   }
+  finalizations.bind(mount)
+  return mount
 }
