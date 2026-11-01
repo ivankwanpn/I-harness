@@ -1,5 +1,6 @@
 import { committedFactSeqs, FactRecoveryRequiredError, isManagedSettlementSource, isNondurableSession, type CapturedSettlementFact, type ProducerFactOutcome, type SessionView, type SettlementFacts } from '@i-harness/core-session'
 import type { PreparedCall, ToolExec } from '../types.ts'
+import {isManagedExecutionSource,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface RetainedOutcomeSink {
   beforeRead(refresh: () => Promise<void>): void
@@ -14,23 +15,24 @@ export interface RetainedToolOutcome {
   drainReferences(): Promise<void>
 }
 interface ValueSource { observed: number; state: 'unknown' | 'progress' | 'ready' | 'consumed'; output?: unknown; refresh?: () => Promise<void>; changed: ReturnType<typeof Promise.withResolvers<void>> }
-interface Scope { exec: ToolExec; view: SessionView; source: SettlementFacts<ProducerFactOutcome> }
+type Scope = {exec:ToolExec;source:SettlementFacts<ProducerFactOutcome>}&({view:SessionView;domain?:never}|{domain:ManagedExecutionDomain;view?:never})
 interface Dispatch { scope: Scope; sources: ValueSource[]; references: Set<CapturedSettlementFact<ProducerFactOutcome>>; open: boolean; ordinal: number }
 const preparedScopes = new WeakMap<PreparedCall, Scope>(), dispatches = new WeakMap<ToolExec, Dispatch>()
 const recoveries = new WeakMap<object, { prepared: PreparedCall; outcome: RetainedToolOutcome }>()
 
-export function assertToolSettlementScope(view: SessionView | undefined, source: SettlementFacts<ProducerFactOutcome> | undefined): void {
+export function assertToolSettlementScope(view: SessionView | undefined, source: SettlementFacts<ProducerFactOutcome> | undefined,domain?:ManagedExecutionDomain): void {
+  if(domain){if(view||!source||!isManagedExecutionSource(domain,source))throw Object.assign(Error('Tool settlement requires original managed domain/source'),{code:'FACT_OWNER_UNSUPPORTED'});source.assertHeld();return}
   if (!view) { if (source) throw Object.assign(new Error('Tool settlement requires its actual view'), { code: 'FACT_OWNER_UNSUPPORTED' }); return }
   if (!isNondurableSession(view) && (!source || !isManagedSettlementSource(view, source))) throw Object.assign(new Error('Tool settlement requires its owned source'), { code: 'FACT_OWNER_UNSUPPORTED' })
   source?.assertHeld()
 }
-export function bindPreparedSettlement(prepared: PreparedCall, source?: SettlementFacts<ProducerFactOutcome>): void {
-  assertToolSettlementScope(prepared.exec.session, source)
-  if (source) preparedScopes.set(prepared, { exec: prepared.exec, view: prepared.exec.session!, source })
+export function bindPreparedSettlement(prepared: PreparedCall, source?: SettlementFacts<ProducerFactOutcome>,domain?:ManagedExecutionDomain): void {
+  assertToolSettlementScope(prepared.exec.session, source,domain)
+  if (source) preparedScopes.set(prepared, domain?{exec:prepared.exec,domain,source}:{ exec: prepared.exec, view: prepared.exec.session!, source })
 }
 function assertScope(scope: Scope, prepared: PreparedCall): void {
   if (prepared.exec !== scope.exec || prepared.exec.session !== scope.view) throw new FactRecoveryRequiredError()
-  assertToolSettlementScope(scope.view, scope.source)
+  assertToolSettlementScope(scope.view, scope.source,scope.domain)
 }
 function isRecovery(error: unknown): boolean {
   return error instanceof Error && ['FACT_RECOVERY_REQUIRED', 'FACT_CAPTURE_FAILED', 'FACT_INSTALL_FAILED'].includes(String((error as { code?: string }).code ?? ''))

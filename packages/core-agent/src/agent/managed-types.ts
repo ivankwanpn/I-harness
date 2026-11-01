@@ -18,6 +18,7 @@ export interface ManagedInputPreparation {prepare(input:import('@i-harness/core-
 export interface ManagedAcknowledgedFact {readonly capture:import('@i-harness/core-session').CapturedActionFact<FactOutcome>;readonly outcome:Extract<FactOutcome,{kind:'committed'}>}
 export interface ManagedSuccessfulInstructionHandoff extends Omit<SuccessfulInstructionHandoff,'outcome'|'calls'> {
  readonly domain:ManagedExecutionDomain
+ readonly action:ManagedAction<FactOutcome>
  readonly accepted:ManagedAcknowledgedFact
  readonly outcome:ManagedAcknowledgedFact['outcome']
  readonly calls:readonly (AcceptedCallDescriptor&ManagedAcknowledgedFact)[]
