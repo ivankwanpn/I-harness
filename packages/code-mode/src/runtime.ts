@@ -7,7 +7,7 @@ import { createWorkerEvents } from './runtime/worker-events.js'
 import { createAdmission } from './runtime/admission.js'
 import { instructionReplan } from '@i-harness/core-tools'
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
-import { createCellFinalizations } from './finalization.ts'
+import { createCellFinalizations, bindOriginalOutputLifetime } from './finalization.ts'
 
 /** Each admission owns a fresh WASM worker. Only JSON crosses its boundary. */
 export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeModeRuntime {
@@ -40,6 +40,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       }
       endings.delete(id)
     })
+    bindOriginalOutputLifetime(handle, () => ({ accepted: original()?.lifetimeOutput?.accepted ?? 0, truncated: original()?.lifetimeOutput?.truncated ?? false,policyRefusal:original()?.policyRefusal,instructionReplan:original()?.instructionReplan }))
     void end.promise.then(() => handle.settle()).catch(() => {})
     return () => end.resolve()
   })

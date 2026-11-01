@@ -68,9 +68,9 @@ export function createProcessAwareResultService(policy: Policy) {
     service.readResult = (access, query) => admitted(access.sessionId, () => read(access, query))
     service.readExecResult = (access, query) => admitted(access.sessionId, () => exec(access, query))
   }
-  const readResult = Object.getOwnPropertyDescriptor(service, 'readResult'), readExecResult = Object.getOwnPropertyDescriptor(service, 'readExecResult')
+  const readResult = Object.getOwnPropertyDescriptor(service, 'readResult'), readExecResult = Object.getOwnPropertyDescriptor(service, 'readExecResult'), readCodeOutputResult = Object.getOwnPropertyDescriptor(service, 'readCodeOutputResult')
   const assertMethods = () => {
-    for (const [key, expected] of [['readResult', readResult], ['readExecResult', readExecResult]] as const) {
+    for (const [key, expected] of [['readResult', readResult], ['readExecResult', readExecResult], ['readCodeOutputResult',readCodeOutputResult]] as const) {
       const current = Object.getOwnPropertyDescriptor(service, key)
       if (!current || !expected || !('value' in current) || !('value' in expected) || current.value !== expected.value) throw new Error('PROCESS_READ_UNAVAILABLE')
     }

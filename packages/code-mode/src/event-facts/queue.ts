@@ -1,12 +1,14 @@
-import { committedFactSeqs, FactRecoveryRequiredError } from '@i-harness/core-session'
+import { committedFactSeqs, FactRecoveryRequiredError, type FactOwner } from '@i-harness/core-session'
 import type { Callback, CellFacts, Pending, PumpResult } from './state.ts'
 import { isOriginalPreparationFailure } from './state.ts'
+import { bindOriginalCodeCommit, retainOriginalCodeCapture } from './commit-proof.ts'
 
 export const recoveryError = (reasons: unknown[]) => Object.assign(new AggregateError(reasons, 'Code Mode event settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
 
 /** One short lane, shared by the outer drive and every original cell owner.
  * A pass never waits for a source close, checkpoint or producer lifecycle. */
 export function createOutputQueue(options: {
+  owner?: FactOwner
   changed(): void
   failed(record: Pending, reason: unknown): void
   hold(record: Pending): void
@@ -32,10 +34,12 @@ export function createOutputQueue(options: {
     for (const cb of [record.commit, record.cancel, record.settle]) if (cb.state === 'failed') throw recoveryError([cb.reason])
     if (!record.fact) {
       touch(record)
-      record.fact = record.capture ? record.capture() : record.source!.code.capture(await record.prepare!())
+      if (record.capture) record.fact = record.capture()
+      else record.fact = record.source!.code.capture(await record.prepare!())
       record.prepare = undefined; record.capture = undefined; touch(record)
     }
     if (!record.disposed) {
+      if(record.descriptor && options.owner)retainOriginalCodeCapture(record,options.owner)
       const firstIssue = !record.attempted; record.attempted = true; touch(record)
       const outcome = await (firstIssue ? record.fact.admit() : record.fact.reconcile())
       if (outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP') {
@@ -49,6 +53,14 @@ export function createOutputQueue(options: {
       if (record.action?.signal.aborted && (outcome.kind === 'absent' || outcome.kind === 'not-issued')) record.cancelled = true
       else committedFactSeqs(outcome)
       record.disposed = true; touch(record)
+      if (!record.cancelled) { record.nativeOutcome = outcome; if(record.descriptor && options.owner)await bindOriginalCodeCommit(record, outcome) }
+    }
+    // Private, awaited, resumable phase. Public callback slots remain sync void.
+    // A failed append keeps this exact fact/outcome/record, never admits again.
+    if (!record.cancelled && record.descriptor && !record.descriptorDone) {
+      const work = record.descriptorFlight ??= Promise.resolve().then(record.descriptor)
+      try { await work; record.descriptorDone = true }
+      catch (cause) { if (record.descriptorFlight === work) record.descriptorFlight = undefined; throw cause }
     }
     invoke(record, record.cancelled ? record.cancel : record.commit)
     invoke(record, record.settle)

@@ -13,6 +13,7 @@ import { createCodeOutputPublisher } from './output-facts.ts'
 import { observationOutput } from './observation-output.ts'
 import { originalObservationReplan } from './runtime/replan-observation.ts'
 import { captureOriginalCellFinalization, createCellFinalizations, type OriginalCellFinalization } from './finalization.ts'
+import { createFinalCodeOutputs } from './final-output.ts'
 
 function declareObservationReplan(exec: ToolExec, out: import('./types.ts').CodeModeObservation) {
   const error = originalObservationReplan(out)
@@ -36,9 +37,11 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const surfaceListeners = new Set<() => void>()
   const surfaceChanged = () => { for (const listener of [...surfaceListeners]) { try { listener() } catch { /* Isolate consumers from publication. */ } } }
   const broker = createCodeModeBroker(ctx, tools, options, (cellId, detail) => runtime.replan(cellId, detail))
-  const finalizations = createCellFinalizations('cell-finalization')
+  const finalizations = createCellFinalizations('cell-finalization',factOwner)
   const originalCells = new Map<string, { terminal: ReturnType<typeof Promise.withResolvers<void>>; fence: ReturnType<typeof Promise.withResolvers<void>>; broker?: Pick<OriginalCellFinalization, 'settle'> }>()
-  const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged)
+  const finalOutputFactory=options.finalOutput
+  const finalOutputs = createFinalCodeOutputs(factOwner, finalOutputFactory, () => facts.refresh())
+  const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged, finalOutputFactory ? {retains:cellId=>finalOutputs.retains(cellId),commit:record=>finalOutputs.commit(record)} : undefined)
   const publishOutput = createCodeOutputPublisher(facts, options.retainText)
   const pendingFinishes = new Map<string, () => Promise<void>>()
   const admissionDebts = new Map<string, () => Promise<void>>()
@@ -92,6 +95,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
           })
           void terminal.promise.then(() => finalization.settle()).catch(() => {})
           try {
+            finalOutputs.reserve(event.cellId, options.sessionId ?? event.origin.sessionId, finalization, runtimeOwner, !!event.origin.instructionOrigin)
             await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
             try { cell.broker = broker.startCell(event.cellId, event.origin.instructionOrigin); liveCells.add(event.cellId); event.instructionInstalled?.() }
             catch (error) { installationFailed = true; throw error }
@@ -222,6 +226,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
         if (brokerFailed) try { await broker.dispose() } catch (error) { errors.push(error === brokerFailure ? error : new AggregateError([brokerFailure, error], 'Original broker cleanup failed')) }
         try { await facts.close() } catch (error) { errors.push(error) }
         try { await finalizations.drain() } catch (error) { errors.push(error) }
+        try { await finalOutputs.drain() } catch (error) { errors.push(error) }
         if (errors.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(errors) })
         await runtime.dispose()
         if (tools.get("code_exec") === execTool) tools.unregister("code_exec")
@@ -235,5 +240,6 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     },
   }
   finalizations.bind(mount)
+  finalOutputs.bind(mount)
   return mount
 }

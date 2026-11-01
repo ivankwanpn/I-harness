@@ -60,7 +60,27 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
   const enqueue = <T>(work: () => Promise<T>): Promise<T> => { const next = serial.then(work); serial = next.catch(() => {}); return next }
   const metadataPath = resolve(directory, 'operation.json')
   const save = (renameRejected?: (cause: unknown) => void) => atomicJson(metadataPath, operation, renameRejected)
-  async function closeFiles() { if (!closed) { await body.close(); await leaves.close(); closed = true; authority.closed() } }
+  // Each original invocation is its own acknowledgement channel. A rejected
+  // close may already have consumed the descriptor; another FileHandle.close
+  // can be a no-op and cannot resolve that uncertainty. Retain the promise,
+  // receiver and raw failure, while still attempting the independent sibling.
+  const retainClose = (handle: FileHandle) => {
+    const close = handle.close.bind(handle)
+    let original: Promise<void> | undefined
+    return () => original ??= Promise.resolve().then(close)
+  }
+  const closeBody = retainClose(body), closeLeaves = retainClose(leaves)
+  let closeFailed = false, closeFailure: unknown
+  async function closeFiles() {
+    if (closed) return
+    const results = await Promise.allSettled([closeBody(), closeLeaves()])
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failures.length) {
+      if (!closeFailed) { closeFailed = true; closeFailure = failures.length === 1 ? failures[0]!.reason : new AggregateError(failures.map(result => result.reason), 'Original artifact close acknowledgement incomplete') }
+      throw closeFailure
+    }
+    closed = true; authority.closed()
+  }
   async function refuse(reason: NonNullable<ArtifactOperation['reason']>) {
     refusing = reason
     operation.phase = 'refused'; operation.reason = reason
@@ -84,7 +104,7 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
         assertCurrent()
         try { await authority.reserve(admitted.bytes.length + 131104) }
         catch (cause) {
-          if ((cause as { code?: string }).code !== 'ARTIFACT_QUOTA') throw cause
+          if ((cause as { code?: string } | null)?.code !== 'ARTIFACT_QUOTA') throw cause
           operation.encodedBytes = admitted.start + admitted.bytes.length; await refuse('quota'); pending = undefined; ordinal++; return
         }
         admitted.reserved = true
@@ -139,16 +159,34 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
         return completion
       })
     } catch (cause) {
-      const reason = (cause as { code?: string }).code === 'ARTIFACT_QUOTA' && operation.phase === 'capturing' ? 'quota' : (cause as { code?: string }).code === 'ARTIFACT_DELETED' ? 'capture-canceled' : undefined
+      const reason = (cause as { code?: string } | null)?.code === 'ARTIFACT_QUOTA' && operation.phase === 'capturing' ? 'quota' : (cause as { code?: string } | null)?.code === 'ARTIFACT_DELETED' ? 'capture-canceled' : undefined
       if (reason) {
         try { await authority.mutate(() => refuse(reason)); return completion! } catch { /* same pending refusal resumes on reconcile */ }
       }
-      return { kind: 'recovery-required', operationId: operation.owner.operationId }
+      return { kind: 'recovery-required', operationId: operation.owner.operationId, cause }
     }
   }
-  return {
+  const observedCompletion=():ArtifactSettlement|undefined=>completion?.kind==='refused'?{...completion,observedEncodedBytes:operation.encodedBytes}:completion
+  const result: OwnedArtifactSink = {
+    refuse(reason) {
+      if (this !== result || !['encoding','capture-canceled'].includes(reason)) return Promise.reject(new Error('Original artifact refusal receiver required'))
+      return enqueue(async () => {
+        try {
+          const previous=observedCompletion();if(previous)return previous
+          if (operation.phase !== 'capturing' && !refusing) return { kind:'recovery-required' as const, operationId:operation.owner.operationId }
+          // Withdraw only this original uncommitted operation. Pending native
+          // work is joined in the same lane; cleanup never rewrites its bytes.
+          refusing ??= reason
+          if(pending)operation.encodedBytes=Math.max(operation.encodedBytes,pending.start+pending.bytes.length)
+          if (pending) await applyPending()
+          const joined=observedCompletion();if(joined)return joined
+          await authority.mutate(() => refuse(refusing ?? reason))
+          return completion!
+        } catch (cause) { return { kind:'recovery-required' as const, operationId:operation.owner.operationId, cause } }
+      })
+    },
     write(input) {
-      if (finished || pending || closed && completion?.kind !== 'refused' || input.length > CHUNK) return Promise.reject(new Error('Artifact write requires one unfinished bounded chunk'))
+      if (finished || pending || refusing && completion?.kind !== 'refused' || closed && completion?.kind !== 'refused' || input.length > CHUNK) return Promise.reject(new Error('Artifact write requires one unfinished bounded chunk'))
       const bytes = Buffer.from(input)
       if (completion?.kind === 'refused') { operation.encodedBytes += bytes.length; return Promise.resolve() }
       pending = { bytes, start: operation.encodedBytes, ordinal, digest: createHash('sha256').update(bytes).digest('hex'), bodyDone: false, accounted: false, copied: 0, reserved: false }
@@ -208,4 +246,5 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
     reconcile() { return enqueue(commit) },
     suspend() { return enqueue(async () => { await closeFiles() }) },
   }
+  return result
 }

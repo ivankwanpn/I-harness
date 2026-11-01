@@ -4,6 +4,8 @@ import { validManagedArtifactRef, type ManagedArtifactRef, type ResultCodec, typ
 import { identity } from '../config.ts'
 import type { ContextAccess, ContextOutputOptions } from '../types.ts'
 import type { ArtifactOperation, ArtifactOwner, ManagedArtifactPage, ResultArtifactScope, ResultArtifactSink } from './types.ts'
+import { readCodeOutputPage } from './code-output-reader.ts'
+import { isStrictFactData } from '@i-harness/core-session'
 import { sha } from './manifest.ts'
 import { atomicJson, boundedJson, ownedPath } from './io.ts'
 import { createArtifactWriter, type OwnedArtifactSink } from './writer.ts'
@@ -52,7 +54,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
   }
   async function beginResult(scope: ResultArtifactScope, codec: ResultCodec): Promise<ResultArtifactSink> {
     const registered = scopes.get(scope)
-    if (!registered || closing || closed || deletedDocuments.has(registered.owner.sessionId) || deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) || !registered.current() || !['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1'].includes(codec)) throw new Error('Artifact source unavailable')
+    if (!registered || closing || closed || deletedDocuments.has(registered.owner.sessionId) || deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) || !registered.current() || !['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1', 'code-output-manifest-v1'].includes(codec)) throw new Error('Artifact source unavailable')
     if (registered.codec !== undefined && registered.codec !== codec) throw new Error('Artifact codec is immutable')
     registered.codec = codec
     const existing = sinks.get(scope)
@@ -110,6 +112,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     return operation
   }
   async function readResult(access: ContextAccess, query: { ref: ManagedArtifactRef; offset?: number; maxBytes?: number; viaCatalog?: ManagedArtifactRef }): Promise<ManagedArtifactPage> {
+    if(query.ref.codec==='code-output-manifest-v1')throw new Error('Code manifest requires authorized logical reader')
     return mutate(async () => {
       const ref = structuredClone(query.ref), viaCatalog = query.viaCatalog === undefined ? undefined : structuredClone(query.viaCatalog)
       await authorized(access, ref, viaCatalog)
@@ -121,6 +124,22 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
   async function protectedCount(): Promise<number> {
     try { return (await readdir(managed)).filter(id => /^ctxv1_[a-f0-9]{64}$/.test(id)).length }
     catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw cause }
+  }
+  async function readCodeOutputResult(access:ContextAccess,query:{ref:ManagedArtifactRef;cursor?:import('@i-harness/core-session').CodeOutputCursor;maxBytes?:number}) {
+    if(!isStrictFactData(query)||Reflect.ownKeys(query).some(key=>!['ref','cursor','maxBytes'].includes(key as string)||!Object.getOwnPropertyDescriptor(query,key)?.enumerable))throw new Error('Invalid Code output read query')
+    return mutate(async()=>{
+      const captured=structuredClone(query),ref=captured.ref
+      const original=await authorized(access,ref)
+      const page=await readCodeOutputPage(ref,captured,async(offset,length)=>{
+        await authorized(access,ref)
+        const bytes=await readVerifiedArtifactBytes(root,directory(ref.id),ref,offset,length)
+        await authorized(access,ref)
+        return bytes
+      })
+      if(page.header.sessionId!==original.owner.sessionId||page.header.cellId!==original.owner.callId||page.header.sourceId!==original.owner.operationId)throw new Error('Foreign Code manifest owner binding')
+      await authorized(access,ref)
+      return page
+    })
   }
   async function readExecResult(access: ContextAccess, query: { ref: ManagedArtifactRef; cursor?: import('@i-harness/core-session').ExecFrameCursor; maxBytes?: number; textView?: boolean; viaCatalog?: ManagedArtifactRef }) {
     return mutate(async () => {
@@ -178,7 +197,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     await mutate(() => confirmArtifactOwner(root, directory(expectedId), registered.owner, registered.confirmation!, quota(), current))
   }
   const transfers = createSeedDependencyTransfer({ root, options, directory, quota, mutate, membership, authorized, available: document => !closed && !deletedDocuments.has(document) })
-  return { ...transfers, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
+  return { ...transfers, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, readCodeOutputResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
     checkQuota: () => mutate(() => requireSpace(root, quota(), 0)),
     reconcileResult: (operationId: string, id: string) => mutate(async () => {
       if (closed) throw new Error('Artifact owner closed')

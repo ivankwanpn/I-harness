@@ -62,7 +62,7 @@ export function createWorkerEvents(
           break
         case 'idle': clearTimeout(cell.watchdog); break
         case 'output': output(cell,data.json as string); break
-        case 'truncated': cell.truncated = true; cell.textIncomplete ||= data.text === true; break
+        case 'truncated': cell.truncated = true; cell.textIncomplete ||= data.text === true; cell.lifetimeOutput ??= { accepted: 0, truncated: false }; cell.lifetimeOutput.truncated = true; break
         case 'yield': cell.yielded = true; cell.wake?.(); break
         case 'call': call(cell,data.id as string,data.name as string,data.json as string); break
         case 'closed': {
