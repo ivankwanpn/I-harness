@@ -160,6 +160,12 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                 const hookSurface = host.hooks.capture();
                 await host.hooks.emit('agent/pre-step', { task: message, domain: host.domain, sessionId: host.domain.sessionId, signal, promptSubmission: first }, hookSurface);
                 assertManagedActionCurrent(host.domain, action);
+                const hookContext=host.hooks.drainContext(host.domain,hookSurface);
+                assertManagedActionCurrent(host.domain,action);
+                for(const text of hookContext){
+                    committedFactSeqs(await action.facts.agent.feedback({type:'user/message',text:feedbackText(text),source:{kind:'plugin',plugin:'hooks'},provenance:{kind:'plugin',authority:'observation',scope:'turn',producer:'agent.hooks'}}));
+                    assertManagedActionCurrent(host.domain,action);
+                }
                 first = false;
                 const reduction = createManagedReduction(host, context, action, () => run.generation, run.register);
                 const callWitnesses = new Map<BatchCall, ManagedFactWitness>(), unstarted = createUnstartedCallSettlement({ registerFactSource: run.register, readOriginalCall(call) {
@@ -383,11 +389,21 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                     continue;
                 if (empty)
                     break;
-                const verdict = await host.hooks.emit('agent/pre-stop', { domain: host.domain, sessionId: host.domain.sessionId, turns: steps, finalText, signal, stopHookActive: stopContinuations > 0 }) as {
+                assertManagedActionCurrent(host.domain,action);
+                const stopSurface=host.hooks.capture(),header=host.execution.observe().header;
+                let agentType:string|undefined;
+                try{agentType=_ctx.services.get<string>('hooks/agent-type')}catch{/* original root-agent absence */}
+                const stopInput=Object.freeze({domain:host.domain,sessionId:host.domain.sessionId,...typeof header?.origin==='string'?{origin:header.origin}:{},turns:steps,finalText,signal,stopHookActive:stopContinuations>0,...agentType!==undefined?{agentType}:{}});
+                const verdict = await host.hooks.emit('agent/pre-stop',stopInput,stopSurface) as {
                     continuation?: {
                         reason?: unknown;
                     };
-                } | undefined, reason = verdict?.continuation?.reason;
+                } | undefined;
+                assertManagedActionCurrent(host.domain,action);
+                if(stopInput.domain!==host.domain||stopInput.sessionId!==host.domain.sessionId)throw TypeError('Original runtime stop identity required');
+                const hookVerdict=await host.hooks.beforeStop(stopInput,stopSurface);
+                assertManagedActionCurrent(host.domain,action);
+                const reason=[verdict?.continuation?.reason,hookVerdict?.reason].filter(value=>typeof value==='string'&&value.trim()).join('\n\n');
                 signal.throwIfAborted();
                 if (typeof reason === 'string' && reason.trim()) {
                     stopContinuations++;

@@ -11,8 +11,10 @@ import { bindNativeExecution, bindInstructionCellRetainer, registerCaptureOwner,
 import type { CapturedToolCall, ToolPrepareIdentity, NativePlan, NativeMutation, AcceptedInstructionCall, InstructionCellLease } from '../types.ts'
 import { isDecision, mergeDecision } from "../approval/decision.ts"
 import { captureApproval } from "../approval/identity.ts"
+import {registerToolInvocation} from './invocation-domain.ts'
 import type { createCatalog } from "./catalog.ts"
 import { createPreparedBodyInvoker, attachPreparedModelOrigin, type ToolExecutionOwnerConfiguration } from './prepared-body.ts'
+const signalAborted=Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
 
 export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined, executionOwner?: ToolExecutionOwnerConfiguration) {
   const domain=executionOwner&&'kind'in executionOwner?executionOwner.domain:undefined
@@ -102,7 +104,14 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     //    call payload when no decision was produced — see the handler's
     //    CRITICAL comment); no shared slot, so concurrent prepares are
     //    independent.
-    const chainValue = hooks?await hooks.emit('tools/pre-execute',policyInput,hookSurface):await ctx.emit("tools/pre-execute", policyInput)
+    const releasePolicy=registerToolInvocation(policyInput,ctx,domain,identity.settlementSource,()=>{
+      assertToolSettlementScope(identity.session,identity.settlementSource,domain)
+      if(signal&&signalAborted.call(signal))throw Error('Original tool invocation aborted')
+      if(!bindingValidation())throw Error('Original invocation binding changed')
+      if(hookSurface)hooks!.assertCurrent(hookSurface)
+    })
+    let chainValue:unknown
+    try{chainValue=hooks?await hooks.emit('tools/pre-execute',policyInput,hookSurface):await ctx.emit("tools/pre-execute",policyInput)}finally{releasePolicy()}
     const decision: ToolDecision = isDecision(chainValue) ? chainValue : { kind: "allow" }
 
     // 1b. Cross-scope fail-open fix (Task 10 mechanism B): `emit` propagates

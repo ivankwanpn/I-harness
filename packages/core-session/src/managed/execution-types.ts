@@ -53,7 +53,7 @@ export interface ExecutionObservation {
  readonly projectionRevision:number
  readonly contextRevision:number
  readonly scheduleRevision:number
- readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapter-not-connected';revision:number}>
+readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapter-not-connected';revision:number}|{kind:'available';revision:number;snapshot:unknown}>
  readonly inbox:Readonly<{pending(fromSeq?:number):readonly DeepReadonly<PendingInput>[];isPending(inputId:string,fromSeq?:number):boolean;everAdmitted(inputId:string):boolean;isExecutable(inputId:string):boolean;
  /** Data only, hydrated at the original recorded ordinal; never an admission grant. */
  admitted(inputId:string):Promise<DeepReadonly<Extract<SessionEventView,{type:'agent/input/admitted'}>>|undefined>;
@@ -76,3 +76,12 @@ export interface PreparedExecutionRequest {
  assertCurrent():void
  settle():Promise<void>
 }
+
+/** A readonly fold over the validated original stream; it owns no writer. */
+export interface OriginalExecutionFoldSink {
+  appendValidated(unit: readonly SessionEventView[], firstOrdinal: number): void
+  finishRestore(prefix: Readonly<JournalPrefix>): void
+  snapshot(prefix: Readonly<JournalPrefix>): unknown
+  validateSnapshot(value: unknown): boolean
+}
+export type OriginalExecutionFoldFactory = (source: Readonly<{sessionId:string; seedLength:number; formatVersion:number}>) => OriginalExecutionFoldSink
