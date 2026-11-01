@@ -10,7 +10,7 @@ import { captureBootstrapTargetPreparationPort } from './bootstrap-preparation.t
 import { captureBootstrapCaptureRequest } from './bootstrap-capture.ts'
 import type { BootstrapCaptureRequest } from './bootstrap-types.ts'
 import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionCoordinator, type SessionBindingObservationRequest, type SessionBindingObservation, type ExistingSessionBindingObservationRequest, type ExistingSessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
-import type { Ownership } from './ownership.ts'
+import type { Ownership, OwnershipCleanup } from './ownership.ts'
 import { assertOutsideTaskDocumentOperation } from './task-document-operation.ts'
 import { assertOutsideTaskTransition } from './task-document-transition.ts'
 import { assertOriginalBootstrapEntry } from './bootstrap.ts'
@@ -33,7 +33,7 @@ export function observationCleanupFor(coordinator: SessionCoordinator, error: un
 /** Private Documents-owned scope admission. No project policy is interpreted here. */
 export function createBindingObservations(
   backend: Pick<PersistenceBackend, 'putDocument'|'getDocument'> & Partial<Pick<PersistenceBackend, 'profile'|'readDocumentObserved'|'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'confirmBootstrapFrames'|'appendOwnedBatch'|'reconcileOwnedBatch'>>,
-  ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'|'acquireDocumentLease'|'exclusionScope'>>,
+  ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'pinOwnershipRetained'|'withSessionOperation'|'acquireDocumentLease'|'exclusionScope'>>,
 ) {
   type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
   type Lock = Awaited<ReturnType<Ownership['acquireLease']>>
@@ -85,6 +85,7 @@ export function createBindingObservations(
   const pendingMutations = new Set<{ keys: readonly string[]; done: Promise<'settled' | 'unknown'> }>()
   let closed = false
   const coldTickets=new WeakMap<object,{owned:OwnedDocument;access:ColdTargetAccess;check():void}>()
+  const coldBindings = new WeakMap<object, { metadata: Readonly<SessionMeta>; assertCurrent(): void }>()
   const bindingKey = (id: string) => `desktop-session-project-${createHash('sha256').update(id).digest('hex')}`
   const intersects = (scope: Scope, ids: readonly string[], keys: readonly string[]) => overlap(snapshot(scope, [...scope.ids], [...scope.keys]), physical(ids, keys).keys)
   const ownedIntersects = (scope: OwnedDocument, ids: readonly string[], keys: readonly string[]) => overlap(snapshot(scope, [scope.id], [scope.key]), physical(ids, keys).keys)
@@ -417,6 +418,10 @@ export function createBindingObservations(
     if (ids.some(id => deletedIds.has(id)) || keys.some(key => deletedKeys.has(key))) throw new Failure('deleted')
     if (pendingExcept(ids,keys,cold?.owned) || [...ownedDocuments].some(scope => scope!==cold?.owned&&ownedIntersects(scope, ids, keys))) throw new Failure('conflict')
     if(cold&&(ids.length!==1||ids[0]!==cold.access.route.request.invocation.targetSessionId||existing.length!==1||existing[0]!==ids[0]))throw new Failure('invalid')
+    if (cold && (!ownership.pinOwnershipRetained || !ownership.acquireDocumentLease)) throw new Failure('unsupported')
+    // Cold F0 owns the acquisition association before any native await, including
+    // attempts which reject before a pin or document wrapper can be returned.
+    const coldAcquisitions = cold ? { pins: [] as OwnershipCleanup[], locks: [] as OwnershipCleanup[] } : undefined
     const completion = Promise.withResolvers<void>()
     const scope: Scope = { ...(captured.kind === 'fork' ? { kind: 'fork', target: captured.target } as const : { kind: 'existing-read' } as const), ids: new Set(ids), keys: new Set(keys), state: 'acquiring', pins: [], locks: [], done: completion.promise, signal, callbackFinished: false }
     scope.done.catch(() => {})
@@ -442,11 +447,17 @@ export function createBindingObservations(
         try { Reflect.apply(signalRemoveListener, signal, ['abort', aborted]); listenerAttached = false }
         catch (error) { failures.push(error) }
       }
-      for (const lock of [...scope.locks].reverse()) {
+      if (coldAcquisitions) {
+        for (const acquisition of [...coldAcquisitions.locks].reverse()) try { await acquisition.close(); acquisition.assertSettled(); coldAcquisitions.locks.splice(coldAcquisitions.locks.indexOf(acquisition), 1) } catch (error) { failures.push(error) }
+        if (!coldAcquisitions.locks.length) scope.locks.length = 0
+      } else for (const lock of [...scope.locks].reverse()) {
         try { await lock.release(); scope.locks.splice(scope.locks.indexOf(lock), 1) } catch (error) { failures.push(error) }
       }
       if (failures.length) throw new AggregateError(failures, 'Failed to release binding observation leases')
-      for (const pin of [...scope.pins].reverse()) {
+      if (coldAcquisitions) {
+        for (const acquisition of [...coldAcquisitions.pins].reverse()) try { await acquisition.close(); acquisition.assertSettled(); coldAcquisitions.pins.splice(coldAcquisitions.pins.indexOf(acquisition), 1) } catch (error) { failures.push(error) }
+        if (!coldAcquisitions.pins.length) scope.pins.length = 0
+      } else for (const pin of [...scope.pins].reverse()) {
         try { await pin.release(); scope.pins.splice(scope.pins.indexOf(pin), 1) } catch (error) { failures.push(error) }
       }
       if (failures.length) throw new AggregateError(failures, 'Failed to release binding observation')
@@ -468,8 +479,8 @@ export function createBindingObservations(
         listenerAttached = true
         Reflect.apply(signalAddListener, signal, ['abort', aborted, { once: true }])
       }
-      for (const id of ids) { scope.pins.push(await ownership.pinOwnership!(id)); guard() }
-      for (const key of keys) { scope.locks.push(await (ownership.acquireDocumentLease ? ownership.acquireDocumentLease(key) : ownership.acquireLease(`doc:${key}`))); guard() }
+      for (const id of ids) { scope.pins.push(await (coldAcquisitions ? ownership.pinOwnershipRetained!(id, cleanup => coldAcquisitions.pins.push(cleanup)) : ownership.pinOwnership!(id))); guard() }
+      for (const key of keys) { scope.locks.push(await (coldAcquisitions ? ownership.acquireDocumentLease!(key, cleanup => coldAcquisitions.locks.push(cleanup)) : ownership.acquireDocumentLease ? ownership.acquireDocumentLease(key) : ownership.acquireLease(`doc:${key}`))); guard() }
       const metadata = new Map<string, SessionMeta>(), bindings = new Map<string, ObservedDocument>()
       for (const id of existing) {
         if(cold){cold.check();if(!coldMetadata||coldMetadata.sessionId!==id||coldMetadata.formatVersion!==14)throw new Failure('unavailable');metadata.set(id,capture(coldMetadata));continue}
@@ -486,6 +497,7 @@ export function createBindingObservations(
         metadata(id: string) { guard(true); if (!metadata.has(id)) throw new Failure('invalid'); return metadata.get(id)! },
         binding(id: string) { guard(true); if (!bindings.has(id)) throw new Failure('invalid'); return bindings.get(id)! },
       })
+      if (cold && coldMetadata) coldBindings.set(observation, { metadata: coldMetadata, assertCurrent() { cold.check(); guard(true) } })
       return observation
     }
     return { scope, guard, completion, acquire }
@@ -654,7 +666,7 @@ export function createBindingObservations(
       },
     })
   }
-  return { createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerOwnedDocumentOperation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
+  return { captureColdBindingObservation(metadata: Readonly<SessionMeta>, observation: SessionBindingObservation) { const original = coldBindings.get(observation); if (!original || original.metadata !== metadata) throw new Failure('invalid'); original.assertCurrent(); return observation }, createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerOwnedDocumentOperation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return retained.cleanupForError(error) ?? (error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined) } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

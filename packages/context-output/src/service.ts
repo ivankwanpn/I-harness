@@ -15,7 +15,20 @@ import { createLegacyUseGate, type LegacyUseLease } from './legacy/use-gate.ts'
 import type { IndexedLegacyContext } from './legacy/index-lifecycle.ts'
 import { commitment } from './legacy/fork-codec.ts'
 import type { LegacyReadObservation, LegacyReadQuery, LegacySearchQuery } from './legacy/fork-types.ts'
-import { createSelectedMetadata } from './legacy/selected-metadata.ts'
+import { createSelectedMetadata, createColdSelectedMetadata } from './legacy/selected-metadata.ts'
+import { captureOriginalColdObservation, type ColdSelectedObservation } from '../../session-persistence/src/selected-source-owner.ts'
+import type { SessionCoordinator } from '../../session-persistence/src/coordinator/types.ts'
+import type { createSeedDependencyTransfer } from './artifact/bootstrap-transfer.ts'
+
+type ColdManagedOwner = Pick<ReturnType<typeof createSeedDependencyTransfer>, 'acquireColdManagedQualification' | 'revokeColdTransfers'>
+const coldManagedOwners = new WeakMap<ContextOutputService, ColdManagedOwner>()
+export function acquireColdManagedQualification(service: ContextOutputService, ...args: Parameters<ColdManagedOwner['acquireColdManagedQualification']>) {
+  const original = coldManagedOwners.get(service); if (!original) throw Error('Original context service required')
+  return original.acquireColdManagedQualification(...args)
+}
+export function revokeColdManagedQualifications(service: ContextOutputService, ids?: readonly string[]) {
+  const original = coldManagedOwners.get(service); if (!original) throw Error('Original context service required'); original.revokeColdTransfers(ids)
+}
 
 const artifactSettlement=new WeakMap<ContextOutputService,(scope:SeedDependencyTransferScope)=>Promise<void>>()
 export function settleSeedDependencyTransferIO(service:ContextOutputService,scope:SeedDependencyTransferScope){const settle=artifactSettlement.get(service);if(!settle)throw Error('Original artifact service required');return settle(scope)}
@@ -26,6 +39,14 @@ type SelectedMetadataRecord=SelectedMetadataOwner & {cleanupForError(error:unkno
 const selectedLegacyOwners=new WeakMap<ContextOutputService,ReturnType<typeof createLegacyForkOwner>['selected']>()
 export function selectedLegacyTransferFor(service:ContextOutputService){const owner=selectedLegacyOwners.get(service);if(!owner)throw Error('Original context service required');return owner}
 const selectedMetadataOwners=new WeakMap<ContextOutputService,{acquire(observation:LegacyReadObservation):Promise<SelectedMetadataOwner>;cleanupForError(error:unknown):SelectedCleanup|undefined}>()
+const coldSelectedOwners = new WeakMap<ContextOutputService, (coordinator: SessionCoordinator, cold: ColdSelectedObservation, sourceId: string) => ReturnType<typeof createColdSelectedMetadata>>()
+const coldSelectedRevokers = new WeakMap<ContextOutputService, (ids?: readonly string[]) => void>()
+export function acquireColdSelectedQualification(service: ContextOutputService, coordinator: SessionCoordinator, cold: ColdSelectedObservation, sourceId: string) {
+  const original = coldSelectedOwners.get(service); if (!original) throw Error('Original context service required'); return original(coordinator, cold, sourceId)
+}
+export function revokeColdSelectedQualifications(service: ContextOutputService, ids?: readonly string[]) {
+  const original = coldSelectedRevokers.get(service); if (!original) throw Error('Original context service required'); original(ids)
+}
 /** Private core-service association; wrappers must forward this original closure. */
 export function acquireSelectedMetadata(service:ContextOutputService,observation:LegacyReadObservation) {
   const owner=selectedMetadataOwners.get(service);if(!owner)throw Error('Original context service required');return owner.acquire(observation)
@@ -46,6 +67,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes, owner)
   let unsubscribeDeletions: (() => void) | undefined
   const releaseDocuments = async (documents: readonly string[]) => {
+    artifacts.revokeColdTransfers(documents)
     for(const reader of selectedReaders)if(documents.includes(selectedReaderIds.get(reader)!))reader.revoke()
     for (const id of documents) legacy.retire(id)
     const managed = artifacts.releaseDocuments(documents)
@@ -87,8 +109,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let mutations: Promise<unknown> = Promise.resolve()
   let transitions: Promise<unknown> = Promise.resolve()
   const jobs = new Map<AbortController, Promise<unknown>>()
-  const selectedReaders=new Set<SelectedMetadataRecord>()
-  const selectedReaderIds=new WeakMap<SelectedMetadataOwner,string>()
+  const selectedReaders=new Set<Pick<SelectedMetadataRecord, 'revoke' | 'close' | 'cleanupForError'>>()
+  const selectedReaderIds=new WeakMap<object,string>()
   const revokeSelectedAuthorities=(sessions?:readonly string[])=>{for(const reader of selectedReaders)if(!sessions||sessions.includes(selectedReaderIds.get(reader)!))reader.revoke();if(!sessions)legacy.selected.retire();else for(const session of sessions)legacy.selected.retire(session)}
   const selectedAcquisitionDebts=new Set<SelectedAcquisitionDebt>()
   let closedSelectedStore:ContextStore|undefined
@@ -411,6 +433,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     async clear(sessionId) {
       if (closed || closing) throw new Error('Context output is closed')
       if (sessionId !== undefined) identity(sessionId, 'sessionId')
+      artifacts.revokeColdTransfers(sessionId === undefined ? undefined : [sessionId])
       for(const reader of selectedReaders)if(sessionId===undefined||selectedReaderIds.get(reader)===sessionId)reader.revoke()
       legacy.retire(sessionId)
       await cleanupTransition([sessionId], async () => {
@@ -453,6 +476,46 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     },
   }
   artifactSettlement.set(service,artifacts.settleSeedDependencyTransfer)
+  coldManagedOwners.set(service, { acquireColdManagedQualification(...args) { assertOpen(); return artifacts.acquireColdManagedQualification(...args) }, revokeColdTransfers: artifacts.revokeColdTransfers })
+  coldSelectedRevokers.set(service, revokeSelectedAuthorities)
+  coldSelectedOwners.set(service, (coordinator, input, sourceId) => {
+    assertOpen(); identity(sourceId, 'sourceId')
+    const cold = captureOriginalColdObservation(coordinator, input), sessionId = cold.metadata.sessionId
+    const outstanding = selectedAcquisitionDebts.values().next().value; if (outstanding) throw outstanding.failure
+    let acquisitionStore: ContextStore | undefined
+    const observation: LegacyReadObservation = Object.freeze({ sessionId, sourceId,
+      bootstrap: Object.freeze({ invocation: cold.facts.invocation, manifestDigest: cold.facts.manifestDigest, seedDigest: cold.facts.seedDigest }), selectedView: cold.view,
+      assertCurrent() { captureOriginalColdObservation(coordinator, cold) },
+      localVisible() { throw Error('Cold legacy source lookup unavailable') }, anchorVisible() { throw Error('Cold legacy source lookup unavailable') },
+    })
+    const withRead = <T>(work: (current: ContextStore) => Promise<T>) => run(undefined, async signal => {
+      if (!store) await gate.exclusive(signal, async lease => {
+        gate.assertLease(lease, 'exclusive'); assertOpen()
+        const current = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities))
+        if (acquisitionStore && acquisitionStore !== current) throw Error('Original cold metadata store changed')
+        acquisitionStore = current; await current.acquireLifetime(signal)
+      })
+      return gate.shared(signal, async lease => {
+        gate.assertLease(lease); assertOpen(); const current = store ?? candidate
+        if (!current || acquisitionStore && acquisitionStore !== current) throw Error('Original cold metadata store changed')
+        acquisitionStore = current; return work(current)
+      })
+    })
+    const settle = () => gate.exclusive(undefined, async lease => {
+      gate.assertLease(lease, 'exclusive'); const original = acquisitionStore
+      if (!original) return
+      if (closedSelectedStore === original) { acknowledgeSelectedAcquisitions(original); return }
+      if ((store ?? candidate) !== original) throw Error('Original cold metadata store changed')
+      await original.joinLegacyFiles(); original.assertLegacyFilesSettled(); acknowledgeSelectedAcquisitions(original)
+    })
+    const assertCurrent = () => { assertOpen(); if (acquisitionStore && (store ?? candidate) !== acquisitionStore) throw Error('Original cold metadata store changed') }
+    let selected!: ReturnType<typeof createColdSelectedMetadata> & { cleanupForError(error: unknown): SelectedCleanup | undefined }
+    const original = createColdSelectedMetadata(observation, withRead, settle, assertCurrent, () => selectedReaders.delete(selected))
+    let failed = false, closeError: unknown
+    const receiver = (value: unknown) => { if (value !== selected) throw TypeError('Invalid cold selected receiver') }
+    selected = Object.freeze({ qualify() { receiver(this); return original.qualify() }, sealWhileActive() { receiver(this); original.sealWhileActive() }, settle() { receiver(this); return original.settle() }, assertSettledCurrent() { receiver(this); original.assertSettledCurrent() }, revoke() { receiver(this); original.revoke() }, async close() { receiver(this); try { await original.close(); failed = false } catch (failure) { failed = true; closeError = failure; throw failure } }, cleanupForError(failure: unknown) { receiver(this); return failed && failure === closeError ? { retry: () => selected.close() } : undefined } })
+    selectedReaderIds.set(selected, sessionId); selectedReaders.add(selected); return selected
+  })
   selectedLegacyOwners.set(service,legacy.selected)
   selectedMetadataOwners.set(service,{cleanupForError(error){for(const debt of selectedAcquisitionDebts)if(debt.failure===error)return debt.cleanup;for(const reader of selectedReaders){const cleanup=reader.cleanupForError(error);if(cleanup)return cleanup}},async acquire(observation){
     assertOpen()

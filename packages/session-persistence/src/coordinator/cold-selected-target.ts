@@ -22,6 +22,13 @@ export interface ColdSelectedObservation {
   readonly receipt: NonNullable<NonNullable<ManagedEntry['selected']>['resultReceipt']>
   assertCurrent(): void
 }
+const issuedObservations = new WeakMap<object, { entry: ManagedEntry; assertCurrent(): void }>()
+/** Internal provenance lookup. A structural observation never supplies an entry. */
+export function captureColdObservationEntry(observation: ColdSelectedObservation): ManagedEntry {
+  const original = issuedObservations.get(observation)
+  if (!original) throw new FactRecoveryRequiredError()
+  original.assertCurrent(); return original.entry
+}
 
 /** Subordinate to an existing unready entry; owns neither a claim nor readiness. */
 export function createColdSelectedInspection(entry: ManagedEntry, route: SelectedResultsRoute,
@@ -51,6 +58,7 @@ export function createColdSelectedInspection(entry: ManagedEntry, route: Selecte
         let active = true, failed = false, cause: unknown, value: T | undefined
         const assertCurrent = () => { if (!active) throw new FactRecoveryRequiredError(); check() }
         const observation = Object.freeze({ document, view, metadata, birth, facts: birth.facts, prefix, receipt, assertCurrent })
+        issuedObservations.set(observation, { entry, assertCurrent })
         try { value = await work(observation); assertCurrent() }
         catch (error) { failed = true; cause = error }
         active = false
