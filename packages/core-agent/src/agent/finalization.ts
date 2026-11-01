@@ -103,7 +103,7 @@ export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, conte
   return accepted!
 }
 
-export async function closeStep(deps: Pick<AgentDeps, "session" | "telemetry" | 'facts' | 'sourceFacts'>, lifecycle: TurnLifecycle, getSteps: () => number, step: ModelStep) {
+export async function closeStep(deps: Pick<AgentDeps, "telemetry" | 'facts' | 'sourceFacts'> & {session?:AgentDeps['session']}, lifecycle: TurnLifecycle, getSteps: () => number, step: ModelStep) {
   const { stepText, toolCallsThisStep, truncatedThisStep, refusedThisStep } = step
   // M77: a REFUSED step still appends this message, and its text stays `""`.
   // The choice is deliberate and is the spec's (§1.3): the log must carry
@@ -131,27 +131,31 @@ export async function closeStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
 }
 
 export async function finishTurn(ctx: PluginContext, deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, getSteps: () => number, reasoning: string[]): Promise<AgentResult> {
+  return finishObservedTurn(deps,lifecycle,getSteps,reasoning,{tokens:()=>activeTokens(deps.session),finalText(){
+    const last=deriveMessages(deps.session).at(-1)
+    return typeof last?.content==='string'?last.content:Array.isArray(last?.content)?last.content.filter(p=>p.type==='text').map(p=>p.text).join(''):''
+  },stop:finalText=>ctx.emit('agent/stop',{session:deps.session,turns:getSteps(),finalText})})
+}
+/** Original turn-ending order; private consumers supply real indexed data
+ * observations instead of manufacturing a complete Session. */
+export async function finishObservedTurn(deps:Pick<AgentDeps,'facts'|'sourceFacts'|'flush'|'telemetry'> & {session?:AgentDeps['session']},lifecycle:TurnLifecycle,getSteps:()=>number,reasoning:string[],observations:{tokens():number|Promise<number>;finalText():string;stop(finalText:string):Promise<unknown>}):Promise<AgentResult>{
   await closeTurnBoundary(deps,lifecycle)
   // M25: turn/end + token/usage at the turn boundary. The token count is the
   // SAME estimate the M20 budget check uses (activeTokens over the derived
   // surface); guarded so an absent telemetry never pays for it.
   if (deps.telemetry) {
     deps.telemetry.emit({ type: "turn/end", ts: Date.now(), data: { turns: getSteps() } })
-    deps.telemetry.emit({ type: "token/usage", ts: Date.now(), data: { tokens: activeTokens(deps.session) } })
+    const observed=observations.tokens(),tokens=typeof observed==='number'?observed:await observed
+    deps.telemetry.emit({ type: "token/usage", ts: Date.now(), data: { tokens } })
   }
   // M14: content may be a parts array (image-bearing); extract text parts
   // only. The final message is an assistant text message, but be robust.
-  const last = deriveMessages(deps.session).at(-1)
-  const finalText = typeof last?.content === "string"
-    ? last.content
-    : Array.isArray(last?.content)
-      ? last.content.filter((p) => p.type === "text").map((p) => p.text).join("")
-      : ""
+  const finalText=observations.finalText()
   // E5 "stop" hooks seam: emit at the turn boundary so hook handlers observe
   // the final text and can refuse it (a listener throw propagates as the
   // turn's failure). No handlers → emit returns the payload unchanged
   // (zero behavior change; additive event, no session-log write).
-  await ctx.emit("agent/stop", { session: deps.session, turns: getSteps(), finalText })
+  await observations.stop(finalText)
   // Execution may already have external effects. A save failure is reported
   // separately and must never be presented as a successful durable turn.
   try { await deps.flush?.() }

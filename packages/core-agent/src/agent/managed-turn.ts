@@ -11,8 +11,12 @@ import type { ManagedRun } from './managed-create.ts';
 import type { AgentResult, TurnLifecycle } from './types.ts';
 import { createModelStep } from './model-step.ts';
 import { createStepInput, feedbackText } from './step-input.ts';
-import { openStepBoundary, closeStepBoundary, closeTurnBoundary } from './boundaries.ts';
-import { completeModelStep, settleFailedTurn, reportModelUsage } from './finalization.ts';
+import { openStepBoundary } from './boundaries.ts';
+import { completeModelStep, settleFailedTurn, reportModelUsage, closeStep, finishObservedTurn } from './finalization.ts';
+import { readRestoredConversation } from '@i-harness/core-session/internal/restoration';
+import { renderConversation } from '@i-harness/core-session';
+import { estimateContent } from '@i-harness/token-meter';
+import { promoteInput } from './input-promotion.ts';
 import { acceptModelExchange } from './exchange.ts';
 import { createUnstartedCallSettlement } from './unstarted-call-settlement.ts';
 import { createAcceptanceSettlement } from './acceptance-settlement.ts';
@@ -141,6 +145,7 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                 host.requestContext?.promotedHumanRequest();
             host.telemetry?.emit({ type: 'turn/start', ts: Date.now(), data: { message } });
             let first = true, stopContinuations = 0, finalText = '';
+            const scope = Object.freeze({ sessionId: host.domain.sessionId, turnId: randomUUID(), ...host.isSubagent ? { isSubagent: true } : {} });
             for (;;) {
                 signal.throwIfAborted();
                 if (!first)
@@ -149,23 +154,14 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                 steps++;
                 if (host.maxTurns !== undefined && steps > host.maxTurns)
                     throw Error(`maxTurns exceeded: ${host.maxTurns}`);
-                await host.stepInputs?.claimAtStepBoundary(action.facts.inputs, run.preparation ? input => run.preparation!.prepare(input, generation) : undefined, async (promoted, text, preparation) => (await run.admit(action.captureInputPromotion({ kind: 'steer-claim', promoted, message: text, ...preparation ? { preparation } : {} }, () => {
-                    try {
-                        assertManagedActionCurrent(host.domain, action);
-                        assertGeneration(run);
-                        return true;
-                    }
-                    catch {
-                        return false;
-                    }
-                }))).outcome);
+                await host.stepInputs?.claimAtStepBoundary(action.facts.inputs, run.preparation ? input => run.preparation!.prepare(input, generation) : undefined, (promoted, text, preparation) => promoteInput({ captureInputPromotion: action.captureInputPromotion.bind(action), registerFactSource: run.register, facts: action.facts }, { kind: 'steer-claim', promoted, message: text, ...preparation ? { preparation } : {} }, () => { assertManagedActionCurrent(host.domain, action); assertGeneration(run); }, undefined, preparation && run.preparation ? () => run.preparation!.cancelUnpromoted(preparation) : undefined));
                 let startWitness = await run.admit(action.captureLifecycle!({ type: 'step/start', actionId: generation.actionId, attemptId: randomUUID() }));
                 openStepBoundary(lifecycle);
                 const hookSurface = host.hooks.capture();
                 await host.hooks.emit('agent/pre-step', { task: message, domain: host.domain, sessionId: host.domain.sessionId, signal, promptSubmission: first }, hookSurface);
                 assertManagedActionCurrent(host.domain, action);
                 first = false;
-                const scope = Object.freeze({ sessionId: host.domain.sessionId, turnId: randomUUID(), ...host.isSubagent ? { isSubagent: true } : {} }), reduction = createManagedReduction(host, context, action, () => run.generation, run.register), admissionOwner = createManagedAdmission(host, context, action, () => assertGeneration(run), reduction, run.register, prepareRequest, scope);
+                const reduction = createManagedReduction(host, context, action, () => run.generation, run.register);
                 const callWitnesses = new Map<BatchCall, ManagedFactWitness>(), unstarted = createUnstartedCallSettlement({ registerFactSource: run.register, readOriginalCall(call) {
                         const witness = callWitnesses.get(call);
                         if (!witness)
@@ -175,6 +171,8 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                             throw TypeError('Original call member required');
                         return event;
                     } }), acceptance = createAcceptanceSettlement({ registerFactSource: run.register, flush: host.flush }, unstarted.close);
+                const admissionOwner = createManagedAdmission(host, context, action, () => assertGeneration(run), reduction, run.register, prepareRequest, scope, candidate => { if (candidate.instructions)
+                    acceptance.retainContext(host.requestContext!.retain(candidate.instructions)); });
                 const state: import('./execution.ts').CandidateExecutionState & import('./recovery.ts').RecoveryAdmissionState = { epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false, reductionAttempts: { count: 0, staleRebuilds: 0 } };
                 let step: ReturnType<ReturnType<typeof createModelStep>['result']> | undefined, acceptedCapture: CapturedActionFact<FactOutcome> | undefined, acceptedEvent: Extract<SessionEventView, {
                     type: 'model/exchange-accepted';
@@ -312,11 +310,28 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                     if (candidate!.captured.instructions && step!.receipt)
                         instructions = host.requestContext!.managedSucceeded({ ...result, outcome: result.outcome, domain: host.domain, action, accepted: acceptedWitness, candidate: candidate!.captured, evidence: candidate!.captured.instructions, physicalExecutionReceipt: step!.receipt, calls: step!.batch.map((call, index) => ({ callId: call.callId, eventSeq: call.eventSeq, call: { name: call.name, args: call.args }, ...witnesses[index]! })) });
                     if (step!.batch.length) {
-                        const pendingInstructions = instructions;
+                        let pendingInstructions = instructions;
                         await unstarted.handoff(take => {
+                            let pin: import('./request-context.ts').RequestContextPin | undefined;
                             const batchSource = createManagedBatchSource(host.domain, action, invocation, token, step!.batch, witnesses, host.hooks, drain => {
-                                const actual = run.register(async () => { await drain(); await pendingInstructions?.release(); });
-                                take();
+                                const actual = run.register(async () => { await drain(); if (pin)
+                                    try {
+                                        await pin.release();
+                                        pin = undefined;
+                                    }
+                                    catch (error) {
+                                        actual.holdRecovery();
+                                        throw error;
+                                    } if (pendingInstructions)
+                                    try {
+                                        await pendingInstructions.release();
+                                        pendingInstructions = undefined;
+                                    }
+                                    catch (error) {
+                                        actual.holdRecovery();
+                                        throw error;
+                                    } });
+                                pin = take();
                                 for (const record of calls)
                                     if (record.call && step!.batch.includes(record.call))
                                         record.handled = true;
@@ -362,11 +377,12 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                     }
                 }
                 const actual = step!;
-                await closeStepBoundary(owned, lifecycle, { type: 'step/end', ...actual.truncatedThisStep ? { truncated: true } : {}, ...actual.refusedThisStep ? { refused: true } : {} });
-                await host.hooks.emit('agent/step', { domain: host.domain, sessionId: host.domain.sessionId, turns: steps, text: actual.stepText, signal });
+                const empty = await closeStep({ ...owned, telemetry: host.telemetry }, lifecycle, () => steps, actual);
                 finalText = actual.stepText;
                 if (actual.toolCallsThisStep)
                     continue;
+                if (empty)
+                    break;
                 const verdict = await host.hooks.emit('agent/pre-stop', { domain: host.domain, sessionId: host.domain.sessionId, turns: steps, finalText, signal, stopHookActive: stopContinuations > 0 }) as {
                     continuation?: {
                         reason?: unknown;
@@ -380,10 +396,12 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                 }
                 break;
             }
-            await closeTurnBoundary(owned, lifecycle);
-            await host.hooks.emit('agent/stop', { domain: host.domain, sessionId: host.domain.sessionId, turns: steps, finalText });
-            await host.flush?.();
-            return { finalText, turns: steps, reasoning: [...reasoning] };
+            return await finishObservedTurn({ ...owned, telemetry: host.telemetry }, lifecycle, () => steps, [...reasoning], { finalText: () => finalText, stop: finalText => host.hooks.emit('agent/stop', { domain: host.domain, sessionId: host.domain.sessionId, turns: steps, finalText }), async tokens() { const lease = await host.execution.prepare(); try {
+                    return estimateContent(renderConversation(readRestoredConversation(lease, { ownerSessionId: host.domain.sessionId }).projection));
+                }
+                finally {
+                    await lease.settle();
+                } } });
         }
         catch (error) {
             failure = error;

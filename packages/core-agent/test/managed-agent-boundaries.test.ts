@@ -57,8 +57,10 @@ async function fixture(mode: string) {
     probe.unknownType = undefined;
     probe.acceptedAppends = probe.resultAppends = 0;
     const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'agent-boundary-')), backend = createJsonlBackend(root), c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await c.create(), execution = await acquireManagedExecution(c, id), ctx = createContext(), origin = createManagedAgentModelOriginOwner(ctx, execution);
-    let effects = 0, hooks = 0, action: ManagedAction<FactOutcome> | undefined, reserves = 0, preCallbacks = 0, postCallbacks = 0, forbidden = 0;
+    let effects = 0, hooks = 0, action: ManagedAction<FactOutcome> | undefined, reserves = 0, preCallbacks = 0, postCallbacks = 0, forbidden = 0, preStops = 0, agentSteps = 0;
     const order: string[] = [];
+    const telemetry: Parameters<import('@i-harness/telemetry').Telemetry['emit']>[0][] = [];
+    const scopes: unknown[] = [];
     onExecutionEvent(ctx, 'agent/pre-step', () => {
         hooks++;
         if (mode === 'falsey-hook')
@@ -80,19 +82,28 @@ async function fixture(mode: string) {
         onExecutionCascade(ctx, 'tools/execute', async (_input, next) => { await Promise.resolve(); ctx.onCascade('tools/execute', async (_later, forward) => { forbidden++; return forward(); }); return next(); });
     if (mode === 'post-throw' || mode === 'falsey-cleanup')
         onExecutionEvent(ctx, 'tools/post-execute', () => { postCallbacks++; throw undefined; });
+    if (mode === 'empty-parity')
+        waterfallExecutionEvent(ctx, 'agent/pre-stop', async (input, next) => { preStops++; await next(input); return preStops === 1 ? { continuation: { reason: 'must not run after empty' } } : undefined; });
+    if (mode === 'scope-parity')
+        onExecutionEvent(ctx, 'agent/step', () => { agentSteps++; });
     if (mode === 'owned-order') {
         onExecutionEvent(ctx, 'tools/pre-execute', () => { preCallbacks++; order.push('pre'); });
         waterfallExecutionEvent(ctx, 'tools/pre-execute', async (input, next) => { order.push('waterfall-before'); const value = await next(input); order.push('waterfall-after'); return value; });
         onExecutionCascade(ctx, 'tools/execute', async (_input, next) => { order.push('around-before'); const value = await next(); order.push('around-after'); return value; });
         onExecutionEvent(ctx, 'tools/post-execute', () => { postCallbacks++; order.push('post'); });
     }
-    const server = await createLoopbackProvider('/v1/chat/completions', [async (response) => { response.end(wire(true)); }, async (response) => { response.end(wire(false)); }, async (response) => { response.end(wire(false)); }]);
+    const server = await createLoopbackProvider('/v1/chat/completions', [async (response) => { response.end(mode === 'empty-parity' ? `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 0 } })}\n\ndata: [DONE]\n\n` : wire(true)); }, async (response) => { response.end(wire(false)); }, async (response) => { response.end(wire(false)); }]);
     let agent: ReturnType<typeof createManagedAgent> | undefined;
     let cleanupFailed = false;
-    const construct = () => createManagedAgent(ctx, { execution, domain: origin.domain, hooks: captureExecutionHookChannel(ctx), modelCallOrigin: origin.bind(pair.registry, pair.driver), tools: pair.registry, model: createOpenAICompatibleClient({ apiKey: 'loopback', model: 'fixture', baseUrl: server.baseUrl }), systemPrompt: 'original', maxOutputTokens: 128, budget: { contextWindow: 16000 }, ...mode === 'deadline' ? { modelActionTimeoutMs: 1 } : {}, ...mode === 'falsey-cleanup' ? { async flush() { await c.flush(id); if (effects && !cleanupFailed) {
-                cleanupFailed = true;
-                throw false;
-            } } } : {}, ...mode === 'prune' || mode === 'unknown-prune' ? { compact: { contextWindow: 16000, auto: false, retainTokens: 0, prune: { thresholdChars: 100, headChars: 16, tailChars: 16 } } } : {}, generationFactory(original, deps) { action = original; return createExecutionGenerationLifecycle(execution, id, original, undefined, deps); } });
+    const actualClient = createOpenAICompatibleClient({ apiKey: 'loopback', model: 'fixture', baseUrl: server.baseUrl });
+    const model: import('@i-harness/llm-seam').ModelClient = mode === 'scope-parity' ? { executionIdentity: actualClient.executionIdentity, stream: request => actualClient.stream(request), async prepare(request) { scopes.push(request.requestScope); return actualClient.prepare!(request); } } : actualClient;
+    const construct = () => createManagedAgent(ctx, { execution, domain: origin.domain, hooks: captureExecutionHookChannel(ctx), modelCallOrigin: origin.bind(pair.registry, pair.driver), tools: pair.registry, model, ...mode === 'empty-parity' || mode === 'scope-parity' ? { telemetry: { emit(event) { telemetry.push(event); }, close() { } } } : {}, systemPrompt: 'original', maxOutputTokens: 128, budget: { contextWindow: 16000 }, ...mode === 'deadline' ? { modelActionTimeoutMs: 1 } : {}, ...mode === 'falsey-cleanup' ? { async flush() {
+                await c.flush(id);
+                if (effects && !cleanupFailed) {
+                    cleanupFailed = true;
+                    throw false;
+                }
+            } } : {}, ...mode === 'prune' || mode === 'unknown-prune' ? { compact: { contextWindow: 16000, auto: false, retainTokens: 0, prune: { thresholdChars: 100, headChars: 16, tailChars: 16 } } } : {}, generationFactory(original, deps) { action = original; return createExecutionGenerationLifecycle(execution, id, original, undefined, deps); } });
     if (mode === 'bookkeeping' || mode === 'input-drift' || mode === 'stop')
         probe.afterReserve = async () => {
             reserves++;
@@ -109,8 +120,11 @@ async function fixture(mode: string) {
         probe.unknownType = 'model/exchange-accepted';
     if (mode === 'unknown-result')
         probe.unknownType = 'tool/result';
-    return { get agent() { return agent ??= construct(); }, c, backend, id, execution, server, output, get action() { if (!action)
-            throw Error('Actual action absent'); return action; }, read: () => ({ effects, hooks, reserves, preCallbacks, postCallbacks, forbidden, order: [...order] }), async close() {
+    return { get agent() { return agent ??= construct(); }, c, backend, id, execution, server, output, telemetry, scopes, get action() {
+            if (!action)
+                throw Error('Actual action absent');
+            return action;
+        }, read: () => ({ effects, hooks, reserves, preCallbacks, postCallbacks, forbidden, preStops, agentSteps, order: [...order] }), async close() {
             probe.afterReserve = undefined;
             probe.unknownType = undefined;
             try {
@@ -255,28 +269,34 @@ it('real rewrite drift refuses original reserve/rebind and never physically issu
     try {
         await f.agent.run('Read original once');
         let boundaries = 0;
-        probe.afterReserve = async () => { if (++boundaries > 1) {
-            f.action.stop();
-            return;
-        } const request = await f.execution.prepareRequest(f.action); try {
-            const captured = captureRestoredContextSnapshot(request.archive, { ownerSessionId: f.id, surface: { systemPrompt: 'original', tools: [] } });
-            if (captured.kind !== 'captured')
-                throw Error('Original snapshot unavailable');
-            const policy = { retainTokens: 0, prune: { enabled: true, thresholdChars: 100, headChars: 16, tailChars: 16 } }, run = selectReductionRuns(captured.snapshot, policy).find(run => pruneProposal(captured.snapshot, run, policy).length);
-            if (!run)
-                throw Error('Original eligible prune absent');
-            const drafts = pruneProposal(captured.snapshot, run, policy), capture = f.action.captureContextReduction!({ kind: 'context-reduction', events: drafts }, () => { try {
-                request.assertCurrent();
-                return true;
+        probe.afterReserve = async () => {
+            if (++boundaries > 1) {
+                f.action.stop();
+                return;
             }
-            catch {
-                return false;
-            } });
-            committedFactSeqs(await capture.admit());
-        }
-        finally {
-            await request.settle();
-        } };
+            const request = await f.execution.prepareRequest(f.action);
+            try {
+                const captured = captureRestoredContextSnapshot(request.archive, { ownerSessionId: f.id, surface: { systemPrompt: 'original', tools: [] } });
+                if (captured.kind !== 'captured')
+                    throw Error('Original snapshot unavailable');
+                const policy = { retainTokens: 0, prune: { enabled: true, thresholdChars: 100, headChars: 16, tailChars: 16 } }, run = selectReductionRuns(captured.snapshot, policy).find(run => pruneProposal(captured.snapshot, run, policy).length);
+                if (!run)
+                    throw Error('Original eligible prune absent');
+                const drafts = pruneProposal(captured.snapshot, run, policy), capture = f.action.captureContextReduction!({ kind: 'context-reduction', events: drafts }, () => {
+                    try {
+                        request.assertCurrent();
+                        return true;
+                    }
+                    catch {
+                        return false;
+                    }
+                });
+                committedFactSeqs(await capture.admit());
+            }
+            finally {
+                await request.settle();
+            }
+        };
         const outcome = await f.agent.run('A new original request').then(() => ({ ok: true as const }), error => ({ ok: false as const, error }));
         expect(outcome.ok).toBe(false);
         expect(f.server.requests).toHaveLength(2);
@@ -303,17 +323,48 @@ it('falsey post-hook primary and original cleanup failure remain ordered while r
         expect(error).toBeInstanceOf(AggregateError);
         expect(Object.getOwnPropertyDescriptor(error, 'cause')?.value).toBeUndefined();
         const values: unknown[] = [];
-        const visit = (value: unknown) => { if (value instanceof AggregateError)
-            for (const nested of value.errors)
-                visit(nested);
-        else
-            values.push(value); };
+        const visit = (value: unknown) => {
+            if (value instanceof AggregateError)
+                for (const nested of value.errors)
+                    visit(nested);
+            else
+                values.push(value);
+        };
         visit(error);
         expect(values[0]).toBeUndefined();
         expect(values).toContain(false);
         expect(f.read()).toMatchObject({ effects: 1, postCallbacks: 1 });
         expect((await f.backend.read(f.id)).events.filter(event => event.type === 'tool/result')).toHaveLength(1);
         expect(f.server.requests).toHaveLength(1);
+    }
+    finally {
+        await f.close();
+    }
+}, 30000);
+it('empty actual completion keeps original empty ending and suppresses pre-stop continuation', async () => {
+    const f = await fixture('empty-parity');
+    try {
+        const result = await f.agent.run('Original empty ending');
+        expect(result.finalText).toBe('');
+        expect(f.server.requests).toHaveLength(1);
+        expect(f.read().preStops).toBe(0);
+        const events = (await f.backend.read(f.id)).events;
+        expect(events.filter(event => event.type === 'step/end')).toEqual([expect.objectContaining({ empty: true })]);
+        expect(f.telemetry.filter(event => event.type === 'provider/empty')).toHaveLength(1);
+    }
+    finally {
+        await f.close();
+    }
+}, 30000);
+it('one original request scope spans a real tool continuation and original finish telemetry', async () => {
+    const f = await fixture('scope-parity');
+    try {
+        await f.agent.run('Original scoped continuation');
+        expect(f.scopes.length).toBeGreaterThanOrEqual(2);
+        expect(f.scopes.every(scope => scope === f.scopes[0])).toBe(true);
+        expect(f.read().agentSteps).toBe(0);
+        expect(f.telemetry.filter(event => event.type === 'turn/end')).toHaveLength(1);
+        expect(f.telemetry.filter(event => event.type === 'token/usage')).toHaveLength(1);
     }
     finally {
         await f.close();
