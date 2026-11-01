@@ -9,6 +9,24 @@ import {createOwnership,captureHeldOwnershipClaim} from '../src/coordinator/owne
 beforeEach(()=>{native.keys.clear();native.held.clear();native.acquired=[];native.released=[];native.refuse=undefined;native.refuseRelease=undefined})
 function identity(){let current=true;const capture=(p:string)=>({kind:'ready' as const,key:path.resolve('C:\\store',p),assertCurrent(){if(!current)throw Error('retired namespace')}});return{session:(id:string)=>capture(id+'.jsonl'),document:(key:string)=>capture(key+'.doc.jsonl'),taskForParent:(id:string)=>capture('task-'+id+'.doc.jsonl'),prepareSession:async()=>{},prepareDocument:async()=>{},assertOriginal(){},settleResources(){},retire(){current=false}}}
 const make=(port=identity())=>{const backend={lockRoot:'fixture'};associations.set(backend,port);return{port,owner:createOwnership(backend,{lock:{enabled:true}})}}
+it('does not publish a reusable claim while original ordering close remains unknown',async()=>{
+ const {owner}=make(),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>();let closes=0
+ owner.beginResultOrderingRegistration({}).commit({assertOutside(){},reserve(retain){const original={async join(){},assertSettled(){},async close(){if(++closes===1){entered.resolve();await leave.promise;throw undefined}}};retain(original);return original}})
+ const pending=owner.pinOwnership('parent').then(claim=>({claim}),error=>({error}))
+ await entered.promise
+ const second=await owner.pinOwnership('parent').then(claim=>({claim}),error=>({error}))
+ if('claim'in second)await second.claim.release()
+ leave.resolve();const first=await pending
+ try{expect('error'in second).toBe(true);expect('error'in first).toBe(true);expect(owner.hasLiveOwnership('parent')).toBe(false)}finally{await owner.retryResultOrdering();await Promise.all(owner.releaseHeldLocks())}
+})
+it('keeps finite method currency through original ordering close before claim publication',async()=>{
+ const {owner}=make();let closes=0
+ const original={async join(){},assertSettled(){},async close(){closes++;original.join=async()=>{}}}
+ owner.beginResultOrderingRegistration({}).commit({assertOutside(){},reserve(retain){retain(original);return original}})
+ const outcome=await owner.pinOwnership('parent').then(claim=>({claim}),error=>({error}))
+ if('claim'in outcome)await outcome.claim.release()
+ try{expect('error'in outcome).toBe(true);const count=native.acquired.length;await owner.retryResultOrdering();expect(native.acquired.length).toBe(count);expect(closes).toBeGreaterThan(0)}finally{await Promise.all(owner.releaseHeldLocks())}
+})
 it('preserves falsey acquisition and original close failures without invoking a substituted cleanup',async()=>{
  const {owner,port}=make(),prepare=vi.spyOn(port,'prepareSession');let closes=0,substitutes=0,settled=false
  const original={async join(){},assertSettled(){if(!settled)throw Error('unsettled')},async close(){if(++closes===1)throw null;settled=true}}

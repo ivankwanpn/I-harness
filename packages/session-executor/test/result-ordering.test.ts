@@ -24,12 +24,35 @@ import { createProcessAwareResultService } from '../src/lifecycle/process-result
 import { ContextStore } from '../../context-output/src/store.ts'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
-import { retryOriginalResultOrdering } from '../../session-persistence/src/result-ordering-internal.ts'
+import { retryOriginalResultOrdering, beginOriginalResultOrderingRegistration } from '../../session-persistence/src/result-ordering-internal.ts'
+import { captureHeldOwnershipClaim } from '../../session-persistence/src/coordinator/ownership.ts'
 
 function serviceFor(root: string, coordinator: ReturnType<typeof createJsonlTaskTransitionCoordinator>, workspaceId: string, dynamic = false, authorize = async () => false) {
   return createProcessAwareResultService({ root, workspaceId, config: { enabled: true }, orderingCoordinators: dynamic ? [] : [coordinator], coordinatorFor: () => coordinator, sourceFor: async () => ({ sourceId: 'source' }), genericVisible: async () => false, authorize })
 }
 const capture = { sessionId: 'source', callId: 'c', label: 'c', text: 'original retained bytes', complete: true }
+
+it.each([[false,'second'],[true,'second'],[false,'cancel'],[true,'cancel']] as const)('keeps original held parent currency after ordinary aggregate extension configured=%s action=%s', async (configured, action) => {
+  const root = await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!, 'ordering-held-currency-'))
+  const coordinator = createJsonlTaskTransitionCoordinator(join(root,'sessions'),{lock:{enabled:true}},taskDocumentStorageContract)
+  const owner = originalOwners.at(-1)!, bridges: ReturnType<typeof serviceFor>[] = []
+  if(configured)bridges.push(serviceFor(root,coordinator,'first'))
+  const acquire=vi.spyOn(locking,'acquireSessionLock'),opened=vi.spyOn(ContextStore.prototype,'open')
+  const held=await owner.pinOwnership('parent');held.retainLive()
+  const original=captureHeldOwnershipClaim(owner,'parent',held), count=acquire.mock.calls.length
+  try {
+    if(action==='second')bridges.push(serviceFor(root,coordinator,'second'))
+    else {const registration=beginOriginalResultOrderingRegistration(coordinator,{});registration.cancel()}
+    held.assertHeld();original.assertHeld();held.retainLive()
+    expect(acquire.mock.calls.length).toBe(count)
+    for(const bridge of bridges){const ref=(await bridge.service.capture(capture))!;await expect(bridge.service.read({sessionId:'denied'},{refId:ref.id})).rejects.toThrow()}
+    const stores=opened.mock.contexts as ContextStore[]
+    expect(stores.every(store=>!store.lifetimeSettled())).toBe(true)
+    await coordinator.create({sessionId:'fresh'})
+    expect(stores.every(store=>store.lifetimeSettled())).toBe(true)
+    held.assertHeld();original.assertHeld()
+  } finally {await held.release();vi.restoreAllMocks();for(const bridge of bridges)await bridge.service.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
 
 it.each(['configure', 'clear'] as const)('joins the original queued %s transition before fresh native acquisition can pass', async operation => {
   const root = await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!, 'ordering-transition-tail-')), sessions = join(root, 'sessions')

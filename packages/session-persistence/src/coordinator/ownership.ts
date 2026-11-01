@@ -257,23 +257,28 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     orderingCheck()
     const captures = reuse ? reuse.captures : artifacts ? (document ? [artifacts.document(id)] : [artifacts.session(id), artifacts.taskForParent(id)]) : []
     const resources = reuse ? reuse.resources : [...new Set(artifacts ? captures.map(c => { if (c.kind !== 'ready') throw Error('Artifact preparation required'); return 'artifact-ownership:' + c.key }) : [document ? 'legacy-document:' + id : id])].sort()
-    const check = () => { orderingCheck(); if (reuse) checkBundle(reuse); for (const capture of captures) capture.assertCurrent(); for (const resource of held) resource.assertHeld() }
+    const checkHeld = () => { if (reuse) checkBundle(reuse); for (const capture of captures) capture.assertCurrent(); for (const resource of held) resource.assertHeld() }
+    const check = () => { orderingCheck(); checkHeld() }
     try { for (const resource of resources) { held.push(await borrowResource(resource, cleanup => { acquisitions.push(cleanup) })); check() } }
     catch (error) { const errors: unknown[] = []; for (const resource of held.reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length) throw new AggregateError([error,...errors], 'Ownership acquisition cleanup failed'); throw error }
+    // Acquisition currency remains finite: do not expose a reusable bundle or
+    // claim until every original ordering reservation acknowledges cleanup.
+    for (const original of [...ordering].reverse()) { await original.close(); original.assertSettled(); check(); orderingDebt.delete(original) }
+    check()
     let retired = false
     const bundle: Bundle = Object.freeze({ role: document ? 'document' : 'session', resources, captures, slots: resources.map(key => slots.get(key)!) })
     // Only complete original session claims enter this authority index.
     let bundles: Set<Bundle> | undefined
     if (bundle.role === 'session') { bundles = activeBundles.get(id); if (!bundles) { bundles = new Set(); activeBundles.set(id, bundles) }; bundles.add(bundle) }
     result = {
-      assertHeld() { if (retired) throw Error('Ownership claim retired'); check() },
+      assertHeld() { if (retired) throw Error('Ownership claim retired'); checkHeld() },
       retainLive() { if (document) throw Error('Document pin cannot retain session ownership'); this.assertHeld(); if (!live.has(id)) { for (const resource of held) resource.retainLive(id); live.set(id, bundle) } },
       async release() { if (!retired) { retired = true; if (bundles) { bundles.delete(bundle); if (!bundles.size && activeBundles.get(id) === bundles) activeBundles.delete(id) } }; const errors: unknown[] = []; for (const resource of [...held].reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length === 1) throw errors[0]; if (errors.length) throw new AggregateError(errors, 'Ownership bundle cleanup failed') },
     }
     claims.set(result, Object.freeze({ role: document ? 'document' : 'session', id, claim: result, assertHeld: result.assertHeld, retainLive: result.retainLive, release: result.release }))
     completed = true; return result
     } finally {
-      try { if (completed) { for (const original of [...ordering].reverse()) { await original.close(); original.assertSettled(); orderingDebt.delete(original) }; orderingAttempts.delete(originalCleanup) } }
+      try { if (completed) orderingAttempts.delete(originalCleanup) }
       finally { if (fresh) freshAcquisitions--; done.resolve() }
     }
   }
