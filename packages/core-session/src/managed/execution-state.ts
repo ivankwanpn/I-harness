@@ -11,9 +11,19 @@ import {freezeJsonData} from './capture.ts'
 import {captureOriginalRestorationSource} from './restoration-source.ts'
 import {originalDeliveryObservation} from './delivery-control.ts'
 
-const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;newWork?():void}>()
+const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;generations():readonly import('../conversation/generation.ts').GenerationActionState[];newWork?():void}>()
 const domains=new WeakMap<object,{identity:ManagedExecutionIdentity;owner:ManagedExecutionOwner;context:object;current():void}>()
 const sources=new WeakMap<object,{identity:ManagedExecutionIdentity;current():void}>()
+/** Existing source lifetime only. Reading its original fold does not reopen
+ * observation admission or authorize a fresh capture after retirement. */
+export function readManagedSourceGenerations(identity:ManagedExecutionIdentity,source:import('./ports.ts').SettlementFacts<FactOutcome>){
+ const original=owners.get(identity),registered=sources.get(source)
+ if(!original||registered?.identity!==identity)throw TypeError('Original same-execution held source required')
+ original.current();registered.current()
+ const snapshot=freezeJsonData(original.generations())
+ registered.current();original.current()
+ return snapshot
+}
 export function createManagedExecutionDomain(identity:ManagedExecutionIdentity,owner:ManagedExecutionOwner,context:object,sessionId?:string):ManagedExecutionDomain{
  const original=owners.get(identity);if(!original||original.owner!==owner||!original.newWork||!context||typeof context!=='object'||types.isProxy(context)||sessionId!==undefined&&sessionId!==original.sessionId)throw TypeError('Original managed execution domain required');original.newWork()
  const domain=Object.freeze({identity,owner,context,sessionId:original.sessionId,assertCurrent(){if(this!==domain)throw TypeError('Original domain receiver required');original.newWork!()}}) as ManagedExecutionDomain
@@ -97,7 +107,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       if(fields.some(field=>!field||!('value'in field)||typeof field.value!=='function'))throw new TypeError('Original execution owner methods required')
       const ready=Object.getOwnPropertyDescriptor(owner,'assertReady');if(ready&&(!('value'in ready)||typeof ready.value!=='function'||types.isProxy(ready.value)))throw TypeError('Original owner readiness required')
       const current=()=>{assertHeld();for(let index=0;index<methods.length;index++)if(Object.getOwnPropertyDescriptor(owner,methods[index]!)?.value!==fields[index]!.value)throw new TypeError('Original execution owner changed');if(ready&&Object.getOwnPropertyDescriptor(owner,'assertReady')?.value!==ready.value)throw TypeError('Original owner readiness changed')}
-      ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,...ready?{newWork(){current();assertNewWork();Reflect.apply(ready.value,owner,[])}}:{}})
+      ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,generations(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},...ready?{newWork(){current();assertNewWork();Reflect.apply(ready.value,owner,[])}}:{}})
     },
     assertNewWork,
     settleDependencies,
