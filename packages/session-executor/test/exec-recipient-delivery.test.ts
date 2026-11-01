@@ -3,6 +3,9 @@ import type { TransportExecutionBackend } from '@i-harness/sandbox'
 import { readDeliveries } from '@i-harness/core-session'
 import { createExecDeliveryFixture } from './helpers/exec-delivery-fixture.ts'
 import { receivedInputsFor } from '../src/lifecycle/received-inputs.ts'
+import { RecipientDeliveryRecoveryError } from '../src/lifecycle/recipient-delivery.ts'
+import { isRetryableDeliveryError } from '../src/service/delivery-drain.ts'
+import { DeliverySourcesError } from '../../subagent/src/task-notification.ts'
 const physical=vi.hoisted(()=>({backend:undefined as TransportExecutionBackend|undefined}))
 vi.mock('../src/execution-runtime.ts',async original=>{const actual=await original<typeof import('../src/execution-runtime.ts')>();return{...actual,createAssemblyExecutionRuntime(...args:Parameters<typeof actual.createAssemblyExecutionRuntime>){const runtime=actual.createAssemblyExecutionRuntime(...args);runtime.execution.selectBackend=()=>{if(!physical.backend)throw new Error('Physical fixture not installed');return physical.backend};return runtime}}})
 vi.mock('../../shell/src/discovery/windows.ts',()=>({bashAvailable:()=>true,resolveBashExe:()=> 'controlled-bash',resolvePwshExe:()=> 'controlled-pwsh',powerShellExecutableAvailable:()=>true}))
@@ -78,6 +81,45 @@ it('nominal transient original Exec admission retries through existing error sch
  const f=await createExecDeliveryFixture(backend=>{physical.backend=backend},{exitCode:9,transientAdmission:true})
  try{await f.start();f.releaseRoot();await f.terminal;await vi.waitFor(()=>expect(f.requests).toHaveLength(3),{timeout:3000});await f.consumed
    expect(f.refusals()).toBe(4);expect(f.document.view.events.filter(e=>e.type==='agent/delivery-received')).toHaveLength(1);expect(f.document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(1);expect(f.launches()).toBe(1)
+ }finally{await f.close()}
+},15000)
+
+it.each(['two-mixed','three-falsey','three-mixed','three-repeated','single-undefined'] as const)('original multi-candidate Exec admissions preserve every failure occurrence (%s)',async mode=>{
+ const nominal=new RecipientDeliveryRecoveryError({kind:'retryable',phase:'temporary-admission'})
+ const permanent=new Error('original permanent admission failure')
+ const failures:unknown[]=mode==='two-mixed'?[undefined,nominal]:mode==='three-falsey'?[false,null,undefined]:mode==='three-mixed'?[permanent,nominal,false]:mode==='three-repeated'?[undefined,nominal,undefined]:[undefined]
+ const f=await createExecDeliveryFixture(backend=>{physical.backend=backend},{candidateFailures:failures})
+ try{
+   await f.start();f.releaseRoot()
+   await vi.waitFor(()=>expect(f.admissionCaptures).toHaveLength(failures.length),{timeout:2000})
+   const adapter=receivedInputsFor(f.document,'parent').delivery
+   const observed=await adapter.reconcileExecCandidates().then(()=>({rejected:false,error:undefined as unknown}),error=>({rejected:true,error}))
+   expect(observed.rejected).toBe(true)
+   if(failures.length===1)expect(observed.error).toBe(failures[0])
+   else{
+     expect(observed.error).toBeInstanceOf(DeliverySourcesError)
+     if(!(observed.error instanceof DeliverySourcesError))throw new Error('Missing original multi-source failure')
+     expect(observed.error.errors).toHaveLength(failures.length)
+     failures.forEach((failure,index)=>expect(observed.error.errors[index]).toBe(failure))
+   }
+   const retryable=failures.includes(nominal)
+   expect(isRetryableDeliveryError(observed.error)).toBe(retryable)
+   expect(f.document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(failures.length)
+   expect(readDeliveries(f.document.view).execPending()).toHaveLength(failures.length)
+   expect(f.document.view.events.filter(e=>e.type==='agent/delivery-received')).toHaveLength(0)
+   const originalCaptures=[...f.admissionCaptures]
+   expect(new Set(originalCaptures).size).toBe(failures.length)
+   // Every pass joins the same source-owned capture; only nominal members arm
+   // the existing published service drain's retry scheduler.
+   const attemptsBeforeRetry=f.admissionAttempts.length
+   if(retryable)await vi.waitFor(()=>expect(f.admissionAttempts.length).toBeGreaterThan(attemptsBeforeRetry),{timeout:2000})
+   f.releaseAdmissions();await adapter.reconcileExecCandidates()
+   await vi.waitFor(()=>expect(f.document.view.events.filter(e=>e.type==='agent/delivery-received')).toHaveLength(failures.length),{timeout:2000})
+   await adapter.reconcileExecCandidates()
+   expect(f.admissionCaptures).toEqual(originalCaptures)
+   expect(f.document.view.events.filter(e=>e.type==='agent/delivery-received').map(e=>e.inputId).sort()).toEqual([...originalCaptures].sort())
+   expect(f.document.view.events.filter(e=>e.type==='agent/input/admitted'&&e.inputId.startsWith('delivery-'))).toHaveLength(failures.length)
+   expect(f.launches()).toBe(failures.length)
  }finally{await f.close()}
 },15000)
 

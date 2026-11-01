@@ -7,6 +7,7 @@ import { eligibleExecTerminal } from '../../../core-session/src/events/exec-deli
 import { readOwnedDeliveryState } from '../../../core-session/src/managed/view.ts'
 import { assertDeliveryIssue } from '../../../core-session/src/managed/delivery-control.ts'
 import { DeliverySuppressedError } from '@i-harness/subagent'
+import { DeliverySourcesError } from '../../../subagent/src/task-notification.ts'
 
 export type DeliveryDrainDisposition =
   | { kind: 'settled' } | { kind: 'waiting-source' }
@@ -171,7 +172,8 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
         try { await admitExec({ kind: 'exec', sourceSeq: candidate.source.seq!, terminalSeq: candidate.terminal.seq! }) }
         catch (cause) { if (!(cause instanceof DeliverySuppressedError)) failures.push(cause) }
       }
-      if (failures.length) throw failures.find(cause => cause instanceof RecipientDeliveryRecoveryError && cause.deliveryDisposition.kind === 'retryable') ?? failures[0]
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) throw new DeliverySourcesError(failures)
     },
     requestClose(reason: 'user-stop' | 'rewind') {
       const fenceId = randomUUID()
