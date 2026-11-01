@@ -1,4 +1,43 @@
-import { expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
+const native=vi.hoisted(()=>({begins:0,writers:0,writes:0,reconciles:0,confirms:0,operationId:undefined as string|undefined,sink:undefined as object|undefined,
+ afterBegin:undefined as (()=>void|Promise<void>)|undefined,afterWrite:undefined as (()=>void|Promise<void>)|undefined,afterFinish:undefined as (()=>void|Promise<void>)|undefined,afterConfirm:undefined as (()=>void|Promise<void>)|undefined}))
+// Pass through the actual owners. Instrument before their constructor captures
+// method identity; never decorate the returned service/scope/sink afterward.
+vi.mock('../../context-output/src/artifact/writer.ts',async load=>{
+ const real=await load<typeof import('../../context-output/src/artifact/writer.ts')>()
+ return {...real,async createArtifactWriter(...args:Parameters<typeof real.createArtifactWriter>){
+  const sink=await real.createArtifactWriter(...args)
+  if(args[0].operation.codec==='code-output-manifest-v1'){
+   native.writers++;native.operationId??=args[0].operation.owner.operationId;expect(args[0].operation.owner.operationId).toBe(native.operationId)
+   native.sink??=sink;expect(sink).toBe(native.sink)
+   const write=sink.write.bind(sink),reconcile=sink.reconcileWrite.bind(sink),finish=sink.finish.bind(sink)
+   sink.write=async bytes=>{native.writes++;await write(bytes);await native.afterWrite?.()}
+   sink.reconcileWrite=async()=>{native.reconciles++;return reconcile()}
+   sink.finish=async value=>{const result=await finish(value);await native.afterFinish?.();return result}
+  }
+  return sink
+ }}
+})
+vi.mock('../../context-output/src/artifact/ownership.ts',async load=>{
+ const real=await load<typeof import('../../context-output/src/artifact/ownership.ts')>()
+ return {...real,createArtifactOwnership(...args:Parameters<typeof real.createArtifactOwnership>){
+  const owner=real.createArtifactOwnership(...args),begin=owner.beginResult.bind(owner),confirm=owner.confirmResultOwner.bind(owner)
+  owner.beginResult=async(scope,codec)=>{if(codec==='code-output-manifest-v1')native.begins++;const sink=await begin(scope,codec);if(codec==='code-output-manifest-v1')await native.afterBegin?.();return sink}
+  owner.confirmResultOwner=async(scope,ref)=>{await confirm(scope,ref);if(ref.codec==='code-output-manifest-v1'){native.confirms++;await native.afterConfirm?.()}}
+  return owner
+ }}
+})
+function resetNative(){Object.assign(native,{begins:0,writers:0,writes:0,reconciles:0,confirms:0,operationId:undefined,sink:undefined,afterBegin:undefined,afterWrite:undefined,afterFinish:undefined,afterConfirm:undefined})}
+afterEach(()=>{resetNative();vi.restoreAllMocks()})
+async function closeOwned(primary:{cause:unknown}|undefined,work:(()=>Promise<void>)[]){
+ const errors:unknown[]=[]
+ for(const close of work)try{await close()}catch(cause){errors.push(cause)}
+ if(errors.length)throw new AggregateError([...(primary?[primary.cause]:[]),...errors],'Original connected fixture use/cleanup failed')
+}
+async function closeFixture(f:Awaited<ReturnType<typeof setup>>,mount:{dispose():Promise<void>}){await closeOwned(f.primary,[()=>mount.dispose(),async()=>{
+ const outcomes=await Promise.allSettled(f.pending),failed=outcomes.filter((value):value is PromiseRejectedResult=>value.status==='rejected')
+ if(failed.length)throw new AggregateError(failed.map(value=>value.reason),'Original fixture settlement failed')
+},()=>f.coordinator.close(),()=>f.service.close()])}
 import { mkdir, mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
@@ -14,6 +53,7 @@ import { observeOriginalCellFinalizations } from '../src/finalization.ts'
 import { subscribe, createNondurableFactOwner, createSession, type ManagedArtifactRef } from '@i-harness/core-session'
 
 async function setup() {
+  resetNative()
   const base=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'code-final-')), sessionRoot=join(base,'sessions')
   await mkdir(sessionRoot)
   const coordinator=createJsonlTaskTransitionCoordinator(sessionRoot,{lock:{enabled:true}},taskDocumentStorageContract)
@@ -22,18 +62,18 @@ async function setup() {
   const service=createContextOutputService({root:join(base,'outputs'),workspaceId:'code-fixture',authorizeResult:async()=>authorized && ++reads<=cutoff})
   const sourceFor=async()=>({sourceId:'original-fixture-source'})
   const factory:import('../src/final-output.ts').CodeFinalOutputFactory=input=>createCodeFinalOutputRetention({service,sourceFor})(input)
-  return {coordinator,id,document,ctx,tools,service,factory,sourceFor,revoke(){authorized=false},revokeDuringRead(){cutoff=reads+2}}
+  return {coordinator,id,document,ctx,tools,service,factory,sourceFor,primary:undefined as {cause:unknown}|undefined,pending:[] as Promise<unknown>[],revoke(){authorized=false},revokeDuringRead(){cutoff=reads+2}}
 }
 it.each(['original-service','copied-service'] as const)('keeps genuine nondurable Code and its consumed cursor intact with an inactive optional manifest factory: %s',async mode=>{
   const session=createSession(),owner=createNondurableFactOwner(session),ctx=createContext(),tools=createToolRegistry(ctx)
   const root=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'inactive-final-')),service=createContextOutputService({root,workspaceId:'inactive'})
-  const begin=vi.spyOn(service,'beginResult'),sourceFor=vi.fn(async()=>({sourceId:'must-not-be-consulted'}))
+  const sourceFor=vi.fn(async()=>({sourceId:'must-not-be-consulted'}))
   const factory=vi.fn(createCodeFinalOutputRetention({service:mode==='copied-service'?{...service}:service,sourceFor}))
   const body=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>()
   tools.register({name:'boundary',description:'',inputSchema:{},execute:async()=>{entered.resolve();await body.promise;return null}})
   const mount=registerCodeMode(ctx,tools,{session,sessionId:'nondurable',factOwner:owner,config:{mode:'mixed'},finalOutput:factory})
   const observed=vi.fn(),off=observeOriginalCodeFinalOutputs(mount,observed)
-  let clean=false
+  let primary:{cause:unknown}|undefined
   try{
     const first=await tools.get('code_exec')!.execute({code:'text("ordinary first");await tools.boundary({});text("ordinary second");store("key",7)',yield_time_ms:1000},{session}) as {status:string;text?:string;cell_id:string}
     await entered.promise
@@ -46,9 +86,9 @@ it.each(['original-service','copied-service'] as const)('keeps genuine nondurabl
     expect(session.events.filter(event=>event.type==='code/store')).toHaveLength(1)
     expect(()=>captureOriginalCodeFinalOutput(mount,first.cell_id)).toThrow(/unavailable/)
     expect(()=>captureOriginalCodeFinalOutput({...mount},first.cell_id)).toThrow(/unavailable/)
-    expect(observed).not.toHaveBeenCalled();expect(factory).not.toHaveBeenCalled();expect(sourceFor).not.toHaveBeenCalled();expect(begin).not.toHaveBeenCalled()
-    clean=true
-  }finally{body.resolve();off();if(clean)await mount.dispose();else await mount.dispose().catch(()=>{});await service.close();vi.restoreAllMocks()}
+    expect(observed).not.toHaveBeenCalled();expect(factory).not.toHaveBeenCalled();expect(sourceFor).not.toHaveBeenCalled();expect(native.begins).toBe(0)
+
+  }catch(cause){primary={cause};throw cause}finally{body.resolve();off();await closeOwned(primary,[()=>mount.dispose(),()=>service.close()]);vi.restoreAllMocks()}
 },10000)
 it('binds the original immutable committed member despite a retention alias mutation in the genuine commit observer',async()=>{
   const f=await setup(),text=createCodeTextRetention({service:f.service,sourceFor:f.sourceFor})
@@ -79,16 +119,12 @@ it('binds the original immutable committed member despite a retention alias muta
     expect(captures).toBe(1);expect(observed).toBe(1)
     expect(f.document.view.events.filter(event=>event.type==='code/output')).toHaveLength(1)
     expect(f.document.view.events.filter(event=>event.type==='code/cell'&&event.state==='started')).toHaveLength(1)
-  }finally{offFact();off();await mount.dispose();await f.coordinator.close();await f.service.close();vi.restoreAllMocks()}
+  }catch(cause){f.primary={cause};throw cause}finally{offFact();off();await closeFixture(f,mount);vi.restoreAllMocks()}
 },30000)
 it('connects actual committed queue members through independent managed retention and all cell ACKs to an authorized immutable final page', async()=>{
   const f=await setup(),held=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>()
-  const original=f.service.confirmResultOwner.bind(f.service)
   let manifestConfirm=0,textCaptures=0,projectionCaptures=0,cellId=''
-  vi.spyOn(f.service,'confirmResultOwner').mockImplementation(async(scope,ref)=>{
-    if(ref.codec==='code-output-manifest-v1'){manifestConfirm++;entered.resolve();await held.promise}
-    return original(scope,ref)
-  })
+  native.afterConfirm=async()=>{manifestConfirm++;entered.resolve();await held.promise}
   const text=createCodeTextRetention({service:f.service,sourceFor:f.sourceFor})
   const mount=registerCodeMode(f.ctx,f.tools,{session:f.document.view,sessionId:f.id,factOwner:f.document,config:{mode:'mixed'},finalOutput:f.factory,
     retainText:input=>{if(input.index)projectionCaptures++;else textCaptures++;return text(input)}})
@@ -103,6 +139,7 @@ it('connects actual committed queue members through independent managed retentio
     expect(captureOriginalCodeFinalOutput(mount,cellId)).toBe(output)
     await entered.promise
     let done=false;const pending=output.settle().then(value=>{done=true;return value})
+    f.pending.push(pending);void pending.catch(()=>{})
     await Promise.resolve();expect(done).toBe(false)
     held.resolve();const final=await pending
     expect(final.kind).toBe('ready')
@@ -124,14 +161,14 @@ it('connects actual committed queue members through independent managed retentio
     if(child.kind!=='text'||child.retention.kind!=='artifact')throw new Error('Expected actual original text ref')
     await expect(f.service.readResult({sessionId:'recipient'},{ref:child.retention.ref})).rejects.toThrow(/unauthorized|unavailable/)
     f.revoke();await expect(f.service.readCodeOutputResult!({sessionId:f.id},{ref:final.ref})).rejects.toThrow(/unauthorized|unavailable/)
-  }finally{held.resolve();off();stopOutput();await mount.dispose();await f.coordinator.close();await f.service.close();vi.restoreAllMocks()}
+  }catch(cause){f.primary={cause};throw cause}finally{held.resolve();off();stopOutput();await closeFixture(f,mount);vi.restoreAllMocks()}
 },30000)
 
 it('waits for each actual original output store and terminal capture ACK without async callback replay',async()=>{
   const f=await setup(),outputGate=Promise.withResolvers<void>(),storeGate=Promise.withResolvers<void>(),terminalGate=Promise.withResolvers<void>(),outputEntered=Promise.withResolvers<void>(),storeEntered=Promise.withResolvers<void>(),terminalEntered=Promise.withResolvers<void>()
-  const begin=f.document.beginAction.bind(f.document),nativeBegin=f.service.beginResult.bind(f.service)
+  const begin=f.document.beginAction.bind(f.document)
   let manifestOpened=0,outputCalls=0,storeCalls=0,terminalCalls=0,output!:ReturnType<typeof captureOriginalCodeFinalOutput>
-  vi.spyOn(f.service,'beginResult').mockImplementation((scope,codec)=>{if(codec==='code-output-manifest-v1')manifestOpened++;return nativeBegin(scope,codec)})
+  native.afterBegin=()=>{manifestOpened++}
   vi.spyOn(f.document,'beginAction').mockImplementation((...args)=>{
     const action=begin(...args),register=action.registerSettlementSource.bind(action),store=action.captureCodeStore.bind(action)
     vi.spyOn(action,'captureCodeStore').mockImplementation(event=>{const fact=store(event),admit=fact.admit.bind(fact);vi.spyOn(fact,'admit').mockImplementation(async()=>{storeCalls++;storeEntered.resolve();await storeGate.promise;return admit()});return fact})
@@ -154,6 +191,7 @@ it('waits for each actual original output store and terminal capture ACK without
     const first=await f.tools.get('code_exec')!.execute({code:'text("original");store("key",7)',yield_time_ms:0},{session:f.document.view,sessionId:f.id}) as {cell_id:string}
     await outputEntered.promise
     let ready=false;const pending=output.settle().then(value=>{ready=true;return value})
+    f.pending.push(pending);void pending.catch(()=>{})
     await Promise.resolve();expect(ready).toBe(false);expect(manifestOpened).toBe(0)
     outputGate.resolve();await storeEntered.promise
     expect(ready).toBe(false);expect(manifestOpened).toBe(1)
@@ -165,22 +203,14 @@ it('waits for each actual original output store and terminal capture ACK without
     expect(page.footer.count).toBe(1);expect(page.footer.store?.seq).toBe(f.document.view.events.find(e=>e.type==='code/store')!.seq)
     expect([outputCalls,storeCalls,terminalCalls]).toEqual([1,1,1])
     expect(await f.tools.get('code_wait')!.execute({cell_id:first.cell_id,yield_time_ms:60000},{session:f.document.view,sessionId:f.id})).toMatchObject({status:'completed',text:'original'})
-  }finally{outputGate.resolve();storeGate.resolve();terminalGate.resolve();off();await mount.dispose();await f.coordinator.close();await f.service.close();vi.restoreAllMocks()}
+  }catch(cause){f.primary={cause};throw cause}finally{outputGate.resolve();storeGate.resolve();terminalGate.resolve();off();await closeFixture(f,mount);vi.restoreAllMocks()}
 },30000)
 
 it('keeps final output unavailable while the actual original nested broker producer and native manifest finish are held',async()=>{
   const f=await setup(),body=Promise.withResolvers<unknown>(),bodyEntered=Promise.withResolvers<void>(),finish=Promise.withResolvers<void>(),finishEntered=Promise.withResolvers<void>()
   f.tools.register({name:'late',description:'',inputSchema:{},isConcurrencySafe:true,execute:async()=>{bodyEntered.resolve();return body.promise}})
   f.tools.register({name:'started',description:'',inputSchema:{},isConcurrencySafe:true,execute:async()=>{await bodyEntered.promise;return null}})
-  const begin=f.service.beginResult.bind(f.service)
-  vi.spyOn(f.service,'beginResult').mockImplementation(async(scope,codec)=>{
-    const sink=await begin(scope,codec)
-    if(codec==='code-output-manifest-v1'){
-      const original=sink.finish.bind(sink)
-      vi.spyOn(sink,'finish').mockImplementation(async completeness=>{finishEntered.resolve();await finish.promise;return original(completeness)})
-    }
-    return sink
-  })
+  native.afterFinish=async()=>{finishEntered.resolve();await finish.promise}
   const mount=registerCodeMode(f.ctx,f.tools,{session:f.document.view,sessionId:f.id,factOwner:f.document,config:{mode:'mixed'},finalOutput:f.factory})
   let output!:ReturnType<typeof captureOriginalCodeFinalOutput>
   const off=observeOriginalCodeFinalOutputs(mount,(_id,handle)=>{output=handle})
@@ -189,17 +219,18 @@ it('keeps final output unavailable while the actual original nested broker produ
     await bodyEntered.promise
     let ready=false,finishing=false;void finishEntered.promise.then(()=>{finishing=true})
     const pending=output.settle().then(value=>{ready=true;return value})
+    f.pending.push(pending);void pending.catch(()=>{})
     await Promise.resolve();await Promise.resolve();expect(ready).toBe(false);expect(finishing).toBe(false)
     body.resolve('late original broker reply');await finishEntered.promise
     expect(ready).toBe(false)
     finish.resolve();expect((await pending).kind).toBe('ready')
     expect(f.document.view.events.filter(e=>e.type==='code/call')).toHaveLength(2)
     expect(f.document.view.events.filter(e=>e.type==='code/result')).toHaveLength(2)
-  }finally{body.resolve(null);finish.resolve();off();await mount.dispose();await f.coordinator.close();await f.service.close();vi.restoreAllMocks()}
+  }catch(cause){f.primary={cause};throw cause}finally{body.resolve(null);finish.resolve();off();await closeFixture(f,mount);vi.restoreAllMocks()}
 },30000)
 
 it('reports unsupported copied/custom retention service before creating an artifact operation',async()=>{
-  const f=await setup(),begin=vi.spyOn(f.service,'beginResult'),lookup=vi.fn(f.sourceFor)
+  const f=await setup(),lookup=vi.fn(f.sourceFor)
   const unsupported=createCodeFinalOutputRetention({service:{...f.service},sourceFor:lookup})
   const mount=registerCodeMode(f.ctx,f.tools,{session:f.document.view,sessionId:f.id,factOwner:f.document,config:{mode:'mixed'},finalOutput:unsupported})
   let output!:ReturnType<typeof captureOriginalCodeFinalOutput>
@@ -207,8 +238,8 @@ it('reports unsupported copied/custom retention service before creating an artif
   try{
     expect(await f.tools.get('code_exec')!.execute({code:'',yield_time_ms:60000},{session:f.document.view,sessionId:f.id})).toMatchObject({status:'completed'})
     expect(await output.settle()).toEqual({kind:'unavailable',reason:'unsupported-owner'})
-    expect(begin).not.toHaveBeenCalled();expect(lookup).not.toHaveBeenCalled()
-  }finally{off();await mount.dispose();await f.coordinator.close();await f.service.close();vi.restoreAllMocks()}
+    expect(native.begins).toBe(0);expect(lookup).not.toHaveBeenCalled()
+  }catch(cause){f.primary={cause};throw cause}finally{off();await closeFixture(f,mount);vi.restoreAllMocks()}
 },30000)
 
 it.each(['stop','replan','policy'] as const)('retains the original %s disposition without upgrading it to ordinary completed output',async mode=>{
@@ -231,7 +262,7 @@ it.each(['stop','replan','policy'] as const)('retains the original %s dispositio
     const page=await f.service.readCodeOutputResult!({sessionId:f.id},{ref:stored.ref})
     expect(page.footer.status).toBe(mode==='stop'?'terminated':mode==='replan'?'replanned':'policy-refused')
     expect(stored.ref.completeness).toBe('capture-canceled')
-  }finally{body.resolve(null);off();await mount.dispose();await f.coordinator.close();await f.service.close()}
+  }catch(cause){f.primary={cause};throw cause}finally{body.resolve(null);off();await closeFixture(f,mount)}
 },30000)
 
 it('seals real empty output and rechecks authorization after awaited managed range IO',async()=>{
@@ -245,7 +276,7 @@ it('seals real empty output and rechecks authorization after awaited managed ran
     f.revokeDuringRead()
     await expect(f.service.readCodeOutputResult!({sessionId:f.id},{ref:stored.ref})).rejects.toThrow(/unauthorized|unavailable/)
     expect(await output.settle()).toEqual(stored) // Historical identity is immutable.
-  }finally{off();await mount.dispose();await f.coordinator.close();await f.service.close()}
+  }catch(cause){f.primary={cause};throw cause}finally{off();await closeFixture(f,mount)}
 },30000)
 
 it('streams more than256 small committed media descriptors across consumed windows without lifetime bodies or observer cursor movement',async()=>{
@@ -278,29 +309,17 @@ it('streams more than256 small committed media descriptors across consumed windo
     expect(await output.settle()).toEqual(final)
     // Manifest reads/settlement did not consume the original observation.
     expect(await f.tools.get('code_wait')!.execute({cell_id:first.cell_id,yield_time_ms:60000},{session:f.document.view,sessionId:f.id})).toMatchObject({status:'completed'})
-  }finally{for(const gate of gates)gate.resolve();off();await mount.dispose();await f.coordinator.close();await f.service.close()}
+  }catch(cause){f.primary={cause};throw cause}finally{for(const gate of gates)gate.resolve();off();await closeFixture(f,mount)}
 },60000)
 
 it.each(['initialization','header-write','descriptor-write','finish','confirmation'] as const)('reconciles the same original managed manifest after lost %s reply without guest/fact/text replay',async mode=>{
   const f=await setup(),injected=Promise.withResolvers<void>()
-  const originalBegin=f.service.beginResult.bind(f.service),originalConfirm=f.service.confirmResultOwner.bind(f.service)
-  let lost=false,writes=0,reconciles=0,textCaptures=0,operationId:string|undefined,sinkObject:object|undefined,output!:ReturnType<typeof captureOriginalCodeFinalOutput>
+  let lost=false,textCaptures=0,output!:ReturnType<typeof captureOriginalCodeFinalOutput>
   const lose=()=>{lost=true;injected.resolve();throw false}
-  vi.spyOn(f.service,'beginResult').mockImplementation(async(scope,codec)=>{
-    const sink=await originalBegin(scope,codec)
-    if(codec!=='code-output-manifest-v1')return sink
-    operationId??=scope.operationId;expect(scope.operationId).toBe(operationId)
-    if(!sinkObject){
-      sinkObject=sink
-      const write=sink.write.bind(sink),reconcile=sink.reconcileWrite.bind(sink),finish=sink.finish.bind(sink)
-      vi.spyOn(sink,'write').mockImplementation(async bytes=>{writes++;await write(bytes);if(!lost&&(mode==='header-write'&&writes===1||mode==='descriptor-write'&&writes===2))lose()})
-      vi.spyOn(sink,'reconcileWrite').mockImplementation(async()=>{reconciles++;return reconcile()})
-      vi.spyOn(sink,'finish').mockImplementation(async completeness=>{const result=await finish(completeness);if(!lost&&mode==='finish')lose();return result})
-    }else expect(sink).toBe(sinkObject)
-    if(!lost&&mode==='initialization')lose()
-    return sink
-  })
-  vi.spyOn(f.service,'confirmResultOwner').mockImplementation(async(scope,ref)=>{await originalConfirm(scope,ref);if(ref.codec==='code-output-manifest-v1'&&!lost&&mode==='confirmation')lose()})
+  native.afterBegin=()=>{if(!lost&&mode==='initialization')lose()}
+  native.afterWrite=()=>{if(!lost&&(mode==='header-write'&&native.writes===1||mode==='descriptor-write'&&native.writes===2))lose()}
+  native.afterFinish=()=>{if(!lost&&mode==='finish')lose()}
+  native.afterConfirm=()=>{if(!lost&&mode==='confirmation')lose()}
   const text=createCodeTextRetention({service:f.service,sourceFor:f.sourceFor})
   const mount=registerCodeMode(f.ctx,f.tools,{session:f.document.view,sessionId:f.id,factOwner:f.document,config:{mode:'mixed'},finalOutput:f.factory,retainText:input=>{if(!input.index)textCaptures++;return text(input)}})
   const off=observeOriginalCodeFinalOutputs(mount,(_id,original)=>{output=original})
@@ -314,7 +333,7 @@ it.each(['initialization','header-write','descriptor-write','finish','confirmati
     const page=await f.service.readCodeOutputResult!({sessionId:f.id},{ref:result.ref})
     expect(page.footer.count).toBe(1);expect(page.items[0]!.ordinal).toBe(0)
     expect(textCaptures).toBe(1);expect(f.document.view.events.filter(e=>e.type==='code/output')).toHaveLength(1)
-    expect(writes).toBe(3)
-    if(mode.endsWith('write'))expect(reconciles).toBe(1)
-  }finally{off();await mount.dispose();await f.coordinator.close();await f.service.close();vi.restoreAllMocks()}
+    expect(native.writes).toBe(3);expect(native.writers).toBe(1);expect(native.operationId).toBeDefined();expect(native.sink).toBeDefined()
+    if(mode.endsWith('write'))expect(native.reconciles).toBe(1)
+  }catch(cause){f.primary={cause};throw cause}finally{off();await closeFixture(f,mount);vi.restoreAllMocks()}
 },30000)

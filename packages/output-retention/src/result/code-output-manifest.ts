@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto'
 import { CODE_OUTPUT_DIGEST_DOMAIN, encodeCodeOutputRecord, isStrictFactData, type CodeOutputDescriptor, type CodeOutputFooter, type CodeOutputHeader, type ManagedArtifactRef } from '@i-harness/core-session'
+import { captureCodeManifestConfirmation, type OriginalCodeManifestAdapter, type OriginalCodeManifestReceipt } from '../../../context-output/src/service.ts'
 import type { ResultArtifactSink } from '@i-harness/context-output'
 
 export type CodeManifestDisposition = { kind: 'ready'; ref: ManagedArtifactRef } | { kind: 'unavailable'; reason: 'quota' | 'encoding' | 'storage-refused' | 'unsupported-owner' | 'capture-canceled' }
 type ManifestInspection = Readonly<{ header: CodeOutputHeader; footer: CodeOutputFooter | undefined; descriptorCount: number; unavailableTextCount: number; encodedBytes: number; artifactDigest: string }>
+const receipts = new WeakMap<object, OriginalCodeManifestReceipt>()
+export function inspectCodeOutputManifestReceipt(port: object): OriginalCodeManifestReceipt | undefined { return receipts.get(port) }
 const inspections = new WeakMap<object, () => ManifestInspection>()
 /** Metadata only; this observation conveys no native authority. */
 export function inspectCodeOutputManifest(port: object): ManifestInspection | undefined { return inspections.get(port)?.() }
@@ -17,18 +20,20 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
   open(): Promise<ResultArtifactSink>
   confirm(ref: ManagedArtifactRef): Promise<void>
   supported?():Promise<boolean>
+  nativeAdapter?(): { adapter: OriginalCodeManifestAdapter; sourceId: string } | undefined
 }) {
   const head = encodeCodeOutputRecord(header)
   header = detached(header)
   const fullDigest = createHash('sha256')
   let encodedBytes = 0, acknowledgedCount = 0, unavailableTextCount = 0
-  const open=options.open.bind(options),confirm=options.confirm.bind(options),supported=options.supported?.bind(options)
+  const open=options.open.bind(options),confirm=options.confirm.bind(options),supported=options.supported?.bind(options),nativeAdapter=options.nativeAdapter?.bind(options)
   const digest = createHash('sha256').update(CODE_OUTPUT_DIGEST_DOMAIN)
   let sink: ResultArtifactSink | undefined, headerDone = false, count = 0, lastSeq = -1
   let methods:{write:ResultArtifactSink['write'];reconcileWrite:ResultArtifactSink['reconcileWrite'];finish:ResultArtifactSink['finish'];refuse:NonNullable<ResultArtifactSink['refuse']>}|undefined
   let pending: Buffer | undefined, writeIssued = false, lastRecord: WeakRef<object> | undefined, current: object | undefined
   let flight: Promise<void> | undefined, footer: CodeOutputFooter | undefined, footerBytes: Buffer | undefined, footerDone = false
   let result: CodeManifestDisposition | undefined, finishFlight: Promise<CodeManifestDisposition> | undefined, nativeFinished: ManagedArtifactRef | undefined
+  let transportCaptured = false, transport: ReturnType<NonNullable<typeof nativeAdapter>>
   let refusal: Extract<CodeManifestDisposition,{kind:'unavailable'}> | undefined
   let lastDescriptorDigest:string|undefined
   let currentDescriptorDigest:string|undefined
@@ -141,6 +146,13 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
           nativeFinished = Object.freeze({...settled.ref})
         }
         await confirm(nativeFinished)
+        if (!transportCaptured) { const supplied = nativeAdapter?.(); transport = supplied && { adapter:supplied.adapter, sourceId:supplied.sourceId }; transportCaptured = true }
+        if (transport) {
+          try {
+            const receipt = captureCodeManifestConfirmation(transport.adapter, sink!, { operationId:header.sourceId, sessionId:header.sessionId, callId:header.cellId, source:{sourceId:transport.sourceId}, ref:nativeFinished })
+            receipts.set(port, receipt)
+          } catch (cause) { throw recovery(cause) }
+        }
         return result = Object.freeze({ kind:'ready', ref:nativeFinished })
       })
       finishFlight = work
