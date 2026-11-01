@@ -2,6 +2,7 @@ import {managedExecutionStatus} from '@i-harness/session-persistence/internal/re
 import {createExecutorExecutionCache} from './durable-session.ts'
 import {createManagedExecutionRuntime} from './managed-assembly.ts'
 import {supportsManagedServiceOptions} from './service/execution-mode.ts'
+import {createContext,captureExecutionHookChannel,type PluginContext} from '@i-harness/core-plugin'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
 // packages/session-executor/src/service.ts — R-C0 (engine-owned posture).
 // The GLOBAL per-session service. A-region owns the per-session serial lane
@@ -125,7 +126,10 @@ type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'asser
 
 export interface SessionServiceOptions extends AssemblyOptions {
   /** Internal explicit-tool managed composition; not the default feature builder. */
-  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'>
+  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'> & {
+    /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
+    mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
+  }
   /** Read-only host authority; never invokes execution project setup. */
   resultReadScopeFor?: import('./lifecycle/result-store.ts').ResultReadScopeResolver
   /** Loaded settings only; never resolves authentication or constructs a model client. */
@@ -971,9 +975,16 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const row:CreatingAssembly={work:work.promise,managedWork:work.promise,failed:false,residentActivation:createResidentActivation(()=>false)}
     creating.set(sessionId,row);privateEntries.add(sessionId)
     let runtime:ManagedRuntime|undefined
-    row.cleanup=async()=>{await runtime?.close();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);privateEntries.delete(sessionId)}
+    const mounted=new Set<()=>void|Promise<void>>()
+    row.cleanup=async()=>{await runtime?.close();for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);privateEntries.delete(sessionId)}
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
+      const context=createContext()
+      let mounting=true
+      try{await opts.managedRuntime!.mount?.(context,cleanup=>{if(!mounting)throw Error('Original construction retention expired');if(typeof cleanup!=='function')throw TypeError('Original mount cleanup required');mounted.add(cleanup)})}finally{mounting=false}
+      assertWritableOpen(sessionId)
+      // Reject unmarked Session callbacks/legacy runtime before resolving a model.
+      captureExecutionHookChannel(context).capture()
       const binding=opts.modelBindingFor?await bindingFor(sessionId):undefined
       const meta=!binding&&opts.loadMeta?await opts.loadMeta(sessionId):undefined
       const model=binding?.status==='ready'?binding.binding.model:binding?undefined:opts.modelBuilder?await opts.modelBuilder(sessionId,meta):opts.model
@@ -981,7 +992,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const reasoningEffort=binding?.status==='ready'?binding.binding.reasoningEffort:opts.reasoningEffortFor===undefined?opts.reasoningEffort:opts.reasoningEffortFor(sessionId,meta)
       assertWritableOpen(sessionId)
       if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
-      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,execution:entry.execution,model,contextWindow,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
+      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,context,execution:entry.execution,model,contextWindow,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         reasoningEffort,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})})
@@ -1174,7 +1185,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   function queue(sessionId: string): SessionQueueItem[] {
     const lane = laneControls(sessionId)
     const st = sessionQueueState(sessionId)
-    const pending = lane?.pending() ?? []
+    // Revoked private facts cannot be observed while the original close joins.
+    const pending = managedRuntimes.has(sessionId) && (closed || closing.has(sessionId)) ? [] : lane?.pending() ?? []
     const current = lane?.currentInput() ?? undefined
     const pendingIds = new Set(pending.map((p) => p.inputId))
 
