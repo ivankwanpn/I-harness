@@ -11,6 +11,7 @@ import { createCodeFinalOutputRetention } from '../../session-executor/src/lifec
 import { registerCodeMode } from '../src/register.ts'
 import { captureOriginalCodeFinalOutput, observeOriginalCodeFinalOutputs } from '../src/final-output.ts'
 import { observeOriginalCellFinalizations } from '../src/finalization.ts'
+import { subscribe, type ManagedArtifactRef } from '@i-harness/core-session'
 
 async function setup() {
   const base=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'code-final-')), sessionRoot=join(base,'sessions')
@@ -23,6 +24,37 @@ async function setup() {
   const factory:import('../src/final-output.ts').CodeFinalOutputFactory=input=>createCodeFinalOutputRetention({service,sourceFor})(input)
   return {coordinator,id,document,ctx,tools,service,factory,sourceFor,revoke(){authorized=false},revokeDuringRead(){cutoff=reads+2}}
 }
+it('binds the original immutable committed member despite a retention alias mutation in the genuine commit observer',async()=>{
+  const f=await setup(),text=createCodeTextRetention({service:f.service,sourceFor:f.sourceFor})
+  let alias:ManagedArtifactRef|undefined,canonical:ManagedArtifactRef|undefined,captures=0,observed=0,output!:ReturnType<typeof captureOriginalCodeFinalOutput>
+  const mount=registerCodeMode(f.ctx,f.tools,{session:f.document.view,sessionId:f.id,factOwner:f.document,config:{mode:'mixed'},finalOutput:f.factory,
+    retainText:async input=>{
+      const result=await text(input)
+      if(!result||result.kind!=='ready'||result.envelope.retention.kind!=='artifact'||input.index)return result
+      captures++;alias={...result.envelope.retention.ref}
+      return {...result,envelope:{...result.envelope,retention:{kind:'artifact',ref:alias}}}
+    }})
+  const off=observeOriginalCodeFinalOutputs(mount,(_id,handle)=>{output=handle})
+  const offFact=subscribe(f.document.view,event=>{
+    if(event.type!=='code/output'||event.envelope?.retention.kind!=='artifact')return
+    observed++;canonical=event.envelope.retention.ref
+    expect(Object.isFrozen(canonical)).toBe(true)
+    if(!alias)throw new Error('Original alias must precede capture')
+    alias.id='ctxv1_'+ 'f'.repeat(64)
+  })
+  try{
+    expect(await f.tools.get('code_exec')!.execute({code:'text("canonical original")',yield_time_ms:60000},{session:f.document.view,sessionId:f.id})).toMatchObject({status:'completed'})
+    const final=await output.settle()
+    if(final.kind!=='ready')throw new Error('Expected original manifest')
+    const page=await f.service.readCodeOutputResult!({sessionId:f.id},{ref:final.ref})
+    const item=page.items[0]!.item
+    if(item.kind!=='text'||item.retention.kind!=='artifact')throw new Error('Expected retained original member')
+    expect(item.retention.ref).toEqual(canonical);expect(item.retention.ref.id).not.toBe(alias!.id)
+    expect(captures).toBe(1);expect(observed).toBe(1)
+    expect(f.document.view.events.filter(event=>event.type==='code/output')).toHaveLength(1)
+    expect(f.document.view.events.filter(event=>event.type==='code/cell'&&event.state==='started')).toHaveLength(1)
+  }finally{offFact();off();await mount.dispose();await f.coordinator.close();await f.service.close();vi.restoreAllMocks()}
+},30000)
 it('connects actual committed queue members through independent managed retention and all cell ACKs to an authorized immutable final page', async()=>{
   const f=await setup(),held=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>()
   const original=f.service.confirmResultOwner.bind(f.service)

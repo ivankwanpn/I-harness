@@ -12,7 +12,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
   const changed = () => { try { onObservationChange?.() } catch { /* Passive observers cannot fail producers. */ } }
   const requireRecovery = () => { stickyRecovery = true; changed(); source.requireRecovery() }
   const observationState = (): 'available' | 'unavailable' | 'retired' => retired ? 'retired' : stickyRecovery || admitting || pending.size || held.size || admissionHolds.size ? 'unavailable' : 'available'
-  const queue = createOutputQueue({ changed,
+  const queue = createOutputQueue({ changed, owner: committedDescriptor ? owner : undefined,
     failed(record, reason) {
       const cell = record.cell ?? record.actionCell
       if (cell) {
@@ -40,7 +40,11 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
   })
   const enroll = (record: Pick<Pending, 'kind'> & Partial<Pending>) => {
     const enrolled = queue.enroll({ attempted: false, disposed: false, cancelled: false, settled: false, commit: callback(), cancel: callback(), settle: callback(), ...record })
-    if (committedDescriptor && record.kind !== 'reference') enrolled.descriptor = () => committedDescriptor(enrolled)
+    if (committedDescriptor && record.kind !== 'reference') {
+      const token=(record.action??record.cell?.action??mountAction).owner
+      if(token)enrolled.expectedOwner=Object.freeze({sessionId:token.sessionId,incarnation:token.incarnation})
+      enrolled.descriptor = () => committedDescriptor(enrolled)
+    }
     pending.add(enrolled); return enrolled
   }
   const settle = async (cell: CellFacts): Promise<SettlementOwnerProgress> => {
@@ -101,7 +105,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
     if (!failedAdmission && captured.type === 'code/cell' && captured.state === 'interrupted' && failedAdmissions.has(captured.cellId)) return refresh()
     if (cell?.terminal) throw new FactRecoveryRequiredError()
     const admission = captured.type === 'code/cell' ? admissionHolds.get(captured.cellId) : undefined
-    const record = enroll({ kind: captured.type === 'code/cell' ? 'terminal' : 'required', cell, source,
+    const record = enroll({ kind: captured.type === 'code/cell' ? 'terminal' : 'required', cell, source, expectedMember:Object.freeze({type:captured.type,cellId:captured.cellId}),
       prepare: async () => captured, commit: callback(onCommit), settle: callback(() => {
         if (captured.type === 'code/cell') {
           const admittedAction = cell?.action ?? admission?.action
@@ -121,7 +125,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
     requiredPrepared(cellId: string, prepare: (assertHeld: () => void) => Promise<CodeSettlementFact>, onCommit?: () => void) {
       const cell = cells.get(cellId)
       if (!cell || cell.sealed) throw new FactRecoveryRequiredError()
-      const record = enroll({ kind: 'output', cell, source: cell.source, prepare: () => prepare(cell.source.assertHeld), commit: callback(onCommit) })
+      const record = enroll({ kind: 'output', cell, source: cell.source, expectedMember:Object.freeze({type:'code/output',cellId}), prepare: () => prepare(cell.source.assertHeld), commit: callback(onCommit) })
       cell.outputs.add(record); cell.revision++; changed()
       return refresh()
     },
@@ -165,7 +169,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
     async store(event: Extract<SessionEvent, { type: 'code/store' }>, onCommit: () => void, onCancelled: () => void) {
       const cell = cells.get(event.cellId)
       if (!cell || cell.sealed) throw new FactRecoveryRequiredError()
-      const record = enroll({ kind: 'store', action: cell.action, actionCell: cell, fact: cell.action.captureCodeStore(event), source:cell.source, originalEvent:event, commit: callback(onCommit), cancel: callback(onCancelled) })
+      const record = enroll({ kind: 'store', action: cell.action, actionCell: cell, fact: cell.action.captureCodeStore(event), source:cell.source, expectedMember:Object.freeze({type:'code/store',cellId:event.cellId}), commit: callback(onCommit), cancel: callback(onCancelled) })
       changed()
       try { await refresh() } catch (reason) { if (!record.settled) throw record.failure ? record.failure.reason : reason }
     },
