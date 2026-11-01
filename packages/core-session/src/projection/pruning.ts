@@ -37,3 +37,50 @@ export function archivePruneSubstitutes(archive: ConversationEventArchive): Map<
   }
   return map
 }
+import type { SessionEventView } from '../managed/types.ts'
+import type { ConversationPruneDependencyView } from '../conversation/restoration-types.ts'
+
+type PrunePosition = { eventIndex: number; recordIndex: number; seq: unknown }
+const pruneViews = new WeakMap<ConversationPruneDependencyView, { positions: Map<string, PrunePosition>; current(): boolean }>()
+
+/** Original prune owner retains positions only; substitute bodies are prepared on demand. */
+export function createPruneDependencyIndex() {
+  let positions = new Map<string, PrunePosition>(), eventCount = 0, revision = 0
+  const read = (): ConversationPruneDependencyView => {
+    const version = revision
+    const view = Object.freeze({ eventCount }) as ConversationPruneDependencyView
+    pruneViews.set(view, { positions, current: () => revision === version })
+    return view
+  }
+  return { read, stage(events: readonly SessionEventView[]) {
+    const version = revision, next = new Map(positions), count = eventCount + events.length
+    events.forEach((event, offset) => {
+      if (event.type === 'compaction/prune') (event.pruned ?? []).forEach((record, recordIndex) => next.set(record.callId, { eventIndex: eventCount + offset, recordIndex, seq: event.seq }))
+    })
+    events = [] // Do not retain prune payloads through a held stage handle.
+    return { commit() {
+      if (revision !== version) throw new TypeError('Stale prune stage')
+      positions = next; eventCount = count; revision++
+      return read()
+    } }
+  } }
+}
+
+export async function preparePruneSubstitutes(view: ConversationPruneDependencyView, selectedCallIds: Iterable<string>, readEvent: (ordinal: number) => Promise<SessionEventView>): Promise<Map<string, PruneRecord>> {
+  const state = pruneViews.get(view)
+  const check = () => { if (!state || !state.current()) throw new TypeError('Invalid or stale prune dependency view') }
+  check()
+  const result = new Map<string, PruneRecord>()
+  for (const callId of new Set(selectedCallIds)) {
+    check()
+    const position = state!.positions.get(callId)
+    if (!position) throw new TypeError('Missing prune dependency: ' + callId)
+    const event = await readEvent(position.eventIndex)
+    check()
+    const record = event.seq === position.seq && event.type === 'compaction/prune' ? event.pruned?.[position.recordIndex] : undefined
+    if (!record || record.callId !== callId) throw new TypeError('Prune dependency source mismatch')
+    result.set(callId, record)
+  }
+  check()
+  return result
+}
