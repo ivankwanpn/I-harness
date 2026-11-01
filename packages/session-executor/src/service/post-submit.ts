@@ -7,6 +7,7 @@ import { createTitleGenerationContext } from '../lifecycle/title-generation.ts'
  * The exact original callback failure remains primary if its drain also fails. */
 export async function runPostSubmit(options: {
   sessionId: string; assembly: SessionAssembly; signal: AbortSignal; localTestEnabled: boolean
+  passiveGeneration?:import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
   binding(): Promise<SessionModelBindingResult>
   callback: NonNullable<SessionServiceOptions['afterSuccessfulSubmit']>
   warn(error: unknown): void
@@ -18,7 +19,7 @@ export async function runPostSubmit(options: {
   try {
     if (assembly.factOwner.view !== assembly.session) throw Object.assign(new Error('Post-turn action requires its actual Session view'), { code: 'FACT_OWNER_UNSUPPORTED' })
     action = assembly.factOwner.beginAction(signal)
-    title = createTitleGenerationContext(assembly.factOwner, options.sessionId, action, { localTestEnabled: options.localTestEnabled, selectedClient: assembly.selectedModel })
+    title = createTitleGenerationContext(assembly.factOwner, options.sessionId, action, { localTestEnabled: options.localTestEnabled, selectedClient: assembly.selectedModel,passiveGeneration:options.passiveGeneration })
     const state = await options.binding()
     action.assertOpen()
     await options.callback(options.sessionId, assembly, state.status === 'ready'
