@@ -7,9 +7,10 @@ import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contr
 import {createOwnership} from '../../session-persistence/src/coordinator/ownership.ts'
 import {heldFactOwner} from '../../session-persistence/src/coordinator/fact-owner.ts'
 import {openOwnedExecutionDependencies} from '../src/backend/owned-execution-read.ts'
-vi.mock('node:fs/promises',async load=>{const actual=await load<typeof import('node:fs/promises')>();return {...actual,open:vi.fn(actual.open),readFile:vi.fn(actual.readFile)}})
+vi.mock('node:fs/promises',async load=>{const actual=await load<typeof import('node:fs/promises')>();return {...actual,open:vi.fn(actual.open),readFile:vi.fn(actual.readFile),stat:vi.fn(actual.stat)}})
 const originalOpen=vi.mocked(fs.open).getMockImplementation()!
-afterEach(()=>{vi.mocked(fs.open).mockImplementation(originalOpen);vi.mocked(fs.readFile).mockClear()})
+const originalStat=vi.mocked(fs.stat).getMockImplementation()!
+afterEach(()=>{vi.mocked(fs.open).mockImplementation(originalOpen);vi.mocked(fs.stat).mockImplementation(originalStat);vi.mocked(fs.readFile).mockClear()})
 async function fixture(){
  const root=await fs.mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-deps-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
  await coordinator.create({sessionId:'a'});coordinator.enqueue('a',[{type:'plan/mode',mode:'on'},{type:'plan/mode',mode:'off'}]);await coordinator.flush('a');await coordinator.close()
@@ -31,6 +32,14 @@ it('keeps its opened extent fixed and rejects a concurrent append rather than ad
  vi.mocked(fs.open).mockImplementation(async(...args)=>{const h=await originalOpen(...args);if(args[0]===f.path){const read=h.read.bind(h);h.read=(async(...args:any[])=>{if(!changed){changed=true;await fs.appendFile(f.path,'late partial frame')}return (read as any)(...args)}) as typeof h.read}return h})
  const scope=openOwnedExecutionDependencies(f.backend,'a',f.held,f.prefix)
  try{await expect(scope.readEvent(0)).rejects.toThrow('archive changed')}finally{await scope.close();await f.close()}
+})
+it('refuses distinct original descriptor/path inode identities which collide as Numbers',async()=>{
+ const f=await fixture(),originalInode=9007199254740992n,replacementInode=9007199254740993n,pathModes:boolean[]=[]
+ expect(originalInode).not.toBe(replacementInode);expect(Number(originalInode)).toBe(Number(replacementInode))
+ vi.mocked(fs.open).mockImplementation(async(...args)=>{const h=await originalOpen(...args);if(args[0]===f.path){const stat=h.stat.bind(h);h.stat=(async(options:any)=>{const actual=await stat(options);Object.defineProperty(actual,'ino',{value:options?.bigint?originalInode:Number(originalInode)});return actual}) as typeof h.stat}return h})
+ vi.mocked(fs.stat).mockImplementation((async(...args:any[])=>{const actual=await (originalStat as any)(...args);if(args[0]===f.path){pathModes.push(args[1]?.bigint===true);Object.defineProperty(actual,'ino',{value:args[1]?.bigint?replacementInode:Number(replacementInode)})}return actual}) as typeof fs.stat)
+ const scope=openOwnedExecutionDependencies(f.backend,'a',f.held,f.prefix)
+ try{await expect(scope.readEvent(0)).rejects.toThrow('archive changed');expect(pathModes).toEqual([true])}finally{await scope.close();await f.close()}
 })
 it('does not hide a complete invalid later frame when reading an earlier dependency',async()=>{
  const f=await fixture();await fs.appendFile(f.path,'{"recordKind":"session/fact-batch","version":1}\n')
