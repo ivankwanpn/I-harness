@@ -4,7 +4,8 @@ import { createSummaryPort } from '../../compaction/src/index.ts'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 // M23 Task 6: `ensureResidentAgent` lazy rebuild (M19 Minor-4 wakeup no-op fix).
 //
@@ -610,7 +611,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
 
   async function mockCoordinator() {
     const root = await mkdtemp(join(tmpdir(), 'ih-f1-resume-consumer-'))
-    return createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+    return composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   }
   function registerWith(coordinator: SessionCoordinator, restoredState: SubagentStateSnapshot) {
     const ctx = createContext()
@@ -627,7 +628,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
 
   it("registerSubagent restores the exact owned child view behind ready and persists its inbox through receipts", async () => {
     const coordinator = await mockCoordinator()
-    await coordinator.create({ sessionId: 'child-abc', origin: 'subagent', parentSession: 'main' })
+    await coordinator.create({ sessionId: 'child-abc', origin: 'subagent', parentSession: 'main', seedLength: 0 })
     const original = await coordinator.openManagedDocument('child-abc')
     await original.inputs.start(undefined, { type: 'user/message', text: 'old' })
     await original.agent.lifecycle({ type: 'turn/end' })

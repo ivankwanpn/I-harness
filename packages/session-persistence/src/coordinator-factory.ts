@@ -71,7 +71,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   let loads: ReturnType<typeof createLoads>
   const coldWrites = createColdExecutionWrites()
   const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations, processLatches, documents.taskTransitions, transitionStorage ? async (id, events) => { if (isTaskTransitionDrain(ownership, id)) await runTaskTransitionDrain(ownership, id, () => mutations.appendQueuedDrainUnlocked(id, events)); else await loads.transitionLoad(id, (check, markIssue) => mutations.appendTransitionUnlocked(id, events, check, markIssue), true) } : undefined, coldWrites)
-  loads = createLoads(backend, ownership, mutations, processLatches, documents.taskTransitions, coldWrites)
+  loads = createLoads(backend, ownership, mutations, processLatches, documents.taskTransitions, coldWrites, archiveReads?.withMutationRead)
   managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations, processLatches, id => observations.assertOutsideOwnedOperations([id]), id => observations.revokeOwnedDocumentOperations(id), documents.taskTransitions, coldWrites)
   const coldFinalization=observations.createColdFinalizationFactory(managed.originalColdBootstrap)
   const lifecycle = createLifecycle(backend, ownership, mutations, documents, managed, processLatches)
@@ -124,7 +124,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       },
     }:{}),    inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
-    async openManagedDocument(sessionId) { assertDurableTransition(); managed.assertOutsideCapture(sessionId); observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
+    async openManagedDocument(sessionId) { assertDurableTransition(); managed.assertOutsideCapture(sessionId); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); return managed.open(sessionId) },
     revokeManagedDocumentNewWork: managed.revoke,
     closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
@@ -148,9 +148,9 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       if (managed.has(sessionId)) throw new Error('Managed document requires fact admission')
       mutations.enqueue(sessionId, events)
     },
-    async snapshot(sessionId) { const session = await managed.snapshot(sessionId); return session ? { session } : loads.snapshot(sessionId) },
-    async load(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.load(sessionId) },
-    async loadOwned(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
+    async snapshot(sessionId) { archiveReads?.assertPublicReadAdmission(); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.snapshot(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
+    async load(sessionId) { archiveReads?.assertPublicReadAdmission(); assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.load(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
+    async loadOwned(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
     async list() { return backend.list() },
     async profile(sessionId) { observations.assertOutsideObservedSession(sessionId); return backend.profile(sessionId) },
     updateMeta: async (id,patch) => {

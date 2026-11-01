@@ -2,7 +2,9 @@
 export interface ArchiveReadResources {
     attach(): {
         fence(): void;
+        assertPublicReadAdmission(): void;
         settle(): Promise<void>;
+        withMutationRead<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     };
 }
 const owners = new WeakMap<object, ArchiveReadResources>();
