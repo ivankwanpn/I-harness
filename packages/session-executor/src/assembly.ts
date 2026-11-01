@@ -1854,6 +1854,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   function dispose(): Promise<void> {
+    pluginCapabilities?.stopUpdates()
     retireExecutionSurface()
     managedDocument?.revokeNewWork()
     disposing = true
@@ -1891,9 +1892,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       await phase('code-mode', () => disposeRootCodeMode?.())
     }
     await phase('subagents', () => disposeSubagents?.())
-    if (!cleanupDone.has('plugins')) {
-      try { await pluginCapabilities?.dispose(); cleanupDone.add('plugins') } catch (error) { d.warn(`Plugin disposal failed: ${String(error)}`) }
-    }
+    await phase('plugins', () => pluginCapabilities?.dispose())
     // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()
     rewindSubscription = undefined

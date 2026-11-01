@@ -1,5 +1,6 @@
 import { mkdtemp } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { inspect } from 'node:util'
 import { expect, it, vi } from 'vitest'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
@@ -85,6 +86,15 @@ it.each([false, true])('actual plugin role startup joins original registry readi
       expect(probe.updates).toBe(1)
       expect(probe.mount!.roles.get('startup-probe')).toMatchObject({ name: 'startup-probe' })
       expect(assembly.subagentState().roles.some(role => role.name === 'startup-probe')).toBe(true)
+      const retained: { cleanup?: import('@i-harness/subagent').RoleCleanup } = {}
+      expect(() => probe.mount!.roles.register({ name: 'late', description: 'p', systemPrompt: 'p', tools: [] }, cleanup => {
+        retained.cleanup = cleanup
+        probe.mount!.tasks.retireOwnedLoad()
+      })).toThrow('Task registry retired')
+      expect(probe.mount!.roles.get('late')).toBeUndefined()
+      await retained.cleanup!()
+      expect(() => probe.mount!.roles.register({ name: 'new-work', description: 'p', systemPrompt: 'p', tools: [] })).toThrow('Task registry retired')
+      expect(() => probe.mount!.roles.remove('startup-probe')).toThrow('Task registry retired')
     }
     expect(provider.requests).toHaveLength(0)
   } finally {
@@ -93,7 +103,8 @@ it.each([false, true])('actual plugin role startup joins original registry readi
     const closed = await service.close().then(() => undefined, cause => cause)
     // A failed initialization remains the original cleanup rejection. The
     // document owner must nevertheless release its own task/read resources.
-    if (!failed && closed) throw closed
+    if (!failed && closed) { console.info('original-plugin-cleanup-cause', inspect(closed, { depth: 9 })); throw closed }
+    if (!failed) expect(originalMount()?.roles.get('startup-probe')).toBeUndefined()
     if (failed && closed) {
       const causes = (error: unknown): unknown[] => error instanceof AggregateError ? error.errors.flatMap(causes) : [error]
       expect(causes(closed).length).toBeGreaterThan(0)
