@@ -29,9 +29,12 @@ type OriginalSelectedOperation={first<T>(work:(handoff:SelectedHandoff)=>Promise
 const selectedSources=new WeakMap<SessionCoordinator,{acquire:ReturnType<typeof createDocuments>['observations']['acquireSelectedBindingRead'];cleanupForError:ReturnType<typeof createDocuments>['observations']['cleanupForError'];retain(document:import('./coordinator/fact-types.ts').ManagedDocument,onRevoke:()=>void):ReturnType<typeof retainSelectedSourceRead>}>()
 const selectedComposers=new WeakMap<SessionCoordinator,{beginCold:ReturnType<ReturnType<typeof createDocuments>["observations"]["createColdFinalizationFactory"]>["begin"];assertCapability():void;capture:ReturnType<typeof createManagedDocuments>['captureSelected'];prepare:ReturnType<typeof createManagedDocuments>['prepareSelectedCapture'];reconcile:ReturnType<typeof createManagedDocuments>['reconcileSelected'];inspect:ReturnType<typeof createManagedDocuments>['inspectSelected'];inspectCold:ReturnType<typeof createManagedDocuments>['inspectColdSelected'];coldRoute:ReturnType<typeof createManagedDocuments>['coldSelectedRoute'];useCold:ReturnType<typeof createManagedDocuments>['useColdSelected'];publish:ReturnType<typeof createManagedDocuments>['publishSelected'];release:ReturnType<typeof createManagedDocuments>['releaseSelected'];observations:ReturnType<typeof createDocuments>['observations'];targets:WeakMap<object,ReturnType<typeof createManagedDocuments>['inspectSelected'] extends (...args:any[])=>infer R?()=>R:never>}>()
 export function beginColdSelectedFinalization(coordinator:SessionCoordinator,target:import('./coordinator/cold-selected-target.ts').ColdSelectedTarget,options?:{signal?:AbortSignal}) {const owner=selectedComposers.get(coordinator);if(!owner)throw TypeError('Original coordinator required');return owner.beginCold(target,options)}
-const coldObservationOwners = new WeakMap<SessionCoordinator, ReturnType<typeof createManagedDocuments>['captureColdObservation']>()
+const coldObservationOwners = new WeakMap<SessionCoordinator, { capture: ReturnType<typeof createManagedDocuments>['captureColdObservation']; binding: ReturnType<typeof createDocuments>['observations']['captureColdBindingObservation'] }>()
 export function captureOriginalColdObservation(coordinator: SessionCoordinator, observation: import('./coordinator/cold-selected-target.ts').ColdSelectedObservation) {
-  const capture = coldObservationOwners.get(coordinator); if (!capture) throw TypeError('Original cold coordinator required'); return capture(observation)
+  const original = coldObservationOwners.get(coordinator); if (!original) throw TypeError('Original cold coordinator required'); return original.capture(observation)
+}
+export function captureOriginalColdBindingObservation(coordinator: SessionCoordinator, cold: import('./coordinator/cold-selected-target.ts').ColdSelectedObservation, binding: import('./coordinator/types.ts').SessionBindingObservation) {
+  const original = coldObservationOwners.get(coordinator); if (!original) throw TypeError('Original cold coordinator required'); original.capture(cold); return original.binding(cold.metadata, binding)
 }
 export function selectedSourceFor(coordinator:SessionCoordinator) {const owner=selectedSources.get(coordinator);if(!owner)throw new TypeError('Original coordinator required');return owner}
 export function inspectSelectedTarget(coordinator:SessionCoordinator,target:object) {const inspect=selectedComposers.get(coordinator)?.targets.get(target);if(!inspect)throw TypeError('Original selected target required');return inspect()}
@@ -192,7 +195,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       }
   }
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
-  coldObservationOwners.set(coordinator, managed.captureColdObservation)
+  coldObservationOwners.set(coordinator, { capture: managed.captureColdObservation, binding: observations.captureColdBindingObservation })
   if (backend.deleteOwnedSession) associateDeletionPreparation(coordinator, lifecycle)
   associateColdExecutionWrites(coordinator, coldWrites)
   observations.associateRetainedCoordinator(coordinator)

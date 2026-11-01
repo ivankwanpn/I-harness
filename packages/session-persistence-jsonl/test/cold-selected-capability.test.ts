@@ -100,15 +100,14 @@ it.each([{mode:'lease',failure:undefined},{mode:'lease',failure:0},{mode:'pin',f
  // Intercept the original canonical document lease, retaining its actual handle.
  const key='desktop-session-project-'+(await import('node:crypto')).createHash('sha256').update('target').digest('hex')
  const acquire=ownership.acquireDocumentLease
- const lock=vi.spyOn(ownership,'acquireDocumentLease').mockImplementation(async documentKey=>{
-  const original=await acquire(documentKey)
-  if(documentKey!==key)return original
-  return {get held(){return original.held},async release(){leaseCalls++;if(fail&&mode==='lease'){fail=false;throw failure}await original.release()}}
- })
+ const lock=vi.spyOn(ownership,'acquireDocumentLease').mockImplementation((documentKey,retain)=>acquire(documentKey,retain===undefined?undefined:cleanup=>{
+  if(documentKey!==key){retain(cleanup);return}
+  retain({assertSettled:()=>cleanup.assertSettled(),async close(){leaseCalls++;if(fail&&mode==='lease'){fail=false;throw failure}await cleanup.close()}})
+ }))
  let owner:{mockRestore():void}|undefined
  try{
   const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target')
-  const pin=ownership.pinOwnership;owner=vi.spyOn(ownership,'pinOwnership').mockImplementation(async id=>{const original=await pin(id);return {assertHeld:original.assertHeld,retainLive:original.retainLive,async release(){pinCalls++;if(fail&&mode==='pin'){fail=false;throw failure}await original.release()}}})
+  const pin=ownership.pinOwnershipRetained;owner=vi.spyOn(ownership,'pinOwnershipRetained').mockImplementation((id,retain)=>pin(id,cleanup=>retain({assertSettled:()=>cleanup.assertSettled(),async close(){pinCalls++;if(fail&&mode==='pin'){fail=false;throw failure}await cleanup.close()}})))
   const attempt=selected.beginColdSelectedFinalization(f.coordinator,result.target);await attempt.use()
   await expect(attempt.settle()).rejects.toThrow();expect(()=>attempt.commitReady()).toThrow();expect(leaseCalls).toBe(1);expect(pinCalls).toBe(mode==='lease'?0:1)
   await attempt.retrySettlement();expect(leaseCalls).toBe(mode==='lease'?2:1);expect(pinCalls).toBe(mode==='lease'?1:2);expect(qualify).toBe(1);expect(settle).toBe(1)

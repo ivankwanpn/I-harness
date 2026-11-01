@@ -2,19 +2,23 @@ import { createHash } from "node:crypto"
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
-import type { SessionCoordinator, SessionMeta, ExistingSessionBindingObservation } from "@i-harness/session-persistence"
+import type { SessionCoordinator, SessionMeta, ExistingSessionBindingObservation, SessionBindingObservation } from "@i-harness/session-persistence"
 import { captureBootstrapTargetPreparationRequest, type BootstrapTargetPreparationRequest, type BootstrapTargetPreparationOutcome } from '@i-harness/session-persistence'
 import { isStrictFactData, canonicalJsonData, captureSelectedResultsBootstrapPreparationFacts, type BootstrapPreparationFactsV2 } from '@i-harness/core-session'
 import type { SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
 import { captureBootstrapProject, captureSelectedProject as importSelectedProject, type BootstrapProjectCapture, type BootstrapProjectPreparation, type BootstrapTargetScope } from './bootstrap-project.ts'
-import { inspectSelectedTarget } from '@i-harness/session-persistence/internal/selected-source-owner'
+import { inspectSelectedTarget, captureOriginalColdObservation, captureOriginalColdBindingObservation, type ColdSelectedObservation } from '@i-harness/session-persistence/internal/selected-source-owner'
 import { requestRetainedReferenceRetirementFor, runRetainedRetirementSink, assertOutsideRetirementSink, joinRetainedRetirementSinks, assertRetainedBindingReferenceFor, preflightRetainedBindingReleaseFor, observeRetainedBindingRetirementFor, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedExistingBinding, type RetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
 import { isConversationMetadata } from './session-visibility.ts'
 import type { BindingObservations } from '../../session-persistence/src/coordinator/binding-observation.ts'
 export type { BootstrapProjectCapture, BootstrapProjectPreparation, BootstrapTargetScope } from './bootstrap-project.ts'
 export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; drainSession?(id: string): Promise<void>; authorityChanged?(ids: readonly string[]): Promise<void>; fence?: SessionManagementFence }
+export interface ColdTargetPolicy {
+  qualify(): Promise<void>; sealWhileActive(): void; settle(): Promise<void>; assertSettledCurrent(): void
+  targetScope(): BootstrapTargetScope; revoke(): void; close(): Promise<void>
+}
 
 interface Binding { bound: boolean; projectId?: string }
 interface ConfirmedProjectScope { id: string; name: string; roots: string[]; primaryRoot?: string; unavailableReason?: string }
@@ -59,8 +63,13 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   const observed = new Set<string>()
   const pendingChanges = new Set<string>()
   const scopeUpdates = new Map<string, number>()
-  const retainedSources = new Set<{ ids:Set<string>;revoke():void }>()
-  const invalidateRetained = (ids?:readonly string[]) => { for (const source of [...retainedSources]) if(!ids||ids.some(id=>source.ids.has(id)))source.revoke() }
+  type RetainedSource = { ids:Set<string>;revoke():void; preflight?():void }
+  const retainedSources = new Set<RetainedSource>()
+  const invalidateRetained = (ids?:readonly string[], except?: RetainedSource) => { for (const source of [...retainedSources]) if(source!==except&&(!ids||ids.some(id=>source.ids.has(id))))source.revoke() }
+  const coldPolicyUse = new AsyncLocalStorage<{ identity: object; active: boolean }>()
+  const coldPolicySeals = new WeakMap<object, object>()
+  const policyAdmissions = new Map<string, object>()
+  let globalPolicyAdmission = {}
   let referenceUpdates = 0
   function trackScopes<T>(ids: readonly string[], job: Promise<T>): Promise<T> {
     invalidateRetained()
@@ -81,7 +90,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   const inspectors = new Set<Inspector>()
   type BrokerCleanup = { operation: RetainedCleanupOperation; active: boolean }
   const brokerOperation = new AsyncLocalStorage<BrokerCleanup>()
-  function preflightInspectors(ids?: readonly string[]) { for (const inspector of inspectors) if (!ids || ids.includes(inspector.id)) inspector.preflight() }
+  function preflightInspectors(ids?: readonly string[], except?: RetainedSource) { for (const inspector of inspectors) if (!ids || ids.includes(inspector.id)) inspector.preflight(); for (const source of retainedSources) if (source !== except && (!ids || ids.some(id=>source.ids.has(id)))) source.preflight?.() }
   async function joinInspectorCleanup(jobs: readonly Promise<void>[]) {
     const results = await Promise.allSettled(jobs)
     const errors = [...new Set(results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))]
@@ -91,17 +100,18 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   function retireInspectors(operation: RetainedCleanupOperation, ids?: readonly string[]) {
     return [...inspectors].filter(inspector => !ids || ids.includes(inspector.id)).map(inspector => inspector.retire(operation))
   }
-  function invalidateInspectors(ids?: readonly string[]) {
+  function invalidateInspectors(ids?: readonly string[], except?: RetainedSource) {
     const context = brokerOperation.getStore()
     const operation = context?.active ? context.operation : undefined
     if (operation) { void joinInspectorCleanup(retireInspectors(operation, ids)).catch(() => {}); return }
-    preflightInspectors(ids)
+    preflightInspectors(ids, except)
     const own = createRetainedCleanupOperation()
     void joinInspectorCleanup(retireInspectors(own, ids)).finally(() => finishRetainedCleanupOperation(own)).catch(() => {})
   }
   let catalogPending = 0
   let catalogTail: Promise<unknown> = Promise.resolve()
   function catalog<T>(work: () => Promise<T>): Promise<T> {
+    globalPolicyAdmission = {}
     catalogPending++
     const job = catalogTail.catch(() => undefined).then(() => { assertOpen(); return work() })
     catalogTail = job
@@ -142,11 +152,12 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       || Object.values(Object.getOwnPropertyDescriptors(document)).some(field => !field.enumerable || field.value === undefined)) throw new Error('Invalid session project binding')
     return { bound: true, ...(Object.hasOwn(document, 'projectId') ? { projectId: identifier(document.projectId) } : {}) }
   }
-  function observeBinding(id: string, value: Binding) {
-    if (canonicalJsonData(bindings.get(id)) !== canonicalJsonData(value)) { invalidateInspectors([id]); invalidateRetained([id]); bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1) }
+  function observeBinding(id: string, value: Binding, except?: RetainedSource) {
+    if (canonicalJsonData(bindings.get(id)) !== canonicalJsonData(value)) { invalidateInspectors([id], except); invalidateRetained([id], except); bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1) }
     bindings.set(id, value)
   }
   function serial<T>(id: string, work: () => Promise<T>): Promise<T> {
+    preflightInspectors([id]); policyAdmissions.set(id, {})
     invalidateRetained([id])
     const job = (operations.get(id) ?? Promise.resolve()).catch(() => undefined).then(work)
     operations.set(id, job)
@@ -384,6 +395,83 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       }
     }
   const broker = {
+    acquireColdTargetPolicy(input: ColdSelectedObservation, inputBinding: SessionBindingObservation): ColdTargetPolicy {
+      const cold = captureOriginalColdObservation(coordinator, input), binding = captureOriginalColdBindingObservation(coordinator, cold, inputBinding)
+      const metadata = cold.metadata, id = identifier(metadata.sessionId), expected = cold.birth.stage.captureReservation.request.requestIntent.project
+      const projectId = expected.kind === 'project' ? expected.projectId : undefined
+      let revoked = false, closedPolicy = false, qualified = false, sealed = false, settled = false
+      let baseline: string | undefined, target: BootstrapTargetScope | undefined
+      let management: ReturnType<SessionManagementFence['captureAdmission']> | undefined
+      let managementObserver: ReturnType<SessionManagementFence['observe']> | undefined
+      let qualification: Promise<void> | undefined, settlement: Promise<void> | undefined, closeFlight: Promise<void> | undefined
+      const originalGlobal = globalPolicyAdmission, originalAdmission = policyAdmissions.get(id)
+      const identity = {}
+      const preflight = () => { const use = coldPolicyUse.getStore(); if (use?.active && use.identity === identity) throw Error('Cold policy self-mutation unavailable') }
+      const retained: RetainedSource = { ids: new Set([id]), revoke() { revoked = true }, preflight }
+      const stamp = () => canonicalJsonData([bindings.get(id), bindingRevisions.get(id) ?? 0, parents.get(id) ?? null,
+        projectId ?? null, projectId ? projects.get(projectId) : null, revisions.get(projectId ?? '') ?? 0,
+        requests.get(projectId ?? '') ?? 0, referenceRevision, references, referenceFailure ?? null])
+      const independent = () => {
+        if (revoked || closedPolicy || coldPolicySeals.get(handle) !== identity) throw Error('Cold project policy revoked')
+        try {
+          assertOpen(); management?.assertCurrent()
+          if (globalPolicyAdmission !== originalGlobal || policyAdmissions.get(id) !== originalAdmission || inspectorPending(id) || operations.has(id) || loading.has(id) || catalogPending || referenceFailure || referenceUpdates || scopeUpdates.has(projectId ?? '') || pendingChanges.has(projectId ?? '') || parents.has(id)) throw Error('Cold project policy changed')
+          assertAvailable(projectId)
+          if (baseline !== undefined && stamp() !== baseline) throw Error('Cold project policy identity changed')
+        } catch (failure) { revoked = true; throw failure }
+      }
+      const active = () => {
+        independent(); captureOriginalColdObservation(coordinator, cold); captureOriginalColdBindingObservation(coordinator, cold, binding)
+        if (canonicalJsonData(binding.metadata(id)) !== canonicalJsonData(metadata)) throw Error('Cold project metadata changed')
+      }
+      const handle: ColdTargetPolicy = Object.freeze({
+        qualify() {
+          if (this !== handle) throw TypeError('Invalid cold policy receiver')
+          if (qualification) return qualification
+          const use = { identity, active: true }
+          qualification = coldPolicyUse.run(use, async () => {
+            active()
+            if (metadata.formatVersion !== 14 || metadata.archived || !isConversationMetadata(metadata) || expected.kind === 'unmanaged') throw Error('Cold target project policy unavailable')
+            const document = binding.binding(id)
+            if (document.kind !== 'present') throw Error('Explicit cold target binding required')
+            const own = parseBinding(document.value)
+            if (!own.bound || own.projectId !== projectId) throw Error('Cold target project binding conflict')
+            observeBinding(id, own, retained); parents.delete(id); observed.add(id)
+            management = fence.captureAdmission(id)
+            managementObserver = fence.observe(id, () => handle.close(), preflight, () => retained.revoke())
+            baseline = stamp(); active()
+            const visibleNow = await visible(id, metadata); active()
+            if (!visibleNow) throw Error('Cold target session is unavailable')
+            const declared = projectId ? projects.get(projectId)! : undefined
+            if (declared) { const resolved = await resolveScope(declared); active(); if (canonicalJsonData(resolved) !== canonicalJsonData(declared)) throw Error('Cold target project roots changed') }
+            for (const reference of references) { const current = await realpath(reference); active(); if (pathKey(current) !== pathKey(reference)) throw Error('Cold target reference changed') }
+            active()
+            const scope = declared && Object.freeze({ id: declared.id, name: declared.name, primaryRoot: declared.primaryRoot!, roots: Object.freeze([...declared.roots]) as unknown as string[] })
+            target = Object.freeze({ ...(projectId ? { projectId } : {}), ...(scope ? { scope } : {}), revision: baseline! })
+            qualified = true
+          }).catch(failure => { revoked = true; throw failure }).finally(() => { use.active = false })
+          void qualification.catch(() => {}); return qualification
+        },
+        sealWhileActive() { if (this !== handle || !qualified || !target) throw Error('Cold target policy unverified'); active(); sealed = true },
+        settle() {
+          if (this !== handle) throw TypeError('Invalid cold policy receiver')
+          preflight(); if (settlement) return settlement
+          const flight = (async () => { if (!qualification) throw Error('Cold policy unused'); await qualification; if (!sealed) throw Error('Cold policy unsealed'); independent(); managementObserver?.release(); managementObserver = undefined; settled = true; retainedSources.delete(retained) })()
+          settlement = flight; void flight.finally(() => { if (settlement === flight) settlement = undefined }).catch(() => {}); return flight
+        },
+        assertSettledCurrent() { if (this !== handle || !qualified || !sealed || !settled || settlement || closeFlight) throw Error('Cold policy unsettled'); independent() },
+        targetScope() { if (this !== handle || !qualified || !target) throw Error('Cold target policy unavailable'); if (sealed) independent(); else active(); return target },
+        revoke() { if (this !== handle) throw TypeError('Invalid cold policy receiver'); retained.revoke() },
+        close() {
+          if (this !== handle) throw TypeError('Invalid cold policy receiver')
+          preflight(); if (closedPolicy) return Promise.resolve(); if (closeFlight) return closeFlight
+          retained.revoke()
+          const flight = (async () => { await qualification?.catch(() => {}); await settlement?.catch(() => {}); managementObserver?.release(); managementObserver = undefined; closedPolicy = true; retainedSources.delete(retained); coldPolicySeals.delete(handle) })()
+          closeFlight = flight; void flight.finally(() => { if (closeFlight === flight) closeFlight = undefined }).catch(() => {}); return flight
+        },
+      })
+      coldPolicySeals.set(handle, identity); retainedSources.add(retained); return handle
+    },
     observeExecutionBinding(reference: RetainedExistingBinding, retired: (operation: RetainedCleanupOperation) => void | Promise<void>) {
       if (inspectorCount >= 32) throw new Error('Execution binding observation capacity reached')
       inspectorCount++
@@ -788,6 +876,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     return (...args) => {
       const ids = selectedIds(...args)
       try { preflightInspectors(ids); assertOutsideRetirementSink(coordinator) } catch (error) { return Promise.reject(error) }
+      if (ids) for (const id of ids) policyAdmissions.set(id, {}); else globalPolicyAdmission = {}
       if (isClose && inspectorClose) return inspectorClose as Promise<R>
       const previous = brokerOperation.getStore()
       const inherited = previous?.active ? previous : undefined

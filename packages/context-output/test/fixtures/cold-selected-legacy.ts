@@ -15,8 +15,9 @@ import { buildPages } from '../../src/legacy/fork-pages.ts'
 import { expiryBase, expiredTuple, fundSlots, revokedTuple } from '../../src/legacy/fork-disposition.ts'
 import { transferDirectory } from '../../src/legacy/observed-read.ts'
 import type { LegacyRowV2 } from '../../src/legacy/fork-types.ts'
+import type { BootstrapProjectIntent } from '../../../session-persistence/src/coordinator/bootstrap-intent.ts'
 
-export async function coldLegacyFixture(empty = false) {
+export async function coldLegacyFixture(empty = false, project: BootstrapProjectIntent = { kind: 'unmanaged' }) {
   const root = await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!, 'cold-legacy-')), sourceId = 'current-target-policy'
   const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
   const ref = await service.capture({ sessionId: 'source', callId: 'legacy', label: 'legacy', text: 'original legacy bytes', complete: true, source: { sourceId } })
@@ -28,7 +29,7 @@ export async function coldLegacyFixture(empty = false) {
   exported.seed.passive.codeStore.groups = [0]
   const sealed = sealCodecSeed(exported.seed), seed = compileSelectedResultsSemanticSeed(sealed)
   const core = readSelectedResultsCore({ version: 2, kind: 'session-fork-core', sourceSessionId: 'source', selection: { kind: 'completed' }, sourceCapture: 'first-authorized-capture', metadata: {}, results: 'selected-results-v1' })
-  const { intent, requestDigest } = createSelectedResultsIntent(core, { kind: 'unmanaged' }), invocation = { version: 1 as const, operationId: 'cold-legacy', targetSessionId: 'target', createdAt: '2026-11-01T00:00:00.000Z', requestDigest }
+  const { intent, requestDigest } = createSelectedResultsIntent(core, project), invocation = { version: 1 as const, operationId: 'cold-legacy', targetSessionId: 'target', createdAt: '2026-11-01T00:00:00.000Z', requestDigest }
   const request = { invocation, core, requestIntent: intent }, route = { protocol: 'public-results-v1' as const, request }
   const built = buildSelectedResultsHeader({ invocation, target: { kind: 'new' }, metadata: {}, lineage: { origin: 'fork', parentSession: 'source' }, seed }, { version: 1, kind: 'semantic-bootstrap-selected-results-capture', request })
   const meta = JSON.parse(built.headerBytes), first = encodeFactBatch('bootstrap:cold-legacy:seed', meta.journal.legacyPrefixDigest, seed.records)
