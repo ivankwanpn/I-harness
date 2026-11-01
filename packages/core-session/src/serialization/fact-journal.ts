@@ -86,7 +86,7 @@ function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersio
   for (const line of legacy.toString('utf8').split('\n')) {
     if (line.trim()) { try { events.push(JSON.parse(line)) } catch { fail() } }
   }
-  if (events.length !== metadata.legacyEventCount || events.some(event => isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow'].includes(event.provenance?.producer ?? ''))) fail()
+  if (events.length !== metadata.legacyEventCount || events.some(event => isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow','session.delivery.code'].includes(event.provenance?.producer ?? ''))) fail()
   let offset = metadata.legacyBodyBytes
   if (metadata.separatorBytes) { if (buffer[offset] !== 0x0a) fail(); offset++ }
   let prefixDigest = metadata.legacyPrefixDigest
@@ -121,7 +121,7 @@ export function createJournalStreamDecoder(metadata: JournalMetadata, formatVers
     if (!line.trim()) return
     let event: SessionEvent
     try { event = JSON.parse(line) } catch { return fail() }
-    if (isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow'].includes(event.provenance?.producer ?? '')) fail()
+    if (isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow','session.delivery.code'].includes(event.provenance?.producer ?? '')) fail()
     eventCount++; consume([event])
   }
   function checkLegacy() {
