@@ -1,4 +1,5 @@
 export { createAgent } from "./agent/create.ts"
+export type {ManagedAgent,ManagedAgentHost,ManagedAgentDeps,ManagedAgentInputOptions,ManagedGenerationAction,ManagedGenerationLifecycle,ManagedGenerationFactory,ManagedInputPreparation,ManagedAcknowledgedFact,ManagedSuccessfulInstructionHandoff,ManagedRequestContext} from './agent/managed-types.ts'
 export type { SessionRequestContext, InstructionRequestEvidence, RequestContextPin, SuccessfulInstructionHandoff } from './agent/request-context.ts'
 export type { AgentGenerationAction, AgentGenerationLifecycle, AgentGenerationDependencies, DocumentGenerationFactory } from './agent/generation.ts'
 export { createAgentRegistry } from "./agent/registry.ts"
