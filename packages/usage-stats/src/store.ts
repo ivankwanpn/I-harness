@@ -1,21 +1,30 @@
 import { createHash, randomUUID } from "node:crypto"
-import { link, mkdir, open, readdir, readFile, unlink } from "node:fs/promises"
+import { link, mkdir, open, readdir, readFile, unlink, lstat } from "node:fs/promises"
 import { join } from "node:path"
 import { aggregateUsage, validateUsagePrice, validateUsageQuery, validateUsageRecord } from "./aggregate.js"
 import { encodeUsageObservation, decodeUsageObservation } from "./observation-codec.js"
 import type { UsageObservationV1 } from "./observation-types.js"
 import type { UsagePrice, UsageQuery, UsageRecord, UsageSnapshot } from "./types.js"
+import type {UsagePopulation} from './observation-snapshot-types.js'
 
 export interface UsageStore {
   record(record: UsageRecord): Promise<void>
   recordObservation(observation: UsageObservationV1): Promise<void>
   loadObservations(): Promise<{ observations: UsageObservationV1[]; warnings: string[] }>
+  observationNamespace():Promise<'absent'|'present'>
+  loadPopulation():Promise<UsagePopulation>
   query(query: UsageQuery): Promise<UsageSnapshot>
   setPricing(price: UsagePrice): Promise<void>
 }
 
 function hash(value: string): string { return createHash("sha256").update(value).digest("hex") }
 function code(error: unknown): string | undefined { return (error as NodeJS.ErrnoException)?.code }
+function effectivePrices(allPrices:UsagePrice[]):UsagePrice[]{
+ const prices=new Map<string,UsagePrice>()
+ allPrices.sort((a,b)=>b.updatedAt-a.updatedAt||JSON.stringify(a).localeCompare(JSON.stringify(b)))
+ for(const price of allPrices){const key=JSON.stringify([price.providerId,price.modelId]);if(!prices.has(key))prices.set(key,price)}
+ return [...prices.values()]
+}
 
 /** Publish fully flushed files with a no-replace hard link, safe across independent processes. */
 async function publish(directory: string, name: string, content: string): Promise<void> {
@@ -66,7 +75,17 @@ export function createUsageStore(directory: string): UsageStore {
   const observationName = (observation: UsageObservationV1) => `${hash(observation.observationId)}.json`
   const recordName = (record: UsageRecord) => `${hash(record.id)}.json`
   const priceName = (price: UsagePrice) => `${hash(JSON.stringify(price))}.json`
+  const namespace=async():Promise<'absent'|'present'>=>{try{await lstat(observationsDirectory);return 'present'}catch(error){if(code(error)==='ENOENT')return 'absent';throw error}}
   return {
+    observationNamespace:namespace,
+    async loadPopulation(){
+      const observationNamespace=await namespace(),warnings:string[]=[]
+      const [observations,legacyRecords,prices]=await Promise.all([
+        load(observationsDirectory,value=>decodeUsageObservation(JSON.stringify(value)),observationName,warnings,'Observation storage is absent; observation coverage is unavailable.'),
+        load(recordsDirectory,validateUsageRecord,recordName,warnings),load(pricesDirectory,validateUsagePrice,priceName,warnings),
+      ])
+      return {observations,legacyRecords,prices:effectivePrices(prices),warnings:[...new Set(warnings)],observationNamespace:observations.length?'present':observationNamespace}
+    },
     async record(value) {
       const record = validateUsageRecord(value)
       await publish(recordsDirectory, recordName(record), JSON.stringify(record))
@@ -91,14 +110,7 @@ export function createUsageStore(directory: string): UsageStore {
         load(recordsDirectory, validateUsageRecord, recordName, warnings),
         load(pricesDirectory, validateUsagePrice, priceName, warnings),
       ])
-      const prices = new Map<string, UsagePrice>()
-      // Timestamp defines the effective update. Content tie-break makes concurrent equal timestamps deterministic.
-      allPrices.sort((a, b) => b.updatedAt - a.updatedAt || JSON.stringify(a).localeCompare(JSON.stringify(b)))
-      for (const price of allPrices) {
-        const key = JSON.stringify([price.providerId, price.modelId])
-        if (!prices.has(key)) prices.set(key, price)
-      }
-      return aggregateUsage(records, query, [...prices.values()], [...new Set(warnings)])
+      return aggregateUsage(records, query, effectivePrices(allPrices), [...new Set(warnings)])
     },
   }
 }

@@ -1,10 +1,15 @@
 import { validateUsagePrice, validateUsageQuery } from "@i-harness/usage-stats"
 import type { DesktopHandlers } from "./types.ts"
+import {validateObservationQuery} from '../../usage-stats/src/observation-query.ts'
 
 /** The renderer supplies filters and prices, never storage locations. */
 export async function usageRequest(store: NonNullable<DesktopHandlers["usageStats"]>, method: string, params: unknown): Promise<unknown> {
   if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error("Invalid usage request")
   const input = params as Record<string, unknown>
+  if(method==='desktop/usage/query-v2'&&Object.keys(input).every(key=>key==='query')){
+    if(!store.queryV2)throw Error('Usage version 2 is unavailable')
+    return store.queryV2(validateObservationQuery(input.query))
+  }
   if (method === "desktop/usage/query" && Object.keys(input).every(key => key === "query")) {
     return store.query(validateUsageQuery(input.query))
   }

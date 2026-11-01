@@ -72,7 +72,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.rewind) capabilities["desktop-rewind"] = ["1"]
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
     if (handlers.provider !== undefined) capabilities["desktop-provider"] = ["1"]
-    if (handlers.usageStats !== undefined) capabilities["desktop-usage"] = ["1"]
+    if (handlers.usageStats !== undefined) capabilities["desktop-usage"] = handlers.usageStats.queryV2?["1","2"]:["1"]
     if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
     if (handlers.memory?.update) capabilities["desktop-memory-authoring"] = ["1"]
     if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
@@ -576,7 +576,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
       if (message.method.startsWith("desktop/usage/") && handlers.usageStats !== undefined) {
         try { send(makeSuccess(message.id, await usageRequest(handlers.usageStats, message.method, message.params))) }
-        catch { send(makeFailure(message.id, INVALID_PARAMS, "Usage statistics could not be read or saved. Check the filters and local storage.")) }
+        catch(error) { if(error!==null&&typeof error==='object'&&'code' in error&&error.code==='USAGE_UPGRADE_REQUIRED')send(makeFailure(message.id,INVALID_PARAMS,'Update the desktop client to view action and send usage.',{code:'USAGE_UPGRADE_REQUIRED'}));else send(makeFailure(message.id, INVALID_PARAMS, "Usage statistics could not be read or saved. Check the filters and local storage.")) }
         return
       }
       if (message.method === "desktop/provider/directory" && handlers.provider !== undefined) {
