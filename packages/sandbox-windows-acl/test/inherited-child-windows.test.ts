@@ -11,13 +11,14 @@ it.skipIf(process.env.IH_ACL_INHERITED_QUALIFICATION !== '1')('qualifies inherit
   const output = join(root, 'inherited-child-windows'), workspace = join(output, 'workspace'), temp = join(output, 'temp')
   mkdirSync(output); mkdirSync(workspace); mkdirSync(temp)
   const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href
-  const env = { ...process.env, NODE_OPTIONS: '', NODE_DISABLE_COMPILE_CACHE: '1', TSX_DISABLE_CACHE: '1', TEMP: temp, TMP: temp, IH_ACL_INHERITED_CWD: output, IH_ACL_INHERITED_TRACE: join(output, 'inherited-trace.jsonl') }
+  const env = { ...process.env, NODE_OPTIONS: '', NODE_DISABLE_COMPILE_CACHE: '1', TSX_DISABLE_CACHE: '1', TEMP: temp, TMP: temp, IH_ACL_INHERITED_CWD: output, IH_ACL_INHERITED_TRACE: join(output, 'inherited-trace.jsonl'), IH_ACL_JOB_TRACE: join(output, 'job-trace.jsonl') }
   function run(phase: string, argv: string[]) {
     writeFileSync(join(output, `${phase}-command.json`), JSON.stringify({ executable: process.execPath, argv, cwd: output, timeoutMs: 20000, temp }, null, 2))
+    const started = Date.now()
     const result = spawnSync(process.execPath, argv, { cwd: output, env, input: '', encoding: 'utf8', timeout: 20000, windowsHide: true })
     writeFileSync(join(output, `${phase}-stdout.txt`), result.stdout ?? '')
     writeFileSync(join(output, `${phase}-stderr.txt`), result.stderr ?? '')
-    writeFileSync(join(output, `${phase}-result.json`), JSON.stringify({ status: result.status, pid: result.pid, signal: result.signal, error: result.error?.message }, null, 2))
+    writeFileSync(join(output, `${phase}-result.json`), JSON.stringify({ status: result.status, pid: result.pid, signal: result.signal, error: result.error?.message, elapsedMs: Date.now() - started }, null, 2))
     expect(result.error, result.stderr + result.stdout).toBeUndefined()
     return result
   }
@@ -33,4 +34,10 @@ it.skipIf(process.env.IH_ACL_INHERITED_QUALIFICATION !== '1')('qualifies inherit
   expect(result.stdout).toBe('runner-out-雪')
   expect(result.stderr).toBe('runner-err-雪')
   expect(result.stderr).not.toContain('windows-acl-run:')
-}, 45000)
+  const jobFixture = fileURLToPath(new URL('./fixtures/inherited-job-windows.ts', import.meta.url))
+  const job = run('job-descendant', ['--import', tsx, jobFixture])
+  expect(job.status, job.stderr + job.stdout).toBe(0)
+  expect(job.stdout).toBe('ROOT_READY')
+  expect(job.stdout).not.toContain('LATE')
+  expect(job.stderr).toBe('')
+}, 65000)
