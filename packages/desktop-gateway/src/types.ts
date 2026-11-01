@@ -35,6 +35,7 @@ export interface DesktopHandlers {
   modelWait?: ReturnType<typeof import("./model-wait-settings.ts").createModelWaitSettings>
   modelRetry?: ReturnType<typeof import("./model-retry-settings.ts").createModelRetrySettings>
   codeSettings?: ReturnType<typeof import("./execution.ts").createCodeModeSettings>
+  executionObservation?: ReturnType<typeof import("./execution-host-observation.ts").createExecutionHostObservation>
   execution?: ReturnType<typeof import("./execution.ts").createDesktopExecution>
   agentProcesses?: ReturnType<typeof import("./agent-processes.ts").createAgentProcesses>
   diagnostics?: ReturnType<typeof import("./environment-diagnostics.ts").createDesktopDiagnostics>

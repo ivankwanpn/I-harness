@@ -2,8 +2,8 @@ import { expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createOwnership } from '../src/coordinator/ownership.ts'
-import { createSessionCoordinator } from '../src/index.ts'
-import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 
 function live(owner: { ownerOf(id: string): boolean; hasLiveOwnership?(id: string): boolean }, id: string) {
   return owner.hasLiveOwnership ? owner.hasLiveOwnership(id) : owner.ownerOf(id)
@@ -30,7 +30,7 @@ it('distinguishes the original live adopter from a native observation pin', asyn
   } finally { await owner.releaseOwnershipUnlocked('session'); await pin.release(); await rm(dir, { recursive: true, force: true }) }
 })
 it('forwards actual cold observation and persistent adoption independently', async () => {
-  const dir = await root(), coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
+  const dir = await root(), coordinator = createJsonlTaskTransitionCoordinator(dir, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'session' })
     await coordinator.releaseOwnership('session')

@@ -26,6 +26,11 @@ import { compileSelectedResultsSemanticSeed } from '../../session-persistence/sr
 import { buildSelectedResultsHeader } from '../../session-persistence/src/coordinator/selected-results-header.ts'
 import { selectedBootstrapPaths } from '../src/backend/selected-results-route-path.ts'
 import { createJsonlBackend } from '../src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+import * as bootstrapFactory from '../../session-persistence/src/coordinator/bootstrap.ts'
+import * as registryFactory from '../../session-persistence/src/coordinator/managed-documents.ts'
+import { inspectColdSelectedTarget } from '../../session-persistence/src/selected-source-owner.ts'
 import * as selectedModule from '../src/backend/selected-fact-journal.ts'
 function selectedSeed() {
  const exported=codecSeed('public-completed',[codecPage([codecRow()])]);exported.seed.groups=[{extent:{kind:'framed',first:1,last:1},items:[{kind:'summary',scope:'turn',extent:{kind:'framed',first:1,last:1},origins:[{origin:0,seq:1,part:'message'}],sourceProvenance:[{origin:0,kind:'summary',authority:'derived',scope:'turn'}],messages:[{role:'user',content:'summary'}]}]}];exported.seed.passive.codeStore.groups=[0];return sealCodecSeed(exported.seed)
@@ -39,6 +44,7 @@ async function fixture() {
  const built=buildSelectedResultsHeader({invocation,target:{kind:'new'},metadata:{},lineage:{origin:'fork',parentSession:'source'},seed},reservation),meta=JSON.parse(built.headerBytes),first=encodeFactBatch('bootstrap:op:seed',meta.journal.legacyPrefixDigest,seed.records),complete=encodeFactBatch('bootstrap:op:complete',decodeFactBatch(first.bytes).prefixDigest,[{type:'session/bootstrap',version:1,seq:seed.records.length,operationId:'op',manifestDigest:meta.semanticSeed.manifestDigest,dependencyClosureDigest:seed.dependencyDigest,seedLength:seed.records.length}])
  const raw=Buffer.concat([Buffer.from(built.headerBytes),Buffer.from(first.bytes),Buffer.from(complete.bytes)]),torn=Buffer.concat([raw,Buffer.from('{')]),initial={eventCount:0,bodyBytes:0,prefixDigest:meta.journal.legacyPrefixDigest},seedPrefix={eventCount:seed.records.length,bodyBytes:first.bytes.length,prefixDigest:decodeFactBatch(first.bytes).prefixDigest},frames=[{prefix:initial,batch:first},{prefix:seedPrefix,batch:complete}]
  await writeFile(path,raw);await writeFile(selectedBootstrapPaths(path,route).stage,built.stageBytes)
+ await writeFile(join(root,'task-target.doc.jsonl'),JSON.stringify(taskDocumentStorageContract.empty())+'\n')
  const birth=await journal.resolveCheckedBirth('target',held);if(!birth)throw Error('Missing checked birth')
  const scope=journal.bindCheckedBirthLane('target',held,birth)
  return {root,path,backend,journal,ownership,held,issuer,route,built,raw,torn,initial,first,frames,birth,scope,async close(){await backend.settleBootstrapCaptureIO!('target',held);await claim.release()}}
@@ -60,6 +66,20 @@ it('binds only this factory and held owner checked-birth identity, never stage J
   await expect(f.journal.appendOwnedBatch('target',f.issuer,f.scope,f.initial,f.first)).resolves.toMatchObject({kind:'absent'})
   expect(await readFile(f.path)).toEqual(Buffer.from(f.built.headerBytes))
  } finally {await f.close()}
+})
+it('keeps checked lane prefix append reconciliation and frame confirmation compatible with supported metadata writes',async()=>{
+ const f=await fixture();try{
+  await f.backend.updateMeta('target',{title:'current checked lane',archived:false,workspaceId:'workspace'})
+  const prefix=await f.journal.readJournalPrefix('target',f.held,f.scope)
+  expect((await f.journal.confirmFrames('target',f.held,f.scope,f.frames)).kind).toBe('committed')
+  const batch=encodeFactBatch('ordinary-after-metadata',prefix.prefixDigest,[{type:'plan/mode',mode:'on',seq:prefix.eventCount}])
+  faults.sync=true
+  expect((await f.journal.appendOwnedBatch('target',f.issuer,f.scope,prefix,batch)).kind).toBe('unknown')
+  expect((await f.journal.reconcileOwnedBatch('target',f.held,f.scope,prefix,batch)).kind).toBe('committed')
+  const raw=await readFile(f.path),end=raw.indexOf(10)
+  expect(raw.subarray(end+1,end+1+f.raw.length-Buffer.byteLength(f.built.headerBytes))).toEqual(f.raw.subarray(Buffer.byteLength(f.built.headerBytes)))
+  expect(await readFile(selectedBootstrapPaths(f.path,f.route).stage)).toEqual(Buffer.from(f.built.stageBytes))
+ }finally{await f.close()}
 })
 it('keeps complete birth required before repair and confirms actual exact original frames',async()=>{
  const f=await fixture()
@@ -224,48 +244,50 @@ it('qualifies a checked birth against the complete original route',async()=>{
 it('admits a cold checked birth into the original managed entry without source capture',async()=>{
  const f=await fixture()
   await f.close()
-  const {createBootstrapOwner}=await import('../../session-persistence/src/coordinator/bootstrap.ts')
-  const {createManagedDocument}=await import('../../session-persistence/src/coordinator/managed-document.ts')
-  const documents=new Map<string,any>()
-  const owner=createBootstrapOwner(f.backend,f.ownership,documents,(id,entry,session,prefix)=>{
-   const document=createManagedDocument(id,session,prefix,f.backend,f.ownership,undefined,()=>{},{operationId:'op',selected:true,bind(control){entry.control=control}})
-   entry.document=document;return document
-  },{} as any)
-  const result=await owner.inspectColdSelected(f.route)
+  const factory=vi.spyOn(bootstrapFactory,'createBootstrapOwner')
+  const coordinator=composeJsonlTaskTransitionCoordinator(f.backend,{lock:{enabled:true}},taskDocumentStorageContract)
+  const documents=factory.mock.calls.at(-1)![2],owner=factory.mock.results.at(-1)!.value as ReturnType<typeof bootstrapFactory.createBootstrapOwner>
+  factory.mockRestore()
+  const result=await inspectColdSelectedTarget(coordinator,f.route)
   expect(result.kind).toBe('qualification-required')
-  const entry=documents.get('target');expect(entry.document).toBeDefined();expect(()=>entry.document.assertReady()).toThrow()
+  const entry=documents.get('target');if(!entry?.document||!entry.selected)throw Error('Missing original selected entry')
+  const document=entry.document;expect(document).toBeDefined();expect(()=>document.assertReady()).toThrow()
   const completion=decodeFactBatch(f.frames[1]!.batch.bytes).events[0]!
   if(completion.type!=='session/bootstrap')throw Error('Missing completion')
   expect(entry.selected.resultReceipt).toMatchObject({invocation:f.route.request.invocation,dependencyClosureDigest:completion.dependencyClosureDigest,seedLength:f.birth.facts.seedLength})
   const changed={...f.route,request:{...f.route.request,invocation:{...f.route.request.invocation,createdAt:'2026-10-29T00:00:00.000Z'}}}
-  expect((await owner.inspectColdSelected(changed)).kind).toBe('conflict')
-  entry.revoked=true;expect((await owner.inspectColdSelected(f.route)).kind).toBe('blocked')
-  await entry.document.close();await owner.releaseCapture(entry)
+  expect((await inspectColdSelectedTarget(coordinator,changed)).kind).toBe('conflict')
+  entry.revoked=true;expect((await inspectColdSelectedTarget(coordinator,f.route)).kind).toBe('blocked')
+  await document.close();await owner.releaseCapture(entry)
+  await coordinator.close()
 })
 
 it.each(['qualification','close-debt','bind-debt'] as const)('retires the original cold process witness after actual managed cleanup: %s',async mode=>{
  const f=await fixture();await f.close()
- const {createManagedDocuments}=await import('../../session-persistence/src/coordinator/managed-documents.ts')
- const {createProcessReadLatches}=await import('../../session-persistence/src/coordinator/process-read-latches.ts')
- const {createMutations}=await import('../../session-persistence/src/coordinator/mutations.ts')
- const {createLoads}=await import('../../session-persistence/src/coordinator/load.ts')
- const latches=createProcessReadLatches(),options={lock:{enabled:true}},mutations=createMutations(f.backend,f.ownership,200,()=>{}),loads=createLoads(f.backend,f.ownership,mutations)
+ const options={lock:{enabled:true}}
  let failCleanup=mode!=='qualification',cleanupCalls=0
- const registry=createManagedDocuments(f.backend,f.ownership,loads.loadOwned,options,()=>{},mutations,latches,()=>{},async()=>{if(failCleanup&&++cleanupCalls===2){failCleanup=false;throw Error('original close dependency debt')}})
+ const original=registryFactory.createManagedDocuments
+ const factory=vi.spyOn(registryFactory,'createManagedDocuments').mockImplementation((...args)=>{
+  const revoke=args[8];args[8]=async id=>{await revoke?.(id);if(failCleanup&&++cleanupCalls===2){failCleanup=false;throw Error('original close dependency debt')}}
+  return original(...args)
+ })
+ const coordinator=composeJsonlTaskTransitionCoordinator(f.backend,options,taskDocumentStorageContract)
+ const registry=factory.mock.results.at(-1)!.value as ReturnType<typeof registryFactory.createManagedDocuments>,ownership=factory.mock.calls.at(-1)![1],latches=factory.mock.calls.at(-1)![6]!
+ factory.mockRestore()
  const bind=mode==='bind-debt'?vi.spyOn(f.journal,'readJournalPrefix').mockRejectedValueOnce(Error('post-attach selected bind cut')):undefined
  const capture=()=>latches.capture({sessionId:'target',documentKeys:[],mode:'cold'})
  try{
-  expect((await registry.inspectColdSelected(f.route)).kind).toBe(mode==='bind-debt'?'blocked':'qualification-required');bind?.mockRestore()
+  expect((await inspectColdSelectedTarget(coordinator,f.route)).kind).toBe(mode==='bind-debt'?'blocked':'qualification-required');bind?.mockRestore()
   expect(registry.has('target')).toBe(true);await expect(registry.open('target')).rejects.toThrow();expect(capture).toThrow('PROCESS_READ_UNAVAILABLE')
   if(mode!=='qualification'){
    await expect(registry.closeOne('target')).rejects.toThrow('original close dependency debt')
-   expect(registry.has('target')).toBe(true);expect(f.ownership.ownerOf('target')).toBe(true);expect(capture).toThrow('PROCESS_READ_UNAVAILABLE')
+   expect(registry.has('target')).toBe(true);expect(ownership.ownerOf('target')).toBe(true);expect(capture).toThrow('PROCESS_READ_UNAVAILABLE')
   }
-  await registry.closeOne('target');expect(registry.has('target')).toBe(false);expect(f.ownership.ownerOf('target')).toBe(false)
+  await registry.closeOne('target');expect(registry.has('target')).toBe(false);expect(ownership.ownerOf('target')).toBe(false)
   const read=capture();read.assertCurrent();read.markVerified();read.retire()
   const foreign=createOwnership(f.backend,options),claim=await foreign.pinOwnership('target');claim.assertHeld();await claim.release()
   await registry.closeOne('target')
-  expect((await registry.inspectColdSelected(f.route)).kind).toBe('qualification-required');expect(capture).toThrow('PROCESS_READ_UNAVAILABLE');await registry.closeOne('target')
+  expect((await inspectColdSelectedTarget(coordinator,f.route)).kind).toBe('qualification-required');expect(capture).toThrow('PROCESS_READ_UNAVAILABLE');await registry.closeOne('target')
   const reopened=capture();reopened.assertCurrent();reopened.retire()
- }finally{bind?.mockRestore();failCleanup=false;await registry.close();await Promise.all(f.ownership.releaseHeldLocks())}
+ }finally{bind?.mockRestore();failCleanup=false;await coordinator.close()}
 })

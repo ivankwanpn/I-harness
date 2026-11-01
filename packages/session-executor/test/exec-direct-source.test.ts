@@ -23,6 +23,15 @@ import { randomUUID } from 'node:crypto'
 
 vi.mock('node:crypto',async original=>{const actual=await original<typeof import('node:crypto')>();return{...actual,randomUUID:vi.fn(actual.randomUUID)}})
 
+// Install stable delegates before the JSONL backend captures its original methods.
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts', async importOriginal => {
+  const original = await importOriginal<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>()
+  return { ...original, createFactJournalBackend(...args: Parameters<typeof original.createFactJournalBackend>) {
+    const backend = original.createFactJournalBackend(...args)
+    return { ...backend, appendOwnedBatch: vi.fn(backend.appendOwnedBatch), reconcileOwnedBatch: vi.fn(backend.reconcileOwnedBatch) }
+  } }
+})
+
 vi.mock('../../shell/src/discovery/windows.ts',()=>({bashAvailable:()=>true,resolveBashExe:()=> 'controlled-bash',resolvePwshExe:()=> 'controlled-pwsh',powerShellExecutableAvailable:()=>true}))
 it.each([
   ['shell','background',true],['bash','background',true],['pwsh','background',true],
@@ -45,17 +54,17 @@ it.each([
   const registry = createToolRegistryWithModelOrigin(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:id}},origin.verifier)
   let sourceWrites=0,handoffWrites=0,allowSource=false,retentionReady=false,releaseReady=false
   let stopRequest:ReturnType<ReturnType<typeof createRecipientDelivery>['requestClose']>|undefined
-  const appendOwned=backendStore.appendOwnedBatch!,reconcileOwned=backendStore.reconcileOwnedBatch!
+  const appendOwned=vi.mocked(backendStore.appendOwnedBatch!).getMockImplementation()!,reconcileOwned=vi.mocked(backendStore.reconcileOwnedBatch!).getMockImplementation()!
   let unknownKey:Parameters<typeof reconcileOwned>[3]['key']|undefined
-  backendStore.appendOwnedBatch=async(...args)=>{
+  vi.mocked(backendStore.appendOwnedBatch!).mockImplementation(async(...args)=>{
     const bytes=Buffer.from(args[3].bytes).toString('utf8')
     const isSource=bytes.includes('"type":"agent/delivery-source"')&&bytes.includes('"kind":"exec"')
     const result=await appendOwned(...args)
     if(bytes.includes('"type":"agent/delivery-handoff"')){handoffWrites++;if(mode==='promotion-race'){gate.resolve();await new Promise<void>(done=>setImmediate(done))}}
     if(isSource){sourceWrites++;if(mode==='close-after-source')stopRequest=received.requestClose('user-stop');if(mode==='unknown-source'){unknownKey=args[3].key;return{kind:'unknown',key:args[3].key}}}
     return result
-  }
-  backendStore.reconcileOwnedBatch=async(...args)=>!allowSource&&unknownKey&&args[3].key.batchId===unknownKey.batchId?{kind:'unknown',key:args[3].key}:reconcileOwned(...args)
+  })
+  vi.mocked(backendStore.reconcileOwnedBatch!).mockImplementation(async(...args)=>!allowSource&&unknownKey&&args[3].key.batchId===unknownKey.batchId?{kind:'unknown',key:args[3].key}:reconcileOwned(...args))
   const gate = Promise.withResolvers<void>(), drained = Promise.withResolvers<void>()
   const admissionGate=Promise.withResolvers<void>(),enteredAdmission=Promise.withResolvers<void>()
   const siblingGate=Promise.withResolvers<void>(),siblingDrained=Promise.withResolvers<void>()

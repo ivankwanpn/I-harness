@@ -18,19 +18,24 @@ export interface RetainedExistingBinding {
 }
 export interface RetainedBindingRequest { sessionId: string; signal?: AbortSignal }
 const issuedReferences = new WeakMap<object, { issuer: object; preflight(): void; request(reason: unknown): Promise<void>; observe(listener: (operation: RetainedCleanupOperation) => void | Promise<void>): () => void }>()
-const coordinatorIssuers = new WeakMap<SessionCoordinator, object>()
+const coordinatorIssuers = new WeakMap<SessionCoordinator, { issuer: object; preflight(ids?: readonly string[]): void }>()
+export function preflightRetainedCoordinatorFor(coordinator: SessionCoordinator, ids?: readonly string[]): void {
+  const owner = coordinatorIssuers.get(coordinator)
+  if (!owner) throw new Failure('invalid')
+  owner.preflight(ids)
+}
 export function assertRetainedBindingReference(reference: RetainedExistingBinding): void {
   if (!issuedReferences.has(reference)) throw new Failure('invalid')
   reference.assertCurrent()
 }
 export function assertRetainedBindingReferenceFor(coordinator: SessionCoordinator, reference: RetainedExistingBinding): void {
   const original = issuedReferences.get(reference)
-  if (!original || coordinatorIssuers.get(coordinator) !== original.issuer) throw new Failure('invalid')
+  if (!original || coordinatorIssuers.get(coordinator)?.issuer !== original.issuer) throw new Failure('invalid')
   reference.assertCurrent()
 }
 export function preflightRetainedBindingReleaseFor(coordinator: SessionCoordinator, reference: RetainedExistingBinding): void {
   const original = issuedReferences.get(reference)
-  if (!original || coordinatorIssuers.get(coordinator) !== original.issuer) throw new Failure('invalid')
+  if (!original || coordinatorIssuers.get(coordinator)?.issuer !== original.issuer) throw new Failure('invalid')
   original.preflight()
 }
 /** Private lifecycle observation on the exact original reference. */
@@ -40,7 +45,7 @@ export function observeRetainedBindingRetirementFor(coordinator: SessionCoordina
 }
 export function requestRetainedReferenceRetirementFor(coordinator: SessionCoordinator, reference: RetainedExistingBinding, reason: unknown): Promise<void> {
   const original = issuedReferences.get(reference)
-  if (!original || coordinatorIssuers.get(coordinator) !== original.issuer) throw new Failure('invalid')
+  if (!original || coordinatorIssuers.get(coordinator)?.issuer !== original.issuer) throw new Failure('invalid')
   return original.request(reason)
 }
 type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
@@ -86,19 +91,26 @@ function captureMethod<T extends (...args: any[]) => any>(receiver: object, key:
  * original leases, and owns only retained references and their finite reads. */
 export function createRetainedBindings(
   backend: Partial<Pick<PersistenceBackend, 'profile' | 'readDocumentObserved'>>,
-  ownership: Pick<Ownership, 'lockEnabled' | 'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership' | 'withSessionOperation'>>,
+  ownership: Pick<Ownership, 'lockEnabled' | 'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership' | 'withSessionOperation' | 'acquireDocumentLease' | 'exclusionScope'>>,
   original: { key(id: string): string; assertAdmission(id: string, key: string): void; assertOutside(ids: readonly string[], keys: readonly string[]): void },
 ) {
   const owners = new Map<string, Owner>()
   const issuer = Object.freeze({})
   let associated = false
   let domain: object = issuer
-  const failures = new WeakMap<object, { retry(): Promise<void> }>()
+  const failures = new WeakMap<object, { retry(operation?: RetainedCleanupOperation): Promise<void> }>()
   const contexts = new AsyncLocalStorage<readonly Context[]>()
   let charged = 0
-  const matches = (owner: Owner, ids: readonly string[], keys: readonly string[], all: boolean) => all || ids.includes(owner.id) || keys.includes(owner.key)
+  const captures = new WeakMap<object, {keys:string[];ready?:boolean;assertCurrent():void}>()
+  const physical = (ids: readonly string[], keys: readonly string[]) => ownership.exclusionScope?.(ids, keys).keys ?? [...ids.map(id => 'session:' + id), ...keys.map(key => 'document:' + key)]
+  function ownerResources(owner: Pick<Owner, 'id'|'key'>) {
+    let capture=captures.get(owner)
+    if(!capture || capture.ready===false){capture=ownership.exclusionScope?.([owner.id],[owner.key]) ?? {keys:physical([owner.id],[owner.key]),assertCurrent(){}};captures.set(owner,capture)}else capture.assertCurrent()
+    return capture.keys
+  }
+  const matches = (owner: Pick<Owner, 'id'|'key'>, ids: readonly string[], keys: readonly string[], all: boolean) => all || ownerResources(owner).some(key => physical(ids, keys).includes(key))
   function preflight(ids: readonly string[], keys: readonly string[], all = false) {
-    if (contexts.getStore()?.some(entry => entry.active && (all || ids.includes(entry.id) || keys.includes(original.key(entry.id))))) throw new Failure('conflict')
+    if (contexts.getStore()?.some(entry => entry.active && (matches({ id: entry.id, key: original.key(entry.id) }, ids, keys, all)))) throw new Failure('conflict')
   }
   async function finite<T>(id: string, work: () => Promise<T>): Promise<T> {
     const entry: Context = { id, active: true }
@@ -106,6 +118,7 @@ export function createRetainedBindings(
     finally { entry.active = false }
   }
   function current(owner: Owner) {
+    ownerResources(owner)
     if (owner.retired || owner.disposed || !owner.ready) throw new Failure('revoked')
     original.assertAdmission(owner.id, owner.key)
     owner.assertPin!()
@@ -148,21 +161,21 @@ export function createRetainedBindings(
       owner.retired = true
       owner.referenceCleanup = [...owner.references].map(reference => reference.cleanup.select(operation))
     })
-    owners.set(id, owner)
+    ownerResources(owner); owners.set(id, owner)
     return owner
   }
   async function setup(owner: Owner) {
     try {
       await finite(owner.id, async () => {
         const pin = captureMethod<Ownership['pinOwnership']>(ownership, 'pinOwnership')
-        const lease = captureMethod<Ownership['acquireLease']>(ownership, 'acquireLease')
+        const lease = ownership.acquireDocumentLease ? captureMethod<Ownership['acquireDocumentLease']>(ownership, 'acquireDocumentLease') : (key: string) => ownership.acquireLease('doc:' + key)
         const queue = captureMethod<Ownership['withSessionOperation']>(ownership, 'withSessionOperation')
         const profile = captureMethod<NonNullable<typeof backend.profile>>(backend, 'profile')
         const binding = captureMethod<NonNullable<typeof backend.readDocumentObserved>>(backend, 'readDocumentObserved')
         owner.queue = queue; owner.profile = profile
         const guard = () => { if (owner.retired) throw new Failure('revoked'); owner.assertPin?.(); original.assertAdmission(owner.id, owner.key) }
         guard(); owner.pin = resource(await pin(owner.id)); owner.pin.release = captureMethod(owner.pin.value, 'release'); owner.assertPin = captureMethod(owner.pin.value, 'assertHeld'); guard()
-        owner.lock = resource(await lease(`doc:${owner.key}`)); owner.lock.release = captureMethod(owner.lock.value, 'release'); guard()
+        owner.lock = resource(await lease(owner.key)); owner.lock.release = captureMethod(owner.lock.value, 'release'); guard()
         const value = await queue(owner.id, async () => { guard(); const value = await profile(owner.id); guard(); return value })
         if (value.meta.sessionId !== owner.id || value.meta.archived) throw new Failure('unavailable')
         owner.metadata = frozen(value.meta)
@@ -266,10 +279,10 @@ export function createRetainedBindings(
       }
       catch (cleanup) {
         const failure = new AggregateError([error, cleanup], 'Retained binding acquisition and cleanup failed')
-        failures.set(failure, Object.freeze({ async retry() {
-          preflight([id], [key]); original.assertOutside([id], [key])
-          const retry = createRetainedCleanupOperation()
-          try { await select(owner, retry) } finally { finishRetainedCleanupOperation(retry) }
+        failures.set(failure, Object.freeze({ async retry(operation?: RetainedCleanupOperation) {
+          preflight([id], [key]); original.assertOutside([id], [key]); assertOutsideRetirementSink(domain)
+          const retry = operation ?? createRetainedCleanupOperation()
+          try { await select(owner, retry) } finally { if (!operation) finishRetainedCleanupOperation(retry) }
         } }))
         throw failure
       }
@@ -356,7 +369,7 @@ export function createRetainedBindings(
   return { acquire, preflight(ids: readonly string[], keys: readonly string[], all = false) { preflight(ids, keys, all); assertOutsideRetirementSink(domain) }, retire,
     associateCoordinator(coordinator: SessionCoordinator) {
       if (associated || coordinatorIssuers.has(coordinator)) throw new TypeError('Retained owner already associated')
-      associated = true; domain = coordinator; coordinatorIssuers.set(coordinator, issuer)
+      associated = true; domain = coordinator; coordinatorIssuers.set(coordinator, { issuer, preflight(ids) { preflight(ids ?? [], [], ids === undefined); assertOutsideRetirementSink(domain) } })
     },
     cleanupForError(error: unknown) { return error !== null && typeof error === 'object' ? failures.get(error) : undefined } }
 }

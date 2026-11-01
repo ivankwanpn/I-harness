@@ -194,5 +194,3 @@ it('recipient re-reads exact Exec source and terminal and refuses subagent casts
    expect(f.document.view.events.filter(e=>e.type==='agent/delivery-received')).toHaveLength(0);f.releaseReceipt();await vi.waitFor(()=>expect(f.requests).toHaveLength(3),{timeout:2000});expect(f.launches()).toBe(1)
  }finally{await f.close()}
 },15000)
-
-

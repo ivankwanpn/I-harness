@@ -1,3 +1,4 @@
+import {executionObservationFixture} from './helpers/execution-observation.ts'
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
@@ -23,7 +24,7 @@ it("shows historical PTY evidence and saved output without offering live control
 
 it("shows code/output/nested trace and confirms a cell stop using the exact session owner", async () => {
   const request = vi.fn().mockImplementation(async input => input.kind.endsWith("stop") ? { stopped: true } : execution)
-  render(<ExecutionPane bridge={{ request }} workspaceId="w" sessionId="s" />)
+  render(<ExecutionPane bridge={executionObservationFixture(request)} workspaceId="w" sessionId="s" />)
   expect(await screen.findByText("text('hi')")).toBeTruthy()
   fireEvent.click(screen.getByRole("tab", { name: "輸出" })); expect(screen.getByText("hi")).toBeTruthy()
   fireEvent.click(screen.getByRole("tab", { name: "巢狀呼叫" })); expect(screen.getByText("nested result")).toBeTruthy()
@@ -37,8 +38,8 @@ it("discards a stale history response after changing sessions and keeps cold cel
   let release!: (value: unknown) => void
   const old = new Promise(resolve => { release = resolve })
   const request = vi.fn().mockImplementation(input => input.sessionId === "s" ? old : Promise.resolve({ ...execution, sessionId: "cold", live: false, cells: [{ ...cell, id: "cold-cell", ownerSessionId: "cold", source: "cold source", live: false, canTerminate: false }] }))
-  const view = render(<ExecutionPane bridge={{ request }} workspaceId="w" sessionId="s" />)
-  view.rerender(<ExecutionPane bridge={{ request }} workspaceId="w" sessionId="cold" />)
+  const view = render(<ExecutionPane bridge={executionObservationFixture(request)} workspaceId="w" sessionId="s" />)
+  view.rerender(<ExecutionPane bridge={executionObservationFixture(request)} workspaceId="w" sessionId="cold" />)
   expect(await screen.findByText("cold source")).toBeTruthy()
   release(execution)
   await vi.waitFor(() => expect(screen.queryByText("text('hi')")).toBeNull())

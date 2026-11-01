@@ -49,11 +49,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { SandboxUnavailableError, workspaceRoots, type ConfinedArgv, type ProcessSpec, type SandboxPolicy, type SandboxProvider } from '@i-harness/sandbox'
 import { grantWrite, revokeWrite } from './acl.ts'
 import { Win32Error } from './errors.ts'
-import { allocPtrSlot, decodePtr, isNullPtr, throwLastError, win32 } from './ffi.ts'
+import { win32 } from './ffi.ts'
 import type { NativePtr, Win32Bindings } from './ffi.ts'
+import { NativeInitOwner, NativeInitializationFailure, NativeCleanupFailure } from './init-owner.ts'
 import { AclWriteGrant } from './grant.ts'
 import { assertPrivateTempDisjoint, assertTempRootOutsideWorkspace } from './path-boundary.ts'
-import { buildCommandLine, drainPipe, spawnSandboxed, spawnSandboxedInherited, waitForExit } from './spawn.ts'
+import { buildCommandLine } from './spawn.ts'
+import { createInheritedChildOwner } from './inherited-child.ts'
+import { createPipeChildOwner, type PipeChildOwner } from './pipe-child.ts'
+import { logonSidText } from './pipe-sid.ts'
+import { acquireWaitDrainBridgeClient } from './native-wait-bridge.ts'
 import { createRestrictedToken, findLogonSid, makeWellKnownSid, openCurrentProcessToken, setTokenDefaultDaclGrant } from './token.ts'
 import { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
 import * as abi from './win32-abi.ts'
@@ -63,6 +68,7 @@ export { AclWriteGrant } from './grant.ts'
 export { assertTempRootOutsideWorkspace } from './path-boundary.ts'
 export { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
 export { Win32Error } from './errors.ts'
+export { NativeInitializationFailure } from './init-owner.ts'
 export { scanWorldWritable, type WorldWritableFinding, type ScanOptions } from './audit.ts'
 
 /** Construction options: the workspace/temp allowlists and their distinct SID identities. */
@@ -122,7 +128,7 @@ export interface AclSandboxSpawnOptions {
   /** Working directory; defaults to the caller's cwd. */
   cwd?: string
   /**
-   * 'pipe' (default): capture stdout/stderr via anonymous pipes.
+   * 'pipe' (default): capture stdout/stderr via overlapped output pipes.
    * 'inherit': the child inherits the caller's stdio directly (runner usage —
    * bytes flow straight through), always wrapped in a kill-on-close job so the
    * child dies with the caller; stdout/stderr in the result are empty.
@@ -145,26 +151,10 @@ export interface AclSandboxChild {
   wait(): Promise<AclSandboxChildResult>
 }
 
-/** Free one optional SID while retaining a failure for best-effort sibling cleanup. */
-function freeSidBestEffort(
-  api: Win32Bindings,
-  sidPtr: NativePtr | undefined,
-  label: string,
-  failures: unknown[],
-): void {
-  if (sidPtr === undefined) return
-  try {
-    const freed = api.localFree(sidPtr)
-    if (!isNullPtr(freed)) throwLastError(api, 'LocalFree', label)
-  } catch (error) {
-    failures.push(error)
-  }
-}
-
 /**
  * One write-restricted sandbox instance: token + write-SID grants + spawn.
- * `init()` is fail-closed — any Win32 failure revokes the revocable (temp)
- * grants and throws; `dispose()` revokes the temp grants, leaves the
+ * `init()` is fail-closed — failures attempt revocation and retain unresolved
+ * cleanup on this instance through NativeInitializationFailure. `dispose()` revokes the temp grants, leaves the
  * standing workspace ACEs in place (the cross-instance reuse cache), frees
  * every allocation, and reports every cleanup failure. With
  * `manageDacls: false` the caller owns the grants (the sandbox seam's grant
@@ -189,7 +179,14 @@ export class AclSandbox {
   private writeSidPtrs: NativePtr[] = []
   private tempWriteSidPtr: NativePtr | undefined
   /** The well-known/logon SID allocations init() makes; freed by dispose() alongside the write SIDs. */
-  private sidAllocations: NativePtr[] = []
+  private initOwner: NativeInitOwner | undefined
+  private initializing = false
+  private initialization: Promise<void> | undefined
+  private ready = false
+  private closing = false
+  private disposal: Promise<void> | undefined
+  private logonSid: string | undefined
+  private readonly pipeChildren = new Set<PipeChildOwner>()
   private grantedPaths: Array<{ path: string; sidPtr: NativePtr }> = []
 
   constructor(options: AclSandboxOptions) {
@@ -241,21 +238,23 @@ export class AclSandbox {
   }
 
   /** Create the restricted token and apply the capability-SID grants. Idempotent-unsafe: once per instance. */
-  async init(): Promise<void> {
+  init(): Promise<void> {
+    if (this.initialization || this.closing) return Promise.reject(new Error('AclSandbox initialization already admitted or closing'))
+    this.initializing = true
+    this.initialization = this.initialize().finally(() => { this.initializing = false })
+    return this.initialization
+  }
+  private async initialize(): Promise<void> {
     if (this.api !== undefined) throw new Error('AclSandbox is already initialized')
     const api = await win32()
-    const currentToken = openCurrentProcessToken(api)
-    let currentTokenOpen = true
-    let restrictedToken: NativePtr | undefined
+    this.api = api
+    const owned = this.initOwner = new NativeInitOwner(api)
     try {
+      if (this.closing) throw new Error('AclSandbox closed during initialization')
+      const currentToken = openCurrentProcessToken(api, owned)
       const parseSid = (sid: string): NativePtr => {
-        const sidSlot = allocPtrSlot()
-        if (api.convertStringSidToSidW(sid, sidSlot) === 0) {
-          throwLastError(api, 'ConvertStringSidToSidW', sid)
-        }
-        const parsedSid = decodePtr(sidSlot)
-        if (parsedSid === null) throw new Win32Error('ConvertStringSidToSidW', api.getLastError(), sid)
-        return parsedSid
+        const slot = owned.slot()
+        return owned.output(slot, 'local', 'ConvertStringSidToSidW', () => api.convertStringSidToSidW(sid, slot))
       }
       for (const sid of this.writeSids) this.writeSidPtrs.push(parseSid(sid))
       this.writeSidPtr = this.writeSidPtrs[0]
@@ -283,82 +282,41 @@ export class AclSandbox {
       if (this.manageDacls) {
         if (this.writeSidPtr !== undefined) {
           for (const [index, path] of this.writableDirs.entries()) {
-            grantWrite(api, path, this.writeSidPtrs[index] ?? this.writeSidPtr)
+            grantWrite(api, path, this.writeSidPtrs[index] ?? this.writeSidPtr, owned)
           }
           if (tempDir !== null && this.tempWriteSidPtr !== undefined) {
             // Record BEFORE granting: grantWrite can throw after a successful
             // apply (a LocalFree failure), and the fail-closed catch must still
             // revoke that path (revoking an ungranted path is a no-op merge).
             this.grantedPaths.push({ path: tempDir, sidPtr: this.tempWriteSidPtr })
-            grantWrite(api, tempDir, this.tempWriteSidPtr)
+            grantWrite(api, tempDir, this.tempWriteSidPtr, owned)
           }
         }
       }
-      const logonSid = findLogonSid(api, currentToken)
-      this.sidAllocations.push(logonSid)
-      const worldSid = makeWellKnownSid(api, abi.WinWorldSid)
-      this.sidAllocations.push(worldSid)
+      const logonSid = findLogonSid(api, currentToken, owned)
+      this.logonSid = logonSidText(owned, logonSid)
+      const worldSid = makeWellKnownSid(api, abi.WinWorldSid, owned)
       const writeSids = [...this.writeSidPtrs, this.tempWriteSidPtr].filter((sid): sid is NativePtr => sid !== undefined)
-      restrictedToken = createRestrictedToken(
+      const restrictedToken = createRestrictedToken(
         api, currentToken, logonSid, writeSids,
         { world: worldSid },
-        this.mode,
+        this.mode, owned,
       )
       this.token = restrictedToken
-      // The restricted token's default DACL still names only the user's
-      // ambient SIDs — none of the restricting SIDs. Every NEW object the
-      // confined process creates (anonymous stdio pipes, sync objects) takes
-      // its DACL from that default, so the write pass-2 check would deny
-      // pipe creation (ERROR_ACCESS_DENIED; Node EPERM) and break every
-      // piped-stdio grandchild spawn. Merge a full-access ACE for a
-      // restricting SID (the PRIVATE temp SID when present, otherwise the
-      // workspace SID, or Everyone under read-only): new-object creation
-      // stays gated by the parent object's DACL, while the new object's own
-      // DACL passes pass-2. Choosing the temp SID prevents default-DACL
-      // objects in one session's temp tree from acquiring the shared
-      // workspace capability.
-      setTokenDefaultDaclGrant(api, restrictedToken, this.tempWriteSidPtr ?? this.writeSidPtr ?? worldSid)
-      if (api.closeHandle(currentToken) === 0) throwLastError(api, 'CloseHandle', 'current process token')
-      currentTokenOpen = false
-      this.api = api
+      // Include a restricting SID in the default DACL for objects that use
+      // the token's default security descriptor. Prefer the private temp SID
+      // over the shared workspace capability. Creation still depends on the
+      // parent object's DACL. An API may supply a different descriptor:
+      // Node/libuv named stdio pipes can still deny a restricted grandchild's
+      // write access, so this grant alone does not establish pipe support.
+      setTokenDefaultDaclGrant(api, restrictedToken, this.tempWriteSidPtr ?? this.writeSidPtr ?? worldSid, owned)
+      owned.release(currentToken, 'handle')
+      this.ready = true
     } catch (error) {
-      // Fail-closed cleanup: never leave a revocable (temp) grant or SID
-      // allocation behind a failed init. Standing workspace ACEs are NOT
-      // revoked — they are the intended end state (the reuse cache), not an
-      // error artifact.
-      const cleanupFailures: unknown[] = []
-      if (currentTokenOpen && api.closeHandle(currentToken) === 0) {
-        cleanupFailures.push(new Win32Error('CloseHandle', api.getLastError(), 'current process token after init failure'))
-      }
-      if (restrictedToken !== undefined && api.closeHandle(restrictedToken) === 0) {
-        cleanupFailures.push(new Win32Error('CloseHandle', api.getLastError(), 'restricted token after init failure'))
-      }
-      for (const grant of this.grantedPaths) {
-        try {
-          revokeWrite(api, grant.path, grant.sidPtr)
-        } catch (cleanupError) {
-          cleanupFailures.push(cleanupError)
-        }
-      }
-      for (const sidPtr of this.writeSidPtrs) freeSidBestEffort(api, sidPtr, 'workspace write SID', cleanupFailures)
-      freeSidBestEffort(api, this.tempWriteSidPtr, 'temp write SID', cleanupFailures)
-      for (const sidPtr of this.sidAllocations.splice(0)) {
-        freeSidBestEffort(api, sidPtr, 'init SID allocation', cleanupFailures)
-      }
-      this.token = undefined
-      this.writeSidPtr = undefined
-      this.writeSidPtrs = []
-      this.tempWriteSidPtr = undefined
-      this.tempDirResolved = undefined
-      this.grantedPaths = []
-      if (cleanupFailures.length > 0) {
-        throw new AggregateError(
-          [error, ...cleanupFailures],
-          `AclSandbox init failed and ${cleanupFailures.length} cleanup operation(s) also failed`,
-        )
-      }
+      this.closing = true
+      try { this.finalizeInitialization() } catch (cleanup) { throw new NativeInitializationFailure(error, cleanup, this) }
       throw error
-    }
+    } finally { this.initializing = false }
   }
 
   /**
@@ -371,44 +329,41 @@ export class AclSandbox {
    * @param options - the program, argv/cwd, and stdio shape.
    * @returns the running child.
    */
-  spawn(options: AclSandboxSpawnOptions): AclSandboxChild {
+  spawn(options: AclSandboxSpawnOptions & { stdio: 'inherit' }): Promise<AclSandboxChild>
+  spawn(options: AclSandboxSpawnOptions & { stdio?: 'pipe' }): Promise<AclSandboxChild>
+  spawn(options: AclSandboxSpawnOptions): Promise<AclSandboxChild>
+  spawn(options: AclSandboxSpawnOptions): Promise<AclSandboxChild> {
     const api = this.api
     const token = this.token
-    if (api === undefined || token === undefined) throw new Error('AclSandbox is not initialized: call init() first')
-    const args = options.args ?? []
+    if (!this.ready || this.closing || api === undefined || token === undefined) throw new Error('AclSandbox is not initialized: call init() first')
+    const args = [...(options.args ?? [])]
     const cwd = options.cwd ?? process.cwd()
 
     if (options.stdio === 'inherit') {
-      const native = spawnSandboxedInherited(api, token, { command: options.command, args, cwd, argumentEncoding: options.argumentEncoding, windowsHide: options.windowsHide })
-      let exitCodePromise: Promise<number> | undefined
-      return {
-        pid: native.pid,
-        wait: async () => {
-          exitCodePromise ??= Promise.resolve(waitForExit(api, native.process))
-          const exitCode = await exitCodePromise
-          if (api.closeHandle(native.job) === 0) throwLastError(api, 'CloseHandle', 'kill-on-close job')
-          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), exitCode }
-        },
-      }
+      buildCommandLine(options.command,args,options.argumentEncoding)
+      return this.admitChild(createInheritedChildOwner(Object.freeze({command:options.command,args:Object.freeze(args),cwd,argumentEncoding:options.argumentEncoding,windowsHide:options.windowsHide}),{
+        api,token,assertLaunchCurrent:()=>{if(this.api!==api||this.token!==token)throw new Error('AclSandbox original launch owner retired')},acquireWaitClient:()=>acquireWaitDrainBridgeClient(),
+      }))
     }
 
-    const native = spawnSandboxed(api, token, { command: options.command, args, cwd, argumentEncoding: options.argumentEncoding })
-    const stdout = drainPipe(api, native.stdoutRead)
-    const stderr = drainPipe(api, native.stderrRead)
-    // waitForExit is deliberately NOT started here: WaitForSingleObject blocks
-    // the thread and would starve the drains while the child is still running
-    // (pipe-buffer deadlock). The drains resolve only after the child closed
-    // its pipe ends — by then the wait returns immediately.
-    let exitCodePromise: Promise<number> | undefined
-    return {
-      pid: native.pid,
-      wait: async () => {
-        const stdoutBuffer = await stdout
-        const stderrBuffer = await stderr
-        exitCodePromise ??= Promise.resolve(waitForExit(api, native.process))
-        return { stdout: stdoutBuffer, stderr: stderrBuffer, exitCode: await exitCodePromise }
-      },
-    }
+    if (this.logonSid === undefined) throw new Error('AclSandbox logon SID unavailable')
+    buildCommandLine(options.command, args, options.argumentEncoding)
+    const record = createPipeChildOwner(Object.freeze({command:options.command, args:Object.freeze(args), cwd, argumentEncoding:options.argumentEncoding}), {
+      api, token, logonSid:this.logonSid,
+      // Closing fences new admission. Already admitted records retain the
+      // original token/grants until disposal has joined them.
+      assertLaunchCurrent: () => { if (this.api !== api || this.token !== token) throw new Error('AclSandbox original launch owner retired') },
+      acquireWaitClient: () => acquireWaitDrainBridgeClient(),
+    })
+    return this.admitChild(record)
+  }
+  private admitChild(record: PipeChildOwner): Promise<AclSandboxChild> {
+    this.pipeChildren.add(record) // Both stdio modes share original admission.
+    const result = record.start()
+    void result.then(child => child.wait(), () => record.joinCleanup()).finally(() => {
+      if (!record.pending()) this.pipeChildren.delete(record)
+    }).catch(() => {})
+    return result
   }
 
   /**
@@ -417,43 +372,49 @@ export class AclSandbox {
    * failure.
    */
   dispose(): void {
+    if (this.initializing || this.disposal || [...this.pipeChildren].some(child => child.pending())) throw new Error('AclSandbox work active: use disposeAsync()')
+    this.closing = true
+    this.finalizeInitialization()
+  }
+  disposeAsync(): Promise<void> {
+    this.closing = true
+    if (this.disposal) return this.disposal
+    const attempt = (async () => {
+      if (this.initialization) await this.initialization.catch(() => {})
+      const children = [...this.pipeChildren]
+      const results = await Promise.allSettled(children.map(child => child.joinCleanup()))
+      for (const child of children) if (!child.pending()) this.pipeChildren.delete(child)
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      if (failures.length) throw new AggregateError(failures, 'AclSandbox children retain cleanup debt')
+      if (this.pipeChildren.size) throw new Error('AclSandbox children remain owned')
+      this.finalizeInitialization()
+    })()
+    this.disposal = attempt
+    void attempt.finally(() => { if (this.disposal === attempt) this.disposal = undefined }).catch(() => {})
+    return attempt
+  }
+  private finalizeInitialization(): void {
+    this.ready = false
     const api = this.api
-    if (api === undefined) return
+    if (!api) return
+    this.initOwner?.cleanupScopes()
     const failures: unknown[] = []
-    if (this.manageDacls) {
-      for (const grant of this.grantedPaths) {
-        try {
-          revokeWrite(api, grant.path, grant.sidPtr)
-        } catch (error) {
-          failures.push(error)
-        }
-      }
+    const retained: typeof this.grantedPaths = []
+    for (const grant of this.grantedPaths) {
+      try { revokeWrite(api, grant.path, grant.sidPtr, this.initOwner) } catch (error) { failures.push(error); if (!(error instanceof NativeCleanupFailure && error.operationCompleted)) retained.push(grant) }
     }
-    for (const sidPtr of this.writeSidPtrs) freeSidBestEffort(api, sidPtr, 'workspace write SID', failures)
-    freeSidBestEffort(api, this.tempWriteSidPtr, 'temp write SID', failures)
-    const token = this.token
-    /* v8 ignore next -- init assigns this.api only after this.token, so an initialized instance always
-       has its token; the guard mirrors the write-SID guard. */
-    if (token !== undefined) {
-      try {
-        if (api.closeHandle(token) === 0) throwLastError(api, 'CloseHandle', 'restricted token')
-      } catch (error) {
-        failures.push(error)
-      }
-    }
-    for (const sidPtr of this.sidAllocations.splice(0)) {
-      freeSidBestEffort(api, sidPtr, 'init SID allocation', failures)
-    }
+    this.grantedPaths = retained
+    if (failures.length) throw new AggregateError(failures, 'AclSandbox grant cleanup incomplete')
+    this.initOwner?.cleanup()
     this.api = undefined
     this.token = undefined
+    this.logonSid = undefined
     this.writeSidPtr = undefined
     this.writeSidPtrs = []
     this.tempWriteSidPtr = undefined
-    this.grantedPaths = []
-    if (failures.length > 0) {
-      throw new AggregateError(failures, `AclSandbox dispose completed with ${failures.length} cleanup failure(s)`)
-    }
+    this.tempDirResolved = undefined
   }
+
 }
 
 /**

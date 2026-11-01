@@ -1,25 +1,40 @@
 import { mkdtemp } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
 import { join } from 'node:path'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator } from '../src/index.ts'
-import { createOwnership } from '../src/coordinator/ownership.ts'
-import { createMutations } from '../src/coordinator/mutations.ts'
-import { createLoads } from '../src/coordinator/load.ts'
-import { createManagedDocuments } from '../src/coordinator/managed-documents.ts'
-import { createBindingObservations } from '../src/coordinator/binding-observation.ts'
-import { createProcessReadLatches } from '../src/coordinator/process-read-latches.ts'
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+import * as ownershipModule from '../src/coordinator/ownership.ts'
+import * as managedModule from '../src/coordinator/managed-documents.ts'
+import * as bindingModule from '../src/coordinator/binding-observation.ts'
 import { retainSelectedSourceRead } from '../src/coordinator/managed-document.ts'
+
+const native = vi.hoisted(() => ({ acquired: undefined as undefined | ((path: string, lock: Awaited<ReturnType<typeof acquireSessionLock>>) => void) }))
+vi.mock('@i-harness/fs-lock', async importOriginal => {
+ const actual = await importOriginal<typeof import('@i-harness/fs-lock')>()
+ return { ...actual, async acquireSessionLock(...args: Parameters<typeof actual.acquireSessionLock>) { const lock = await actual.acquireSessionLock(...args); native.acquired?.(args[0].lockPath, lock); return lock } }
+})
+// Capture the real composed owners; keep their transition wiring intact.
+async function fixture(root: string, onLease?: (name: string, lock: Awaited<ReturnType<ReturnType<typeof ownershipModule.createOwnership>['acquireLease']>>) => void) {
+  const ownerSpy = vi.spyOn(ownershipModule, 'createOwnership')
+  const registrySpy = vi.spyOn(managedModule, 'createManagedDocuments'), bindingsSpy = vi.spyOn(bindingModule, 'createBindingObservations')
+  try {
+    const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
+    await coordinator.create({ sessionId: 'source' })
+    const ownership = ownerSpy.mock.results[0]!.value as ReturnType<typeof ownershipModule.createOwnership>
+    const capture = ownership.artifacts!.document('desktop-session-project-' + createHash('sha256').update('source').digest('hex'))
+    if (capture.kind !== 'ready') throw new Error('Fixture parent unavailable')
+    const path = lockPathFor(root, 'artifact-document-lease:' + capture.key)
+    native.acquired = (actual, lock) => { if (actual === path) onLease?.('artifact-document-lease', lock) }
+    return { coordinator, ownership: ownerSpy.mock.results[0]!.value as ReturnType<typeof ownershipModule.createOwnership>, registry: registrySpy.mock.results[0]!.value as ReturnType<typeof managedModule.createManagedDocuments>, bindings: bindingsSpy.mock.results[0]!.value as ReturnType<typeof bindingModule.createBindingObservations> }
+  } finally { ownerSpy.mockRestore(); registrySpy.mockRestore(); bindingsSpy.mockRestore() }
+}
 
 it('revokes fixed selected ownership before admission while the same original process owner delivers its suffix', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'selected-process-'))
-  const backend = createJsonlBackend(root), options = { lock: { enabled: true } }
-  const setup = createSessionCoordinator(backend, options); await setup.create({ sessionId: 'source' }); await setup.close()
-  const ownership = createOwnership(backend, options), latches = createProcessReadLatches()
-  const mutations = createMutations(backend, ownership, 200, () => {}, undefined, undefined, latches)
-  const loads = createLoads(backend, ownership, mutations, latches)
-  const registry = createManagedDocuments(backend, ownership, loads.loadOwned, options, () => {}, mutations, latches)
-  const bindings = createBindingObservations(backend, ownership)
+  const { coordinator, ownership, registry, bindings } = await fixture(root)
   const document = await registry.open('source'), selected = await bindings.acquireSelectedBindingRead({ sessionIds: ['source'] })
   const fixed = retainSelectedSourceRead(document, ownership, selected.revoke), processRead = registry.captureProcessRead(document, [])
   try {
@@ -41,23 +56,15 @@ it('revokes fixed selected ownership before admission while the same original pr
     } finally { nextFixed.unsubscribe(); await next.release() }
   } finally {
     fixed.unsubscribe(); processRead.close(); await selected.release(); await bindings.closeAdmission()()
-    await registry.close(); await Promise.all(ownership.releaseHeldLocks())
+    await coordinator.close()
   }
 })
 
 it('keeps fixed selected and process reads revoked after original recovery hold release while binding use drains', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'selected-process-hold-'))
-  const backend = createJsonlBackend(root), options = { lock: { enabled: true } }
-  const setup = createSessionCoordinator(backend, options); await setup.create({ sessionId: 'source' }); await setup.close()
-  const originalOwnership = createOwnership(backend, options)
-  let originalLock: Awaited<ReturnType<typeof originalOwnership.acquireLease>> | undefined
-  const ownership = { ...originalOwnership, async acquireLease(name: string) {
-    const lock = await originalOwnership.acquireLease(name); if (name.startsWith('doc:')) originalLock = lock; return lock
-  } }
-  const latches = createProcessReadLatches(), mutations = createMutations(backend, ownership, 200, () => {}, undefined, undefined, latches)
-  const loads = createLoads(backend, ownership, mutations, latches)
-  const registry = createManagedDocuments(backend, ownership, loads.loadOwned, options, () => {}, mutations, latches)
-  const bindings = createBindingObservations(backend, ownership), document = await registry.open('source')
+  let originalLock: Awaited<ReturnType<ReturnType<typeof ownershipModule.createOwnership>['acquireLease']>> | undefined
+  const { coordinator, ownership, registry, bindings } = await fixture(root, (name, lock) => { if (name === 'artifact-document-lease') originalLock = lock })
+  const document = await registry.open('source')
   const action = document.beginAction(), source = action.registerSettlementSource(async () => {})
   const selected = await bindings.acquireSelectedBindingRead({ sessionIds: ['source'] })
   const fixed = retainSelectedSourceRead(document, ownership, selected.revoke), processRead = registry.captureProcessRead(document, [])
@@ -86,6 +93,6 @@ it('keeps fixed selected and process reads revoked after original recovery hold 
   } finally {
     leave.resolve(); await active; action.finish(); await source.close()
     stop(); fixed.unsubscribe(); processRead.close(); await selected.release(); await bindings.closeAdmission()()
-    await registry.close(); await Promise.all(ownership.releaseHeldLocks())
+    await coordinator.close()
   }
 })

@@ -82,6 +82,7 @@ export class ContextStore {
     const failures = settled.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : [])
     failuresTogether(failures, 'Original legacy file cleanup remains unresolved')
   }
+  assertLegacyFilesSettled(): void { if (this.fileDebt.size || this.fileClosing.size) throw Error('Original legacy file cleanup remains unresolved') }
 
   constructor(root: string, readonly workspaceId: string, private readonly owner?: WorkspaceMutationOwner, private readonly assertLease: LegacyUseGate['assertLease'] = () => { throw Error('Legacy creating gate unavailable') }, private readonly beforeAuthorityChange?: (sessions?: readonly string[]) => void) {
     this.root = resolve(root)

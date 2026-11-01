@@ -11,7 +11,7 @@ it.each(['open','torn'].flatMap(tail=>['missing','malformed','future','inconsist
  await backend.create('p',{sessionId:'p',formatVersion:14,createdAt:'x'})
  if(state==='inconsistent')await backend.append('p',[{type:'subagent/start',version:1,taskId:'missing',agentPath:'a',role:'worker',description:'d'}])
  if(tail==='open')await backend.append('p',[{type:'turn/start'}]);else await appendFile(path,'{"torn":')
- const literal=state==='malformed'?'{bad':JSON.stringify({formatVersion:state==='future'?3:2,tasks:[],notifications:[]});if(state==='unavailable'){const {mkdir}=await import('node:fs/promises');await mkdir(task)}else if(state!=='missing')await writeFile(task,literal)
+ const literal=state==='malformed'?'{bad':JSON.stringify({formatVersion:state==='future'?4:2,tasks:[],notifications:[]});if(state==='unavailable'){const {mkdir}=await import('node:fs/promises');await mkdir(task)}else if(state!=='missing')await writeFile(task,literal)
  const before=await readFile(path),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
  try{await expect(coordinator.load('p')).rejects.toThrow();expect(await readFile(path)).toEqual(before);if(state==='missing')await expect(readFile(task)).rejects.toMatchObject({code:'ENOENT'});else if(state==='unavailable'){const {readdir}=await import('node:fs/promises');expect(await readdir(task)).toEqual([])}else expect(await readFile(task,'utf8')).toBe(literal)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })

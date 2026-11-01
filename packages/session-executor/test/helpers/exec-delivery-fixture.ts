@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, writeFile, cp } from 'node:fs/promises'
 import { join } from 'node:path'
+import { inspect } from 'node:util'
 import { expect, vi } from 'vitest'
 import { createExecutionLease, type TransportExecutionBackend } from '@i-harness/sandbox'
 import { subscribe, decodeFactBatch } from '@i-harness/core-session'
@@ -79,6 +80,6 @@ export async function createExecDeliveryFixture(install:(backend:TransportExecut
       const saved=join(root,'pending-crash-image');await cp(join(root,'sessions'),saved,{recursive:true});await writeFile(join(saved,'parent.jsonl'),bytes)
       journalRoot=saved;backend=createJsonlBackend(saved);coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);document=await coordinator.openManagedDocument('parent');off=listen();service=mount();await service.assemblyFor('parent');return bytes
     },
-    async close(){recoveryReady=true;rootExit.resolve();io.resolve();receiptGate.resolve();parentGate.resolve();promotionGate.resolve();allowReceipt=true;off();const failures:unknown[]=[];for(const close of[()=>service.close(),()=>coordinator.close(),()=>output.close(),()=>server.close()])try{await close()}catch(cause){failures.push(cause)}if(failures.length)throw new AggregateError(failures,'Original Exec fixture cleanup failed')},
+    async close(){recoveryReady=true;rootExit.resolve();io.resolve();receiptGate.resolve();parentGate.resolve();promotionGate.resolve();allowReceipt=true;off();const failures:unknown[]=[];for(const close of[()=>service.close(),()=>coordinator.close(),()=>output.close(),()=>server.close()])try{await close()}catch(cause){failures.push(cause)}if(failures.length){console.info('original-exec-cleanup-causes',inspect(failures,{depth:9}));throw new AggregateError(failures,'Original Exec fixture cleanup failed')}},
   }
 }

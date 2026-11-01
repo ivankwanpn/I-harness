@@ -13,7 +13,15 @@ it.each(['sync-rollback', 'close-after-sync', 'close-recheck-denied'] as const)(
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'cold-issued-')), path = join(root, 's.jsonl')
   const fault = Object.freeze({ original: mode }), counters = { writes: 0, syncs: 0, rollbacks: 0, closes: 0, faults: 0, deniedRechecks: 0 }
   let armed = false, denyRead = false
-  vi.mocked(readFile).mockImplementation(async (...args: any[]) => { if (denyRead && String(args[0]) === path) { denyRead = false; counters.deniedRechecks++; throw Error('secondary recheck denied') }; return (native.readFile as any)(...args) })
+  let collecting: string[] | undefined
+  const repairAdmissions: string[][] = []
+  vi.mocked(readFile).mockImplementation(async (...args: any[]) => {
+    // Capture the admission before the ORIGINAL repair read completes. Keep
+    // the existing append-only failure/rollback oracles below unchanged.
+    if (collecting && String(args[0]) === path && new Error().stack?.includes('Object.repair')) repairAdmissions.push(collecting.splice(0))
+    if (denyRead && String(args[0]) === path) { denyRead = false; counters.deniedRechecks++; throw Error('secondary recheck denied') }
+    return (native.readFile as any)(...args)
+  })
   vi.mocked(open).mockImplementation(async (...args) => {
     const handle = await native.open(...args)
     if (String(args[0]) !== path || args[1] !== 'r+') return handle
@@ -34,10 +42,12 @@ it.each(['sync-rollback', 'close-after-sync', 'close-recheck-denied'] as const)(
     await coordinator.create({ sessionId: 's' })
     const before = await readFile(path), event = { type: 'plan/mode' as const, mode: 'on' as const, seq: 0 }
     const seen: string[] = []; const off = observeColdExecutionWrites(coordinator, id => seen.push(id))
+    collecting = seen
     armed = true; coordinator.enqueue('s', [event])
     let failure: unknown
     try { await coordinator.flush('s') } catch (error) { failure = error }
     expect(failure).toMatchObject({ message: 'TASK_TRANSITION_FAILED', cause: fault })
+    expect(repairAdmissions).toEqual([['s']])
     expect((failure as Error).cause).toBe(fault); expect(backend.append).toBe(append)
     expect(counters.faults).toBe(1); expect(counters.writes).toBe(1)
     expect(counters.closes).toBe(1); expect(counters.syncs).toBe(mode === 'sync-rollback' ? 2 : 1)
@@ -55,8 +65,10 @@ it.each(['sync-rollback', 'close-after-sync', 'close-recheck-denied'] as const)(
     // Reopen via the other genuine original coordinator only after the first
     // has released native ownership. Its poisoned pending batch was reported,
     // never silently acknowledged or retried in the old incarnation.
+    collecting = undefined
     await foreign.adoptOwnership('s')
     const recovered: string[] = []; const offRecovery = observeColdExecutionWrites(foreign, id => recovered.push(id))
+    collecting = recovered
     foreign.enqueue('s', [event]); await foreign.flush('s')
     expect((await backend.read('s')).events).toEqual([event])
     expect(mode !== 'sync-rollback' ? seen : recovered).toEqual(['s'])
@@ -65,5 +77,6 @@ it.each(['sync-rollback', 'close-after-sync', 'close-recheck-denied'] as const)(
     else expect(counters.writes).toBe(2)
     await foreign.flush('s'); expect(mode !== 'sync-rollback' ? seen : recovered).toEqual(['s'])
     off(); offRecovery(); await foreign.releaseOwnership('s')
+    expect(repairAdmissions.every(edges => edges.length === 1 && edges[0] === 's')).toBe(true)
   } finally { armed = false; await Promise.allSettled([coordinator.close(), foreign.close()]); vi.mocked(open).mockImplementation(native.open); vi.mocked(readFile).mockImplementation(native.readFile); await rm(root, { recursive: true, force: true }) }
 })

@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, type Tray } from "electron"
 import { join } from "node:path"
-import { registerDesktopIpc } from "./ipc.ts"
+import { registerDesktopIpc, closeDesktopSurfaceWindows } from "./ipc.ts"
 import { createWorkspaceRuntimeManager, launchBundledGateway, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import { createDesktopWindow } from "./window.ts"
 import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
@@ -25,6 +25,7 @@ let catalog: WorkspaceCatalog | undefined
 let runtimes: WorkspaceRuntimeManager | undefined
 let quitting = false
 let drainNativeSettings: (() => Promise<void>) | undefined
+let restoreWindowAfterFailedQuit: (()=>void) | undefined
 
 /** Later main-process modules (the scoped IPC in the next task) read through these. */
 export function workspaceCatalog(): WorkspaceCatalog {
@@ -64,7 +65,13 @@ app.whenReady().then(() => {
   const globalProviders = createGlobalProviderSettings(async () => (await manager.get({ id: "desktop-configuration", path: app.getPath("userData"), label: "本機設定" })).client, { openExternal: url => shell.openExternal(url), usageWarnings: usageWarnings.read })
   const notifications = createNotificationHistory(join(app.getPath("userData"), "notifications-v1.json"))
   const drafts = new AttachmentDraftStore(join(app.getPath("userData"), "unsent-drafts-v1"))
-  drainNativeSettings = async () => { await closeDesktopProjectContentSearches(); await globalProviders.close(); await manager.close(); stopDiagnostics(); await diagnostics.flush(); stopUsageWarnings(); await usageWarnings.flush(); await notifications.flush(); await drafts.flush() }
+  drainNativeSettings = async () => {
+    let retrySurfaces=false
+    try {await closeDesktopSurfaceWindows()} catch(error) {retrySurfaces=true;diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error')}
+    await closeDesktopProjectContentSearches(); await globalProviders.close(); await manager.close()
+    if(retrySurfaces){try{await closeDesktopSurfaceWindows()}catch(error){diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error');await diagnostics.flush();throw error}}
+    stopDiagnostics(); await diagnostics.flush(); stopUsageWarnings(); await usageWarnings.flush(); await notifications.flush(); await drafts.flush()
+  }
   const applicationInfo = () => ({ version: app.getVersion(), electron: process.versions.electron, node: process.versions.node, platform: process.platform, arch: process.arch, packaged: app.isPackaged, updateSupported: false })
   let mainWindow: BrowserWindow | undefined
   let tray: Tray | undefined
@@ -103,13 +110,14 @@ app.whenReady().then(() => {
         return result.canceled ? undefined : result.filePaths[0]
       },
     }, ipcMain)
-    window.on("closed", () => { unregister(); if (mainWindow === window) mainWindow = undefined })
+    window.on("closed", () => { void unregister().catch(error=>diagnostics.recordRequestFailure('desktop',undefined,error,'runtime/error')); if (mainWindow === window) mainWindow = undefined })
   }
   const showWindow = (): void => {
     if (!mainWindow || mainWindow.isDestroyed()) { openWindow(); return }
     if (mainWindow.isMinimized()) mainWindow.restore()
     mainWindow.show(); mainWindow.focus()
   }
+  restoreWindowAfterFailedQuit=showWindow
   openWindow()
   if (process.platform === "win32") {
     try { tray = createDesktopTray({ show: showWindow, quit: () => app.quit(), locale: () => localPreferences.get().locale }) }
@@ -129,6 +137,5 @@ app.on("before-quit", (event) => {
   if (quitting || runtimes === undefined) return
   event.preventDefault()
   quitting = true
-  void (drainNativeSettings ? drainNativeSettings() : runtimes.close()).finally(() => app.quit())
+  void (drainNativeSettings ? drainNativeSettings() : runtimes.close()).then(() => app.quit(),error=>{quitting=false;console.error('Desktop cleanup incomplete; retry Quit to settle the original owners.',error);try{restoreWindowAfterFailedQuit?.()}catch(restoreError){console.error('Desktop window restoration failed.',restoreError)}})
 })
-

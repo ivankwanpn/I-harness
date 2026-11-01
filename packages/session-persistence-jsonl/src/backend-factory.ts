@@ -1,3 +1,7 @@
+import { associateArchiveReadResources } from '@i-harness/session-persistence/internal/archive-read'
+import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
+import { readSessionArchive } from './backend/archive-reader.ts'
+import { associateArtifactPaths } from '@i-harness/session-persistence/internal/artifact-path'
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
@@ -9,7 +13,9 @@ import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact
 import { upgradeFactJournal, stageOwnedUpgrade } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
+import { ordinaryStageIO } from './backend/bootstrap-stage.ts'
 import { createBootstrapCaptureIO } from './backend/bootstrap-capture-io.ts'
+import { resolveSelectedBirth, snapshotSelectedMetadataUpdate } from './backend/selected-birth.ts'
 import { createSelectedFactJournalBackend } from './backend/selected-fact-journal.ts'
 import { createJsonlProcessReadCapability } from './backend/process-read.ts'
 import { assembleSessionCoordinatorWithProcessStorage, type TaskTransitionBackendSession, type TaskTransitionConfiguration } from '@i-harness/session-persistence/internal/process-read-assembly'
@@ -126,6 +132,7 @@ const BLANK_PROBE_MAX_BYTES = 1024
 export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const rootPath = resolve(root)
   const captureIO = createBootstrapCaptureIO()
+  const archiveReads = createArchiveReadOwner()
   const artifactPath = (id: string, suffix: string): string => {
     const portableId = id.replace(/\\/g, "/")
     const candidate = resolve(rootPath, `${portableId}${suffix}`)
@@ -141,20 +148,20 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     return candidate
   }
   const filePath = (id: string) => artifactPath(id, ".jsonl")
-  async function assertPublicBootstrap(sessionId: string, creating = false) {
+  async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}) {
     const path = filePath(sessionId)
     const namespace=await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
     if (!namespace.length) {
       if(creating)return
       // A retained semantic header does not become an ordinary replacement
       // merely because its sole birth stage is missing.
-      const header=await readHeader(path)
+      const header=observed?.header ?? await archiveReads.run(path,async(handle,extent)=>(await readSessionArchive(handle,extent,true)).header,true)
       if(!header.semanticSeed)return
     }
     const prefix=basename(path)+'.bootstrap-'
     if(namespace.some(name=>!(/^[a-f0-9]{64}\.(stage|publish|promote)$/.test(name.slice(prefix.length)))))throw Object.assign(new Error('Unknown bootstrap artifact requires its original owner'),{code:'SESSION_BOOTSTRAP_INCOMPLETE'})
     if (creating) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
-    const raw = await readFile(path)
+    const raw = observed?.birth ?? await archiveReads.run(path,async (handle,extent)=>(await readSessionArchive(handle,extent,true)).birth,true)
     const end = raw.indexOf(10), meta = parseHeader(raw.subarray(0, end).toString('utf8'))
     if (!meta.semanticSeed) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
     // Only the immutable bootstrap prefix is needed. Do not parse a live suffix
@@ -288,14 +295,11 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
 
     async read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       await assertNotDeleted("session", sessionId)
-      await assertPublicBootstrap(sessionId)
-      const text = await readFile(filePath(sessionId), "utf-8")
-      const lines = text.split("\n")
-      if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
-      const header = parseHeader(lines[0]!)
-      const events = [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events : parseEventLines(lines.slice(1))
-      if (![6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
-      return { version: header.formatVersion, events, meta: header }
+      return archiveReads.run(filePath(sessionId),async(handle,extent)=>{
+        const candidate=await readSessionArchive(handle,extent,false,prefix => assertPublicBootstrap(sessionId,false,prefix))
+        await assertNotDeleted("session",sessionId)
+        return {version:candidate.header.formatVersion,events:candidate.events,meta:candidate.header}
+      },false,sessionId,true)
     },
 
     async list(): Promise<string[]> {
@@ -413,17 +417,15 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       // (a torn tail is preserved as-is, repair's business). Atomic temp +
       // rename (putDocument pattern) — a concurrent reader sees either the
       // old or the new file, never a truncated one.
-      const text = await readFile(path, "utf-8")
-      const lines = text.split("\n")
-      if (lines.length === 0 || lines[0]!.trim() === "") {
-        throw new Error(`empty session file: ${sessionId}`)
-      }
-      const previous = parseHeader(lines[0]!)
-      const snapshot = snapshotMetadataUpdate(previous, patch)
-      const out = lines.slice()
-      out[0] = snapshot.line
+      const raw = await readFile(path), end=raw.indexOf(10)
+      if(end<0||end+1>65536||!raw.subarray(0,end).toString('utf8').trim())throw new Error(`empty session file: ${sessionId}`)
+      const previous=parseHeader(raw.subarray(0,end).toString('utf8'))
+      const birth=previous.semanticSeed?.version===3 ? await resolveSelectedBirth(path,sessionId,assertNotDeleted,{stage:ordinaryStageIO(path),readJournal:()=>readFile(path)}) : undefined
+      // Bind the rewrite to the same observed bytes, including the real resolver reread.
+      if(birth&&!(await readFile(path)).equals(raw))throw TypeError('Selected journal changed during metadata update')
+      const snapshot=birth ? snapshotSelectedMetadataUpdate(birth,patch) : snapshotMetadataUpdate(previous,patch)
       const tmp = `${path}.${randomUUID()}.tmp`
-      await writeFile(tmp, out.join("\n"), { encoding: "utf-8" })
+      await writeFile(tmp, Buffer.concat([Buffer.from(snapshot.line+'\n'),raw.subarray(end+1)]))
       await rename(tmp, path)
       return snapshot.meta
     },
@@ -505,6 +507,20 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       if (!current || !('value' in current) || current.value !== original.value) throw new Error('PROCESS_READ_UNAVAILABLE')
     }
   }
+  associateArchiveReadResources(backend,archiveReads.association)
+  associateArtifactPaths(backend, Object.freeze({
+    root() { assertOriginal(); return rootPath },
+    async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
+    session(id: string) { assertOriginal(); return filePath(id) },
+    document(key: string) { assertOriginal(); return docPath(key) },
+    taskForParent(id: string) { assertOriginal(); return docPath('task-' + id) },
+    async prepareDocumentParents(key: string) {
+      assertOriginal(); await assertNotDeleted('document', key); assertOriginal()
+      await mkdir(rootPath, { recursive: true }); assertOriginal()
+      await mkdir(dirname(docPath(key)), { recursive: true }); assertOriginal()
+    },
+    assertOriginal,
+  }))
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
     async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
   function openOwnedTask(scope: HeldTaskDocumentScope, initialize: boolean): TaskDocumentBackendSession {

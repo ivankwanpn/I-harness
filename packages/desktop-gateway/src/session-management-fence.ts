@@ -8,6 +8,8 @@ export function createSessionManagementFence() {
   const blocked = new Set<string>()
   const retired = new Set<string>()
   const work = new Map<string, Set<Promise<unknown>>>()
+  const admissionRevisions = new Map<string, object>()
+  const advanceAdmission = (id: string) => { admissionRevisions.set(id, {}) }
   const admitted = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>()
   type Observer = { id: string; active: boolean; charged: boolean; preflight?(): void; prepare?(operation: RetainedCleanupOperation): void; retired(operation: RetainedCleanupOperation): void | Promise<void> }
   const observers = new Set<Observer>()
@@ -35,6 +37,11 @@ export function createSessionManagementFence() {
   return {
     associateRetainedDomain(owner: object) { if (associated && domain !== owner) throw new TypeError('Foreign fence lifecycle domain'); domain = owner; associated = true },
     assertOpen,
+    captureAdmission(id: string) {
+      assertOpen(id); const revision = admissionRevisions.get(id)
+      const captured = Object.freeze({ assertCurrent() { if (this !== captured) throw new TypeError('Original management admission receiver required'); assertOpen(id); if (admissionRevisions.get(id) !== revision) throw new Error('Session management admission changed') } })
+      return captured
+    },
     observe(id: string, onRetired: (operation: RetainedCleanupOperation) => void | Promise<void>, preflight?: () => void, prepare?: (operation: RetainedCleanupOperation) => void) {
       if (typeof id !== 'string' || !id || id.length > 256 || typeof onRetired !== 'function') throw new TypeError('Invalid management observation')
       assertOpen(id)
@@ -50,6 +57,7 @@ export function createSessionManagementFence() {
       preflightObservers(id); assertOutsideRetirementSink(domain)
       const operation = supplied ?? createRetainedCleanupOperation()
       assertRetainedCleanupOperation(operation)
+      advanceAdmission(id)
       retired.add(id)
       const done = join([...notify(id, operation), joinRetainedRetirementSinks(operation)]).then(errors => { if (errors.length) throw new AggregateError(errors, 'Management observation cleanup failed') })
       const result = supplied ? done : done.finally(() => finishRetainedCleanupOperation(operation))
@@ -59,7 +67,7 @@ export function createSessionManagementFence() {
     async run<T>(id: string, operation: () => Promise<T>): Promise<T> {
       // Already registered producers may finish their nested service calls
       // while management drains them. No new outer admission gets this grant.
-      if (!admitted.getStore()?.get(id)?.active || retired.has(id)) assertOpen(id)
+      if (!admitted.getStore()?.get(id)?.active || retired.has(id)) { assertOpen(id); advanceAdmission(id) }
       // Registration precedes the operation's first await.
       const token = { active: true }
       const context = new Map(admitted.getStore()); context.set(id, token)
@@ -73,6 +81,7 @@ export function createSessionManagementFence() {
       preflightObservers(id); assertOutsideRetirementSink(domain); assertOpen(id)
       const cleanup = supplied ?? createRetainedCleanupOperation()
       assertRetainedCleanupOperation(cleanup)
+      advanceAdmission(id)
       blocked.add(id)
       const cleanupResult = join([...notify(id, cleanup), joinRetainedRetirementSinks(cleanup)])
       let primary: { error: unknown } | undefined

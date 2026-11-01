@@ -12,6 +12,9 @@ import { createContextOutputService } from '../src/index.ts'
 import type { SeedDependencyHostAccess } from '../src/index.ts'
 import { createTransferClosure } from '../src/artifact/transfer-closure.ts'
 import { settleSeedDependencyTransferIO } from '../src/service.ts'
+import * as originalService from '../src/service.ts'
+import { EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from '@i-harness/core-session'
+import * as locking from '@i-harness/fs-lock'
 import { structureEvidence } from './structure-evidence.ts'
 
 const controls = vi.hoisted(() => ({ reads: [] as string[], cutPath: '', cut: '', afterRead: undefined as undefined | ((path: string) => void), afterReaddir: undefined as undefined | ((path: string) => void), mutations: 0, consume:false,directClose:false,requireRead:false,openFault:'',paths:new Map<object,string>(),closeMode:'r+',closeCounts:new Map<object,number>(), primary:undefined as unknown, failClose: false, falsey: false, failed: [] as import('node:fs/promises').FileHandle[], pending: undefined as Promise<void>|undefined, entered: undefined as (()=>void)|undefined }))
@@ -112,6 +115,99 @@ it('passively confirms surviving target retention after source release and a fai
     const recovered = f.service.registerSeedDependencyTransfer(f.access)
     expect(await f.service.reconcileSeedDependencies(recovered, f.request)).toEqual(confirmed)
   } finally { await f.service.close() }
+})
+
+it('seals genuine passive managed qualification independently of the expired target callback', async () => {
+  const f = await fixture()
+  try {
+    const scope = f.service.registerSeedDependencyTransfer(f.access), outcome = await f.service.confirmSeedDependencies(scope, f.request, () => true)
+    if (outcome.kind !== 'confirmed') throw Error('fixture transfer unavailable')
+    f.revokeSource(); let active = true
+    const acquire = (originalService as unknown as Record<string, any>).acquireColdManagedQualification
+    expect(typeof acquire).toBe('function')
+    const qualification = acquire(f.service, { ...f.access, sourceAvailable: () => false, assertSourceCurrent() { throw Error('historical source must stay cold') }, assertTargetCurrent() { if (!active) throw Error('expired target callback'); f.access.assertTargetCurrent() } }, f.request, outcome.closureDigest)
+    const calls = f.sourceCalls(), mutations = controls.mutations
+    await qualification.qualify(); qualification.sealWhileActive(); active = false
+    await qualification.settle(); qualification.assertSettledCurrent()
+    expect(f.sourceCalls()).toBe(calls); expect(controls.mutations).toBe(mutations)
+    await qualification.close(); expect(() => qualification.assertSettledCurrent()).toThrow()
+  } finally { await f.service.close() }
+})
+
+it('cold managed seals survive source-only deletion and terminally refuse target clear and service close', async () => {
+  const f = await fixture()
+  try {
+    const outcome = await f.service.confirmSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), f.request, () => true)
+    if (outcome.kind !== 'confirmed') throw Error('fixture unavailable')
+    const selected = originalService.acquireColdManagedQualification(f.service, f.access, f.request, outcome.closureDigest)
+    await selected.qualify(); selected.sealWhileActive(); await selected.settle(); selected.assertSettledCurrent()
+    await f.deleted(['parent']); f.revokeSource(); selected.assertSettledCurrent()
+    await f.service.clear('child'); expect(() => selected.assertSettledCurrent()).toThrow()
+    await selected.close()
+    const empty = originalService.acquireColdManagedQualification(f.service, f.access, { ...f.request, artifacts: [] }, EMPTY_SEMANTIC_DEPENDENCY_DIGEST)
+    await empty.qualify(); empty.sealWhileActive(); await empty.settle(); empty.assertSettledCurrent()
+    await f.service.close(); expect(() => empty.assertSettledCurrent()).toThrow()
+  } finally { await f.service.close() }
+})
+
+it('cold managed empty closure validates target policy without accepting an ordinary empty transfer', async () => {
+  const f = await fixture()
+  try {
+    const request = { ...f.request, artifacts: [] }, reads = controls.reads.length, calls = f.sourceCalls(), writes = controls.mutations
+    expect(await f.service.reconcileSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), request)).toEqual({ kind: 'blocked', reason: 'unavailable' })
+    const selected = originalService.acquireColdManagedQualification(f.service, { ...f.access, sourceAvailable: () => false, assertSourceCurrent() { throw Error('cold source forbidden') } }, request, EMPTY_SEMANTIC_DEPENDENCY_DIGEST)
+    await selected.qualify(); selected.sealWhileActive(); await selected.settle(); selected.assertSettledCurrent()
+    expect(controls.reads.length).toBe(reads); expect(controls.mutations).toBe(writes); expect(f.sourceCalls()).toBe(calls)
+    selected.revoke(); expect(() => selected.assertSettledCurrent()).toThrow(); await selected.close()
+    const denied = originalService.acquireColdManagedQualification(f.service, f.access, request, EMPTY_SEMANTIC_DEPENDENCY_DIGEST)
+    f.revokeTarget(); await expect(denied.qualify()).rejects.toThrow(); await denied.close(); expect(() => denied.sealWhileActive()).toThrow()
+  } finally { await f.service.close() }
+})
+
+it('cold managed settled checks never execute a mutated caller binding getter after callback expiry', async () => {
+  const f = await fixture()
+  try {
+    const outcome = await f.service.confirmSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), f.request, () => true)
+    if (outcome.kind !== 'confirmed') throw Error('fixture unavailable')
+    let active = true, getters = 0
+    const access = { ...f.access, assertTargetCurrent() { if (!active) throw Error('expired callback'); f.access.assertTargetCurrent() } }
+    const selected = originalService.acquireColdManagedQualification(f.service, access, f.request, outcome.closureDigest)
+    await selected.qualify(); selected.sealWhileActive(); active = false
+    Object.defineProperty(access, 'binding', { get() { getters++; throw undefined } })
+    const settled = await selected.settle().then(() => 'settled', error => ({ error }))
+    expect(settled).toBe('settled'); selected.assertSettledCurrent(); expect(getters).toBe(0)
+    await f.service.clear('child'); expect(() => selected.assertSettledCurrent()).toThrow(); await selected.close()
+    const next = originalService.acquireColdManagedQualification(f.service, f.access, f.request, outcome.closureDigest)
+    await next.qualify(); next.sealWhileActive(); await next.settle(); await f.service.close()
+    expect(() => next.assertSettledCurrent()).toThrow(); expect(getters).toBe(0)
+  } finally { await f.service.close() }
+})
+
+it('cold managed cleanup never upgrades a blocked closure into a verified seal', async () => {
+  const f = await fixture()
+  try {
+    const outcome = await f.service.confirmSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), f.request, () => true)
+    if (outcome.kind !== 'confirmed') throw Error('fixture unavailable')
+    await rm(f.companion(f.members[0]!))
+    const selected = originalService.acquireColdManagedQualification(f.service, f.access, f.request, outcome.closureDigest)
+    await expect(selected.qualify()).rejects.toThrow(); expect(() => selected.sealWhileActive()).toThrow()
+    await selected.close(); expect(() => selected.assertSettledCurrent()).toThrow(); expect(() => selected.sealWhileActive()).toThrow()
+  } finally { await f.service.close() }
+})
+
+it('cold managed qualification retains its exact failed workspace turn without rediscovery or reacquisition', async () => {
+  const f = await fixture(); let spy: { mockRestore(): void } | undefined, blocked = true
+  try {
+    const outcome = await f.service.confirmSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), f.request, () => true)
+    if (outcome.kind !== 'confirmed') throw Error('fixture unavailable')
+    const acquire = locking.acquireSessionLock; let acquisitions = 0, releases = 0
+    spy = vi.spyOn(locking, 'acquireSessionLock').mockImplementation(async options => { acquisitions++; const raw = await acquire(options); return { get held() { return raw.held }, async release() { releases++; if (blocked) throw undefined; await raw.release() } } })
+    const selected = originalService.acquireColdManagedQualification(f.service, f.access, f.request, outcome.closureDigest)
+    await expect(selected.qualify()).rejects.toBeUndefined(); expect(() => selected.sealWhileActive()).toThrow()
+    await expect(selected.close()).rejects.toBeUndefined(); const reads = controls.reads.length
+    blocked = false; await selected.close(); expect(acquisitions).toBe(1); expect(releases).toBe(3); expect(controls.reads.length).toBe(reads)
+    expect(() => selected.assertSettledCurrent()).toThrow()
+  } finally { blocked = false; spy?.mockRestore(); await f.service.close() }
 })
 
 it.each(['pin', 'access', 'companion'] as const)('does not recreate a missing target %s during passive original confirmation', async missing => {

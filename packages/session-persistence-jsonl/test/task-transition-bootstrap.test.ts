@@ -1,3 +1,4 @@
+import { taskDocumentOperationsFor } from '@i-harness/session-persistence/internal/task-document-operations'
 import { expect, it } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile, copyFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -18,7 +19,7 @@ it('initializes the actual fresh bootstrap target task file before readiness', a
   const request = { invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) }, target: { kind: 'new' as const }, metadata: {}, lineage: { origin: 'fork' as const, parentSession: 'parent' }, seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' as const }, records: [] } }
   const guards = { assertCurrent() {}, dependencies: { async confirm() { throw Error('unused') }, async reconcile() { throw Error('unused') } } }
   try {
-    const first = await coordinator.bootstrapSemanticTarget(request, guards); expect(first.kind).toBe('ready')
+    const first = await coordinator.bootstrapSemanticTarget(request, guards); expect(first.kind).toBe('ready');if(first.kind==='ready'){const ops=taskDocumentOperationsFor(coordinator)!;ops.assertTaskV3Parent(ops.parent(first.document),'target')}
     const repeated = await coordinator.bootstrapSemanticTarget(request, guards); expect(repeated.kind).toBe('already-ready')
     if (first.kind === 'ready' && repeated.kind === 'already-ready') expect(repeated.document).toBe(first.document)
     expect(JSON.parse(await readFile(join(root, 'task-target.doc.jsonl'), 'utf8'))).toEqual({ formatVersion: 2, tasks: [], notifications: [] })
@@ -165,7 +166,7 @@ it('uses the actual selected source and original binding admission for a capture
         return { invocation: request.invocation, target: { kind: 'new' as const }, metadata: core.metadata, lineage: { origin: 'fork' as const, parentSession: 'source' }, seed: p.compileSemanticSeed(exported) }
       })
     })
-    expect(result.kind).toBe('ready'); expect(captures).toBe(1); expect(JSON.parse(await readFile(join(root, 'task-target.doc.jsonl'), 'utf8')).formatVersion).toBe(2)
+    expect(result.kind).toBe('ready');if(result.kind==='ready'){const ops=taskDocumentOperationsFor(coordinator)!;ops.assertTaskV3Parent(ops.parent(result.document),'target')} expect(captures).toBe(1); expect(JSON.parse(await readFile(join(root, 'task-target.doc.jsonl'), 'utf8')).formatVersion).toBe(2)
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 it('refuses a completed physical14 bootstrap with missing task storage',async()=>{

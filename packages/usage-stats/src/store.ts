@@ -2,10 +2,14 @@ import { createHash, randomUUID } from "node:crypto"
 import { link, mkdir, open, readdir, readFile, unlink } from "node:fs/promises"
 import { join } from "node:path"
 import { aggregateUsage, validateUsagePrice, validateUsageQuery, validateUsageRecord } from "./aggregate.js"
+import { encodeUsageObservation, decodeUsageObservation } from "./observation-codec.js"
+import type { UsageObservationV1 } from "./observation-types.js"
 import type { UsagePrice, UsageQuery, UsageRecord, UsageSnapshot } from "./types.js"
 
 export interface UsageStore {
   record(record: UsageRecord): Promise<void>
+  recordObservation(observation: UsageObservationV1): Promise<void>
+  loadObservations(): Promise<{ observations: UsageObservationV1[]; warnings: string[] }>
   query(query: UsageQuery): Promise<UsageSnapshot>
   setPricing(price: UsagePrice): Promise<void>
 }
@@ -35,9 +39,9 @@ async function publish(directory: string, name: string, content: string): Promis
   }
 }
 
-async function load<T>(directory: string, validate: (value: unknown) => T, filename: (value: T) => string, warnings: string[]): Promise<T[]> {
+async function load<T>(directory: string, validate: (value: unknown) => T, filename: (value: T) => string, warnings: string[], missingWarning?: string): Promise<T[]> {
   let files: string[]
-  try { files = await readdir(directory) } catch (error) { if (code(error) === "ENOENT") return []; throw error }
+  try { files = await readdir(directory) } catch (error) { if (code(error) === "ENOENT") { if (missingWarning) warnings.push(missingWarning); return [] }; throw error }
   const result: T[] = []
   // Bounded IO concurrency avoids exhausting descriptors on large histories.
   for (let index = 0; index < files.length; index += 32) {
@@ -58,12 +62,24 @@ async function load<T>(directory: string, validate: (value: unknown) => T, filen
 
 export function createUsageStore(directory: string): UsageStore {
   const recordsDirectory = join(directory, "records"), pricesDirectory = join(directory, "prices")
+  const observationsDirectory = join(directory, "observations-v1")
+  const observationName = (observation: UsageObservationV1) => `${hash(observation.observationId)}.json`
   const recordName = (record: UsageRecord) => `${hash(record.id)}.json`
   const priceName = (price: UsagePrice) => `${hash(JSON.stringify(price))}.json`
   return {
     async record(value) {
       const record = validateUsageRecord(value)
       await publish(recordsDirectory, recordName(record), JSON.stringify(record))
+    },
+    async recordObservation(value) {
+      const bytes = encodeUsageObservation(value)
+      const captured = decodeUsageObservation(bytes)
+      await publish(observationsDirectory, observationName(captured), bytes)
+    },
+    async loadObservations() {
+      const warnings: string[] = []
+      const observations = await load(observationsDirectory, value => decodeUsageObservation(JSON.stringify(value)), observationName, warnings, "Observation storage is absent; observation coverage is unavailable.")
+      return { observations, warnings: [...new Set(warnings)] }
     },
     async setPricing(value) {
       const price = validateUsagePrice(value)

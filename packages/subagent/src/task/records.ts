@@ -6,8 +6,21 @@ export class TaskRecords {
   readonly #records = new Map<string, TaskRecord>()
   readonly #byIdentity = new Map<string, TaskRecord>()
   readonly #byChild = new Map<string, TaskRecord>()
+  readonly #originalDelivery = new WeakMap<TaskRecord, TaskRecord['delivery']>()
+  protectSubmission(task: TaskRecord): void {
+    if (this.#originalDelivery.has(task)) return
+    this.#originalDelivery.set(task, task.delivery)
+    const freeze = (value: unknown): void => {
+      if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value) }
+    }
+    if (task.childBirth) freeze(task.childBirth)
+    for (const key of ['id','parentSessionId','toolCallId','callEventSeq','agentPath','description','prompt','agent','timeCreated','childBirth'] as const) {
+      Object.defineProperty(task, key, { value: task[key], enumerable: Object.hasOwn(task, key), writable: false, configurable: false })
+    }
+  }
   #taskCounter = 0
   #anonCounter = 0
+  #checkedCounter = false
 
   get(taskId: string): TaskRecord | undefined { return this.#records.get(taskId) }
   has(taskId: string): boolean { return this.#records.has(taskId) }
@@ -28,9 +41,10 @@ export class TaskRecords {
     const key = this.#identityKey(input.identity)
     const existing = this.#byIdentity.get(key)
     if (existing) {
-      if (existing.prompt === input.prompt && existing.agent === input.agent && existing.agentPath === input.agentPath && existing.delivery === input.delivery) return { record: existing, inserted: false }
+      if (existing.prompt === input.prompt && existing.agent === input.agent && existing.agentPath === input.agentPath && (this.#originalDelivery.get(existing) ?? existing.delivery) === input.delivery) return { record: existing, inserted: false }
       throw new TaskIdentityConflictError(input.identity)
     }
+    if (this.#checkedCounter && this.#taskCounter >= Number.MAX_SAFE_INTEGER) throw new Error('Task counter exhausted')
     this.#taskCounter += 1
     const record: TaskRecord = {
       id: `task-${this.#taskCounter}`,
@@ -72,25 +86,25 @@ export class TaskRecords {
     return n
   }
 
-  seedRestoredCounter(tasks: readonly TaskRecord[]): void {
+  seedRestoredCounter(tasks: readonly TaskRecord[], strict = false): void {
+    if (strict) this.#checkedCounter = true
     for (const task of tasks) {
       const match = /^task-(\d+)$/.exec(task.id)
-      if (match) this.#taskCounter = Math.max(this.#taskCounter, Number(match[1]))
+      if (match) { const value = Number(match[1]); if (strict && (!Number.isSafeInteger(value) || value >= Number.MAX_SAFE_INTEGER)) throw new Error('Unsafe restored task counter'); this.#taskCounter = Math.max(this.#taskCounter, value) }
     }
   }
   checkRestoredId(taskId: string): void {
     if (this.#records.has(taskId)) throw new Error(`duplicate task id on restore: ${taskId}`)
   }
   insertRestored(task: TaskRecord): void { this.#records.set(task.id, task) }
-  indexRestored(task: TaskRecord, restoredAnon: number): void {
-    this.#byIdentity.set(
-      task.callEventSeq !== undefined
+  indexRestored(task: TaskRecord, restoredAnon: number, strict = false): void {
+    const key = task.callEventSeq !== undefined
         ? `${task.parentSessionId}:${task.callEventSeq}`
         : task.toolCallId !== undefined
           ? `${task.parentSessionId}:call:${task.toolCallId}`
-          : `restored-anon:${restoredAnon}`,
-      task,
-    )
+          : `restored-anon:${restoredAnon}`
+    if (strict && (this.#byIdentity.has(key) || !!task.childSessionId && this.#byChild.has(task.childSessionId))) throw new Error('Duplicate restored task index')
+    this.#byIdentity.set(key, task)
     if (task.childSessionId) this.#byChild.set(task.childSessionId, task)
   }
 }

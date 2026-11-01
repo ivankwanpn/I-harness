@@ -434,4 +434,3 @@ it('a failed rewind close has no effects and explicit reconciliation retries its
   } catch (error) { await f.evidence('rewind-original-close-explicit-retry-failure', error); throw error }
   finally { allow = true; await boundary('unknown rewind cleanup', f.close()) }
 }, 20000)
-

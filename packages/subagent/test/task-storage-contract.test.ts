@@ -7,7 +7,7 @@ it('validates literal v1 and v2 task documents without migration or mutation', (
     expect(() => taskDocumentStorageContract.validate(value)).not.toThrow()
     expect(value.formatVersion).toBe(formatVersion)
   }
-  for (const value of [null, {}, { formatVersion: 3, tasks: [], notifications: [] }, { formatVersion: 2, tasks: {}, notifications: [] }])
+  for (const value of [null, {}, { formatVersion: 3, tasks: {}, notifications: [] }, { formatVersion: 2, tasks: {}, notifications: [] }])
     expect(() => taskDocumentStorageContract.validate(value)).toThrow()
 })
 

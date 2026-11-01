@@ -12,7 +12,8 @@
  */
 
 import { grantWrite, revokeWrite } from './acl.ts'
-import { allocPtrSlot, decodePtr, isNullPtr, throwLastError, win32Sync } from './ffi.ts'
+import { win32Sync } from './ffi.ts'
+import { NativeInitOwner, NativeInitializationFailure, NativeCleanupFailure } from './init-owner.ts'
 import type { NativePtr, Win32Bindings } from './ffi.ts'
 
 /**
@@ -29,14 +30,16 @@ export class AclWriteGrant {
   /** The write SID in SDDL string form. */
   readonly writeSid: string
   private readonly api: Win32Bindings
-  private readonly sidPtr: NativePtr
+  private sidPtr: NativePtr | undefined
+  private readonly owner: NativeInitOwner
   private readonly revocablePaths: string[] = []
   private readonly standingPaths: string[] = []
   private freed = false
+  private closing = false
 
-  private constructor(api: Win32Bindings, sidPtr: NativePtr, writeSid: string) {
+  private constructor(api: Win32Bindings, writeSid: string) {
     this.api = api
-    this.sidPtr = sidPtr
+    this.owner = new NativeInitOwner(api)
     this.writeSid = writeSid
   }
 
@@ -49,13 +52,15 @@ export class AclWriteGrant {
    */
   static create(writeSid: string, api?: Win32Bindings): AclWriteGrant {
     const bindings = api ?? win32Sync()
-    const sidSlot = allocPtrSlot()
-    if (bindings.convertStringSidToSidW(writeSid, sidSlot) === 0) {
-      throwLastError(bindings, 'ConvertStringSidToSidW', writeSid)
+    const grant = new AclWriteGrant(bindings, writeSid)
+    try {
+      const slot = grant.owner.slot()
+      grant.sidPtr = grant.owner.output(slot, 'local', 'ConvertStringSidToSidW', () => bindings.convertStringSidToSidW(writeSid, slot))
+      return grant
+    } catch (error) {
+      try { grant.dispose() } catch (cleanup) { throw new NativeInitializationFailure(error, cleanup, grant) }
+      throw error
     }
-    const sidPtr = decodePtr(sidSlot)
-    if (sidPtr === null) throwLastError(bindings, 'ConvertStringSidToSidW', `null SID for ${writeSid}`)
-    return new AclWriteGrant(bindings, sidPtr, writeSid)
   }
 
   /**
@@ -73,9 +78,9 @@ export class AclWriteGrant {
    *   dispose — the temp-directory lifecycle).
    */
   add(path: string, standing = false): void {
-    if (this.freed) throw new Error('AclWriteGrant has been disposed')
+    if (this.freed || this.closing || this.sidPtr === undefined) throw new Error('AclWriteGrant has been disposed')
     ;(standing ? this.standingPaths : this.revocablePaths).push(path)
-    grantWrite(this.api, path, this.sidPtr)
+    grantWrite(this.api, path, this.sidPtr, this.owner)
   }
 
   /** Every directory currently carrying the grant, in grant order. */
@@ -86,22 +91,23 @@ export class AclWriteGrant {
   /** Revoke every revocable grant (standing ACEs stay) and free the SID; reports every cleanup failure. */
   dispose(): void {
     if (this.freed) return
+    this.closing = true
+    this.owner.cleanupScopes()
     const failures: unknown[] = []
     const stillGranted: string[] = []
     for (const path of this.revocablePaths) {
       try {
-        revokeWrite(this.api, path, this.sidPtr)
+        revokeWrite(this.api, path, this.sidPtr!, this.owner)
       } catch (error) {
         failures.push(error)
-        stillGranted.push(path)
+        if (!(error instanceof NativeCleanupFailure && error.operationCompleted)) stillGranted.push(path)
       }
     }
     this.revocablePaths.length = 0
     this.revocablePaths.push(...stillGranted)
-    if (stillGranted.length === 0) {
+    if (stillGranted.length === 0 && failures.length === 0) {
       try {
-        const freed = this.api.localFree(this.sidPtr)
-        if (!isNullPtr(freed)) throwLastError(this.api, 'LocalFree', 'write SID')
+        this.owner.cleanup()
         this.freed = true
       } catch (error) {
         failures.push(error)

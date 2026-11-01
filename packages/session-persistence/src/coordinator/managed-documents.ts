@@ -3,18 +3,20 @@ import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
-import { createManagedDocument, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
+import { invalidateManagedMetadataWitness, createManagedDocument, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
 import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
 import { captureBootstrapRoute } from './bootstrap-route.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import type { createColdExecutionWrites } from './cold-execution-writes.ts'
+import { captureColdObservationEntry, type ColdSelectedObservation } from './cold-selected-target.ts'
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
   loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
-  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>) {
+  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>, executionChanges?: ReturnType<typeof createColdExecutionWrites>) {
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
   }
@@ -24,19 +26,35 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id))
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges)
     entry.document=document
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
     document.revokeNewWork=()=>{assertTaskOutside(id);void revokeTaskOperations(id);markManagedEntryRevoked(entry);revoke()}
     const close=document.close
+    let closeFlight:Promise<void>|undefined,closeComplete=false
     document.close=async()=>{
+      // Refuse self-use before tokens, revocation or cleanup; all attached closes
+      // share this wrapper rather than recursively entering closeOne.
       assertTaskOutside(id)
-      // An unready cold entry already owns the retryable cleanup fence.
+      bootstrap.assertOutsideCapture(id)
+      if(closeComplete)return
+      if(closeFlight)return closeFlight
       const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
       let outcome:'settled'|'unknown'='unknown'
-      try {await revokeTaskOperations(id);await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)};outcome='settled'}
-      finally {token?.end(outcome)}
+      const flight=(async()=>{
+        try {
+          revokeManagedEntry(entry)
+          await entry.flight?.catch(()=>{})
+          await bootstrap.settleCapture(entry)
+          if(entry.headerUnknown)throw new FactRecoveryRequiredError()
+          await revokeTaskOperations(id);await close();await bootstrap.releaseCapture(entry)
+          if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}
+          outcome='settled';closeComplete=true
+        }finally{token?.end(outcome)}
+      })().finally(()=>{if(closeFlight===flight)closeFlight=undefined})
+      closeFlight=flight
+      return flight
     }
     if(entry.revoked)document.revokeNewWork()
     if(!entry.bootstrap&&!entry.selected)resolved.set(id,document)
@@ -49,21 +67,31 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     assertTaskOutside(id)
     bootstrap.assertOutsideCapture(id)
     const entry=documents.get(id);if(!entry)return
+    const attachedDocument=()=>entry.document
+    if(entry.document){await entry.document.close();return}
     // Retain the original cold fence across failed cleanup instead of poisoning it.
     const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
     let outcome:'settled'|'unknown'='unknown'
     try {
     revokeManagedEntry(entry);await entry.flight?.catch(()=>{})
+    // The opening flight may have attached this exact entry while close waited.
+    const attached=attachedDocument()
+    if(attached){await attached.close();outcome='settled';return}
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
-    if(entry.document)await entry.document.close()
-    else {if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
+    if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry)
+    if(documents.get(id)===entry)documents.delete(id)
     outcome='settled'
     } finally { token?.end(outcome) }
   }
-  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)})
+  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)},(id,entry)=>{if(documents.get(id)!==entry||entry.ready||!entry.document||entry.revoked)throw new FactRecoveryRequiredError();const document=entry.document;return ()=>{resolved.set(id,document)}})
   return {
     ...bootstrap,
+    captureColdObservation(observation: ColdSelectedObservation) {
+      const entry = captureColdObservationEntry(observation), association = entry.document && documentEntries.get(entry.document)
+      if (!association || association.entry !== entry || documents.get(association.id) !== entry || entry.ready || entry.revoked || !entry.selected?.cold || observation.metadata.sessionId !== association.id) throw new FactRecoveryRequiredError()
+      return observation
+    },
     captureProcessRead(document: ManagedDocument, documentKeys: readonly string[]) {
       const association = documentEntries.get(document)
       if (!association) throw new FactRecoveryRequiredError()
@@ -93,11 +121,21 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const parent = Object.freeze({ id, assertCurrent() {
         if (this !== parent) throw new TypeError('Invalid parent receiver')
         check()
+      }, assertTaskV3Parent() {
+        if (this !== parent) throw new TypeError('Invalid parent receiver')
+        check()
+        if (!transitions || entry.headerUnknown) throw new FactRecoveryRequiredError()
+        readiness.assertTask14Ready()
       } })
       return parent
     },
     has:(id:string)=>documents.has(id),
     assertMutation(id:string){assertEntry(documents.get(id))},
+    invalidateMetadataWitness(id:string){
+      assertTaskOutside(id);bootstrap.assertOutsideCapture(id)
+      const entry=documents.get(id);assertEntry(entry)
+      if(entry){entry.metadataRevision={};if(entry.document)invalidateManagedMetadataWitness(entry.document,ownership,entry.metadataRevision)}
+    },
     revoke(id:string){assertTaskOutside(id);bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
     async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable();return entry?.document?.view},

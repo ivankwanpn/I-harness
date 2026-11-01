@@ -23,6 +23,7 @@ import { build } from "esbuild"
 import { copyRuntimePackage, runtimePackageRoot } from "../packages/desktop/scripts/runtime-copy.mjs"
 import { copyNativeAssets } from "./runtime-native-assets.mjs"
 import { copyWslAssets } from "./runtime-wsl-assets.mjs"
+import { copyAclWaitAssets, verifyAclWaitSourceAssets } from "./runtime-acl-wait-assets.mjs"
 import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { join, resolve, relative, isAbsolute } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -67,6 +68,8 @@ if (!outputRelative || outputRelative.startsWith("..") || isAbsolute(outputRelat
 if (!existsSync(CLI_ENTRY)) fail(`entry not found: ${CLI_ENTRY}`)
 if (!existsSync(MANIFEST_PATH)) fail(`deploy manifest not found: ${MANIFEST_PATH} (installer/dist-package.json)`)
 if (!existsSync(STORE_DIR)) fail(`pnpm store not found: ${STORE_DIR} — run pnpm install first`)
+// The fixed Worker has no source/tsx or stale-DLL fallback. Validate before replacing output.
+verifyAclWaitSourceAssets(join(ROOT, "packages/sandbox-windows-acl"))
 
 const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"))
 if (!manifest.dependencies) fail("installer/dist-package.json has no dependencies")
@@ -167,6 +170,7 @@ async function bundleEntry(entry, outfile, label) {
 
 await bundleEntry(CLI_ENTRY, join(OUT, "ih.mjs"), "cli")
 await bundleEntry(RUNNER_ENTRY, join(OUT, "runner.mjs"), "acl runner")
+copyAclWaitAssets(join(ROOT, "packages/sandbox-windows-acl/native/runtime"), OUT)
 
 // ---------------------------------------------------------------- 2. natives
 

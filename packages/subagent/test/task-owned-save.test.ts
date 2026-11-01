@@ -1,18 +1,19 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
-const handoff = vi.hoisted(() => ({ cleanupPath: '', cleanupEntered: undefined as undefined | (() => void), cleanupGate: undefined as undefined | Promise<void>, closeEntered: undefined as undefined | (() => void), closeGate: undefined as undefined | Promise<void>, publications: 0, temps: 0, syncs: 0 }))
+const handoff = vi.hoisted(() => ({ cleanupPath: '', cleanupEntered: undefined as undefined | (() => void), cleanupGate: undefined as undefined | Promise<void>, closeEntered: undefined as undefined | (() => void), closeGate: undefined as undefined | Promise<void>, publications: 0, temps: 0, syncs: 0, releases:0, closeCalls:0, acquireFails:'', heldFails:'', releaseFails:'' }))
 vi.mock('../../fs-lock/src/index.ts', async original => {
   const locks = await original<typeof import('../../fs-lock/src/index.ts')>()
   return { ...locks, async acquireSessionLock(options: import('../../fs-lock/src/index.ts').AcquireOptions) {
+    if(options.lockPath===handoff.acquireFails)throw null
     const lock = await locks.acquireSessionLock(options)
-    return { get held() { return lock.held }, async release() { if (options.lockPath === handoff.cleanupPath && handoff.cleanupGate) { handoff.cleanupEntered?.(); await handoff.cleanupGate }; await lock.release() } }
+    return { get held() { if(options.lockPath===handoff.heldFails)throw 0; return lock.held }, async release() { if(options.lockPath===handoff.cleanupPath){handoff.releases++;if(options.lockPath===handoff.releaseFails)throw false}; if (options.lockPath === handoff.cleanupPath && handoff.cleanupGate) { handoff.cleanupEntered?.(); await handoff.cleanupGate }; await lock.release() } }
   } }
 })
 const fault = vi.hoisted(() => ({ afterRename: false, failFinalClose: false, finalOpens: 0, target: '', tempSynced: undefined as undefined | (() => Promise<void>), entered: undefined as undefined | (() => void), gate: undefined as undefined | Promise<void>, writeEntered: undefined as undefined | (() => void), writeGate: undefined as undefined | Promise<void> }))
-vi.mock('node:fs/promises', async original => { const fs = await original<typeof import('node:fs/promises')>(); return { ...fs, open: async (...args: Parameters<typeof fs.open>) => { const handle = await fs.open(...args), close = handle.close.bind(handle), sync = handle.sync.bind(handle), write = handle.write.bind(handle); if (String(args[0]) === fault.target && args[1] === 'r+') { fault.finalOpens++; handle.sync = async () => { handoff.syncs++; await sync() }; handle.close = async () => { if (handoff.closeGate) { handoff.closeEntered?.(); await handoff.closeGate }; if (fault.failFinalClose) throw null; await close() } }; if (String(args[0]).startsWith(fault.target + '.') && args[1] === 'wx') { handoff.temps++; handle.sync = async () => { await sync(); await fault.tempSynced?.() }; handle.write = (async (buffer: Uint8Array, offset: number, length: number, position: number) => { if (fault.writeGate) { fault.writeEntered?.(); await fault.writeGate }; return write(buffer, offset, length, position) }) as typeof handle.write }; return handle }, rename: async (...args: Parameters<typeof fs.rename>) => { await fs.rename(...args); if (String(args[1]) === fault.target) handoff.publications++; if (String(args[1]) === fault.target && fault.gate) { fault.entered?.(); await fault.gate }; if (fault.afterRename && String(args[1]) === fault.target) throw new Error('lost response') } } })
-import { createJsonlTaskDocumentCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+vi.mock('node:fs/promises', async original => { const fs = await original<typeof import('node:fs/promises')>(); return { ...fs, open: async (...args: Parameters<typeof fs.open>) => { const handle = await fs.open(...args), close = handle.close.bind(handle), sync = handle.sync.bind(handle), write = handle.write.bind(handle); if (String(args[0]) === fault.target && args[1] === 'r+') { fault.finalOpens++; handle.sync = async () => { handoff.syncs++; await sync() }; handle.close = async () => { handoff.closeCalls++; if (handoff.closeGate) { handoff.closeEntered?.(); await handoff.closeGate }; if (fault.failFinalClose) throw null; await close() } }; if (String(args[0]).startsWith(fault.target + '.') && args[1] === 'wx') { handoff.temps++; handle.sync = async () => { await sync(); await fault.tempSynced?.() }; handle.write = (async (buffer: Uint8Array, offset: number, length: number, position: number) => { if (fault.writeGate) { fault.writeEntered?.(); await fault.writeGate }; return write(buffer, offset, length, position) }) as typeof handle.write }; return handle }, rename: async (...args: Parameters<typeof fs.rename>) => { await fs.rename(...args); if (String(args[1]) === fault.target) handoff.publications++; if (String(args[1]) === fault.target && fault.gate) { fault.entered?.(); await fault.gate }; if (fault.afterRename && String(args[1]) === fault.target) throw new Error('lost response') } } })
+import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentOperationsFor } from '@i-harness/session-persistence/internal/task-document-operations'
 import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
 import { TaskPersistence } from '../src/task/persistence.ts'
@@ -28,9 +29,18 @@ import { createMockClient } from '@i-harness/llm-mock'
 import { registerExec } from '@i-harness/exec'
 import { registerSubagent } from '../src/index.ts'
 import { lockPathFor } from '../../fs-lock/src/index.ts'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { artifactPathsFor } from '../../session-persistence/src/coordinator/artifact-path-association.ts'
+
+// Select the actual temporary lease for fault injection, retaining the original native hooks.
+function taskLeasePath(root: string): string {
+  const capture = artifactPathsFor(createJsonlBackend(root))!.document('task-parent')
+  if (capture.kind !== 'ready') throw new Error('Task fixture document directory is unavailable')
+  return lockPathFor(root, 'artifact-document-lease:' + capture.key)
+}
 
 it.each(['initial', 'retry'] as const)('rechecks the original %s save after awaiting finish', async mode => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-finish-continuation-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-finish-continuation-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), probed = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
@@ -38,12 +48,12 @@ it.each(['initial', 'retry'] as const)('rechecks the original %s save after awai
     const persistence = new TaskPersistence(coordinator, 'parent', true, () => ({ formatVersion: 2, tasks: [], notifications: [] }), captureOwnedTaskContext(coordinator, document, document.view, 'parent'))
     fault.target = path; handoff.publications = handoff.temps = handoff.syncs = 0
     if (mode === 'retry') fault.failFinalClose = true
-    else { handoff.cleanupPath = lockPathFor(root, 'doc:task-parent'); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise }
+    else { handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise }
     const original = persistence.captureSave()!
     let completing = original.done; void completing.catch(() => {})
     if (mode === 'retry') {
       await expect(original.done).rejects.toBeNull(); fault.failFinalClose = false
-      handoff.cleanupPath = lockPathFor(root, 'doc:task-parent'); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
+      handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
       completing = original.retry(); void completing.catch(() => {})
     }
     await entered.promise; const committed = original.outcome(); expect(committed?.kind).toBe('committed')
@@ -63,15 +73,16 @@ it.each(['initial', 'retry'] as const)('rechecks the original %s save after awai
 })
 
 it.each(['revoked', 'mutated', 'ready'] as const)('checks actual registry parent %s after committed save cleanup', async state => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-handoff-cleanup-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-handoff-cleanup-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original result'
-    fault.target = path; handoff.cleanupPath = lockPathFor(root, 'doc:task-parent'); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
+    fault.target = path; handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
     handoff.publications = handoff.temps = handoff.syncs = 0
     const retaining = registry.retainResult(task.id); void retaining.catch(() => {}); await entered.promise
     const original = lastOriginalTaskSave(registry)!, committed = original.outcome(); expect(committed?.kind).toBe('committed')
@@ -93,7 +104,7 @@ it.each(['revoked', 'mutated', 'ready'] as const)('checks actual registry parent
 })
 
 it('keeps a late committed save refused after external parent close and same-save retry', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-handoff-close-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-handoff-close-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
@@ -112,12 +123,13 @@ it('keeps a late committed save refused after external parent close and same-sav
 })
 
 it('checks the exact save again when the actual registry consumes its completion', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-handoff-consumer-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-handoff-consumer-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   let restore: (() => void) | undefined
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original result'
     const capture = TaskPersistence.prototype.captureSave
@@ -134,7 +146,7 @@ it('checks the exact save again when the actual registry consumes its completion
 })
 
 it('saves the exact captured original snapshot through the real owned acknowledgment', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-save-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-save-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -151,7 +163,7 @@ it('saves the exact captured original snapshot through the real owned acknowledg
 })
 
 it('does not let a later save or flush acknowledge the original unknown candidate', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-unknown-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-unknown-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -165,7 +177,7 @@ it('does not let a later save or flush acknowledge the original unknown candidat
 })
 
 it('gates a newer already-queued snapshot behind the first uncertain save', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-queued-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-queued-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -180,7 +192,7 @@ it('gates a newer already-queued snapshot behind the first uncertain save', asyn
 })
 
 it('does not let a later invalid snapshot cancel an earlier queued original save', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-invalid-queued-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-invalid-queued-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -195,9 +207,9 @@ it('does not let a later invalid snapshot cancel an earlier queued original save
 })
 
 it('refuses an absent task document without initializing it', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-absent-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-absent-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
-    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent')
+    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'); await unlink(join(root, 'task-parent.doc.jsonl'))
     const persistence = new TaskPersistence(coordinator, 'parent', true, () => ({ formatVersion: 2, tasks: [], notifications: [] }), captureOwnedTaskContext(coordinator, document, document.view, 'parent'))
     await expect(persistence.save()).rejects.toThrow(/absent/); await expect(persistence.flush()).rejects.toThrow()
     await expect(readFile(join(root, 'task-parent.doc.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
@@ -205,11 +217,12 @@ it('refuses an absent task document without initializing it', async () => {
 })
 
 it('retains the exact original save on the actual task registry', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-registry-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-registry-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const row = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'original prompt', agent: 'general', delivery: 'tool' })
     await registry.flushPersistence(); const doc = JSON.parse(await readFile(path, 'utf8'))
     expect(doc.tasks).toMatchObject([{ id: row.id, prompt: 'original prompt' }]); expect(lastOriginalTaskSave(registry)?.outcome()?.kind).toBe('committed')
@@ -217,13 +230,14 @@ it('retains the exact original save on the actual task registry', async () => {
 })
 
 it('uses the actual registerSubagent parent to construct its owned task saver', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-register-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-register-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const context = createContext(), tools = createToolRegistry(context)
     const subagent = registerSubagent(context, tools, { parentSession: document.view, factOwner: document, parentModel: createMockClient([]), exec: registerExec(context), resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: 'parent', parentSessionId: 'parent' } })
     try {
+      await subagent.ready
       const row = subagent.tasks.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'owned prompt', agent: 'general', delivery: 'tool' })
       await subagent.tasks.flushPersistence(); expect(JSON.parse(await readFile(path, 'utf8')).tasks).toMatchObject([{ id: row.id, prompt: 'owned prompt' }])
       expect(lastOriginalTaskSave(subagent.tasks)?.outcome()?.kind).toBe('committed')
@@ -232,7 +246,7 @@ it('uses the actual registerSubagent parent to construct its owned task saver', 
 })
 
 it('keeps a specific acknowledged save blocked until its original final handle closes', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-ack-debt-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-ack-debt-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -245,7 +259,7 @@ it('keeps a specific acknowledged save blocked until its original final handle c
 })
 
 it('closes a terminal conflicting save without allowing a later snapshot to replace it', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-conflict-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-conflict-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -258,7 +272,7 @@ it('closes a terminal conflicting save without allowing a later snapshot to repl
 })
 
 it('preserves the original unknown write outcome after external revocation', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-owned-revoke-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-owned-revoke-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -271,7 +285,7 @@ it('preserves the original unknown write outcome after external revocation', asy
 })
 
 it('resumes three original captures in writer order after cleanup debt', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-ordered-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-task-ordered-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -294,11 +308,12 @@ it('resumes three original captures in writer order after cleanup debt', async (
 })
 
 it.each(['terminal-before', 'terminal-after'] as const)('foreground route CAS chooses one original route: %s', async timing => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-route-cas-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-route-cas-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     const begin = registry.bindForegroundHandoff(task.id)
     if (timing === 'terminal-before') registry.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'done' })
@@ -314,11 +329,12 @@ it.each(['terminal-before', 'terminal-after'] as const)('foreground route CAS ch
 })
 
 it('keeps terminal snapshot behind the original held foreground handoff save', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-route-gate-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-route-gate-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     fault.target = path; handoff.closeEntered = entered.resolve; handoff.closeGate = release.promise
     const route = registry.bindForegroundHandoff(task.id)(); if (route.kind !== 'parent') throw new Error('expected parent')
@@ -331,11 +347,12 @@ it('keeps terminal snapshot behind the original held foreground handoff save', a
 })
 
 it('resumes the original terminal save after the handoff close debt clears', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-route-debt-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-route-debt-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     fault.target = path; fault.failFinalClose = true; handoff.closeEntered = entered.resolve; handoff.closeGate = release.promise
     const route = registry.bindForegroundHandoff(task.id)(); if (route.kind !== 'parent') throw new Error('expected parent'); void route.save.done.catch(() => {})
@@ -355,12 +372,13 @@ it('resumes the original terminal save after the handoff close debt clears', asy
 })
 
 it('original spawn source retains its delivery guard until both handoff and terminal saves settle', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-source-barrier-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-source-barrier-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let source: ReturnType<typeof createSpawnSource> | undefined
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     let signals = 0
     const retained = { beforeRead: vi.fn(), observed: vi.fn(), progress: vi.fn(), unavailable: vi.fn(), requireRecovery: vi.fn(), ready: vi.fn() }
@@ -379,15 +397,16 @@ it('original spawn source retains its delivery guard until both handoff and term
 })
 
 it('joins original terminal retention while a later writer capture is queued', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-terminal-consumer-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-terminal-consumer-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'parent' }); await registry.flushPersistence()
     task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original terminal'
-    fault.target = path; handoff.cleanupPath = lockPathFor(root, 'doc:task-parent'); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
+    fault.target = path; handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
     handoff.publications = 0
     const retaining = registry.retainResult(task.id); void retaining.catch(() => {}); await entered.promise
     const original = lastOriginalTaskSave(registry)!
@@ -411,19 +430,18 @@ import { createRoleRegistry } from '../src/roles.ts'
 import { createAgentTable } from '../src/agent-table.ts'
 import { createJobRegistry } from '../src/jobs.ts'
 import { createAgentRegistry } from '@i-harness/core-agent'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
-import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { receivedInputsFor } from '../../session-executor/src/lifecycle/received-inputs.ts'
 import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
 
 async function foregroundFixture(owned: boolean, custom = false, deadline = false) {
-  const root = await mkdtemp(join(tmpdir(), 'ih-actual-handoff-'))
-  const base = owned ? createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract) : createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-actual-handoff-'))
+  const base = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const coordinator = custom ? { ...base } : base
   await coordinator.create({ sessionId: 'parent' })
   const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
   if (owned) await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
   const tasks = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ...(owned ? { ownedTask: captureOwnedTaskContext(base, document, document.view, 'parent') } : {}) })
+  if (!custom) await tasks.ready
   const context = createContext(), tools = createToolRegistry(context), table = createAgentTable(), roles = createRoleRegistry()
   roles.register({ name: 'probe', description: '', systemPrompt: 'probe', tools: [] })
   const received = receivedInputsFor(document, 'parent')
@@ -492,4 +510,114 @@ it('actual spawn reconciliation resumes pre-terminal preparation after original 
     await f.source().reconcileTerminal()
     expect(f.counts()).toMatchObject({ hints: 1, unregisters: 1, launches: 1 })
   } finally { release.resolve(); fault.failFinalClose = false; fault.target = ''; handoff.closeGate = undefined; handoff.closeEntered = undefined; await f.close() }
+})
+
+it('retires a binding consumer after acknowledgement even after parent revocation', async () => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-binding-retire-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await coordinator.create({ sessionId:'parent' }); const document = await coordinator.openManagedDocument('parent')
+    await writeFile(join(root,'task-parent.doc.jsonl'), '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const persistence = new TaskPersistence(coordinator,'parent',false,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,document,document.view,'parent'))
+    const held = persistence.captureBindingSave()!; await held.done; document.revokeNewWork()
+    await held.retireConsumer(); expect(() => held.release()).toThrow(); expect(() => held.assertHandoff()).toThrow(); await persistence.flush()
+  } finally { await coordinator.close(); await rm(root,{recursive:true,force:true}) }
+})
+
+it('retirement releases a clean queue and checks receiver and repeated consumption', async () => {
+  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(),'ih-binding-queue-')), coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+  try {
+    await coordinator.create({sessionId:'parent'}); const doc=await coordinator.openManagedDocument('parent')
+    const p=new TaskPersistence(coordinator,'parent',true,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
+    const held=p.captureBindingSave(); await held.done; const later=p.save(); await held.retireConsumer(); await held.retireConsumer(); await later; await p.flush()
+    await expect(held.retireConsumer.call({})).rejects.toThrow('receiver'); expect(()=>held.release()).toThrow(); expect(()=>held.assertHandoff()).toThrow()
+  } finally { await coordinator.close(); await rm(root,{recursive:true,force:true}) }
+})
+it('retirement retains unknown original write debt and releases the parked queue', async () => {
+  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(),'ih-binding-unknown-')), coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+  try {
+    await coordinator.create({sessionId:'parent'}); const doc=await coordinator.openManagedDocument('parent'), path=join(root,'task-parent.doc.jsonl')
+    const p=new TaskPersistence(coordinator,'parent',true,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
+    fault.target=path; fault.afterRename=true; handoff.publications=0
+    const held=p.captureBindingSave(); await expect(held.done).rejects.toThrow(); const queued=p.save(); void queued.catch(()=>{})
+    await expect(held.retireConsumer()).rejects.toThrow(); await expect(queued).rejects.toThrow(); await expect(p.flush()).rejects.toThrow(); expect(handoff.publications).toBe(1); expect(p.lastOwnedSave()).toBe(held)
+  } finally { fault.afterRename=false; fault.target=''; await coordinator.close().catch(()=>{}); await rm(root,{recursive:true,force:true}) }
+})
+it('retirement retries only original close and retains its failure history', async () => {
+  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(),'ih-binding-close-')), coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+  try {
+    await coordinator.create({sessionId:'parent'}); const doc=await coordinator.openManagedDocument('parent'), path=join(root,'task-parent.doc.jsonl')
+    const p=new TaskPersistence(coordinator,'parent',true,()=>({formatVersion:2,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
+    fault.target=path; fault.failFinalClose=true; handoff.publications=0
+    const held=p.captureBindingSave(); await expect(held.done).rejects.toBeNull(); fault.failFinalClose=false
+    await held.retireConsumer(); await p.flush(); expect(handoff.publications).toBe(1); expect(()=>held.release()).toThrow()
+  } finally { fault.failFinalClose=false; fault.target=''; await coordinator.close().catch(()=>{}); await rm(root,{recursive:true,force:true}) }
+})
+
+it.each(['before','after'] as const)('repair non-strict binding debt fences later save queued %s retirement',async timing=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'binding-nonstrict-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{await coordinator.create({sessionId:'parent'});const doc=await coordinator.openManagedDocument('parent'),path=join(root,'task-parent.doc.jsonl');let version:1|2=2
+ const p=new TaskPersistence(coordinator,'parent',false,()=>({formatVersion:version,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'));fault.target=path;fault.afterRename=true;handoff.publications=handoff.temps=0
+ const held=p.captureBindingSave();await expect(held.done).rejects.toThrow();version=1
+ let later:Promise<void>|undefined;if(timing==='before'){later=p.save();void later.catch(()=>{})}await expect(held.retireConsumer()).rejects.toThrow();later??=p.save();void later.catch(()=>{});const flush=p.flush();void flush.catch(()=>{})
+ await expect(later).rejects.toThrow();await expect(flush).rejects.toThrow();expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1);expect(JSON.parse(await readFile(path,'utf8')).formatVersion).toBe(2);expect(p.lastOwnedSave()).toBe(held);expect(()=>held.assertHandoff()).toThrow();expect(()=>held.release()).toThrow()
+ }finally{fault.afterRename=false;fault.target='';await coordinator.close().catch(()=>{});await rm(root,{recursive:true,force:true})}
+})
+it.each(['retry-first','retire-first'] as const)('repair exact clean head retirement is single-owner for %s',async order=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'binding-concurrent-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{await coordinator.create({sessionId:'parent'});const doc=await coordinator.openManagedDocument('parent'),path=join(root,'task-parent.doc.jsonl');let version:1|2=2
+ const p=new TaskPersistence(coordinator,'parent',false,()=>({formatVersion:version,tasks:[],notifications:[]}),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'));fault.target=path;handoff.publications=handoff.temps=0
+ const held=p.captureBindingSave();await held.done;version=1;const later=p.save();void later.catch(()=>{});const retry=order==='retry-first'?held.retry():undefined,retiring=held.retireConsumer(),recovery=retry??held.retry();const flush=p.flush();void flush.catch(()=>{})
+ await recovery;await retiring;await later;await flush;expect(handoff.publications).toBe(2);expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow();await held.retireConsumer()
+ }finally{fault.target='';await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+
+async function repairBinding(snapshot?:()=>import('../src/task/types.ts').TaskProtocolDocument){
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'binding-matrix-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'parent'});const doc=await coordinator.openManagedDocument('parent'),path=join(root,'task-parent.doc.jsonl');let version:1|2=2
+ const p=new TaskPersistence(coordinator,'parent',false,snapshot??(()=>({formatVersion:version,tasks:[],notifications:[]})),captureOwnedTaskContext(coordinator,doc,doc.view,'parent'))
+ fault.target=path;handoff.cleanupPath=taskLeasePath(root);handoff.publications=handoff.temps=handoff.syncs=handoff.releases=handoff.closeCalls=0;fault.finalOpens=0
+ return{root,coordinator,doc,path,p,version(v:1|2){version=v},async close(){fault.afterRename=fault.failFinalClose=false;fault.target='';fault.writeGate=fault.gate=undefined;fault.writeEntered=fault.entered=undefined;handoff.closeGate=handoff.cleanupGate=undefined;handoff.closeEntered=handoff.cleanupEntered=undefined;handoff.acquireFails=handoff.heldFails=handoff.releaseFails='';await coordinator.close().catch(()=>{});await rm(root,{recursive:true,force:true})}}
+}
+it.each(['write','close','release'] as const)('repair retirement joins held original %s once before queued save/flush',async phase=>{
+ const f=await repairBinding(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ try{if(phase==='write'){fault.writeEntered=entered.resolve;fault.writeGate=release.promise}else if(phase==='close'){handoff.closeEntered=entered.resolve;handoff.closeGate=release.promise}else{handoff.cleanupEntered=entered.resolve;handoff.cleanupGate=release.promise}
+ const held=f.p.captureBindingSave();void held.done.catch(()=>{});await entered.promise;f.version(1);const later=f.p.save();void later.catch(()=>{});const retiring=held.retireConsumer();expect(held.retireConsumer()).toBe(retiring);let settled=false;void retiring.then(()=>{settled=true});const flush=f.p.flush();await Promise.resolve();expect(settled).toBe(false);expect(()=>held.release()).toThrow();release.resolve();await held.done;await retiring;await later;await flush;expect(handoff.publications).toBe(2);expect(handoff.temps).toBe(2);expect(fault.finalOpens).toBe(2);expect(()=>held.assertHandoff()).toThrow()
+ }finally{release.resolve();await f.close()}
+})
+it.each(['retry-first','retire-first'] as const)('repair concurrent close debt recovery/retirement %s preserves original acknowledgement',async order=>{
+ const f=await repairBinding()
+ try{fault.failFinalClose=true;const held=f.p.captureBindingSave();await expect(held.done).rejects.toBeNull();const before=held.outcome();fault.failFinalClose=false;f.version(1);const later=f.p.save();void later.catch(()=>{});const retry=order==='retry-first'?held.retry():undefined,retiring=held.retireConsumer(),recovery=retry??held.retry();await recovery;await retiring;await expect(later).rejects.toThrow('Earlier owned task save requires resolution');const queued=f.p.lastOwnedSave()!;expect(queued).not.toBe(held);await queued.retry();await f.p.flush();const after=held.outcome();if(before?.kind==='committed'&&after?.kind==='committed')expect(after.ack).toBe(before.ack);else throw Error('lost original ack');expect(handoff.publications).toBe(2);expect(handoff.temps).toBe(2);expect(()=>held.assertHandoff()).toThrow();expect(()=>held.release()).toThrow()
+ }finally{await f.close()}
+})
+it('repair failed cleanup after revoked parent recovers only original resources',async()=>{
+ const f=await repairBinding()
+ try{fault.failFinalClose=true;const held=f.p.captureBindingSave();await expect(held.done).rejects.toBeNull();const original=held.outcome(),initialCloses=handoff.closeCalls;f.doc.revokeNewWork();await expect(held.retireConsumer()).rejects.toBeNull();await expect(f.p.flush()).rejects.toThrow();expect(f.p.lastOwnedSave()).toBe(held);fault.failFinalClose=false;await held.retry();await f.p.flush();expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1);expect(fault.finalOpens).toBe(1);expect(handoff.closeCalls).toBe(initialCloses+2);const after=held.outcome();if(original?.kind==='committed'&&after?.kind==='committed')expect(after.ack).toBe(original.ack);else throw Error('lost ack');expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow()
+ }finally{await f.close()}
+})
+it.each([null,undefined,0,false] as const)('repair failed snapshot retains original falsey cause %s and exact receivers',async cause=>{
+ const f=await repairBinding(()=>{throw cause})
+ try{const held=f.p.captureBindingSave();await expect(held.done).rejects.toBe(cause);expect(held.outcome()).toBeUndefined();await expect(held.retireConsumer()).rejects.toBe(cause);await expect(held.retry()).rejects.toBe(cause);expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow();await expect(held.retireConsumer.call({})).rejects.toThrow('receiver');await expect(held.retry.call({})).rejects.toThrow('receiver');for(const method of [held.release,held.assertHandoff,held.outcome])expect(()=>method.call({})).toThrow('receiver');const later=f.p.save();await expect(later).rejects.toBe(cause);await expect(f.p.flush()).rejects.toMatchObject({cause});expect(handoff.publications).toBe(0);expect(handoff.temps).toBe(0);expect(f.p.lastOwnedSave()).toBe(held)
+ }finally{await f.close()}
+})
+it.each(['validation','acquire','acquire-cleanup'] as const)('repair %s refusal retains original operation/cleanup without publication',async failure=>{
+ const f=await repairBinding(failure==='validation'?()=>({formatVersion:3,tasks:[],notifications:[],extra:true}):undefined)
+ try{if(failure==='acquire')handoff.acquireFails=handoff.cleanupPath;if(failure==='acquire-cleanup'){handoff.heldFails=handoff.cleanupPath;handoff.releaseFails=handoff.cleanupPath}
+ const held=f.p.captureBindingSave();const error=await held.done.then(()=>{throw Error('unexpected success')},e=>e);expect(held.outcome()).toBeUndefined();if(failure==='acquire')expect(error.cause).toBeNull();if(failure==='acquire-cleanup'){expect(error.cause).toBe(0);expect(error.cleanupCause).toBe(false)}
+ await expect(held.retireConsumer()).rejects.toBeDefined();f.doc.revokeNewWork();handoff.acquireFails=handoff.heldFails=handoff.releaseFails='';await expect(held.retry()).rejects.toBe(error);await expect(f.p.flush()).rejects.toThrow();expect(held.outcome()).toBeUndefined();expect(handoff.publications).toBe(0);expect(handoff.temps).toBe(0);expect(()=>held.assertHandoff()).toThrow();await expect(held.retry.call({})).rejects.toThrow('receiver')
+ }finally{await f.close()}
+})
+it('repair queued non-strict save during original unknown publication retains exact candidate through explicit retry',async()=>{
+ const f=await repairBinding(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ try{fault.afterRename=true;fault.entered=entered.resolve;fault.gate=release.promise;const held=f.p.captureBindingSave();void held.done.catch(()=>{});await entered.promise;f.version(1);const later=f.p.save();void later.catch(()=>{});const retiring=held.retireConsumer();void retiring.catch(()=>{});const flush=f.p.flush();void flush.catch(()=>{});release.resolve();await expect(held.done).rejects.toThrow();await expect(retiring).rejects.toThrow();await expect(later).rejects.toThrow();await expect(flush).rejects.toThrow();expect(f.p.lastOwnedSave()).toBe(held);expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1);fault.afterRename=false;await held.retry();expect(handoff.publications).toBe(1);expect(handoff.temps).toBe(1);const queued=f.p.lastOwnedSave()!;expect(queued).not.toBe(held);await queued.retry();await f.p.flush();expect(handoff.publications).toBe(2);expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow()
+ }finally{release.resolve();await f.close()}
+})
+it.each(['unknown-revoked','conflict'] as const)('repair abandoned %s never grants handoff or a replacement snapshot',async kind=>{
+ const f=await repairBinding()
+ try{if(kind==='unknown-revoked')fault.afterRename=true;else fault.tempSynced=async()=>{fault.tempSynced=undefined;await writeFile(f.path,'{ "formatVersion":2,"tasks":[],"notifications":[] }')}
+ const held=f.p.captureBindingSave();await expect(held.done).rejects.toThrow();const original=held.outcome();expect(original?.kind).toBe(kind==='conflict'?'conflict':'unknown');f.doc.revokeNewWork();await expect(held.retireConsumer()).rejects.toThrow();fault.afterRename=false;await expect(held.retry()).rejects.toBeDefined();const later=f.p.save();await expect(later).rejects.toBeDefined();await expect(f.p.flush()).rejects.toThrow();expect(held.outcome()).toEqual(original);expect(handoff.publications).toBe(kind==='conflict'?0:1);expect(handoff.temps).toBe(1);await expect(held.retry.call({})).rejects.toThrow('receiver');for(const method of [held.release,held.assertHandoff,held.outcome])expect(()=>method.call({})).toThrow('receiver');expect(()=>held.release()).toThrow();expect(()=>held.assertHandoff()).toThrow()
+ }finally{fault.tempSynced=undefined;await f.close()}
+})
+it('repair completed head retirement remains clean when a later capture records its own debt',async()=>{
+ let invalid=false;const f=await repairBinding(()=>invalid?({formatVersion:3,tasks:[],notifications:[],extra:true}):({formatVersion:2,tasks:[],notifications:[]}))
+ try{const held=f.p.captureBindingSave();await held.done;invalid=true;const later=f.p.save();void later.catch(()=>{});const retry=held.retry(),retirement=held.retireConsumer();await retry;await retirement;await expect(later).rejects.toThrow();await expect(f.p.flush()).rejects.toThrow();expect(f.p.lastOwnedSave()).not.toBe(held);expect(handoff.publications).toBe(1);expect(()=>held.assertHandoff()).toThrow()
+ }finally{await f.close()}
 })

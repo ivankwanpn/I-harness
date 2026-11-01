@@ -54,4 +54,5 @@ export interface BootstrapDocumentControl {
   held: HeldFactOwner;
   bindSelected?(): Promise<void>;
   ready(): void;
+  prepareReady?(): () => void;
 }

@@ -5,6 +5,9 @@ import { bootstrapHash, compileSelectedResultsSemanticSeed } from '../semantic-s
 import { bootstrapFields } from './bootstrap-header.ts'
 import { encodeSelectedResultsReservation, parseSelectedResultsReservation } from './selected-results-intent.ts'
 
+/** Complete UTF-8 header line, including its terminating LF. */
+export const SELECTED_RESULTS_HEADER_MAX_BYTES = 65536
+
 const invalid = (): never => { throw new TypeError('Invalid selected results materialization') }
 const same = (a: unknown, b: unknown): boolean => canonicalJsonData(a) === canonicalJsonData(b)
 /** Check all descriptors before copying, including arrays and fields JSON would discard. */
@@ -69,7 +72,7 @@ export function buildSelectedResultsHeader(input: unknown, reservationInput: unk
   const stage = freezeJsonData({version:2 as const,kind:'semantic-bootstrap-selected-results-header' as const,captureReservation:reservation,
     invocation,originalTarget,metadata,lineage,headerBase,seed:stageSeed,headerBytes})
   const stageBytes = canonicalJsonData(stage)+'\n'
-  if (Buffer.byteLength(headerBytes)>65536 || Buffer.byteLength(stageBytes)>262144) invalid()
+  if (Buffer.byteLength(headerBytes)>SELECTED_RESULTS_HEADER_MAX_BYTES || Buffer.byteLength(stageBytes)>262144) invalid()
   return Object.freeze({stage,stageBytes,headerBytes})
 }
 export type SelectedResultsHeaderStageV2 = ReturnType<typeof buildSelectedResultsHeader>['stage']
@@ -78,7 +81,7 @@ export function parseSelectedResultsHeaderStage(bytes: Uint8Array): SelectedResu
   if (types.isProxy(bytes) || !(bytes instanceof Uint8Array) || bytes.length > 262144) invalid()
   const stage = captureData(JSON.parse(Buffer.from(bytes).toString('utf8')))
   bootstrapFields(stage,['version','kind','captureReservation','invocation','originalTarget','metadata','lineage','headerBase','seed','headerBytes'])
-  if (stage.version !== 2 || stage.kind !== 'semantic-bootstrap-selected-results-header' || typeof stage.headerBytes !== 'string' || Buffer.byteLength(stage.headerBytes)>65536) invalid()
+  if (stage.version !== 2 || stage.kind !== 'semantic-bootstrap-selected-results-header' || typeof stage.headerBytes !== 'string' || Buffer.byteLength(stage.headerBytes)>SELECTED_RESULTS_HEADER_MAX_BYTES) invalid()
   const reservation = parseSelectedResultsReservation(encodeSelectedResultsReservation(stage.captureReservation)), request=reservation.request
   bootstrapFields(stage.originalTarget,['kind']); bootstrapFields(stage.lineage,['origin','parentSession'])
   if (stage.originalTarget.kind !== 'new' || !same(stage.invocation,request.invocation) || !same(stage.metadata,request.core.metadata)
