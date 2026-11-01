@@ -22,6 +22,23 @@ import { configureContext, DEFAULT_CONTEXT_OUTPUT_CONFIG, identity, integer } fr
 import { ContextStore } from './store.ts'
 import type { ContextAccess, ContextOutputOptions, ContextOutputService, ContextOutputStatus, ContextResultRef } from './types.ts'
 import { createArtifactOwnership } from './artifact/ownership.ts'
+type CodeManifestQuery = ReturnType<typeof createArtifactOwnership>['captureConfirmedCodeManifest']
+const codeManifestQueries = new WeakMap<ContextOutputService, CodeManifestQuery>()
+declare const confirmedCodeManifestBrand: unique symbol
+export type OriginalConfirmedCodeManifest = Readonly<{[confirmedCodeManifestBrand]:true}>
+const codeManifestProofs=new WeakMap<OriginalConfirmedCodeManifest,{service:ContextOutputService;args:Parameters<CodeManifestQuery>}>()
+export function captureConfirmedCodeManifest(service: ContextOutputService, ...args: Parameters<CodeManifestQuery>):OriginalConfirmedCodeManifest {
+  const query = codeManifestQueries.get(service)
+  if (!query) throw new Error('Original context output service required')
+  const snapshot=query(...args),proof=Object.freeze({}) as OriginalConfirmedCodeManifest
+  codeManifestProofs.set(proof,{service,args:[args[0],args[1],snapshot]})
+  return proof
+}
+export function readConfirmedCodeManifest(service:ContextOutputService,proof:OriginalConfirmedCodeManifest) {
+  const original=codeManifestProofs.get(proof),query=codeManifestQueries.get(service)
+  if(!original||original.service!==service||!query)throw new Error('Original confirmed Code manifest required')
+  return query(...original.args)
+}
 import { captureLegacy } from './legacy/capture.ts'
 import { readLegacy, searchLegacy } from './legacy/query.ts'
 import { createWorkspaceMutationOwner, failuresTogether, type WorkspaceMutationTurn } from './workspace-mutation.ts'
@@ -714,5 +731,20 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     return selected
   }})
   associateManagedResultRefusal(service)
+  const methodNames=['registerResultScope','beginResult','confirmResultOwner'] as const
+  const originalMethods=methodNames.map(name=>Object.getOwnPropertyDescriptor(service,name)!)
+  let querying=false
+  const assertManifestService=()=>{
+    if(closing||closed)throw new Error('Original manifest service closed')
+    for(const [i,name] of methodNames.entries()){
+      const field=Object.getOwnPropertyDescriptor(service,name),original=originalMethods[i]!
+      if(!field||!('value'in field)||field.value!==original.value||field.enumerable!==original.enumerable||field.configurable!==original.configurable||field.writable!==original.writable)throw new Error('Original service methods required')
+    }
+  }
+  codeManifestQueries.set(service, (...args) => {
+    if(querying)throw new Error('Original manifest query reentry unavailable')
+    assertManifestService();querying=true
+    try{const result=artifacts.captureConfirmedCodeManifest(...args);assertManifestService();return result}finally{querying=false}
+  })
   return service
 }
