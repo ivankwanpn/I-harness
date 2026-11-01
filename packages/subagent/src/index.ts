@@ -62,6 +62,7 @@ import { subagentFactOwner } from './facts.ts'
 import { residentOwnerFor, refusedReentry } from './followup/resident-lifetime.ts'
 import type { ManagedDocument } from '@i-harness/session-persistence'
 import { captureOwnedTaskContext } from './task/owned-context.ts'
+import { createTaskStartupFacade } from './task/startup-facade.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
   residentActivation?: import('./followup/activation.ts').ResidentInboxActivation
@@ -153,6 +154,9 @@ export interface RegisterSubagentResult {
 // subagent/job tools, and registers them on the parent registry.
 export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistry, opts: RegisterSubagentOptions): RegisterSubagentResult {
   const factOwner = subagentFactOwner(opts.parentSession, opts.factOwner)
+  let ownedTask: import('./task/persistence.ts').OwnedTaskContext | undefined
+  if (opts.factOwner && opts.persist) ownedTask = captureOwnedTaskContext(opts.persist.coordinator, opts.factOwner as ManagedDocument, opts.parentSession, opts.persist.stateId)
+
   // M24a (G1a/G4): resolved to the real post-restore step below when BOTH a
   // restored state and persistence are present; otherwise a no-op.
   let ready: Promise<void> = Promise.resolve()
@@ -172,7 +176,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // the G4 sweep run afterwards behind `ready` (below).
     restoreState({ jobs, table, roles }, opts.restoredState, opts.persist ? { ...opts.persist, parentSession: opts.parentSession, factOwner } : undefined)
   }
-  if (opts.persist) {
+  if (opts.persist && !ownedTask) {
     const wired = wireSubagentPersistence({ jobs, table, roles }, { ...opts.persist, factOwner: opts.persist.factOwner ?? opts.factOwner })
     factPersistence = wired
     jobs = wired.jobs
@@ -202,9 +206,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     void pending.then(() => { settlingDeliverySources = undefined }, () => { settlingDeliverySources = undefined })
     return pending
   }
-  let ownedTask: import('./task/persistence.ts').OwnedTaskContext | undefined
-  if (opts.factOwner && opts.persist) ownedTask = captureOwnedTaskContext(opts.persist.coordinator, opts.factOwner as ManagedDocument, opts.parentSession, opts.persist.stateId)
-  const tasks = createTaskRegistry({
+  const taskOwner = createTaskRegistry({
     results: opts.results,
     reportPolicy: opts.reportPolicy,
     ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
@@ -212,6 +214,42 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     maxConcurrency: opts.maxConcurrency,
     onTerminalized: () => { notifDrainHook?.() },
   })
+  // The original runtime containers are staged without observers. The public
+  // facades route mutations through the task owner before reaching a producer.
+  const stagedRuntime = { jobs, table, roles }
+  let mountedRuntime = stagedRuntime
+  let runtimeWorkReady = !ownedTask
+  let runtimeRetiring = false
+  let startupFailure: { cause: unknown } | undefined
+  function assertRuntimeWork(): void {
+    taskOwner.assertReady()
+    if (startupFailure) throw new Error('Owned runtime restoration failed', { cause: startupFailure.cause })
+    if (!runtimeWorkReady || runtimeRetiring) throw new Error('Owned runtime restoration pending or retired')
+  }
+  const tasks = ownedTask ? createTaskStartupFacade(taskOwner, assertRuntimeWork) : taskOwner
+  if (ownedTask) {
+    function guarded<T extends object>(kind: 'jobs' | 'table' | 'roles', original: T, names: readonly (keyof T)[]): T {
+      const facade = { ...original }
+      for (const name of names) {
+        const method = (...args: unknown[]) => {
+          // Original resident retirement must retain its closing event after
+          // new work is fenced, without scheduling another persistence save.
+          const patch = args[2] as Partial<ChildAgentEntry> | undefined
+          if (runtimeRetiring && kind === 'table' && name === 'update' && patch?.closing === true && Reflect.ownKeys(patch).length === 1) {
+            return stagedRuntime.table.update(args[0] as string, args[1] as ChildAgentEntry, { closing: true })
+          }
+          assertRuntimeWork()
+          const target = mountedRuntime[kind] as T
+          return Reflect.apply(target[name] as (...args: unknown[]) => unknown, target, args)
+        }
+        Object.defineProperty(facade, name, { value: method, enumerable: true })
+      }
+      return facade
+    }
+    jobs = guarded('jobs', jobs, ['registerJob', 'updateJob', 'kill'])
+    table = guarded('table', table, ['add', 'update', 'remove'])
+    roles = guarded('roles', roles, ['register', 'remove'])
+  }
   // M23 (Minor 4): the deps object is kept in a named variable so the
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
@@ -269,7 +307,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   const tools = createSubagentTools(subagentDeps)
   // ToolRegistry.register throws on duplicate names, so skip tools the parent
   // already has — makes registerSubagent idempotent for repeat mounts.
-  for (const tool of tools) {
+  for (const originalTool of tools) {
+    const tool = ownedTask ? { ...originalTool, async execute(...args: Parameters<typeof originalTool.execute>) { await ready; tasks.assertReady(); return originalTool.execute(...args) } } : originalTool
     if (!parentRegistry.get(tool.name)) parentRegistry.register(tool)
   }
   // M26-D2: the notification drain. admit = the host-injected A-plan admission
@@ -310,27 +349,34 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       try { opts.parentNotify?.wake(opts.persist?.parentSessionId ?? '') } catch { /* A host hint cannot replace the retained drain failure. */ }
     }).finally(() => { notificationDrains.delete(job) })
   }
-  if (opts.restoredState && opts.persist) {
-    // Task 4.4 (fix round 1): restoreState mapped each mid-flight job
-    // running→"error" PRE-wiring, so the observer-wrapped registry never saw
-    // that transition and no terminal `job/status` event would land in the
-    // evented parent session — the resumed log (pre-crash `running` event,
-    // nothing after) would fold to forever-"running" while the doc says
-    // "error". Replay the mapped outcome through the event emitter now, so
-    // the log stays rebuildable (no-op without a parentSession).
-    emitRestoredJobTransitions(opts.persist, opts.restoredState, jobs, factPersistence?.observe)
+  if (ownedTask) {
+    ready = (async () => {
+      await taskOwner.ready
+      taskOwner.assertReady()
+      const wired = wireSubagentPersistence(stagedRuntime, { ...opts.persist!, factOwner: opts.persist!.factOwner ?? opts.factOwner })
+      factPersistence = wired
+      mountedRuntime = wired
+      if (opts.restoredState) emitRestoredJobTransitions(opts.persist!, opts.restoredState, jobs, wired.observe)
+      await taskOwner.qualifyRestoredResults()
+      await classifyRestoredTasks(taskOwner, opts.persist!.coordinator)
+      await restoreMirrorsAndSweep(subagentDeps, wired.table, () => { runtimeWorkReady = true })
+    })().catch(cause => {
+      runtimeWorkReady = false
+      startupFailure = { cause }
+      throw cause
+    })
+  } else {
+    if (opts.restoredState && opts.persist) emitRestoredJobTransitions(opts.persist, opts.restoredState, jobs, factPersistence?.observe)
+    if (opts.persist) ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks)
   }
-  if (opts.persist) {
-    // M26-D1/D2: the unified post-restore chain — task doc restore +
-    // recovery classification (M26) THEN the M24a G1a mirror
-    // rebuild + G4 pending-inbox sweep. `ready` gates hosts until it completes.
-    ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks)
-  }
+  void ready.catch(() => {})
   let disposeFlight: Promise<void> | undefined
   const entryPhases = new Map<ChildAgentEntry, { settled: boolean; disposed: boolean; dispose?: () => Promise<void>; unmount?: () => void; chain?: Promise<void>; sessionId?: string; agent?: ReturnType<AgentRegistry['get']> }>()
   let factsFlushed = false, tasksFlushed = false, factsClosed = false, readyFailureReported = false
   function dispose(): Promise<void> {
     notificationsRetired = true
+    runtimeRetiring = true
+    taskOwner.retireOwnedLoad()
     const owner = residentOwnerFor(subagentDeps)
     if (owner.inInvocation()) { owner.retire(); return refusedReentry() }
     if (disposeFlight) return disposeFlight
@@ -339,11 +385,15 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     const finishCleanup = owner.beginCleanupAttempt()
     void attempt.promise.then(() => { disposeFlight = undefined; finishCleanup() }, () => { disposeFlight = undefined; finishCleanup() })
     owner.retire()
+    // Release original consumer fences before any source/entry join can flush
+    // a queued save behind them. The same flight retains read cleanup debt.
+    const taskClosing = taskOwner.closeOwnedLoad()
+    void taskClosing.catch(() => {})
     const fenceEntries = () => { for (const entry of table.entries().values()) {
       if (!entryPhases.has(entry)) entryPhases.set(entry, { settled: false, disposed: false,
         dispose: entry.dispose?.bind(entry), unmount: entry.unmount?.bind(entry), chain: entry.followupChain,
         sessionId: entry.sessionId, agent: entry.sessionId ? agents.get(entry.sessionId) : undefined })
-      if (!entry.closing) table.update(entry.path, entry, { closing: true })
+      if (!entry.closing) { if (ownedTask) entry.closing = true; else table.update(entry.path, entry, { closing: true }) }
       entry.controller.abort()
       if (entry.sessionId) opts.persist?.coordinator.revokeManagedDocumentNewWork(entry.sessionId)
     } }
@@ -370,7 +420,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))
       try { await ownedClosing } catch (error) { errors.push(error) }
       if (!factsFlushed) try { await factPersistence?.flushFacts(); factsFlushed = true } catch (error) { errors.push(error) }
-      if (!tasksFlushed) try { await tasks.flushPersistence(); tasksFlushed = true } catch (error) { errors.push(error) }
+      try { await taskClosing } catch (error) { errors.push(error) }
+      if (!tasksFlushed) try { if (!ownedTask) await tasks.flushPersistence(); tasksFlushed = true } catch (error) { errors.push(error) }
       if (!errors.length && !factsClosed) try { await factPersistence?.closeFacts(); factsClosed = true } catch (error) { errors.push(error) }
       if (errors.length) throw Object.assign(new AggregateError(errors, 'Subagent settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
     })().then(attempt.resolve, attempt.reject)
@@ -378,6 +429,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   }
   return {
     async retainResults() {
+      await ready
+      tasks.assertReady()
       if (!opts.persist) return "memory"
       if (!opts.persist.coordinator.putDocumentStrict) throw new Error("Strict result retention is unavailable")
       await opts.persist.coordinator.putDocumentStrict(opts.persist.stateId, snapshotState({ jobs, table, roles }))
@@ -385,7 +438,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     },
     roles, jobs, table, agents,
     retainInitialSetup: (setup: import('./child/instruction-context.ts').InitialChildSetup) => residentOwnerFor(subagentDeps).retainInitial(setup),
-    ensureResident: (entry: ChildAgentEntry, controller?: AbortController, executionCurrent?: () => boolean) => ensureResidentAgent(subagentDeps, entry, controller, executionCurrent),
+    ensureResident: (entry: ChildAgentEntry, controller?: AbortController, executionCurrent?: () => boolean) => ownedTask ? ready.then(() => { tasks.assertReady(); return ensureResidentAgent(subagentDeps, entry, controller, executionCurrent) }) : ensureResidentAgent(subagentDeps, entry, controller, executionCurrent),
     followupActivation: subagentDeps.residentActivation,
     captureFollowupGeneration: followupDepsWithRebuild(subagentDeps).captureGeneration,
     followupGeneration: followupDepsWithRebuild(subagentDeps).openGeneration,
@@ -451,7 +504,7 @@ async function restoreTasksAndSweep(
 // the empty stub): the entry is marked error with an explanatory message so
 // wait_agent / list_agents can surface why the child is unusable. Afterwards
 // the G4 sweep drives waiting entries with unconsumed inbox events.
-async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable): Promise<void> {
+async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable, beforeSweep?: () => void): Promise<void> {
   for (const entry of table.entries().values()) {
     if (!entry.sessionId || !deps.childSessions) continue
     try {
@@ -462,5 +515,6 @@ async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable)
       table.update(entry.path, entry, { status: "error", error: "child log unavailable after resume" })
     }
   }
+  beforeSweep?.()
   await sweepPendingInbox(deps, table)
 }

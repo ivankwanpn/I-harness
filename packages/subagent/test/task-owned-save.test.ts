@@ -79,6 +79,7 @@ it.each(['revoked', 'mutated', 'ready'] as const)('checks actual registry parent
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original result'
     fault.target = path; handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
@@ -128,6 +129,7 @@ it('checks the exact save again when the actual registry consumes its completion
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original result'
     const capture = TaskPersistence.prototype.captureSave
@@ -220,6 +222,7 @@ it('retains the exact original save on the actual task registry', async () => {
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const row = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'original prompt', agent: 'general', delivery: 'tool' })
     await registry.flushPersistence(); const doc = JSON.parse(await readFile(path, 'utf8'))
     expect(doc.tasks).toMatchObject([{ id: row.id, prompt: 'original prompt' }]); expect(lastOriginalTaskSave(registry)?.outcome()?.kind).toBe('committed')
@@ -234,6 +237,7 @@ it('uses the actual registerSubagent parent to construct its owned task saver', 
     const context = createContext(), tools = createToolRegistry(context)
     const subagent = registerSubagent(context, tools, { parentSession: document.view, factOwner: document, parentModel: createMockClient([]), exec: registerExec(context), resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: 'parent', parentSessionId: 'parent' } })
     try {
+      await subagent.ready
       const row = subagent.tasks.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/child', description: 'work', prompt: 'owned prompt', agent: 'general', delivery: 'tool' })
       await subagent.tasks.flushPersistence(); expect(JSON.parse(await readFile(path, 'utf8')).tasks).toMatchObject([{ id: row.id, prompt: 'owned prompt' }])
       expect(lastOriginalTaskSave(subagent.tasks)?.outcome()?.kind).toBe('committed')
@@ -309,6 +313,7 @@ it.each(['terminal-before', 'terminal-after'] as const)('foreground route CAS ch
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     const begin = registry.bindForegroundHandoff(task.id)
     if (timing === 'terminal-before') registry.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'done' })
@@ -329,6 +334,7 @@ it('keeps terminal snapshot behind the original held foreground handoff save', a
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     fault.target = path; handoff.closeEntered = entered.resolve; handoff.closeGate = release.promise
     const route = registry.bindForegroundHandoff(task.id)(); if (route.kind !== 'parent') throw new Error('expected parent')
@@ -346,6 +352,7 @@ it('resumes the original terminal save after the handoff close debt clears', asy
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     fault.target = path; fault.failFinalClose = true; handoff.closeEntered = entered.resolve; handoff.closeGate = release.promise
     const route = registry.bindForegroundHandoff(task.id)(); if (route.kind !== 'parent') throw new Error('expected parent'); void route.save.done.catch(() => {})
@@ -371,6 +378,7 @@ it('original spawn source retains its delivery guard until both handoff and term
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
     let signals = 0
     const retained = { beforeRead: vi.fn(), observed: vi.fn(), progress: vi.fn(), unavailable: vi.fn(), requireRecovery: vi.fn(), ready: vi.fn() }
@@ -395,6 +403,7 @@ it('joins original terminal retention while a later writer capture is queued', a
     await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    await registry.ready
     const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'parent' }); await registry.flushPersistence()
     task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original terminal'
     fault.target = path; handoff.cleanupPath = taskLeasePath(root); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
@@ -432,6 +441,7 @@ async function foregroundFixture(owned: boolean, custom = false, deadline = fals
   const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
   if (owned) await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
   const tasks = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ...(owned ? { ownedTask: captureOwnedTaskContext(base, document, document.view, 'parent') } : {}) })
+  if (!custom) await tasks.ready
   const context = createContext(), tools = createToolRegistry(context), table = createAgentTable(), roles = createRoleRegistry()
   roles.register({ name: 'probe', description: '', systemPrompt: 'probe', tools: [] })
   const received = receivedInputsFor(document, 'parent')

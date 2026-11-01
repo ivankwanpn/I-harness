@@ -75,6 +75,11 @@ export class TaskPersistence {
       }
     }
   }
+  async retireConsumers(): Promise<void> {
+    const failures: unknown[] = []
+    for (const save of [...this.#pending]) try { await save.retireConsumer() } catch (error) { failures.push(error) }
+    if (failures.length) throw new AggregateError(failures, 'Original task consumer cleanup failed')
+  }
   lastOwnedSave() { return this.#debt ?? this.#last }
   private captureOwnedSave(hold: boolean): OwnedTaskSave {
     const owned = this.owned!

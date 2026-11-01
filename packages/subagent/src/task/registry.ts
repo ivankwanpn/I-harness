@@ -1,3 +1,5 @@
+import { stageTaskRestore } from './restore-stage.ts'
+import { isOwnedTaskContext } from './owned-context.ts'
 import { validateTaskDocument } from "./validation.ts"
 import { unqualifyRestoredTask, qualifyTaskPublication } from './publication.ts'
 import { settleTaskRecord } from "./settlement.ts"
@@ -9,12 +11,18 @@ import { associateTaskSaveOwner } from './save-owner.ts'
 import { TaskRecords } from "./records.ts"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
-  let documentVersion: 1 | 2 = opts.results ? 2 : 1
-  const records = new TaskRecords()
+  const ownedTask = opts.ownedTask
+  type State = { records: TaskRecords; notifications: TaskNotifications; version: 1 | 2; phase: 'pending' | 'ready' | 'poisoned' | 'retired'; failure?: { cause: unknown } }
+  let currentState: State = { records: new TaskRecords(), notifications: new TaskNotifications(), version: opts.results ? 2 : 1, phase: ownedTask ? 'pending' : 'ready' }
+  function assertReady() {
+    if (currentState.phase !== 'ready') throw Object.assign(new Error('Task registry ' + currentState.phase, { cause: currentState.failure?.cause }), { code: 'TASK_REGISTRY_UNAVAILABLE' })
+    if (ownedTask) ownedTask.operations.assertParentSession(ownedTask.parent, opts.stateId!)
+  }
   const resultOwner = opts.results ? new TaskResultOwner(opts.results) : undefined
   const listeners = new Map<string, Set<(record: Readonly<TaskRecord>) => void>>()
   function subscribe(taskId: string, listener: (record: Readonly<TaskRecord>) => void): () => void {
-    if (!records.has(taskId)) throw new Error(`unknown task: ${taskId}`)
+    assertReady()
+    if (!currentState.records.has(taskId)) throw new Error(`unknown task: ${taskId}`)
     let set = listeners.get(taskId)
     if (!set) { set = new Set(); listeners.set(taskId, set) }
     set.add(listener)
@@ -26,21 +34,21 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       try { listener({ ...snapshot }) } catch { /* Observers never interrupt producers. */ }
     }
   }
-  const notifications = new TaskNotifications()
   const maxConcurrency = opts.maxConcurrency ?? Infinity
-  const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, opts.ownedTask)
+  const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask)
   const retentionSaves = new WeakMap<TaskRecord, import('./persistence.ts').OwnedTaskSave>()
   const retentionFlights = new WeakMap<TaskRecord, Promise<void>>()
-  const save = () => persistence.save()
+  const save = async () => { assertReady(); await persistence.save() }
 
   function snapshot(): TaskProtocolDocument {
+    assertReady()
     return {
-      formatVersion: documentVersion,
-      tasks: [...records.values()].map(({ modelLabel, ...task }) => ({
+      formatVersion: currentState.version,
+      tasks: [...currentState.records.values()].map(({ modelLabel, ...task }) => ({
         ...task,
         ...(modelLabel !== undefined ? { modelLabel } : {}),
       })),
-      notifications: notifications.snapshot(),
+      notifications: currentState.notifications.snapshot(),
     }
   }
 
@@ -56,7 +64,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
 
   function retainResult(taskId: string): Promise<void> {
-    const task = records.get(taskId)
+    assertReady()
+    const task = currentState.records.get(taskId)
     if (!task) return Promise.reject(new Error(`unknown task: ${taskId}`))
     const previous = retentionFlights.get(task)
     if (previous) return previous
@@ -67,9 +76,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
 
   async function retainResultOnce(taskId: string): Promise<void> {
-    const task = records.get(taskId)
+    const task = currentState.records.get(taskId)
     if (!task) throw new Error(`unknown task: ${taskId}`)
-    if (!task.result && (task.publication === 'unqualified' || documentVersion === 2 && task.legacyFormatVersion !== 1)) throw new Error('Retained task body incomplete')
+    if (!task.result && (task.publication === 'unqualified' || currentState.version === 2 && task.legacyFormatVersion !== 1)) throw new Error('Retained task body incomplete')
     if (resultOwner) await resultOwner.settle(task)
     if (!opts.reportPolicy) return
     // The in-memory authoritative outcome is already complete. Persistence
@@ -102,7 +111,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   function announceTerminal(t: TaskRecord, notify = true): void {
     // A genuine new current capture leaves historical text recovery behind.
     if (t.result) delete t.legacyFormatVersion
-    notifications.enqueue(t)
+    currentState.notifications.enqueue(t)
     if (opts.reportPolicy) {
       void retainResult(t.id).then(() => { if (notify) opts.onTerminalized?.(t) }, () => { if (notify) opts.onTerminalized?.(t) })
     } else {
@@ -113,23 +122,86 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
 
   function terminalize(input: TaskTerminalizeInput): boolean {
-    const task = records.get(input.taskId)
+    assertReady()
+    const task = currentState.records.get(input.taskId)
     if (!settleTaskRecord(task, input, resultOwner)) return false
     announceTerminal(task)
     return true
   }
 
+  const controller = new AbortController()
+  type Operation = Awaited<ReturnType<NonNullable<TaskRegistryOptions['ownedTask']>['operations']['begin']>>
+  let operation: Operation | undefined
+  let handoff: ReturnType<Operation['prepareReadHandoff']> | undefined
+  let beginCleanup: ReturnType<NonNullable<TaskRegistryOptions['ownedTask']>['operations']['cleanupFor']>
+  let resourcesClosed = false, closeAttempted = false
+  let cleanupFlight: Promise<void> | undefined
+  function cleanupLoad(): Promise<void> {
+    if (cleanupFlight) return cleanupFlight
+    const flight = (async () => {
+      handoff?.abandon()
+      if (operation && !resourcesClosed) {
+        if (closeAttempted) await operation.retryClose()
+        else { closeAttempted = true; await operation.close() }
+        resourcesClosed = true
+      }
+      if (beginCleanup) { await beginCleanup.retry(); beginCleanup = undefined }
+    })()
+    cleanupFlight = flight
+    void flight.finally(() => { if (cleanupFlight === flight) cleanupFlight = undefined }).catch(() => {})
+    return flight
+  }
+  // Only this original load closure can see its staged candidate and handoff.
+  async function loadOwned(): Promise<void> {
+    const owned = ownedTask!
+    try {
+      if (!isOwnedTaskContext(owned) || owned.coordinator !== opts.coordinator || owned.stateId !== opts.stateId) throw new Error('Original task owner unavailable')
+      operation = await owned.operations.begin(owned.parent, { signal: controller.signal })
+      const observed = await operation.observe()
+      if (observed.kind !== 'present') throw new Error('Owned task document is absent')
+      const staged = stageTaskRestore(observed.value as TaskProtocolDocument, Boolean(opts.reportPolicy), resultOwner?.available?.() === true)
+      const readyState: State = { records: staged.records, notifications: staged.notifications, version: opts.results ? 2 : staged.version, phase: 'ready' }
+      const confirmed = await operation.confirm(observed.witness)
+      if (confirmed.kind !== 'confirmed' || confirmed.cleanupPending) throw new Error('Owned task read was not confirmed', { cause: confirmed })
+      handoff = operation.prepareReadHandoff(observed.witness)
+      closeAttempted = true
+      await operation.close(); resourcesClosed = true
+      if (currentState.phase !== 'pending' || controller.signal.aborted) throw new Error('Original task load retired')
+      // No callback, allocation, validation or await between consume and swap.
+      handoff.consume()
+      currentState = readyState
+      for (const task of currentState.records.values()) publish(task)
+    } catch (cause) {
+      if (!operation) beginCleanup = owned.operations.cleanupFor(cause)
+      currentState = { ...currentState, phase: 'poisoned', failure: { cause } }
+      try { await cleanupLoad() } catch (cleanup) { throw new AggregateError([cause, cleanup], 'Owned task load and cleanup failed') }
+      throw cause
+    } finally { handoff?.abandon() }
+  }
+  const ready = ownedTask ? loadOwned() : Promise.resolve()
+  void ready.catch(() => {})
+  function retireOwnedLoad(): void {
+    if (!ownedTask) return
+    if (currentState.phase !== 'poisoned') currentState = { ...currentState, phase: 'retired' }
+    controller.abort(); handoff?.abandon()
+  }
   const registry: TaskRegistry = {
+    ready,
+    assertReady,
+    retireOwnedLoad,
+    async closeOwnedLoad() { await ready.catch(() => {}); await cleanupLoad(); await persistence.retireConsumers(); await persistence.flush() },
     bindForegroundHandoff(taskId) {
-      const task = records.get(taskId)
+      assertReady()
+      const task = currentState.records.get(taskId)
       if (!task || task.delivery !== 'tool') throw new Error('Original foreground task unavailable')
       // A recipient binding certifies source identity, not owned task storage.
       // Unsupported compositions keep their original tool/manual route.
-      if (!opts.coordinator || !opts.stateId || !opts.reportPolicy || !opts.ownedTask) return () => ({ kind: 'manual' })
+      if (!opts.coordinator || !opts.stateId || !opts.reportPolicy || !ownedTask) return () => ({ kind: 'manual' })
       let selected: ReturnType<TaskRegistry['bindForegroundHandoff']> extends () => infer R ? R : never
       return () => {
+        assertReady()
         if (selected) return selected
-        if (records.get(taskId) !== task) throw new Error('Original foreground task replaced')
+        if (currentState.records.get(taskId) !== task) throw new Error('Original foreground task replaced')
         if (task.outcome !== undefined) return selected = { kind: 'ready' }
         task.delivery = 'parent'
         const save = persistence.captureSave(true)
@@ -138,14 +210,16 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       }
     },
     async prepareResult(taskId, context, current) {
-      const task = records.get(taskId)
+      assertReady()
+      const task = currentState.records.get(taskId)
       if (!task) throw new Error(`unknown task: ${taskId}`)
       return resultOwner?.prepare(task, context, current)
     },
     async qualifyRestoredResults() {
+      assertReady()
       if (!opts.coordinator?.snapshot) return
       const sessions = new Map<string, Awaited<ReturnType<NonNullable<typeof opts.coordinator.snapshot>>>>()
-      for (const task of records.values()) {
+      for (const task of currentState.records.values()) {
         if (task.publication !== 'unqualified') continue
         let snapshot = sessions.get(task.parentSessionId)
         if (!snapshot) { snapshot = await opts.coordinator.snapshot(task.parentSessionId); sessions.set(task.parentSessionId, snapshot) }
@@ -153,7 +227,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       }
     },
     async readResult(taskId, args) {
-      const task = records.get(taskId)
+      assertReady()
+      const task = currentState.records.get(taskId)
       if (!task) throw new Error(`unknown task: ${taskId}`)
       if (!resultOwner) throw new Error("Retained task body reader unavailable")
       return resultOwner.read(task, args)
@@ -161,24 +236,27 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     retainResult,
     subscribe,
     submit(input) {
-      const { record, inserted } = records.submit(input, maxConcurrency)
+      assertReady()
+      const { record, inserted } = currentState.records.submit(input, maxConcurrency)
       if (!inserted) return record
       void save().catch(() => {})
       publish(record)
       return record
     },
-    get: (taskId) => records.get(taskId),
-    getByIdentity: identity => records.getByIdentity(identity),
-    getByChildSession: (childSessionId) => records.getByChildSession(childSessionId),
-    list: () => [...records.values()],
-    notifications: () => notifications.list(),
+    get: (taskId) => { assertReady(); return currentState.records.get(taskId) },
+    getByIdentity: identity => { assertReady(); return currentState.records.getByIdentity(identity) },
+    getByChildSession: (childSessionId) => { assertReady(); return currentState.records.getByChildSession(childSessionId) },
+    list: () => { assertReady(); return [...currentState.records.values()] },
+    notifications: () => { assertReady(); return currentState.notifications.list() },
     updateNotification(id, patch) {
-      if (!notifications.update(id, patch)) return false
+      assertReady()
+      if (!currentState.notifications.update(id, patch)) return false
       void save().catch(() => {})
       return true
     },
     claim(taskId, childSessionId, modelLabel, jobId) {
-      const t = records.claim(taskId, childSessionId, modelLabel, jobId)
+      assertReady()
+      const t = currentState.records.claim(taskId, childSessionId, modelLabel, jobId)
       if (!t) return false
       void save().catch(() => {})
       publish(t)
@@ -186,9 +264,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     },
     terminalize,
     cancelTree(taskId, error = "task cancelled by owner") {
-      const root = records.get(taskId)
+      assertReady()
+      const root = currentState.records.get(taskId)
       if (!root) return { taskIds: [], cancelled: 0 }
-      const tree = [root, ...[...records.values()].filter((r) => r.agentPath.startsWith(`${root.agentPath}/`))]
+      const tree = [root, ...[...currentState.records.values()].filter((r) => r.agentPath.startsWith(`${root.agentPath}/`))]
       const taskIds: string[] = []
       let cancelled = 0
       for (const t of tree) {
@@ -197,46 +276,48 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         taskIds.push(t.id)
         cancelled += 1
       }
-      for (const id of taskIds) announceTerminal(records.get(id)!, false)
+      for (const id of taskIds) announceTerminal(currentState.records.get(id)!, false)
       return { taskIds, cancelled }
     },
-    runningCount: () => records.runningCount(),
+    runningCount: () => { assertReady(); return currentState.records.runningCount() },
     async wait(taskId, timeoutMs) {
-      const current = records.get(taskId)
+      assertReady()
+      const current = currentState.records.get(taskId)
       if (!current || current.outcome !== undefined) return current
       let terminal = false
       await waitForObservation({
-        ready: () => terminal || records.get(taskId)!.outcome !== undefined,
+        ready: () => terminal || currentState.records.get(taskId)!.outcome !== undefined,
         changes: { subscribe: listener => subscribe(taskId, record => { terminal ||= record.outcome !== undefined; listener() }) },
         // Legacy non-finite positive/NaN deadlines never expired; negatives expired immediately.
         timeoutMs: timeoutMs === -Infinity ? 0 : Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : undefined,
       })
-      return records.get(taskId)
+      return currentState.records.get(taskId)
     },
     restore(doc) {
+      if (ownedTask) throw new Error("Owned task restore requires original load")
       validateTaskDocument(doc)
-      if (doc.formatVersion === 2) documentVersion = 2
+      if (doc.formatVersion === 2) currentState.version = 2
       // Counter seeding（Ruling M24a-T1a 同款）：還原的 id 是權威——task-<n> /
       // notif-<n> 從已知最大編號續增，避免 post-restore spawn 撞 id。
-      records.seedRestoredCounter(doc.tasks)
-      notifications.restore(doc.notifications)
+      currentState.records.seedRestoredCounter(doc.tasks)
+      currentState.notifications.restore(doc.notifications)
       // anonymous 還原記錄用獨立命名空間（restored-anon:N），永不與新
       // anonymous submit 的 anon:<n> 相撞——anonymous 任務永不 adopt（Task 3 規約）。
       let restoredAnon = 0
       for (const t of doc.tasks) {
-        records.checkRestoredId(t.id)
+        currentState.records.checkRestoredId(t.id)
         if (doc.formatVersion === 1) { t.bodyKind = "legacy-text"; t.legacyFormatVersion = 1 }
         else unqualifyRestoredTask(t)
-        records.insertRestored(t)
+        currentState.records.insertRestored(t)
         if (opts.reportPolicy && t.outcome !== undefined) restoredRetention(t, resultOwner?.available?.() === true)
         const anon = t.callEventSeq === undefined && t.toolCallId === undefined
         if (anon) restoredAnon += 1
-        records.indexRestored(t, restoredAnon)
+        currentState.records.indexRestored(t, restoredAnon)
       }
       for (const t of doc.tasks) publish(t)
     },
     save,
-    flushPersistence: () => persistence.flush(),
+    flushPersistence: async () => { assertReady(); await persistence.flush() },
   }
   associateTaskSaveOwner(registry, persistence)
   return registry
