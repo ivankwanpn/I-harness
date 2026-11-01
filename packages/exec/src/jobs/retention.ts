@@ -1,4 +1,4 @@
-import type { ExecResult, ExecResultRetention, ExecFrameObservation } from '../index.ts'
+import type { ExecResult, ExecResultRetention, ExecFrameObservation, ExecFrameCapture } from '../index.ts'
 import type { Capture } from '../capture/contracts.ts'
 import type { Job } from './contracts.ts'
 
@@ -11,14 +11,19 @@ function failure(result: ExecFrameObservation | undefined): Failure {
 /** The job registry delegates original capture retention here. Observer grants
  * do not change the capture's stored disposition or its native exit status. */
 export function createJobRetention(owner: ExecResultRetention | undefined, jobFor: (capture: Capture) => Job | undefined, changed: () => void = () => {}) {
-  const pending = new Set<Capture>()
-  async function settle(capture: Capture): Promise<ExecFrameObservation | undefined> {
-    if (!capture.frames || !owner) return undefined
+  const pending = new Map<ExecFrameCapture, Capture | undefined>()
+  const ownerSettle = owner?.settle, ownerObserve = owner?.observe
+  async function settleFrames(frames: ExecFrameCapture): Promise<ExecFrameObservation | undefined> {
+    if (!owner) return undefined
     try {
-      const result = await (owner.settle ? owner.settle(capture.frames) : capture.frames.settle())
-      if (result.kind === 'ready') pending.delete(capture)
+      const result = await (ownerSettle ? ownerSettle.call(owner, frames) : frames.settle())
+      if (result.kind === 'ready') pending.delete(frames)
       return result
     } catch { return { kind: 'recovery-required' } }
+  }
+  async function settle(capture: Capture): Promise<ExecFrameObservation | undefined> {
+    if (!capture.frames || !owner) return undefined
+    return settleFrames(capture.frames)
   }
   async function record(job: Job): Promise<void> {
     const result = await settle(job.capture)
@@ -33,12 +38,14 @@ export function createJobRetention(owner: ExecResultRetention | undefined, jobFo
   }
   async function currentObservation(capture: Capture): Promise<ExecFrameObservation | undefined> {
     if (!capture.frames || !owner) return undefined
-    try { return await owner.observe(capture.frames) }
+    try { return await ownerObserve!.call(owner, capture.frames) }
     catch { return { kind: 'recovery-required' } }
   }
   return {
+    trackFrames(frames: ExecFrameCapture) { if (owner) pending.set(frames, undefined) },
+    settleFrames,
     track(capture: Capture): Capture {
-      if (capture.frames && owner) pending.add(capture)
+      if (capture.frames && owner) pending.set(capture.frames, capture)
       return capture
     },
     record,
@@ -56,12 +63,12 @@ export function createJobRetention(owner: ExecResultRetention | undefined, jobFo
     },
     async drain(): Promise<string[]> {
       const unresolved: string[] = []
-      await Promise.all([...pending].map(async capture => {
-        await capture.complete.catch(() => {})
-        const job = jobFor(capture)
+      await Promise.all([...pending].map(async ([frames, capture]) => {
+        await capture?.complete.catch(() => {})
+        const job = capture ? jobFor(capture) : undefined
         if (job) await record(job)
-        else await settle(capture)
-        if (pending.has(capture)) unresolved.push(job?.id ?? capture.execution.id)
+        else await settleFrames(frames)
+        if (pending.has(frames)) unresolved.push(job?.id ?? capture?.execution.id ?? frames.sourceId)
       }))
       return unresolved
     },

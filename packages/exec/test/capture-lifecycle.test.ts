@@ -8,6 +8,7 @@ import { createExecService } from "../src/service.ts"
 import { withExecCallerScope, type BackgroundJobView, type ExecutionSupervisor } from "../src/index.ts"
 import { retainedOutputReader } from "../src/retained-output.ts"
 import { createExecutionSupervisor } from "../src/execution-supervisor.ts"
+import { createCaptureRetention } from '../src/capture/retention.ts'
 
 const opened = vi.hoisted(() => [] as number[])
 const closeFailure = vi.hoisted(() => ({ cause: undefined as Error | undefined, descriptors: [] as number[] }))
@@ -22,6 +23,23 @@ function deferred<T>() {
   const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
   return { promise, resolve, reject }
 }
+it('retains and finalizes the first real spill when second channel construction throws', () => {
+  const spillRoot = mkdtempSync(join(tmpdir(), 'capture-partial-'))
+  const boom = new Error('second channel'), start = opened.length
+  let reads = 0
+  const retention = createCaptureRetention({ spill: { spillRoot, get maxOutputBytes() {
+    if (++reads === 2) { retention.push('stdout', Buffer.alloc(64, 120)); throw boom }
+    return 16
+  } } }, undefined, undefined)
+  try {
+    expect(() => retention.initialize()).toThrow(boom)
+    expect(opened.slice(start)).toHaveLength(1)
+    expect(() => fstatSync(opened[start]!)).not.toThrow()
+    expect(retention.finalizeOutput()).toEqual([])
+    expect(() => fstatSync(opened[start]!)).toThrow(/EBADF/)
+    expect(retention.cleanupFailures()).toEqual([])
+  } finally { retention.finalizeOutput() }
+})
 it("reads the injected supervised handle once and preserves IO callback receivers through capture completion", async () => {
   const events: string[] = []
   const owner = { sessionId: "injected-owner" }
@@ -127,7 +145,14 @@ it("preserves execution and both independent close failures while closing both d
       expect(closeFailure.descriptors).toContain(fd)
       expect(() => fstatSync(fd)).toThrow(/EBADF/)
     }
-  } finally { closeFailure.cause = undefined; await f.exec.dispose() }
+  } finally {
+    closeFailure.cause = undefined
+    const closes = closeFailure.descriptors.length
+    await expect(f.exec.dispose()).rejects.toThrow('Exec service disposal failed')
+    // close took effect before throwing: the owner must retain unknown debt,
+    // never replay that numeric fd after it could have been reused.
+    expect(closeFailure.descriptors.length).toBe(closes)
+  }
 })
 it.each([undefined, { opaque: "observer" }, new Error("observer")])("joins cancellation and rejects the exact observer throw %s", async cause => {
   const f = fixture({ heldCancel: true, output: (async function* () { yield { channel: "stdout", data: Buffer.from("callback") } })() })
@@ -264,7 +289,11 @@ it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rej
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(reads).toBe(3)
     expect(supervisor.list()).toHaveLength(0)
-  } finally { closeFailure.cause = undefined; recovered = true; nativeEof.resolve(); await outcome; await exec.dispose() }
+  } finally {
+    closeFailure.cause = undefined; recovered = true; nativeEof.resolve(); await outcome
+    if (mode.endsWith('close failures')) await expect(exec.dispose()).rejects.toThrow('Exec service disposal failed')
+    else await exec.dispose()
+  }
 })
 function steerFixture() {
   let pending = false
