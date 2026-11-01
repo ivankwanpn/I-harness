@@ -102,3 +102,16 @@ it('matches an independently encoded full artifact and detaches caller header me
  expect(metadata.artifactDigest).not.toBe(domainDigest);expect(Object.isFrozen(metadata.header)).toBe(true)
  expect(inspectCodeOutputManifest({...stream})).toBeUndefined()
 })
+
+it.each(['accessor','toJSON','undefined','symbol'] as const)('rejects producer metadata before normalization or callbacks: %s',async mode=>{
+ let callbacks=0
+ const corrupt=(value:object,key:string)=>mode==='accessor'?Object.defineProperty({...value},key,{enumerable:true,get(){callbacks++;return 'actor'}}):mode==='toJSON'?{...value,toJSON(){callbacks++;return value}}:mode==='undefined'?{...value,extra:undefined}:{...value,[Symbol('extra')]:true}
+ const options={async open(){throw Error('Unexpected sink')},async confirm(){}}
+ const header={kind:'code-output' as const,version:1 as const,sessionId:'actor',cellId:'cell',sourceId:'original-operation'}
+ expect(()=>createCodeOutputManifest(corrupt(header,'sessionId') as typeof header,options)).toThrow();expect(callbacks).toBe(0)
+ const stream=createCodeOutputManifest(header,options)
+ const descriptor={kind:'output' as const,member:member(1),item:{kind:'text' as const,retention:{kind:'unavailable' as const,reason:'quota' as const}}}
+ await expect(stream.append({},corrupt(descriptor,'item') as typeof descriptor)).rejects.toThrow();expect(callbacks).toBe(0)
+ const footer={terminal:member(2),status:'completed' as const,store:null,accepted:0,omitted:0,truncated:false}
+ expect(()=>stream.seal(corrupt(footer,'terminal') as typeof footer)).toThrow();expect(callbacks).toBe(0)
+})

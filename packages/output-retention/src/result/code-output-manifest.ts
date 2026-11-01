@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { CODE_OUTPUT_DIGEST_DOMAIN, encodeCodeOutputRecord, type CodeOutputDescriptor, type CodeOutputFooter, type CodeOutputHeader, type ManagedArtifactRef } from '@i-harness/core-session'
+import { CODE_OUTPUT_DIGEST_DOMAIN, encodeCodeOutputRecord, isStrictFactData, type CodeOutputDescriptor, type CodeOutputFooter, type CodeOutputHeader, type ManagedArtifactRef } from '@i-harness/core-session'
 import type { ResultArtifactSink } from '@i-harness/context-output'
 
 export type CodeManifestDisposition = { kind: 'ready'; ref: ManagedArtifactRef } | { kind: 'unavailable'; reason: 'quota' | 'encoding' | 'storage-refused' | 'unsupported-owner' | 'capture-canceled' }
@@ -18,11 +18,12 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
   confirm(ref: ManagedArtifactRef): Promise<void>
   supported?():Promise<boolean>
 }) {
+  const head = encodeCodeOutputRecord(header)
   header = detached(header)
   const fullDigest = createHash('sha256')
   let encodedBytes = 0, acknowledgedCount = 0, unavailableTextCount = 0
   const open=options.open.bind(options),confirm=options.confirm.bind(options),supported=options.supported?.bind(options)
-  const digest = createHash('sha256').update(CODE_OUTPUT_DIGEST_DOMAIN), head = encodeCodeOutputRecord(header)
+  const digest = createHash('sha256').update(CODE_OUTPUT_DIGEST_DOMAIN)
   let sink: ResultArtifactSink | undefined, headerDone = false, count = 0, lastSeq = -1
   let methods:{write:ResultArtifactSink['write'];reconcileWrite:ResultArtifactSink['reconcileWrite'];finish:ResultArtifactSink['finish'];refuse:NonNullable<ResultArtifactSink['refuse']>}|undefined
   let pending: Buffer | undefined, writeIssued = false, lastRecord: WeakRef<object> | undefined, current: object | undefined
@@ -70,6 +71,7 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
   }
   const port = Object.freeze({
     append(record: object, descriptor: Omit<CodeOutputDescriptor,'ordinal'>): Promise<void> {
+      if (!isStrictFactData(descriptor)) return Promise.reject(new TypeError('Invalid Code descriptor data'))
       if (current && current !== record) return Promise.reject(new Error('Original Code manifest record still pending'))
       if (lastRecord?.deref() === record) {
         if(refusal)return Promise.resolve()
@@ -110,8 +112,10 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
       return work
     },
     seal(value: Omit<CodeOutputFooter,'kind'|'count'|'digest'>) {
+      if (!isStrictFactData(value)) throw new TypeError('Invalid Code footer data')
       if(value.terminal.receipt.owner.sessionId!==header.sessionId||value.terminal.seq<=lastSeq||value.store&&(value.store.receipt.owner.sessionId!==header.sessionId||value.store.seq>=value.terminal.seq))throw new Error('Foreign Code output terminal/store member')
       const candidate: CodeOutputFooter = { kind:'seal', count, digest: digest.copy().digest('hex'), ...value }
+      encodeCodeOutputRecord(candidate)
       // Empty output must hash its real header, installed during finish below.
       if (footer && JSON.stringify({ ...footer, digest:'' }) !== JSON.stringify({ ...candidate, digest:'' })) throw new Error('Original Code terminal changed')
       if (!footer) footer = detached(candidate)
