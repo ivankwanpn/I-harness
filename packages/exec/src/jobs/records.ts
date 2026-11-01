@@ -73,7 +73,9 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     try {
       const attempt = factory.prepare(args[0],args[1],args[2],args[3],entry.delivery)
       entry.attempt = attempt
-      entry.delivery?.prepareAttempt(attempt,retention.settleFrames)
+      entry.delivery?.prepareAttempt(attempt,retention.settleFrames,()=>{
+        if(pendingInstances.get(entry.instanceId)===entry&&entry.attempt?.isClean()&&entry.delivery?.isClean())pendingInstances.delete(entry.instanceId)
+      })
       const capture = await attempt.start()
       captured = true
       captureAttempts.set(capture, attempt)

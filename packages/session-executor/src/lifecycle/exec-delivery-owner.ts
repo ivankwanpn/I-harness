@@ -22,6 +22,7 @@ export function createExecDeliveryOwner(issuer:OriginalExecSourceIssuer,input:Ex
   let handoffFlight:Promise<boolean>|undefined
   let flight:Promise<void>|undefined
   let admissionCurrent=()=>true
+  let retireReservation=()=>{}
   const available=Promise.withResolvers<void>()
   async function settleTerminal(){
     if(terminalAttempted)terminalOutcome=await terminal!.observe()
@@ -92,8 +93,16 @@ export function createExecDeliveryOwner(issuer:OriginalExecSourceIssuer,input:Ex
   function settle(){if(flight)return flight;const pending=settleCompletion();flight=pending;void pending.then(()=>{flight=undefined},()=>{flight=undefined});return pending}
   const source=issuer.registerCompletion(async()=>{if(!unavailable&&!sourceRetired)await attempt?.retire();await settle()})
   const retainDebt=()=>{try{source.holdRecovery()}catch{/* The original owner retains a failed close. */}}
+  const closeOriginal=source.close.bind(source)
+  // The document's original checkpoint also calls this same source directly.
+  // Retirement follows that owner's close acknowledgment, whichever caller joins.
+  source.close=async function(){
+    if(this!==source)throw new Error('Foreign Exec settlement receiver')
+    try{await closeOriginal();completed=true;clean=true;retireReservation()}
+    catch(cause){retainDebt();throw cause}
+  }
   const owner:OriginalExecDeliveryOwner={
-    prepareAttempt(original,settleOriginal){if(attempt)throw new Error('Exec attempt already attached');attempt=original;settleFrames=settleOriginal},
+    prepareAttempt(original,settleOriginal,retire){if(attempt)throw new Error('Exec attempt already attached');attempt=original;settleFrames=settleOriginal;retireReservation=retire},
     async admit(){
       issuer.assertAdmissionCurrent()
       const prepared=await prepare(input)
@@ -111,6 +120,7 @@ export function createExecDeliveryOwner(issuer:OriginalExecSourceIssuer,input:Ex
       if(!current())throw new FactRecoveryRequiredError()
     },
     issued(){issuer.assertAdmissionCurrent();if(!admissionCurrent()||!unavailable&&sourceSeq===undefined)throw new FactRecoveryRequiredError();issued=true},
+    assertAdmissionCurrent(){issuer.assertAdmissionCurrent();if(!admissionCurrent()||!unavailable&&sourceSeq===undefined)throw new FactRecoveryRequiredError()},
     bind(original,originalAttempt,settleOriginal){capture=original;attempt=originalAttempt;settleFrames=settleOriginal;available.resolve();void settle().then(()=>owner.close(),retainDebt).catch(retainDebt)},
     failed(originalAttempt){attempt??=originalAttempt;available.resolve();void owner.close().catch(retainDebt)},
     async promoted(){
@@ -120,8 +130,8 @@ export function createExecDeliveryOwner(issuer:OriginalExecSourceIssuer,input:Ex
       if(sourceSeq===undefined)throw new FactRecoveryRequiredError()
       if(!await settleHandoff())throw Object.assign(new FactRecoveryRequiredError(),{cause:handoffOutcome})
     },
-    async close(){try{await source.close();completed=true;clean=true}catch(cause){retainDebt();throw cause}},
+    async close(){await source.close()},
     isClean(){return clean&&completed},
   }
-  return owner
+  return Object.freeze(owner)
 }

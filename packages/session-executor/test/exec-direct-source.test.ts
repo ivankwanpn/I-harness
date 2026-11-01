@@ -1,5 +1,5 @@
 import { createExecResultRetention } from '../src/lifecycle/exec-result-retention.ts'
-import { registerExecWithReservation } from '@i-harness/exec'
+import { registerExecWithReservation, createExecutionSupervisor } from '@i-harness/exec'
 import { expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -19,6 +19,9 @@ import { createExecutionLease, type TransportExecutionBackend } from '@i-harness
 import { compileExecutionPolicy } from '@i-harness/sandbox-policy'
 import { createExecFrameCapture } from '../../output-retention/src/result/exec-frames.ts'
 import * as scoped from '../src/scoped-exec.ts'
+import { randomUUID } from 'node:crypto'
+
+vi.mock('node:crypto',async original=>{const actual=await original<typeof import('node:crypto')>();return{...actual,randomUUID:vi.fn(actual.randomUUID)}})
 
 vi.mock('../../shell/src/discovery/windows.ts',()=>({bashAvailable:()=>true,resolveBashExe:()=> 'controlled-bash',resolvePwshExe:()=> 'controlled-pwsh',powerShellExecutableAvailable:()=>true}))
 it.each([
@@ -28,6 +31,11 @@ it.each([
   ['shell','background',false],['shell','nested',true],['shell','stop',true],
   ['shell','frame-debt',true],['shell','native-debt',true],['shell','unknown-source',true],
   ['shell','manual',true],['shell','code',true],['shell','once',true],['shell','child',true],['shell','close-after-source',true],['shell','null-exit',true],['shell','transform-failure',true],['shell','dispose-in-policy',true],['shell','promotion-race',true],['shell','recipient-unavailable',true],
+  ['shell','commit-rollback-debt',true],['shell','commit-falsey-rollback-debt',true],['shell','receipt-cleanup-debt',true],
+  ['shell','prepared-policy-debt',true],
+  ['shell','commit-rollback-sibling',true],
+  ['shell','revoked-probe',true],['shell','revoked-prepare',true],['shell','stop-held-prepare',true],['shell','authority-revocation',true],['shell','healthy-held-prepare',true],
+  ['shell','wrapped-supervisor',true],['shell','reconcile-held-prepare',true],
 ] as const)('owns original %s %s source and post-body completion (direct: %s)', async (name,mode,privileged) => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'exec-source-'))
   const backendStore=createJsonlBackend(root)
@@ -49,19 +57,31 @@ it.each([
   }
   backendStore.reconcileOwnedBatch=async(...args)=>!allowSource&&unknownKey&&args[3].key.batchId===unknownKey.batchId?{kind:'unknown',key:args[3].key}:reconcileOwned(...args)
   const gate = Promise.withResolvers<void>(), drained = Promise.withResolvers<void>()
+  const admissionGate=Promise.withResolvers<void>(),enteredAdmission=Promise.withResolvers<void>()
+  const siblingGate=Promise.withResolvers<void>(),siblingDrained=Promise.withResolvers<void>()
   let launches = 0,cancellations=0
+  let rollbacks=0,nativeOutstanding=false,preparedPolicyReads=0
+  let authorityCalls=0,policyResolutions=0,siblingCancels=0
+  const rejectedAdmission=['commit-rollback-debt','commit-falsey-rollback-debt','receipt-cleanup-debt','prepared-policy-debt','commit-rollback-sibling'].includes(mode)
   const nativeIssued=Promise.withResolvers<void>(),controller=new AbortController()
   const expectedSources=privileged&&mode!=='stop'&&mode!=='transform-failure'&&mode!=='dispose-in-policy'&&mode!=='recipient-unavailable'?1:0
   const backend: TransportExecutionBackend = {
-    async probe(){return{id:'source',availability:'available',assurance:'unverified',features:{writeIsolation:false,readIsolation:false,denyPaths:false,pipes:true,pty:false,retainedTree:true}}},
-    async prepare(spec,policy){return{policy,async rollback(){},async commit(check){check();launches++
-    expect(document.view.events.filter(e=>e.type==='agent/delivery-source'&&e.kind==='exec'),JSON.stringify({traces,results:document.view.events.filter(e=>e.type==='tool/result')})).toHaveLength(spec.argv[0]==='nested'?0:expectedSources)
-      if(spec.argv[0]!=='nested')nativeIssued.resolve()
-      const lease=createExecutionLease({receipt:{executionId:'source-native-'+launches,backendId:'source',policyFingerprint:policy.fingerprint,owner:spec.owner,assurance:'unverified'},rootExited:gate.promise.then(()=>({exitCode:mode==='null-exit'?null:0})),waitTreeEmpty:()=>gate.promise,settleIo:()=>drained.promise,async releaseResources(){if(mode==='native-debt'&&!releaseReady)throw new Error('original native release debt')},async terminate(){cancellations++;gate.resolve()}})
-      return{...lease,get settled(){return lease.settled},pid:1,io:{async write(){},async endInput(){},output:(async function*(){try{yield{channel:'stdout' as const,data:Buffer.from('original')};await gate.promise}finally{drained.resolve()}})()}}
-    }}},
+    async probe(){if(mode==='revoked-probe'){enteredAdmission.resolve();await admissionGate.promise};return{id:'source',availability:'available',assurance:'unverified',features:{writeIsolation:false,readIsolation:false,denyPaths:false,pipes:true,pty:false,retainedTree:true}}},
+    async prepare(spec,policy){
+      const sibling=spec.argv[0]==='sibling',rootGate=sibling?siblingGate:gate,ioGate=sibling?siblingDrained:drained
+      if(['revoked-prepare','stop-held-prepare','healthy-held-prepare','reconcile-held-prepare'].includes(mode)){enteredAdmission.resolve();await admissionGate.promise}
+      const prepared:Awaited<ReturnType<TransportExecutionBackend['prepare']>>={get policy(){if(!sibling)preparedPolicyReads++;if(mode==='prepared-policy-debt'){nativeOutstanding=true;throw new Error('original prepared policy failure')};return policy},async rollback(){expect(this).toBe(prepared);rollbacks++;if(rejectedAdmission&&!sibling&&!releaseReady)throw mode==='commit-falsey-rollback-debt'?undefined:new Error('original rollback debt');if(!sibling)nativeOutstanding=false;rootGate.resolve();ioGate.resolve()},async commit(check){check();launches++
+    expect(document.view.events.filter(e=>e.type==='agent/delivery-source'&&e.kind==='exec'),JSON.stringify({traces,results:document.view.events.filter(e=>e.type==='tool/result')})).toHaveLength(spec.argv[0]==='nested'||sibling?0:expectedSources)
+      if(spec.argv[0]!=='nested'&&!sibling)nativeIssued.resolve()
+      if(!sibling)nativeOutstanding=true
+      if(!sibling&&['commit-rollback-debt','commit-falsey-rollback-debt','commit-rollback-sibling'].includes(mode))throw new Error('original commit failed after native issue')
+      const lease=createExecutionLease({receipt:{executionId:'source-native-'+launches,backendId:mode==='receipt-cleanup-debt'?'invalid-receipt':'source',policyFingerprint:policy.fingerprint,owner:spec.owner,assurance:'unverified'},rootExited:rootGate.promise.then(()=>({exitCode:mode==='null-exit'?null:0})),waitTreeEmpty:()=>rootGate.promise,settleIo:async()=>{if(mode==='receipt-cleanup-debt'){if(!releaseReady)throw new Error('original native IO debt');return};await ioGate.promise},async releaseResources(){if(mode==='native-debt'&&!releaseReady)throw new Error('original native release debt');if(!sibling)nativeOutstanding=false},async terminate(){if(sibling)siblingCancels++;else cancellations++;rootGate.resolve()}})
+      return{...lease,get settled(){return lease.settled},pid:1,io:{async write(){},async endInput(){},output:(async function*(){try{yield{channel:'stdout' as const,data:Buffer.from('original')};await rootGate.promise}finally{ioGate.resolve()}})()}}
+    }};return prepared},
   }
-  const execPair=registerExecWithReservation(ctx,{execution:{defaultOwner:{sessionId:id},selectBackend:()=>backend,validateAuthority(){},resolvePolicy:owner=>compileExecutionPolicy({mode:'danger-full-access',owner,authority:{kind:'unbound',revision:'source',workspaceRoot:resolve('.')}})},resultRetention:mode==='frame-debt'?{begin({sourceId}){return createExecFrameCapture({sourceId,async openArtifact(){if(mode==='frame-debt')return{async write(){},async reconcileWrite(){return 'ready' as const},async finish(){return retentionReady?{kind:'refused' as const,reason:'quota' as const,observedEncodedBytes:9}:{kind:'recovery-required' as const,operationId:'original-frames'}},async reconcile(){throw new Error('unused')}};throw Object.assign(new Error('quota'),{code:'ARTIFACT_QUOTA'})}})},async settle(frames){return frames.settle()},async observe(frames){return frames.settle()}}:createExecResultRetention(undefined)})
+  const originalSupervisor=createExecutionSupervisor()
+  const supervisor=mode==='wrapped-supervisor'?{...originalSupervisor,launch(input:Parameters<typeof originalSupervisor.launch>[0]){return originalSupervisor.launch(input)}}:originalSupervisor
+  const execPair=registerExecWithReservation(ctx,{execution:{supervisor,defaultOwner:{sessionId:id},selectBackend:()=>backend,validateAuthority(){authorityCalls++;if(mode==='authority-revocation'&&authorityCalls===3)stopRequest=received.requestClose('user-stop')},resolvePolicy:owner=>{policyResolutions++;return compileExecutionPolicy({mode:'danger-full-access',owner,authority:{kind:'unbound',revision:'source',workspaceRoot:resolve('.')}})}},resultRetention:mode==='frame-debt'?{begin({sourceId}){return createExecFrameCapture({sourceId,async openArtifact(){if(mode==='frame-debt')return{async write(){},async reconcileWrite(){return 'ready' as const},async finish(){return retentionReady?{kind:'refused' as const,reason:'quota' as const,observedEncodedBytes:9}:{kind:'recovery-required' as const,operationId:'original-frames'}},async reconcile(){throw new Error('unused')}};throw Object.assign(new Error('quota'),{code:'ARTIFACT_QUOTA'})}})},async settle(frames){return frames.settle()},async observe(frames){return frames.settle()}}:createExecResultRetention(undefined)})
   let received!: ReturnType<typeof createRecipientDelivery>
   const receivedSource=document.registerReceivedInputSource(async()=>{await received.settle()})
   received=createRecipientDelivery(document,receivedSource,id)
@@ -86,14 +106,58 @@ it.each([
   const agent=createAgent(ctx,{session:document.view,sessionId:id,factOwner:document,tools:registry.registry,modelCallOrigin:origin.bind(registry.registry,registry.driver),model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),systemPrompt:'s',generationFactory:(action,deps)=>createGenerationLifecycle(document.view,id,action,undefined,deps)})
   try{
     if(mode!=='recipient-unavailable')await receivedSource.captureAdmitted({type:'agent/input/admitted',version:1,inputId:'original-human',text:'run the original command',delivery:'steer',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture',originSessionId:id}}).admit()
+    const sibling=mode==='commit-rollback-sibling'?await execPair.service.runBackground({argv:['sibling']}):undefined
     const running=agent.run('run the original command',controller.signal,undefined,mode==='recipient-unavailable'?undefined:'original-human')
-    if(mode==='stop'||mode==='transform-failure'||mode==='dispose-in-policy'||mode==='unknown-source'||mode==='close-after-source')await running.catch(()=>{})
+    if(['revoked-probe','revoked-prepare','stop-held-prepare','healthy-held-prepare','reconcile-held-prepare'].includes(mode)){
+      await enteredAdmission.promise
+      expect(sourceWrites).toBe(1);expect(launches).toBe(0)
+      expect(document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(0)
+      if(mode==='stop-held-prepare')controller.abort()
+      else if(mode!=='healthy-held-prepare'){
+        if(mode==='reconcile-held-prepare')await originalSupervisor.reconcile(id,()=>{})
+        stopRequest=received.requestClose('user-stop')
+      }
+      admissionGate.resolve()
+    }
+    const revoked=['revoked-probe','revoked-prepare','stop-held-prepare','authority-revocation','reconcile-held-prepare'].includes(mode)
+    if(revoked||rejectedAdmission||mode==='stop'||mode==='transform-failure'||mode==='dispose-in-policy'||mode==='unknown-source'||mode==='close-after-source')await running.catch(()=>{})
     else{
       await Promise.race([nativeIssued.promise,running])
       if(mode==='foreground')gate.resolve()
       await running
     }
     await scopedDispose
+    if(revoked){
+      expect(sourceWrites).toBe(1);expect(launches).toBe(0)
+      await stopRequest?.settled
+      await execPair.service.dispose()
+      expect(document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(1)
+      return
+    }
+    if(rejectedAdmission){
+      const issued=mode==='prepared-policy-debt'?0:sibling?2:1
+      expect(sourceWrites).toBe(1);expect(launches).toBe(issued);expect(nativeOutstanding).toBe(true)
+      expect(document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(0)
+      await expect(sibling?document.settleFinishedActions():execPair.service.dispose()).rejects.toThrow()
+      expect(document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(0)
+      const previousRollbacks=rollbacks
+      const grants=policyResolutions
+      releaseReady=true;await(sibling?document.settleFinishedActions():execPair.service.dispose())
+      expect(nativeOutstanding).toBe(false);expect(sourceWrites).toBe(1);expect(launches).toBe(issued)
+      expect(preparedPolicyReads).toBe(1)
+      expect(policyResolutions).toBe(grants)
+      if(sibling){
+        expect(siblingCancels).toBe(0);expect(execPair.service.getJobView(sibling.jobId).status).toBe('running')
+        const original=document.view.events.find(e=>e.type==='agent/delivery-source'&&e.kind==='exec')!
+        if(original.type!=='agent/delivery-source')throw new Error('Missing original source')
+        vi.mocked(randomUUID).mockReturnValueOnce(original.sourceId as ReturnType<typeof randomUUID>)
+        const unused=execPair.port.reserve();expect(execPair.port.instanceId(unused)).toBe(original.sourceId);execPair.port.release(unused)
+      }
+      if(mode==='receipt-cleanup-debt')expect(rollbacks).toBe(0)
+      else expect(rollbacks).toBeGreaterThan(previousRollbacks)
+      expect(document.view.events.filter(e=>e.type==='exec/end')).toMatchObject([{execution:{dispatch:'unknown',outcome:'unknown'}}])
+      return
+    }
     if(mode==='close-after-source'){
       expect(launches).toBe(0);expect(sourceWrites).toBe(1)
       await stopRequest?.settled
@@ -156,7 +220,7 @@ it.each([
     await execPair.service.dispose()
     expect(document.view.events.filter(e=>e.type==='exec/end')).toHaveLength(expectedSources)
     if(mode==='null-exit')expect(document.view.events.filter(e=>e.type==='exec/end')).toMatchObject([{execution:{dispatch:'dispatched',outcome:'unknown'},exitCode:null}])
-  }finally{allowSource=true;retentionReady=true;releaseReady=true;gate.resolve();drained.resolve();await execPair.service.dispose().catch(()=>{});await receivedSource.close();await coordinator.close();await server.close();await ctx.scope.unmount()}
+  }finally{siblingGate.resolve();siblingDrained.resolve();admissionGate.resolve();allowSource=true;retentionReady=true;releaseReady=true;gate.resolve();drained.resolve();await execPair.service.dispose().catch(()=>{});await receivedSource.close();await coordinator.close();await server.close();await ctx.scope.unmount()}
 })
 
 

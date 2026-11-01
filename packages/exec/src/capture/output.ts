@@ -5,6 +5,7 @@ import type { Capture, CaptureAttempt, Channel, StreamMetadata } from "./contrac
 import { validateInput } from "./input.ts"
 import { createCaptureRetention } from "./retention.ts"
 import { completeCapture } from "./completion.ts"
+import type { NativeAdmissionOwner, OriginalExecutionAdmission } from '../supervision/contracts.ts'
 
 function isEpipe(cause: unknown): boolean { return (cause as NodeJS.ErrnoException)?.code === "EPIPE" }
 function together(failures: unknown[], message: string): void {
@@ -17,13 +18,19 @@ interface FrameOwner {
 }
 
 export function createCaptureFactory(options: ExecServiceOptions, supervisor: ExecutionSupervisor,
-  launchTransport: (request: ExecTransportRequest, automaticPromotion?: boolean) => Promise<SupervisedExecution>, frameOwner: FrameOwner,
+  launchTransport: (request: ExecTransportRequest, automaticPromotion?: boolean, admission?:NativeAdmissionOwner) => Promise<SupervisedExecution>, frameOwner: FrameOwner,
   resultRetention: ExecServiceOptions['resultRetention']) {
   function prepare(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background = false, promotable = false, delivery?: import('../direct-delivery.ts').OriginalExecDeliveryOwner): CaptureAttempt {
     // No acquisition or caller getters before the registry installs this owner.
     let flight: Promise<Capture> | undefined, cleanupFlight: Promise<void> | undefined
     let execution: SupervisedExecution | undefined, handle: TransportExecutionHandle | undefined
     let nativeSettlement: ExecutionSettlement | undefined
+    let admission:OriginalExecutionAdmission|undefined,admissionExpected=false
+    const admissionOwner:NativeAdmissionOwner|undefined=delivery?Object.freeze({
+      begin(){if(this!==admissionOwner)throw new Error('Foreign native admission receiver');admissionExpected=true},
+      attach(original:OriginalExecutionAdmission){if(this!==admissionOwner||admission)throw new Error('Original admission already attached');admission=original},
+      assertCurrent(){if(this!==admissionOwner)throw new Error('Foreign native admission receiver');delivery.assertAdmissionCurrent()},
+    }):undefined
     let failed: { cause: unknown } | undefined, retiring = false, clean = false
     let capture: Capture | undefined, frames: ExecFrameCapture | undefined
     let retention: ReturnType<typeof createCaptureRetention> | undefined
@@ -93,6 +100,8 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
     async function cleanup(retryNative: boolean): Promise<void> {
       const failures: unknown[] = []
       if (failed) stopFailedCapture()
+      const admissionCleanup=admission?(retryNative?admission.retryCleanup():admission.observeCleanup()):undefined
+      void admissionCleanup?.catch(()=>{})
       try { releaseCommand() } catch (cause) { failures.push(cause) }
       let cancelFailure: { cause: unknown } | undefined
       let cancelled: ExecutionSettlement | undefined
@@ -142,6 +151,8 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
       if (!nativeClean && cancelled?.kind === 'incomplete') failures.push(new Error(`Execution cancellation incomplete: ${cancelled.detail}`))
       failures.push(...iteratorFailures)
       if (returnPending) failures.push(new Error('Original output iterator return is unresolved'))
+      if(admissionCleanup)try{const outcome=await admissionCleanup;if(outcome.kind==='failed')failures.push(outcome.cause)}catch(cause){failures.push(cause)}
+      if(admissionExpected&&!admission&&!execution)failures.push(new Error('Original native admission cleanup is unknown'))
       together(failures, 'Capture cleanup failed')
       clean = true
     }
@@ -183,7 +194,7 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
         if(delivery)await delivery.admit()
         if(retiring)throw new Error('Exec service disposed')
         delivery?.issued()
-        execution = await launchTransport(request, promotable && !background && target !== "wsl")
+        execution = await launchTransport(request, promotable && !background && target !== "wsl",admissionOwner)
         if (retiring) throw new Error('Exec service disposed')
         handle = execution.handle
         const timeoutMs = command.timeoutMs
