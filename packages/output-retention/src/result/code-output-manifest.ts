@@ -1,16 +1,29 @@
 import { createHash } from 'node:crypto'
-import { CODE_OUTPUT_DIGEST_DOMAIN, encodeCodeOutputRecord, type CodeOutputDescriptor, type CodeOutputFooter, type CodeOutputHeader, type ManagedArtifactRef } from '@i-harness/core-session'
+import { CODE_OUTPUT_DIGEST_DOMAIN, encodeCodeOutputRecord, isStrictFactData, type CodeOutputDescriptor, type CodeOutputFooter, type CodeOutputHeader, type ManagedArtifactRef } from '@i-harness/core-session'
 import type { ResultArtifactSink } from '@i-harness/context-output'
 
 export type CodeManifestDisposition = { kind: 'ready'; ref: ManagedArtifactRef } | { kind: 'unavailable'; reason: 'quota' | 'encoding' | 'storage-refused' | 'unsupported-owner' | 'capture-canceled' }
+type ManifestInspection = Readonly<{ header: CodeOutputHeader; footer: CodeOutputFooter | undefined; descriptorCount: number; unavailableTextCount: number; encodedBytes: number; artifactDigest: string }>
+const inspections = new WeakMap<object, () => ManifestInspection>()
+/** Metadata only; this observation conveys no native authority. */
+export function inspectCodeOutputManifest(port: object): ManifestInspection | undefined { return inspections.get(port)?.() }
+function detached<T>(value: T): T {
+  const copy = JSON.parse(JSON.stringify(value)) as T
+  const freeze = (v: unknown): void => { if (v && typeof v === 'object') { for (const child of Object.values(v)) freeze(child); Object.freeze(v) } }
+  freeze(copy); return copy
+}
 /** One original sink/frontier. No lifetime record collection or output bodies. */
 export function createCodeOutputManifest(header: CodeOutputHeader, options: {
   open(): Promise<ResultArtifactSink>
   confirm(ref: ManagedArtifactRef): Promise<void>
   supported?():Promise<boolean>
 }) {
+  const head = encodeCodeOutputRecord(header)
+  header = detached(header)
+  const fullDigest = createHash('sha256')
+  let encodedBytes = 0, acknowledgedCount = 0, unavailableTextCount = 0
   const open=options.open.bind(options),confirm=options.confirm.bind(options),supported=options.supported?.bind(options)
-  const digest = createHash('sha256').update(CODE_OUTPUT_DIGEST_DOMAIN), head = encodeCodeOutputRecord(header)
+  const digest = createHash('sha256').update(CODE_OUTPUT_DIGEST_DOMAIN)
   let sink: ResultArtifactSink | undefined, headerDone = false, count = 0, lastSeq = -1
   let methods:{write:ResultArtifactSink['write'];reconcileWrite:ResultArtifactSink['reconcileWrite'];finish:ResultArtifactSink['finish'];refuse:NonNullable<ResultArtifactSink['refuse']>}|undefined
   let pending: Buffer | undefined, writeIssued = false, lastRecord: WeakRef<object> | undefined, current: object | undefined
@@ -35,6 +48,7 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
       await methods.write(pending)
     }
     if (hash) digest.update(pending)
+    fullDigest.update(pending); encodedBytes += pending.length
     pending = undefined; writeIssued = false
   }
   async function initialize() {
@@ -55,8 +69,9 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
     pending=undefined;writeIssued=false;current=undefined;lastRecord=undefined
     return result=Object.freeze({...refusal})
   }
-  return Object.freeze({
+  const port = Object.freeze({
     append(record: object, descriptor: Omit<CodeOutputDescriptor,'ordinal'>): Promise<void> {
+      if (!isStrictFactData(descriptor)) return Promise.reject(new TypeError('Invalid Code descriptor data'))
       if (current && current !== record) return Promise.reject(new Error('Original Code manifest record still pending'))
       if (lastRecord?.deref() === record) {
         if(refusal)return Promise.resolve()
@@ -68,6 +83,7 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
       }
       if (footer) return Promise.reject(new Error('Code manifest already sealed'))
       if(!refusal && (descriptor.member.receipt.owner.sessionId!==header.sessionId||descriptor.member.seq<=lastSeq||!Number.isSafeInteger(count+1)))return Promise.reject(new Error('Foreign or replayed Code output member'))
+      const unavailableText = descriptor.item.kind === 'text' && descriptor.item.retention.kind === 'unavailable'
       let encoded:Buffer|undefined,encodedDigest:string|undefined
       if(!refusal) {
         try {encoded=encodeCodeOutputRecord({...descriptor,ordinal:count});encodedDigest=createHash('sha256').update(encoded).digest('hex')}
@@ -89,17 +105,20 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
           if ((cause as {code?:string})?.code === 'ARTIFACT_QUOTA') refusal = { kind: 'unavailable', reason: 'quota' }
           else throw recovery(cause)
         }
+        if (!refusal) { acknowledgedCount++; if (unavailableText) unavailableTextCount++ }
         count++; lastSeq = descriptor.member.seq;lastDescriptorDigest=createHash('sha256').update(bytes).digest('hex'); lastRecord = new WeakRef(record); current = undefined
       })
       flight = work; void work.then(() => { if (flight === work) flight = undefined }, () => { if (flight === work) flight = undefined })
       return work
     },
     seal(value: Omit<CodeOutputFooter,'kind'|'count'|'digest'>) {
+      if (!isStrictFactData(value)) throw new TypeError('Invalid Code footer data')
       if(value.terminal.receipt.owner.sessionId!==header.sessionId||value.terminal.seq<=lastSeq||value.store&&(value.store.receipt.owner.sessionId!==header.sessionId||value.store.seq>=value.terminal.seq))throw new Error('Foreign Code output terminal/store member')
       const candidate: CodeOutputFooter = { kind:'seal', count, digest: digest.copy().digest('hex'), ...value }
+      encodeCodeOutputRecord(candidate)
       // Empty output must hash its real header, installed during finish below.
       if (footer && JSON.stringify({ ...footer, digest:'' }) !== JSON.stringify({ ...candidate, digest:'' })) throw new Error('Original Code terminal changed')
-      if (!footer) footer = candidate
+      if (!footer) footer = detached(candidate)
     },
     finish(): Promise<CodeManifestDisposition> {
       if (result) return Promise.resolve(result)
@@ -111,7 +130,7 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
         }
         if (!footerDone) {
           if(!await initialize())return result=refusal!
-          footer = { ...footer, digest: digest.copy().digest('hex') }
+          footer = detached({ ...footer, digest: digest.copy().digest('hex') })
           try {footerBytes ??= encodeCodeOutputRecord(footer)}catch{refusal={kind:'unavailable',reason:'encoding'};return closeRefused()}
           await write(footerBytes, false); footerDone = true
         }
@@ -129,4 +148,6 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
       return work
     },
   })
+  inspections.set(port, () => Object.freeze({ header, footer, descriptorCount: acknowledgedCount, unavailableTextCount, encodedBytes, artifactDigest: fullDigest.copy().digest('hex') }))
+  return port
 }
