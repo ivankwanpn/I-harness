@@ -299,7 +299,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
         const candidate=await readSessionArchive(handle,extent,false,prefix => assertPublicBootstrap(sessionId,false,prefix))
         await assertNotDeleted("session",sessionId)
         return {version:candidate.header.formatVersion,events:candidate.events,meta:candidate.header}
-      })
+      },false,sessionId,true)
     },
 
     async list(): Promise<string[]> {

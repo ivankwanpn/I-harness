@@ -506,7 +506,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(code==='FACT_TARGET_UNAVAILABLE')return blocked(entry,'dependency-unavailable')
       if(code==='FACT_PRECONDITION_STALE'||code==='FACT_CANCELLED')return b.issued?blocked(entry,code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown'):{kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
       return b.issued || b.taskBarrier?.taskIssued ? blocked(entry) : {kind:'refused',reason:'manifest-invalid'}
-    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)}; if (b.taskBarrier && !b.taskBarrier.completed && !b.taskBarrier.taskIssued && !b.issued) { await b.taskBarrier.close(); b.taskBarrier = undefined } }
+    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)}; if (b.taskBarrier && b.issued && entry.headerUnknown) await b.taskBarrier.allowObservation(); if (b.taskBarrier && !b.taskBarrier.completed && !b.taskBarrier.taskIssued && !b.issued) { await b.taskBarrier.close(); b.taskBarrier = undefined } }
   }
   function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation}):Promise<BootstrapOutcome> {
     let captured: BootstrapInvocation

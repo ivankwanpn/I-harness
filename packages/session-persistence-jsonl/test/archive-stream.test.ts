@@ -1,13 +1,16 @@
+import * as formatValidation from '../../session-persistence/src/format/validation.ts'
 import { afterEach, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import * as fs from 'node:fs/promises';
 import { createJsonlBackend } from '../src/index.ts';
 import { createSessionCoordinator } from '@i-harness/session-persistence';
 vi.mock('node:fs/promises', async (load) => { const actual = await load<typeof import('node:fs/promises')>(); return { ...actual, open: vi.fn(actual.open), readFile: vi.fn(actual.readFile), writeFile: vi.fn(actual.writeFile) }; });
+vi.mock('../../session-persistence/src/format/validation.ts', async load => { const actual=await load<typeof import('../../session-persistence/src/format/validation.ts')>(); return {...actual,migrate:vi.fn(actual.migrate)} })
+const actualMigrate = vi.mocked(formatValidation.migrate).getMockImplementation()!
 const actualOpen = vi.mocked(fs.open).getMockImplementation()!;
 const actualReadFile = vi.mocked(fs.readFile).getMockImplementation()!;
 const actualWriteFile = vi.mocked(fs.writeFile).getMockImplementation()!;
-afterEach(() => { vi.mocked(fs.open).mockImplementation(actualOpen); vi.mocked(fs.readFile).mockImplementation(actualReadFile); vi.mocked(fs.writeFile).mockImplementation(actualWriteFile); });
+afterEach(() => { vi.mocked(formatValidation.migrate).mockImplementation(actualMigrate); vi.mocked(fs.open).mockImplementation(actualOpen); vi.mocked(fs.readFile).mockImplementation(actualReadFile); vi.mocked(fs.writeFile).mockImplementation(actualWriteFile); });
 async function fixture() { const root = await fs.mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'archive-')); const path = join(root, 'a.jsonl'); await fs.writeFile(path, JSON.stringify({ formatVersion: 1, sessionId: 'a', createdAt: '' }) + '\n' + JSON.stringify({ type: 'user/message', text: '雪' }) + '\n'); return { root, path, backend: createJsonlBackend(root) }; }
 it('actual read streams without whole session readFile and preserves literal legacy final lines', async () => {
     const f = await fixture();
@@ -241,4 +244,35 @@ it.each([false,true])('ordinary header with recognized bootstrap namespace refus
  const f=await managed();await fs.writeFile(f.path+'.bootstrap-'+ 'a'.repeat(64)+'.stage','{}');if(corrupt)await fs.appendFile(f.path,'{}\n');const before=await fs.readFile(f.path);
  for(const operation of [()=>f.backend.read('a'),()=>f.backend.append('a',[])])await expect(operation()).rejects.toMatchObject({code:'SESSION_BOOTSTRAP_INCOMPLETE'});
  expect(await fs.readFile(f.path)).toEqual(before);
+});
+
+import { createArchiveReadOwner } from '../src/backend/archive-read-owner.ts'
+it('retained original mutation read scope is exact-session and expires without reopening public admission',async()=>{
+ const f=await fixture(),owner=createArchiveReadOwner(),participant=owner.association.attach();participant.fence();await participant.settle();
+ const release=Promise.withResolvers<void>();let escaped:Promise<unknown>|undefined;
+ const original=await participant.withMutationRead('a',async()=>{
+  escaped=release.promise.then(()=>owner.run(f.path,async()=> 'escaped',false,'a'));void escaped.catch(()=>{});
+  await expect(owner.run(f.path,async()=> 'foreign',false,'other')).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE');
+  return owner.run(f.path,async()=> 'original',false,'a')
+ });expect(original).toBe('original');release.resolve();await expect(escaped).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE');
+ await expect(owner.run(f.path,async()=> 'public',false,'a')).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE');
+});
+
+it('raw structural backend observation survives settled close while that coordinator public reads stay retired',async()=>{
+ const f=await fixture(),c=createSessionCoordinator(f.backend);await c.close();
+ expect((await f.backend.read('a')).events).toHaveLength(1);
+ await expect(c.snapshot!('a')).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE');await expect(c.load('a')).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE');
+ const later=createSessionCoordinator(f.backend);try{expect((await later.snapshot!('a')).session.events).toHaveLength(1);await expect(c.snapshot!('a')).rejects.toThrow('ARCHIVE_READ_UNAVAILABLE')}finally{await later.close()}
+});
+
+import { composeJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+it.each(['snapshot','load'] as const)('public %s cannot publish a candidate whose final migration crossed original coordinator close',async method=>{
+ const f=await fixture(),c=composeJsonlTaskTransitionCoordinator(f.backend,undefined,taskDocumentStorageContract),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let calls=0;
+ vi.mocked(formatValidation.migrate).mockImplementation(async(...args)=>{const result=await actualMigrate(...args);if(args[2]?.sessionId==='a'&&++calls===(method==='snapshot'?1:3)){entered.resolve();await release.promise}return result});
+ const reading=method==='snapshot'?c.snapshot!('a'):c.load('a');void reading.catch(()=>{});
+ await Promise.race([entered.promise,reading.then(()=>{throw Error('public read finished before migration hold')},error=>{throw error})]);
+ const closing=c.close();void closing.catch(()=>{});release.resolve();const outcome=await reading.then(value=>({ok:true,value,error:undefined}),error=>({ok:false,value:undefined,error}));await closing;
+ vi.mocked(formatValidation.migrate).mockImplementation(actualMigrate);
+ const later=createSessionCoordinator(f.backend);try{expect(outcome.ok).toBe(false);expect(outcome.error).toMatchObject({message:'ARCHIVE_READ_UNAVAILABLE'});expect((await f.backend.read('a')).events.length).toBeGreaterThan(0);expect((await later.snapshot!('a')).session.events.length).toBeGreaterThan(0)}finally{await later.close()}
 });
