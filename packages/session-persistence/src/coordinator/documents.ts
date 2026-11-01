@@ -8,6 +8,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { canonicalJsonData, isStrictFactData } from '@i-harness/core-session'
 import { captureHeldOwnershipClaim } from './ownership.ts'
+import { closeOriginalDeletionCleanup, type OriginalDeletionCleanup } from './deletion-preparation.ts'
 
 export interface DeletionDocumentCleanup { assertCovered(keys: readonly string[]): void; assertSettled(): void; close(): Promise<void> }
 
@@ -23,7 +24,7 @@ export function createDocuments(
   const observations = createBindingObservations(backend, ownership)
   const deletedDocuments = new Set<string>()
   const isDeleted = (key: string) => [...deletedDocuments].some(value => ownership.exclusionScope ? ownership.exclusionScope([], [key]).keys.some(resource => ownership.exclusionScope!([], [value]).keys.includes(resource)) : value === key)
-  type Disposal = { pins: Awaited<ReturnType<Ownership['pinDocumentOwnership']>>[]; locks: Awaited<ReturnType<Ownership['acquireLease']>>[]; acquisitions: OwnershipCleanup[] }
+  type Disposal = { pins: Awaited<ReturnType<Ownership['pinDocumentOwnership']>>[]; locks: Awaited<ReturnType<Ownership['acquireLease']>>[]; acquisitions: OwnershipCleanup[]; predecessor?: OriginalDeletionCleanup }
   const disposalDebt = new Set<Disposal>()
   function trackLease(raw: Awaited<ReturnType<Ownership['acquireLease']>>) {
     let failed = false, cause: unknown
@@ -34,6 +35,7 @@ export function createDocuments(
     } }
   }
   async function dispose(record: Disposal) {
+    if (record.predecessor) await closeOriginalDeletionCleanup(record.predecessor)
     while (record.acquisitions.length) { await record.acquisitions.at(-1)!.close(); record.acquisitions.at(-1)!.assertSettled(); record.acquisitions.pop() }
     record.locks.length = 0; record.pins.length = 0
     disposalDebt.delete(record)
@@ -45,8 +47,8 @@ export function createDocuments(
     ? createTaskDocumentOperations(ownership as Ownership, observations, taskConfiguration, run => { const p = docChain.then(run); docChain = p.then(() => {}, () => {}); return p }, processLatches) : undefined
   const taskTransitions = transitionConfiguration && ownership.pinOwnership && ownership.withSessionOperation
     ? createTaskDocumentTransitions(ownership as Ownership, observations, transitionConfiguration, () => docChain, processLatches) : undefined
-  async function withDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>, queued = false, retain?: (cleanup: DeletionDocumentCleanup) => void): Promise<T> {
-    const record: Disposal = { pins: [], locks: [], acquisitions: [] }
+  async function withDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>, queued = false, retain?: (cleanup: DeletionDocumentCleanup) => void, predecessor?: OriginalDeletionCleanup): Promise<T> {
+    const record: Disposal = { pins: [], locks: [], acquisitions: [], predecessor }
     async function acquire<T extends { release(): void | Promise<void> }>(start: (retain: (cleanup: OwnershipCleanup) => void) => Promise<T>, protectLease = false): Promise<T> {
       let captured = false
       const resource = await start(cleanup => { captured = true; record.acquisitions.push(cleanup) })
@@ -181,7 +183,7 @@ export function createDocuments(
   return {
     writeOwnedProjectBinding,
     async retryProjectBindingCleanup() { const results = await Promise.allSettled([...bindingAttempts].map(record => record.close())); const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []); if (failures.length === 1) throw failures[0]; if (failures.length) throw new AggregateError(failures, 'Binding cleanup unresolved') },
-    withDeletionDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>, retain: (cleanup: DeletionDocumentCleanup) => void) { return withDocumentLeases(keys, run, false, retain) },
+    withDeletionDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>, retain: (cleanup: DeletionDocumentCleanup) => void, predecessor?: OriginalDeletionCleanup) { return withDocumentLeases(keys, run, false, retain, predecessor) },
     observations, withDocumentLeases, taskOperations, taskTransitions,
     // Deletion closes this key for this coordinator lifetime; the retained token
     // keeps a later capture from treating the retired document as available.

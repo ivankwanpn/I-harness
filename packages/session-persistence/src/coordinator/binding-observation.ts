@@ -603,7 +603,7 @@ export function createBindingObservations(
         }) as OriginalResultRevocationTicket
         records.set(ticket, record)
         if (request.kind === 'workspace') resultWorkspaceFences.add(ticket)
-        try { record.admissions.push(beginMutation(request.sessionIds, request.sessionIds.map(bindingKey))) }
+        try { record.admissions.push(beginMutation(request.sessionIds, [...request.sessionIds.map(bindingKey), ...(request.documentKeys ?? [])])) }
         catch (failure) { resultWorkspaceFences.delete(ticket); records.delete(ticket); throw failure }
         resultRevocations.add(ticket)
         return ticket

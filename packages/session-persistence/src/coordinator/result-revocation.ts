@@ -4,6 +4,7 @@ import type { SessionCoordinator } from './types.ts'
 import { assertOriginalBatchParticipant, reserveOriginalOwnershipBatch, assertOriginalOwnershipBatchCoverage, type OriginalOwnershipBatch, type Ownership, type OwnershipCleanup } from './ownership.ts'
 import type { OriginalLegacyOrderingParticipant, OriginalOrderingOrigin } from './result-ordering-types.ts'
 import { captureResultTargetIds } from './result-revocation-data.ts'
+import { captureOriginalDeletionBatch, captureOriginalDeletionPlan, captureOriginalDeletionScope, type DeletionPreparationScope } from './deletion-preparation.ts'
 
 declare const scopeBrand: unique symbol
 declare const ticketBrand: unique symbol
@@ -22,7 +23,7 @@ export interface ResultRevocationAdmission {
   joinLocalTargets(ticket: OriginalResultRevocationTicket, ids: readonly string[]): Promise<void>
   bindOriginalCoverage(ticket: OriginalResultRevocationTicket, coverage: OriginalRevocationCoverage): void
 }
-export type ResultRevocationRequest = Readonly<{ kind: 'workspace' | 'session'; sessionIds: readonly string[] }>
+export type ResultRevocationRequest = Readonly<{ kind: 'workspace' | 'session'; sessionIds: readonly string[]; documentKeys?: readonly string[] }>
 const scopes = new WeakMap<object, { admission: ResultRevocationAdmission; request: ResultRevocationRequest }>()
 const admissions = new WeakSet<object>()
 const participants = new WeakMap<object, Ownership>()
@@ -37,6 +38,8 @@ type CoverageRecord = {
   owner: Ownership; ports: readonly ResultRevocationAdmission[]; tickets: readonly OriginalResultRevocationTicket[]; ids: readonly string[]
   batch?: OriginalOwnershipBatch; native?: OwnershipCleanup; locals: Map<ResultRevocationAdmission, { ticket: OriginalResultRevocationTicket; drain(): Promise<void> }>
   done: Promise<void>; retired: boolean; effectActive?: object; closing?: Promise<void>
+  outer?: OwnershipCleanup
+  deletion?: { coordinator: SessionCoordinator; scope: DeletionPreparationScope }
 }
 const coverages = new WeakMap<OriginalRevocationCoverage, CoverageRecord>()
 function coverageFor(coverage: OriginalRevocationCoverage): CoverageRecord {
@@ -85,12 +88,41 @@ export function closeOriginalRevocationCoverage(coverage: OriginalRevocationCove
   if (original.effectActive) return Promise.reject(Error('Original covered clear in progress'))
   if (original.closing) return original.closing
   const flight = (async () => {
-    await original.done
-    for (const local of original.locals.values()) await local.drain()
+    await drainOriginalRevocationCoverage(coverage)
+    original.outer?.assertSettled()
     await original.native?.close(); original.native?.assertSettled()
     original.retired = true
   })()
   original.closing = flight; void flight.finally(() => { if (original.closing === flight) original.closing = undefined }).catch(() => {}); return flight
+}
+export async function drainOriginalRevocationCoverage(coverage: OriginalRevocationCoverage): Promise<void> {
+  const original = coverageFor(coverage)
+  await original.done
+  for (const local of original.locals.values()) await local.drain()
+}
+/** Borrow only Lifecycle's genuine same-owner batch; never acquires/releases it. */
+export async function borrowOriginalDeletionCoverage(domain: OriginalRevocationDomain, coordinator: SessionCoordinator, scope: DeletionPreparationScope, tickets: readonly OriginalResultRevocationTicket[], input: readonly string[], retain: (coverage: OriginalRevocationCoverage) => void): Promise<OriginalRevocationCoverage> {
+  const original = originalDomain(domain), ids = captureResultTargetIds(input)
+  if (!Array.isArray(tickets) || types.isProxy(tickets) || tickets.length !== original.admissions.length) throw TypeError('Original complete tickets required')
+  const capturedTickets: OriginalResultRevocationTicket[] = []
+  for (let index = 0; index < tickets.length; index++) { const field = Object.getOwnPropertyDescriptor(tickets, String(index)); if (!field || !('value' in field)) throw TypeError('Original ticket data required'); capturedTickets.push(field.value) }
+  const outer = captureOriginalDeletionPlan(coordinator, scope, original.owner, ids)
+  const coverage = Object.freeze({}) as OriginalRevocationCoverage, done = Promise.withResolvers<void>()
+  const record: CoverageRecord = { owner: original.owner, ports: original.admissions, tickets: Object.freeze(capturedTickets), ids, locals: new Map(), done: done.promise, retired: false, outer: outer.cleanup, deletion: { coordinator, scope } }
+  coverages.set(coverage, record)
+  try {
+    retain(coverage)
+    for (let index = 0; index < record.ports.length; index++) record.ports[index]!.bindOriginalCoverage(record.tickets[index]!, coverage)
+    await Promise.all(record.ports.map((port, index) => port.joinLocalTargets(record.tickets[index]!, ids)))
+    return coverage
+  } finally { done.resolve() }
+}
+export function attachOriginalDeletionCoverage(coverage: OriginalRevocationCoverage, coordinator: SessionCoordinator, scope: DeletionPreparationScope): void {
+  const original = coverageFor(coverage)
+  if (original.retired || original.closing || original.batch || original.deletion?.coordinator !== coordinator || original.deletion.scope !== scope) throw TypeError('Original matching deletion acquisition required')
+  const outer = captureOriginalDeletionBatch(coordinator, scope, original.owner, original.ids)
+  if (outer.cleanup !== original.outer) throw TypeError('Original returned deletion acquisition differs from retained plan')
+  original.batch = outer.batch; assertOriginalRevocationCoverage(coverage, original.ids)
 }
 export async function acquireOriginalRevocationCoverage(domain: OriginalRevocationDomain, tickets: readonly OriginalResultRevocationTicket[], input: readonly string[], retain: (coverage: OriginalRevocationCoverage) => void, origin?: OriginalOrderingOrigin): Promise<OriginalRevocationCoverage> {
   const original = domains.get(domain)
@@ -120,6 +152,7 @@ function originalDomain(domain: OriginalRevocationDomain) {
   return record
 }
 export function beginOriginalRevocationOrdering(domain: OriginalRevocationDomain): OriginalOrderingOrigin { return originalOrderingLedgerFor(originalDomain(domain).owner).begin() }
+export function assertOriginalRevocationOrdering(domain: OriginalRevocationDomain, origin: OriginalOrderingOrigin): void { originalOrderingLedgerFor(originalDomain(domain).owner).predecessors(origin) }
 export function runOriginalRevocationOrdering<T>(domain: OriginalRevocationDomain, origin: OriginalOrderingOrigin, work: () => Promise<T>): Promise<T> { return originalOrderingLedgerFor(originalDomain(domain).owner).run(origin, work) }
 export function joinOriginalRevocationPredecessors(domain: OriginalRevocationDomain, origin: OriginalOrderingOrigin): Promise<void> | undefined { return originalOrderingLedgerFor(originalDomain(domain).owner).predecessors(origin)?.join() }
 export function completeOriginalRevocationOrdering(domain: OriginalRevocationDomain, origin: OriginalOrderingOrigin): void { originalOrderingLedgerFor(originalDomain(domain).owner).complete(origin) }
@@ -165,6 +198,13 @@ export function issueOriginalResultRevocationScope(admission: ResultRevocationAd
   assertOriginalBatchParticipant(participants.get(admission)!, participant)
   const scope = Object.freeze({}) as OriginalResultRevocationScope
   scopes.set(scope, { admission, request: Object.freeze({ kind: kind.value, sessionIds: captured }) })
+  return scope
+}
+/** Manifest keys originate only in the authenticated Lifecycle scope. */
+export function issueOriginalDeletionRevocationScope(admission: ResultRevocationAdmission, coordinator: SessionCoordinator, input: DeletionPreparationScope, participant: OriginalLegacyOrderingParticipant): OriginalResultRevocationScope {
+  const original = captureOriginalDeletionScope(coordinator, input)
+  const scope = issueOriginalResultRevocationScope(admission, { kind: 'session', sessionIds: [original.sessionId] }, participant)
+  scopes.get(scope)!.request = Object.freeze({ kind: 'session', sessionIds: Object.freeze([original.sessionId]), documentKeys: Object.freeze([...original.manifest.documents]) })
   return scope
 }
 export function captureOriginalResultRevocationRequest(admission: ResultRevocationAdmission, scope: OriginalResultRevocationScope) {

@@ -5,6 +5,8 @@ import { createArtifactQualificationIO } from './artifact/qualification-io.ts'
 import { canonicalJsonData } from '@i-harness/core-session'
 import { originalResultRevocationFor, beginOriginalRevocationOrdering, runOriginalRevocationOrdering, joinOriginalRevocationPredecessors, completeOriginalRevocationOrdering, assertOutsideOriginalRevocationOrdering, captureOriginalRevocationDomain, acquireOriginalRevocationCoverage, assertOriginalRevocationCoverage, closeOriginalRevocationCoverage, beginOriginalRevocationEffect, type OriginalRevocationCoverage, issueOriginalResultRevocationScope, type OriginalResultRevocationTicket, type ResultRevocationAdmission } from '../../session-persistence/src/coordinator/result-revocation.ts'
 import type { WorkspaceMutationCleanup } from './workspace-mutation.ts'
+import { captureOriginalDeletionScope, captureOriginalDeletionSelection, originalDeletionSelectionIds, originalDeletionPreparationAvailable, installOriginalDeletionParticipant, type OriginalDeletionReservation, type DeletionPreparationScope, type OriginalDeletionSelection } from '../../session-persistence/src/coordinator/deletion-preparation.ts'
+import { borrowOriginalDeletionCoverage, attachOriginalDeletionCoverage, drainOriginalRevocationCoverage, issueOriginalDeletionRevocationScope, assertOriginalRevocationOrdering } from '../../session-persistence/src/coordinator/result-revocation.ts'
 export interface OriginalResultRevocationPreparation { readonly frontier: number; assertCovered(ids: readonly string[]): void; close(): Promise<void> }
 export interface OriginalResultRevocationRequest { readonly kind: 'workspace' | 'session'; readonly sessionIds: readonly string[]; readonly documents: readonly string[] }
 const revocationPreparers = new WeakMap<ContextOutputService, (coordinator: SessionCoordinator, request: OriginalResultRevocationRequest, retain: (cleanup: OriginalResultRevocationPreparation) => void) => Promise<OriginalResultRevocationPreparation>>()
@@ -97,6 +99,118 @@ import type { createSeedDependencyTransfer } from './artifact/bootstrap-transfer
 type ColdManagedOwner = Pick<ReturnType<typeof createSeedDependencyTransfer>, 'acquireColdManagedQualification' | 'revokeColdTransfers'>
 type LegacyOrderingOwner = { participant: OriginalLegacyOrderingParticipant; coordinators: Map<SessionCoordinator, ReturnType<typeof originalResultRevocationFor>>; operations: Set<object> }
 const legacyOrderingOwners = new WeakMap<ContextOutputService, LegacyOrderingOwner>()
+type DeletionWork = { snapshot(cutoff: number): Promise<{ identity: string; targets: readonly string[] }>; bind(coverage: OriginalRevocationCoverage): void; effect(): Promise<void>; close(): Promise<void>; assertSettled(): void; settle(): void; fail(cause: unknown): void }
+type DeletionFactory = (coordinator: SessionCoordinator, scope: DeletionPreparationScope, selection: OriginalDeletionSelection, reservation: OriginalDeletionReservation) => DeletionWork
+const deletionOwners = new WeakMap<ContextOutputService, DeletionFactory>()
+// Membership is part of the original construction relation, not a runtime selector.
+const deletionMembers = new WeakMap<SessionCoordinator, { services: Set<ContextOutputService>; active: Set<object> }>()
+type DeletionMember = { service: ContextOutputService; topology: LegacyOrderingOwner; create: DeletionFactory }
+type DeletionTopology = { membership: NonNullable<ReturnType<typeof deletionMembers.get>>; members: readonly DeletionMember[]; domain?: ReturnType<typeof captureOriginalRevocationDomain>; ports: readonly ResultRevocationAdmission[]; done: PromiseWithResolvers<void>; begun: boolean; settled: boolean; closed: boolean; failure?: { cause: unknown } }
+const deletionTopologies = new WeakMap<OriginalDeletionReservation, DeletionTopology>()
+function stageOriginalDeletionService(service: ContextOutputService, coordinator: SessionCoordinator): () => void {
+  if (!originalDeletionPreparationAvailable(coordinator)) return () => {}
+  let membership = deletionMembers.get(coordinator)
+  if (!membership) {
+    membership = { services: new Set(), active: new Set() }
+    const captured = membership
+    installOriginalDeletionParticipant(coordinator, Object.freeze({ assertReady() {
+      const ports: ResultRevocationAdmission[] = []
+      for (const service of captured.services) {
+        const topology = legacyOrderingOwners.get(service)
+        if (!topology || !deletionOwners.has(service) || !topology.coordinators.has(coordinator)) throw Error('Original deletion service unavailable')
+        for (const [owner, port] of topology.coordinators) { if (originalResultRevocationFor(owner) !== port) throw Error('Changed original deletion coordinator'); ports.push(port) }
+      }
+      if (ports.length) captureOriginalRevocationDomain(ports)
+    }, reserve(origin: OriginalOrderingOrigin, retain: (reservation: OriginalDeletionReservation, cleanup: import('../../session-persistence/src/coordinator/ownership.ts').OwnershipCleanup) => void) {
+      const reservation = Object.freeze({}) as OriginalDeletionReservation
+      const record: DeletionTopology = { membership: captured, members: [], ports: [], done: Promise.withResolvers<void>(), begun: false, settled: false, closed: false }
+      deletionTopologies.set(reservation, record); void record.done.promise.catch(() => {})
+      const cleanup = Object.freeze({ assertSettled() { if (!record.closed) throw Error('Original deletion topology cleanup unresolved') }, async close() {
+        if (record.closed) return
+        if (record.begun && !record.settled) { if (record.failure) throw record.failure.cause; throw Error('Original deletion aggregate cleanup unresolved') }
+        for (const member of record.members) member.topology.operations.delete(reservation)
+        captured.active.delete(reservation); record.closed = true; record.done.resolve()
+      } })
+      // The original attempt owns this exact cleanup before any fence can fail.
+      retain(reservation, cleanup)
+      record.members = Object.freeze([...captured.services].map(service => {
+        const topology = legacyOrderingOwners.get(service), create = deletionOwners.get(service)
+        if (!topology || !create || !topology.coordinators.has(coordinator)) throw Error('Original deletion service unavailable')
+        return { service, topology, create }
+      }))
+      record.ports = Object.freeze([...new Set(record.members.flatMap(member => [...member.topology.coordinators.values()]))])
+      for (const member of record.members) for (const [owner, port] of member.topology.coordinators) if (originalResultRevocationFor(owner) !== port) throw TypeError('Changed original deletion coordinator')
+      if (record.ports.length) { record.domain = captureOriginalRevocationDomain(record.ports); assertOriginalRevocationOrdering(record.domain, origin) }
+      captured.active.add(reservation); for (const member of record.members) member.topology.operations.add(reservation)
+      return reservation
+    }, begin(input: DeletionPreparationScope, reservation?: OriginalDeletionReservation) {
+      const record = reservation && deletionTopologies.get(reservation)
+      if (!record || record.membership !== captured || record.closed || record.begun) throw TypeError('Original retained deletion topology required')
+      const scope = captureOriginalDeletionScope(coordinator, input), selection = captureOriginalDeletionSelection(coordinator, scope)
+      const members = record.members, ports = record.ports, domain = record.domain, works: DeletionWork[] = [], tickets: OriginalResultRevocationTicket[] = []
+      if (captured.services.size !== members.length || members.some(member => !captured.services.has(member.service) || !member.topology.operations.has(reservation!))) throw Error('Original deletion topology changed')
+      record.begun = true
+      let coverage: OriginalRevocationCoverage | undefined, targets: readonly string[] = [], prepared = false, issued = false, closedWork = false, settled = false
+      const check = () => { scope.assertCurrent(); if (captured.services.size !== members.length || members.some(member => !captured.services.has(member.service))) throw Error('Original deletion topology changed'); for (const member of members) for (const [owner, port] of member.topology.coordinators) if (originalResultRevocationFor(owner) !== port) throw Error('Changed original deletion coordinator') }
+      const operation = Object.freeze({
+        async prepare() {
+          if (this !== operation || prepared) throw TypeError('Original deletion preparation required')
+          try {
+            check()
+            for (const member of members) works.push(member.create(coordinator, scope, selection, reservation!))
+            for (const port of ports) {
+              const member = members.find(member => [...member.topology.coordinators.values()].includes(port))!
+              tickets.push(port.begin(issueOriginalDeletionRevocationScope(port, coordinator, scope, member.topology.participant)))
+            }
+            for (let index = 0; index < ports.length; index++) for (const work of works) ports[index]!.retainCleanup(tickets[index]!, work)
+            const first = await Promise.all(works.map(work => work.snapshot(Date.now()))); check()
+            targets = Object.freeze([...new Set([scope.sessionId, ...first.flatMap(value => value.targets)])].sort())
+            await scope.planTargets(targets); check()
+            if (domain) coverage = await borrowOriginalDeletionCoverage(domain, coordinator, scope, tickets, targets, value => { coverage = value })
+            await scope.acquireTargets(targets); check()
+            if (coverage) attachOriginalDeletionCoverage(coverage, coordinator, scope)
+            if (coverage) for (const work of works) work.bind(coverage)
+            const frontier = Date.now(), second = await Promise.all(works.map(work => work.snapshot(frontier))); check()
+            if (first.some((value, index) => canonicalJsonData(value) !== canonicalJsonData(second[index]))) throw Error('Original deletion inventory changed')
+            if (coverage) assertOriginalRevocationCoverage(coverage, targets)
+            prepared = true
+          } catch (cause) { for (const work of works) work.fail(cause); throw cause }
+        },
+        async effect() {
+          if (this !== operation || !prepared || issued) throw TypeError('Original single deletion effect required')
+          check(); scope.assertDocumentsCovered(scope.manifest.documents); if (coverage) assertOriginalRevocationCoverage(coverage, targets)
+          issued = true
+          const active = coverage && beginOriginalRevocationEffect(coverage)
+          try { for (const work of works) { check(); scope.assertDocumentsCovered(scope.manifest.documents); await work.effect() } }
+          catch (cause) { for (const work of works) work.fail(cause); throw cause }
+          finally { active?.close() }
+        },
+        async close() {
+          if (this !== operation) throw TypeError('Original deletion cleanup required')
+          if (closedWork) return
+          if (coverage) await drainOriginalRevocationCoverage(coverage)
+          else for (const work of works) { await work.close(); work.assertSettled() }
+          closedWork = true
+        },
+        async settle() {
+          if (this !== operation || !closedWork) throw TypeError('Original deletion cleanup not acknowledged')
+          if (settled) return
+          if (coverage) await closeOriginalRevocationCoverage(coverage)
+          for (const ticket of tickets) await ticket.close()
+          for (const work of works) work.settle()
+          settled = true; record.settled = true
+        },
+        fail(cause: unknown) { if (this !== operation) throw TypeError('Original deletion failure receiver required'); record.failure = { cause }; record.done.reject(cause); for (const work of works) work.fail(cause) },
+      })
+      return operation
+    } }))
+    deletionMembers.set(coordinator, membership)
+  }
+  if (membership.active.size) throw Error('Original deletion registration busy')
+  const captured = membership
+  return () => { captured.services.add(service) }
+}
+export function hasOriginalDeletionService(service: ContextOutputService, coordinator: SessionCoordinator): boolean { return deletionMembers.get(coordinator)?.services.has(service) === true }
 const orderingRequired = new WeakSet<ContextOutputService>(), orderingConfigured = new WeakSet<ContextOutputService>()
 export function requireOriginalLegacyOrdering(service: ContextOutputService) {
   if (!legacyOrderingOwners.has(service)) throw TypeError('Original legacy ordering service required')
@@ -108,7 +222,8 @@ export function commitOriginalLegacyOrdering(service: ContextOutputService, regi
   if (original.operations.size) throw Error('Original result topology operation busy')
   captureOriginalResultOrderingRegistration(coordinator, registration)
   const admission = originalResultRevocationFor(coordinator)
-  registration.commit(original.participant); original.coordinators.set(coordinator, admission); orderingConfigured.add(service)
+  const commitDeletion = stageOriginalDeletionService(service, coordinator)
+  registration.commit(original.participant); original.coordinators.set(coordinator, admission); orderingConfigured.add(service); commitDeletion()
 }
 export function registerOriginalLegacyOrdering(service: ContextOutputService, coordinator: SessionCoordinator) {
   const original = legacyOrderingOwners.get(service)
@@ -503,6 +618,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     reconcileResult: artifacts.reconcileResult,
     status,
     async configure(patch) {
+      while (pendingDeletionTopologies().length) await joinDeletionUse()
       while (finiteClear) await joinFiniteClear()
       if (closed || closing) throw new Error('Context output is closed')
       configureContext(config, patch)
@@ -591,6 +707,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       return status()
     },
     async close() {
+      while (pendingDeletionTopologies().length) await joinDeletionUse()
       if (finiteClear) {
         if (clearContext.getStore() === finiteClear) throw Error('Original clear operation reentry')
         if (finiteClear.debt) {
@@ -624,6 +741,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
         }
         failuresTogether(failures, 'Original context output resources failed to close')
         closed = true
+        for (const coordinator of legacyOrderingOwners.get(service)!.coordinators.keys()) deletionMembers.get(coordinator)?.services.delete(service)
       }, true).catch(cause => { closeFlight = undefined; throw cause })
       await closeFlight
     },
@@ -651,6 +769,85 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     orderingReservations.add(reservation); retain(reservation); return reservation
   } })
   legacyOrderingOwners.set(service, { participant, coordinators: new Map(), operations: new Set() })
+  function pendingDeletionTopologies(): DeletionTopology[] {
+    return [...legacyOrderingOwners.get(service)!.operations].map(operation => deletionTopologies.get(operation as OriginalDeletionReservation)).filter((record): record is DeletionTopology => !!record && !record.closed)
+  }
+  async function joinDeletionUse(): Promise<void> {
+    const records = pendingDeletionTopologies()
+    for (const original of records) { if (original.domain) assertOutsideOriginalRevocationOrdering(original.domain); if (original.failure) throw original.failure.cause }
+    await Promise.all(records.map(original => original.done.promise))
+  }
+  deletionOwners.set(service, (coordinator, scope, selection, reservation) => {
+    captureOriginalDeletionScope(coordinator, scope); assertOpen(); assertOrderingOutside()
+    const topology = legacyOrderingOwners.get(service)!, members = [...topology.coordinators]
+    const token = deletionTopologies.get(reservation), marker = {}
+    if (!token || !token.begun || token.closed || !topology.operations.has(reservation)) throw TypeError('Original service deletion reservation required')
+    // Other constructor-issued topology fences are still pre-issue metadata.
+    // All real ordering debt and native resource predicates remain mandatory.
+    if ([...topology.operations].some(operation => operation !== reservation && !deletionTopologies.has(operation as OriginalDeletionReservation) && operation !== finiteClear)) throw Error('Original deletion service busy')
+    topology.operations.add(marker); controls++; state = 'stopping'
+    const predecessors = { jobs: [...jobs.values()], transitions, mutations }, documents = originalDeletionSelectionIds(selection)
+    for (const controller of jobs.keys()) controller.abort()
+    artifacts.revokeColdTransfers(documents); for (const reader of selectedReaders) if (documents.includes(selectedReaderIds.get(reader)!)) reader.revoke(); for (const id of documents) legacy.retire(id)
+    const original = candidate ?? store ?? new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities, revokeResumedAuthorities)
+    const io = createArtifactQualificationIO(), workspaces: WorkspaceMutationCleanup[] = []
+    type Inventory = { managed: Awaited<ReturnType<typeof artifacts.passiveReleaseInventory>>; legacy: Awaited<ReturnType<ContextStore['passiveInventory']>>; targets: readonly string[] }
+    let first: Inventory | undefined, matched: Inventory | undefined, coverage: OriginalRevocationCoverage | undefined
+    let managedEffect: ReturnType<typeof artifacts.prepareCoveredRelease> | undefined, legacyEffect: Awaited<ReturnType<ContextStore['prepareCoveredClear']>> | undefined, active: Promise<unknown> | undefined, closedWork = false, settled = false
+    const check = () => { assertOpen(); scope.assertCurrent(); if (topology.coordinators.size !== members.length || members.some(([co, port]) => topology.coordinators.get(co) !== port || originalResultRevocationFor(co) !== port)) throw Error('Original deletion service topology changed') }
+    const work: DeletionWork = Object.freeze({
+      async snapshot(cutoff: number) {
+        check(); await Promise.allSettled(predecessors.jobs); await predecessors.transitions; await predecessors.mutations; check()
+        const flight = gate.exclusive(undefined, async lease => {
+          await original.acquireLifetime(); check()
+          const inventory = await owner.mutate(async turn => {
+            const managed = await artifacts.passiveReleaseInventory(turn, documents, io), legacy = await original.passiveDeletionInventory(turn, selection, cutoff)
+            check(); if (managed.recoveryRequired || legacy.recoveryRequired) throw Error('Original deletion recovery required')
+            return { managed, legacy, targets: Object.freeze([...new Set([...managed.targets, ...legacy.targets])].sort()) }
+          }, cleanup => { workspaces.push(cleanup) })
+          await original.quiesce(lease); check(); return inventory
+        })
+        active = flight; const value = await flight
+        if (!first) first = value; else matched = value
+        return { identity: canonicalJsonData({ managed: value.managed, legacy: value.legacy }), targets: value.targets }
+      },
+      bind(originalCoverage: OriginalRevocationCoverage) { if (!first || coverage) throw Error('Original deletion inventory required'); assertOriginalRevocationCoverage(originalCoverage, first.targets); coverage = originalCoverage },
+      async effect() {
+        check(); scope.assertDocumentsCovered(scope.manifest.documents)
+        if (!matched || !coverage) throw Error('Original matched deletion inventory required')
+        const flight = gate.exclusive(undefined, async lease => {
+          await original.acquireLifetime(); check(); assertOriginalRevocationCoverage(coverage!, matched!.targets)
+          return owner.mutate(async turn => {
+            check(); scope.assertDocumentsCovered(scope.manifest.documents)
+            managedEffect = artifacts.prepareCoveredRelease(turn, matched!.managed, coverage!)
+            legacyEffect = await original.prepareCoveredClear(turn, lease, matched!.legacy, coverage!)
+            await artifacts.applyCoveredRelease(turn, managedEffect)
+            let present = true
+            try { await fileAccess(original.directory) } catch (failure) { if ((failure as NodeJS.ErrnoException).code === 'ENOENT') present = false; else throw failure }
+            if (candidate && candidate !== original || store && store !== original) throw Error('Original deletion store changed')
+            if (candidate || store || present) candidate = store = original
+            await original.applyCoveredClear(turn, lease, config.maxDiskBytes, legacyEffect)
+          }, cleanup => { workspaces.push(cleanup) })
+        })
+        active = flight; await flight
+      },
+      async close() {
+        if (closedWork) return
+        await active?.catch(() => {})
+        await io.settle(); io.assertSettled(); await original.joinLegacyFiles(); original.assertLegacyFilesSettled()
+        for (const cleanup of workspaces) { await cleanup.close(); cleanup.assertSettled() }
+        await gate.exclusive(undefined, lease => original.quiesce(lease))
+        if (managedEffect) artifacts.assertCoveredReleaseSettled(managedEffect)
+        if (legacyEffect) original.assertCoveredClearSettled(legacyEffect)
+        if (!original.lifetimeSettled()) throw Error('Original deletion lifetime remains unresolved')
+        closedWork = true
+      },
+      assertSettled() { if (!closedWork) throw Error('Original deletion service cleanup unresolved') },
+      settle() { if (!closedWork) throw Error('Original deletion service cleanup unresolved'); if (settled) return; settled = true; topology.operations.delete(marker); controls--; state = controls ? 'stopping' : config.enabled ? 'ready' : 'disabled' },
+      fail(cause: unknown) { token.failure = { cause }; token.done.reject(cause) },
+    })
+    return work
+  })
   async function joinFiniteClear(): Promise<void> {
     const original = finiteClear
     if (!original) return
@@ -728,6 +925,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   }
   revocationPreparers.set(service, async (coordinator, request, retain) => {
     const topology = legacyOrderingOwners.get(service)!
+    if (pendingDeletionTopologies().length) throw Error('Original deletion topology operation busy')
     if (!topology.coordinators.has(coordinator)) throw Error('Original complete service registration required')
     return prepareRevocation(request, retain)
   })
