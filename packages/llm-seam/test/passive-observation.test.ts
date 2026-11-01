@@ -49,3 +49,9 @@ it('captures partial Stop measurements on original iterator return before falsey
  expect(f.sends()).toBe(1);expect(f.records.at(-1)).toMatchObject({kind:'usage',usage:{},terminalCoverage:'unknown'})
  expect(f.trace.indexOf('settle')).toBeGreaterThan(f.trace.lastIndexOf('usage'))
 })
+it('captures provider error-event usage/partial coverage before original error settlement rejects',async()=>{
+ const f=await fixture([{type:'usage',usage:{inputTokens:8,outputTokens:3}},{type:'error',error:Object.assign(Error('provider failure'),{code:'PROVIDER'})}],{settleError:0})
+ await expect(f.run()).rejects.toBe(0);expect(f.sends()).toBe(1)
+ expect(f.records.filter(row=>row.kind==='usage').map(row=>({usage:row.usage,coverage:row.terminalCoverage}))).toEqual([{usage:{inputTokens:8,outputTokens:3},coverage:'partial'},{usage:{},coverage:'partial'}])
+ expect(f.trace.indexOf('settle')).toBeGreaterThan(f.trace.lastIndexOf('usage'))
+})

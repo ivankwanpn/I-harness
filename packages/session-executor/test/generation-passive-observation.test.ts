@@ -8,7 +8,7 @@ import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
 import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 import {createOpenAICompatibleClient} from '../../llm-openai-compatible/src/index.ts'
-import {prepareModelRequest} from '@i-harness/llm-seam'
+import {prepareModelRequest,createRetryingClient,resolveRetryPolicy} from '@i-harness/llm-seam'
 import {withOriginalPassiveClientAttribution} from '@i-harness/llm-seam/internal/passive-observation'
 afterEach(()=>vi.unstubAllGlobals())
 it('captures original acknowledged memory seq/trustedAt and original close without new source calls',async()=>{
@@ -20,21 +20,23 @@ it('captures original acknowledged memory seq/trustedAt and original close witho
  for(const row of facts){expect(row.source).toBe('memory-committed');expect(row.event).toEqual(document.view.events[row.factSeq]);expect(row.event.trustedAt).toBeGreaterThan(0)}
  expect(facts.map(row=>row.event.op)).toEqual(['open','close']);expect(drained).toBeGreaterThan(0)
 })
-it('the original action reservation creator associates the actual owned terminal and measured failed usage',async()=>{
+it('two actual retry sends keep one original action and distinct original reservations/send observations',async()=>{
  const session=createSession();append(session,{type:'command/run',commandId:'c',name:'fixture',source:{kind:'user'}})
  const owner=createNondurableFactOwner(session),action=owner.beginAction(),rows:PassiveProducerRecord[]=[],gaps:string[]=[]
  const observer={capture(row:PassiveProducerRecord){rows.push(row)},unavailable(reason:string){gaps.push(reason)}}
  const lifecycle=createGenerationLifecycle(owner.view,'s',action,undefined,{async beforeDrain(){},passiveGeneration:observer})
  const generation=await lifecycle.open('manual',{kind:'command',seq:0})
- let sends=0;vi.stubGlobal('fetch',async()=>{sends++;return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3}}\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}})})
- const client=withOriginalPassiveClientAttribution(createOpenAICompatibleClient({apiKey:'fixture-only',model:'actual-model',baseUrl:'https://original.invalid'}),{providerId:'p',modelId:'actual-model',workspace:'w',billing:'api'})
+ let sends=0;vi.stubGlobal('fetch',async()=>{sends++;if(sends===1)return new Response('fixture busy',{status:503});return new Response('data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":3}}\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}})})
+ const attributed=withOriginalPassiveClientAttribution(createOpenAICompatibleClient({apiKey:'fixture-only',model:'actual-model',baseUrl:'https://original.invalid'}),{providerId:'p',modelId:'actual-model',workspace:'w',billing:'api'})
+ const client=createRetryingClient(attributed,resolveRetryPolicy({mode:'normal',maxRetries:1,backoff:{initialDelayMs:1,maxDelayMs:1,jitterRatio:0}}))
  const prepared=await prepareModelRequest(client,{systemPrompt:'',messages:[],tools:[]});await generation.bind(prepared)
  for await(const _ of prepared.stream({generation:generation.control('summary')})){}
  await generation.close('stopped');await lifecycle.drain();action.finish()
- expect(sends).toBe(1);expect(gaps).toEqual([])
+ expect(sends).toBe(2);expect(gaps).toEqual(['original-send-usage-unavailable'])
  const handoff=rows.find(row=>row.kind==='handoff');expect(handoff).toMatchObject({identity:{actionId:generation.actionId,lane:'summary'},attribution:{modelId:'actual-model'}})
  expect(rows.filter(row=>row.kind==='usage').at(-1)).toMatchObject({terminalCoverage:'complete'})
- expect(rows.filter(row=>row.kind==='fact').map(row=>row.event.op)).toEqual(['open','bind','reserve','settle','close'])
+ const handoffs=rows.filter(row=>row.kind==='handoff');expect(handoffs).toHaveLength(2);expect(new Set(handoffs.map(row=>row.identity.actionId))).toEqual(new Set([generation.actionId]));expect(new Set(handoffs.map(row=>row.identity.attemptId)).size).toBe(2);expect(new Set(handoffs.map(row=>row.confirmation.sendId)).size).toBe(2)
+ expect(rows.filter(row=>row.kind==='fact').map(row=>row.event.op)).toEqual(['open','bind','reserve','settle','reserve','settle','close'])
 })
 it('captures genuine durable seq/time after original close reconciliation without a new capture',async()=>{
  const root=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'passive-ack-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true,lockRoot:root}},taskDocumentStorageContract)

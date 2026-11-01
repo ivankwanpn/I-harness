@@ -2,7 +2,6 @@ import type { GenerationEvent } from '@i-harness/core-session'
 import type { LLMStreamEvent, ModelClient } from '../index.ts'
 import type { GenerationReservation, GenerationIssue } from './generation.ts'
 import type { PreparedModelRequest } from './types.ts'
-import { modelExecutionSource } from './client-source.ts'
 import { preparedExecutionSource } from './owned-terminal.ts'
 import { withOwnedPreparedRequests } from './owned-wrappers.ts'
 import { randomUUID } from 'node:crypto'
@@ -29,7 +28,19 @@ export function withOriginalPassiveClientAttribution(client:ModelClient,attribut
  if(observer)clientObservers.set(client,observer)
  return withOwnedPreparedRequests(client,inner=>inner)
 }
-export function associateOriginalPassivePrepared(client:ModelClient,value:PreparedModelRequest):void {const actual=modelExecutionSource(client),a=clients.get(client)??clients.get(actual),observer=clientObservers.get(client)??clientObservers.get(actual);if(a){prepared.set(value,a);prepared.set(preparedExecutionSource(value),a)}if(observer){preparedObservers.set(value,observer);preparedObservers.set(preparedExecutionSource(value),observer)}}
+export function associateOriginalPassivePrepared(client:ModelClient,value:PreparedModelRequest):void {
+ // Only the actual client's constructor registration is evidence. Traversing a
+ // stable source chain would invoke its selector again (including in legacy
+ // mode) and could overwrite an already-selected A terminal with later B.
+ const a=clients.get(client),observer=clientObservers.get(client)
+ if(!a&&!observer)return
+ const source=preparedExecutionSource(value),original=prepared.get(source),originalObserver=preparedObservers.get(source)
+ if(a&&!original)prepared.set(source,a)
+ if(observer&&!originalObserver)preparedObservers.set(source,observer)
+ const captured=prepared.get(source),capturedObserver=preparedObservers.get(source)
+ if(captured&&!prepared.has(value))prepared.set(value,captured)
+ if(capturedObserver&&!preparedObservers.has(value))preparedObservers.set(value,capturedObserver)
+}
 export function inheritOriginalPassivePrepared(source:PreparedModelRequest,target:PreparedModelRequest):void{const a=prepared.get(source);if(a)prepared.set(target,a);const observer=preparedObservers.get(source);if(observer)preparedObservers.set(target,observer)}
 function safely(observer:OriginalPassiveObserver,work:()=>void){try{work()}catch{try{observer.unavailable('passive-observer-failed')}catch{}}}
 /** One context per actual payload stream. Never await observer work or expose controls. */
