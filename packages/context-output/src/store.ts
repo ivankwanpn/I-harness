@@ -184,8 +184,12 @@ export class ContextStore {
         if (!attempt.described) {
           // Only the first clean attempt can bind cached state to actual originals.
           if (!attempt.failed && this.originalsLoaded && !this.retiring) {
-            this.retainedAuthority = (await this.passiveInventory(turn)).identity
-            await this.index.retainWitness(turn, lease)
+            // Passive lifetime reacquisition has not refreshed the loaded maps.
+            // Keep their old association so ordinary resume detects any drift.
+            if (!this.suspended) {
+              this.retainedAuthority = (await this.passiveInventory(turn)).identity
+              await this.index.retainWitness(turn, lease)
+            }
           } else this.retainedAuthority = undefined
           attempt.described = true
         }
