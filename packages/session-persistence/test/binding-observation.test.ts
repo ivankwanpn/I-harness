@@ -709,3 +709,25 @@ it('fix R2 malformed request invocation and resume payload retain closed refusal
   expect(await c.resumeSemanticTarget(invocation, originalGuards, invalidRequest as BootstrapRequest)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
   expect(reads).toBe(0)
 })
+it('recovery close keeps reads retired while original ordinary writes and queued barriers remain supported',async()=>{
+ const {coordinator:c,backend}=await fixture();let escaped:SessionBindingObservation|undefined
+ await c.withSessionBindingObservation!(request,async observation=>{escaped=observation;observation.assertCurrent()})
+ await c.close();expect(()=>escaped!.assertCurrent()).toThrow();let entered=false
+ await expect(c.openManagedDocument('source')).rejects.toThrow();await expect(c.loadOwned!('source')).rejects.toThrow()
+ await expect(c.withSessionBindingObservation!(request,async()=>{entered=true})).rejects.toMatchObject({reason:'revoked'});expect(entered).toBe(false)
+ await expect(c.withProcessReadObservation!('source',{documentKeys:[]},async()=>{entered=true},async value=>value)).rejects.toThrow();expect(entered).toBe(false)
+ await c.updateMeta('source',{title:'supported ordinary metadata'});c.enqueue('source',[{type:'plan/mode',mode:'on',seq:0}]);await c.flush('source')
+ expect((await backend.profile('source')).meta.title).toBe('supported ordinary metadata');expect((await backend.read('source')).events).toHaveLength(1);await c.close();expect(c.ownerOf('source')).toBe(false)
+})
+it('recovery unknown bootstrap observation is effect-free and original resume refences it before original recovery',async()=>{
+ const f=await fixture(),c=f.coordinator,original=await existingAncestor(f);faults.headerUnknown=true
+ expect(await c.bootstrapSemanticTarget(original,originalGuards)).toMatchObject({kind:'blocked'});faults.headerUnknown=false
+ const first=backendCalls.prepareBootstrapHeader.mock.calls.at(-1)!,held=first[1],operation=first[2],prepares=backendCalls.prepareBootstrapHeader.mock.calls.length,reconciles=backendCalls.reconcileBootstrapHeader.mock.calls.length,appends=backendCalls.appendOwnedBatch.mock.calls.length
+ const originalLease=resourcePath(f.root,'lease','task-ancestor'),leaseAcquisitions=()=>vi.mocked(acquireSessionLock).mock.calls.filter(call=>call[0].lockPath===originalLease).length,leaseCount=leaseAcquisitions()
+ const entered=Promise.withResolvers<SessionBindingObservation>(),leave=Promise.withResolvers<void>()
+ const reading=c.withSessionBindingObservation!({...request,existingSessionIds:['ancestor']},async observation=>{entered.resolve(observation);await leave.promise});const outcome=reading.catch(error=>error);const observation=await entered.promise
+ try{expect(backendCalls.prepareBootstrapHeader).toHaveBeenCalledTimes(prepares);expect(backendCalls.reconcileBootstrapHeader).toHaveBeenCalledTimes(reconciles);expect(backendCalls.appendOwnedBatch).toHaveBeenCalledTimes(appends);await expect(c.openManagedDocument('ancestor')).rejects.toThrow();observation.assertCurrent()
+ const resume=c.resumeSemanticTarget(original.invocation,originalGuards,original);const recovered=resume.then(value=>value);expect(()=>observation.assertCurrent()).toThrow();await Promise.resolve();expect(backendCalls.reconcileBootstrapHeader).toHaveBeenCalledTimes(reconciles);leave.resolve();await outcome;expect(await recovered).toMatchObject({kind:'ready'})
+ const calls=backendCalls.reconcileBootstrapHeader.mock.calls.slice(reconciles);expect(calls.length).toBeGreaterThan(0);expect(calls.every(call=>call[1].owner===held.owner)).toBe(true);for(const call of calls)expect(call[2]).toEqual(operation);expect(leaseAcquisitions()).toBe(leaseCount);expect(backendCalls.prepareBootstrapHeader).toHaveBeenCalledTimes(prepares);expect(()=>observation.assertCurrent()).toThrow()
+ }finally{leave.resolve();await outcome}
+})

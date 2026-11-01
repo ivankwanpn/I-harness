@@ -334,6 +334,12 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
       }); void flight.then(() => { flight = undefined }, () => { flight = undefined }); return flight
     }
     const barrier = Object.freeze({
+      async allowObservation() {
+        if (this !== barrier || done || revoked || cleanupPending || ownerFlight || flight || externalFlight || !headerIssued || headerAck || retainedHeaderOutcome?.kind !== 'unknown') return
+        await settleHeaderResources()
+        if (done || revoked || cleanupPending || ownerFlight || flight || externalFlight || !claim || !held || hasHeaderDebt(id,held) || historyReader?.hasDebt() || !(confirmed || result?.kind === 'committed') || result?.cleanupPending) return
+        claim.assertHeld(); ticket.allowObservation()
+      },
       openOwner() { if (this !== barrier) return Promise.reject(new TypeError('Invalid bootstrap barrier receiver')); return openOwner() },
       setGuard(value: () => void) { if (this !== barrier || typeof value !== 'function' || types.isProxy(value) || flight || ownerFlight || externalFlight) throw new Error('TASK_TRANSITION_CONFLICT'); currentGuard = value },
       setMode(value:'new'|'existing-empty'|'completed') { if (this !== barrier || mode && mode !== value) throw new Error('TASK_TRANSITION_CONFLICT'); mode = value },
