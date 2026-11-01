@@ -33,7 +33,7 @@ it('requires exactly one own row for each known ID and permits extra legacy rows
   expect(taskDocumentStorageContract.consistency('p', [event], 0, { ...doc, tasks: [{ ...row, parentSessionId: 'foreign' }] }).kind).toBe('recovery-required')
 })
 
-it('folds actual core-validated delivery facts without using a projection', async () => {
+it('folds actual core-validated mixed Exec and subagent delivery facts without assigning Exec to task rows', async () => {
   const { createSession, createNondurableFactOwner, committedFactSeqs, deliveryInputId, validateConversationHistory, validateDeliveryFrame } = await import('@i-harness/core-session')
   const session = createSession(), owner = createNondurableFactOwner(session), action = owner.beginAction()
   const received = owner.registerReceivedInputSource(async () => {})
@@ -51,12 +51,45 @@ it('folds actual core-validated delivery facts without using a projection', asyn
   const key = { recipientSessionId: 'parent', sourceNamespace: 'registry', sourceId: 'task-1', resultRevision: 'revision', kind: 'subagent' } as const, inputId = deliveryInputId(key)
   const admitted = { type: 'agent/input/admitted', version: 1, inputId, text: 'result', delivery: 'steer', intent: 'system', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'session.delivery.subagent' }, synthetic: { description: 'd', scope: 'turn', display: { kind: 'task', title: 'd', body: 'result' } } } as const
   committedFactSeqs(await received.captureDeliveryAdmission({ type: 'agent/delivery-received', version: 1, key, sourceSeq: sourceSeq!, terminalSeq: terminalSeq!, inputId }, admitted, () => true).admit())
+  const [execCall] = committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId: 'exec-call', name: 'shell', args: {} }))
+  committedFactSeqs(await action.facts.tools.dispatch('exec-call', { kind: 'prior', seq: execCall!, expectedType: 'tool/call' }))
+  const [execSource] = committedFactSeqs(await action.captureExecDeliverySource({ type: 'agent/delivery-source', version: 1, kind: 'exec', recipientSessionId: 'parent', generationId: 'g', sourceNamespace: 'exec', sourceId: 'original-exec-instance', callSeq: execCall!, delivery: 'parent' }, () => true).admit())
+  const ref = { version: 1, id: 'ctxv1_'+'a'.repeat(64), revision: 'b'.repeat(64), codec: 'exec-frames-v1', encodedBytes: 9, contentDigest: 'c'.repeat(64), completeness: 'complete' } as const
+  const [execEnd] = committedFactSeqs(await terminal.delivery.capture({ type: 'exec/end', version: 1, sourceSeq: execSource!, instanceId: 'original-exec-instance', execution: { dispatch: 'dispatched', outcome: 'failed' }, frameSourceId: 'process:original', dependency: { kind: 'exec-frames', sourceId: 'process:original', retention: { kind: 'artifact', ref } }, exitCode: 7, timedOut: false }).admit())
+  const execKey = { recipientSessionId: 'parent', sourceNamespace: 'exec', sourceId: 'original-exec-instance', resultRevision: ref.revision, kind: 'exec' } as const
+  const execInputId = deliveryInputId(execKey)
+  committedFactSeqs(await received.captureDeliveryAdmission({ type: 'agent/delivery-received', version: 1, key: execKey, sourceSeq: execSource!, terminalSeq: execEnd!, inputId: execInputId }, { ...admitted, inputId: execInputId, provenance: { ...admitted.provenance, producer: 'session.delivery.exec' } }, () => true).admit())
   committedFactSeqs(await action.facts.compaction.commit([{ type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 0, mode: 'conversation', fileOps: [] }]))
-  validateConversationHistory(session.events, 13, { sessionId: 'parent' })
+  validateConversationHistory(session.events, 14, { sessionId: 'parent' })
   const sourceIndex = session.events.findIndex(event => event.type === 'agent/delivery-source')
   const receiptIndex = session.events.findIndex(event => event.type === 'agent/delivery-received')
   validateDeliveryFrame(session.events.slice(sourceIndex - 1, sourceIndex + 1), 13)
   validateDeliveryFrame(session.events.slice(receiptIndex, receiptIndex + 2), 13)
   expect(taskDocumentStorageContract.consistency('parent', session.events, 0, undefined)).toEqual({ kind: 'recovery-required', knownIds: ['task-1'] })
+  for (const bad of [
+    { ...session.events[execSource!]!, kind: 'unknown' },
+    { ...session.events[execSource!]!, version: 2 },
+    { ...session.events[execSource!]!, sourceNamespace: 'registry' },
+    { ...session.events[execSource!]!, recipientSessionId: 'other' },
+    { ...session.events[execSource!]!, extra: true },
+  ]) {
+    const mixed = [...session.events]; mixed[execSource!] = bad as typeof mixed[number]
+    expect(() => taskDocumentStorageContract.consistency('parent', mixed, 0, undefined)).toThrow()
+    expect(() => validateConversationHistory(mixed, 14, { sessionId: 'parent' })).toThrow()
+  }
+  const execReceiptIndex = session.events.findIndex(event => event.type === 'agent/delivery-received' && event.key.kind === 'exec')
+  const execReceipt = session.events[execReceiptIndex]!
+  if (execReceipt.type !== 'agent/delivery-received') throw new Error('Missing actual mixed Exec receipt')
+  for (const bad of [
+    { ...execReceipt, version: 2 },
+    { ...execReceipt, key: { ...execReceipt.key, kind: 'unknown' } },
+    { ...execReceipt, key: { ...execReceipt.key, sourceNamespace: 'registry' } },
+    { ...execReceipt, key: { ...execReceipt.key, recipientSessionId: 'other' } },
+    { ...execReceipt, extra: true },
+  ]) {
+    const mixed = [...session.events]; mixed[execReceiptIndex] = bad as typeof mixed[number]
+    expect(() => taskDocumentStorageContract.consistency('parent', mixed, 0, undefined)).toThrow()
+    expect(() => validateConversationHistory(mixed, 14, { sessionId: 'parent' })).toThrow()
+  }
   action.finish(); await terminal.close(); await received.close()
 })

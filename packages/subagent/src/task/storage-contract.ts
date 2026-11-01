@@ -1,4 +1,4 @@
-import type { SessionEventView } from '@i-harness/core-session'
+import { validDeliveryEvent, type SessionEventView } from '@i-harness/core-session'
 import { validateTaskDocument } from './validation.ts'
 import type { TaskProtocolDocument } from './types.ts'
 
@@ -17,11 +17,13 @@ function consistency(parent: string, events: readonly SessionEventView[], seedLe
       if (event.version !== 1 || typeof event.taskId !== 'string' || !event.taskId || !['completed', 'error', 'cancelled', 'recovery-required'].includes(event.outcome)) throw new Error('Invalid local task end')
       ids.add(event.taskId)
     } else if (event.type === 'agent/delivery-source') {
-      if (event.recipientSessionId !== parent) throw new Error('Foreign task delivery')
-      ids.add(event.sourceId)
+      if (!validDeliveryEvent(event) || event.recipientSessionId !== parent) throw new Error('Foreign or invalid task delivery')
+      // Original closed delivery validation owns Exec identity and terminal
+      // proof. An Exec capture is never a subagent TaskRegistry row.
+      if (event.kind === 'subagent') ids.add(event.sourceId)
     } else if (event.type === 'agent/delivery-received') {
-      if (event.key.recipientSessionId !== parent || event.key.kind !== 'subagent') throw new Error('Foreign task delivery')
-      ids.add(event.key.sourceId)
+      if (!validDeliveryEvent(event) || event.key.recipientSessionId !== parent) throw new Error('Foreign or invalid task delivery')
+      if (event.key.kind === 'subagent') ids.add(event.key.sourceId)
     }
   }
   const knownIds = [...ids]

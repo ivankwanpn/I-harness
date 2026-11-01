@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { decodeFactBatch, readDeliveries } from '@i-harness/core-session'
 import { createDeliveryFixture } from './helpers/delivery-fixture.ts'
 import { receivedInputsFor } from '../src/lifecycle/received-inputs.ts'
@@ -21,13 +21,13 @@ it('confirms the original delivery close before invoking any rewind restoration 
   let effects = 0
   try {
     await f.start()
-    const owner = await f.coordinator.openManagedDocument('parent'), append = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const owner = await f.coordinator.openManagedDocument('parent'), append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close' && e.reason === 'rewind')) {
         entered.resolve(); await release.promise
       }
       return append(...args)
-    }
+    })
     const rewinding = withRewindFacts(owner, async record => {
       effects++; effect.resolve()
       await record({ type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 0, mode: 'conversation', fileOps: [] })
@@ -64,11 +64,11 @@ it('managed filesystem rewind fences its own genuine bound child before restorat
     expect(points[0]!.files).toContainEqual({ path: 'greet.txt', status: 'modified', preBlob: hash('hello'), isNewFile: false, afterHash: hash('goodbye') })
     expect(readDeliveries(owner.view).activeGeneration()).toBeDefined()
     expect(owner.view.events.filter(e => e.type === 'agent/delivery-source')).toHaveLength(1)
-    const append = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close' && e.reason === 'rewind')) { entered.resolve(); await release.promise }
       return append(...args)
-    }
+    })
     const rewinding = withRewindFacts(owner, appendEvent => new RewindService({ store, workspace: f.root }).execute(0, 'all', { appendEvent }))
     try {
       await boundary('same bound child close before fs rewind', entered.promise)
@@ -122,11 +122,11 @@ it('Stop during actual lane promotion preparation prevents first claim issuance 
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await f.start()
-    const append = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/input/promoted' && e.inputId.startsWith('delivery-'))) { entered.resolve(); await release.promise }
       return append(...args)
-    }
+    })
     f.releaseChild(); await boundary('original lane promotion prepared', entered.promise)
     const assembly = await f.service.assemblyFor('parent')
     f.service.cancelRunning!('parent')
@@ -285,19 +285,19 @@ it('reconciling a failed original rewind marker never repeats its completed rest
   try {
     await f.start()
     owner = await f.coordinator.openManagedDocument('parent')
-    const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(f.backend.reconcileOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       const outcome = await append(...args)
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'rewind/point')) {
         keys.push(args[3].key.batchId)
         return { kind: 'unknown', key: args[3].key }
       }
       return outcome
-    }
-    f.backend.reconcileOwnedBatch = async (...args) => {
+    })
+    vi.mocked(f.backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
       if (keys.includes(args[3].key.batchId)) { keys.push(args[3].key.batchId); if (!allow) return { kind: 'unknown', key: args[3].key } }
       return reconcile(...args)
-    }
+    })
     const failure = await withRewindFacts(owner, async record => {
       effects++
       try { await record({ type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 0, mode: 'conversation', fileOps: [] }) }
@@ -372,11 +372,11 @@ it('Stop revokes synchronous pending eligibility while its original close is phy
     // Real source drain commits the admission while the actual parent step is held.
     await assembly.drainParentNotifications?.()
     expect(assembly.inbox.pending()).toHaveLength(1)
-    const append = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close')) { entered.resolve(); await release.promise }
       return append(...args)
-    }
+    })
     f.service.cancelRunning!('parent')
     expect(assembly.inbox.pending()).toHaveLength(0)
     const stopped = f.service.awaitDeliveryStop('parent')
@@ -399,9 +399,9 @@ it('a failed rewind close has no effects and explicit reconciliation retries its
   try {
     await f.start()
     const owner = await f.coordinator.openManagedDocument('parent'), adapter = receivedInputsFor(owner, 'parent').delivery
-    const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(f.backend.reconcileOwnedBatch!).getMockImplementation()!
     let originalFence: string | undefined
-    f.backend.appendOwnedBatch = async (...args) => {
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       const close = decodeFactBatch(args[3].bytes).events.find(e => e.type === 'agent/delivery-generation' && e.op === 'close')
       const outcome = await append(...args)
       if (close?.type === 'agent/delivery-generation' && close.op === 'close' && !allow) {
@@ -409,14 +409,14 @@ it('a failed rewind close has no effects and explicit reconciliation retries its
         return { kind: 'unknown', key: args[3].key }
       }
       return outcome
-    }
-    f.backend.reconcileOwnedBatch = async (...args) => {
+    })
+    vi.mocked(f.backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
       if (keys.includes(args[3].key.batchId)) {
         keys.push(args[3].key.batchId)
         if (!allow) return { kind: 'unknown', key: args[3].key }
       }
       return reconcile(...args)
-    }
+    })
     await expect(withRewindFacts(owner, async () => { effects++ })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     expect(effects).toBe(0)
     expect(originalFence).toBeDefined()
@@ -434,3 +434,4 @@ it('a failed rewind close has no effects and explicit reconciliation retries its
   } catch (error) { await f.evidence('rewind-original-close-explicit-retry-failure', error); throw error }
   finally { allow = true; await boundary('unknown rewind cleanup', f.close()) }
 }, 20000)
+
