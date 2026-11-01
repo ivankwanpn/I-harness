@@ -11,6 +11,8 @@ export const desktopInputReceiptDocumentKey = (sessionId: string) => `desktop-in
 interface TokenReceipt { fingerprint: string; inputId: string }
 interface TokenReceipts { version: 1; sessionId: string; receipts: Record<string, TokenReceipt> }
 const MAX_TOKEN_RECEIPTS = 4096
+type ManagedInputOwner=NonNullable<Awaited<ReturnType<NonNullable<SessionService['managedInputFor']>>>>
+type ManagedInputObservation=ReturnType<ManagedInputOwner['observe']>
 
 /** Durable admission owns acceptance; each execution is scheduled separately. */
 export function createDesktopInput(coordinator: SessionCoordinator, service: SessionService, options: {
@@ -59,8 +61,14 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
       if (pending.delivery === "queue" || !running) start(id, pending.inputId, pending.text)
     }
   }
-  async function acknowledgeExisting(id: string, existing: Extract<SessionEventView, { type: "agent/input/admitted" }>, shouldStart: boolean) {
+  async function acknowledgeExisting(id: string, existing: Extract<SessionEventView, { type: "agent/input/admitted" }>, shouldStart: boolean, managed?:ManagedInputOwner, observation?:ManagedInputObservation) {
     if (closed) throw new Error("Input service closed")
+    if(managed){
+      if(!observation)throw Error('Original admission observation required')
+      observation.assertCurrent()
+      if(shouldStart&&existing.delivery==='queue')schedulePending(id,managed.inbox)
+      return {accepted:true as const,inputId:existing.inputId,delivery:existing.delivery}
+    }
     const document = await coordinator.openManagedDocument(id)
     if (!isManagedFactOwner(document.view, document)) throw new Error('Durable input owner unavailable')
     // The actual managed view installs a received input only after its receipt.
@@ -84,13 +92,16 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         if (raw.context !== undefined && (typeof raw.context !== "string" || raw.context.length > 131072)) throw new Error("Invalid prompt context")
         if (raw.clientToken !== undefined && (typeof raw.clientToken !== "string" || raw.clientToken.length < 8 || raw.clientToken.length > 128)) throw new Error("Invalid prompt client token")
         if (raw.images) validateImages(raw.images, "desktop input")
+        const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined,supplementalContext:raw.context!==undefined})
         await coordinator.profile(id)
+        managed?.observe().assertCurrent()
         let receipt: TokenReceipt | undefined
         if (raw.clientToken) {
           const tokenHash = createHash("sha256").update(JSON.stringify([id, raw.clientToken])).digest("hex")
           const documentKey = desktopInputReceiptDocumentKey(id)
           const fingerprint = createHash("sha256").update(JSON.stringify({ text: raw.text, context: raw.context, delivery: raw.delivery, images: raw.images })).digest("hex")
           const document = await coordinator.getDocument(documentKey) as TokenReceipts | undefined
+          managed?.observe().assertCurrent()
           if (document && (document.version !== 1 || document.sessionId !== id || !document.receipts || typeof document.receipts !== "object" || Array.isArray(document.receipts) || Object.keys(document.receipts).length > MAX_TOKEN_RECEIPTS)) throw new Error("Invalid input token receipts")
           if (document && Object.entries(document.receipts).some(([key, value]) => !/^[a-f0-9]{64}$/.test(key) || !value || !/^[a-f0-9]{64}$/.test(value.fingerprint) || typeof value.inputId !== "string" || value.inputId.length > 128)) throw new Error("Invalid input token receipt identity")
           const stored = document?.receipts[tokenHash]
@@ -99,35 +110,45 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           if (!stored) {
             if (Object.keys(document?.receipts ?? {}).length >= MAX_TOKEN_RECEIPTS) throw new Error("Conversation input receipt limit reached; start a new conversation")
             await coordinator.putDocument(documentKey, { version: 1, sessionId: id, receipts: { ...document?.receipts, [tokenHash]: receipt } } satisfies TokenReceipts)
+            managed?.observe().assertCurrent()
             const saved = await coordinator.getDocument(documentKey) as TokenReceipts | undefined
+            managed?.observe().assertCurrent()
             if (saved?.receipts[tokenHash]?.fingerprint !== fingerprint || saved?.receipts[tokenHash]?.inputId !== receipt.inputId) throw new Error("Could not persist input token receipt")
           }
           // Inspect durable/live events before assembly startup. Retrying an
           // acknowledged input must never recreate execution or replay tools.
-          const existing = (await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === receipt!.inputId)
-          if (existing?.type === "agent/input/admitted") return acknowledgeExisting(id, existing, raw.start !== false)
+          const observation=managed?.observe()
+          const existing = observation?await observation.inbox.admitted(receipt.inputId):(await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === receipt!.inputId)
+          observation?.assertCurrent()
+          if (existing?.type === "agent/input/admitted") return acknowledgeExisting(id, existing, raw.start !== false,managed,observation)
         }
-        const session = await ownSession(id)
-        const inbox = await service.receivedInputFor(id)
+        const session = managed?undefined:await ownSession(id)
+        const inbox = managed?.inbox??await service.receivedInputFor(id)
         let blocked = false
-        try { (await coordinator.openManagedDocument(id)).assertReady() } catch { blocked = true }
+        if(managed)managed.observe().assertCurrent()
+        else try { (await coordinator.openManagedDocument(id)).assertReady() } catch { blocked = true }
+        const observation=managed?.observe()
         let inputId = receipt?.inputId ?? raw.inputId ?? randomUUID()
         // A canceled admission grants no delivery. A shutdown-compensated
         // recovery can use a deterministic new generation; pending/promoted
         // generations remain exactly once across the crash window.
         while (raw.inputId) {
-          const duplicate = session.events.find((event) => event.type === "agent/input/admitted" && event.inputId === inputId)
+          const duplicate = observation?await observation.inbox.admitted(inputId):session!.events.find((event) => event.type === "agent/input/admitted" && event.inputId === inputId)
+          observation?.assertCurrent()
           if (!duplicate || duplicate.type !== "agent/input/admitted") break
-          const cancelled = session.events.findLast((event) => event.type === "agent/input/cancelled" && event.inputId === inputId)
-          if (cancelled) { inputId = `${raw.inputId}:retry:${cancelled.seq}`; continue }
+          const cancelledSeq=observation?observation.inbox.lastCancellationSeq(inputId):session!.events.findLast((event) => event.type === "agent/input/cancelled" && event.inputId === inputId)?.seq
+          observation?.assertCurrent()
+          if (cancelledSeq!==undefined) { inputId = `${raw.inputId}:retry:${cancelledSeq}`; continue }
           if (duplicate.text !== raw.text || duplicate.delivery !== raw.delivery) throw new Error("Recovered input does not match its durable admission")
-          return acknowledgeExisting(id, duplicate, raw.start !== false)
+          return acknowledgeExisting(id, duplicate, raw.start !== false,managed,observation)
         }
         const delivery = raw.delivery === "steer" && !service.queueState(id).running ? "queue" : raw.delivery
+        observation?.assertCurrent()
         await inbox.admit({ inputId, text: raw.text, preparationPolicy: 'human-host', delivery, intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" },
           ...(raw.context ? { supplementalContext: raw.context } : {}), ...(raw.images?.length ? { images: raw.images } : {}), ...(raw.clientToken ? { clientToken: raw.clientToken } : {}) })
         if (closed) throw new Error("Input service closed")
         if (raw.start !== false && !blocked && delivery === "queue") {
+          managed?.observe().assertCurrent()
           schedulePending(id, inbox)
         }
         return { accepted: true as const, inputId, delivery }
@@ -156,9 +177,9 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     resume(id: string) {
       return serial(id, async () => {
         if (closed) throw new Error("Input service closed")
-        await ownSession(id)
-        ;(await coordinator.openManagedDocument(id)).assertReady()
-        for (const input of (await service.receivedInputFor(id)).pending()) start(id, input.inputId, input.text)
+        const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined})
+        if(managed){const observation=managed.observe();const pending=managed.inbox.pending();observation.assertCurrent();for(const input of pending)start(id,input.inputId,input.text)}
+        else {await ownSession(id);(await coordinator.openManagedDocument(id)).assertReady();for (const input of (await service.receivedInputFor(id)).pending()) start(id, input.inputId, input.text)}
         return { resumed: true }
       })
     },

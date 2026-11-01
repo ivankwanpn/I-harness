@@ -186,6 +186,11 @@ interface SessionSubmitOptions {
   prepareInput?: (assembly: SessionAssembly, prompt: string) => Promise<string>
 }
 export interface SessionService {
+  /** Internal default-input adapter over the SAME private entry; no Session facade. */
+  managedInputFor?(sessionId:string,requirements?:{completePreparation?:boolean;supplementalContext?:boolean}):Promise<{
+    readonly inbox:Pick<AsyncInbox,'pending'|'admit'|'cancel'>
+    observe():import('@i-harness/core-session/internal/execution').ExecutionObservation
+  }|undefined>
   instructionState?(sessionId: string, childSessionId?: string): import('./context/instructions/diagnostics.ts').InstructionReport
   refreshInstructions?(sessionId: string, childSessionId?: string, signal?: AbortSignal): Promise<import('./context/instructions/diagnostics.ts').InstructionReport>
   onInstructionsChanged?(sessionId: string, childSessionId: string | undefined, listener: () => void): () => void
@@ -682,17 +687,25 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   async function receivedInputFor(sessionId: string): Promise<Pick<AsyncInbox, 'pending' | 'admit' | 'cancel'>> {
-    if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))throw Error('Private entry cannot switch to Session-shaped compatibility')
-    if(managedCompatible(sessionId)){
-      if(!privateCache)throw Error('Managed runtime requires original coordinator')
-      privateEntries.add(sessionId)
-      return (await privateCache.get(sessionId)).inputs.inbox
-    }
+    const managed=await managedInputFor(sessionId)
+    if(managed)return managed.inbox
     await writableSessionFor(sessionId)
     assertWritableOpen(sessionId)
     const inbox = assemblies.get(sessionId)?.inbox ?? mountingAssemblies.get(sessionId)?.inbox ?? inputInboxes.get(sessionId)
     if (!inbox) throw Object.assign(new Error('Trusted received-input owner is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' })
     return { pending: () => inbox.pending(), admit: (input, signal) => inbox.admit(input, signal), cancel: (id, reason) => inbox.cancel(id, reason) }
+  }
+
+  async function managedInputFor(sessionId:string,requirements?:{completePreparation?:boolean;supplementalContext?:boolean}){
+    assertWritableOpen(sessionId)
+    if(requirements?.completePreparation){selectComplete(sessionId);return undefined}
+    if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))throw Error('Private entry cannot switch to Session-shaped compatibility')
+    if(!managedCompatible(sessionId)){selectComplete(sessionId);return undefined}
+    if(requirements?.supplementalContext)throw Error('Private supplemental context requires original owned preparation')
+    if(!privateCache)throw Error('Managed runtime requires original coordinator')
+    privateEntries.add(sessionId)
+    const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
+    return Object.freeze({inbox:entry.inputs.inbox,observe(){assertWritableOpen(sessionId);return entry.execution.observe()}})
   }
 
   function getOrCreate(sessionId: string): Promise<SessionAssembly> {
@@ -1483,6 +1496,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     writableSessionFor,
     receivedInputFor,
+    managedInputFor,
     liveAssembly,
     instructionState(sessionId, childSessionId) { return liveAssembly(sessionId)?.instructionDiagnostics?.(childSessionId)?.read() ?? { state: 'not-published' } },
     onInstructionsChanged(sessionId, childSessionId, listener) {
