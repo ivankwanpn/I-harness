@@ -56,6 +56,32 @@ it('withholds a combined result at the original pre-Worker started acknowledgeme
  }finally{gate.resolve();off();await running;await pending;await mount.dispose();await coordinator.close();await service.close();vi.restoreAllMocks()}
 },10000)
 
+it('retires failed original-attempt wait edges before a healthy later source retry',async()=>{
+ const root=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'retired-wait-')),sessions=join(root,'sessions');await mkdir(sessions)
+ const coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract)
+ const {id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),ctx=createContext(),tools=createToolRegistry(ctx)
+ const ready=Promise.withResolvers<void>(),bEntered=Promise.withResolvers<void>(),releaseB=Promise.withResolvers<void>()
+ const handles:ReturnType<typeof captureOriginalCodeCompletion>[]=[],pending:ReturnType<ReturnType<typeof captureOriginalCodeCompletion>['settle']>[]=[],errors:unknown[]=[];let ports=0,aAttempts=0
+ const mount=registerCodeMode(ctx,tools,{session:document.view,sessionId:id,factOwner:document,config:{mode:'mixed'},finalOutput:()=>{
+  const ordinal=ports++
+  return {async append(){},seal(){},async finish(){
+   await ready.promise
+   if(ordinal===0){aAttempts++;if(aAttempts===1){void handles[1]!.settle().catch(()=>{});await new Promise<void>(resolve=>setImmediate(resolve));throw false}}
+   else{bEntered.resolve();await releaseB.promise;try{await handles[0]!.settle()}catch(error){errors.push(error)}}
+   return {kind:'unavailable' as const,reason:'unsupported-owner' as const}
+  }}
+ }})
+ const off=observeOriginalCodeFinalOutputs(mount,cell=>{const handle=captureOriginalCodeCompletion(mount,cell);handles.push(handle);const original=handle.settle();void original.catch(()=>{});pending.push(original);if(handles.length===2)ready.resolve()})
+ try{
+  await tools.get('code_exec')!.execute({code:'text("a")',yield_time_ms:60000},{session:document.view,sessionId:id})
+  await tools.get('code_exec')!.execute({code:'text("b")',yield_time_ms:60000},{session:document.view,sessionId:id})
+  await bEntered.promise;await expect(pending[0]).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+  releaseB.resolve();expect(await pending[1]).toMatchObject({kind:'unqualified'})
+  expect(errors).toEqual([]);expect(aAttempts).toBe(2)
+  expect(await handles[0]!.settle()).toMatchObject({kind:'unqualified'})
+ }finally{ready.resolve();releaseB.resolve();off();await mount.dispose();await coordinator.close()}
+},10000)
+
 it('keeps a real native quota refusal known after two original acknowledged output members',async()=>{
  const root=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'refused-manifest-')),sessions=join(root,'sessions');await mkdir(sessions)
  const coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract)

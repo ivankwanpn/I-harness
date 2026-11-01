@@ -2,7 +2,7 @@ import type { FactOwner } from '@i-harness/core-session'
 import { isOriginalCellFinalization, type OriginalCellFinalization } from './finalization.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 
-type Lifetime = { waits: Map<Lifetime,number> }
+type Lifetime = { waits: Map<Lifetime,{count:number}> }
 type DrainFrame = { lifetime:Lifetime;parent?:DrainFrame;active:boolean }
 const drains=new AsyncLocalStorage<DrainFrame>()
 function currentDrain(){for(let frame=drains.getStore();frame;frame=frame.parent)if(frame.active)return frame.lifetime}
@@ -13,8 +13,8 @@ function reaches(start:Lifetime,target:Lifetime){
 }
 function joinOriginal<T>(caller:Lifetime|undefined,target:Lifetime,flight:Promise<T>):Promise<T>{
   if(!caller)return flight
-  caller.waits.set(target,(caller.waits.get(target)??0)+1)
-  const retired=()=>{const count=caller.waits.get(target);if(count===undefined)return;if(count===1)caller.waits.delete(target);else caller.waits.set(target,count-1)}
+  const edge=caller.waits.get(target)??{count:0};edge.count++;caller.waits.set(target,edge)
+  const retired=()=>{if(caller.waits.get(target)!==edge)return;if(--edge.count===0)caller.waits.delete(target)}
   return flight.then(value=>{retired();return value},cause=>{retired();throw cause})
 }
 
@@ -35,7 +35,7 @@ export function createFinalOutputLifetime<T, Operation extends { finish(): Promi
     await finalization.settle()
     if (failed) throw failure
     if (!finished) { result = await finishOriginal!(); afterFinish?.(operation!,result); finished = true }
-    }finally{frame.active=false}})
+    }finally{frame.active=false;lifetime.waits.clear()}})
   }) } finally { action.finish() } })()
   const held=source.assertHeld.bind(source),close=source.close.bind(source)
   const assertHeld = () => held()
@@ -49,7 +49,7 @@ export function createFinalOutputLifetime<T, Operation extends { finish(): Promi
       if(caller&&reaches(lifetime,caller))return Promise.reject(Object.assign(new Error('Original Code completion cyclic close wait refused'),{code:'FACT_RECOVERY_REQUIRED'}))
       if (closeFlight) return joinOriginal(caller,lifetime,closeFlight)
       const frame:DrainFrame={lifetime,parent:drains.getStore(),active:true}
-      const flight=Promise.resolve().then(()=>drains.run(frame,async()=>{try{await close()}finally{frame.active=false}})).then(()=>{acknowledged=true;lifetime.waits.clear();return result!})
+      const flight=Promise.resolve().then(()=>drains.run(frame,async()=>{try{await close()}finally{frame.active=false;lifetime.waits.clear()}})).then(()=>{acknowledged=true;return result!})
       closeFlight=flight
       void flight.catch(()=>{if(closeFlight===flight)closeFlight=undefined})
       return joinOriginal(caller,lifetime,flight)
