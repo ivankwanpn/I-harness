@@ -1,4 +1,5 @@
-import {canonicalJsonData,exportConversationSeed,freezeJsonData,type SessionView} from '@i-harness/core-session'
+import {exportConversationSeed,freezeJsonData,type SessionView} from '@i-harness/core-session'
+import {captureManagedHistoryCut,assertManagedHistoryCut} from '@i-harness/core-session/internal/bootstrap'
 import {compileSemanticSeed,type ChildHistory} from '@i-harness/session-persistence'
 import {assertOriginalTaskCaller,type OriginalTaskCaller} from '@i-harness/core-tools/internal/task-caller'
 
@@ -12,10 +13,10 @@ export function captureTaskChildHistory(caller:OriginalTaskCaller):OriginalTaskC
   if(turns===undefined||turns==='none')return
   if(turns!=='all')throw Error('Unsupported task semantic history selection')
   const view=caller.context.view,parentSessionId=caller.identity.parentSessionId
-  const count=view.events.length,prefix=canonicalJsonData(view.events)
+  const owner=caller.context.factOwner,cut=captureManagedHistoryCut(view,owner,parentSessionId)
   const assertCurrent=()=>{
     assertOriginalTaskCaller(caller)
-    if(caller.context.view!==view||view.events.length<count||canonicalJsonData(view.events.slice(0,count))!==prefix)throw Error('Original task history changed')
+    assertManagedHistoryCut(cut,caller.context.view,caller.context.factOwner,parentSessionId)
   }
   assertCurrent()
   const exported=exportConversationSeed(view,{kind:'session',sessionId:parentSessionId},{kind:'all'})
