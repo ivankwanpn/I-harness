@@ -26,6 +26,10 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
   }
   return {
     fence,
+    supported() {
+      if(!coordinator.retainExistingSessionBindingObservation||!service.onExecutionSurfaceLifecycle)return false
+      try{preflightRetainedCoordinatorFor(coordinator);return true}catch{return false}
+    },
     async subscribe(sessionId: string, sink: (notice: Notice) => void) {
       if (closing || leases.size >= 32 || !coordinator.retainExistingSessionBindingObservation || !service.onExecutionSurfaceLifecycle) throw Error('Execution observation unavailable')
       assertOutsideRetirementSink(coordinator)
@@ -36,7 +40,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
       let acquisitionCleanup: ReturnType<typeof observationCleanupFor>, acquisitionReported = false, acquisitionFailure: { error: unknown } | undefined
       let reference: RetainedExistingBinding | undefined, broker: ReturnType<typeof projects.observeExecutionBinding> | undefined
       let externalClose: Promise<void> | undefined, retirementFlight: Promise<void> | undefined, resourcesClean = false
-      let read: Promise<unknown> | undefined, drainFlight: Promise<void> | undefined, noticePending = false
+      let read: Promise<unknown> | undefined, drainFlight: Promise<void> | undefined, noticePending = false, writing = false
       let noticeError: { error: unknown } | undefined
       type NoticeCompletion = { done: Promise<void>; observed: boolean; outcome?: { ok: true } | { ok: false; error: unknown } }
       let retiredCompletion: NoticeCompletion | undefined
@@ -83,7 +87,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
       }
       const lease = {
         epoch,
-        preflight() { preflightRetainedCoordinatorFor(coordinator, [sessionId]); if (reference) preflightRetainedBindingReleaseFor(coordinator, reference) },
+        preflight() { if(writing) throw Error('Execution writer cannot close its own lease'); preflightRetainedCoordinatorFor(coordinator, [sessionId]); if (reference) preflightRetainedBindingReleaseFor(coordinator, reference) },
         fence() { active = false },
         async settleExternalClose() { await externalClose },
         async settleRetirement() { const pending = retirementFlight; try { await pending } finally { if (retirementFlight === pending) retirementFlight = undefined; forgetCompleted() } },
@@ -118,6 +122,13 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
           const flight = outer(lease); externalClose = flight
           void flight.finally(() => { if (externalClose === flight) externalClose = undefined; forgetCompleted() }).catch(() => {})
           return flight
+        },
+        withCurrent<T>(write: (stamp: { epoch: string; revision: number }) => T): T {
+          if(writing) throw Error('Execution writer reentry')
+          if (!active || !reference || !broker || !reliable() || source !== service.liveAssembly(sessionId)) throw Error('Execution source retired or unavailable')
+          reference.assertCurrent(); broker.assertCurrent()
+          writing=true
+          try { return write({ epoch, revision }) } catch(error) {terminate();throw error} finally {writing=false}
         },
         async snapshot(options: { offset?: number; limit?: number } = {}) {
           if (!active || !reference || !broker) throw Error('Execution observation retired or unavailable')
@@ -158,7 +169,7 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
         if (source !== service.liveAssembly(sessionId) || !reliable()) throw Error('Execution source unavailable')
       })()
       void acquisition.then(setup.resolve, error => { acquisitionFailure = { error }; acquisitionCleanup = observationCleanupFor(coordinator, error); setup.reject(error) })
-      try { await acquisition; return Object.freeze({ epoch, snapshot: lease.snapshot, close: lease.close }) }
+      try { await acquisition; return Object.freeze({ epoch, snapshot: lease.snapshot, close: lease.close, withCurrent: lease.withCurrent }) }
       catch (error) { try { await outer(lease, false) } catch (cleanup) { throw new AggregateError([error, cleanup], 'Execution acquisition and cleanup failed') } finally { acquisitionReported = true }; throw error }
     },
     close(supplied?: RetainedCleanupOperation): Promise<void> {

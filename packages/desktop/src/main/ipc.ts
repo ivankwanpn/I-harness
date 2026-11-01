@@ -1,3 +1,4 @@
+import {createNativeSurfaceObservation} from './surface-observation.ts'
 import type { BrowserWindow } from "electron"
 import { relative, isAbsolute, sep } from "node:path"
 import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopEvent, type DesktopRequest, type TerminalShellChoice } from "../shared/bridge.ts"
@@ -27,6 +28,7 @@ import { readForkPrepareRequest, readForkPrepareResult, readForkOperation, readF
 import { RpcError } from '@i-harness/sdk'
 
 export interface DesktopIpcDependencies {
+  surfaceObservation?: ReturnType<typeof createNativeSurfaceObservation>
   catalog: WorkspaceCatalog
   projects?: ProjectCatalog
   revealWorkspace?: (path: string) => Promise<void>
@@ -47,6 +49,9 @@ export interface DesktopIpcDependencies {
   projectContentSearch?: ReturnType<typeof createDesktopProjectContentSearch>
 }
 const searchOwners = new WeakMap<DesktopIpcDependencies, ReturnType<typeof createDesktopProjectContentSearch>>()
+const windowCleanups=new Set<()=>Promise<void>>()
+const ipcWindows=new WeakMap<IpcMainLike,Map<unknown,DesktopIpcDependencies>>()
+export async function closeDesktopSurfaceWindows(){const results=await Promise.allSettled([...windowCleanups].map(close=>close()));const errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Desktop surface window cleanup incomplete')}
 function searchOwner(dependencies: DesktopIpcDependencies) {
   if (dependencies.projectContentSearch) return dependencies.projectContentSearch
   let owner = searchOwners.get(dependencies)
@@ -68,6 +73,9 @@ export async function dispatchDesktopRequest(
   dependencies: DesktopIpcDependencies,
 ): Promise<unknown> {
   const value = requireRecord(request)
+  const kind=Object.getOwnPropertyDescriptor(value,'kind')
+  if(!kind||!('value' in kind))throw Error('Invalid Desktop request kind')
+  if(typeof value.kind==='string'&&value.kind.startsWith('desktop/surface/')) {if(!dependencies.surfaceObservation)throw Error('Native surface window unavailable');return dependencies.surfaceObservation.request(value)}
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
   if (value.kind.startsWith("desktop/diagnostics/")) {
     if (!dependencies.diagnostics) throw new Error("Runtime diagnostics unavailable")
@@ -722,16 +730,19 @@ export function registerDesktopIpc(
   window: BrowserWindow,
   dependencies: DesktopIpcDependencies,
   ipc: IpcMainLike,
-): () => void {
+): () => Promise<void> {
+  if(windowCleanups.size>=32)throw Error('Desktop window cleanup capacity')
   const projectContentSearch = createDesktopProjectContentSearch(dependencies)
-  const ownedDependencies = { ...dependencies, projectContentSearch }
+  const surfaceObservation=createNativeSurfaceObservation(id=>runtimeForKnownWorkspace(id,dependencies),id=>dependencies.runtimes.peek?.(id),event=>window.webContents.send(DESKTOP_EVENT_CHANNEL,event))
+  const ownedDependencies = { ...dependencies, projectContentSearch, surfaceObservation }
   let removed = false
-  ipc.handle(DESKTOP_REQUEST_CHANNEL, async (event, request) => {
-    if (event.sender !== window.webContents) throw new Error("untrusted IPC sender")
-    return await dispatchDesktopRequest(request, ownedDependencies)
-  })
+  let windows=ipcWindows.get(ipc)
+  if(!windows){windows=new Map();ipcWindows.set(ipc,windows);ipc.handle(DESKTOP_REQUEST_CHANNEL,async(event,request)=>{const owned=windows!.get(event.sender);if(!owned)throw Error('untrusted IPC sender');return dispatchDesktopRequest(request,owned)})}
+  if(windows.has(window.webContents))throw Error('Desktop window already registered')
+  windows.set(window.webContents,ownedDependencies)
   const offEvent = dependencies.runtimes.onEvent((desktopEvent) => {
     if (window.isDestroyed()) return
+    if(!surfaceObservation.event(desktopEvent))return
     if (desktopEvent.kind === "sdk/notification" && desktopEvent.method === "session/event" && (desktopEvent.params as { event?: { type?: unknown } } | null)?.event?.type === "model/activity") return
     try { dependencies.native?.onEvent(desktopEvent) } catch { /* Notifications cannot interrupt SDK event delivery. */ }
     window.webContents.send(DESKTOP_EVENT_CHANNEL, desktopEvent)
@@ -748,16 +759,20 @@ export function registerDesktopIpc(
     if (removed || window.isDestroyed()) return
     window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "runtime/activity", ...activity } satisfies DesktopEvent)
   })
-  return () => {
-    if (removed) return
+  const unregister=():Promise<void> => {
+    if (removed) return surfaceObservation.close().then(()=>{windowCleanups.delete(unregister)})
     removed = true
-    ipc.removeHandler(DESKTOP_REQUEST_CHANNEL)
+    windows!.delete(window.webContents)
+    if(!windows!.size){ipc.removeHandler(DESKTOP_REQUEST_CHANNEL);ipcWindows.delete(ipc)}
     offEvent()
     offWindowState?.()
     offDiagnostics?.()
     offActivity?.()
     void projectContentSearch.close()
+    return surfaceObservation.close().then(()=>{windowCleanups.delete(unregister)})
   }
+  windowCleanups.add(unregister)
+  return unregister
 }
 
 async function runtimeForKnownWorkspace(

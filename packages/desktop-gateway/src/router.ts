@@ -13,6 +13,7 @@ import type { SdkServer } from "@i-harness/sdk/server"
 import type { DesktopHandlers, GatewayWrite } from "./types.ts"
 import { ReviewPathError } from "./review.ts"
 import { randomUUID } from "node:crypto"
+import { createSurfaceSubscriptions } from './observation/subscriptions.ts'
 import { ScheduleInputError } from "@i-harness/schedule"
 import { ModelUnavailableError } from "@i-harness/session-executor"
 import { memoryRequest } from "./memory-wire.ts"
@@ -45,6 +46,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.codeSettings) capabilities["desktop-code-mode-settings"] = ["1"]
     if (handlers.contextSubsystems) capabilities["desktop-context-subsystems"] = ["1"]
     if (handlers.execution) capabilities["desktop-execution"] = ["1"]
+    if (handlers.execution && handlers.executionObservation?.supported?.()) capabilities["desktop-surface-events"] = ["1"]
     if (handlers.diagnostics) capabilities["desktop-environment-diagnostics"] = ["1"]
     if (handlers.agentProcesses) capabilities["desktop-agent-processes"] = ["1"]
     if (handlers.approvalRules) capabilities["desktop-approval-rules"] = ["1"]
@@ -112,6 +114,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
   const probes = handlers.provider ? createProviderProbes(handlers.provider) : undefined
   const modelSwitches = new Map<string, Promise<unknown>>()
   const forkSources = new Map<string, { identity: string; flight: Promise<unknown> }>()
+  const surfaces = handlers.executionObservation ? createSurfaceSubscriptions(handlers.executionObservation, notice => send({jsonrpc:'2.0',method:'desktop/surface/changed',params:notice})) : undefined
 
   return {
     async handleLine(line) {
@@ -255,6 +258,15 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if(message.method.startsWith('desktop/surface/') && surfaces) {
+        try {
+          if(message.method==='desktop/surface/subscribe') { const lease=await surfaces.subscribe(message.params);surfaces.acknowledge(lease.subscriptionId,value=>send(makeSuccess(message.id,value))) }
+          else if(message.method==='desktop/surface/snapshot') { const reply=await surfaces.snapshot(message.params);reply.write(value=>send(makeSuccess(message.id,value))) }
+          else if(message.method==='desktop/surface/unsubscribe') send(makeSuccess(message.id,await surfaces.unsubscribe(message.params)))
+          else throw Error('Unknown surface method')
+        } catch(error) {send(makeFailure(message.id,INVALID_PARAMS,error instanceof Error?error.message:String(error)))}
+        return
+      }
       if (['desktop/instructions/state', 'desktop/instructions/refresh', 'desktop/instructions/subscribe', 'desktop/instructions/unsubscribe', 'desktop/instructions/settings', 'desktop/instructions/configure'].includes(message.method) && handlers.instructions) {
         try {
           const result = await instructionRequest(handlers.instructions, message.method, message.params, handlers.instructionSettings)
@@ -742,6 +754,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       closed = true
       const attempt = (async () => {
         const failures: unknown[] = []
+        try { await surfaces?.close() } catch(cause) {failures.push(cause)}
         // Independent auxiliary cleanup cannot skip the original SDK join.
         try { await handlers.projectContentSearch?.close() } catch (cause) { failures.push(cause) }
         try { await probes?.close() } catch (cause) { failures.push(cause) }

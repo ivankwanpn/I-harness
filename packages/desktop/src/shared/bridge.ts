@@ -71,6 +71,9 @@ export type DesktopRequest =
   | { kind: "desktop/session/subagents/history"; workspaceId: string; sessionId: string; childSessionId: string; afterSeq?: number; limit?: number }
   | { kind: "desktop/session/subagents/result"; workspaceId: string; sessionId: string; childSessionId: string; offset?: number; maxBytes?: number; resultRevision?: string; refId?: string; refRevision?: string }
   | { kind: "desktop/session/subagents/control"; workspaceId: string; sessionId: string; childSessionId: string; action: "followup" | "message" | "interrupt" | "close"; text?: string }
+  | { kind: 'desktop/surface/subscribe'; workspaceId:string; surface:'execution'; sessionId:string }
+  | { kind:'desktop/surface/snapshot';workspaceId:string;subscriptionId:string;epoch:string;offset?:number;limit?:number }
+  | {kind:'desktop/surface/unsubscribe';workspaceId:string;subscriptionId:string}
   | { kind: 'desktop/instructions/state' | 'desktop/instructions/refresh' | 'desktop/instructions/subscribe'; workspaceId: string; sessionId: string; childSessionId?: string }
   | { kind: 'desktop/instructions/unsubscribe'; workspaceId: string; subscriptionId: string }
   | { kind: 'desktop/instructions/settings'; workspaceId: string }
@@ -152,13 +155,14 @@ export type DesktopRequest =
   | { kind: "desktop/review/commit"; workspaceId: string; message: string }
 
 export type DesktopEvent =
+  | {kind:"sdk/ready";workspaceId:string;runtimeGeneration:number;method:"sdk/ready";params?:never}
   | { kind: "runtime/diagnostic"; entry: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry }
   | ({ kind: "runtime/activity" } & import("./runtime-diagnostics.ts").RuntimeActivity)
   | { kind: "window/state"; maximized: boolean }
   | {
       kind: "sdk/notification"
       workspaceId: string
-      method: "session/event" | "session/status" | "session/execution-state" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/session/subagents/changed" | "desktop/usage/recording-warning" | "desktop/context/diagnostic" | 'desktop/instructions/changed'
+      method: "session/event" | "session/status" | "session/execution-state" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/session/subagents/changed" | "desktop/usage/recording-warning" | "desktop/context/diagnostic" | 'desktop/instructions/changed' | 'desktop/surface/changed'
       params: unknown
     }
   | { kind: "sdk/disconnected"; workspaceId: string; message: string; close?: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry["close"] }

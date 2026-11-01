@@ -159,7 +159,8 @@ describe("Desktop SDK runtime manager", () => {
     exits[0]!()
     await new Promise((resolve) => setImmediate(resolve))
 
-    expect(events).toEqual([
+    expect(events.filter(event=>event.kind==='sdk/ready')).toEqual([{kind:'sdk/ready',method:'sdk/ready',workspaceId:'ws-exit',runtimeGeneration:0}])
+    expect(events.filter(event=>event.kind!=='sdk/ready')).toEqual([
       { kind: "sdk/disconnected", workspaceId: "ws-exit", message: expect.stringContaining("exited"), close: { generation: 0, reason: "subprocess-exited" } },
     ])
     const second = await manager.get(workspace("ws-exit"))
@@ -214,7 +215,8 @@ describe("Desktop SDK runtime manager", () => {
     notify("desktop/context/diagnostic")
     notify("desktop/session/subagents/changed")
 
-    expect(events).toEqual([
+    expect(events.filter(event=>event.kind==='sdk/ready')).toEqual([{kind:'sdk/ready',method:'sdk/ready',workspaceId:'ws-notes',runtimeGeneration:0}])
+    expect(events.filter(event=>event.kind!=='sdk/ready')).toEqual([
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/event", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/status", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/execution-state", params: { seq: 0 } },
