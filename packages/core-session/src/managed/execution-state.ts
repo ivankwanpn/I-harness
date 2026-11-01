@@ -6,9 +6,10 @@ import { factPrefixDigest } from '../serialization/fact-journal.ts'
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts'
 import type { CapturedFactGroup } from './groups.ts'
 import type { EncodedFactBatch,FactReceipt,FactOutcome,BatchKey } from './types.ts'
-import type { ManagedExecutionIdentity,ManagedExecutionOwner,OriginalExecutionWriterBinding,OriginalWriterDependencyScope,OriginalExecutionCaptureHooks } from './execution-types.ts'
+import type { ManagedExecutionIdentity,ManagedExecutionOwner,OriginalExecutionWriterBinding,OriginalWriterDependencyScope,OriginalExecutionCaptureHooks,ExecutionObservation,PreparedExecutionRequest } from './execution-types.ts'
 import {freezeJsonData} from './capture.ts'
 import {captureOriginalRestorationSource} from './restoration-source.ts'
+import {originalDeliveryObservation} from './delivery-control.ts'
 
 const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;current():void}>()
 export function isManagedExecutionOwner(identity:ManagedExecutionIdentity,owner:object):boolean{
@@ -38,6 +39,32 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   let dependencyFailure:{cause:unknown}|undefined
   const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();debt.delete(scope)}catch(error){errors.push(error)}if(errors.length)throw new AggregateError(errors,'Exact writer dependency cleanup unresolved');dependencyFailure=undefined}
   const assertNewWork=()=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size)throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
+  const requestActions=new WeakMap<object,()=>void>()
+  function observe():ExecutionObservation{
+    assertNewWork();const bound=owners.get(identity);if(!bound)throw TypeError('Original execution owner unbound');bound.current()
+    const expected=original.prefix,delivery=originalDeliveryObservation(original.delivery),fence=delivery.revision();
+    const current=()=>{assertNewWork();bound.current();if(original.prefix!==expected||delivery.revision()!==fence)throw TypeError('Original execution observation expired')}
+    const floor=(value:number)=>{if(!Number.isSafeInteger(value)||value<0||value>expected.eventCount)throw RangeError('Invalid original inbox floor')}
+    const inbox:ExecutionObservation['inbox']=Object.freeze({pending(fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.pending(fromSeq)},isPending(inputId:string,fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.isPending(inputId)&&(original.intake.admission(inputId)??-1)>=fromSeq},everAdmitted(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.everAdmitted(inputId)},isExecutable(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return delivery.isExecutable(inputId)}})
+    const header=original.header===undefined?undefined:freezeJsonData(structuredClone(original.header))
+    const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:original.formatVersion,...header?{header}:{},prefix:Object.freeze({...expected}),projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules:Object.freeze({kind:'unavailable' as const,reason:'original-schedule-adapter-not-connected' as const,revision:original.context.scheduleRevision()}),inbox,
+      assertCurrent(){if(this!==observation)throw TypeError('Original observation receiver required');current()},
+      plan(){if(this!==observation)throw TypeError('Original observation receiver required');current();return freezeJsonData(original.context.plan())},
+      sandboxMode(fromSeq=0){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.context.sandboxMode(fromSeq)},
+      rewrite(){if(this!==observation)throw TypeError('Original observation receiver required');current();return freezeJsonData(original.context.rewrite())},
+      budget(){if(this!==observation)throw TypeError('Original observation receiver required');current();return freezeJsonData(original.context.budget(token.sessionId))},
+      recovery(binding?:Parameters<ExecutionObservation['recovery']>[0]){if(this!==observation)throw TypeError('Original observation receiver required');current();let captured:typeof binding;if(binding!==undefined){if(!binding||typeof binding!=='object'||types.isProxy(binding))throw TypeError('Original recovery binding scalars required');const model=Object.getOwnPropertyDescriptor(binding,'modelId'),protocol=Object.getOwnPropertyDescriptor(binding,'protocol'),provider=Object.getOwnPropertyDescriptor(binding,'providerId');if(!model||!('value'in model)||typeof model.value!=='string'||!protocol||!('value'in protocol)||typeof protocol.value!=='string'||provider&&(!('value'in provider)||provider.value!==undefined&&typeof provider.value!=='string'))throw TypeError('Original recovery binding scalars required');captured={modelId:model.value,protocol:protocol.value,...provider?.value!==undefined?{providerId:provider.value}:{}}}return freezeJsonData(original.context.recovery(token.sessionId,captured))},
+      generations(){if(this!==observation)throw TypeError('Original observation receiver required');current();return freezeJsonData(original.generations())},
+    });current();return observation
+  }
+  async function prepareRequest(action:import('./ports.ts').ManagedAction<FactOutcome>):Promise<PreparedExecutionRequest>{
+    const actionCurrent=requestActions.get(action);if(!actionCurrent)throw TypeError('Original request action required')
+    actionCurrent();const observation=observe(),archive=await original.prepare();let active=true,settled=false,settling:Promise<void>|undefined
+    const current=()=>{if(!active)throw TypeError('Original request preparation expired');actionCurrent();observation.assertCurrent();archive.assertCurrent()}
+    try{current()}catch(primary){try{await archive.settle()}catch(cleanup){throw new AggregateError([primary,cleanup],'Request preparation and original lease cleanup failed')}throw primary}
+    const request:PreparedExecutionRequest=Object.freeze({archive,observation,assertCurrent(){if(this!==request)throw TypeError('Original request receiver required');current()},settle(){if(this!==request)return Promise.reject(TypeError('Original request receiver required'));active=false;if(settled)return Promise.resolve();if(settling)return settling;const flight=archive.settle().then(()=>{settled=true});settling=flight;void flight.finally(()=>{if(settling===flight)settling=undefined}).catch(()=>{});return flight}})
+    return request
+  }
   return {
     identity,
     get eventCount(){return original.eventCount},
@@ -62,6 +89,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     settleDependencies,
     stopNewWork(){stopped=true},
     prepare(){assertNewWork();return original.prepare()},
+    observe,prepareRequest,
     async prepareWrite(groups:readonly CapturedFactGroup[],rejectInvalidGroups=false){
       // Only the original writer invokes this after its real authorization;
       // already-admitted/source-required work can drain after new-work Stop.
@@ -98,6 +126,10 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     },
     captureHooks(source:object,assertCaptureCurrent:()=>void):OriginalExecutionCaptureHooks{
       assertNewWork();assertCaptureCurrent()
+      const bound=owners.get(identity);bound?.current();if(bound?.owner.ownsAction(source)){
+        const field=Object.getOwnPropertyDescriptor(source,'assertOpen');if(!field||!('value'in field)||typeof field.value!=='function'||types.isProxy(field.value))throw TypeError('Original action currentness required');const assert=field.value.bind(source) as ()=>void;
+        requestActions.set(source,()=>{bound.current();if(!bound.owner.ownsAction(source)||Object.getOwnPropertyDescriptor(source,'assertOpen')?.value!==field.value)throw TypeError('Original request action changed');assert()})
+      }
       return Object.freeze({capture:<T extends import('./ports.ts').CapturedActionFact>(group:CapturedFactGroup,commands:T)=>members.capture(group,commands,source,assertCaptureCurrent),forward:members.forward})
     },
     acknowledge:members.acknowledge,

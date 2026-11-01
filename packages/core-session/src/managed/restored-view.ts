@@ -118,6 +118,8 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         compatibility(events:readonly SessionEventView[],owner:object){check();return createManagedIndexedView(events,owned.source.formatVersion,owned.source.header,owned.index,owner,owned.sessionId)},
         delivery(){check();return readConversationDeliveries(owned.index)!},
         intake:owned.intake,
+        context:owned.context,
+        generations(){check();return readConversationGenerations(owned.index)??[]},
         get eventCount(){check();return owned.index.eventCount},
         get prefix(){check();return owned.source.prefix},
         get formatVersion(){check();return owned.source.formatVersion},
@@ -195,6 +197,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             for (const lease of [...leases])
                 await lease.settle();
             await owned.source.close();
+            owned.intake.releasePayloads();owned.context.releasePayloads();
         },
     };
 }

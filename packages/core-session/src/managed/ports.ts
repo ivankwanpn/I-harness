@@ -100,6 +100,8 @@ export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
   captureCancellation(event: Event<'agent/input/cancelled'>): CapturedSettlementFact<Outcome>
 }
 export interface ManagedAction<Outcome = FactOutcome> {
+  /** Original producer capture, when supported; copied outcomes cannot replace it. */
+  captureToolCall?(event:Event<'tool/call'>):CapturedActionFact<Outcome>
   captureModelExchange(...args: Parameters<AgentFacts<Outcome>['accept']>): CapturedActionFact<Outcome>
   captureRuntimeContext(record: import('../events/runtime-context.ts').RuntimeContextRecordV1, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureSoftReduction(event: import('../events/soft-reduction.ts').SoftReductionStart, checkCurrent: () => boolean): CapturedActionFact<Outcome>

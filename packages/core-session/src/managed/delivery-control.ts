@@ -8,6 +8,9 @@ const controls = new WeakMap<object, {
 }>();
 const ports = new WeakMap<object, ReturnType<typeof createDeliveryControl>>();
 const listeners = new WeakMap<object, Set<() => void>>();
+const ownerObservations=new WeakMap<()=>DeliveryReadIndex,{revision():number;isExecutable(inputId:string):boolean}>();
+/** Original fence observation; no callback/label can enroll a replacement. */
+export function originalDeliveryObservation(readIndex:()=>DeliveryReadIndex){const original=ownerObservations.get(readIndex);if(!original)throw TypeError('Original delivery observation unavailable');return original}
 export function subscribeDeliveryControl(view: SessionView, listener: () => void): () => void {
   let set = listeners.get(view);
   if (!set) { set = new Set(); listeners.set(view, set); }
@@ -46,7 +49,9 @@ export function createDeliveryControl(view: SessionView) {
 }
 /** Same original delivery fence, independent of optional complete public view. */
 export function createOwnerDeliveryControl(readIndex:()=>DeliveryReadIndex,eventCount:()=>number,changed:()=>void=()=>{}) {
+  if(ownerObservations.has(readIndex))throw TypeError('Original delivery control already associated');
   const control = { through: -1, retired: false, debt: new Set<object>() };
+  let revision=0;
   let publicView:SessionView|undefined;
   const publish=()=>{changed();if(publicView)notify(publicView)};
   const port = {
@@ -54,13 +59,14 @@ export function createOwnerDeliveryControl(readIndex:()=>DeliveryReadIndex,event
       control.through = Math.max(control.through, eventCount() - 1);
       const token = {};
       control.debt.add(token);
+      revision++;
       publish();
       return () => {
-        control.debt.delete(token);
+        if(control.debt.delete(token))revision++;
         publish();
       };
     }, retire() {
-      control.retired = true;
+      if(!control.retired)revision++;control.retired = true;
       publish();
     }, assert(events: readonly SessionEventView[]) {
       // Unrelated groups never need a delivery read. Relevant groups use the
@@ -88,6 +94,7 @@ export function createOwnerDeliveryControl(readIndex:()=>DeliveryReadIndex,event
       }
     }
   };
+  ownerObservations.set(readIndex,Object.freeze({revision:()=>revision,isExecutable:(inputId:string)=>executable(readIndex(),inputId,control)}));
   return {control,port,bindView(view:SessionView){if(publicView||controls.has(view))throw TypeError('Original delivery view already bound');publicView=view;controls.set(view,control);ports.set(view,port)}};
 }
 export function isBoundDeliveryInput(view: SessionView, inputId: string): boolean {

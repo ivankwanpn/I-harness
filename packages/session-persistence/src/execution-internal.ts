@@ -1,4 +1,4 @@
-import type {ManagedExecutionIdentity,ManagedExecutionOwner,OriginalWriterDependencyScope} from '@i-harness/core-session/internal/execution'
+import type {ManagedExecutionIdentity,ManagedExecutionOwner,OriginalWriterDependencyScope,ExecutionObservation,PreparedExecutionRequest} from '@i-harness/core-session/internal/execution'
 import type {PreparedConversationArchive} from '@i-harness/core-session/internal/restoration'
 import type {JournalPrefix} from '@i-harness/core-session'
 import type {HeldFactOwner,ManagedDocument} from './coordinator/fact-types.ts'
@@ -10,6 +10,8 @@ export interface ManagedExecutionAttachment {
  readonly identity:ManagedExecutionIdentity
  readonly owner:ManagedExecutionProducer
  prepare():Promise<PreparedConversationArchive>
+ observe():ExecutionObservation
+ prepareRequest(action:ReturnType<ManagedExecutionProducer['beginAction']>):Promise<PreparedExecutionRequest>
  revokeNewWork():void
  close():Promise<void>
 }

@@ -475,7 +475,10 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             actionControllers.add(cancel);
             const capability: import('@i-harness/core-session').ManagedAction<FactOutcome> = {
                 signal: action.signal!,
-                facts: createFactPorts(draft => admit(draft, authorization)),
+                facts: createFactPorts(draft => admit(draft, authorization),async event=>{
+                    if(closing||closed||metadataStale||quarantined||sourceFault||recoveryHolds.size||action.stopped||action.signal?.aborted)return admit({kind:'tool',event},authorization);
+                    return capability.captureToolCall!(event).admit();
+                }),
                 ...createActionCaptures({
                     ...(core?{captureMembers:actionCaptureMembers}:{}),
                     assertHeld: held.assertHeld,
@@ -540,6 +543,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                 },
             };
             Object.defineProperty(capability, 'owner', { value: owner, enumerable: true, writable: false, configurable: false });
+            Object.defineProperty(capability,'captureToolCall',{value:capability.captureToolCall,enumerable:true,writable:false,configurable:false});
             ownedActions.add(capability);
             if(core){actionHooks=core.captureHooks(capability,held.assertHeld);actionMembers.add({source:capability,finished:()=>finished})}
             return capability;
