@@ -48,7 +48,10 @@ export function createPipeChildOwner(input: PipeChildInput, original: Original, 
     const invoke = (action: () => unknown) => { try { actions.push(Promise.resolve(action())) } catch (e) { actions.push(Promise.reject(e)) } }
     // Termination is a request, never an exit acknowledgment.
     if (native && (native.phase() === 'created' || native.phase() === 'unknown') && !exited) invoke(() => native!.terminate())
-    for (const credit of credits.slice(1)) invoke(() => credit.fence())
+    // Pipe cancellation stops new submissions. Preserve normal channel credit
+    // until original pending I/O can be observed and its observer retired.
+    // Only an already-acknowledged failed renewal has no capacity to preserve.
+    for (const credit of credits.slice(1)) invoke(() => credit.retireFailedRenewal())
     for (const pipe of pipes) invoke(() => pipe.cancel())
     recoveryFlight = Promise.allSettled(actions).then(results => { recoveryErrors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []) })
   }
@@ -70,6 +73,7 @@ export function createPipeChildOwner(input: PipeChildInput, original: Original, 
       // the original failed actions for an explicit cleanup retry.
       const previous = recoveryErrors; recoveryErrors = []
       if (native && native.phase() === 'created' && !exited) await attempt(() => native!.terminate())
+      for (const credit of credits.slice(1)) await attempt(() => credit.retireFailedRenewal())
       for (const pipe of pipes) await attempt(() => pipe.cancel())
       if (failures.length) { recoveryErrors = failures; throw new AggregateError([...previous, ...failures], 'rollback requests remain incomplete') }
     }

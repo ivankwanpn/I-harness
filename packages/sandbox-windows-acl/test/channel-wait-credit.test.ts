@@ -42,3 +42,21 @@ it('delegates with exact original receivers and renews synchronously before comp
   await Promise.resolve();expect(events).toEqual(['release1','reserve','competitor-refused'])
   credit.fence();credit.fence();expect(events.at(-1)).toBe('release2')
 })
+it('cleanup preparation preserves ordinary unused and active credit for original I/O observations',()=>{
+  let releases=0,reserves=0
+  const make=():WaitDrainReservation=>({unregister(){throw Error('unused')},rejoin(){},release(){releases++}})
+  const credit=createChannelWaitCredit({reserve(){reserves++;return make()}},make())
+  credit.retireFailedRenewal();expect(releases).toBe(0)
+  const first=credit.reserve();credit.retireFailedRenewal();first.release()
+  expect(reserves).toBe(1);credit.retireFailedRenewal()
+  const replacement=credit.reserve();replacement.release();credit.fence()
+  expect(reserves).toBe(2);expect(releases).toBe(3)
+})
+it('cleanup preparation completes only the acknowledged failed renewal without double release',()=>{
+  let releases=0
+  const original:WaitDrainReservation={unregister(){throw Error('unused')},rejoin(){},release(){releases++}}
+  const credit=createChannelWaitCredit({reserve(){throw false}},original),generation=credit.reserve()
+  let failed=false;try{generation.release()}catch(error){failed=true;expect(error).toBe(false)};expect(failed).toBe(true)
+  credit.retireFailedRenewal();generation.release();generation.release();credit.fence()
+  expect(releases).toBe(1);expect(()=>credit.reserve()).toThrow('unavailable')
+})

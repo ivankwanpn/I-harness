@@ -27,6 +27,13 @@ export function createChannelWaitCredit(client: Pick<WaitDrainService, 'reserve'
         },
       }
     },
+    /** A failed renewal has already acknowledged the old original release,
+     * but has no replacement credit. Permit only that retained release wrapper
+     * to finish during cleanup; ordinary active/unused capacity stays live for
+     * observations acknowledging already-issued I/O. */
+    retireFailedRenewal() {
+      if (state === 'renewal-failed') { fenced = true; state = 'fenced' }
+    },
     fence() {
       fenced = true
       if (state === 'unused' && current) { current.release(); current = undefined; state = 'fenced' }
