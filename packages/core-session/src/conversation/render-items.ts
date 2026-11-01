@@ -1,3 +1,5 @@
+import type { PreparedPrunedResult, ConversationSourceCoordinateView } from './restoration-types.ts'
+import type { PruneRecord } from '../projection/pruning.ts'
 import { runtimeContextDigest, renderRuntimeContext } from '../events/runtime-context.ts'
 import type { ConversationEventArchive } from './archive.ts'
 import type { SessionView, SessionEventView } from '../managed/types.ts'
@@ -7,19 +9,19 @@ import type { HistoryItem, HistoryRecipe } from './history/types.ts'
 import { archiveConversationSources } from './sources.ts'
 import { finishItem } from './exchange.ts'
 import { copyConversationData, copyConversationMessage } from './render.ts'
-import { createConversationPayloadReader, projectToolResult, type ConversationPayloadCapture } from './payload.ts'
+import { createConversationPayloadReader, projectToolResult, projectPrunedResultProjection, type ConversationPayloadCapture } from './payload.ts'
 import { archivePruneSubstitutes } from '../projection/pruning.ts'
 import { resultIsError } from '../results/projection.ts'
 import { validatePreparedInputText } from './input-preparation.ts'
 
 /** Payload-only rendering consumes the sole history owner's complete recipes.
  * It never establishes groups, closure, source unions, order or visibility. */
-export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[]; current?: import('./history/types.ts').HistoryCurrent }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number } } = {}): ConversationProjection {
+export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[]; current?: import('./history/types.ts').HistoryCurrent }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number }; sourceCoordinates?: ConversationSourceCoordinateView; pruneSubstitutes?: ReadonlyMap<string,PruneRecord>; prunedResults?: ReadonlyMap<number,PreparedPrunedResult> } = {}): ConversationProjection {
   const diagnostics: ConversationDiagnostic[] = []
   const readPayload = createConversationPayloadReader(options.capturePayload)
   const sources = archiveConversationSources(archive, options.ownerSessionId, diagnostics, { ...options, ...(options.capturePayload ? { readPayload } : {}) })
   const source = (ref: { eventIndex: number; part: string }) => sources.ref(ref.eventIndex, ref.part)
-  const pruned = archivePruneSubstitutes(archive)
+  const pruned = options.pruneSubstitutes ?? archivePruneSubstitutes(archive)
   const results = new Map<number, ReturnType<typeof projectToolResult>>()
   const payload = <T extends object, K extends keyof T>(event: T, key: K, index: number, part: string) => copyConversationData(readPayload(event, key, sources.ref(index, part)))
   // The source index already checked preparation structure. Validate selected
@@ -42,6 +44,8 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
   const result = (index: number) => {
     const previous = results.get(index)
     if (previous) return previous
+    const selected = options.prunedResults?.get(index)
+    if (selected) { const rendered = projectPrunedResultProjection(selected, sources.ref(index,'result'), sources.ref(index,'image'), options.capturePayload); results.set(index,rendered); return rendered }
     const event = archive.get(index) as Extract<SessionEventView, { type: 'tool/result' }>
     const rendered = projectToolResult(event, pruned.get(event.callId), sources.ref(index, 'result'), sources.ref(index, 'image'), options.capturePayload)
     results.set(index, rendered)
@@ -49,7 +53,8 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
   }
   const render = (recipe: HistoryRecipe, item: HistoryItem): LLMMessage => {
     const index = recipe.index!
-    const event = index === undefined ? undefined : archive.get(index)
+    const selectedResult = index === undefined ? undefined : options.prunedResults?.get(index)
+    const event = index === undefined || selectedResult ? undefined : archive.get(index)
     if (recipe.kind === 'input') {
       if (event?.type !== 'user/message') throw new Error('Invalid input recipe')
       const admission = item.imageAdmissionIndex === undefined ? undefined : archive.get(item.imageAdmissionIndex)
@@ -87,7 +92,7 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
   })()
   const items = history.items.map(item => {
     const establishment = source(item.establishment)
-    const own = archive.get(item.establishmentIndex)
+    const own = options.prunedResults?.has(item.establishmentIndex) ? undefined : archive.get(item.establishmentIndex)
     const seedRecipe = item.recipes.find(recipe => recipe.kind === 'seed-item')
     const seedItem = own?.type === 'conversation/seed-group' && seedRecipe ? own.group.items[seedRecipe.item!] : undefined
     const rendered = finishItem({ ...item, id: `${establishment.id}:${item.kind}`, establishment, sources: item.sources.map(source), provenance: sources.provenance(item.establishmentIndex, item.establishment.part, item.admissionIndex),

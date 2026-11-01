@@ -9,11 +9,17 @@ import { createHistoryIndex } from './history/index.ts'
 import { createGenerationIndex, type GenerationHistoryScope, type GenerationActionState } from './generation.ts'
 import { createInputPreparationIndex } from './input-preparation.ts'
 import { createSoftReductionIndex } from './soft-reduction.ts'
-import { bootstrapStaging, semanticSourceStructure, conversationScopeKey, validateBootstrapReadiness } from './bootstrap-validation.ts'
+import { bootstrapStaging, semanticSourceStructure, conversationScopeKey, validateBootstrapReadiness, createBootstrapReadinessScan } from './bootstrap-validation.ts'
 export { conversationScopeKey } from './bootstrap-validation.ts'
 
 interface Address { index: number; type: SessionEvent["type"]; step?: number; callId?: string; actionId?: string; attemptId?: string; ambiguous?: boolean }
 
+interface ConversationScanStage {
+  advance(event: SessionEvent): void;
+  dependencies(event: SessionEvent): readonly number[];
+  finish(): ReturnType<ConversationValidationIndex['stage']>;
+}
+type ConversationScanBegin = (readCurrent?: (index: number) => SessionEvent | undefined, readStaged?: (index: number) => SessionEvent | undefined) => ConversationScanStage;
 interface StageOptions { readCurrentEvent?: (index: number) => SessionEvent | undefined }
 interface Step { failed: boolean; accepted: boolean; calls: number }
 export interface ConversationValidationIndex {
@@ -51,7 +57,7 @@ export function createBootstrapConversationIndex(events: readonly SessionEvent[]
 export function createSemanticSourceConversationIndex(events: readonly SessionEvent[], formatVersion: number, header: GenerationHistoryScope = {}): ConversationValidationIndex {
   return conversationIndex(events, undefined, formatVersion, header, semanticSourceStructure)
 }
-function conversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope, capability?: typeof bootstrapStaging | typeof semanticSourceStructure): ConversationValidationIndex {
+function conversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope, capability?: typeof bootstrapStaging | typeof semanticSourceStructure, scan?: (begin: ConversationScanBegin) => void): ConversationValidationIndex {
   const validateShape = capability === semanticSourceStructure ? validateSemanticSourceEventShape : validateConversationEventShape
   const acceptances = new Map<number, AcceptanceFact>()
   const completions = new Map<number, string>()
@@ -79,34 +85,14 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
       || actual.type === "step/start" && (actual.actionId !== target.actionId || actual.attemptId !== target.attemptId)
       || actual.type === "tool/call" && actual.callId !== target.callId) fail("referenced structure was mutated")
   }
-  const index: ConversationValidationIndex = {
-    generationScope: conversationScopeKey(scope),
-    get formatVersion() { return formatVersion },
-    get eventCount() { return count },
-    get semanticsStartSeq() { return fence },
-    history: history.history,
-    semanticSeedResultRefs: () => [...index.iterateSelectedResultRefs()],
-    *iterateSelectedResultRefs() {
-      if (scope.semanticSeed?.version === 3 && count < scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) return
-      yield* history.iterateSelectedResultRefs()
-    },
-    resultFacts: history.resultFacts,
-    replacementDependencies: history.dependencies,
-    softReduction: soft.read,
-    stage(suffix, options) {
-      // Readiness itself dispatches on event.type, so source descriptors must
-      // be checked before it or any index/boundary consumes those scalars.
-      for (const event of suffix) validateRuntimeContextDiscriminant(event, formatVersion)
-      if (capability === semanticSourceStructure) for (const event of suffix) validateSemanticSourceEventShape(event, formatVersion)
-      const readCurrent = options?.readCurrentEvent ?? read
-      const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0
-      validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...suffix], formatVersion, scope, capability)
+
+  function beginStage(readCurrent?: (index: number) => SessionEvent | undefined, readStaged = readCurrent ?? (() => undefined)): ConversationScanStage {
       const stagedHistory = history.stage(readCurrent)
       const stagedDelivery = delivery.stage()
       deliveryOrigins = stagedDelivery
       const stagedGeneration = generation.stage()
       const stagedSoft = soft.stage()
-      const stagedPreparations = preparations.stage(seq => seq >= count ? suffix[seq - count] : readCurrent?.(seq) ?? events[seq], stagedGeneration.action)
+      const stagedPreparations = preparations.stage(seq => seq >= count ? readStaged(seq) : readCurrent?.(seq) ?? events[seq], stagedGeneration.action)
       const newAcceptances = new Map<number, AcceptanceFact>()
       const newCompletions = new Map<number, string>()
       const newAnchors = new Map<string, UsageAnchorFact>()
@@ -121,7 +107,13 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         if (!value) { const old = steps.get(seq); if (!old) fail("missing physical step"); value = { ...old }; newSteps.set(seq, value) }
         return value
       }
-      for (const [offset, event] of suffix.entries()) {
+
+    let stagedLength = 0;
+    const advance = (event: SessionEvent) => {
+      validateRuntimeContextDiscriminant(event, formatVersion);
+      if (capability === semanticSourceStructure) validateSemanticSourceEventShape(event, formatVersion);
+      const offset = stagedLength++;
+
         validateShape(event, formatVersion)
         stagedDelivery.advance(event)
         stagedGeneration.advance(event)
@@ -176,7 +168,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
           const anchorId = event.op === "sample" ? event.checkpoint.anchorId : event.anchorId
           const seq = event.op === "sample" ? event.checkpoint.accepted.acceptedSeq : undefined
           const accepted = seq === undefined ? undefined : newAcceptances.get(seq) ?? acceptances.get(seq)
-          const actual = accepted && (accepted.index < count ? readCurrent?.(accepted.index) : suffix[accepted.index - count])
+          const actual = accepted && (accepted.index < count ? readCurrent?.(accepted.index) : readStaged(accepted.index))
           const fact = validateUsageFact(event, position, {
             accepted,
             actual,
@@ -221,7 +213,17 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
           if (event.type === "tool/call") newCalls.set(event.callId, newCalls.has(event.callId) || callsById.has(event.callId) ? null : event.seq)
         } else if (nextFence !== undefined) fail("unaddressable explicit event")
         if (event.type === "step/end" || event.type === "turn/start" || event.type === "turn/end") nextStep = undefined
+
+    };
+    return { advance, dependencies(event) {
+      const required = new Set(stagedPreparations.dependencies(event));
+      if (event.type === 'context/usage' && event.version === 2 && event.op === 'sample') {
+        const actual = newAcceptances.get(event.checkpoint.accepted.acceptedSeq) ?? acceptances.get(event.checkpoint.accepted.acceptedSeq);
+        if (actual) required.add(actual.index);
       }
+      return [...required];
+    }, finish() {
+
       stagedDelivery.validate()
       stagedGeneration.validate()
       stagedPreparations.validate()
@@ -250,11 +252,38 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         for (const id of newExchanges) exchanges.add(id)
         for (const id of newAttempts) attempts.add(id)
         for (const seq of newAccepted) acceptedCalls.add(seq)
-        count += suffix.length; fence = nextFence; activeStep = nextStep; revision++; committed = true
+        count += stagedLength; fence = nextFence; activeStep = nextStep; revision++; committed = true
       } }
+
+    } };
+  }
+
+  const index: ConversationValidationIndex = {
+    generationScope: conversationScopeKey(scope),
+    get formatVersion() { return formatVersion },
+    get eventCount() { return count },
+    get semanticsStartSeq() { return fence },
+    history: history.history,
+    semanticSeedResultRefs: () => [...index.iterateSelectedResultRefs()],
+    *iterateSelectedResultRefs() {
+      if (scope.semanticSeed?.version === 3 && count < scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) return
+      yield* history.iterateSelectedResultRefs()
+    },
+    resultFacts: history.resultFacts,
+    replacementDependencies: history.dependencies,
+    softReduction: soft.read,
+    stage(suffix, options) {
+      for (const event of suffix) validateRuntimeContextDiscriminant(event, formatVersion);
+      if (capability === semanticSourceStructure) for (const event of suffix) validateSemanticSourceEventShape(event, formatVersion);
+      const readCurrent = options?.readCurrentEvent ?? read;
+      const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0;
+      validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...suffix], formatVersion, scope, capability);
+      const staged = beginStage(readCurrent, position => suffix[position - count]);
+      for (const event of suffix) staged.advance(event);
+      return staged.finish();
     },
   }
-  index.stage(events).commit()
+  if (scan) scan(beginStage); else index.stage(events).commit()
   if (capability !== semanticSourceStructure) deliveryObservations.set(index, delivery.readIndex())
   if (capability !== semanticSourceStructure) generationObservations.set(index, generation.read)
   return index
@@ -263,4 +292,58 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
 export function validateConversationHistory(events: readonly SessionEvent[], formatVersion: number, header?: GenerationHistoryScope): void {
   for (const event of events) validateConversationEventShape(event, formatVersion)
   createConversationValidationIndex(events, { formatVersion, header })
+}
+
+/** Only nominal completed validation candidates cross into original managed
+ * construction. Read consumers never receive the mutable validation index. */
+const scanCandidates = new WeakMap<object, { index: ConversationValidationIndex; consumed: boolean }>()
+export function inspectConversationValidationScan(candidate: object) {
+  const record = scanCandidates.get(candidate)
+  if (!record || record.consumed) throw new TypeError('Invalid or consumed conversation validation scan')
+  return { eventCount: record.index.eventCount, history: record.index.history(), resultFacts: record.index.resultFacts() }
+}
+/** Constructor-private transfer, used by the original restored state owner. */
+export function takeConversationValidationScan(candidate: object): ConversationValidationIndex {
+  const record = scanCandidates.get(candidate)
+  if (!record || record.consumed) throw new TypeError('Invalid or consumed conversation validation scan')
+  record.consumed = true
+  return record.index
+}
+export function createConversationValidationScan(options: {
+  formatVersion: number; header?: GenerationHistoryScope;
+  readEvent(ordinal: number): Promise<SessionEvent>
+}) {
+  let begin!: ConversationScanBegin
+  const header = options.header ?? {}, available = new Map<number, SessionEvent>()
+  const index = conversationIndex([], undefined, options.formatVersion, header, undefined, value => { begin = value })
+  const staged = begin(position => available.get(position), position => available.get(position))
+  const bootstrap = createBootstrapReadinessScan(options.formatVersion, header)
+  let ordinal = 0, terminal = false, failed = false, flight = false
+  return {
+    async push(unit: readonly SessionEvent[]) {
+      if (terminal || failed || flight) throw new TypeError('Conversation scan unavailable')
+      flight = true
+      try {
+        for (const event of unit) {
+          validateRuntimeContextDiscriminant(event, options.formatVersion)
+          validateConversationEventShape(event, options.formatVersion)
+          available.set(ordinal, event)
+          for (const dependency of staged.dependencies(event)) if (dependency < ordinal && !available.has(dependency)) available.set(dependency, await options.readEvent(dependency))
+          bootstrap.advance(event)
+          staged.advance(event)
+          ordinal++
+          available.clear()
+        }
+      } catch (error) { failed = true; throw error } finally { available.clear(); flight = false }
+    },
+    finish(): object {
+      if (terminal || failed || flight) throw new TypeError('Conversation scan unavailable')
+      terminal = true
+      bootstrap.finish()
+      staged.finish().commit()
+      const candidate = Object.freeze({})
+      scanCandidates.set(candidate, { index, consumed: false })
+      return candidate
+    },
+  }
 }

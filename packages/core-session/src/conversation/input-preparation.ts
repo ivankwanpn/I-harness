@@ -31,6 +31,21 @@ export function createInputPreparationIndex(scope: { parentSession?: string; see
       return event
     }
     return {
+      /** Exact original payload references needed before a streamed advance. */
+      dependencies(event: SessionEventView): readonly number[] {
+        const needed = new Set<number>();
+        if (event.type === 'user/message' && event.seedInputContext) needed.add(event.seedInputContext.rawMessageSeq);
+        if (event.type === 'user/message' && event.inputPreparation) {
+          needed.add(event.inputPreparation.resultSeq);
+          if ('rawMessageSeq' in event.inputPreparation) needed.add(event.inputPreparation.rawMessageSeq);
+          else { const original = get(event.inputPreparation.preparationId); if (original) needed.add(original.started.admissionSeq); }
+        }
+        if (event.type === 'agent/input/preparation') {
+          if (event.op === 'started') { needed.add(event.admissionSeq); needed.add(event.actionSeq); }
+          if (event.op === 'promoted') { needed.add(event.resultSeq); needed.add(event.rawMessageSeq); for (const seq of event.derivedMessageSeqs) needed.add(seq); }
+        }
+        return [...needed];
+      },
       advance(event: SessionEventView) {
         if (event.type === 'agent/input/promoted') promoted.set(event.inputId, event.seq!)
         if (event.type === 'agent/input/cancelled') cancelled.add(event.inputId)

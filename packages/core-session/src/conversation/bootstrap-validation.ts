@@ -120,3 +120,24 @@ export function conversationScopeKey(header: GenerationHistoryScope = {}): strin
   if (header.semanticSeed) validateSeedHeader(header.semanticSeed)
   return canonicalJsonData([header.sessionId ?? null, header.parentSession ?? null, header.seedLength ?? null, header.semanticSeed ?? null])
 }
+
+/** Original bootstrap readiness across a private scan; payload is retained only
+ * until the finite birth has passed its complete original validator. */
+export function createBootstrapReadinessScan(formatVersion: number, scope: GenerationHistoryScope) {
+  const required = scope.semanticSeed ? scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1) : 0
+  let count = 0, complete = required === 0
+  let prefix: SessionEventView[] = []
+  return {
+    advance(event: SessionEventView) {
+      validateSeedEventShape(event, formatVersion)
+      if (!complete) {
+        prefix.push(event)
+        if (++count === required) { validateBootstrapReadiness(prefix, formatVersion, scope); prefix = []; complete = true }
+        return
+      }
+      if (['conversation/seed-manifest', 'conversation/seed-results', 'conversation/seed-group', 'session/bootstrap'].includes(event.type)) seedInvalid()
+      count++
+    },
+    finish() { if (!complete) incomplete(); if (!required) validateBootstrapReadiness([], formatVersion, scope) },
+  }
+}
