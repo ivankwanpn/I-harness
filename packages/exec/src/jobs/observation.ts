@@ -5,7 +5,7 @@ import { registerExecResultOutcome, transferExecutionMetadata } from '../retaine
 
 interface JobObservation {
   makeCapture(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background?: boolean, promotable?: boolean): Promise<Capture>
-  registerJob(capture: Capture): NativeJobIdentity
+  registerJob(capture: Capture): Promise<NativeJobIdentity>
   releaseCapture(capture: Capture): void
   isDisposed(): boolean
   observe?(capture: Capture): Promise<ExecResult['retentionFailure']>
@@ -61,8 +61,9 @@ export function createJobObservation({ makeCapture, registerJob, releaseCapture,
         if ("result" in outcome) { void observed(capture, outcome.result).then(resolve, reject) }
         else if ("reason" in outcome) {
           try {
-            const nativeJob = registerJob(capture)
-            resolve({ jobId: nativeJob.jobId, nativeJob, promoted: true, ranForegroundMs: Date.now() - started, promotionReason: outcome.reason })
+            void registerJob(capture).then(nativeJob => {
+              resolve({ jobId: nativeJob.jobId, nativeJob, promoted: true, ranForegroundMs: Date.now() - started, promotionReason: outcome.reason })
+            }, reject)
           } catch (error) { reject(error) }
         }
       }

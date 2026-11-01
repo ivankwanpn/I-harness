@@ -88,7 +88,7 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   const makeCapture: MakeCapture = (...args) => captureReserved(consume(reserve()), ...args)
   const { observe, record } = retention
 
-  const run = createJobObservation({ makeCapture, registerJob, releaseCapture, isDisposed: () => disposed, observe })
+  const run = createJobObservation({ makeCapture, registerJob: publishJob, releaseCapture, isDisposed: () => disposed, observe })
 
   function releaseCapture(capture: Capture): void {
     if (captureJobs.has(capture)) return
@@ -161,6 +161,20 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     return nativeJob
   }
 
+  /** All publication callers share the exact original attempt's failure path. */
+  async function publishJob(capture: Capture): Promise<NativeJobIdentity> {
+    try { return registerJob(capture) }
+    catch (cause) {
+      let cleanup: { cause: unknown } | undefined
+      try { await captureAttempts.get(capture)?.fail(cause) }
+      catch (failure) { cleanup = { cause: failure } }
+      // releaseCapture removes only an attempt with proven clean ownership.
+      releaseCapture(capture)
+      if (cleanup) throw new AggregateError([cause, cleanup.cause], 'Execution publication and cleanup failed')
+      throw cause
+    }
+  }
+
   function publish(job: Job): void {
     publishCollection()
     // Observers receive independent views and cannot interrupt owner transitions.
@@ -194,8 +208,8 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     run: run as NativeExecService["run"],
     async runBackground(command) {
       const capture = await makeCapture(command, undefined, true)
-      try { const nativeJob = registerJob(capture); return { jobId: nativeJob.jobId, nativeJob } }
-      catch (cause) { await captureAttempts.get(capture)?.fail(cause); releaseCapture(capture); throw cause }
+      const nativeJob = await publishJob(capture)
+      return { jobId: nativeJob.jobId, nativeJob }
     },
     getJobView(jobId) {
       const job = jobs.get(jobId)
@@ -379,13 +393,11 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       try {
         if (mode === 'background') {
           const capture = await reservedCapture(command, undefined, true)
-          let nativeJob: NativeJobIdentity
-          try { nativeJob = registerJob(capture) }
-          catch (cause) { await captureAttempts.get(capture)?.fail(cause); releaseCapture(capture); throw cause }
+          const nativeJob = await publishJob(capture)
           return { jobId: nativeJob.jobId, nativeJob }
         }
         if (mode !== 'foreground') throw new Error('Invalid reservation mode')
-        return await createJobObservation({ makeCapture: reservedCapture, registerJob, releaseCapture, isDisposed: () => disposed, observe })(command, runOptions)
+        return await createJobObservation({ makeCapture: reservedCapture, registerJob: publishJob, releaseCapture, isDisposed: () => disposed, observe })(command, runOptions)
       } finally { if (!captured) pendingInstances.delete(entry.instanceId) }
     },
   })
