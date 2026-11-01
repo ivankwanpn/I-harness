@@ -37,7 +37,7 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { jobStatusEvents?:boolean;retiredSourceControl?:boolean;holdTaskACK?:boolean;holdTaskUnknown?:boolean; activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { failBeforePublication?:boolean;jobStatusEvents?:boolean;retiredSourceControl?:boolean;holdTaskACK?:boolean;holdTaskUnknown?:boolean; activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const projectionStart={...legacyProjectionCalls}
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT??tmpdir(), 'ih-d1a-service-'))
   let backend = createJsonlBackend(join(root, 'sessions'))
@@ -240,7 +240,7 @@ export async function createDeliveryFixture(options: { jobStatusEvents?:boolean;
 
     additionalTools: [{ name: 'fixture_step', description: 'A normal parent step boundary', inputSchema: {}, isReadOnly: true, execute: async () => ({ stepped: true }) }],
     allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: 'fixture', model: 'child' }),
-    resolveRoleModel: async () => ({ status: 'ready', binding: { client: child, contextWindow: 100000 } }),
+    resolveRoleModel: async () => {if(options.failBeforePublication)throw new Error('Controlled original setup failure');return { status: 'ready', binding: { client: child, contextWindow: 100000 } }},
   })
   let service = mount()
   const evidence = async (label: string, failure?: unknown) => {

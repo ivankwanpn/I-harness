@@ -263,7 +263,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         const failures: unknown[] = [error]
         try {
           const input={taskId:task.id,outcome,error:error instanceof Error?error.message:String(error)};if(!await source.terminalizeOriginal(input))deps.tasks.terminalize(input)
-        } catch (failure) { source.failed(failure, Object.freeze({ outcome, error })); failures.push(failure) }
+        } catch (failure) { if(!source.hasRequiredTask())source.failed(failure, Object.freeze({ outcome, error })); failures.push(failure) }
         const settled = deps.tasks.get(task.id)
         if (settled?.outcome !== undefined) {
           try {

@@ -74,3 +74,16 @@ it('keeps unavailable original end recovery eligible while refusing retired new 
   await f.service.close()
  }finally{f.releaseTerminalOutcome();f.releaseChild();await f.close()}
 },20000)
+
+it('retains undispatched setup failure and original unknown Task save for same-source recovery',async()=>{
+ const f=await createDeliveryFixture({failBeforePublication:true,holdTaskUnknown:true,retiredSourceControl:true,expectedWarnings:["[subagent] role 'general' declares 3 tool(s) absent from the parent registry; the child runs without them: code_context_search, code_context_status, code_context_index"]})
+ let primary:{cause:unknown}|undefined
+ try{
+  const starting=f.start();void starting.catch(()=>{});await f.waitForTaskACK();await starting.catch(()=>{})
+  expect(f.launchCount()).toBe(0);expect(f.terminalTaskSnapshotCount()).toBe(1)
+  f.coordinator.revokeManagedDocumentNewWork('parent');f.releaseTaskUnknown();await f.settleOriginalSpawnSources()
+  const task=(await f.backend.getDocument('task-parent') as {tasks:{outcome:string;result:{envelope:{execution:{dispatch:string}}}}[]}).tasks[0]!
+  expect(task.outcome).toBe('error');expect(task.result.envelope.execution.dispatch).toBe('not-dispatched');expect(f.terminalTaskSnapshotCount()).toBe(1);expect(f.launchCount()).toBe(0)
+  expect((await f.backend.read('parent')).events.filter(e=>e.type==='subagent/end')).toHaveLength(1);await f.service.close()
+ }catch(cause){primary={cause};console.info('required-undispatched-primary',cause)}finally{f.releaseTaskUnknown();f.releaseChild();try{await f.close()}catch(cleanup){throw new AggregateError([...(primary?[primary.cause]:[]),cleanup],'Original undispatched recovery failed')};if(primary)throw primary.cause}
+},20000)

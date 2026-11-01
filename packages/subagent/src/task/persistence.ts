@@ -97,10 +97,10 @@ export class TaskPersistence {
   private captureOwnedSave(hold: boolean,beforeIssue?:()=>Promise<void>,required?:{parent:object;capture:()=>TaskProtocolDocument}): OwnedTaskSave {
     const owned = this.owned!
     if (!isOwnedTaskContext(owned) || owned.coordinator !== this.coordinator || owned.stateId !== this.stateId) throw new Error('Original task owner unavailable')
-    const parent=required?.parent??owned.parent
+    let parent:object|undefined=required?undefined:owned.parent
     let snapshot=required?undefined:captureTaskSnapshot(this.snapshot())
-    if(snapshot){taskDocumentStorageContract.validate(snapshot);if((snapshot as TaskProtocolDocument).formatVersion===3)owned.operations.assertTaskV3Parent(parent,this.stateId!)}
-    owned.operations.assertParentSession(parent,this.stateId!)
+    if(snapshot){taskDocumentStorageContract.validate(snapshot);if((snapshot as TaskProtocolDocument).formatVersion===3)owned.operations.assertTaskV3Parent(parent!,this.stateId!)}
+    if(!required)owned.operations.assertParentSession(parent!,this.stateId!)
     let operation: Awaited<ReturnType<Operations['begin']>> | undefined, write: ReturnType<Awaited<ReturnType<Operations['begin']>>['stageWrite']> | undefined
     let entered = false, failed = false, abandoned = false, consumed = false, consumerRetired = false, retireFlight: Promise<void> | undefined
     let result: TaskWriteOutcome | undefined, closed = false, closeAttempted = false, retryFlight: Promise<void> | undefined, primaryFailure: unknown, beginCleanup: ReturnType<Operations['cleanupFor']>
@@ -131,11 +131,12 @@ export class TaskPersistence {
     const run = async () => {
       if (this.#pending[0] !== handle || this.#debt && this.#debt !== handle) throw new Error('Earlier owned task save requires resolution')
       try {
+        if(required)parent=await required.parent
         if(beforeIssue)await beforeIssue()
         if(this.#pending[0]!==handle||this.#debt&&this.#debt!==handle)throw new Error('Earlier owned task save requires resolution')
-        if(!snapshot){snapshot=captureTaskSnapshot(required!.capture());taskDocumentStorageContract.validate(snapshot);owned.operations.assertTaskV3Parent(parent,this.stateId!)}
+        if(!snapshot){snapshot=captureTaskSnapshot(required!.capture());taskDocumentStorageContract.validate(snapshot);owned.operations.assertTaskV3Parent(parent!,this.stateId!)}
         entered = true
-        operation = await owned.operations.begin(parent)
+        operation = await owned.operations.begin(parent!)
         const observed = await operation.observe(); if (observed.kind !== 'present') throw new Error('Task document is absent')
         write = operation.stageWrite(observed.witness, snapshot)
         await finish(false)

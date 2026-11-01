@@ -68,3 +68,27 @@ Required queue authority is an opaque token in a constructor-private registry We
 CURRENT communication: actual port insert must mark liveAccepted only for original newly inserted row; original beforeResultIssue map is shared by normal/required queue before entered=true. Source-run binds exact low-level receipt BEFORE any fallible acquisition/publication callback and exact entry+preallocated initialRun BEFORE table/publication callbacks/model gate; no public authority field. Actual callback must be source.published or explicitly forwarded genuine association, never inferred by ID/name/shape. No B2 source has been copied wholesale. R6/2A reserved owner modules are untouched.
 
 Checkpoint packaging contains full base7c5 range and unit base3368 range patches, exact physical source copies/hashes and Git blobs, and receipt currentness audit. NativeSetup independently audited final four manifests83/83/103/76 entries, zero mismatches before checkpoint. Bounded manifests are not complete transitive dependency closure. Source review acceptance remains CHANGES REQUIRED; actual B2/fullR1 integration and two P1 corrections remain outstanding.
+
+## Bounded independent-review correction candidate
+
+Pre-repair UNACCEPTED freeze is f8971cfc7e9ba4698a0e68a445bba6d2fc46877c. Exact28path source/patch/audit packet is prerepair-f8971cfc; it is preserved unchanged. The independent two-P1 review is required-task-settlement-review-20261101.md. This correction changes ONLY four production paths (registry.ts, persistence.ts, spawn.ts, spawn-source.ts) plus two causal tests and their existing dedicated helper. No core managed/Task operation guard was relaxed or rewritten.
+
+P1 Stop winner: actual cancelTree won CAS; its first original Task file write really occurred but ACK returned unknown. RED required-stop-unknown-red-2ef7297a89cb4f24b7488d144e025317 proves retirement retry merely reawaited its rejected retention promise. A live source-bound terminal route is now installed before the original parent-issuer await. Public terminalize/cancelTree remain readiness guarded; when their genuine Stop CAS wins, the same route immediately reserves the existing FIFO under the original opaque registry authority. That one save is stored in retentionSaves and shared by ordinary live retention and the original producer. Parent acquisition is the already-issued original flight, awaited at queued entry; strict physical/current/source checks precede final snapshot and native begin. Ordinary parent/begin behavior is unchanged. Failed retries use the same save/stage/snapshot/result revision; actual producer still must settle before end. Removed the rejected terminalSettlements shortcut and obsolete duplicate terminal-copy maps. No new CAS, body capture, snapshot, writer or parent acquisition is created after retirement.
+
+P1 undispatched setup: actual controlled role resolver failure produced zero child model launches, then its genuine Task save ACK was unknown. RED required-undispatched-unknown-red-860b430837a040609694edc3aea784d0 exposes the unpublished identity error in the same required recovery path. The prepublication catch now mirrors onSettled: an already-owned required save failure remains that exact debt and does not call the unrelated permanent source.failed quarantine. The required end event uses the actual task disposition/result; an unpublished child has no published observation/output identity, so none is fabricated. Parent/source guards and original setup error remain intact.
+
+Focused GREENs:
+- required-stop-original-green-86aba0ba7dc24910a3b49f2cc5402503: original clean Stop and Stop-owned unknown2/2, same original save, one native snapshot/stage and original cancelled revision preserved.
+- required-undispatched-unknown-green-097bbf60389649c583599809e57b3566: actual undispatched setup failure/model0, same original unknown save recovered, truthful error/not-dispatched metadata and one original end.
+- required-review-correction-causals-c975e41673ef45a8a80ac3323083c44e: Task unknown, opt-in JobFacts and undispatched3/3 on composed owner path.
+
+Final coherent correction receipts:
+- required-corrected-owner-matrix-5028083558714622aebdcd3a000f0698:24/24 (actual owner10, projection6, notification8).
+- required-corrected-actual-matrix-8d742b1a0fa64315bebd2321cbf73be5:8/8 actual legacy/service/parent-close/JobFacts/active automatic recovery plus new undispatched case. Strict warning oracles and zero legacy public republish assertions remain.
+- required-corrected-subagent-types-1b9af71ed1b3417c8db116be559ebbb8:exit0.
+- required-corrected-persistence-types-abd36f528b47497f9562db0469861ae6:exit0.
+- required-corrected-executor-types-a91835bbb95b4bfa9efc6a52a8ce96b1:exit0.
+
+The intermediate Stop route implementation type/guard failures855b29ee/a01683c6 and an unused former promise-map type failure44bf8132 are retained as failed receipts, not qualification. No repeated unrelated full routes/platform/native/provider gates ran. These populations overlap prior receipts; do not add them to a whole-version pass count.
+
+This is a correction candidate awaiting the SAME independent reviewer, not accepted MAIN work or full-goal completion. Actual CURRENT/B2 and final full R1 consumer integration remain separate required real paths. SOURCE ABI and exact source/receipt audit are packaged with the correction commit; original prerepair evidence remains immutable.

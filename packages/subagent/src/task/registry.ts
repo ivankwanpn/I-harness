@@ -42,19 +42,18 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const maxConcurrency = opts.maxConcurrency ?? Infinity
   const requiredSaveAuthorities=new WeakMap<object,{parent:object;capture:()=>TaskProtocolDocument;beforeIssue:()=>Promise<void>}>()
   const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask,authority=>{const original=requiredSaveAuthorities.get(authority);if(!original)throw Error('Original required Task capture unavailable');return original})
+  const requiredTerminalRoutes=new WeakMap<TaskRecord,()=>Promise<void>>()
   const retentionSaves = new WeakMap<TaskRecord, import('./persistence.ts').OwnedTaskSave>()
   type RetentionIdentity={revision:string|undefined;fingerprint:string}
   const acknowledgedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
   const capturedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
   const retentionIdentity=(task:TaskRecord):RetentionIdentity=>({revision:task.result?.revision,fingerprint:JSON.stringify(captureTaskSnapshot(task.result??null))})
   const sameRetention=(identity:RetentionIdentity,task:TaskRecord)=>identity.revision===task.result?.revision&&identity.fingerprint===retentionIdentity(task).fingerprint
-  const nativeTerminals=new WeakMap<TaskRecord,Readonly<TaskRecord>>(),terminalIntents=new WeakMap<TaskRecord,Readonly<TaskRecord>>()
   const terminalData=(task:Readonly<TaskRecord>,nativeOnly=false)=>{const data:Record<string,unknown>=Object.create(null);for(const[key,field]of Object.entries(Object.getOwnPropertyDescriptors(task))){if(!field.enumerable||nativeOnly&&(key==='retention'||key==='retentionError'))continue;if(!('value'in field))throw Error('Original Task data accessor changed');Object.defineProperty(data,key,{value:field.value,enumerable:true})};return data}
   const captureTerminal=(task:Readonly<TaskRecord>)=>captureTaskSnapshot(terminalData(task)) as Readonly<TaskRecord>
   const terminalFingerprint=(task:Readonly<TaskRecord>)=>JSON.stringify(captureTaskSnapshot(terminalData(task,true)))
   const retentionPrerequisites=new WeakMap<TaskRecord,()=>Promise<void>>()
   const retentionFlights = new WeakMap<TaskRecord, Promise<void>>()
-  const terminalSettlements=new WeakMap<TaskRecord,Promise<void>>()
   const save = async () => { assertReady(); await persistence.save() }
 
   function snapshot():TaskProtocolDocument {assertReady();return snapshotData()}
@@ -86,6 +85,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     assertReady()
     const task = currentState.records.get(taskId)
     if (!task) return Promise.reject(new Error(`unknown task: ${taskId}`))
+    const required=requiredTerminalRoutes.get(task);if(required&&task.outcome!==undefined)return required()
     const previous = retentionFlights.get(task)
     if (previous) return previous
     const flight = retainResultOnce(taskId)
@@ -113,7 +113,6 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     try {
       const previous = retentionSaves.get(task)
       const captured=previous?capturedRetention.get(task)!:retentionIdentity(task)
-      if(!previous)nativeTerminals.set(task,captureTerminal(task))
       const originalSave = previous ?? persistence.captureSave(true,retentionPrerequisites.get(task))
       if (originalSave) { retentionSaves.set(task, originalSave);capturedRetention.set(task,captured); if (previous) await originalSave.retry(); else await originalSave.done; originalSave.assertHandoff() }
       else await save()
@@ -140,13 +139,14 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   function announceTerminal(t: TaskRecord, notify = true): void {
     // A genuine new current capture leaves historical text recovery behind.
     if (t.result) delete t.legacyFormatVersion
-    terminalIntents.set(t,captureTerminal(t))
     currentState.notifications.enqueue(t)
+    const required=requiredTerminalRoutes.get(t)
+    if(required){const original=required();void original.then(()=>{if(notify)opts.onTerminalized?.(t)},()=>{if(notify)opts.onTerminalized?.(t)});publish(t);return}
     if (opts.reportPolicy) {
-      const originalRetention=retainResult(t.id);terminalSettlements.set(t,originalRetention)
+      const originalRetention=retainResult(t.id);
       void originalRetention.then(() => { if (notify) opts.onTerminalized?.(t) }, () => { if (notify) opts.onTerminalized?.(t) })
     } else {
-      const originalSave=save();terminalSettlements.set(t,originalSave);void originalSave.catch(() => {})
+      const originalSave=save();void originalSave.catch(() => {})
     }
     publish(t)
     if (!opts.reportPolicy && notify) opts.onTerminalized?.(t)
@@ -368,23 +368,54 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
   const requiredTasks=new WeakSet<TaskRecord>()
   associateRequiredTaskRegistry(registry,async(task,source,producer)=>{
-    if(!ownedTask)return undefined;assertReady();if(task.parentSessionId!==opts.stateId||!liveAccepted.has(task)||currentState.records.get(task.id)!==task||task.outcome!==undefined||requiredTasks.has(task))throw Error('Original required Task unavailable');requiredTasks.add(task);
-    const records=currentState.records,notifications=currentState.notifications,parent=await ownedTask.operations.requiredParent(ownedTask.document,source as import('@i-harness/core-session').SettlementFacts);
-    const check=()=>{if(!isInstalledRequiredTaskData(ownedTask.operations,opts.stateId!,installedData)||currentState.records!==records||currentState.notifications!==notifications||currentState.phase==='poisoned'||records.get(task.id)!==task)throw Error('Original required Task incarnation replaced');source.assertHeld();ownedTask.operations.assertTaskV3Parent(parent,opts.stateId!)};check();
-    let save:import('./persistence.ts').OwnedTaskSave|undefined,flight:Promise<Readonly<TaskRecord>>|undefined,revision:string|undefined,consumed=false,released=false,saveAttempted=false;
-    let originalInput:TaskTerminalizeInput|undefined,saveIdentity:RetentionIdentity|undefined,sealedTerminal:Readonly<TaskRecord>|undefined
+    if(!ownedTask)return undefined
+    assertReady();if(task.parentSessionId!==opts.stateId||!liveAccepted.has(task)||currentState.records.get(task.id)!==task||task.outcome!==undefined||requiredTasks.has(task))throw Error('Original required Task unavailable')
+    requiredTasks.add(task)
+    const records=currentState.records,notifications=currentState.notifications
+    let parent:object|undefined
+    const readyParent=ownedTask.operations.requiredParent(ownedTask.document,source as import('@i-harness/core-session').SettlementFacts).then(original=>{parent=original;return original})
+    const checkData=()=>{if(!isInstalledRequiredTaskData(ownedTask.operations,opts.stateId!,installedData)||currentState.records!==records||currentState.notifications!==notifications||currentState.phase==='poisoned'||records.get(task.id)!==task)throw Error('Original required Task incarnation replaced');source.assertHeld()}
+    const check=()=>{checkData();if(!parent)throw Error('Original required parent pending');ownedTask.operations.assertTaskV3Parent(parent,opts.stateId!)}
+    let save:import('./persistence.ts').OwnedTaskSave|undefined,flight:Promise<Readonly<TaskRecord>>|undefined,ackFlight:Promise<Readonly<TaskRecord>>|undefined,revision:string|undefined,consumed=false,released=false,saveAttempted=false
+    let originalInput:TaskTerminalizeInput|undefined,saveIdentity:RetentionIdentity|undefined,sealedTerminal:Readonly<TaskRecord>|undefined,projection:Readonly<TaskRecord>|undefined
+    const reserve=()=>{
+      if(save)return
+      checkData();if(task.outcome===undefined)throw Error('Original terminal disposition unavailable')
+      revision=task.result?.revision
+      const prerequisite=retentionPrerequisites.get(task),authority=Object.freeze({})
+      requiredSaveAuthorities.set(authority,{parent:readyParent,capture:()=>{check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed');saveIdentity=retentionIdentity(task);sealedTerminal=captureTerminal(task);capturedRetention.set(task,saveIdentity);return snapshotData()},beforeIssue:async()=>{if(prerequisite)await prerequisite();check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed');if(resultOwner)await resultOwner.settle(task);check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed')}})
+      save=persistence.captureRequiredSave(authority);retentionSaves.set(task,save)
+    }
+    const acknowledge=():Promise<Readonly<TaskRecord>>=>{
+      if(projection)return Promise.resolve(projection)
+      if(ackFlight)return ackFlight
+      // Reserve synchronously at the terminal CAS, including a live Stop winner.
+      reserve()
+      const pending=(async()=>{
+        if(saveAttempted)await save!.retry();else{saveAttempted=true;await save!.done}
+        check();save!.assertHandoff();if(!consumed){save!.release();consumed=true}
+        if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original required Task terminal changed after capture')
+        if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else if(task.result?.kind==='pending')throw Error('Original required Task result pending');else{task.retention='durable';delete task.retentionError}
+        acknowledgedRetention.set(task,saveIdentity!);retentionSaves.delete(task);capturedRetention.delete(task)
+        projection=captureTaskSnapshot({...sealedTerminal!,...(task.retention!==undefined?{retention:task.retention}:{}),...(task.retentionError!==undefined?{retentionError:task.retentionError}:{})}) as Readonly<TaskRecord>
+        publish(task);return projection
+      })();ackFlight=pending;void pending.catch(()=>{if(ackFlight===pending)ackFlight=undefined});return pending
+    }
+    let stopFlight:Promise<void>|undefined
+    const stopRoute=()=>{if(stopFlight)return stopFlight;const pending=acknowledge().then(()=>{});stopFlight=pending;retentionFlights.set(task,pending);void pending.finally(()=>{if(stopFlight===pending)stopFlight=undefined;if(retentionFlights.get(task)===pending)retentionFlights.delete(task)}).catch(()=>{});return pending}
+    requiredTerminalRoutes.set(task,stopRoute)
     const drive=async()=>{
-      if(!save){const input=originalInput??=Object.freeze({...await producer()});check();if(input.taskId!==task.id)throw Error('Original required Task producer changed');
-        const priorTerminal=task.outcome!==undefined?terminalSettlements.get(task):undefined;const won=(():boolean=>settleTaskRecord(task,input,resultOwner))();revision=task.result?.revision;if(!won&&priorTerminal){await priorTerminal;check();if(task.result?.revision!==revision)throw Error('Original Stop result changed');const ack=acknowledgedRetention.get(task);if(opts.reportPolicy&&(!ack||!sameRetention(ack,task)))throw Error('Original Stop acknowledgment unavailable');const original=nativeTerminals.get(task)??terminalIntents.get(task);if(!original||terminalFingerprint(original)!==terminalFingerprint(task))throw Error('Original Stop terminal changed');sealedTerminal=original;consumed=true;return captureTaskSnapshot({...original,...(task.retention!==undefined?{retention:task.retention}:{}),...(task.retentionError!==undefined?{retentionError:task.retentionError}:{})}) as Readonly<TaskRecord>};if(won){if(task.result)delete task.legacyFormatVersion;notifications.enqueue(task)}
-        const prerequisite=retentionPrerequisites.get(task),previous=retentionSaves.get(task),saveAuthority=Object.freeze({});requiredSaveAuthorities.set(saveAuthority,{parent,capture:()=>{check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed');saveIdentity=retentionIdentity(task);sealedTerminal=captureTerminal(task);return snapshotData()},beforeIssue:async()=>{if(prerequisite)await prerequisite();check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed');if(resultOwner)await resultOwner.settle(task);check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed')}});save=previous??persistence.captureRequiredSave(saveAuthority);
-        publish(task)
-      }
-      if(saveAttempted)await save.retry();else{saveAttempted=true;await save.done};check();save.assertHandoff();if(!consumed){save.release();consumed=true}
-      if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original required Task terminal changed after capture')
-      if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else if(task.result?.kind==='pending')throw Error('Original required Task result pending');else{task.retention='durable';delete task.retentionError}
-      publish(task);return captureTaskSnapshot({...sealedTerminal!,...(task.retention!==undefined?{retention:task.retention}:{}),...(task.retentionError!==undefined?{retentionError:task.retentionError}:{})}) as Readonly<TaskRecord>
-    };
-    const result:RequiredTaskSettlement=Object.freeze({settle(){if(this!==result)throw Error('Invalid required Task receiver');const pending=flight??=drive();void pending.catch(()=>{if(flight===pending)flight=undefined});return pending},reconcile(){if(this!==result)throw Error('Invalid required Task receiver');return result.settle()},assertProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');check();if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original Task projection changed')},async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent);released=true}}});return result
+      const input=originalInput??=Object.freeze({...await producer()});check();if(input.taskId!==task.id)throw Error('Original required Task producer changed')
+      if(task.outcome===undefined){settleTaskRecord(task,input,resultOwner);if(task.result)delete task.legacyFormatVersion;notifications.enqueue(task)}
+      return acknowledge()
+    }
+    const result:RequiredTaskSettlement=Object.freeze({
+      settle(){if(this!==result)throw Error('Invalid required Task receiver');const pending=flight??=drive();void pending.catch(()=>{if(flight===pending)flight=undefined});return pending},
+      reconcile(){if(this!==result)throw Error('Invalid required Task receiver');return result.settle()},
+      assertProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');check();if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original Task projection changed')},
+      async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task)}}
+    })
+    try{await readyParent;check();return result}catch(error){requiredTerminalRoutes.delete(task);throw error}
   })
   associateTaskSaveOwner(registry, persistence)
   associateColdBindings(registry, () => coldBindings)

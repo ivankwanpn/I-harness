@@ -137,3 +137,20 @@ it('refuses a changed terminal alias after native Task ACK instead of publishing
   task.outcome='cancelled';task.status='cancelled';const terminal=await required.reconcile();expect(terminal.outcome).toBe('cancelled');expect(Object.isFrozen(terminal)).toBe(true);await required.release();await source.close();action.finish()
  }finally{release.resolve();queueGate.closePath='';queueGate.closeEntered=undefined;queueGate.closeGate=undefined;await tasks?.closeOwnedLoad();await c.close()}
 })
+
+it('retries the exact Stop-owned unknown save after retirement without replacing CAS or snapshot',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'required-stop-unknown-')),c=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ let tasks:ReturnType<typeof createTaskRegistry>|undefined,required:RequiredTaskSettlement|undefined,primary:{cause:unknown}|undefined
+ try{
+  await c.create({sessionId:'parent'});const document=await c.openManagedDocument('parent');tasks=createTaskRegistry({coordinator:c,stateId:'parent',ownedTask:captureOwnedTaskContext(c,document,document.view,'parent'),reportPolicy:SHIPPING_REPORT_POLICY,results:createTaskResultRetention(undefined,undefined,'parent')});await tasks.ready
+  const task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'one',description:'one',prompt:'work',agent:'general',delivery:'tool'});await tasks.flushPersistence()
+  const action=document.beginAction(),source=action.registerSettlementSource(async()=>{await required?.settle()});required=(await bindRequiredTaskSettlement(tasks,task,source,async()=>({taskId:task.id,outcome:'completed',resultText:'late result'})))!
+  queueGate.root=root;queueGate.blocked=true;queueGate.stages=[];expect(tasks.cancelTree(task.id,'Original Stop won').cancelled).toBe(1)
+  await expect(tasks.retainResult(task.id)).rejects.toThrow();const save=lastOriginalTaskSave(tasks),revision=task.result!.revision;expect(queueGate.stages).toHaveLength(1)
+  tasks.retireOwnedLoad();document.revokeNewWork();queueGate.blocked=false
+  const terminal=await required.reconcile();expect(terminal.outcome).toBe('cancelled');expect(terminal.result!.revision).toBe(revision);expect(lastOriginalTaskSave(tasks)).toBe(save);expect(queueGate.stages).toHaveLength(1)
+  await required.release();await source.close();action.finish();await tasks.closeOwnedLoad()
+ }catch(cause){primary={cause};console.info('required-stop-unknown-primary',cause)}finally{
+  queueGate.blocked=false;queueGate.root='';const cleanup=await Promise.allSettled([tasks?.closeOwnedLoad(),c.close()]);const errors=cleanup.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(primary||errors.length)throw new AggregateError([...(primary?[primary.cause]:[]),...errors],'Original Stop unknown recovery failed')
+ }
+})
