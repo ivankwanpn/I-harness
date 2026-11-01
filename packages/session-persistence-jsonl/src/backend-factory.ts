@@ -1,6 +1,7 @@
 import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
 import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
 import { readSessionArchive } from './backend/archive-reader.ts'
+import {associateOwnedExecutionReader} from './backend/owned-execution-read.ts'
 import { associateArtifactPaths } from '@i-harness/session-persistence/internal/artifact-path'
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
@@ -148,7 +149,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     return candidate
   }
   const filePath = (id: string) => artifactPath(id, ".jsonl")
-  async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}) {
+  async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}, stageIO?:import('./backend/bootstrap-stage.ts').StageLookupIO) {
     const path = filePath(sessionId)
     const namespace=await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
     if (!namespace.length) {
@@ -170,7 +171,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     const frames = meta.semanticSeed.seedLength ? 2 : 1
     for (let index = 0; index < frames; index++) { boundary = raw.indexOf(10, boundary + 1); if (boundary < 0) throw Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' }) }
     const birth=raw.subarray(0,boundary+1),decoded=readFactJournal(birth.subarray(end+1),meta.journal!,meta.formatVersion,meta)
-    await preserveBootstrapBirth(path,birth,meta,decoded.events)
+    await preserveBootstrapBirth(path,birth,meta,decoded.events,stageIO)
   }
   const docPath = (key: string) => artifactPath(key, ".doc.jsonl")
   const tombPath = (kind: string, id: string) => artifactPath(`desktop-deleted-${kind}-${createHash("sha256").update(id).digest("hex")}`, ".tombstone")
@@ -508,6 +509,10 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     }
   }
   associateArchiveReadResources(backend,archiveReads.association)
+  associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
+    register(id,held){trackHeaderOwner(id,held);if(hasTrackedHeaderDebt(id,held))throw Error('Owned dependency birth cleanup unresolved')},
+    qualify:(id,held,prefix)=>assertPublicBootstrap(id,false,prefix,trackedStageIO(id,held)),
+    settleBirth:(id,held)=>settleTrackedHeaderIO(id,held)})
   associateArtifactPaths(backend, Object.freeze({
     root() { assertOriginal(); return rootPath },
     async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },

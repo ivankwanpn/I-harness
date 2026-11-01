@@ -110,5 +110,26 @@ export function createArchiveReadOwner() {
         void flight.finally(() => pending.delete(flight)).catch(() => { });
         return flight;
     }
-    return { run, association };
+    /** Same original ledger, but lifetime belongs to an already-held writer.
+     * Registration precedes open; retirement never supplies writer authority. */
+    function openHeld(path:string,assertHeld:()=>void) {
+        const healthy=()=>{assertHeld();if([...resources].some(r=>r.failed))throw Error('Archive read cleanup unresolved')};
+        healthy();
+        let resource:Resource|undefined,initial:Awaited<ReturnType<FileHandle['stat']>>|undefined,extent=0,retiredScope=false;
+        const reads=new Set<Promise<unknown>>();
+        const track=<T>(flight:Promise<T>)=>{pending.add(flight);void flight.finally(()=>pending.delete(flight)).catch(()=>{});return flight};
+        const opening=track(Promise.resolve().then(async()=>{
+            healthy();const handle=await open(path,'r');resource={handle,close:handle.close.bind(handle),failed:false,consumed:false};resources.add(resource);
+            healthy();initial=await handle.stat();healthy();extent=initial.size;
+            if(!initial.isFile()||!Number.isSafeInteger(extent)||extent<0)throw Error('Archive extent unsupported');
+        }));
+        const check=()=>{if(retiredScope)throw Error('Owned dependency scope retired');healthy();if(resource&&!resources.has(resource))throw Error('Owned dependency descriptor retired')};
+        return {assertCurrent:check,read<T>(work:(handle:FileHandle,extent:number)=>Promise<T>):Promise<T>{
+            check();const flight=track(Promise.resolve().then(async()=>{await opening;check();const result=await work(resource!.handle,extent);check();
+                const final=await resource!.handle.stat(),current=await stat(path);check();
+                if(!initial||final.dev!==initial.dev||final.ino!==initial.ino||current.dev!==initial.dev||current.ino!==initial.ino||final.size!==extent||current.size!==extent)throw Error('Owned dependency archive changed');return result;
+            }));reads.add(flight);void flight.finally(()=>reads.delete(flight)).catch(()=>{});return flight;
+        },async close(){retiredScope=true;await opening.catch(()=>{});await Promise.allSettled([...reads]);if(resource)await close(resource)}};
+    }
+    return { run, association, openHeld };
 }
