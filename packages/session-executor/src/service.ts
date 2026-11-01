@@ -1,4 +1,6 @@
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
+import {createExecutorExecutionCache} from './durable-session.ts'
+import {createManagedExecutionRuntime} from './managed-assembly.ts'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
 // packages/session-executor/src/service.ts — R-C0 (engine-owned posture).
 // The GLOBAL per-session service. A-region owns the per-session serial lane
@@ -121,6 +123,8 @@ type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'asser
 }
 
 export interface SessionServiceOptions extends AssemblyOptions {
+  /** Internal explicit-tool managed composition; not the default feature builder. */
+  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'>
   /** Read-only host authority; never invokes execution project setup. */
   resultReadScopeFor?: import('./lifecycle/result-store.ts').ResultReadScopeResolver
   /** Loaded settings only; never resolves authentication or constructs a model client. */
@@ -279,12 +283,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const loadingWriters = new Map<string, Promise<Session | undefined>>()
   const ownedAssemblies = () => new Map([...mountingAssemblies, ...assemblies])
   const lanes = new Map<string, SessionTurnLane>()
-  type CreatingAssembly = { work: Promise<SessionAssembly>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
+  type ManagedRuntime=ReturnType<typeof createManagedExecutionRuntime>
+  const managedRuntimes=new Map<string,ManagedRuntime>()
+  const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
+  type CreatingAssembly = { work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
   const creating = new Map<string, CreatingAssembly>()
   const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
   const extensionRefreshes = new Map<string, Promise<void>>()
   const extensionCleanups = new Map<string, () => void | Promise<void>>()
   const hooks = new Set<(assembly: SessionAssembly) => void>()
+  const managedCompatible=()=>!!opts.managedRuntime&&!opts.session&&!opts.sessionFor&&!opts.policySession&&!opts.detachedSession&&!opts.detachedPolicySession&&!opts.transformPrompt&&!opts.afterSuccessfulSubmit&&!opts.extensionsFor&&!opts.additionalSystemPrompt&&!opts.hookContext&&!opts.prepareHumanInput&&!opts.guardian&&!opts.contextOutput&&!opts.skills&&!opts.pluginMcp&&!opts.pluginAgents&&!opts.mcp&&!opts.lsp&&!opts.team&&hooks.size===0
+  const privateCache=opts.coordinator?createExecutorExecutionCache({coordinator:opts.coordinator,assertOpen:assertWritableOpen}):undefined
+  const privateEntries=new Set<string>()
   type SurfaceLifecycle = { sessionId: string; assembly: SessionAssembly; kind: "published" | "retiring" | "removed" }
   const surfaceListeners = new Set<(event: SurfaceLifecycle) => void>()
   const retiredSurfaces = new WeakSet<SessionAssembly>()
@@ -668,6 +678,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   async function receivedInputFor(sessionId: string): Promise<Pick<AsyncInbox, 'pending' | 'admit' | 'cancel'>> {
+    if(privateEntries.has(sessionId)&&!managedCompatible())throw Error('Private entry cannot switch to Session-shaped compatibility')
+    if(managedCompatible()){
+      if(!privateCache)throw Error('Managed runtime requires original coordinator')
+      privateEntries.add(sessionId)
+      return (await privateCache.get(sessionId)).inputs.inbox
+    }
     await writableSessionFor(sessionId)
     assertWritableOpen(sessionId)
     const inbox = assemblies.get(sessionId)?.inbox ?? mountingAssemblies.get(sessionId)?.inbox ?? inputInboxes.get(sessionId)
@@ -679,6 +695,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => getOrCreateUnfenced(sessionId)) : getOrCreateUnfenced(sessionId)
   }
   async function getOrCreateUnfenced(sessionId: string): Promise<SessionAssembly> {
+    if(privateEntries.has(sessionId)||managedRuntimes.has(sessionId))throw Error('Private runtime requires explicit complete compatibility adapter')
     if (closed) throw new Error("session service closed")
     if (failedClose.has(sessionId)) throw new Error("Session process cleanup incomplete; retry close before admission")
     const pendingClose = closing.get(sessionId)
@@ -692,7 +709,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       // Publish the owner before build starts, including synchronous retention
       // during the original constructor. Never replace this row after failure.
       const work = Promise.withResolvers<SessionAssembly>()
-      const row: CreatingAssembly = { work: work.promise, failed: false, residentActivation: createResidentActivation(() =>
+      const row: CreatingAssembly = { work: work.promise, publicWork:work.promise, failed: false, residentActivation: createResidentActivation(() =>
         !!row.assembly && !closed && !closing.has(sessionId) && !failedClose.has(sessionId)
         && assemblies.get(sessionId) === row.assembly && !retiredSurfaces.has(row.assembly) && row.assembly.executionSurfaceState?.() !== 'retired') }
       pending = row
@@ -922,13 +939,45 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         throw error
       }).finally(() => { if (!row.cleanup && creating.get(sessionId) === row) creating.delete(sessionId) }).then(work.resolve, work.reject)
     }
-    return pending.work
+    if(!pending.publicWork)throw Error('Private runtime cannot publish a public assembly')
+    return pending.publicWork
+  }
+
+  function getManagedRuntime(sessionId:string):Promise<ManagedRuntime>{
+    assertWritableOpen(sessionId)
+    const existing=managedRuntimes.get(sessionId);if(existing)return Promise.resolve(existing)
+    const prior=creating.get(sessionId)
+    if(prior){if(prior.failed)return Promise.reject(Error('Session process cleanup incomplete'));if(!prior.managedWork)return Promise.reject(Error('Complete compatibility construction already selected'));return prior.managedWork}
+    if(!managedCompatible()||!privateCache||!opts.managedRuntime)return Promise.reject(Error('Managed runtime configuration unavailable'))
+    const work=Promise.withResolvers<ManagedRuntime>()
+    const row:CreatingAssembly={work:work.promise,managedWork:work.promise,failed:false,residentActivation:createResidentActivation(()=>false)}
+    creating.set(sessionId,row);privateEntries.add(sessionId)
+    let runtime:ManagedRuntime|undefined
+    row.cleanup=async()=>{await runtime?.close();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);privateEntries.delete(sessionId)}
+    void(async()=>{
+      const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
+      const binding=opts.modelBindingFor?await bindingFor(sessionId):undefined
+      const meta=!binding&&opts.loadMeta?await opts.loadMeta(sessionId):undefined
+      const model=binding?.status==='ready'?binding.binding.model:binding?undefined:opts.modelBuilder?await opts.modelBuilder(sessionId,meta):opts.model
+      assertWritableOpen(sessionId)
+      if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
+      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,execution:entry.execution,model,contextWindow:binding?.status==='ready'?binding.binding.contextWindow:opts.contextWindow,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
+        modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
+        reasoningEffort:binding?.status==='ready'?binding.binding.reasoningEffort:opts.reasoningEffort,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata,
+        ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})})
+      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime)
+      return runtime
+    })().then(work.resolve,error=>{row.failed=true;failedClose.add(sessionId);work.reject(error)})
+    return work.promise
   }
 
   function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
     return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)) : submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)
   }
   function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
+    if(privateEntries.has(sessionId)&&!managedCompatible())return Promise.reject(Error('Private entry cannot switch to Session-shaped compatibility'))
+    if(managedCompatible()&&(options?.prepareInput||deliveryOwner))return Promise.reject(Error('Session-shaped input preparation requires complete compatibility before private acquisition'))
+    if(managedCompatible()&&options?.context!==undefined)return Promise.reject(Error('Private supplemental context requires original owned preparation'))
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     const clientToken = options?.clientToken
@@ -948,7 +997,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const st = sessionQueueState(sessionId)
     const id = options?.admittedInputId ?? randomUUID()
     const admitted = options?.admittedInputId ? assemblies.get(sessionId)?.inbox.pending().find((input) => input.inputId === id) : undefined
-    if (st.byId.get(id)?.scheduled || lanes.get(sessionId)?.currentInput()?.inputId === id) return Promise.reject(new Error("Input is already scheduled"))
+    if (st.byId.get(id)?.scheduled || laneControls(sessionId)?.currentInput()?.inputId === id) return Promise.reject(new Error("Input is already scheduled"))
     if (admitted?.intent !== "system" && !signal.aborted) cancelledParents.delete(sessionId)
     const controller = new AbortController()
     const record: QueueRowRecord = {
@@ -1010,6 +1059,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       void completeSubmission(async () => {
         const input: AdmittedInput = { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
           ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }
+        if(managedCompatible()){
+          if(options?.prepareInput||deliveryOwner)throw Error('Session-shaped input preparation requires complete compatibility before private acquisition')
+          const inbox=await receivedInputFor(sessionId)
+          if(options?.admittedInputId){const original=inbox.pending().find(p=>p.inputId===id);if(!original)return;if(original.text!==prompt)throw Error('Admitted input does not match submitted text');if(original.supplementalContext!==undefined)throw Error('Private supplemental context requires original owned preparation')}
+          else await inbox.admit(input,controller.signal)
+          controller.signal.throwIfAborted();assertWritableOpen(sessionId)
+          const runtime=await getManagedRuntime(sessionId)
+          controller.signal.throwIfAborted();assertWritableOpen(sessionId)
+          record.state='queued'
+          await runtime.lane.runAdmitted(id,controller.signal)
+          return
+        }
         const priorAssembly = liveAssembly(sessionId), priorDocument = priorAssembly?.managedDocument
         if (deliveryOwner && priorAssembly !== deliveryOwner) throw new ParentNotificationStoppedError()
         try { await awaitDeliveryStop(sessionId); await priorAssembly?.settleRuntimeContextPublications(); await priorDocument?.settleFinishedActions() }
@@ -1091,7 +1152,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   // purged here; scheduled submissions remain until their promise cleanup.
 
   function queue(sessionId: string): SessionQueueItem[] {
-    const lane = lanes.get(sessionId)
+    const lane = laneControls(sessionId)
     const st = sessionQueueState(sessionId)
     const pending = lane?.pending() ?? []
     const current = lane?.currentInput() ?? undefined
@@ -1173,7 +1234,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     // queue()-read projection and can lag a fresh promotion — consulting it
     // alone would abort a running turn's controller (agent.run's signal) and
     // report an honest-but-false { cancelled: true } (review fix).
-    if (lanes.get(sessionId)?.currentInput()?.inputId === id) return { cancelled: false }
+    if (laneControls(sessionId)?.currentInput()?.inputId === id) return { cancelled: false }
     const rec = queues.get(sessionId)?.byId.get(id)
     // Already-cancelled / running / unknown ids are all an honest false — the
     // row is no longer cancellable at the moment (the UI refresh shows truth).
@@ -1182,8 +1243,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     // executing) and retract a lane-admitted input synchronously — the inbox
     // cancel is append-marked, so the projection drops the row immediately.
     rec.controller.abort()
-    const cancelled = await lanes.get(sessionId)?.cancel(id)
-    if (cancelled?.cancelled === false && lanes.get(sessionId)?.currentInput()?.inputId === id) return { cancelled: false }
+    const cancelled = await laneControls(sessionId)?.cancel(id)
+    if (cancelled?.cancelled === false && laneControls(sessionId)?.currentInput()?.inputId === id) return { cancelled: false }
     rec.state = "cancelled"
     notifyExecutionState(sessionId)
     return { cancelled: true }
@@ -1192,9 +1253,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   function cancelRunning(sessionId: string): { cancelled: boolean } {
     requestDeliveryStop(sessionId)
     stopNotifications(sessionId)
-    const current = lanes.get(sessionId)?.currentInput()
-    if (current !== undefined && lanes.get(sessionId)?.cancelCurrent !== undefined) {
-      const result = lanes.get(sessionId)!.cancelCurrent!()
+    const current = laneControls(sessionId)?.currentInput()
+    if (current !== undefined && laneControls(sessionId)?.cancelCurrent !== undefined) {
+      const result = laneControls(sessionId)!.cancelCurrent!()
       if (result.cancelled) stopNotifications(sessionId)
       if (result.cancelled) notifyExecutionState(sessionId)
       return result
@@ -1233,11 +1294,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
   async function closeAll(): Promise<void> {
-    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && writableSessions.size === 0 && loadingWriters.size === 0 && notificationStops.size === 0 && !resultReader.size && !defaultInstructions) return
+    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && privateEntries.size===0 && writableSessions.size === 0 && loadingWriters.size === 0 && notificationStops.size === 0 && !resultReader.size && !defaultInstructions) return
     closed = true
     const stopAttempts = startNotificationStops()
     defaultInstructions?.dispose()
-    for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
+    for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...privateEntries,...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
       revokeSession(id); stopNotifications(id, stopAttempts)
     }
     const [readerJoined] = await Promise.allSettled([
@@ -1275,6 +1336,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (assemblies.has(id) || mountingAssemblies.has(id) || creating.has(id)) continue
       try { await opts.coordinator?.closeManagedDocument(id); writableSessions.delete(id); inputInboxes.delete(id); failedClose.delete(id) }
       catch (error) { failedClose.add(id); failures.push(error) }
+    }
+    for(const id of [...privateEntries]){
+      if(creating.has(id))continue
+      try{await privateCache!.close(id);privateCache!.releaseClosed(id);privateEntries.delete(id)}catch(error){failedClose.add(id);failures.push(error)}
     }
     // Retained assembly publications still own pins in this shared source.
     // Reader-only cleanup debt is independent and must not prevent its close.
@@ -1315,6 +1380,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       try {
         if (handle) await disposeOwnedAssembly(handle)
         else if (build?.cleanup) await build.cleanup()
+        else if(privateEntries.has(sessionId)){await privateCache!.close(sessionId);privateCache!.releaseClosed(sessionId);privateEntries.delete(sessionId)}
         else if (!retainedStopOwner || writableSessions.has(sessionId)) await opts.coordinator?.closeManagedDocument(sessionId)
         if (build && creating.get(sessionId) === build) creating.delete(sessionId)
       }
@@ -1450,6 +1516,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       return assembly.cancelTask(id)
     },
     onAssembly: (hook, options) => {
+      if(privateEntries.size)throw Error('Session-shaped callback requires complete compatibility before private acquisition')
       hooks.add(hook)
       try {
         if (options?.includeExisting) {

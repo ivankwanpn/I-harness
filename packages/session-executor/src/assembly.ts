@@ -1,3 +1,4 @@
+export {createManagedExecutionRuntime,type ManagedExecutionRuntimeOptions} from './managed-assembly.ts'
 import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
 import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
 import { isNondurableSession } from '@i-harness/core-session'
