@@ -350,7 +350,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       for (const t of doc.tasks) publish(t)
     },
     save,
-    flushPersistence: async () => { assertReady(); await persistence.flush() },
+    // Cleanup joins original initialization/writes even after work is retired.
+    // Failed initialization retains its original rejection; no work is admitted.
+    flushPersistence: async () => { await ready; await persistence.flush() },
   }
   if (ownedTask && opts.launchContext) launchPort = createTaskLaunchPort(registry, opts.launchContext, {
     current(record) { assertReady();if(record&&currentState.records.get(record.id)!==record)throw Error('Original slot task replaced'); ownedTask.operations.assertTaskV3Parent(ownedTask.parent, opts.stateId!) },
