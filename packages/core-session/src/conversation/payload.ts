@@ -1,9 +1,11 @@
+import { copyConversationData } from './render.ts'
+import type { PreparedPrunedResult } from './restoration-types.ts'
 import type { ConversationSourceRef } from "./types.ts"
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { imageDescriptor, type ImageInput } from "../images.ts"
 import { renderPruneSubstitute, type PruneRecord } from "../projection/pruning.ts"
 import { stringifyJsonData } from "../serialization/json-data.ts"
-import { resultText } from '../results/projection.ts'
+import { resultText, resultIsError } from '../results/projection.ts'
 import type { ResultEnvelope } from '../results/types.ts'
 
 export type ConversationPayloadCapture = (value: unknown, source: ConversationSourceRef) => unknown
@@ -73,4 +75,19 @@ function toolResultText(output: unknown): string {
   const restText = hasRest ? (stringifyJsonData(rest) ?? String(rest)) : ""
   const descriptor = imageDescriptor(images as ImageInput[])
   return hasRest ? restText + descriptor : descriptor.trimStart()
+}
+
+/** Projection-only preparation after original complete-source validation. The
+ * returned closed slots never retain the excluded event/output/envelope. */
+export function preparePrunedResultProjection(event: Extract<SessionEvent, {type:'tool/result'}>, prune: PruneRecord, pruneSource: PreparedPrunedResult['pruneSource']): PreparedPrunedResult {
+  const originalMedia = event.envelope ? event.envelope.media : outcomeField(outcomeField(event, 'output'), 'images')
+  const media = Array.isArray(originalMedia) ? copyConversationData(originalMedia) as ImageInput[] : []
+  const stack:object[]=[media];while(stack.length){const value=stack.pop()!;for(const child of Object.values(value))if(child&&typeof child==='object'&&(Array.isArray(child)||Object.getPrototypeOf(child)===Object.prototype||Object.getPrototypeOf(child)===null))stack.push(child);Object.freeze(value)}
+  return Object.freeze({kind:'pruned-result',callId:event.callId,name:event.name,isError:event.envelope ? resultIsError(event.envelope) : event.isError===true,
+    media:Object.freeze(media),prune:Object.freeze({callId:prune.callId,head:prune.head,tail:prune.tail,removedBytes:prune.removedBytes}),pruneSource:Object.freeze({...pruneSource})})
+}
+export function projectPrunedResultProjection(slot: PreparedPrunedResult, source: ConversationSourceRef, imageSource: ConversationSourceRef, capture?: ConversationPayloadCapture): {content:string;images?:ImageInput[]} {
+  const record = capture ? capture(slot.prune,source) as PruneRecord : slot.prune
+  const media = capture ? capture(slot.media,imageSource) as ImageInput[] : slot.media
+  return {content:renderPruneSubstitute(record),...(media.length?{images:[...media]}:{})}
 }

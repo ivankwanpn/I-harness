@@ -26,7 +26,7 @@ const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('h
 /** Low-level byte adapter; cannot associate a backend with factory authority. */
 export function createJsonlProcessReadCapability(ports: Ports) {
     const freshOwners = new WeakMap<object, HeldTaskDocumentScope>();
-    const historyOwners = new WeakMap<object, { scope: HeldTaskDocumentScope; bytes: Buffer; identity: Identity }>();
+    const historyOwners = new WeakMap<object, { scope: HeldTaskDocumentScope; bytes: Buffer; identity: Identity; prefix?: Readonly<import('@i-harness/core-session').JournalPrefix>; assertPrefixCurrent():void }>();
     function processHeader(line: string) {
         const raw = JSON.parse(line) as Record<string, unknown>;
         // Generic header normalization deliberately remains unchanged. This
@@ -255,7 +255,9 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 });
                 void checking.then(() => { checking = undefined }, () => { checking = undefined }); return checking;
             } });
-            historyOwners.set(proof, { scope, bytes: captured.bytes, identity: captured.witness.identity }); await proof.assertCurrent(); return proof;
+            if(historyOwners.has(proof))bad();
+            const prefix=decoded?Object.freeze({eventCount:decoded.prefix.eventCount,bodyBytes:decoded.prefix.bodyBytes,prefixDigest:decoded.prefix.prefixDigest}):undefined;
+            historyOwners.set(proof, { scope, bytes: captured.bytes, identity: captured.witness.identity, prefix, assertPrefixCurrent(){if(retiring||checking||resources.size)bad();scope.assertActive();ports.assertOriginal()} }); await proof.assertCurrent(); return proof;
         }
         function settle(retire: boolean) {
             if (retire) retiring = true; if (cleanup) return cleanup;
@@ -273,6 +275,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
     return {
         openTaskHistory, observeFreshTaskParent, observeReservedTaskParent,
         assertFreshOwner(proof: object, scope: HeldTaskDocumentScope) { if (freshOwners.get(proof) !== scope) bad(); scope.assertActive(); },
+        qualifiedHistoryPrefix(proof:object){const value=historyOwners.get(proof);if(!value?.prefix)return undefined;try{value.assertPrefixCurrent();return value.prefix}catch{return undefined}},
         originalHistory(proof: object, scope: HeldTaskDocumentScope) { const value = historyOwners.get(proof); if (!value || value.scope !== scope) return bad(); scope.assertActive(); return { bytes: value.bytes, identity: value.identity }; },
         async capture(id: string, requested: readonly string[]) {
             const result = await captureCommon(id, requested, true)

@@ -47,7 +47,7 @@ type Pending = {
     prefix: JournalPrefix;
     entries: Entry[];
     events: ReturnType<typeof resolveFactGroup>;
-    install(): void;
+    install(receipt: FactReceipt): void;
     receipt?: FactReceipt;
     issued: boolean;
     cleanupReported?: boolean;
@@ -67,6 +67,12 @@ export function managedExecutionStatus(document: ManagedDocument): 'available' |
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
 const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; invalidateMetadata(revision:object):void; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+type RestoredStage = (events: readonly import('@i-harness/core-session').SessionEventView[], readCurrentEvent:(index:number)=>import('@i-harness/core-session').SessionEventView|undefined)=>{install(batch:ReturnType<typeof encodeFactBatch>,receipt:FactReceipt):void}
+const restoredStages = new WeakMap<ManagedDocument, RestoredStage>()
+/** Only the actual managed constructor/ownership association may bind its read fold. */
+export function bindManagedRestoredStage(document:ManagedDocument,ownership:Ownership,stage:RestoredStage){
+  const original=readyOwners.get(document);if(!original||original.ownership!==ownership||restoredStages.has(document))throw new FactRecoveryRequiredError();restoredStages.set(document,stage)
+}
 export function captureManagedProcessRead(document: ManagedDocument, ownership: Ownership, documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture {
     const original = readyOwners.get(document);
     if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
@@ -199,7 +205,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             const receipt = outcome.receipt;
             current.receipt = receipt;
             try {
-                current.install();
+                current.install(receipt);
                 current.installationFailure = undefined;
             }
             catch (error) {
@@ -274,8 +280,9 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     deliveryControl.assert(events);
                     const staged = state.stage(events);
                     preflightBatchShape(formatVersion, staged.events);
+                    const restored = restoredStages.get(document)?.(staged.events, position => state.view.events[position]);
                     const batch = encodeFactBatch(entries[0]!.bootstrap?.batchId ?? randomUUID(), prefix.prefixDigest, staged.events);
-                    current = { batch, prefix, entries, events: staged.events, install: staged.install, issued: false };
+                    current = { batch, prefix, entries, events: staged.events, install(receipt) { staged.install(); restored?.install(batch,receipt) }, issued: false };
                     pending = current;
                     const operation = current;
                     const issuer = issuingFactOwner(held, () => {

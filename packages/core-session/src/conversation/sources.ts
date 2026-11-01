@@ -4,25 +4,30 @@ import type { ConversationDiagnostic, ConversationProvenance, ConversationSource
 import type { ConversationPayloadReader } from './payload.ts'
 
 /** Source coordinates belong to the original archive, even for a prefix view. */
-export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number }; readPayload?: ConversationPayloadReader } = {}) {
+export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number }; readPayload?: ConversationPayloadReader; coordinates?: ConversationSourceCoordinateView; prunedResults?: ReadonlyMap<number, import('./restoration-types.ts').PreparedPrunedResult> } = {}) {
+  const coordinates = options.coordinates === undefined ? undefined : coordinateViews.get(options.coordinates)
+  if (options.coordinates && (!coordinates || !coordinates.current() || options.coordinates.eventCount !== archive.length)) throw new TypeError('Invalid or stale source coordinates')
+  const assertCurrent = () => { if (coordinates && !coordinates.current()) throw new TypeError('Stale source coordinates') }
+  const seqAt = (index: number) => { if (!Number.isSafeInteger(index) || index < 0 || index >= archive.length) throw new RangeError('Conversation source index out of bounds'); return coordinates ? coordinates.seqs[index] : archive.get(index).seq }
   const counts = new Map<number, number>()
   const valid = (seq: unknown): seq is number => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0
   const positions = new Map<number, number>()
   let fenceIndex = -1
   for (let index = 0; index < archive.length; index++) {
-    const event = archive.get(index)
-    if (valid(event.seq) && !(options.candidate && index >= options.candidate.baseCount)) {
-      counts.set(event.seq, (counts.get(event.seq) ?? 0) + 1)
-      if (!positions.has(event.seq)) positions.set(event.seq, index)
+    const seq = seqAt(index)
+    if (valid(seq) && !(options.candidate && index >= options.candidate.baseCount)) {
+      counts.set(seq, (counts.get(seq) ?? 0) + 1)
+      if (!positions.has(seq)) positions.set(seq, index)
     }
-    if (fenceIndex < 0 && event.type === "conversation/semantics") fenceIndex = index
+    if (fenceIndex < 0 && (coordinates ? coordinates.fenceIndex === index : archive.get(index).type === "conversation/semantics")) fenceIndex = index
   }
   const cache = new Map<string, ConversationSourceRef>()
   const ref = (eventIndex: number, part: string): ConversationSourceRef => {
+    assertCurrent()
     const key = `${eventIndex}:${part}`
     let source = cache.get(key)
     if (source) return source
-    const seq = archive.get(eventIndex).seq
+    const seq = seqAt(eventIndex)
     const prospective = options.candidate !== undefined && eventIndex >= options.candidate.baseCount
     const addressable = !prospective && valid(seq) && counts.get(seq) === 1
     const coordinate = prospective ? `candidate:${options.candidate!.id}:${eventIndex - options.candidate!.baseCount}` : addressable ? seq : `event:${eventIndex}`
@@ -31,11 +36,20 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     return source
   }
   for (let index = 0; index < archive.length; index++) {
-    const seq = archive.get(index).seq
+    const seq = seqAt(index)
     const code = seq === undefined ? "missing-source-seq" : !valid(seq) ? "invalid-source-seq" : counts.get(seq)! > 1 ? "duplicate-source-seq" : undefined
     if (code && !(options.candidate && index >= options.candidate.baseCount)) diagnostics.push({ code, sourceIds: [ref(index, "event").id] })
   }
   const provenance = (eventIndex: number, part: string, admissionIndex?: number): ConversationProvenance => {
+    assertCurrent()
+    const selected = options.prunedResults?.get(eventIndex)
+    if (selected) {
+      const source = ref(eventIndex, part), evidence = [source]
+      const admission = admissionIndex === undefined ? undefined : archive.get(admissionIndex)
+      if (admissionIndex !== undefined) evidence.push(ref(admissionIndex, 'admission'))
+      const inherited = isInherited(eventIndex) || admissionIndex !== undefined && isInherited(admissionIndex) && admission?.type === 'agent/input/admitted' && admission.provenance !== undefined
+      return Object.freeze({kind:inherited?'inherited' as const:'tool' as const,authority:'observation' as const,scope:'turn' as const,evidence:Object.freeze(evidence),producer:selected.name,...(inherited?{originSessionId:options.header!.parentSession}:{})})
+    }
     const event = archive.get(eventIndex)
     const source = ref(eventIndex, part)
     const evidence = [source]
@@ -78,7 +92,7 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
   function isInherited(index: number): boolean {
     return (options.header?.parentSession !== undefined || options.header?.semanticSeed !== undefined) && index < (options.header.seedLength ?? 0)
   }
-  return { ref, provenance, indexOfSeq: (seq: number) => positions.get(seq) ?? -1 }
+  return { ref, provenance, indexOfSeq: (seq: number) => { assertCurrent(); return positions.get(seq) ?? -1 } }
 }
 
 /** Existing Session consumer entry, backed by the same archive source owner. */
@@ -87,3 +101,22 @@ export function conversationSources(session: Session, ownerSessionId: string | u
 }
 
 export type ConversationSources = Pick<ReturnType<typeof conversationSources>, 'ref' | 'provenance'>
+import type { SessionEventView } from '../managed/types.ts'
+import type { ConversationSourceCoordinateView } from './restoration-types.ts'
+const coordinateViews = new WeakMap<ConversationSourceCoordinateView, { seqs: unknown[]; fenceIndex: number; current(): boolean }>()
+export function createConversationSourceCoordinates() {
+  let seqs: unknown[] = [], revision = 0, fenceIndex = -1
+  const read = (): ConversationSourceCoordinateView => {
+    const version = revision, view = Object.freeze({ eventCount: seqs.length }) as ConversationSourceCoordinateView
+    coordinateViews.set(view, { seqs, fenceIndex, current: () => revision === version })
+    return view
+  }
+  return { read, stage(events: readonly SessionEventView[]) {
+    const version = revision, next = seqs.concat(events.map(event => event.seq)), offset = events.findIndex(event => event.type === 'conversation/semantics'), nextFence = fenceIndex >= 0 ? fenceIndex : offset < 0 ? -1 : seqs.length + offset
+    events = [] // Staged commits retain structural coordinates only.
+    return { commit() {
+      if (revision !== version) throw new TypeError('Stale source coordinate stage')
+      seqs = next; fenceIndex = nextFence; revision++; return read()
+    } }
+  } }
+}

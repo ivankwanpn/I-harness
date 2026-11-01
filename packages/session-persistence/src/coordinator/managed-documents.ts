@@ -1,9 +1,12 @@
+import { hasArchiveHistoryPrefixReader } from '../archive-read-internal.ts'
+import { createManagedRestoredRead } from './managed-restored-read.ts'
+import type { ManagedRestoredContextRead } from '../restored-context-internal.ts'
 import type { Session, JournalPrefix } from '@i-harness/core-session'
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
-import { invalidateManagedMetadataWitness, createManagedDocument, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
+import { invalidateManagedMetadataWitness, createManagedDocument, bindManagedRestoredStage, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
 import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
@@ -21,6 +24,9 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
   }
   const documents = new Map<string, ManagedEntry>()
+  const restoredEntries = new WeakMap<ManagedEntry, ReturnType<typeof createManagedRestoredRead>>()
+  const restoredBindings = new WeakSet<ManagedDocument>()
+  function bindRestored(entry:ManagedEntry,document:ManagedDocument){const restored=restoredEntries.get(entry);if(restored&&!restoredBindings.has(document)){bindManagedRestoredStage(document,ownership,restored.stage);restoredBindings.add(document)}}
   const resolved = new Map<string, ReturnType<typeof createManagedDocument>>()
   const documentEntries = new WeakMap<ManagedDocument, { id: string; entry: ManagedEntry }>()
   function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
@@ -28,6 +34,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
       entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges)
     entry.document=document
+    bindRestored(entry,document)
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
     document.revokeNewWork=()=>{assertTaskOutside(id);void revokeTaskOperations(id);markManagedEntryRevoked(entry);revoke()}
@@ -48,7 +55,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
           await entry.flight?.catch(()=>{})
           await bootstrap.settleCapture(entry)
           if(entry.headerUnknown)throw new FactRecoveryRequiredError()
-          await revokeTaskOperations(id);await close();await bootstrap.releaseCapture(entry)
+          const cleanup=await Promise.allSettled([restoredEntries.get(entry)?.close(),(async()=>{await revokeTaskOperations(id);await close()})()]);const errors=cleanup.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Managed restored read/document cleanup unresolved');await bootstrap.releaseCapture(entry)
           if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}
           outcome='settled';closeComplete=true
         }finally{token?.end(outcome)}
@@ -73,7 +80,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
     let outcome:'settled'|'unknown'='unknown'
     try {
-    revokeManagedEntry(entry);await entry.flight?.catch(()=>{})
+    revokeManagedEntry(entry);await entry.flight?.catch(()=>{});await restoredEntries.get(entry)?.close()
     // The opening flight may have attached this exact entry while close waited.
     const attached=attachedDocument()
     if(attached){await attached.close();outcome='settled';return}
@@ -140,10 +147,27 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
     async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable();return entry?.document?.view},
     closeOne,
+    async acquireRestoredContext(id:string):Promise<ManagedRestoredContextRead>{
+      if(!transitions||!ownership.lockEnabled||!hasArchiveHistoryPrefixReader(backend))throw Object.assign(new Error('Owned restoration source unavailable'),{code:'FACT_OWNER_UNSUPPORTED'})
+      let entry=documents.get(id);assertEntry(entry)
+      if(!entry){entry={};documents.set(id,entry)}
+      const original=entry,prior=entry.flight
+      if(prior)await prior
+      if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError()
+      assertEntry(original)
+      let restored=restoredEntries.get(original)
+      if(!restored){restored=createManagedRestoredRead({id,entry:original,backend,ownership,transitions,loadOwned,assertEntry(){if(documents.get(id)!==original)throw new FactRecoveryRequiredError();assertEntry(original)},closeEntry:()=>closeOne(id),onValidated(){if(original.document)bindRestored(original,original.document)}});restoredEntries.set(original,restored)}
+      const pending=restored.ensure();if(!original.document)original.flight=pending;await pending
+      if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError()
+      if(original.document)bindRestored(original,original.document)
+      return restored.read
+    },
     open(id:string):Promise<ReturnType<typeof createManagedDocument>> {
       if(!ownership.lockEnabled||!backend.appendOwnedBatch||!backend.reconcileOwnedBatch||!backend.readJournalPrefix)return Promise.reject(Object.assign(new Error('Exclusive owned fact backend is required'),{code:'FACT_OWNER_UNSUPPORTED'}))
       const existing=documents.get(id)
-      if(existing){try{assertEntry(existing)}catch(error){return Promise.reject(error)}return existing.flight ? existing.flight.then(()=>existing.document!) : Promise.resolve(existing.document!)}
+      if(existing){try{assertEntry(existing)}catch(error){return Promise.reject(error)}
+        if(restoredEntries.has(existing)&&!existing.document){const prior=existing.flight;const operation=(async()=>{await prior;const {session}=await loadOwned(id);return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==existing||existing.revoked)throw new FactRecoveryRequiredError();const prefix=await backend.readJournalPrefix!(id,heldFactOwner({sessionId:id,incarnation:'restored-compatibility'},ownership,()=>{}));return attach(id,existing,session,prefix)})})();existing.flight=operation;return operation}
+        return existing.flight ? existing.flight.then(()=>existing.document!) : Promise.resolve(existing.document!)}
       let token=transitions ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
       const entry:ManagedEntry={};documents.set(id,entry)
       const operation=(async()=>{
