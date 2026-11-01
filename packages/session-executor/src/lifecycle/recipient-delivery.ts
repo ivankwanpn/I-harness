@@ -4,6 +4,7 @@ import { committedFactSeqs, deliveryInputId, FactRecoveryRequiredError, isManage
   type FactOwner, type InputDisplay, type ProducerFactOutcome, type ReceivedInputSource, type SubagentDeliveryEvidence,
   type SubagentDeliveryKey } from '@i-harness/core-session'
 import { readOwnedDeliveryState } from '../../../core-session/src/managed/view.ts'
+import { assertDeliveryIssue } from '../../../core-session/src/managed/delivery-control.ts'
 import { DeliverySuppressedError } from '@i-harness/subagent'
 
 export type DeliveryDrainDisposition =
@@ -60,17 +61,14 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
     return pending
   }
   const settleCloses = async () => { for (const record of closes.values()) await settle(record) }
-  const adapter = {
-    bind,
-    revoke() { retired = true },
-    async prepareLaunch(namespace: string, sourceId: string, callSeq: number): Promise<DeliveryLaunchPreparation> {
+  async function prepareLaunch(namespace: string, sourceId: string, callSeq: number, execCall?: { callId: string }): Promise<DeliveryLaunchPreparation> {
       assertCurrent(); await settleCloses(); assertCurrent()
       if (opening) { await settle(opening); opening = undefined; assertCurrent() }
       if (isManagedFactOwner(owner.view, owner)) (owner as import('@i-harness/session-persistence').ManagedDocument).assertReady()
       if (!recipient) return { kind: 'unavailable', reason: 'recipient-not-bound' }
       const view = owner.view, call = view.events[callSeq]
-      if (call?.type !== 'tool/call' || call.name !== 'spawn_agent' || call.seq !== callSeq || callSeq < (view.header?.seedLength ?? 0)
-        || !view.events.some(e => e.type === 'tool/dispatch' && e.callId === call.callId && e.seq! > callSeq)) return { kind: 'unavailable', reason: 'uncertified-call' }
+      if (call?.type !== 'tool/call' || (execCall ? !['bash','pwsh','shell'].includes(call.name) || call.callId !== execCall.callId : call.name !== 'spawn_agent') || call.seq !== callSeq || callSeq < (view.header?.seedLength ?? 0)
+        || !view.events.some(e => e.type === 'tool/dispatch' && e.callId === call.callId && e.seq! > callSeq && (!execCall || e.eventSeq === undefined || e.eventSeq === callSeq))) return { kind: 'unavailable', reason: 'uncertified-call' }
       const original = state().source(namespace, sourceId)
       if (original) throw failed({ kind: 'blocked', reason: 'conflict', debt: 'none' })
       let generation = state().activeGeneration()
@@ -92,6 +90,19 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
       }
       if (!generation) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'none' })
       return { kind: 'bound', binding: { recipientSessionId: recipient, generationId: generation.generationId, sourceNamespace: namespace, sourceId, callSeq } }
+    }
+  const adapter = {
+    bind,
+    revoke() { retired = true },
+    prepareLaunch(namespace: string, sourceId: string, callSeq: number) { return prepareLaunch(namespace,sourceId,callSeq) },
+    async prepareExecLaunch(input: { view: import('@i-harness/core-session').SessionView; sessionId: string; callId: string; sourceId: string; callSeq: number }) {
+      if (input.view !== owner.view || input.sessionId !== recipient) throw new TypeError('Original Exec recipient required')
+      const result=await prepareLaunch('exec',input.sourceId,input.callSeq,{callId:input.callId})
+      return result.kind==='bound'?{...result,isCurrent:()=>{
+        try{assertDeliveryIssue(owner.view,[{type:'agent/delivery-source',version:1,kind:'exec',...result.binding,sourceNamespace:'exec',delivery:'tool'}])}
+        catch{return false}
+        return current()&&state().activeGeneration()?.generationId===result.binding.generationId
+      }}:result
     },
     async admit(evidence: SubagentDeliveryEvidence, presentation: { text: string; description: string; display: InputDisplay }): Promise<DeliveryAdmissionReceipt> {
       await settleCloses()

@@ -4,7 +4,7 @@ import type {
   SandboxProvider, StopReason, TransportExecutionBackend, ExecutionSettlement,
 } from "@i-harness/sandbox"
 import type { ExecutionSupervisor, SupervisedExecution } from "./execution-supervisor.ts"
-import { createExecService } from "./service.ts"
+import { createExecServiceWithReservation } from "./service.ts"
 export { createExecService } from "./service.ts"
 
 export { launchExecution } from "./execution-admission.ts"
@@ -169,7 +169,12 @@ export interface NativeExecService extends ExecService {
 }
 
 export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): NativeExecService {
-  const service = createExecService(deps)
-  ctx.services.register("exec/service", service)
-  return service
+  return registerExecWithReservation(ctx, deps).service
+}
+
+/** Trusted construction retains the port paired with the registered service. */
+export function registerExecWithReservation(ctx: PluginContext, deps?: ExecServiceOptions) {
+  const pair = createExecServiceWithReservation(deps)
+  ctx.services.register("exec/service", pair.service)
+  return pair
 }

@@ -11,6 +11,8 @@ export interface ExecutionLaunch {
   requirements: BackendRequirements
   validateAuthority(policy: CompiledSandboxPolicy): void
   signal?: AbortSignal
+  /** Constructor-held capture gate/cleanup receiver, never ProcessSpec data. */
+  admission?: NativeAdmissionOwner
 }
 
 export interface SupervisedExecution {
@@ -41,6 +43,17 @@ export interface OwnerState {
 }
 export type CleanupOutcome = { kind: "cleaned" } | { kind: "failed"; cause: unknown }
 export const cleaned: CleanupOutcome = { kind: "cleaned" }
+/** Original per-launch cleanup, including a rejected admission with no handle. */
+export interface OriginalExecutionAdmission {
+  observeCleanup(): Promise<CleanupOutcome>
+  retryCleanup(): Promise<CleanupOutcome>
+}
+/** Private capture composition, never a public transport/command option. */
+export interface NativeAdmissionOwner {
+  begin(): void
+  attach(admission: OriginalExecutionAdmission): void
+  assertCurrent(): void
+}
 
 export interface Entry {
   id: string
@@ -50,6 +63,8 @@ export interface Entry {
   controller: AbortController
   unlink(): void
   preparing: boolean
+  retired: boolean
+  assertAdmissionCurrent?: () => void
   prepared?: PreparedTransportExecution
   rollbackFailed: boolean
   completion: Promise<CleanupOutcome>

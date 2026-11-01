@@ -31,7 +31,8 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   const captureInstances = new WeakMap<Capture, string>()
   // Only pending/captured ownership lives here. Publication transfers the token
   // to the existing job registry; terminal foreground observations release it.
-  type Reservation = { instanceId: string; state: 'reserved' | 'started' | 'released'; attempt?: CaptureAttempt }
+  type Reservation = { instanceId: string; state: 'reserved' | 'started' | 'released'; attempt?: CaptureAttempt; delivery?: import('../direct-delivery.ts').OriginalExecDeliveryOwner }
+  const captureDeliveries = new WeakMap<Capture, import('../direct-delivery.ts').OriginalExecDeliveryOwner>()
   const pendingInstances = new Map<string, Reservation>()
   const captureAttempts = new WeakMap<Capture, CaptureAttempt>()
   let nextJob = 0
@@ -64,23 +65,34 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   function release(handle: object) {
     const entry = reservations.get(handle)
     if (!entry || entry.state !== 'reserved') throw new Error('Original reservation unavailable')
+    if (entry.delivery && !entry.delivery.isClean()) throw new Error('Original Exec delivery requires recovery')
     entry.state = 'released'; pendingInstances.delete(entry.instanceId)
   }
   async function captureReserved(entry: Reservation, ...args: Parameters<MakeCapture>) {
     let captured = false
     try {
-      const attempt = factory.prepare(...args)
+      const attempt = factory.prepare(args[0],args[1],args[2],args[3],entry.delivery)
       entry.attempt = attempt
+      entry.delivery?.prepareAttempt(attempt,retention.settleFrames,()=>{
+        if(pendingInstances.get(entry.instanceId)===entry&&entry.attempt?.isClean()&&entry.delivery?.isClean())pendingInstances.delete(entry.instanceId)
+      })
       const capture = await attempt.start()
       captured = true
       captureAttempts.set(capture, attempt)
+      if (entry.delivery) {
+        captureDeliveries.set(capture,entry.delivery)
+        entry.delivery.bind(capture,attempt,retention.settleFrames)
+      }
       if (disposed) throw new Error('Exec service disposed')
       captureInstances.set(capture, entry.instanceId)
       return retention.track(capture)
     } catch (error) {
+      entry.delivery?.failed(entry.attempt)
       let cleanup: { cause: unknown } | undefined
       if (captured && entry.attempt) try { await entry.attempt.fail(error) } catch (cause) { cleanup = { cause } }
-      if (!entry.attempt || entry.attempt.isClean()) pendingInstances.delete(entry.instanceId)
+      if(entry.delivery&&entry.attempt?.isClean())try{await entry.delivery.close()}
+      catch(cause){cleanup={cause:cleanup?new AggregateError([cleanup.cause,cause],'Capture and source cleanup failed'):cause}}
+      if ((!entry.attempt || entry.attempt.isClean()) && (!entry.delivery || entry.delivery.isClean())) pendingInstances.delete(entry.instanceId)
       if (cleanup) throw new AggregateError([error, cleanup.cause], 'Capture publication and cleanup failed')
       throw error
     }
@@ -93,14 +105,19 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   function releaseCapture(capture: Capture): void {
     if (captureJobs.has(capture)) return
     const instanceId = captureInstances.get(capture)
-    const release = () => { if (instanceId && !captureJobs.has(capture)) pendingInstances.delete(instanceId) }
-    if (captureAttempts.get(capture)?.isClean()) { release(); return }
+    const release = () => { if (instanceId && !captureJobs.has(capture) && (!captureDeliveries.get(capture) || captureDeliveries.get(capture)!.isClean())) pendingInstances.delete(instanceId) }
+    if (captureAttempts.get(capture)?.isClean()) {
+      const delivery=captureDeliveries.get(capture)
+      if(delivery)void delivery.close().then(release,()=>{})
+      else release()
+      return
+    }
     // Observation failures can precede native settlement. Keep their token
     // reserved until the exact original capture settles; incomplete cleanup
     // stays owned until successful service disposal.
     void capture.complete.catch(() => {}).then(async () => {
       const attempt = captureAttempts.get(capture)
-      try { await attempt?.retryCleanup(); if (attempt?.isClean()) release() }
+      try { await attempt?.retryCleanup(); if (attempt?.isClean()) { await captureDeliveries.get(capture)?.close(); release() } }
       catch { /* The original attempt still owns native/output cleanup debt. */ }
     })
   }
@@ -163,7 +180,7 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
 
   /** All publication callers share the exact original attempt's failure path. */
   async function publishJob(capture: Capture): Promise<NativeJobIdentity> {
-    try { return registerJob(capture) }
+    try { const identity=registerJob(capture); await captureDeliveries.get(capture)?.promoted(); return identity }
     catch (cause) {
       let cleanup: { cause: unknown } | undefined
       try { await captureAttempts.get(capture)?.fail(cause) }
@@ -351,14 +368,18 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       const attempt = Promise.resolve().then(async () => {
         publishCollection(); collection.clear()
         const native = Promise.resolve().then(() => supervisor.dispose())
+        for(const entry of pendingInstances.values())if(entry.state==='reserved')entry.delivery?.failed(undefined)
         const attempts = new Set([...pendingInstances.values()].flatMap(entry => entry.attempt ? [entry.attempt] : []))
         for (const job of jobs.values()) { const owner = captureAttempts.get(job.capture); if (owner) attempts.add(owner) }
         const outcomes = await Promise.allSettled([native, ...[...attempts].map(owner => owner.retire())])
         const failures = outcomes.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : [])
+        const deliveries=new Set([...pendingInstances.values()].flatMap(entry=>entry.delivery?[entry.delivery]:[]))
+        for(const job of jobs.values()){const delivery=captureDeliveries.get(job.capture);if(delivery)deliveries.add(delivery)}
+        for(const result of await Promise.allSettled([...deliveries].map(owner=>owner.close())))if(result.status==='rejected')failures.push(result.reason)
         let unresolved: string[] = []
         try { unresolved = await retention.drain() } catch (cause) { failures.push(cause) }
         if (unresolved.length) failures.push(Object.assign(new Error('Result retention still requires recovery: ' + unresolved.join(',')), { code: 'ARTIFACT_RECOVERY_REQUIRED' }))
-        for (const [id, entry] of pendingInstances) if (entry.attempt?.isClean()) pendingInstances.delete(id)
+        for (const [id, entry] of pendingInstances) if ((entry.attempt?.isClean()||entry.state==='reserved'&&!entry.attempt) && (!entry.delivery || entry.delivery.isClean())) pendingInstances.delete(id)
         for (const job of jobs.values()) job.listeners.clear()
         if (failures.length) throw Object.assign(new AggregateError(failures,
           'Exec service disposal failed' + (unresolved.length ? ': Result retention still requires recovery: ' + unresolved.join(',') : '')),
@@ -371,6 +392,20 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     },
   }
   const port = Object.freeze({
+    attachDelivery(handle: object, delivery: import('../direct-delivery.ts').OriginalExecDeliveryOwner) {
+      if(this!==port)throw new Error('Invalid reservation port receiver')
+      const entry=reservations.get(handle)
+      if(!entry||entry.state!=='reserved'||entry.delivery||disposed)throw new Error('Original reservation unavailable')
+      entry.delivery=delivery
+    },
+    async abortDelivery(handle: object) {
+      if(this!==port)throw new Error('Invalid reservation port receiver')
+      const entry=reservations.get(handle)
+      if(!entry||entry.state!=='reserved')throw new Error('Original reservation unavailable')
+      entry.delivery?.failed(undefined)
+      await entry.delivery?.close()
+      release(handle)
+    },
     reserve() {
       if (this !== port) throw new Error('Invalid reservation port receiver')
       return reserve()
@@ -390,6 +425,7 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       const entry = consume(handle)
       let captured = false
       const reservedCapture: MakeCapture = (...args) => { captured = true; return captureReserved(entry, ...args) }
+      let failure: { cause: unknown } | undefined
       try {
         if (mode === 'background') {
           const capture = await reservedCapture(command, undefined, true)
@@ -398,7 +434,15 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
         }
         if (mode !== 'foreground') throw new Error('Invalid reservation mode')
         return await createJobObservation({ makeCapture: reservedCapture, registerJob: publishJob, releaseCapture, isDisposed: () => disposed, observe })(command, runOptions)
-      } finally { if (!captured) pendingInstances.delete(entry.instanceId) }
+      } catch (cause) { failure={cause};throw cause }
+      finally {
+        if(!captured&&entry.delivery){
+          entry.delivery.failed(undefined)
+          try{await entry.delivery.close()}
+          catch(cleanup){throw new AggregateError(failure?[failure.cause,cleanup]:[cleanup],'Exec prelaunch delivery cleanup failed')}
+        }
+        if (!captured && (!entry.delivery || entry.delivery.isClean())) pendingInstances.delete(entry.instanceId)
+      }
     },
   })
   return { service, port }

@@ -128,7 +128,7 @@ export function attachModelMember(token: LiveBatchToken | undefined,index:number
   const proof=Object.freeze({});proofs.set(proof,{state:state!,index,prepared,taken:false})
   owner.origin.driver.attach(prepared,proof)
 }
-export function takeModelMember(origin:ModelOriginState,proof:object,expected:ModelOriginExpectation): {assertCurrent():void} {
+export function takeModelMember(origin:ModelOriginState,proof:object,expected:ModelOriginExpectation): import('@i-harness/core-tools/model-origin').OriginalModelMemberPermit {
   const member=proofs.get(proof)
   const check=()=>{
     if(!member)throw new Error('Original member proof required')
@@ -138,5 +138,24 @@ export function takeModelMember(origin:ModelOriginState,proof:object,expected:Mo
     if(state.phase!=='prepared'||expected.registry!==origin.registry||expected.prepared!==prepared||expected.view!==origin.view||expected.source!==state.source||state.members?.[index]!==memberData({callId:expected.callId,eventSeq:expected.callEventSeq,name:expected.name,args:expected.args})||state.members[index]!==memberData(state.batch[index]!))throw new Error('Foreign model member')
   }
   check();if(member!.taken)throw new Error('Model member already taken');member!.taken=true
-  return Object.freeze({assertCurrent:check})
+  let issued=false
+  const permit=Object.freeze({assertCurrent:check,takeExecSourceIssuer(){
+    if(this!==permit)throw new Error('Foreign model permit receiver')
+    check();if(issued)throw new Error('Exec source issuer already taken');issued=true
+    const action=member!.state.invocation.action
+    if(origin.factOwner.view!==origin.view||origin.factOwner.ownsAction?.(action)===false)throw new Error('Original model action required')
+    let captured=false,registered=false
+    const issuer:import('@i-harness/core-tools/model-origin').OriginalExecSourceIssuer=Object.freeze({
+      assertAdmissionCurrent(){if(this!==issuer)throw new Error('Foreign Exec issuer receiver');check()},
+      captureSource(binding:import('@i-harness/core-tools/model-origin').ExecSourceBinding,recipientCurrent:()=>boolean){
+        if(this!==issuer)throw new Error('Foreign Exec issuer receiver');check()
+        if(!registered||captured||binding.callSeq!==expected.callEventSeq||binding.recipientSessionId!==expected.prepared.exec.sessionId||binding.sourceNamespace!=='exec')throw new Error('Foreign Exec source binding')
+        captured=true
+        return action.captureExecDeliverySource({type:'agent/delivery-source',version:1,kind:'exec',recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceNamespace:'exec',sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery},()=>{try{check();return recipientCurrent()}catch{return false}})
+      },
+      registerCompletion(drain:()=>Promise<void>){if(this!==issuer)throw new Error('Foreign Exec issuer receiver');check();if(registered)throw new Error('Exec completion already registered');registered=true;return action.registerSettlementSource(drain)},
+    })
+    return issuer
+  }})
+  return permit
 }

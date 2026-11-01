@@ -420,6 +420,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       attempts?.set(notificationStops.get(assembly!)!.stops.get(input.inputId)!, job)
     }
   }
+  function execDeliveryFor(id:string, owner:()=>SessionAssembly|undefined): NonNullable<AssemblyOptions['prepareExecDelivery']> {
+    return async input=>{
+      const assembly=owner()
+      const current=()=>{try{opts.sessionOperation?.assertOpen(id)}catch{return false};return !!assembly&&owner()===assembly&&assemblies.get(id)===assembly&&!closed&&!closing.has(id)}
+      if(!current()||input.sessionId!==id||input.view!==assembly!.factOwner.view)throw new ParentNotificationStoppedError()
+      opts.sessionOperation?.assertOpen(id)
+      const result=await receivedInputsFor(assembly!.factOwner,id).delivery.prepareExecLaunch(input)
+      opts.sessionOperation?.assertOpen(id)
+      if(!current())throw new ParentNotificationStoppedError()
+      return result.kind==='bound'?{...result,isCurrent:()=>current()&&result.isCurrent()}:result
+    }
+  }
   function parentNotifyFor(id: string, owner: () => SessionAssembly | undefined): NonNullable<AssemblyOptions["parentNotify"]> {
     if (opts.parentNotify) return opts.parentNotify
     return {
@@ -732,6 +744,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
             webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
+            prepareExecDelivery: execDeliveryFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
             model: binding.model,
@@ -777,6 +790,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
             webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
+            prepareExecDelivery: execDeliveryFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
             ...(model !== undefined ? { model } : {}),
