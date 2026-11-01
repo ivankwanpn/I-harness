@@ -9,6 +9,7 @@ import { TaskResultOwner } from "./result.ts"
 import { TaskNotifications } from "./notifications.ts"
 import { TaskPersistence } from "./persistence.ts"
 import { associateTaskSaveOwner } from './save-owner.ts'
+import {captureTaskSnapshot} from '@i-harness/session-persistence/internal/task-document-operations'
 import { TaskRecords } from "./records.ts"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
@@ -39,6 +40,11 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const maxConcurrency = opts.maxConcurrency ?? Infinity
   const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask)
   const retentionSaves = new WeakMap<TaskRecord, import('./persistence.ts').OwnedTaskSave>()
+  type RetentionIdentity={revision:string|undefined;fingerprint:string}
+  const acknowledgedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
+  const capturedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
+  const retentionIdentity=(task:TaskRecord):RetentionIdentity=>({revision:task.result?.revision,fingerprint:JSON.stringify(captureTaskSnapshot(task.result??null))})
+  const sameRetention=(identity:RetentionIdentity,task:TaskRecord)=>identity.revision===task.result?.revision&&identity.fingerprint===retentionIdentity(task).fingerprint
   const retentionFlights = new WeakMap<TaskRecord, Promise<void>>()
   const save = async () => { assertReady(); await persistence.save() }
 
@@ -88,13 +94,19 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     // The in-memory authoritative outcome is already complete. Persistence
     // failure changes delivery evidence only; it never reopens execution.
     if (!opts.coordinator || !opts.stateId) { task.retention = "memory"; return }
+    const acknowledged=acknowledgedRetention.get(task)
+    if(acknowledged&&sameRetention(acknowledged,task))return
     if (task.retention === "durable") return
     task.retention = "pending"
     try {
       const previous = retentionSaves.get(task)
+      const captured=previous?capturedRetention.get(task)!:retentionIdentity(task)
       const originalSave = previous ?? persistence.captureSave(true)
-      if (originalSave) { retentionSaves.set(task, originalSave); if (previous) await originalSave.retry(); else await originalSave.done; originalSave.assertHandoff() }
+      if (originalSave) { retentionSaves.set(task, originalSave);capturedRetention.set(task,captured); if (previous) await originalSave.retry(); else await originalSave.done; originalSave.assertHandoff() }
       else await save()
+      originalSave?.release()
+      acknowledgedRetention.set(task,captured);retentionSaves.delete(task);capturedRetention.delete(task)
+      if(!sameRetention(captured,task))throw Error('Original saved task result changed')
       if (task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'unavailable') {
         task.retention = 'failed'
         task.retentionError = task.result.envelope.retention.reason
@@ -102,7 +114,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         task.retention = "durable"
         delete task.retentionError
       }
-      originalSave?.release()
+
     } catch (error) {
       task.retention = "failed"
       task.retentionError = error instanceof Error ? error.message : String(error)
