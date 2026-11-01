@@ -170,21 +170,22 @@ export function createLifecycle(
       outcome = 'settled'
       } finally { reservations.delete(reservation); token?.end(outcome) }
     },
-    async close(releaseOwners = true) {
+    async close(releaseOwners = true, settleArchiveReads?: () => Promise<void>) {
       for (const attempt of attempts) ownership.assertOutsideSessionOperation(attempt.sessionId)
       processLatches?.closeAdmission()
       const flushed = await Promise.allSettled(flushWriteBehinds())
       cancelAutomaticWaits()
-      await pendingDocuments()
+      const documentCleanup = await Promise.allSettled([pendingDocuments()])
       await Promise.allSettled(pendingOperations())
       const taskCleanup = await Promise.allSettled([joinTaskDocumentIO()])
       const deletionCleanup = await Promise.allSettled([retryDeletionCleanup()])
+      const archiveCleanup = await Promise.allSettled([settleArchiveReads?.()])
       // Unknown managed/observation work still depends on its original actual
       // owners. Independent drainage may proceed without retiring those leases.
-      const released = releaseOwners && [...taskCleanup, ...deletionCleanup].every(result => result.status === 'fulfilled') ? await Promise.allSettled(releaseHeldLocks()) : []
+      const released = releaseOwners && [...documentCleanup, ...taskCleanup, ...deletionCleanup, ...archiveCleanup].every(result => result.status === 'fulfilled') ? await Promise.allSettled(releaseHeldLocks()) : []
       const disposed = await Promise.allSettled([retryDisposals()])
       clearConversationIndexes()
-      const failures = [...flushed, ...taskCleanup, ...deletionCleanup, ...released, ...disposed].flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      const failures = [...flushed, ...documentCleanup, ...taskCleanup, ...deletionCleanup, ...archiveCleanup, ...released, ...disposed].flatMap(result => result.status === "rejected" ? [result.reason] : [])
       if (failures.length > 0) throw new AggregateError(failures, "Failed to persist sessions during shutdown")
     },
   }

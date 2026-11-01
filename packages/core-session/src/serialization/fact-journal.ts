@@ -104,3 +104,66 @@ function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersio
   }
   return { events, prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, torn: offset !== buffer.length, frames }
 }
+
+/** Incremental physical decoding. The consumer is private and must not publish
+ * its candidate until finish and the original whole-history validation succeed. */
+export function createJournalStreamDecoder(metadata: JournalMetadata, formatVersion: number, consume: (events: SessionEvent[]) => void) {
+  if (!validJournalMetadata(metadata)) fail()
+  const size = Buffer.alloc(8); size.writeBigUInt64BE(BigInt(metadata.legacyEventCount))
+  const legacyHash = createHash('sha256').update('ih.fact-legacy.v1\0').update(size)
+  let legacyLeft = metadata.legacyBodyBytes, separatorLeft = metadata.separatorBytes
+  let legacyChecked = false, eventCount = 0, bodyBytes = 0, prefixDigest = metadata.legacyPrefixDigest
+  let parts: Buffer[] = [], partBytes = 0, finished = false
+  function add(bytes: Uint8Array) { if (bytes.length) { parts.push(Buffer.from(bytes)); partBytes += bytes.length } }
+  function take() { const result = Buffer.concat(parts, partBytes); parts = []; partBytes = 0; return result }
+  function legacyLine(bytes: Buffer) {
+    const line = bytes.toString('utf8')
+    if (!line.trim()) return
+    let event: SessionEvent
+    try { event = JSON.parse(line) } catch { return fail() }
+    if (isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec'].includes(event.provenance?.producer ?? '')) fail()
+    eventCount++; consume([event])
+  }
+  function checkLegacy() {
+    if (legacyChecked) return
+    if (partBytes) legacyLine(take())
+    if (eventCount !== metadata.legacyEventCount || legacyHash.digest('hex') !== metadata.legacyPrefixDigest) fail()
+    legacyChecked = true
+  }
+  function lines(input: Buffer, legacy: boolean) {
+    let start = 0
+    while (start < input.length) {
+      const end = input.indexOf(10, start)
+      if (end < 0) { add(input.subarray(start)); break }
+      add(input.subarray(start, end + 1)); const record = take()
+      if (legacy) legacyLine(record.subarray(0, -1))
+      else {
+        const frame = decodeFactBatch(record); validateDeliveryFrame(frame.events, formatVersion)
+        if (frame.key.firstSeq !== eventCount || frame.key.previousPrefixDigest !== prefixDigest) fail()
+        consume(frame.events); eventCount += frame.events.length; prefixDigest = frame.prefixDigest; bodyBytes += record.length
+      }
+      start = end + 1
+    }
+  }
+  return {
+    push(bytes: Uint8Array) {
+      if (finished) throw new TypeError('Journal decoder already finished')
+      const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      let offset = 0
+      if (legacyLeft) {
+        const length = Math.min(legacyLeft, input.length), chunk = input.subarray(0, length)
+        legacyHash.update(chunk); lines(chunk, true); legacyLeft -= length; bodyBytes += length; offset += length
+      }
+      if (!legacyLeft) checkLegacy()
+      if (separatorLeft && offset < input.length) { if (input[offset++] !== 10) fail(); separatorLeft = 0; bodyBytes++ }
+      if (!legacyLeft && !separatorLeft && offset < input.length) lines(input.subarray(offset), false)
+    },
+    finish() {
+      if (finished) throw new TypeError('Journal decoder already finished')
+      finished = true
+      if (legacyLeft || separatorLeft) fail()
+      checkLegacy()
+      return { prefix: { eventCount, bodyBytes, prefixDigest }, torn: partBytes !== 0 }
+    },
+  }
+}
