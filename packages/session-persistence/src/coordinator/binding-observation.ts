@@ -134,10 +134,10 @@ export function createBindingObservations(
     const prior = admitMutation([id], [key], false, [])
     let revoked = false, finished = false, joining: Promise<void> | undefined
     const entry: OwnedDocument = { id, key, revoke() { revoked = true; call('revoke') }, close() { return call('close') as Promise<void> }, retryClose() { return call('retryClose') as Promise<void> }, assertOutside() { call('assertOutside') }, closing: false, writing: false }
-    ownedDocuments.add(entry)
+    snapshot(entry, [entry.id], [entry.key]); ownedDocuments.add(entry)
     const ticket = Object.freeze({
       join() { if (this !== ticket || finished) return Promise.reject(new Failure('conflict')); return joining ??= Promise.all([prior.join(), ...priorMutations.map(async record => { if (await record.done !== 'settled') throw new Failure('unavailable') })]).then(() => {}) },
-      assertCurrent() { if (this !== ticket || finished || revoked || closed || !ownedDocuments.has(entry)) throw new Failure('revoked'); for (const name of ['revoke', 'close', 'retryClose', 'assertOutside'] as const) { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations, name); if (!expected && !now && name === 'assertOutside') continue; if (!expected || !now || !('value' in expected) || !('value' in now) || now.value !== expected.value) throw new TypeError('Changed transition operation') } },
+      assertCurrent() { if (this !== ticket || finished || revoked || closed || !ownedDocuments.has(entry)) throw new Failure('revoked'); snapshot(entry, [entry.id], [entry.key]); for (const name of ['revoke', 'close', 'retryClose', 'assertOutside'] as const) { const expected = captured[name], now = Object.getOwnPropertyDescriptor(operations, name); if (!expected && !now && name === 'assertOutside') continue; if (!expected || !now || !('value' in expected) || !('value' in now) || now.value !== expected.value) throw new TypeError('Changed transition operation') } },
       finish(outcome: 'settled' | 'unknown') { if (this !== ticket || finished) throw new TypeError('Invalid transition ticket'); finished = true; ownedDocuments.delete(entry); prior.finish(outcome) },
     })
     return ticket

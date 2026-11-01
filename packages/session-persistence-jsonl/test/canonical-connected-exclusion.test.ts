@@ -73,3 +73,21 @@ it('canonical document aliases share one temporary lease inside a multi-key oper
   const f = await fixture(); let writes=0
   try { await f.documents.withDocumentLeases(['name','nested/../name'],async()=>{writes++}); expect(writes).toBe(1) } finally { await f.close() }
 })
+
+it('ready generic writer refuses a nested-directory replacement while original revoked cleanup is joined', async () => {
+  const {mkdir,rename,readFile,stat}=await import('node:fs/promises')
+  const f=await fixture(), entered=Promise.withResolvers<void>(), release=Promise.withResolvers<void>(); let writes=0
+  const docs=createDocuments({async putDocument(key,data){writes++;await f.backend.putDocument(key,data)},getDocument:key=>f.backend.getDocument(key)},f.owner,()=>{},f.latches)
+  await f.backend.putDocument('nested/key',{original:true})
+  const before=await readFile(join(f.root,'nested/key.doc.jsonl'))
+  let registration:ReturnType<typeof docs.observations.registerOwnedDocumentOperation>
+  registration=docs.observations.registerOwnedDocumentOperation('other','nested/key',{revoke(){},async close(){entered.resolve();await release.promise;registration.unregister()},async retryClose(){throw Error('unexpected retry')}})
+  await registration.join()
+  const writing=docs.putDocumentStrict('nested/key',{replacement:true}); const outcome=writing.then(()=>({written:true}),cause=>({written:false,cause}))
+  try {
+    await entered.promise; await rename(join(f.root,'nested'),join(f.root,'original-nested')); await mkdir(join(f.root,'nested')); release.resolve()
+    expect((await outcome).written).toBe(false); expect(writes).toBe(0)
+    expect(await readFile(join(f.root,'original-nested/key.doc.jsonl'))).toEqual(before)
+    await expect(stat(join(f.root,'nested/key.doc.jsonl'))).rejects.toMatchObject({code:'ENOENT'})
+  } finally {release.resolve();await outcome;await docs.pendingWrites();await docs.retryDisposals();await f.close()}
+})

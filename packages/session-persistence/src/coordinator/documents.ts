@@ -61,6 +61,8 @@ export function createDocuments(
   async function putDocumentStrict(key: string, data: unknown) {
     observations.assertOutsideObservedDocument(key)
     if (isDeleted(key)) throw new Error('Session document is deleted')
+    const entryScope = ownership.exclusionScope?.([], [key])
+    let writeScope = entryScope
     const token = processLatches?.beginMutation({ sessionIds: [], documentKeys: [key], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
     let admission: ReturnType<typeof observations.beginMutation> | undefined
@@ -69,14 +71,21 @@ export function createDocuments(
     try {
       admission = observations.beginMutation([], [key])
       await admission.join()
+      if (entryScope?.ready !== false) entryScope?.assertCurrent()
       if (isDeleted(key)) throw new Error('Session document is deleted')
       await ownership.artifacts?.prepareDocument(key)
+      if (entryScope?.ready === false) writeScope = ownership.exclusionScope?.([], [key])
+      if (writeScope?.ready === false) throw new Error('Document artifact preparation is incomplete')
+      writeScope?.assertCurrent()
       finalToken = processLatches?.beginMutation({ sessionIds: [], documentKeys: [key], kind: 'other' })
       finalAdmission = observations.beginMutation([], [key]); await finalAdmission.join()
+      writeScope?.assertCurrent()
       await withDocumentLeases([key], () => {
+        writeScope?.assertCurrent()
         if (isDeleted(key)) throw new Error('Session document is deleted')
         return backend.putDocument(key, data)
       }, true)
+      writeScope?.assertCurrent()
       outcome = 'settled'
     } finally { try { finalToken?.end(outcome); token?.end(outcome) } catch (error) { outcome = 'unknown'; throw error } finally { finalAdmission?.finish(outcome); admission?.finish(outcome) } }
   }
