@@ -83,7 +83,7 @@ it.each(['sourceSeq', 'terminalSeq', 'recipient', 'revision', 'callSeq', 'startS
   const f = await ownedDeliveryHistory();
   try {
     const events = JSON.parse(JSON.stringify(f.document.view.events)) as SessionEvent[], receipt = events.find(e => e.type === 'agent/delivery-received')!, source = events.find(e => e.type === 'agent/delivery-source')!;
-    if (receipt.type !== 'agent/delivery-received' || source.type !== 'agent/delivery-source')
+    if (receipt.type !== 'agent/delivery-received' || source.type !== 'agent/delivery-source' || source.kind !== 'subagent')
       throw Error('fixture');
     if (field === 'sourceSeq' || field === 'terminalSeq')
       receipt[field] = 0;

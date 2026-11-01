@@ -10,7 +10,7 @@ export type LegacyIndexMutation = <T>(context: IndexedLegacyContext, work: (turn
 export async function verifyPageInventory(context: IndexedLegacyContext, directory: string, root: LegacyRoot, guard: () => void): Promise<void> {
   const { store, index } = context
   index.assertCurrent()
-  const binding = recordHash('binding', root.binding), names = await readdir(resolve(directory, 'pages')); index.assertCurrent(); guard()
+  const binding = recordHash('binding', root.binding,root.version), names = await readdir(resolve(directory, 'pages')); index.assertCurrent(); guard()
   let finals = 0
   for (const name of names) if (name.endsWith('.json')) { finals++; if (!store.legacyPageHint(index, binding, name)) throw Error('Legacy page EOF mismatch') }
   if (finals !== store.legacyPageCount(index, binding)) throw Error('Legacy page EOF mismatch')
@@ -22,9 +22,9 @@ export async function prepareLegacyIndex(context: IndexedLegacyContext, director
   index.assertCurrent()
   const checked = () => { index.assertCurrent(); guard() }
   if (!force && store.legacyReady(index, root)) { await verifyPageInventory(context, directory, root, guard); return }
-  await mutate(context, async turn => { checked(); await store.resetLegacyIndex(turn, lease, index, recordHash('binding', root.binding), quota); checked() }); checked()
+  await mutate(context, async turn => { checked(); await store.resetLegacyIndex(turn, lease, index, recordHash('binding', root.binding,root.version), quota); checked() }); checked()
   for await (const _ of walkPages(directory, root, checked, groupCount, store.retireLegacyFile, async (ref, page) => {
-    await mutate(context, async turn => { checked(); await store.stageLegacyPage(turn, lease, index, recordHash('binding', root.binding), pageName(ref), page, quota); checked() }); checked()
+    await mutate(context, async turn => { checked(); await store.stageLegacyPage(turn, lease, index, recordHash('binding', root.binding,root.version), pageName(ref), page, quota,root.version); checked() }); checked()
   })) { checked() }
   await mutate(context, async turn => { checked(); await store.confirmLegacyIndex(turn, lease, index, root, quota); checked() }); checked()
 }

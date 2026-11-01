@@ -4,6 +4,11 @@ import { prunePassiveCodeStore } from './prune.ts'
 import type { DataRow, OwnedPassiveCandidates, PassiveCodeStoreV1 } from './types.ts'
 
 export function capturePassiveCodeStore(candidates: OwnedPassiveCandidates): PassiveCodeStoreV1 | undefined {
+  const data = capturePassiveCodeStoreData(candidates)
+  return data.rows.length || data.cuts.some(cut => cut.overLimit) ? data : undefined
+}
+/** V3 public profiles carry an explicit empty passive observation too. */
+export function capturePassiveCodeStoreData(candidates: OwnedPassiveCandidates): PassiveCodeStoreV1 {
   const selected = new Set<number>(), cuts: PassiveCodeStoreV1['cuts'][number][] = []
   const captured = new Map<number, { value: unknown; valueJson?: string }>()
   const slots = new Map(candidates.slots.map(slot => [slot.slot, slot]))
@@ -62,5 +67,5 @@ export function capturePassiveCodeStore(candidates: OwnedPassiveCandidates): Pas
     return { kind: 'put', unit: row.unit, key, value }
   })
   const data = prunePassiveCodeStore({ version: 1, units: candidates.units, rows, keys, values, cuts, latest: candidates.latest, completed: candidates.completed, groups: candidates.groups })
-  return data.rows.length || data.cuts.some(cut => cut.overLimit) ? data : undefined
+  return data
 }

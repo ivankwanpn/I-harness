@@ -13,6 +13,7 @@ export type TaskSavedObservation = { status: 'accepted' | 'running'; outcome?: n
 export interface TaskRecord {
   id: string
   parentSessionId: string
+  childBirth?: TaskChildBirthBinding
   toolCallId?: string
   callEventSeq?: number
   childSessionId?: string
@@ -56,7 +57,8 @@ export interface TaskNotificationRecord {
   timeWoken?: number
   error?: string
 }
-export interface TaskProtocolDocument { formatVersion: 1 | 2; tasks: TaskRecord[]; notifications: TaskNotificationRecord[] }
+export type TaskChildBirthBinding = Readonly<{ version: 1; kind: 'task-child-birth'; request: import('@i-harness/session-persistence').ChildBootstrapCaptureRequest }>
+export interface TaskProtocolDocument { formatVersion: 1 | 2 | 3; tasks: TaskRecord[]; notifications: TaskNotificationRecord[] }
 
 export class TaskIdentityConflictError extends Error {
   constructor(readonly identity: TaskIdentity) {
@@ -88,6 +90,9 @@ export interface TaskTerminalizeInput {
   recoveryReason?: RecoveryReason
 }
 export interface TaskRegistryOptions {
+  launchContext?: import('@i-harness/core-tools/internal/task-caller').ToolExecutionOwnerContext
+  /** Internal original-parent save capability; never supplied by a tool. */
+  ownedTask?: import('./persistence.ts').OwnedTaskContext
   results?: TaskResultStore
   reportPolicy?: ReportPolicy
   coordinator?: SessionCoordinator
@@ -96,6 +101,14 @@ export interface TaskRegistryOptions {
   onTerminalized?: (task: TaskRecord) => void
 }
 export interface TaskRegistry {
+  /** Original owned document load; legacy manual registries are immediately ready. */
+  readonly ready: Promise<void>
+  assertReady(): void
+  /** Synchronously revoke installation/new work before disposal joins cleanup. */
+  retireOwnedLoad(): void
+  /** Cleanup only: original read debt, held consumers, then writer flush. */
+  closeOwnedLoad(): Promise<void>
+  bindForegroundHandoff(taskId: string): () => { kind: 'manual' } | { kind: 'ready' } | { kind: 'parent'; save: import('./persistence.ts').OwnedTaskSave }
   prepareResult(taskId: string, context?: import('@i-harness/core-tools').ToolExec, current?: () => boolean): Promise<TaskResultStore | undefined>
   /** Qualify restored current rows from the original parent's committed F1 facts. */
   qualifyRestoredResults(): Promise<void>
@@ -120,4 +133,3 @@ export interface TaskRegistry {
   /** Retain the existing complete task result before advertising durable retrieval. */
   retainResult(taskId: string): Promise<void>
 }
-

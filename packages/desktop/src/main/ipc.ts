@@ -1,3 +1,4 @@
+import {createNativeSurfaceObservation} from './surface-observation.ts'
 import type { BrowserWindow } from "electron"
 import { relative, isAbsolute, sep } from "node:path"
 import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopEvent, type DesktopRequest, type TerminalShellChoice } from "../shared/bridge.ts"
@@ -23,8 +24,11 @@ import type { AttachmentDraftStore } from "./attachment-draft-store.ts"
 import { listDesktopTerminalShellOptions } from "../../../desktop-gateway/src/terminal-shells.ts"
 import type { attachNativeWindow } from "./native-window.ts"
 import type { createBrowserSurface } from "./browser-surface.ts"
+import { readForkPrepareRequest, readForkPrepareResult, readForkOperation, readForkOutcome, readForkHostErrorData } from '@i-harness/sdk/fork'
+import { RpcError } from '@i-harness/sdk'
 
 export interface DesktopIpcDependencies {
+  surfaceObservation?: ReturnType<typeof createNativeSurfaceObservation>
   catalog: WorkspaceCatalog
   projects?: ProjectCatalog
   revealWorkspace?: (path: string) => Promise<void>
@@ -45,6 +49,9 @@ export interface DesktopIpcDependencies {
   projectContentSearch?: ReturnType<typeof createDesktopProjectContentSearch>
 }
 const searchOwners = new WeakMap<DesktopIpcDependencies, ReturnType<typeof createDesktopProjectContentSearch>>()
+const windowCleanups=new Set<()=>Promise<void>>()
+const ipcWindows=new WeakMap<IpcMainLike,Map<unknown,DesktopIpcDependencies>>()
+export async function closeDesktopSurfaceWindows(){const results=await Promise.allSettled([...windowCleanups].map(close=>close()));const errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Desktop surface window cleanup incomplete')}
 function searchOwner(dependencies: DesktopIpcDependencies) {
   if (dependencies.projectContentSearch) return dependencies.projectContentSearch
   let owner = searchOwners.get(dependencies)
@@ -66,6 +73,9 @@ export async function dispatchDesktopRequest(
   dependencies: DesktopIpcDependencies,
 ): Promise<unknown> {
   const value = requireRecord(request)
+  const kind=Object.getOwnPropertyDescriptor(value,'kind')
+  if(!kind||!('value' in kind))throw Error('Invalid Desktop request kind')
+  if(typeof value.kind==='string'&&value.kind.startsWith('desktop/surface/')) {if(!dependencies.surfaceObservation)throw Error('Native surface window unavailable');return dependencies.surfaceObservation.request(value)}
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
   if (value.kind.startsWith("desktop/diagnostics/")) {
     if (!dependencies.diagnostics) throw new Error("Runtime diagnostics unavailable")
@@ -196,6 +206,7 @@ export async function dispatchDesktopRequest(
   if (contextParams !== undefined) {
     const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
     if (value.kind.startsWith("desktop/session/subagents/") && !runtime.info.capabilities["desktop-subagent-catalog"]?.includes("1")) throw new Error("Subagent catalog unavailable")
+    if (value.kind.startsWith('desktop/instructions/') && !runtime.info.capabilities['desktop-instructions']?.includes('1')) throw new Error('Instruction observation unavailable')
     if (value.kind === "desktop/approval-rules/add") {
       const navigation = await runtime.client.request("desktop/session/navigation/state", {})
       if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, String(contextParams.sessionId))) throw new Error("Approval conversation unavailable")
@@ -381,10 +392,35 @@ export async function dispatchDesktopRequest(
       }
       return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, params, 120000)
     }
+    case 'desktop/session/fork/prepare': {
+      if (Object.keys(value).length !== 3 || Object.keys(value).some(key => !['kind', 'workspaceId', 'request'].includes(key))) throw new Error('Invalid fork preparation request')
+      const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId'), request = readForkPrepareRequest(value.request)
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies), versions = runtime.info.capabilities['session-fork-bootstrap']
+      if (!Array.isArray(versions) || !versions.includes('1')) throw new Error('Session fork unavailable')
+      const result = readForkPrepareResult(await runtime.client.request('session/fork/prepare', request))
+      if (result.kind === 'prepared' && (result.prepared.core.sourceSessionId !== request.sourceSessionId
+        || JSON.stringify(result.prepared.core.selection) !== JSON.stringify(request.selection ?? { kind: 'completed' }))) throw new Error('Invalid fork preparation response')
+      return result
+    }
+    case 'desktop/session/fork/begin':
+    case 'desktop/session/fork/retry': {
+      if (Object.keys(value).length !== 3 || Object.keys(value).some(key => !['kind', 'workspaceId', 'operation'].includes(key))) throw new Error('Invalid fork operation request')
+      const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId'), operation = readForkOperation(value.operation)
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies), versions = runtime.info.capabilities['session-fork-bootstrap']
+      if (!Array.isArray(versions) || !versions.includes('1')) throw new Error('Session fork unavailable')
+      try { return readForkOutcome(await runtime.client.request(value.kind === 'desktop/session/fork/begin' ? 'session/fork/begin' : 'session/fork/retry', { operation }), operation) }
+      catch (cause) {
+        if (!(cause instanceof RpcError)) throw cause
+        // Electron invocation errors omit custom data. Only this existing,
+        // operation-bound safe DTO crosses as data; never arbitrary RPC fields.
+        try { return readForkHostErrorData(cause.data, operation) }
+        catch { throw new Error('Invalid session fork response') }
+      }
+    }
     case "desktop/session/manage": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
-      if (!["rename", "archive", "restore", "fork", "pin", "unpin", "read", "unread"].includes(String(value.action))) throw new Error("invalid session action")
+      if (!["rename", "archive", "restore", "pin", "unpin", "read", "unread"].includes(String(value.action))) throw new Error("invalid session action")
       const title = value.action === "rename" ? requireNonEmpty(value.title, "title") : undefined
       if (title && title.length > 256) throw new Error("title is too long")
       return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, { sessionId, action: value.action, ...(title ? { title } : {}) })
@@ -694,16 +730,19 @@ export function registerDesktopIpc(
   window: BrowserWindow,
   dependencies: DesktopIpcDependencies,
   ipc: IpcMainLike,
-): () => void {
+): () => Promise<void> {
+  if(windowCleanups.size>=32)throw Error('Desktop window cleanup capacity')
   const projectContentSearch = createDesktopProjectContentSearch(dependencies)
-  const ownedDependencies = { ...dependencies, projectContentSearch }
+  const surfaceObservation=createNativeSurfaceObservation(id=>runtimeForKnownWorkspace(id,dependencies),id=>dependencies.runtimes.peek?.(id),event=>window.webContents.send(DESKTOP_EVENT_CHANNEL,event))
+  const ownedDependencies = { ...dependencies, projectContentSearch, surfaceObservation }
   let removed = false
-  ipc.handle(DESKTOP_REQUEST_CHANNEL, async (event, request) => {
-    if (event.sender !== window.webContents) throw new Error("untrusted IPC sender")
-    return await dispatchDesktopRequest(request, ownedDependencies)
-  })
+  let windows=ipcWindows.get(ipc)
+  if(!windows){windows=new Map();ipcWindows.set(ipc,windows);ipc.handle(DESKTOP_REQUEST_CHANNEL,async(event,request)=>{const owned=windows!.get(event.sender);if(!owned)throw Error('untrusted IPC sender');return dispatchDesktopRequest(request,owned)})}
+  if(windows.has(window.webContents))throw Error('Desktop window already registered')
+  windows.set(window.webContents,ownedDependencies)
   const offEvent = dependencies.runtimes.onEvent((desktopEvent) => {
     if (window.isDestroyed()) return
+    if(!surfaceObservation.event(desktopEvent))return
     if (desktopEvent.kind === "sdk/notification" && desktopEvent.method === "session/event" && (desktopEvent.params as { event?: { type?: unknown } } | null)?.event?.type === "model/activity") return
     try { dependencies.native?.onEvent(desktopEvent) } catch { /* Notifications cannot interrupt SDK event delivery. */ }
     window.webContents.send(DESKTOP_EVENT_CHANNEL, desktopEvent)
@@ -720,16 +759,20 @@ export function registerDesktopIpc(
     if (removed || window.isDestroyed()) return
     window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "runtime/activity", ...activity } satisfies DesktopEvent)
   })
-  return () => {
-    if (removed) return
+  const unregister=():Promise<void> => {
+    if (removed) return surfaceObservation.close().then(()=>{windowCleanups.delete(unregister)})
     removed = true
-    ipc.removeHandler(DESKTOP_REQUEST_CHANNEL)
+    windows!.delete(window.webContents)
+    if(!windows!.size){ipc.removeHandler(DESKTOP_REQUEST_CHANNEL);ipcWindows.delete(ipc)}
     offEvent()
     offWindowState?.()
     offDiagnostics?.()
     offActivity?.()
     void projectContentSearch.close()
+    return surfaceObservation.close().then(()=>{windowCleanups.delete(unregister)})
   }
+  windowCleanups.add(unregister)
+  return unregister
 }
 
 async function runtimeForKnownWorkspace(

@@ -89,5 +89,3 @@ function constructWin32Wait(handle: NativePtr, reservation: WaitDrainReservation
     },
   } as const
 }
-
-

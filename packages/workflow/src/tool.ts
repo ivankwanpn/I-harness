@@ -6,7 +6,7 @@
 // subagent job_* third layer) can consume getOutput/listJobs/killJob without
 // reaching into the tool layer.
 import type { PluginContext } from "@i-harness/core-plugin"
-import { userSteerForTool, waitForObservation, type Tool, type ToolRegistry } from "@i-harness/core-tools"
+import { backgroundEventForTool, userSteerForTool, waitForObservation, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import type { ExecService } from "@i-harness/exec"
 import type { WorkflowDefinition, WorkflowParamSpec } from "./definition.ts"
 import type { WorkflowExecutor } from "./runner.ts"
@@ -36,7 +36,7 @@ interface WorkflowRunOutput {
   output?: string
   exit_code?: number
   yielded?: true
-  yield_reason?: "user-steer"
+  yield_reason?: "user-steer" | "background-event"
 }
 
 interface WorkflowListEntry {
@@ -99,7 +99,7 @@ export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; execut
       const reason = await waitForObservation({
         ready: () => terminalSeen || deps.executor.getOutput(jobId).status !== "running",
         changes: { subscribe: wake => deps.executor.subscribeJob(jobId, view => { terminalSeen ||= view.status !== "running"; wake() }) },
-        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec),
       })
       const view = deps.executor.getOutput(jobId)
       return {
@@ -107,7 +107,7 @@ export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; execut
         job_id: jobId,
         status: view.status,
         output: view.stdout,
-        ...(reason === "user-steer" && !exec.abortSignal?.aborted && view.status === "running" ? { yielded: true as const, yield_reason: "user-steer" as const } : {}),
+        ...((reason === "user-steer" || reason === "background-event") && !exec.abortSignal?.aborted && view.status === "running" ? { yielded: true as const, yield_reason: reason } : {}),
         ...(view.exitCode !== undefined ? { exit_code: view.exitCode } : {}),
       }
     },

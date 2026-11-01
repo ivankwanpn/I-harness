@@ -1,0 +1,34 @@
+import { expect, it, vi } from 'vitest'
+const fault = vi.hoisted(() => ({ target: '', fail: false, closes: 0, links: 0 }))
+vi.mock('node:fs/promises', async original => {
+  const real = await original<typeof import('node:fs/promises')>()
+  return { ...real, async open(...args: Parameters<typeof real.open>) {
+    const handle = await real.open(...args)
+    if (String(args[0]) === fault.target && args[1] === 'r+') {
+      const close = handle.close.bind(handle); handle.close = async () => { fault.closes++; if (fault.fail) throw false; await close() }
+    }
+    return handle
+  }, async link(...args: Parameters<typeof real.link>) { await real.link(...args); if (String(args[1]) === fault.target) fault.links++ } }
+})
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+import { taskDocumentTransitionCleanupFor } from '../../session-persistence/src/task-document-internal.ts'
+import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
+import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
+
+it('retains header acknowledgment and retries its original failed close without republishing', async () => {
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-header-debt-'))
+  const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  fault.target = join(root, 'p.jsonl'); fault.fail = true; fault.closes = 0; fault.links = 0
+  try {
+    let failure: unknown
+    try { await coordinator.create({ sessionId: 'p' }); expect.fail('expected cleanup debt') } catch (error) { failure = error }
+    expect(JSON.parse((await readFile(fault.target, 'utf8')).split('\n')[0]!).sessionId).toBe('p')
+    const retry = taskDocumentTransitionCleanupFor(coordinator, failure); expect(retry).toBeDefined()
+    const other = createOwnership({ lockRoot: root }, { lock: { enabled: true }, acquireDeadlineMs: 50, acquireRetryMs: 5 })
+    await expect(other.acquireLease('doc:task-p')).rejects.toThrow()
+    fault.fail = false; await retry!.retry(); expect(fault.links).toBe(1); expect(fault.closes).toBe(2)
+    const released = await other.acquireLease('doc:task-p'); await released.release()
+  } finally { fault.fail = false; fault.target = ''; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})

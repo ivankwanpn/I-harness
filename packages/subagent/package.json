@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./internal/task-storage-contract": "./src/task/storage-contract.ts" },
+  "exports": { ".": "./src/index.ts", "./internal/task-storage-contract": "./src/task/storage-contract.ts", "./internal/task-save-owner": "./src/task/save-owner-internal.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@i-harness/code-mode": "workspace:*",

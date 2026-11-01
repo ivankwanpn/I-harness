@@ -1,5 +1,5 @@
 import { committedFactSeqs, type SessionView as Session } from "@i-harness/core-session"
-import { isPolicyRefusal, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry } from "@i-harness/core-tools"
+import { isPolicyRefusal, isNativePlanValidationError, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchRecords } from "./record.ts"
 import type { BatchCancellation } from "./cancel.ts"
@@ -12,11 +12,11 @@ export function prepareCall(tools: ToolRegistry, call: BatchCall, signal: AbortS
 
 export function recordPreparationFailure(index: number, call: BatchCall, error: unknown, records: BatchRecords, cancellation: BatchCancellation): void {
   // Only typed, unmarked name/argument failures are model-repairable.
-  if (isPolicyRefusal(error) || !(error instanceof ToolArgsError || error instanceof ToolNotFoundError)) throw error
+  if (isPolicyRefusal(error) || !(error instanceof ToolArgsError || error instanceof ToolNotFoundError || isNativePlanValidationError(error))) throw error
   cancellation.recordFailure(index, error)
   records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true,
     execution: { outcome: 'failed', dispatch: 'not-dispatched' },
-    output: { error: error.message, code: TOOL_FAILED } })
+    output: isNativePlanValidationError(error) ? error.output : { error: error.message, code: TOOL_FAILED } })
 }
 
 export async function markDispatch(session: Session, index: number, call: BatchCall, records: BatchRecords, opts: ExecuteToolCallsOptions): Promise<void> {

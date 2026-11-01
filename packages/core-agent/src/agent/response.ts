@@ -1,7 +1,9 @@
+import { retainAcceptedClose } from '../tool-batch/live-continuation.ts'
+import type { ExecutionDependencies } from './dependencies.ts'
 import { randomUUID } from 'node:crypto'
 import { modelFailureFacts, type LLMRequest } from '@i-harness/llm-seam'
 import { agentFacts, committedFactSeqs } from './facts.ts'
-import type { AgentDeps, AgentConfig, TurnLifecycle } from './types.ts'
+import type { TurnLifecycle } from './types.ts'
 import type { AgentContext } from './context.ts'
 import type { createModelLoop } from './model-loop.ts'
 import { createStepInput } from './step-input.ts'
@@ -12,10 +14,11 @@ import { acceptCompletedModelStep, reportModelUsage, closeStep, settleFailedTurn
 import { savingFailure } from './saving-failure.ts'
 import { createUnstartedCallSettlement } from './unstarted-call-settlement.ts'
 import { createAcceptanceSettlement } from './acceptance-settlement.ts'
+import { captureLegacyFact } from '@i-harness/core-session'
 
 /** Own one logical response and every prepared physical attempt beneath it.
  * Hooks, inbox claims, accepted tool effects and turn lifetime stay outside. */
-export function createResponseRunner(deps: AgentDeps & AgentConfig, context: AgentContext, modelLoop: ReturnType<typeof createModelLoop>, getSteps: () => number) {
+export function createResponseRunner(deps: ExecutionDependencies, context: AgentContext, modelLoop: ReturnType<typeof createModelLoop>, getSteps: () => number) {
   const prepareRequest = createStepInput(deps, context)
   return async function respond(lifecycle: TurnLifecycle, stepStartSeq: number, abort: AbortSignal | undefined, requestScope: LLMRequest['requestScope']) {
     const recovery = createRecovery(deps, context)
@@ -27,6 +30,7 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
       if (candidate.instructions) acceptance.retainContext(deps.requestContext!.retain(candidate.instructions))
     })
     let responseFailure: unknown, responseFailed = false
+    let instructionBatch: import('@i-harness/core-tools').AcceptedInstructionBatch | undefined
     let success: { step: import('./model-step.ts').ModelStep; accepted: import('./request-context.ts').AcceptedExchange; candidate: import('./request-snapshot.ts').RequestEvidence; issued?: import('@i-harness/llm-seam').ExecutionReceipt & { actionId: string; attemptId: string } } | undefined
     try {
     try {
@@ -120,6 +124,7 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
     await acceptance.close()
     if (lifecycle.deferredFailure === deferredFailure) lifecycle.deferredFailure = undefined
     await deps.generationAction?.close('accepted')
+    retainAcceptedClose(deps.liveInvocation, accepted, deps.generationAction, requestScope)
     await recovery.resolve(prepared.measurement, abort)
     if (!step.batch.length) await unstarted.close()
     success = { ...success!, step, accepted }
@@ -142,13 +147,17 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
       && issued.actionId === step.identity.actionId && issued.attemptId === step.identity.attemptId && JSON.stringify(receipt.identity) === JSON.stringify(issued.identity)
       && receipt.candidateId === issued.candidateId && receipt.sendId === issued.sendId && receipt.semanticId === issued.semanticId
       && receipt.payloadId === issued.payloadId && receipt.payloadKind === issued.payloadKind
-    if (matched && candidate.instructions) deps.requestContext!.succeeded({ ...accepted, candidate, evidence: candidate.instructions, physicalExecutionReceipt: issued! })
-    return { step, acceptedSeq: accepted.acceptedSeq, handoffBatch: unstarted.handoff }
+    if (matched && candidate.instructions) {
+      const captured = captureLegacyFact(step.batch.map(call => ({ callId: call.callId, ...(call.eventSeq !== undefined ? { eventSeq: call.eventSeq } : {}), call: { name: call.name, args: call.args } })))
+      if (captured.kind !== 'captured') throw Object.assign(new Error('Accepted call data unavailable'), { code: 'FACT_CAPTURE_FAILED' })
+      instructionBatch = deps.requestContext!.succeeded({ ...accepted, candidate, evidence: candidate.instructions, physicalExecutionReceipt: issued!, calls: captured.value })
+    }
+    return { step, accepted, acceptedSeq: accepted.acceptedSeq, handoffBatch: unstarted.handoff, instructionBatch }
     } catch (error) {
       // A success can still fail in original finally/Stop/notification. Only
       // this late path needs an additional original unstarted drain.
       if (!responseFailed) {
-        try { await unstarted.close() }
+        try { await unstarted.close(); await instructionBatch?.release() }
         catch (saving) { throw savingFailure(error, [saving], 'Post-completion original settlement failed') }
       }
       throw error

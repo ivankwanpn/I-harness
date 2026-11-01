@@ -4,7 +4,7 @@ import type {
   SandboxProvider, StopReason, TransportExecutionBackend, ExecutionSettlement,
 } from "@i-harness/sandbox"
 import type { ExecutionSupervisor, SupervisedExecution } from "./execution-supervisor.ts"
-import { createExecService } from "./service.ts"
+import { createExecServiceWithReservation } from "./service.ts"
 export { createExecService } from "./service.ts"
 
 export { launchExecution } from "./execution-admission.ts"
@@ -51,18 +51,19 @@ export interface ExecStreamRunOptions {
   stream: { maxBytes: number; onStdout(chunk: Buffer): void | "stop" }
   backgroundAfterMs?: never
   promotionWake?: never
+  backgroundEventWake?: never
 }
 export interface ExecSpillOptions { maxOutputBytes?: number; maxSpillBytes?: number; spillRoot?: string }
 interface ExecPromotionWake {
   pending(): boolean
   subscribe(listener: () => void): () => void
 }
-export interface ExecRunOptions { backgroundAfterMs?: number; promotionWake?: ExecPromotionWake }
+export interface ExecRunOptions { backgroundAfterMs?: number; promotionWake?: ExecPromotionWake; backgroundEventWake?: ExecPromotionWake }
 /** Original prelaunch provenance, never an authorization capability. */
 export type NativeJobIdentity = Readonly<{ version: 1; instanceId: string; jobId: string; ownerSessionId: string; sourceId: string }>
 export interface BackgroundRun { jobId: string; nativeJob?: NativeJobIdentity }
 export interface NativeBackgroundRun extends BackgroundRun { nativeJob: NativeJobIdentity }
-export interface PromotedRun extends BackgroundRun { promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" }
+export interface PromotedRun extends BackgroundRun { promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" | "background-event" }
 export interface NativePromotedRun extends PromotedRun { nativeJob: NativeJobIdentity }
 /** Running also covers a retained handle whose cleanup is incomplete; inspect settlement. */
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"
@@ -132,6 +133,7 @@ export interface ExecService {
   getOutput(jobId: string): BackgroundJobView
   readJobOutputFrames?(jobId: string, query: import('./capture/frames.ts').JobOutputFrameQuery): Promise<import('./capture/frames.ts').ExecFrameRead>
   observeJobOutput?(jobId: string, options?: import('./capture/frames.ts').JobOutputSelectors): Promise<JobOutputObservation>
+  subscribeJobs?(listener: () => void): () => void
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
   /** Passive metadata only: no observer registration or storage settlement. */
@@ -167,7 +169,12 @@ export interface NativeExecService extends ExecService {
 }
 
 export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): NativeExecService {
-  const service = createExecService(deps)
-  ctx.services.register("exec/service", service)
-  return service
+  return registerExecWithReservation(ctx, deps).service
+}
+
+/** Trusted construction retains the port paired with the registered service. */
+export function registerExecWithReservation(ctx: PluginContext, deps?: ExecServiceOptions) {
+  const pair = createExecServiceWithReservation(deps)
+  ctx.services.register("exec/service", pair.service)
+  return pair
 }

@@ -22,7 +22,7 @@ import { createResidentActivation, type ResidentActivationController } from './l
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { subscribe, validateImages, contextStateFromBudget, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
+import { subscribe, validateImages, contextStateFromBudget, isBoundDeliveryInput, isDeliveryExecutable, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import { receivedInputsFor } from './lifecycle/received-inputs.ts'
 import { createDeliveryDrain, isRetryableDeliveryError } from './service/delivery-drain.ts'
@@ -180,6 +180,9 @@ interface SessionSubmitOptions {
   prepareInput?: (assembly: SessionAssembly, prompt: string) => Promise<string>
 }
 export interface SessionService {
+  instructionState?(sessionId: string, childSessionId?: string): import('./context/instructions/diagnostics.ts').InstructionReport
+  refreshInstructions?(sessionId: string, childSessionId?: string, signal?: AbortSignal): Promise<import('./context/instructions/diagnostics.ts').InstructionReport>
+  onInstructionsChanged?(sessionId: string, childSessionId: string | undefined, listener: () => void): () => void
   onExecutionSurfaceLifecycle?(listener: (event: { sessionId: string; assembly: SessionAssembly; kind: "published" | "retiring" | "removed" }) => void, options?: { includeExisting?: boolean }): () => void
   compact(sessionId: string, instructions?: string, signal?: AbortSignal): Promise<import('@i-harness/compaction').CompactionResult>
   /** Update plugin-owned capabilities without replacing sessions or agents. */
@@ -415,6 +418,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (input.intent !== "system" || !input.inputId.startsWith("parent-notify-")) continue
       const job = stopNotification(id, assembly!, input.inputId)
       attempts?.set(notificationStops.get(assembly!)!.stops.get(input.inputId)!, job)
+    }
+  }
+  function execDeliveryFor(id:string, owner:()=>SessionAssembly|undefined): NonNullable<AssemblyOptions['prepareExecDelivery']> {
+    return async input=>{
+      const assembly=owner()
+      const current=()=>{try{opts.sessionOperation?.assertOpen(id)}catch{return false};return !!assembly&&owner()===assembly&&assemblies.get(id)===assembly&&!closed&&!closing.has(id)}
+      if(!current()||input.sessionId!==id||input.view!==assembly!.factOwner.view)throw new ParentNotificationStoppedError()
+      opts.sessionOperation?.assertOpen(id)
+      const result=await receivedInputsFor(assembly!.factOwner,id).delivery.prepareExecLaunch(input)
+      opts.sessionOperation?.assertOpen(id)
+      if(!current())throw new ParentNotificationStoppedError()
+      return result.kind==='bound'?{...result,isCurrent:()=>current()&&result.isCurrent()}:result
     }
   }
   function parentNotifyFor(id: string, owner: () => SessionAssembly | undefined): NonNullable<AssemblyOptions["parentNotify"]> {
@@ -729,6 +744,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
             webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
+            prepareExecDelivery: execDeliveryFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
             model: binding.model,
@@ -774,6 +790,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
             webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
+            prepareExecDelivery: execDeliveryFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
             ...(model !== undefined ? { model } : {}),
@@ -849,6 +866,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             const failures: unknown[] = []
             try { await published.drainParentNotifications?.(true) } catch (error) { failures.push(error) }
             try { await delivery.settle() } catch (error) { failures.push(error) }
+            try { await delivery.reconcileExecCandidates() } catch (error) { failures.push(error) }
             if (failures.length) {
               for (const error of failures) d.warn(`[i-harness] original delivery settlement: ${String(error)}`)
               // Select a nominal actual-owner classification directly, never
@@ -856,7 +874,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
               throw failures.find(isRetryableDeliveryError) ?? failures[0]
             }
           },
-          pending: () => published.inbox.pending().filter(input => input.provenance?.producer === 'session.delivery.subagent').map(input => input.inputId),
+          pending: () => published.inbox.pending().filter(input => ['session.delivery.subagent', 'session.delivery.exec'].includes(input.provenance?.producer ?? '')
+            && isBoundDeliveryInput(published.session, input.inputId) && isDeliveryExecutable(published.session, input.inputId)).map(input => input.inputId),
           schedule(inputId, settled) {
             if (assemblies.get(sessionId) !== published || closed || closing.has(sessionId) || !published.inbox.isPending(inputId)) return false
             try { published.managedDocument?.assertReady() } catch { return false }
@@ -876,7 +895,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (event.type === "agent/input/admitted" || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") {
             notifyExecutionState(sessionId)
           }
-          if (event.type === 'agent/delivery-received' || event.type === 'agent/delivery-generation' || event.type === 'agent/delivery-source' || event.type === 'subagent/end' || event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') deliveryDrain.signal()
+          if (event.type === 'agent/delivery-received' || event.type === 'agent/delivery-generation' || event.type === 'agent/delivery-source' || event.type === 'subagent/end' || event.type === 'exec/end' || event.type === 'agent/delivery-handoff' || event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') deliveryDrain.signal()
         }))
         // Hooks fire ONCE per assembly, after registration, inside the shared
         // pending — concurrent racers never double-attach (ApprovalMuxBridge
@@ -1391,6 +1410,26 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     writableSessionFor,
     receivedInputFor,
     liveAssembly,
+    instructionState(sessionId, childSessionId) { return liveAssembly(sessionId)?.instructionDiagnostics?.(childSessionId)?.read() ?? { state: 'not-published' } },
+    onInstructionsChanged(sessionId, childSessionId, listener) {
+      let active = true, assembly: SessionAssembly | undefined, owner: ReturnType<NonNullable<SessionAssembly['instructionDiagnostics']>>, offOwner: (() => void) | undefined, offChildren: (() => void) | undefined
+      const emit = () => { if (active) listener() }
+      const bind = () => {
+        const next = liveAssembly(sessionId), nextOwner = next?.instructionDiagnostics?.(childSessionId)
+        if (assembly !== next) { offChildren?.(); offChildren = next?.onSubagentsChanged?.(() => { bind(); emit() }); assembly = next }
+        if (owner !== nextOwner) { offOwner?.(); owner = nextOwner; offOwner = owner?.subscribe(emit) }
+      }
+      const lifecycle = (event: SurfaceLifecycle) => { if (event.sessionId === sessionId) { bind(); emit() } }
+      surfaceListeners.add(lifecycle); bind()
+      return () => { if (!active) return; active = false; surfaceListeners.delete(lifecycle); offOwner?.(); offChildren?.() }
+    },
+    async refreshInstructions(sessionId, childSessionId, signal) {
+      const assembly = liveAssembly(sessionId), owner = assembly?.instructionDiagnostics?.(childSessionId)
+      if (!owner) return { state: 'not-published' }
+      const report = await owner.refresh(signal)
+      if (liveAssembly(sessionId) !== assembly || assembly?.instructionDiagnostics?.(childSessionId) !== owner) return { state: 'revoked' }
+      return report
+    },
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState,
     onExecutionState: listener => {

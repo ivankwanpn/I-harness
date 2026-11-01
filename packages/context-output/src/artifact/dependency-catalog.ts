@@ -1,3 +1,4 @@
+import type { ArtifactQualificationIO } from './qualification-io.ts'
 import { validManagedArtifactRef, type ManagedArtifactRef, type ResultDependency } from '@i-harness/core-session'
 import { isMetadataData } from './metadata-data.ts'
 import { identity } from '../config.ts'
@@ -50,7 +51,7 @@ function parseDescriptor(text: string): unknown {
  * sourceId hash set grows with count. The callback is metadata traversal, not a
  * commit hook: callers must await successful EOF before target mutations. */
 export async function readDependencyCatalog(root: string, directory: string, ref: ManagedArtifactRef,
-  visit: (entry: ResultDependency, ordinal: number) => void | Promise<void>, expectedCount?: number): Promise<number> {
+  visit: (entry: ResultDependency, ordinal: number) => void | Promise<void>, expectedCount?: number, io?: ArtifactQualificationIO): Promise<number> {
   if (!validManagedArtifactRef(ref) || ref.codec !== 'json-utf8-v1' || expectedCount !== undefined && (!Number.isSafeInteger(expectedCount) || expectedCount < 0)) throw new Error('Dependency catalog unavailable')
   const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
   let offset = 0, page = '', cursor = 0, ended = false
@@ -58,7 +59,7 @@ export async function readDependencyCatalog(root: string, directory: string, ref
     while (cursor === page.length && !ended) {
       if (offset === ref.encodedBytes) { page = decoder.decode(); cursor = 0; ended = true; break }
       const length = Math.min(32768, ref.encodedBytes - offset)
-      page = decoder.decode(await readVerifiedArtifactBytes(root, directory, ref, offset, length), { stream: true }); cursor = 0; offset += length
+      page = decoder.decode(await readVerifiedArtifactBytes(root, directory, ref, offset, length, io), { stream: true }); cursor = 0; offset += length
     }
     return cursor === page.length ? '' : String.fromCodePoint(page.codePointAt(cursor)!)
   }

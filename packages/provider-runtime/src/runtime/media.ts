@@ -9,7 +9,7 @@ import { isGenerationError } from '@i-harness/llm-seam'
 import { describeSelection } from '../selection/metadata.ts'
 
 export function createMediaRuntime(
-  options: Pick<CreateProviderRuntimeOptions, "settings">,
+  options: Pick<CreateProviderRuntimeOptions, "settings"|'passiveUsageWorkspace'>,
   auth: ProviderAuthResolver,
   provider: (id: string) => ProviderView | undefined,
 ): Pick<ProviderRuntime, "setVideoAudioModel" | "analyzeVideoAudio"> {
@@ -42,7 +42,7 @@ export function createMediaRuntime(
         input.signal?.throwIfAborted()
         if (!key) return { status: "unconfigured", reason: "Configure an API key for the selected video audio provider." }
         const described = describeSelection(options.settings, provider, { sessionSelection: { provider: selection.provider, model: selection.model } })
-        return await requestVideoAudio(input, { ...selection, baseURL: view.baseURL, apiKey: key, headers: view.headers, budgetBinding: described?.budgetBinding })
+        return await requestVideoAudio(input, { ...selection, baseURL: view.baseURL, apiKey: key, headers: view.headers, budgetBinding: described?.budgetBinding,passiveUsageWorkspace:options.passiveUsageWorkspace })
       } catch (error) {
         if (isGenerationError(error)) throw error
         input.signal?.throwIfAborted()

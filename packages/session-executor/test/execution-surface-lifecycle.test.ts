@@ -162,3 +162,20 @@ it('never delivers a stale published event after an earlier listener retires tha
     expect(assembly.executionSurfaceState?.()).toBe('retired')
   } finally { await owner.close() }
 })
+
+it('forwards creation of a workflow job when the collection was empty', async () => {
+  const owner = service(), assembly = await owner.assemblyFor('workflow-observer')
+  const changes: number[] = []
+  const off = assembly.onExecutionSurfaceChanged!(() => changes.push(1))
+  const { createWorkflowExecutor } = await import('@i-harness/workflow')
+  const gate = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }>()
+  const executor = createWorkflowExecutor({ exec: { run: () => gate.promise } as never })
+  try {
+    executor.runWorkflow({ name: 'test', description: 'test', steps: [{ name: 'step', command: 'test' }] }, {}, 'workflow-observer')
+    expect(changes.length).toBeGreaterThan(0)
+    assembly.revokeNewWork(); const retired = changes.length
+    gate.resolve({ stdout: '', stderr: '', exitCode: 0, timedOut: false })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(changes.length).toBe(retired)
+  } finally { gate.resolve({ stdout: '', stderr: '', exitCode: 0, timedOut: false }); off(); await owner.close() }
+})

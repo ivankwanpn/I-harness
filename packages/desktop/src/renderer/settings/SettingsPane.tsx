@@ -11,6 +11,7 @@ import { NativeSettings } from "./NativeSettings.tsx"
 import { AutoTitleSettings } from "./AutoTitleSettings.tsx"
 import { CodeModeSettings } from "./CodeModeSettings.tsx"
 import { ContextSubsystemSettings } from "./ContextSubsystemSettings.tsx"
+import { InstructionSettings } from './InstructionSettings.tsx'
 import { GlobalProviderDirectory } from "./GlobalProviderDirectory.tsx"
 import { CodingPlans } from "./CodingPlans.tsx"
 import { UsageStatistics, type UsageStatisticsRequest } from "./UsageStatistics.tsx"
@@ -131,6 +132,7 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
     if (tab === "coding-plans" && bridge) return <CodingPlans request={codingPlansRequest} active={pageActive} onManageModels={() => select("models")} />
     if (tab === "usage" && bridge) return <UsageStatistics request={usageRequest} active={pageActive} projectLabels={usageLabels.projects} workspaceLabels={usageLabels.workspaces} />
     if (tab === "execution" && workspace && bridge) return <>
+      {capabilities['desktop-instructions']?.includes('1') ? <InstructionSettings key={`instructions:${workspace.id}`} bridge={bridge} workspaceId={workspace.id} /> : null}
       {capabilities["desktop-context-subsystems"]?.includes("1") ? <ContextSubsystemSettings key={`context:${workspace.id}`} bridge={bridge} workspaceId={workspace.id} active={pageActive} /> : null}
       {capabilities["desktop-agent-settings"]?.includes("1") ? <AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} onSandboxChange={onSandboxChange} onExecutionBindingSaved={() => setExecutionBindingRevisions(previous => ({ ...previous, [workspace.id]: (previous[workspace.id] ?? 0) + 1 }))} /> : null}
       {capabilities["desktop-agent-shell"]?.includes("1") ? <AgentShellSettings key={`shell:${workspace.id}`} bridge={bridge} workspaceId={workspace.id} refreshRevision={executionBindingRevisions[workspace.id] ?? 0} /> : null}

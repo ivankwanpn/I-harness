@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest"
 import { createSession, Inbox } from "@i-harness/core-session"
-import { userSteerForTool, waitForObservation } from "../src/observation.ts"
+import { backgroundEventForTool, userSteerForTool, waitForObservation } from "../src/observation.ts"
 
 afterEach(() => vi.useRealTimers())
 function source() {
@@ -195,4 +195,20 @@ it("rejects setup failure after a synchronous callback and cleans the previously
   })
   await expect(waiting).rejects.toBe(setupError)
   expect(owner.listeners.size).toBe(0)
+})
+
+it("prioritizes readiness and human steer over a background event", async () => {
+  const changes = source()
+  const pending = { ...source(), pending: () => true }
+  expect(await waitForObservation({ ready: () => true, changes, userSteer: pending, backgroundEvent: pending })).toBe("ready")
+  expect(await waitForObservation({ ready: () => false, changes, userSteer: pending, backgroundEvent: pending })).toBe("user-steer")
+  expect(await waitForObservation({ ready: () => false, changes, backgroundEvent: pending })).toBe("background-event")
+})
+
+it("does not treat unbound system input as a background delivery", () => {
+  const session = createSession(), inbox = new Inbox(session)
+  inbox.admit({ inputId: "forged", text: "finished", intent: "system", delivery: "steer" })
+  expect(backgroundEventForTool({ session })?.pending()).toBe(false)
+  expect(backgroundEventForTool({ session, resultConsumer: "code" })).toBeUndefined()
+  expect(backgroundEventForTool({})).toBeUndefined()
 })

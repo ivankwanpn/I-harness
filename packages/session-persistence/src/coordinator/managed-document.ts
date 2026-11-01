@@ -1,3 +1,4 @@
+import type { createColdExecutionWrites } from './cold-execution-writes.ts';
 import { createDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
 import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
 import type { BootstrapDocumentControl } from './bootstrap-types.ts';
@@ -46,7 +47,7 @@ type Pending = {
     prefix: JournalPrefix;
     entries: Entry[];
     events: ReturnType<typeof resolveFactGroup>;
-    install(): void;
+    install(receipt: FactReceipt): void;
     receipt?: FactReceipt;
     issued: boolean;
     cleanupReported?: boolean;
@@ -61,7 +62,17 @@ export interface ManagedReadyObservation {
 export type SelectedSourceRead = ManagedReadyObservation & { readonly header: SessionView['header']; unsubscribe():void };
 type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'; from: number; to: number; events: SessionView['events'] };
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
-const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
+export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
+    return executionStatuses.get(document)?.() ?? 'unavailable';
+}
+const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; invalidateMetadata(revision:object):void; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+type RestoredStage = (events: readonly import('@i-harness/core-session').SessionEventView[], readCurrentEvent:(index:number)=>import('@i-harness/core-session').SessionEventView|undefined)=>{install(batch:ReturnType<typeof encodeFactBatch>,receipt:FactReceipt):void}
+const restoredStages = new WeakMap<ManagedDocument, RestoredStage>()
+/** Only the actual managed constructor/ownership association may bind its read fold. */
+export function bindManagedRestoredStage(document:ManagedDocument,ownership:Ownership,stage:RestoredStage){
+  const original=readyOwners.get(document);if(!original||original.ownership!==ownership||restoredStages.has(document))throw new FactRecoveryRequiredError();restoredStages.set(document,stage)
+}
 export function captureManagedProcessRead(document: ManagedDocument, ownership: Ownership, documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture {
     const original = readyOwners.get(document);
     if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
@@ -83,9 +94,14 @@ export function retainSelectedSourceRead(document:ManagedDocument,ownership:Owne
     if(!original||original.ownership!==ownership||typeof onRevoke!=='function')throw new FactRecoveryRequiredError();
     return original.retainSelected(onRevoke);
 }
+/** Original owner invalidation; no caller can install a replacement witness. */
+export function invalidateManagedMetadataWitness(document:ManagedDocument,ownership:Ownership,revision:object) {
+ const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError()
+ original.invalidateMetadata(revision)
+}
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
-export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}): ManagedDocument & {
+export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>): ManagedDocument & {
     assertObservable(): void;
 } {
     const state = (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }), incarnation = randomUUID();
@@ -108,6 +124,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const fenceFault = () => { faultWitness ??= processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); };
     const releaseRecoveryWitness = (source: object) => { const token = recoveryWitnesses.get(source); if (token) { recoveryWitnesses.delete(source); token.end('settled'); } };
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
+    let metadataRevision:object={},metadataStale=false;
     const selectedListeners=new Set<()=>void>();
     let selectedAdmissions=0;
     const invalidateSelected=()=>{for(const listener of [...selectedListeners]){selectedListeners.delete(listener);try{listener()}catch{}}};
@@ -117,6 +134,22 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         if (closed)
             throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
     });
+    const executionStatus = (): 'available' | 'unavailable' | 'retired' => {
+        if (closing || closed) return 'retired';
+        if (!bootstrapReady || quarantined || sourceFault || recoveryHolds.size) return 'unavailable';
+        try { held.assertHeld(); return 'available'; } catch { return 'unavailable'; }
+    };
+    let publishedStatus = executionStatus();
+    const publishExecutionStatus = () => { const next = executionStatus(); if (next !== publishedStatus) { publishedStatus = next; executionChanges?.invalidated(id); } };
+    type SelectedScope=Readonly<{kind:'selected-lane'}>
+    const selectedJournal=(backend as PersistenceBackend & {selectedJournal?:{
+      resolveCheckedBirth(id:string,owner:typeof held):Promise<unknown>;bindCheckedBirthLane(id:string,owner:typeof held,birth:unknown):SelectedScope;
+      readJournalPrefix(id:string,owner:typeof held,scope:SelectedScope):Promise<JournalPrefix>;
+      appendOwnedBatch(id:string,owner:import('./fact-types.ts').IssuingFactOwner,scope:SelectedScope,prefix:JournalPrefix,batch:ReturnType<typeof encodeFactBatch>):Promise<import('./fact-types.ts').BackendFactOutcome>;
+      reconcileOwnedBatch(id:string,owner:typeof held,scope:SelectedScope,prefix:JournalPrefix,batch:ReturnType<typeof encodeFactBatch>):Promise<import('./fact-types.ts').BackendFactOutcome>;
+    }}).selectedJournal
+    let selectedLane:SelectedScope|undefined,selectedIOStarted=false,selectedBindFlight:Promise<void>|undefined
+    const settleSelected=async()=>{if(bootstrap?.selected&&selectedIOStarted){if(!backend.settleBootstrapCaptureIO)throw new FactRecoveryRequiredError();await backend.settleBootstrapCaptureIO(id,held);selectedIOStarted=false}}
     const assertAuthorized = (authorization: Authorization) => {
         held.assertHeld();
         try { authorization.assertSource?.(); }
@@ -136,6 +169,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const failQueued = () => {
         fenceFault();
         quarantined = true;
+        publishExecutionStatus();
         invalidateSelected();
         capacity.stop('FACT_RECOVERY_REQUIRED');
         for (const entry of queue.splice(0)) {
@@ -147,6 +181,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         assertTaskOutside();
         fenceFault();
         sourceFault = true;
+        publishExecutionStatus();
         invalidateSelected();
         capacity.blockOptional('FACT_RECOVERY_REQUIRED');
         for (let index = queue.length - 1; index >= 0; index--) {
@@ -170,7 +205,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             const receipt = outcome.receipt;
             current.receipt = receipt;
             try {
-                current.install();
+                current.install(receipt);
                 current.installationFailure = undefined;
             }
             catch (error) {
@@ -201,6 +236,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             }
         }
         return { results: current.entries.map(() => outcome), observe: false };
+    };
+    const observeInstalled = (events: Pending['events']) => {
+        state.observe(events, report);
+        if (events.some(event => ['code/cell', 'code/output', 'code/call', 'code/dispatch', 'code/result'].includes(event.type))) executionChanges?.committed(id);
     };
     const reportCleanup = () => {
         try {
@@ -241,18 +280,22 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     deliveryControl.assert(events);
                     const staged = state.stage(events);
                     preflightBatchShape(formatVersion, staged.events);
+                    const restored = restoredStages.get(document)?.(staged.events, position => state.view.events[position]);
                     const batch = encodeFactBatch(entries[0]!.bootstrap?.batchId ?? randomUUID(), prefix.prefixDigest, staged.events);
-                    current = { batch, prefix, entries, events: staged.events, install: staged.install, issued: false };
+                    current = { batch, prefix, entries, events: staged.events, install(receipt) { staged.install(); restored?.install(batch,receipt) }, issued: false };
                     pending = current;
                     const operation = current;
-                    const outcome = await backend.appendOwnedBatch!(id, issuingFactOwner(held, () => {
+                    const issuer = issuingFactOwner(held, () => {
                         if (operation.issued)
                             throw new FactRecoveryRequiredError();
                         for (const entry of entries)
                             assertAuthorized(entry.authorization);
                         deliveryControl.assert(operation.events);
                         operation.issued = true;
-                    }), prefix, batch);
+                    });
+                    await settleSelected();
+                    if(bootstrap?.selected)selectedIOStarted=true;
+                    const outcome = bootstrap?.selected ? await selectedJournal!.appendOwnedBatch(id,issuer,selectedLane!,prefix,batch) : await backend.appendOwnedBatch!(id,issuer,prefix,batch);
                     completed = finish(current, outcome);
                 }
                 catch (error) {
@@ -274,7 +317,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 for (const [index, entry] of current.entries.entries())
                     entry.resolve(completed.results[index]!);
                 if (completed.observe)
-                    state.observe(current.events, report);
+                    observeInstalled(current.events);
                 if (completed.cleanupDiagnostic) reportCleanup();
             }
         }
@@ -353,6 +396,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             let outcome: 'settled' | 'unknown' = 'unknown';
             try {
                 closing = true;
+                publishExecutionStatus();
                 invalidateSelected();
                 deliveryControl.retire();
                 capacity.revokeNewWork();
@@ -442,14 +486,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                             assertTaskOutside();
                             if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
                             if (!recoveryWitnesses.has(source)) { const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); if (token) recoveryWitnesses.set(source, token); }
-                            recoveryHolds.add(source); invalidateSelected(); capacity.holdOptional(source);
+                            recoveryHolds.add(source); publishExecutionStatus(); invalidateSelected(); capacity.holdOptional(source);
                             for (let index = queue.length - 1; index >= 0; index--) {
                                 const entry = queue[index]!; if (entry.authorization.required) continue;
                                 queue.splice(index, 1); entry.ticket.release(); entry.resolve({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' });
                             }
                         },
-                        releaseRecovery() { assertTaskOutside(); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) },
-                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) }, reconcilePending, checkpointOwner);
+                        releaseRecovery() { assertTaskOutside(); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() },
+                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() }, reconcilePending, checkpointOwner);
                     required.source = source;
                     bindFactSettlementSource(state.view, document, source, id);
                     sourceDrains.set(source, { action, finished: () => finished, closeRequested: false });
@@ -481,8 +525,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 if (!current || !sameBatchKey(key, current.batch.key))
                     return;
                 held.assertHeld();
+                await settleSelected();
+                if(bootstrap?.selected&&!current.receipt)selectedIOStarted=true;
                 const outcome = current.receipt ? { kind: 'committed' as const, receipt: current.receipt }
-                    : await backend.reconcileOwnedBatch!(id, held, current.prefix, current.batch);
+                    : bootstrap?.selected ? await selectedJournal!.reconcileOwnedBatch(id,held,selectedLane!,current.prefix,current.batch) : await backend.reconcileOwnedBatch!(id, held, current.prefix, current.batch);
                 completed = finish(current, outcome);
             });
             if (!current || !completed) {
@@ -490,7 +536,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
             }
             if (completed.observe)
-                state.observe(current.events, report);
+                observeInstalled(current.events);
             if (completed.cleanupDiagnostic) reportCleanup();
             if (!pending) {
                 quarantined = false;
@@ -508,6 +554,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 // One original frame owns one reconciliation witness, including
                 // concurrent callers and repeated uncertain attempts.
                 if (!witness.users && (!original || pending !== original)) witness.token?.end(outcome);
+                publishExecutionStatus();
             }
         },
         async drain() {
@@ -556,15 +603,30 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             await pump;
             if (pending || quarantined || sourceFault || recoveryHolds.size || drains.some(result => result.status === 'rejected'))
                 throw new FactRecoveryRequiredError();
+            if(selectedBindFlight)await selectedBindFlight.catch(()=>{});
+            await settleSelected();
             closed = true;
         },
     };
-    bootstrap?.bind({ held, ready() { bootstrapReady = true; },
+    bootstrap?.bind({ held, bindSelected() {
+        if(!bootstrap.selected||!selectedJournal||!backend.settleBootstrapCaptureIO||closed||closing)return Promise.reject(new FactRecoveryRequiredError());
+        if(selectedLane)return Promise.resolve();if(selectedBindFlight)return selectedBindFlight;
+        const flight=(async()=>{
+            await settleSelected();
+            try {
+                selectedIOStarted=true;const birth=await selectedJournal.resolveCheckedBirth(id,held);if(!birth||closing||closed)throw new FactRecoveryRequiredError();
+                const lane=selectedJournal.bindCheckedBirthLane(id,held,birth),actual=await selectedJournal.readJournalPrefix(id,held,lane);
+                if(JSON.stringify(actual)!==JSON.stringify(prefix)||closing||closed)throw new FactRecoveryRequiredError();
+                await settleSelected();if(closing||closed)throw new FactRecoveryRequiredError();selectedLane=lane;
+            } catch(error) { try{await settleSelected()}catch(cleanup){throw new AggregateError([error,cleanup],'Selected document acquisition cleanup unresolved')}throw error; }
+        })();
+        selectedBindFlight=flight;void flight.finally(()=>{if(selectedBindFlight===flight)selectedBindFlight=undefined}).catch(()=>{});return flight;
+    }, prepareReady(){if(closed||closing||quarantined||bootstrap.selected&&!selectedLane)throw new FactRecoveryRequiredError();return ()=>{bootstrapReady=true;queueMicrotask(publishExecutionStatus)}}, ready() { if(bootstrap.selected&&!selectedLane)throw new FactRecoveryRequiredError();bootstrapReady = true; publishExecutionStatus(); },
         async admit(phase, events, guards) {
             assertTaskOutside();
             const assertSource = () => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }); guards.assertCurrent(); };
             const authorization: Authorization = { action: { stopped: false, signal: guards.signal }, required: false, source: bootstrap, assertSource };
-            if (pending || quarantined || closed || closing) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
+            if (bootstrap.selected || pending || quarantined || closed || closing) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
             selectedAdmissions++;
             try {
             invalidateSelected();
@@ -575,9 +637,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             } finally { selectedAdmissions--; }
         }
     });
+    executionStatuses.set(document, executionStatus);
     state.bindOwner(document);
     const originalReady = document.assertReady, originalView = state.view;
-    readyOwners.set(document, { ownership, captureProcess(documentKeys, checkEntry) {
+    readyOwners.set(document, { ownership, invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected()}, captureProcess(documentKeys, checkEntry) {
         if (!processLatches) throw new FactRecoveryRequiredError();
         const latch = processLatches.capture({ sessionId: id, documentKeys, mode: 'managed', managedOwner: owner });
         const view = state.view, header = view.header, events = view.events;
@@ -586,7 +649,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             try {
                 const viewProperty = Object.getOwnPropertyDescriptor(document, 'view');
                 const readyProperty = Object.getOwnPropertyDescriptor(document, 'assertReady');
-                if (failed || retired || !bootstrapReady || pending || queue.length || quarantined || sourceFault || recoveryHolds.size || closing || closed
+                if (metadataStale || failed || retired || !bootstrapReady || pending || queue.length || quarantined || sourceFault || recoveryHolds.size || closing || closed
                     || formatVersion !== CURRENT_FORMAT_VERSION || header?.semanticSeed !== undefined
                     || (header?.seedLength !== undefined && header.seedLength !== 0)
                     || !viewProperty || !('value' in viewProperty) || viewProperty.value !== view
@@ -620,16 +683,20 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         });
         return result;
     }, captureParent() {
+        const revision = metadataRevision;
         const check = () => {
             const ready = Object.getOwnPropertyDescriptor(document, 'assertReady');
             const view = Object.getOwnPropertyDescriptor(document, 'view');
-            if (!ready || !('value' in ready) || ready.value !== originalReady || !view || !('value' in view) || view.value !== originalView || state.view !== originalView) throw new FactRecoveryRequiredError();
+            if (metadataStale || revision!==metadataRevision || !ready || !('value' in ready) || ready.value !== originalReady || !view || !('value' in view) || view.value !== originalView || state.view !== originalView) throw new FactRecoveryRequiredError();
             Reflect.apply(originalReady, document, []);
         };
         check();
         const result = Object.freeze({ view: originalView, assertCurrent() {
             if (this !== result) throw new TypeError('Invalid parent readiness receiver');
             check();
+        }, assertTask14Ready() {
+            if (this !== result) throw new TypeError('Invalid parent readiness receiver');
+            check(); if (formatVersion !== 14) throw new FactRecoveryRequiredError();
         } });
         return result;
     }, retainSelected(onRevoke) {
@@ -639,9 +706,9 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         const listener=()=>{if(revoked)return;revoked=true;onRevoke()};selectedListeners.add(listener);
         return Object.freeze({...original,header,assertCurrent(){if(revoked)throw new FactRecoveryRequiredError();original.assertCurrent()},unsubscribe(){revoked=true;selectedListeners.delete(listener)}});
     }, capture() {
-        const view = state.view, events = view.events, eventCount = events.length, originalPrefix = prefix, header = view.header;
+        const view = state.view, events = view.events, eventCount = events.length, originalPrefix = prefix, header = view.header, revision=metadataRevision;
         const assertCurrent = () => {
-            if (!bootstrapReady || pending || quarantined || document.view !== view || state.view !== view || view.events !== events || events.length !== eventCount
+            if (metadataStale || revision!==metadataRevision || !bootstrapReady || pending || quarantined || document.view !== view || state.view !== view || view.events !== events || events.length !== eventCount
                 || view.header !== header || prefix !== originalPrefix || prefix.eventCount !== eventCount) throw new FactRecoveryRequiredError();
             assertAuthorized(rootAuthorization);
         };

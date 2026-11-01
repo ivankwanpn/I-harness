@@ -303,18 +303,12 @@ export class AclSandbox {
         this.mode, owned,
       )
       this.token = restrictedToken
-      // The restricted token's default DACL still names only the user's
-      // ambient SIDs — none of the restricting SIDs. Every NEW object the
-      // confined process creates (anonymous stdio pipes, sync objects) takes
-      // its DACL from that default, so the write pass-2 check would deny
-      // pipe creation (ERROR_ACCESS_DENIED; Node EPERM) and break every
-      // piped-stdio grandchild spawn. Merge a full-access ACE for a
-      // restricting SID (the PRIVATE temp SID when present, otherwise the
-      // workspace SID, or Everyone under read-only): new-object creation
-      // stays gated by the parent object's DACL, while the new object's own
-      // DACL passes pass-2. Choosing the temp SID prevents default-DACL
-      // objects in one session's temp tree from acquiring the shared
-      // workspace capability.
+      // Include a restricting SID in the default DACL for objects that use
+      // the token's default security descriptor. Prefer the private temp SID
+      // over the shared workspace capability. Creation still depends on the
+      // parent object's DACL. An API may supply a different descriptor:
+      // Node/libuv named stdio pipes can still deny a restricted grandchild's
+      // write access, so this grant alone does not establish pipe support.
       setTokenDefaultDaclGrant(api, restrictedToken, this.tempWriteSidPtr ?? this.writeSidPtr ?? worldSid, owned)
       owned.release(currentToken, 'handle')
       this.ready = true

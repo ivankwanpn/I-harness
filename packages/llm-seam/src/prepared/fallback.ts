@@ -6,12 +6,14 @@ import { freezePreparedFacts, preparedControls, snapshotModelData, validateOutpu
 import { createPreparedValidation } from './validation.ts'
 import { readPreparedTextOutput } from './text-output.ts'
 import { NO_GENERATION_RETRY, generationError } from './generation.ts'
+import { associateOriginalPassivePrepared } from './passive-observation.ts'
 /** Compatible custom clients expose neutral-only coverage and unknown cap
  * support: a stream-only client cannot certify its protocol or applied cap. */
 export async function prepareModelRequest(client: ModelClient, request: LLMRequest): Promise<PreparedModelRequest> {
   request.signal?.throwIfAborted()
-  if (client.prepare)
-    return client.prepare(request)
+  if (client.prepare) {
+    const value=await client.prepare(request);associateOriginalPassivePrepared(client,value);return value
+  }
   const captured = snapshotModelData(request), counter = new ProjectionCounter()
   counter.text("system", captured.systemPrompt)
   counter.structured("toolSchemas", captured.tools)

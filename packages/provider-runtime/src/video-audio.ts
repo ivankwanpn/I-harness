@@ -3,6 +3,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { isGenerationControl, isGenerationError, generationError, type GenerationReservation, type MediaGenerationAction } from '@i-harness/llm-seam'
 import { assessCapacity } from '@i-harness/context-engine'
+import { createOriginalPassiveExecution } from '@i-harness/llm-seam/internal/passive-observation'
 export interface VideoAudioInput {
   generation?: MediaGenerationAction
   wav: Uint8Array
@@ -14,7 +15,7 @@ export interface VideoAudioInput {
 export type VideoAudioResult = { status: "analyzed"; analysis: string; provider: string; model: string }
   | { status: "unconfigured" | "unsupported" | "failed"; reason: string }
 
-export async function requestVideoAudio(input: VideoAudioInput, route: { provider: string; model: string; baseURL: string; apiKey: string; headers?: Record<string, string>; budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding }): Promise<VideoAudioResult> {
+export async function requestVideoAudio(input: VideoAudioInput, route: { provider: string; model: string; baseURL: string; apiKey: string; headers?: Record<string, string>; budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding;passiveUsageWorkspace?:string }): Promise<VideoAudioResult> {
   input.signal?.throwIfAborted()
   if (input.wav.byteLength < 44 || input.wav.byteLength > 24 * 1024 * 1024 || !Number.isFinite(input.startSeconds) || input.startSeconds < 0 || !Number.isFinite(input.durationSeconds) || input.durationSeconds <= 0 || input.durationSeconds > 60) {
     return { status: "failed", reason: "Invalid or oversized audio segment." }
@@ -24,6 +25,7 @@ export async function requestVideoAudio(input: VideoAudioInput, route: { provide
   if (!["https:", "http:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) return { status: "failed", reason: "Invalid audio provider endpoint." }
   const signal = AbortSignal.any([...(input.signal ? [input.signal] : []), ...(input.generation ? [input.generation.signal] : []), AbortSignal.timeout(90_000)])
   let reservation: GenerationReservation | undefined, issued = false, disposition: 'unknown' | 'completed' | 'failed' = 'unknown'
+  const passive=createOriginalPassiveExecution(undefined,route.passiveUsageWorkspace?{providerId:route.provider,modelId:route.model,workspace:route.passiveUsageWorkspace,billing:'api'}:undefined)
   try {
     const headers = new Headers(route.headers)
     headers.set("Content-Type", "application/json")
@@ -45,7 +47,8 @@ export async function requestVideoAudio(input: VideoAudioInput, route: { provide
       const candidate = Object.freeze({ semanticId: createHash('sha256').update('video-audio-v1\0').update(body).digest('hex'), payloadId: createHash('sha256').update(body).digest('hex'), payloadKind: 'audio-json-body' as const })
       reservation = await input.generation.control.reserve(candidate)
       signal.throwIfAborted(); input.generation.signal.throwIfAborted()
-      reservation.issue({ version: 1, ...candidate, sendId: randomUUID() })
+      const confirmation={version:1 as const,...candidate,sendId:randomUUID()};reservation.issue(confirmation)
+      try{passive.issue(reservation,confirmation)}catch{/* Passive evidence cannot alter fetch. */}
     }
     issued = true
     const response = await fetch(endpoint.href, { method: 'POST', redirect: 'error', signal, headers, body })
@@ -66,5 +69,5 @@ export async function requestVideoAudio(input: VideoAudioInput, route: { provide
     if (isGenerationError(error)) throw error
     input.signal?.throwIfAborted()
     return { status: "failed", reason: signal.aborted ? "Audio analysis timed out." : "Audio analysis failed; check the provider endpoint and selected audio model." }
-  } finally { await reservation?.settle(issued ? disposition : 'unsent') }
+  } finally { try{passive.finish('unknown')}catch{/* No media usage parser: unavailable, never guessed tokens. */}await reservation?.settle(issued ? disposition : 'unsent') }
 }

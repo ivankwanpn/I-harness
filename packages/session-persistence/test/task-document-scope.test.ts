@@ -44,3 +44,17 @@ it('issues a nominal scope only under a real pin and synthetic operation admissi
     expect(publicApi.isHeldTaskDocumentScope(scope)).toBe(true)
   } finally { await claim.release(); await rm(root, { recursive: true, force: true }) }
 })
+
+it('captures only the original active queue turn and expires it on exit', async () => {
+  const owner = createOwnership({}, { lock: { enabled: false } })
+  expect(() => owner.captureActiveSessionOperation('p')).toThrow()
+  let original: ReturnType<typeof owner.captureActiveSessionOperation> | undefined
+  await owner.withSessionOperation('p', async () => {
+    original = owner.captureActiveSessionOperation('p'); original.assertCurrent()
+    expect(() => owner.captureActiveSessionOperation('other')).toThrow()
+    expect(() => original!.assertCurrent.call({})).toThrow()
+    await owner.withSessionOperation('other', async () => original!.assertCurrent())
+  })
+  expect(() => original!.assertCurrent()).toThrow()
+  await owner.withSessionOperation('p', async () => { expect(() => original!.assertCurrent()).toThrow() })
+})

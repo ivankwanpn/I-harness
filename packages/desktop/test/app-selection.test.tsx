@@ -9,9 +9,83 @@ vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: Workb
 import { App } from "../src/renderer/app.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 import { writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
+import { preparedFork, readyFork } from './helpers/fork-contract.ts'
+import type { ForkOperation } from '@i-harness/sdk/fork'
 afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it('both actual App fork callbacks join one preparation and one held operation before navigation', async () => {
+  const pending = defer(), prepared = preparedFork('a')
+  const requests = fixture(request => {
+    const value = request as unknown as { kind: string; operation?: ForkOperation }
+    if (value.kind === 'desktop/session/fork/prepare') return pending.promise
+    if (value.kind === 'desktop/session/fork/begin') return Promise.resolve(readyFork(value.operation!))
+    if (value.kind === 'desktop/session/manage') return Promise.resolve({ sessionId: 'raw-child' })
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe('w1'))
+  act(() => captured.props!.onSelectSession('a'))
+  await waitFor(() => expect(captured.props?.selectedSessionId).toBe('a'))
+  let sidebar!: Promise<void>, conversation!: Promise<void>
+  act(() => { sidebar = captured.props!.onManageSessionInWorkspace!('w1', 'a', 'fork'); conversation = captured.props!.onManageSession!('a', 'fork') })
+  try {
+    await waitFor(() => expect(requests.mock.calls.filter(([request]) => (request as { kind: string }).kind === 'desktop/session/fork/prepare')).toHaveLength(1))
+    expect(requests.mock.calls.filter(([request]) => (request as { kind: string }).kind === 'desktop/session/fork/begin')).toHaveLength(0)
+    expect(captured.props?.selectedSessionId).toBe('a')
+  } finally { await act(async () => { pending.resolve(prepared); await Promise.all([sidebar, conversation]) }) }
+  const begins = requests.mock.calls.map(([request]) => request as unknown as { kind: string; operation?: ForkOperation }).filter(request => request.kind === 'desktop/session/fork/begin')
+  expect(begins).toHaveLength(1)
+  expect(requests.mock.calls.some(([request]) => request.kind === 'desktop/session/manage' && (request as { action: string }).action === 'fork')).toBe(false)
+  expect(captured.props?.selectedSessionId).toBe(begins[0]!.operation!.invocation.targetSessionId)
+})
+it.each(['sidebar', 'conversation'] as const)('actual %s fork retains refresh failure and guards retry navigation across selection ABA', async first => {
+  let fail = false, operation!: ForkOperation, retries = 0
+  const pending = defer()
+  const requests = fixture(request => {
+    if (request.kind === 'desktop/session/fork/prepare') return Promise.resolve(preparedFork('a'))
+    if (request.kind === 'desktop/session/fork/begin') { operation = request.operation; fail = true; return Promise.resolve(readyFork(operation)) }
+    if (request.kind === 'desktop/session/fork/retry') { expect(request.operation).toEqual(operation); return ++retries === 1 ? pending.promise : Promise.resolve(readyFork(operation, 'adopted')) }
+    if (request.kind === 'session/dashboard') return fail ? Promise.reject(new Error('fork dashboard refresh failed')) : Promise.resolve({ sessions: [{ id: 'a', live: false }] })
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe('w1')); act(() => captured.props!.onSelectSession('a'))
+  await waitFor(() => expect(captured.props?.selectedSessionId).toBe('a'))
+  const call = (which: 'sidebar' | 'conversation') => which === 'sidebar' ? captured.props!.onManageSessionInWorkspace!('w1', 'a', 'fork') : captured.props!.onManageSession!('a', 'fork')
+  await act(async () => { await expect(call(first)).rejects.toThrow('fork dashboard refresh failed') })
+  expect(captured.props?.selectedSessionId).toBe('a'); expect(captured.props?.error).toBeUndefined()
+  fail = false
+  let running!: Promise<void>
+  act(() => { running = call(first === 'sidebar' ? 'conversation' : 'sidebar') })
+  await waitFor(() => expect(retries).toBe(1))
+  act(() => captured.props!.onSelectSession('b')); act(() => captured.props!.onSelectSession('a'))
+  await act(async () => { pending.resolve(readyFork(operation, 'adopted')); await running })
+  expect(captured.props?.selectedSessionId).toBe('a')
+  await act(async () => { await call(first) })
+  expect(captured.props?.selectedSessionId).toBe(operation.invocation.targetSessionId)
+  expect(requests.mock.calls.filter(([request]) => request.kind === 'desktop/session/fork/prepare')).toHaveLength(1)
+  expect(requests.mock.calls.some(([request]) => request.kind === 'session/cancel')).toBe(false)
+})
+it.each(['sidebar', 'conversation'] as const)('explicit fresh from the actual %s callback replaces the shared attempt only after settlement', async freshEntry => {
+  const operations: ForkOperation[] = [], retries: ForkOperation[] = []
+  const requests = fixture(request => {
+    if (request.kind === 'desktop/session/fork/prepare') return Promise.resolve(preparedFork('a'))
+    if (request.kind === 'desktop/session/fork/begin') { operations.push(request.operation); return Promise.resolve(readyFork(request.operation)) }
+    if (request.kind === 'desktop/session/fork/retry') { retries.push(request.operation); return Promise.resolve(readyFork(request.operation, 'adopted')) }
+    return undefined
+  })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe('w1')); act(() => captured.props!.onSelectSession('a'))
+  await act(async () => { await captured.props!.onManageSessionInWorkspace!('w1', 'a', 'fork') })
+  act(() => captured.props!.onSelectSession('a'))
+  await act(async () => {
+    if (freshEntry === 'sidebar') await captured.props!.onManageSessionInWorkspace!('w1', 'a', 'fork-fresh')
+    else await captured.props!.onManageSession!('a', 'fork-fresh')
+  })
+  expect(operations).toHaveLength(2); expect(operations[1]!.invocation.targetSessionId).not.toBe(operations[0]!.invocation.targetSessionId)
+  act(() => captured.props!.onSelectSession('a'))
+  await act(async () => { await captured.props!.onManageSession!('a', 'fork') })
+  expect(retries).toEqual([operations[1]])
+  expect(requests.mock.calls.filter(([request]) => request.kind === 'desktop/session/fork/prepare')).toHaveLength(2)
+})
 it("keeps newer service state over reordered notifications and legacy completion of a preceding prompt", async () => {
   let emit!: Parameters<DesktopBridge["onEvent"]>[0]
   fixture(() => undefined, listener => { emit = listener; return () => {} })

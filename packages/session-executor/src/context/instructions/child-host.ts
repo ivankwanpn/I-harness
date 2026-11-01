@@ -67,6 +67,13 @@ export function createChildInstructionHost(options: {
       return slot.construct(managerOptions)
     } finally { constructing = false }
   }
+  Object.defineProperty(create, 'settleFailed', { value: (input: Parameters<ChildInstructionContextFactory>[0]) => {
+    const slot = slots.get(input.session)
+    if (!slot) return Promise.resolve()
+    if (slot.factOwner !== input.factOwner) return observedRejection(new TypeError('Original child instruction owner mismatch'))
+    if (!slot.failed) return observedRejection(Object.assign(new Error('Original failed instruction construction unavailable'), { code: 'FACT_RECOVERY_REQUIRED' }))
+    return slot.close()
+  } })
   const retire = () => { retired = true; for (const slot of owned) slot.retire() }
   const close = (): Promise<void> => {
     retire()
@@ -90,7 +97,12 @@ export function createChildInstructionHost(options: {
     }).then(deferred.resolve, deferred.reject)
     return deferred.promise
   }
-  return { create, observe(target: InstructionTarget, exec: ToolExec): Promise<InstructionReadScope> {
+  return { create, invalidateDiagnostics() { for (const slot of owned) slot.invalidateDiagnostics() }, diagnosticsFor(session: SessionView, factOwner: FactOwner) {
+    if (!available() || factOwner.view !== session) return undefined
+    if (session === rootSession) return factOwner === rootOwner ? rootManager.diagnostics : undefined
+    const slot = slots.get(session)
+    return slot && slot.factOwner === factOwner ? slot.diagnostics() : undefined
+  }, observe(target: InstructionTarget, exec: ToolExec): Promise<InstructionReadScope> {
     if (!available()) return Promise.resolve({ status: 'unavailable', reason: 'mapping-unavailable' })
     const session = exec.session
     if (!session) return Promise.resolve({ status: 'reference-only', reason: 'outside-root' })

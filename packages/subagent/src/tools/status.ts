@@ -3,7 +3,7 @@ import { SHIPPING_REPORT_POLICY, reportPageSchema } from '../report-policy.ts'
 import { nativeJobOutput, nativeOutputRefusal } from './native-job-output.ts'
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
-import { userSteerForTool, waitForObservation } from "@i-harness/core-tools"
+import { backgroundEventForTool, userSteerForTool, waitForObservation } from "@i-harness/core-tools"
 import { runningElapsedMs } from "../agent-table.ts"
 
 export function createListTool(deps: SubagentToolDeps): Tool {
@@ -97,7 +97,7 @@ export function createJobOutputTool(deps: SubagentToolDeps): Tool {
         ready: () => terminalSeen || read().status !== "running",
         changes: { subscribe: wake => subscribe(view => { terminalSeen ||= view.status !== "running"; wake() }) },
         timeoutMs: args.timeout_ms === Infinity || Number.isNaN(args.timeout_ms) ? undefined : Math.max(0, args.timeout_ms ?? 30_000),
-        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec),
       }) : undefined
       exec.abortSignal?.throwIfAborted()
       const view = read()
@@ -107,7 +107,7 @@ export function createJobOutputTool(deps: SubagentToolDeps): Tool {
         ...(entry?.retention !== undefined ? { retention: entry.retention } : {}),
         ...(entry?.retentionError !== undefined ? { retention_error: entry.retentionError } : {}),
       } : {}),
-        ...(reason === "user-steer" && view.status === "running" ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) } }
+        ...((reason === "user-steer" || reason === "background-event") && view.status === "running" ? { yielded: true as const, yield_reason: reason } : {}) } }
   }
   registerJobOutputInvocation(jobOutputTool, invoke)
   return jobOutputTool

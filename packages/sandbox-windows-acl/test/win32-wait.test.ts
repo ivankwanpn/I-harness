@@ -206,5 +206,3 @@ it('setup reports exact falsey unknown registration failure', async () => {
   await expect(wait.setup).rejects.toBeNull(); expect(await signal).toBeNull()
   await expect(wait.close()).rejects.toMatchObject({ errors: [null, expect.objectContaining({ outcome: 'unknown' })] })
 })
-
-

@@ -1,3 +1,7 @@
+import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
+import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
+import { isNondurableSession } from '@i-harness/core-session'
+import { managedExecutionStatus } from '@i-harness/session-persistence/internal/retained-inspection'
 import { summaryFactory, composeCompactConfig } from './context-composition.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
@@ -11,7 +15,7 @@ import { ownedContextReadiness } from "@i-harness/session-persistence"
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
-import { createScopedExec } from "./scoped-exec.ts"
+import { createScopedExec, createScopedExecWithReservation } from "./scoped-exec.ts"
 import { createChildObservation } from "./child-observation.ts"
 import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
 import { inspectWslRuntime } from "@i-harness/sandbox-local"
@@ -45,7 +49,7 @@ import { acquireAssemblyResultStore } from './lifecycle/result-store.ts'
 import { createExecResultRetention } from './lifecycle/exec-result-retention.ts'
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
-import { registerExec, type ExecService } from "@i-harness/exec"
+import { registerExecWithReservation, type ExecService } from "@i-harness/exec"
 import { registerApprovalAnswerer, registerAskUserInput } from "@i-harness/interaction"
 import { createRuntimeContext } from "@i-harness/runtime-context"
 import { createInstructionEnvironment, createProjectInstructionEnvironment, type InstructionEnvironment } from './context/instructions/index.ts'
@@ -148,6 +152,10 @@ type RoleModelSelection = {
 }
 
 export interface AssemblyOptions {
+  prepareTaskChild?: import('@i-harness/subagent').PrepareTaskChild
+  prepareExecDelivery?: import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery
+  /** Constructor opt-in passive evidence only; no shipping activation. */
+  passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
   residentActivation?: ResidentActivationController
   /** Retain the original partial assembly's cleanup before Team construction. */
   retainConstructionCleanup?: (cleanup: () => Promise<void>) => void
@@ -359,6 +367,7 @@ export interface UnavailableExecutionAuthorityStatus {
 }
 
 export interface SessionAssembly {
+  instructionDiagnostics?(childSessionId?: string): import('./context/instructions/manager.ts').InstructionDiagnostics | undefined
   onExecutionSurfaceChanged?(listener: () => void): () => void
   executionSurfaceState?(): "available" | "unavailable" | "retired"
   settleRuntimeContextPublications(): Promise<void>
@@ -570,7 +579,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const resultStore = await acquireAssemblyResultStore(opts)
   opts = { ...opts, ...(resultStore.service ? { contextOutput: resultStore.service } : {}), ...(resultStore.sourceFor ? { contextOutputSourceFor: resultStore.sourceFor } : {}), ...(resultStore.withLegacyReadObservation ? { contextOutputLegacyReadObservation: resultStore.withLegacyReadObservation } : {}) }
   const ctx: PluginContext = createContext()
-  const tools = createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId) })
+  const modelOrigins = !isNondurableSession(session) ? createAgentModelOriginOwner({view:session,factOwner}) : undefined
+  const modelPair = modelOrigins ? createToolRegistryWithModelOrigin(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId), executionOwner: {view:session,factOwner,context:ctx,...opts.sessionId!==undefined?{sessionId:opts.sessionId}:{}} }, modelOrigins.verifier) : undefined
+  const tools = modelPair?.registry ?? createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId), executionOwner: {view:session,factOwner,context:ctx,...opts.sessionId!==undefined?{sessionId:opts.sessionId}:{}} })
+  const modelCallOrigin = modelPair && modelOrigins!.bind(tools, modelPair.driver)
 
   // ── session: live source of truth + coordinator mirror (write-behind) ──────
   // Created BEFORE the execution environment on purpose: the sandbox policy
@@ -746,7 +758,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     () => ctx.services.get<ApprovalPrompt>("approval/answerer"),
   )
   // One assembly execution owner is registered before either transport surface.
-  const assemblyExec = registerExec(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution, resultRetention: createExecResultRetention(opts.contextOutput, opts.shellRetention?.maxBytes ?? 64000) })
+  const assemblyExecPair = registerExecWithReservation(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution, resultRetention: createExecResultRetention(opts.contextOutput, opts.shellRetention?.maxBytes ?? 64000) })
+  const assemblyExec=assemblyExecPair.service
   const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, {
     execService: assemblyExec,
     cwd: opts.workspace,
@@ -765,7 +778,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // per-call and transient, appends no `sandbox/mode` event, and never moves the
   // standing mode (spec §3.3 point 1). It reaches a tool through its own
   // arguments and the approver below, not through this resolver.
+  const directShell=createScopedExecWithReservation(assemblyExecPair,opts.workspace,sandboxPolicyNow,opts.prepareExecDelivery??(async()=>({kind:'unavailable',reason:'recipient-not-bound'})),ctx)
   registerShell(ctx, tools, {
+    directEntry: directShell.direct,
     ...(agentShell ? { agentShell } : {}),
     ...(wslShell ? { wslShell } : {}),
     timeoutMs: shellTimeoutMs,
@@ -1066,6 +1081,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let instructionEnvironment: InstructionEnvironment | undefined
   let instructionManager: ReturnType<typeof createMainInstructionManager> | undefined
   let childInstructionHost: ReturnType<typeof createChildInstructionHost> | undefined
+  let isolatedInstructionHost: ReturnType<typeof import('./context/instructions/isolated.ts').createIsolatedInstructionHost> | undefined
   let retireInstructionHost: (() => void) | undefined
   let closeInstructionHost: (() => Promise<void>) | undefined
   runtimeContext.registerSection(
@@ -1197,6 +1213,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let constructionComplete = false
   const residentActivation = opts.residentActivation ?? createResidentActivation(() => constructionComplete && !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false)
   let offCodeModeSurface: (() => void) | undefined
+  let offExecSurface: (() => void) | undefined
+  let offWorkflowSurface: (() => void) | undefined
   const executionSurfaceListeners = new Set<() => void>()
   const executionSurfaceChanged = () => {
     for (const listener of [...executionSurfaceListeners]) {
@@ -1205,10 +1223,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
   const retireExecutionSurface = () => {
     residentActivation.retire()
+    isolatedInstructionHost?.retire()
     retireInstructionHost?.()
     if (executionSurfaceRetired) return
     executionSurfaceRetired = true
     offCodeModeSurface?.(); offCodeModeSurface = undefined
+    offExecSurface?.(); offExecSurface = undefined
+    offWorkflowSurface?.(); offWorkflowSurface = undefined
     executionSurfaceChanged()
   }
   const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
@@ -1233,11 +1254,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // The original mount guard must own the asynchronous policy/watch lifetime
     // before any dependent setup can reject. Earlier config getters acquire none.
     instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
-    instructionManager = createMainInstructionManager({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+    instructionManager = createMainInstructionManager({ session, environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
       available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
     childInstructionHost = createChildInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
       available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false,
       root: { session, factOwner, manager: instructionManager } })
+    isolatedInstructionHost = (await import('./context/instructions/isolated.ts')).createIsolatedInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow, available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false })
     retireInstructionHost = childInstructionHost.retire.bind(childInstructionHost)
     closeInstructionHost = childInstructionHost.close.bind(childInstructionHost)
     for (const cfg of opts.mcp ?? []) {
@@ -1293,8 +1315,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
     const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => (action, dependencies) =>
-      createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, dependencies)
+      createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, opts.passiveGeneration?{...dependencies,beforeDrain:dependencies?.beforeDrain??(async()=>{}),passiveGeneration:opts.passiveGeneration}:dependencies)
     const subagent = registerSubagent(ctx, tools, {
+      prepareTaskChild: opts.prepareTaskChild,
       residentActivation: residentActivation.ticket,
       createInstructionContext: childInstructionHost.create,
       results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
@@ -1423,6 +1446,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // register rather than try/catch, mirroring the tool loop above: a taken
     // name is skipped, and RoleRegistry.register's duplicate throw is never
     // used as control flow.
+    // Startup roles use the same live facade as later updates. Join its
+    // original load and restoration before the first installation attempt.
+    await subagent.ready
     const pluginAgentResults = new Map<string, boolean>()
     pluginCapabilities = createPluginCapabilities({
       skillDirs: pluginSkillDirs, handles: mcpHandles, roles: subagent.roles,
@@ -1437,6 +1463,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
     if (opts.guardian) {
       await registerGuardian(ctx, {
+        createIsolatedInstructionContext: isolatedInstructionHost.create,
+        createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
         results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
         ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
         ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
@@ -1495,6 +1523,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentRegistry: tools,
         subagents: {
           results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
+          createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
           reportPolicy: SHIPPING_REPORT_POLICY,
           generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
           retainResults: subagent.retainResults,
@@ -1587,6 +1616,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     cancelRootCodeMode = codeModeMount?.cancel.bind(codeModeMount)
     disposeRootCodeMode = codeModeMount?.dispose.bind(codeModeMount)
     offCodeModeSurface = codeModeMount?.onSurfaceChanged?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
+    offExecSurface = execService.subscribeJobs?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
+    offWorkflowSurface = workflowMount?.executor.subscribeJobs?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
     await codeModeMount?.ready?.()
     const modelToolSchemas = () => codeModeMount?.schemas() ?? tools.schemas()
     let overheadOverride = opts.compact?.overheadTokens
@@ -1615,9 +1646,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const compactForAgent = composeCompactConfig(opts.compact, opts.contextWindow, overheadEstimate, d)
 
     const agent = createAgent(ctx, {
+      modelCallOrigin,
       requestContext: instructionManager,
       ...(managedDocument ? { inputPreparationFactory: createSteerPreparationFactory(session, inbox, opts.prepareHumanInput) } : {}),
-      ...(managedDocument ? { generationFactory: (action, dependencies) => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }, dependencies) } : {}),
+      ...(managedDocument ? { generationFactory: (action, dependencies) => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }, opts.passiveGeneration?{...dependencies,beforeDrain:dependencies?.beforeDrain??(async()=>{}),passiveGeneration:opts.passiveGeneration}:dependencies) } : {}),
       modelActionTimeoutMs: opts.modelActionTimeoutMs,
       modelActionMaxAttempts: opts.modelActionMaxAttempts,
       summaryFactory,
@@ -1660,7 +1692,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     constructionComplete = true
     if (!opts.residentActivation) residentActivation.activate()
     return {
-      reconcileExecutionAuthority: () => executionRuntime.reconcile(),
+      reconcileExecutionAuthority: () => { instructionManager?.diagnostics.invalidate(); childInstructionHost?.invalidateDiagnostics(); return executionRuntime.reconcile() },
       settleRuntimeContextPublications: () => runtimeContext.settleOriginals(),
       executionBackendStatus: () => executionRuntime.status(),
       ctx,
@@ -1672,6 +1704,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       revokeNewWork() { retireExecutionSurface(); managedDocument?.revokeNewWork() },
       onExecutionSurfaceChanged(listener) { executionSurfaceListeners.add(listener); return () => { executionSurfaceListeners.delete(listener) } },
       executionSurfaceState: () => executionSurfaceRetired ? 'retired'
+        : managedDocument && managedExecutionStatus(managedDocument) !== 'available' ? managedExecutionStatus(managedDocument)
         : !codeModeMount ? 'available'
         : !codeModeMount.onSurfaceChanged || !codeModeMount.surfaceState ? 'unavailable' : codeModeMount.surfaceState(),
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
@@ -1739,6 +1772,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         return {finish}
       },
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
+      instructionDiagnostics: childSessionId => {
+        if (disposing) return undefined
+        if (!childSessionId) return instructionManager?.diagnostics
+        const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ['running', 'waiting'].includes(row.status))
+        return entry?.factOwner && !entry.closing && !entry.controller.signal.aborted ? childInstructionHost?.diagnosticsFor(entry.session, entry.factOwner) : undefined
+      },
       liveChildSession: childObservation.liveSession,
       liveChildBudget: childSessionId => {
         const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ["running", "waiting"].includes(row.status))
@@ -1819,6 +1858,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   function dispose(): Promise<void> {
+    pluginCapabilities?.stopUpdates()
     retireExecutionSurface()
     managedDocument?.revokeNewWork()
     disposing = true
@@ -1856,9 +1896,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       await phase('code-mode', () => disposeRootCodeMode?.())
     }
     await phase('subagents', () => disposeSubagents?.())
-    if (!cleanupDone.has('plugins')) {
-      try { await pluginCapabilities?.dispose(); cleanupDone.add('plugins') } catch (error) { d.warn(`Plugin disposal failed: ${String(error)}`) }
-    }
+    await phase('plugins', () => pluginCapabilities?.dispose())
     // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()
     rewindSubscription = undefined
@@ -1886,7 +1924,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // Failed child/generation debt still borrows the original publication,
     // document, environment and result-store owners. Never release through it.
     if (!processCleanupFailures.length) {
-      await phase('instruction-host', () => closeInstructionHost?.())
+      await phase('isolated-instructions', () => isolatedInstructionHost?.close())
+      if (cleanupDone.has('isolated-instructions')) await phase('instruction-host', () => closeInstructionHost?.())
       if (cleanupDone.has('instruction-host')) await phase('runtime', () => runtimeContext.close())
       if (cleanupDone.has('runtime')) await phase('instructions', () => instructionManager?.close())
       if (cleanupDone.has('instructions')) await phase('document', () => managedDocument?.close())

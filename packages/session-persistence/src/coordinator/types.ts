@@ -112,6 +112,7 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  retainExistingSessionBindingObservation?(request: import('./retained-binding.ts').RetainedBindingRequest, retired: (operation: import('./retained-cleanup.ts').RetainedCleanupOperation) => void): Promise<import('./retained-binding.ts').RetainedExistingBinding>
   withProcessReadObservation?<T, U>(id: string, options: import('./process-read-owner.ts').ProcessReadOptions, work: (observation: import('./process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('./process-read-owner.ts').ProcessReadObservation, last: import('./process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
   withExistingSessionBindingObservation?<T>(request: ExistingSessionBindingObservationRequest, run: (observation: ExistingSessionBindingObservation) => Promise<T>): Promise<T>
   withSessionBindingObservation?<T>(request: SessionBindingObservationRequest, run: (observation: SessionBindingObservation) => Promise<T>): Promise<T>
@@ -119,6 +120,7 @@ export interface SessionCoordinator {
   resumeSemanticTarget(invocation: import('./bootstrap-types.ts').BootstrapInvocation, guards: import('./bootstrap-types.ts').BootstrapGuards, originalPayload?: import('./bootstrap-types.ts').BootstrapRequest): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   inspectBootstrap(invocation: import('./bootstrap-types.ts').BootstrapInvocation): Promise<import('./bootstrap-types.ts').BootstrapInspection>
   inspectChildBootstrapCapture?(request: import('./child-bootstrap-intent.ts').ChildBootstrapCaptureRequest): Promise<import('./child-bootstrap-intent.ts').ChildBootstrapCaptureInspection>
+  inspectChildBootstrap?(request: import('./child-bootstrap-intent.ts').ChildBootstrapCaptureRequest): Promise<import('./bootstrap-types.ts').BootstrapInspection>
   bootstrapChildTargetWithCapture?(request: import('./child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('./bootstrap-types.ts').BootstrapGuards, capture: () => Promise<import('./bootstrap-types.ts').BootstrapRequest>): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   resumeChildTarget?(request: import('./child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('./bootstrap-types.ts').BootstrapGuards, originalPayload?: import('./bootstrap-types.ts').BootstrapRequest): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   inspectBootstrapCapture?(request: import('./bootstrap-types.ts').BootstrapCaptureRequest): Promise<import('./bootstrap-types.ts').BootstrapCaptureInspection>

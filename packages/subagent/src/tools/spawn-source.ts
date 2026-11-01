@@ -2,6 +2,7 @@ import { committedFactSeqs, FactRecoveryRequiredError, type CapturedActionFact, 
 import type { RetainedOutcomeSink } from '@i-harness/core-tools'
 import type { TaskRecord } from '../task-protocol.ts'
 import { OriginalTerminalRecoveryError } from '../task-notification.ts'
+import type { TaskRegistry } from '../task/types.ts'
 
 export interface PublishedChild { path: string; jobId: string; sessionId?: string; modelLabel?: string }
 type SpawnIdentity = Readonly<{ agent_path: string; job_id: string; task_id: string }>
@@ -19,8 +20,16 @@ export function spawnObservation(base: SpawnIdentity, task: TaskRecord) {
 
 /** Retains the original start disposition, publication identity and real end.
  * Passive outcome reads never join a still-running child. */
-export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void) {
+export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void, retainUnused?: (cleanup: { close(): Promise<void> }) => void) {
   const action = owner.beginAction(signal)
+  let closeAcquired: (() => Promise<void>) | undefined
+  let unused = false
+  // Retain the original acquisition before any later constructor step can
+  // throw. The same handle gains its actual source below, before beforeRead.
+  retainUnused?.(Object.freeze({ async close() {
+    if(!start&&!published)unused = true
+    try { await closeAcquired?.() } finally { action.finish() }
+  } }))
   let start: CapturedActionFact<ProducerFactOutcome> | undefined
   let terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined
   let terminalEvent: Readonly<Extract<SessionEvent, { type: 'subagent/end' }>> | undefined
@@ -30,16 +39,20 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   let terminalOutput: ReturnType<typeof spawnObservation> | undefined
   let taskSave: (() => Promise<void>) | undefined
   let saving: Promise<void> | undefined
-  let taskSaved = false, terminalSaved = false, unused = false, retainPublished = false
+  let taskSaved = false, terminalSaved = false, retainPublished = false
   let resultPublished = false
   let terminalSignalled = false
-  let recoverySignalled = false, terminalOutcome: ProducerFactOutcome | undefined, taskSaveFailure: unknown
+  let recoverySignalled = false, terminalOutcome: ProducerFactOutcome | undefined
   let settling = false
+  let beginHandoff: ReturnType<TaskRegistry['bindForegroundHandoff']> | undefined
+  let handoff: ReturnType<NonNullable<typeof beginHandoff>> | undefined
+  let handoffAcknowledged = false, handoffReleased = false, handoffConsumerPending = false
   const terminalReady = Promise.withResolvers<void>()
   void terminalReady.promise.catch(() => {})
   let captureFailure: Readonly<{ cause: unknown; observedOutcome?: unknown }> | undefined
   let prepareEnd: (() => Promise<{ event: Extract<SessionEvent, { type: 'subagent/end' }>; output?: ReturnType<typeof spawnObservation> }>) | undefined
   let preparingEnd: Promise<void> | undefined
+  let terminalSettlement: Promise<void> | undefined
 
   const prepareTerminal = async () => {
     if (terminal || !prepareEnd) return
@@ -64,7 +77,8 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   }
   const publishResult = () => {
     if (!retainPublished || !retained || resultPublished) return
-    if (background) { retained.ready(identity()); resultPublished = true }
+    if (handoff?.kind === 'parent' && !handoffReleased) retained.unavailable()
+    else if (background || handoff?.kind === 'parent' || handoff?.kind === 'manual') { retained.ready(identity()); resultPublished = true }
     else if (terminalSaved && taskSaved && terminalOutput) { retained.ready(terminalOutput); resultPublished = true }
     else retained.unavailable()
   }
@@ -72,10 +86,10 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     if (taskSaved) return
     if (!taskSave) throw new FactRecoveryRequiredError()
     const pending = saving ??= taskSave().then(() => { taskSaved = true })
-    try { await pending } catch (error) { taskSaveFailure = error; throw error } finally { if (saving === pending) saving = undefined }
+    try { await pending } finally { if (saving === pending) saving = undefined }
   }
   const completed = () => {
-    if (terminalSaved && taskSaved && !terminalSignalled) {
+    if (terminalSaved && taskSaved && (handoff?.kind !== 'parent' || handoffReleased) && !terminalSignalled) {
       terminalSignalled = true
       try { onTerminalCommitted?.() } catch { /* Observers cannot replace the original outcome. */ }
     }
@@ -83,13 +97,17 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   }
   const terminalFailure = (errors: unknown[]) => {
     const failure = Object.assign(new AggregateError(errors, 'Spawn completion needs recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
+    if (handoff?.kind === 'parent' && !recoverySignalled) {
+      recoverySignalled = true
+      try { onTerminalRecovery?.() } catch { /* Original owner retains both saves. */ }
+    }
     if (taskSaved && terminalOutcome && (terminalOutcome.kind === 'unknown' || terminalOutcome.kind === 'recovery-required')) {
       if (!recoverySignalled) { recoverySignalled = true; try { onTerminalRecovery?.() } catch { /* Original outcome remains authoritative. */ } }
       return new OriginalTerminalRecoveryError(terminalOutcome, failure)
     }
     return failure
   }
-  const settleTerminal = async () => {
+  const settleTerminalOnce = async () => {
     await prepareTerminal()
     if (captureFailure || !terminal) throw Object.assign(new FactRecoveryRequiredError(), { cause: captureFailure })
     const results = await Promise.allSettled([
@@ -100,9 +118,21 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     if (errors.length) throw terminalFailure(errors)
     completed()
   }
+  const settleTerminal = () => {
+    const pending = terminalSettlement ??= settleTerminalOnce()
+    void pending.finally(() => { if (terminalSettlement === pending) terminalSettlement = undefined }).catch(() => {})
+    return pending
+  }
   const source = action.registerSettlementSource(async () => {
     if (!unused) await settleTerminal()
   }, reconcileStart)
+  let closing: Promise<void> | undefined
+  const closeSource = () => {
+    const pending = closing ??= source.close()
+    void pending.catch(() => { if (closing === pending) closing = undefined })
+    return pending
+  }
+  closeAcquired = closeSource
   retained?.beforeRead(async () => {
     await reconcileStart()
     if (terminal || prepareEnd) await settleTerminal()
@@ -110,22 +140,71 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   })
   return {
     async reconcileTerminal() {
-      // This hook never calls prepareEnd or captures a new terminal/result.
-      if (!terminal) return
+      if (handoffConsumerPending) return
+      if (handoff?.kind === 'parent' && !handoffAcknowledged) {
+        await handoff.save.retry(); handoff.save.assertHandoff(); handoff.save.release(); handoffAcknowledged = true; handoffReleased = true
+      }
+      if (handoff?.kind === 'parent' && handoffAcknowledged && !handoffReleased) { handoff.save.assertHandoff(); handoff.save.release(); handoffReleased = true }
+      // Resume the retained preparation owned by this original invocation. Its
+      // registry consumer retries the exact captured save before end capture.
+      if (terminalSaved && taskSaved) { completed(); return }
+      if (!terminal && prepareEnd) {
+        if (terminalSettlement) try { await terminalSettlement } catch { /* Resume the same preparation below. */ }
+        await settleTerminal(); terminalReady.resolve(); await closeSource(); return
+      }
+      if (!terminal) { completed(); return }
       source.assertHeld()
+      if (terminalSettlement) {
+        try { await terminalSettlement } catch { /* Reconcile the same captured terminal and save below. */ }
+        if (terminalSaved && taskSaved) { completed(); return }
+      }
       let outcome = await terminal.observe()
       if (outcome.kind === 'unknown' || outcome.kind === 'recovery-required') outcome = await terminal.reconcile()
       terminalOutcome = outcome
       const errors: unknown[] = []
       try { committedFactSeqs(outcome); terminalSaved = true } catch (error) { errors.push(error) }
       if (!taskSaved) {
-        if (saving) try { await saving } catch (error) { errors.push(error) }
-        else errors.push(taskSaveFailure ?? new FactRecoveryRequiredError())
+        if (saving) {
+          const pending = saving
+          try { await pending } catch {
+            if (saving === pending) saving = undefined
+            try { await saveTask() } catch (error) { errors.push(error) }
+          }
+        }
+        else try { await saveTask() } catch (error) { errors.push(error) }
       }
       if (errors.length) throw terminalFailure(errors)
-      completed(); terminalReady.resolve(); await source.close()
+      completed(); terminalReady.resolve(); await closeSource()
     },
     bindTask(id: string, save: () => Promise<void>) { taskId = id; taskSave = save },
+    bindHandoff(begin: ReturnType<TaskRegistry['bindForegroundHandoff']>) { beginHandoff = begin },
+    async handoffToParent() {
+      if (!beginHandoff) throw new FactRecoveryRequiredError()
+      handoff ??= beginHandoff()
+      if (handoff.kind === 'manual') return 'manual' as const
+      if (handoff.kind === 'ready') return 'ready' as const
+      handoffConsumerPending = true
+      try { await handoff.save.done; handoff.save.assertHandoff() }
+      catch (error) {
+        handoffConsumerPending = false
+        if (!recoverySignalled) { recoverySignalled = true; try { onTerminalRecovery?.() } catch { /* Original save remains held. */ } }
+        throw error
+      }
+      handoffAcknowledged = true
+      return 'parent' as const
+    },
+    assertHandoff() {
+      if (handoff?.kind !== 'parent' || !handoffAcknowledged) throw new FactRecoveryRequiredError()
+      handoff.save.assertHandoff()
+    },
+    consumeHandoff() {
+      if (handoff?.kind !== 'parent' || !handoffAcknowledged || handoffReleased) throw new FactRecoveryRequiredError()
+      handoff.save.release()
+      handoffReleased = true
+      handoffConsumerPending = false
+      completed()
+    },
+    abandonHandoff() { handoffConsumerPending = false; try { onTerminalRecovery?.() } catch { /* Original save remains held. */ } },
     settling() { settling = true },
     published(info: PublishedChild) {
       published = Object.freeze({ ...info })
@@ -137,7 +216,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     assertLaunch() { action.assertOpen() },
     settlementHeld() { try { source.assertHeld(); return true } catch { return false } },
     identity,
-    async releaseUnused() { unused = true; await source.close() },
+    async releaseUnused() { unused = true; await closeSource() },
     async start(event: Extract<SessionEvent, { type: 'subagent/start' }>, binding?: SubagentDeliveryLaunchDraft) {
       start ??= action.captureSubagentStart(event, binding)
       committedFactSeqs(await start.admit())
@@ -147,13 +226,13 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       terminalEvent ??= Object.freeze({ ...event })
       terminal ??= source.delivery.capture(terminalEvent)
       terminalOutput ??= output
-      try { await settleTerminal(); terminalReady.resolve(); await source.close() }
+      try { await settleTerminal(); terminalReady.resolve(); if (handoff?.kind !== 'parent' || handoffReleased) await closeSource() }
       catch (error) { terminalReady.reject(error); throw error }
     },
     async prepareEnd(prepare: NonNullable<typeof prepareEnd>) {
       prepareEnd ??= prepare
       settling = true
-      try { await settleTerminal(); terminalReady.resolve(); await source.close() }
+      try { await settleTerminal(); terminalReady.resolve(); if (handoff?.kind !== 'parent' || handoffReleased) await closeSource() }
       catch (error) { terminalReady.reject(error); throw error }
     },
     async foreground() {

@@ -3,8 +3,10 @@ import { validManagedArtifactRef } from '../results/validate.ts'
 import { validateImages } from '../images.ts'
 import { validateNativeWitness } from '../projection/native-witness.ts'
 import { canonicalJsonData } from '../serialization/json-data.ts'
-import { seedHash, seedPreimage, semanticSourceDomain } from './seed-digest.ts'
-import type { SemanticSeed, SeedItem, SeedOriginAddress, TurnExtent } from './seed-types.ts'
+import { seedHash, seedPreimage, semanticSourceDomain, semanticSeedDomain, semanticDependencyDigest } from './seed-digest.ts'
+import type { SemanticSeed, SemanticSeedV3, SeedItem, SeedOriginAddress, TurnExtent } from './seed-types.ts'
+import { seedLayout } from './seed-layout.ts'
+import { validateSelectedResultsTable } from './selected-results-codec.ts'
 import { validateSeedNative } from './seed-native.ts'
 import { validatePassiveCodeStore } from '../projection/passive-code-store/validate.ts'
 import { validateSeedHeader, validateSeedSourceEventShape } from './bootstrap-validation.ts'
@@ -16,25 +18,57 @@ export function semanticSeedFromRecords(header: import('../events/bootstrap.ts')
   const manifest = records[0]
   if (!header.seedLength || manifest?.type !== 'conversation/seed-manifest' || manifest.version !== header.version || manifest.codec !== header.codec
     || manifest.digest !== header.seedDigest || manifest.groupCount !== header.groupCount) seedInvalid()
+  if (header.version === 3 && (manifest.version !== 3 || header.profile !== manifest.profile || header.resultPageCount !== manifest.resultPageCount || canonicalJsonData(header.results) !== canonicalJsonData(manifest.results))) seedInvalid()
   return semanticSeedBodyFromRecords(records.slice(0, header.seedLength))
 }
 /** Internal original-capture owner: the birth header does not exist until the
  * request is validated. Reconstruct its actual manifest, never a partial header.
  * This also serves growing prefixes without traversing conversation bodies. */
 export function semanticSeedBodyFromRecords(records: readonly import('../managed/types.ts').SessionEventView[]): SemanticSeed {
+  return bodyFromRecords(records, false)
+}
+function bodyFromRecords(records: readonly import('../managed/types.ts').SessionEventView[], partial: boolean): SemanticSeed {
   const manifest = records[0]
   if (manifest?.type !== 'conversation/seed-manifest') seedInvalid()
   validateSeedSourceEventShape(manifest, 13)
-  if (records.length > manifest.groupCount + 1) seedInvalid()
-  const groups = records.slice(1).map((record, ordinal) => {
+  const layout = seedLayout(manifest)
+  if (records.length > layout.seedLength || manifest.version === 3 && !partial && records.length !== layout.seedLength) seedInvalid()
+  const pages = records.slice(1, 1 + layout.resultPageCount).map((record, ordinal) => {
     validateSeedSourceEventShape(record, 13)
-    if (record.type !== 'conversation/seed-group' || record.seq !== ordinal + 1 || record.ordinal !== ordinal || record.manifestSeq !== 0) seedInvalid()
+    if (record.type !== 'conversation/seed-results' || record.seq !== 1 + ordinal || record.ordinal !== ordinal || record.manifestSeq !== 0) seedInvalid()
+    return record.page
+  })
+  const groups = records.slice(1 + layout.resultPageCount).map((record, ordinal) => {
+    validateSeedSourceEventShape(record, 13)
+    if (record.type !== 'conversation/seed-group' || record.seq !== layout.groupSeq(ordinal) || record.ordinal !== ordinal || record.manifestSeq !== 0) seedInvalid()
     return record.group
   })
   const common = { origins: manifest.origins, turns: manifest.turns, omissions: manifest.omissions, artifacts: manifest.artifacts, groups }
   // This wrapper reuses readonly source records; it must not clone discarded
   // conversation bodies merely to reconstruct a validation input.
+  if (manifest.version === 3) {
+    const seed = { ...common, version: 3, profile: manifest.profile, selection: manifest.selection, results: { summary: manifest.results, pages }, ...(manifest.profile === 'public-completed' ? { passive: manifest.passive } : {}) } as SemanticSeedV3
+    if (!partial) validateSemanticSeedStructure(seed)
+    return seed
+  }
   return (manifest.version === 2 ? { ...common, version: 2, selection: manifest.selection, passive: manifest.passive } : { ...common, version: 1, selection: manifest.selection }) as unknown as SemanticSeed
+}
+
+export function validateSelectedResultsRecordPrefix(header: import('../events/bootstrap.ts').SeedHeaderV3, records: readonly import('../managed/types.ts').SessionEventView[]): { kind: 'prefix'; resultPages: number; groups: number } | { kind: 'complete'; seed: SemanticSeedV3 } {
+  validateSeedHeader(header)
+  if (header.version !== 3 || records.length > header.seedLength) seedInvalid()
+  if (!records.length) return { kind: 'prefix', resultPages: 0, groups: 0 }
+  const manifest = records[0]
+  if (manifest?.type !== 'conversation/seed-manifest' || manifest.version !== 3 || manifest.codec !== header.codec || manifest.digest !== header.seedDigest || manifest.groupCount !== header.groupCount
+    || manifest.profile !== header.profile || manifest.resultPageCount !== header.resultPageCount || canonicalJsonData(manifest.results) !== canonicalJsonData(header.results)) seedInvalid()
+  const seed = bodyFromRecords(records, true) as SemanticSeedV3
+  if (records.length === header.seedLength) {
+    validateSemanticSeed(seed)
+    if (seedHash(semanticSeedDomain(seed), seed) !== header.seedDigest || semanticDependencyDigest(seed) !== header.dependencyDigest) seedInvalid()
+    return { kind: 'complete', seed }
+  }
+  validateSemanticSeedPrefix(seed)
+  return { kind: 'prefix', resultPages: seed.results.pages.length, groups: seed.groups.length }
 }
 
 export function seedInvalid(): never { throw new TypeError('Invalid semantic seed') }
@@ -87,9 +121,11 @@ export function validateSemanticSeedPrefix(value: unknown): SemanticSeed {
 function semanticSeed(value: unknown, payload: boolean, partial = false): SemanticSeed {
   if (payload) seedData(value)
   const version = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'version')?.value : undefined
-  seedFields(value, ['version', 'origins', 'selection', 'turns', 'omissions', 'artifacts', 'groups', ...(version === 2 ? ['passive'] : [])])
+  const profile = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'profile')?.value : undefined
+  seedFields(value, ['version', 'origins', 'selection', 'turns', 'omissions', 'artifacts', 'groups', ...(version === 3 ? ['profile', 'results'] : []), ...(version === 2 || version === 3 && profile === 'public-completed' ? ['passive'] : [])])
   const seed = value as unknown as SemanticSeed
-  if (![1, 2].includes(seed.version) || !Array.isArray(seed.origins) || !seed.origins.length) seedInvalid()
+  if (![1, 2, 3].includes(seed.version) || !Array.isArray(seed.origins) || !seed.origins.length) seedInvalid()
+  if (seed.version === 3 && (seed.profile !== 'public-completed' && seed.profile !== 'child-history' || seed.profile === 'public-completed' && seed.selection.kind !== 'completed' || seed.profile === 'child-history' && !['all', 'last-turns'].includes(seed.selection.kind))) seedInvalid()
   for (const origin of seed.origins) {
     seedFields(origin, origin.kind === 'session' ? ['kind', 'sessionId', 'revision'] : ['kind', 'contentDigest'])
     if (origin.kind === 'session' ? !seedId(origin.sessionId) || !seedDigest(origin.revision) : origin.kind !== 'anonymous' || !seedDigest(origin.contentDigest)) seedInvalid()
@@ -112,7 +148,7 @@ function semanticSeed(value: unknown, payload: boolean, partial = false): Semant
   }
   const addresses = (refs: readonly SeedOriginAddress[]) => { if (!Array.isArray(refs)) seedInvalid(); for (const ref of refs) address(ref) }
   if (![seed.groups, seed.omissions, seed.artifacts].every(Array.isArray)) seedInvalid()
-  if (seed.version === 2) { seedFields(seed.passive, ['codeStore']); validatePassiveCodeStore(seed.passive.codeStore, seed.turns, seed.groups.length, partial) }
+  if (seed.version === 2 || seed.version === 3 && seed.profile === 'public-completed') { seedFields(seed.passive, ['codeStore']); validatePassiveCodeStore(seed.passive.codeStore, seed.turns, seed.groups.length, partial) }
   const used = new Map<number, Set<string>>()
   const artifact = (index: number, use: { kind: 'result' } | { kind: 'dependency-catalog'; count: number }) => {
     if (!seedCount(index) || index >= seed.artifacts.length) seedInvalid()
@@ -271,5 +307,6 @@ function semanticSeed(value: unknown, payload: boolean, partial = false): Semant
     const origin = seed.origins[0]!, expected = seedHash(semanticSourceDomain(seed), seedPreimage(seed))
     if ((origin.kind === 'session' ? origin.revision : origin.contentDigest) !== expected) seedInvalid()
   }
+  if (seed.version === 3) validateSelectedResultsTable(seed, partial)
   return seed
 }

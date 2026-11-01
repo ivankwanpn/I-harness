@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { settlementSourceSessionId } from '@i-harness/core-session'
-import { assertResultPrepared, assertSyntheticResult, resultPresentation, toolResultDependencies, type ToolResultRetention } from '@i-harness/core-tools'
+import { assertResultPrepared, assertPreparedExecutionOwnerContext, assertSyntheticResult, resultPresentation, toolResultDependencies, type ToolResultRetention } from '@i-harness/core-tools'
 import { createResultCapture } from '@i-harness/output-retention'
 import type { ContextCapture, ContextOutputService, ResultArtifactScope } from '@i-harness/context-output'
 import { bindResultSource, resultSourceBinding } from './result-sources.ts'
@@ -10,11 +10,14 @@ import { withResultDependencies } from './result-dependencies.ts'
 export function createToolResultRetention(service: ContextOutputService | undefined, sourceFor?: (sessionId: string) => Promise<ContextCapture['source']>, _ownerSessionId?: string): ToolResultRetention {
   const preparedSources = new WeakMap<object, Map<string, ContextCapture['source']>>()
   return {
-    async prepare(prepared) {
+    async prepare(prepared, executionOwner) {
+      assertPreparedExecutionOwnerContext(prepared, executionOwner)
       const original = assertResultPrepared(prepared)
       const sessionId = prepared.exec.sessionId
       const descriptor = sessionId && service ? await sourceFor?.(sessionId) : undefined
-      bindResultSource(prepared.exec, { ...original, sessionId, callId: prepared.exec.callId, descriptor })
+      assertPreparedExecutionOwnerContext(prepared, executionOwner)
+      assertResultPrepared(prepared)
+      bindResultSource(prepared.exec, { ...original, sessionId, callId: prepared.exec.callId, descriptor, ...(executionOwner ? {executionOwner} : {}) })
       if (original.source && prepared.exec.callId) {
         let calls = preparedSources.get(original.source)
         if (!calls) preparedSources.set(original.source, calls = new Map())

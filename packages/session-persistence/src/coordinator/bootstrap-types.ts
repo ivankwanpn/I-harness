@@ -52,5 +52,7 @@ export interface BootstrapBackend {
 export interface BootstrapDocumentControl {
   admit(phase: 'seed'|'completion', events: readonly SessionEvent[], guards: BootstrapGuards): Promise<FactOutcome>;
   held: HeldFactOwner;
+  bindSelected?(): Promise<void>;
   ready(): void;
+  prepareReady?(): () => void;
 }

@@ -28,13 +28,14 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
-  usageStats?: Pick<import("@i-harness/usage-stats").UsageStore, "query" | "setPricing">
+  usageStats?: Pick<import("@i-harness/usage-stats").UsageStore, "query" | "setPricing"> & {queryV2?(query:import('../../usage-stats/src/observation-snapshot-types.ts').ObservationQuery):Promise<import('../../usage-stats/src/observation-snapshot-types.ts').UsageSnapshotV2>}
   wslSettings?: ReturnType<typeof import("./wsl-settings.ts").createWslSettings>
   contextSubsystems?: ReturnType<typeof import("./context-subsystems.ts").createContextSubsystemSettings>
   autoTitle?: ReturnType<typeof import("./auto-title.ts").createAutoTitleSettings>
   modelWait?: ReturnType<typeof import("./model-wait-settings.ts").createModelWaitSettings>
   modelRetry?: ReturnType<typeof import("./model-retry-settings.ts").createModelRetrySettings>
   codeSettings?: ReturnType<typeof import("./execution.ts").createCodeModeSettings>
+  executionObservation?: ReturnType<typeof import("./execution-host-observation.ts").createExecutionHostObservation>
   execution?: ReturnType<typeof import("./execution.ts").createDesktopExecution>
   agentProcesses?: ReturnType<typeof import("./agent-processes.ts").createAgentProcesses>
   diagnostics?: ReturnType<typeof import("./environment-diagnostics.ts").createDesktopDiagnostics>
@@ -54,6 +55,8 @@ export interface DesktopHandlers {
   hooks?: ReturnType<typeof createHookSettings>
   subagents?: ReturnType<typeof createSubagentSettings>
   sessionSubagents?: ReturnType<typeof createDesktopSubagents>
+  instructions?: ReturnType<typeof import('./instructions/views.ts').createInstructionViews>
+  instructionSettings?: ReturnType<typeof import('./instructions/settings.ts').createInstructionSettings>
   agentSettings?: ReturnType<typeof createAgentSettings>
   terminal?: ReturnType<typeof createDesktopTerminal>
   schedules?: ReturnType<typeof createDesktopSchedules>

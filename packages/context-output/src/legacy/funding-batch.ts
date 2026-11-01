@@ -219,12 +219,16 @@ function applicationDescription(final: string, bytes: Buffer, file: FundingFile)
   return fundingDescription(final, 'application', [final, pending, digest(bytes), String(bytes.length), ...fileFields(file)], [{ key: 'pending', peakGrowth: growth }])
 }
 export async function describeApplicationFunding(directory: string, final: string, bytes: Buffer, guard: () => void, retire?: RetireFile): Promise<FundingDescription> { return applicationDescription(final, bytes, await inspectApplication(directory, final, bytes, guard, retire)) }
-export async function fundApplicationInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, directory: string, final: string, bytes: Buffer, guard: () => void, retire?: RetireFile): Promise<FundingDescription> {
+export async function fundApplicationInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, directory: string, final: string, bytes: Buffer, guard: () => void, retire?: RetireFile, issuance?:import('../artifact/io.ts').OriginalPublicationStaging): Promise<FundingDescription> {
   const prior = await inspectApplication(directory, final, bytes, guard, retire), description = applicationDescription(final, bytes, prior), allocation = owner.enter(scope, description), pending = applicationPending(final, bytes)
   owner.assertAllocation(allocation, final); guard()
   if (prior.kind === 'absent') owner.issued(allocation, 'pending', bytes.length)
   const handle = await open(pending, prior.kind === 'absent' ? 'wx+' : 'r+')
-  await withFundingFile(handle, retire, async () => {
+  await withFundingFile(handle, issuance?.retire ?? retire, async () => {
+    if (issuance) {
+      if (prior.kind === 'absent') await issuance.onCreated(handle)
+      else if (!await issuance.allowExisting(handle)) throw Error('Foreign application staging')
+    }
     guard(); const initial = await handle.stat({ bigint: true }); guard()
     const file = prior.kind === 'file' ? prior : nativeFundingFile(initial, '')
     const size = prior.kind === 'file' ? prior.size : 0

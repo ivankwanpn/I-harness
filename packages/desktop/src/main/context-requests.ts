@@ -36,7 +36,11 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     }
     case "desktop/session/execution/stop": return { sessionId: text("sessionId", 256), cellId: text("cellId", 256) }
     case "desktop/session/processes/read": return { sessionId: text("sessionId", 256) }
-    case "desktop/session/processes/job-output": return { sessionId: text("sessionId", 256), id: text("id", 256) }
+    case "desktop/session/processes/job-output": {
+      const fields = ['backend', 'instanceId', 'sourceId', 'mode', 'cursor', 'expectedRef']
+      if (Object.keys(value).some(key => !['kind', 'workspaceId', 'sessionId', 'id', ...fields].includes(key))) throw new Error('invalid job output query')
+      return { sessionId: text('sessionId', 256), id: text('id', 256), ...Object.fromEntries(fields.filter(key => value[key] !== undefined).map(key => [key, structuredClone(value[key])])) }
+    }
     case "desktop/session/processes/terminal-output": return { sessionId: text("sessionId", 256), id: text("id", 256) }
     case "desktop/session/processes/control": {
       if (!value.command || typeof value.command !== "object" || Array.isArray(value.command) || JSON.stringify(value.command).length > 131072) throw new Error("invalid process command")
@@ -117,6 +121,18 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     }
     case "desktop/subagents/state": return {}
     case "desktop/session/subagents/list": return { sessionId: text("sessionId", 256) }
+    case 'desktop/instructions/state':
+    case 'desktop/instructions/refresh':
+    case 'desktop/instructions/subscribe': return { sessionId: text('sessionId', 256), ...(value.childSessionId === undefined ? {} : { childSessionId: text('childSessionId', 256) }) }
+    case 'desktop/instructions/unsubscribe': return { subscriptionId: text('subscriptionId', 256) }
+    case 'desktop/instructions/settings': return {}
+    case 'desktop/instructions/configure': {
+      if (!value.patch || typeof value.patch !== 'object' || Array.isArray(value.patch)) throw new Error('Invalid instruction settings patch')
+      const patch = value.patch as Record<string, unknown>
+      if (Object.keys(patch).some(key => !['enabled', 'maxBytes', 'globalSources'].includes(key))) throw new Error('Invalid instruction settings patch')
+      if (Buffer.byteLength(JSON.stringify(patch)) > 65536 || patch.enabled !== undefined && typeof patch.enabled !== 'boolean' || patch.maxBytes !== undefined && (!Number.isSafeInteger(patch.maxBytes) || (patch.maxBytes as number) < 0) || patch.globalSources !== undefined && (!Array.isArray(patch.globalSources) || patch.globalSources.length > 256 || patch.globalSources.some(path => typeof path !== 'string'))) throw new Error('Invalid instruction settings patch')
+      return { patch }
+    }
     case "desktop/session/subagents/history": {
       if (value.afterSeq !== undefined && (typeof value.afterSeq !== "number" || !Number.isSafeInteger(value.afterSeq) || value.afterSeq < 0)) throw new Error("invalid afterSeq")
       if (value.limit !== undefined && (typeof value.limit !== "number" || !Number.isSafeInteger(value.limit) || value.limit < 1 || value.limit > 1000)) throw new Error("invalid history limit")

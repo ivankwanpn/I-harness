@@ -13,13 +13,33 @@ import type { SpawnOptions } from "./types.ts"
 import { retainInitialInput } from './initial-input.ts'
 import type { InitialChildInput } from './generation.ts'
 
+function originalMethod<T extends (...args: any[]) => any>(owner: object | undefined, name: string): T | undefined {
+  if (!owner) return undefined
+  for (let current: object | null = owner; current; current = Object.getPrototypeOf(current)) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, name)
+    if (descriptor) { if ('value' in descriptor && typeof descriptor.value === 'function') return descriptor.value.bind(owner) as T; break }
+  }
+  throw new TypeError(`Original child ${name} capability unavailable`)
+}
+
 export async function publishChild(
   opts: SpawnOptions, childCtx: PluginContext, childSession: SessionView, factOwner: FactOwner, document: ManagedDocument | undefined,
   sessionId: string | undefined, childPath: string, childReg: ToolRegistry,
   codeModeMount: CodeModeMount | undefined, controller: AbortController, agent: Agent, modelLabel: string | undefined,
   initial?: InitialChildInput,
   selectedModel: () => import('@i-harness/llm-seam').ModelClient = () => opts.parentModel,
+  instruction?: import('./instruction-context.ts').ChildInstructionContext,
+  retireInstruction?: () => void,
+  onEntryPublished?: (entry: ChildAgentEntry) => void,
+  assertSetupLive?: () => void,
+  original?: { unmount(): void; revokeDocument?(): void; closeDocument?(): Promise<void>; closeInitial?(): Promise<void>; cancelMount?(reason?: string): Promise<void>; disposeMount?(): Promise<void> },
 ): Promise<{ path: string; jobId: string; sessionId?: string; modelLabel?: string }> {
+  const cancelMount = original?.cancelMount ?? originalMethod<(reason?: string) => Promise<void>>(codeModeMount, 'cancel')
+  const disposeMount = original?.disposeMount ?? originalMethod<() => Promise<void>>(codeModeMount, 'dispose')
+  const revokeDocument = original?.revokeDocument ?? originalMethod<() => void>(document, 'revokeNewWork')
+  const closeDocument = original?.closeDocument ?? originalMethod<() => Promise<void>>(document, 'close')
+  const closeInitial = original?.closeInitial ?? originalMethod<() => Promise<void>>(initial, 'close')
+  const unmountContext = original?.unmount ?? originalMethod<() => void>(childCtx.scope, 'unmount')!
   const inputId = initial?.inputId ?? randomUUID(), admission = initial ? undefined : factOwner.beginAction(controller.signal)
   let initialOutcome:import('@i-harness/core-session').ProducerFactOutcome
   try {
@@ -27,10 +47,19 @@ export async function publishChild(
     committedFactSeqs(initialOutcome)
   } finally { admission?.finish() }
   opts.validateBeforeLaunch?.()
+  opts.retainPublication?.({kind:'agent',value:agent})
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
-  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, undefined,
-    { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) })
+  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, opts.childStart?.kind==='committed-child-birth'?()=>controller.abort():undefined,
+    { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) },registration=>opts.retainPublication?.({kind:'job',value:registration}))
   let resultLifetime = true
+  let initialClosed = false, initialFlight: Promise<void> | undefined
+  const settleInitial = () => {
+    if (initialClosed) return Promise.resolve()
+    if (initialFlight) return initialFlight
+    const pending = Promise.resolve().then(() => closeInitial?.()).then(() => { initialClosed = true })
+    initialFlight = pending; void pending.catch(() => { if (initialFlight === pending) initialFlight = undefined }); return pending
+  }
+  let disposal: Promise<void> | undefined, mountCancelled = false, mountDisposed = false, chainSettled = false, instructionClosed = false, documentClosed = false, contextClosed = false
   const entry: ChildAgentEntry = {
     resultLifetime: () => resultLifetime,
     path: childPath,
@@ -56,27 +85,37 @@ export async function publishChild(
     // on the same session. The rejection is swallowed so a failed initial run
     // cannot reject the chain and silently kill all later followups.
     followupChain: undefined,
-    unmount: () => childCtx.scope.unmount(),
-    ...(codeModeMount ? { cancel: (reason?: string) => codeModeMount.cancel(reason) } : {}),
-    dispose: async () => {
+    unmount: () => unmountContext(),
+    ...(codeModeMount ? { cancel: (reason?: string) => cancelMount!(reason) } : {}),
+    dispose: () => {
+      if (disposal) return disposal
       opts.table.update(childPath, entry, { closing: true })
-      document?.revokeNewWork()
+      let retirementFailure: unknown, retirementFailed = false
+      try { retireInstruction?.(); instruction?.retire() } catch (error) { retirementFailure = error; retirementFailed = true }
+      revokeDocument?.()
       entry.controller.abort()
       controller.abort()
-      await codeModeMount?.cancel("Subagent closed")
-      await codeModeMount?.dispose()
-      await entry.followupChain?.catch(() => {})
-      resultLifetime = false
-      await document?.close()
-      await childCtx.scope.unmount()
+      const pending = (async () => {
+        const failures: unknown[] = retirementFailed ? [retirementFailure] : []
+        if (!mountCancelled) try { await cancelMount?.("Subagent closed"); mountCancelled = true } catch (error) { failures.push(error) }
+        if (!mountDisposed) try { await disposeMount?.(); mountDisposed = true } catch (error) { failures.push(error) }
+        if (!chainSettled) { await entry.followupChain?.catch(() => {}); chainSettled = true }
+        if (failures.length) throw new AggregateError(failures, 'Original child producer cleanup incomplete')
+        await settleInitial()
+        if (!instructionClosed) { await instruction?.close(); instructionClosed = true }
+        resultLifetime = false
+        if (!documentClosed) { await closeDocument?.(); documentClosed = true }
+        if (!contextClosed) { await unmountContext(); contextClosed = true }
+      })()
+      disposal = pending; void pending.catch(() => { if (disposal === pending) disposal = undefined }); return pending
     },
   }
   retainInitialInput(entry,inputId,initialOutcome)
-  opts.table.add(childPath, entry)
-  opts.onPublished?.({ path: childPath, jobId, sessionId, ...(modelLabel !== undefined ? { modelLabel } : {}) })
+  const publication=Object.freeze({path:childPath,jobId,sessionId,...(modelLabel!==undefined?{modelLabel}:{})})
+  const runGate=Promise.withResolvers<void>()
   // Defer transport until the entry and its retained lifecycle are published.
-  const initialRun = Promise.resolve().then(() => agent.runAdmitted!(opts.message, controller.signal, undefined, inputId, initial?.generation && initial.delegatedOrigin
-    ? { provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) }, generation: initial.generation, delegatedOrigin: initial.delegatedOrigin } : undefined))
+  const initialRun = runGate.promise.then(() => { controller.signal.throwIfAborted();assertSetupLive?.(); return agent.runAdmitted!(opts.message, controller.signal, undefined, inputId, initial?.generation && initial.delegatedOrigin
+    ? { provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) }, generation: initial.generation, delegatedOrigin: initial.delegatedOrigin } : undefined) })
 
   const completion = initialRun.then(
     async (result) => {
@@ -94,8 +133,19 @@ export async function publishChild(
       await retainChildResult(opts, entry, { error }, aborted ? "cancelled" : "error", settled)
     },
   )
-  entry.followupChain = completion.finally(() => initial?.close())
+  entry.followupChain = completion.finally(settleInitial)
   void entry.followupChain.catch(() => {})
+  try {
+    opts.retainPublication?.({kind:'run',value:entry.followupChain})
+    opts.retainPublication?.({kind:'entry',value:entry})
+    opts.validateBeforeLaunch?.()
+    if(opts.childStart?.kind==='committed-child-birth'&&opts.table.get(childPath))throw Error('Original child publication path occupied')
+    opts.table.add(childPath, entry)
+    onEntryPublished?.(entry)
+    opts.onEntryPublished?.(entry,publication)
+    opts.onPublished?.(publication)
+    controller.signal.throwIfAborted();assertSetupLive?.();runGate.resolve()
+  }catch(cause){runGate.reject(cause);throw cause}
 
   return { path: childPath, jobId, sessionId, ...(modelLabel !== undefined ? { modelLabel } : {}) }
 }

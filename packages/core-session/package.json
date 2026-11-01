@@ -6,6 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./context": "./src/context.ts",
+    "./internal/restoration": "./src/restoration-internal.ts",
+    "./internal/archive": "./src/serialization/archive-internal.ts",
     "./internal/bootstrap": "./src/managed/bootstrap.ts"
   },
   "scripts": {

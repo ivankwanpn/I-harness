@@ -1,23 +1,32 @@
+import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
+import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
+import { readSessionArchive } from './backend/archive-reader.ts'
+import { associateArtifactPaths } from '@i-harness/session-persistence/internal/artifact-path'
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import { validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
+import { canonicalJsonData, validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, validateSubagentHeader, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMetadataUpdate } from "./format.ts"
-import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
+import { createSessionFile, stageOwnedSessionFile, replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
 import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact-journal.ts'
-import { upgradeFactJournal } from './backend/format-upgrade.ts'
+import { upgradeFactJournal, stageOwnedUpgrade } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
+import { ordinaryStageIO } from './backend/bootstrap-stage.ts'
+import { createBootstrapCaptureIO } from './backend/bootstrap-capture-io.ts'
+import { resolveSelectedBirth, snapshotSelectedMetadataUpdate } from './backend/selected-birth.ts'
+import { createSelectedFactJournalBackend } from './backend/selected-fact-journal.ts'
 import { createJsonlProcessReadCapability } from './backend/process-read.ts'
-import { assembleSessionCoordinatorWithProcessStorage } from '@i-harness/session-persistence/internal/process-read-assembly'
-import type { CoordinatorOptions, SessionCoordinator } from '@i-harness/session-persistence'
+import { assembleSessionCoordinatorWithProcessStorage, type TaskTransitionBackendSession, type TaskTransitionConfiguration } from '@i-harness/session-persistence/internal/process-read-assembly'
+import { routeInvocation, type CoordinatorOptions, type SessionCoordinator, type BootstrapRoute, type BootstrapReadState } from '@i-harness/session-persistence'
 import { createTaskDocumentObservation } from './backend/task-document-observation.ts'
-import type { HeldTaskDocumentScope } from '@i-harness/session-persistence'
+import { writeLegacyDocument } from './backend/document-write.ts'
+import type { HeldTaskDocumentScope, TaskDocumentBackendSession, HeldFactOwner } from '@i-harness/session-persistence'
 
 // Only the original constructor below can associate a backend. Byte adapters
 // and callers with structurally identical objects cannot mint this identity.
-const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): ReturnType<typeof createTaskDocumentObservation> }>()
+const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): TaskDocumentBackendSession; openTransitionTask(scope: HeldTaskDocumentScope): TaskTransitionBackendSession; stageCreateHeader(scope: HeldTaskDocumentScope, meta: SessionMeta, proof: Awaited<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['observeFreshTaskParent']>>): ReturnType<typeof stageOwnedSessionFile>; stageUpgradeHeader(scope: HeldTaskDocumentScope, proof: Awaited<ReturnType<ReturnType<ReturnType<typeof createJsonlProcessReadCapability>['openTaskHistory']>['observe']>>, held: HeldFactOwner): ReturnType<typeof stageOwnedUpgrade>; trackHeaderOwner(id: string, owner: HeldFactOwner): void; settleTrackedHeaderIO(id: string, owner: HeldFactOwner): Promise<void>; readTrackedState(route: BootstrapRoute, owner: HeldFactOwner): Promise<BootstrapReadState>; hasTrackedHeaderDebt(id: string, owner: HeldFactOwner): boolean; trackedStageIO(id: string, owner: HeldFactOwner): import('./backend/bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id: string, owner: HeldFactOwner): ReturnType<ReturnType<typeof createBootstrapHeaderBackend>['resolveTrackedBirth']> }>()
 export function lookupJsonlProcessRead(backend: object) {
   const owner = processReadOwners.get(backend)
   if (!owner) return undefined
@@ -31,19 +40,99 @@ export function createJsonlSessionCoordinator(root: string, options?: Coordinato
     captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) },
   })
 }
-export function createJsonlTaskDocumentCoordinator(root: string, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
-  const backend = createJsonlBackend(root), owner = processReadOwners.get(backend)!
+export function composeJsonlTaskDocumentCoordinator(backend: PersistenceBackend, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
+  const owner = processReadOwners.get(backend)
+  if (!owner) throw new TypeError('Original JSONL backend required')
+  owner.assertOriginal()
   return assembleSessionCoordinatorWithProcessStorage(backend, options, { capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) }, captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) } }, { validator, open(scope) { owner.assertOriginal(); return owner.openTask(scope) } })
 }
-
+export function createJsonlTaskDocumentCoordinator(root: string, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
+  return composeJsonlTaskDocumentCoordinator(createJsonlBackend(root), options, validator)
+}
+/** Internal candidate: full transition wiring is not production-qualified. */
+export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBackend, options: CoordinatorOptions | undefined, validator: TaskTransitionConfiguration['validator']): SessionCoordinator {
+  const owner = processReadOwners.get(backend); if (!owner) throw new TypeError('Original JSONL backend required'); owner.assertOriginal()
+  return assembleSessionCoordinatorWithProcessStorage(backend, options,
+    { capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) }, captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) } },
+    { validator, open(scope) { owner.assertOriginal(); return owner.openTask(scope) } },
+    { validator, open(scope) { owner.assertOriginal(); return owner.openTransitionTask(scope) }, observeFresh(scope) { owner.assertOriginal(); return owner.capability.observeFreshTaskParent(scope) },
+      observeBootstrap(scope, route, held) {
+        owner.assertOriginal(); if ((route.protocol === 'public-results-v1' ? route.request.invocation : routeInvocation(route)).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
+        if (route.protocol === 'public-results-v1') return owner.capability.observeReservedTaskParent(scope, async () => {
+          owner.assertOriginal(); scope.assertActive()
+          const selected = (backend as PersistenceBackend & {selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture']}).selectedCapture
+          try {
+            const state = await selected.readSelectedCapture(scope.parentSessionId,held,route)
+            scope.assertActive(); owner.assertOriginal()
+            if (state.kind !== 'reserved' || canonicalJsonData(state.reservation.request) !== canonicalJsonData(route.request)) throw new Error('Selected bootstrap target unavailable')
+            return canonicalJsonData(state)
+          } finally { await backend.settleBootstrapCaptureIO!(scope.parentSessionId,held) }
+        })
+        return owner.capability.observeReservedTaskParent(scope, async () => {
+          owner.assertOriginal(); scope.assertActive(); const state = await owner.readTrackedState(route,held); scope.assertActive(); owner.assertOriginal()
+          if (state.kind === 'unavailable' || state.foreign || state.meta || state.rawHeader || state.publicationPresent || state.promotionPresent || state.stagePresent && !state.stageBytes && !state.captureReservation) throw new Error('Bootstrap target unavailable')
+          return canonicalJsonData({ kind: state.kind, stagePresent: !!state.stagePresent, stage: state.stageBytes ? Buffer.from(state.stageBytes).toString('base64') : null, reservation: state.captureReservation ?? null })
+        })
+      }, openHistory(scope, held) {
+        owner.assertOriginal()
+        return owner.capability.openTaskHistory(scope, async () => { owner.assertOriginal(); const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); owner.assertOriginal(); return birth?.digest })
+      },
+      openBootstrapHistory(scope, route, held) {
+        owner.assertOriginal(); if ((route.protocol === 'public-results-v1' ? route.request.invocation : routeInvocation(route)).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
+        let originalStage: string | undefined
+        return owner.capability.openTaskHistory(scope, async () => {
+          owner.assertOriginal(); const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); owner.assertOriginal()
+          if (!birth || canonicalJsonData(birth.route) !== canonicalJsonData(route)) throw new Error('Bootstrap history unavailable')
+          const stage = canonicalJsonData(birth.stage); if (originalStage !== undefined && originalStage !== stage) throw new Error('Bootstrap stage changed'); originalStage ??= stage
+          return birth.digest
+        })
+      },
+      openHistoryHeader(scope, held, proof) {
+        owner.assertOriginal(); owner.capability.originalHistory(proof,scope); scope.assertActive()
+        let decided = false, operation: import('@i-harness/session-persistence').BootstrapHeaderOperation | undefined, captured = false, selectedRoute: import('@i-harness/session-persistence').SelectedResultsRoute | undefined
+        let result: import('@i-harness/session-persistence').HeaderOutcome | {kind:'not-required'} | undefined, flight: Promise<import('@i-harness/session-persistence').HeaderOutcome | {kind:'not-required'}> | undefined, settling: Promise<void> | undefined
+        const session = Object.freeze({
+          confirm() {
+            if (this !== session) return Promise.reject(new TypeError('Invalid history header receiver'))
+            if (result?.kind === 'committed' || result?.kind === 'not-required' || result?.kind === 'conflict') return Promise.resolve(result)
+            if (flight) return flight
+            flight = Promise.resolve().then(async () => {
+              owner.assertOriginal(); scope.assertActive()
+              if (!decided) {
+                const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); await proof.assertCurrent(); scope.assertActive(); decided = true
+                if (!birth) return result = {kind:'not-required' as const}
+                operation = { invocation:birth.stage.invocation, target:birth.stage.originalTarget, stageBytes:birth.stageBytes, headerBytes:Buffer.from(birth.stage.headerBytes) }
+                captured = !!birth.stage.captureReservation
+                if (birth.route.protocol === 'public-results-v1') selectedRoute = birth.route
+              }
+              try { result = selectedRoute ? await (backend as PersistenceBackend & {selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture']}).selectedCapture.confirmSelectedBirthHeader(scope.parentSessionId,held,selectedRoute,operation!,proof.initial.formatVersion) : await backend.reconcileBootstrapHeader!(scope.parentSessionId,held,operation!); return result }
+              catch { return result = {kind:'unknown' as const} }
+            })
+            void flight.then(() => { flight = undefined }, () => { flight = undefined }); return flight
+          },
+          settle() {
+            if (this !== session) return Promise.reject(new TypeError('Invalid history header receiver'))
+            if (settling) return settling
+            settling = Promise.resolve().then(async () => { await flight?.catch(() => {}); await owner.settleTrackedHeaderIO(scope.parentSessionId,held); if (captured) await backend.settleBootstrapCaptureIO!(scope.parentSessionId,held) })
+            void settling.then(() => { settling = undefined }, () => { settling = undefined }); return settling
+          },
+        })
+        return session
+      }, trackHeader(id, held) { owner.assertOriginal(); owner.trackHeaderOwner(id, held) }, settleHeader(id, held) { owner.assertOriginal(); return owner.settleTrackedHeaderIO(id, held) }, hasHeaderDebt(id, held) { owner.assertOriginal(); return owner.hasTrackedHeaderDebt(id, held) }, readBootstrapState(route, held) { owner.assertOriginal(); return owner.readTrackedState(route, held) }, stageUpgrade(scope, proof, held) { owner.assertOriginal(); return owner.stageUpgradeHeader(scope, proof, held) }, stageHeader(scope, meta, proof) { owner.assertOriginal(); return owner.stageCreateHeader(scope, meta, proof) } })
+}
+export function createJsonlTaskTransitionCoordinator(root: string, options: CoordinatorOptions | undefined, validator: TaskTransitionConfiguration['validator']): SessionCoordinator {
+  return composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), options, validator)
+}
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
 // answer (no turn/start yet); a larger one is served non-blank without a read
 // (honest-bounding: it may have content — never guessed blank).
 const BLANK_PROBE_MAX_BYTES = 1024
 
-export function createJsonlBackend(root: string): PersistenceBackend {
+export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const rootPath = resolve(root)
+  const captureIO = createBootstrapCaptureIO()
+  const archiveReads = createArchiveReadOwner()
   const artifactPath = (id: string, suffix: string): string => {
     const portableId = id.replace(/\\/g, "/")
     const candidate = resolve(rootPath, `${portableId}${suffix}`)
@@ -59,20 +148,20 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     return candidate
   }
   const filePath = (id: string) => artifactPath(id, ".jsonl")
-  async function assertPublicBootstrap(sessionId: string, creating = false) {
+  async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}) {
     const path = filePath(sessionId)
     const namespace=await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
     if (!namespace.length) {
       if(creating)return
       // A retained semantic header does not become an ordinary replacement
       // merely because its sole birth stage is missing.
-      const header=await readHeader(path)
+      const header=observed?.header ?? await archiveReads.run(path,async(handle,extent)=>(await readSessionArchive(handle,extent,true)).header,true)
       if(!header.semanticSeed)return
     }
     const prefix=basename(path)+'.bootstrap-'
     if(namespace.some(name=>!(/^[a-f0-9]{64}\.(stage|publish|promote)$/.test(name.slice(prefix.length)))))throw Object.assign(new Error('Unknown bootstrap artifact requires its original owner'),{code:'SESSION_BOOTSTRAP_INCOMPLETE'})
     if (creating) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
-    const raw = await readFile(path)
+    const raw = observed?.birth ?? await archiveReads.run(path,async (handle,extent)=>(await readSessionArchive(handle,extent,true)).birth,true)
     const end = raw.indexOf(10), meta = parseHeader(raw.subarray(0, end).toString('utf8'))
     if (!meta.semanticSeed) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
     // Only the immutable bootstrap prefix is needed. Do not parse a live suffix
@@ -128,9 +217,16 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     return { visibility: value.visibility, manifest: { documents: value.documents, files: value.files } }
   }
 
-  const backend: PersistenceBackend = {
+  function initialHeader(meta: SessionMeta): string {
+    const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
+    return serializeHeader({ ...meta, journal }) + '\n'
+  }
+  const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO)
+  const backend: PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>; selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } = {
     ...createFactJournalBackend(filePath, assertNotDeleted),
-    ...createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath),
+    ...bootstrapBackend,
+    // Original private selected lane shares capture IO with bootstrap.
+    selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO),
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.
@@ -139,13 +235,14 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     deletionReceipt,
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
+      validateSubagentHeader(meta)
+      if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy create cannot install selected results')
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId, true)
       if (meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("new session writers require current format; downgrade refused")
       await mkdir(rootPath, { recursive: true })
       // wx: fail if the session file already exists.
-      const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
-      await writeFile(filePath(sessionId), serializeHeader({ ...meta, journal }) + "\n", { flag: "wx" })
+      await createSessionFile(filePath(sessionId), initialHeader(meta))
     },
 
     async append(sessionId: string, events: SessionEvent[]): Promise<void> {
@@ -163,7 +260,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         const lastByte = Buffer.alloc(1)
         if (committedBytes > 0) await handle.read(lastByte, 0, 1, committedBytes - 1)
         const separator = events.length > 0 && committedBytes > 0 && lastByte[0] !== 0x0a ? "\n" : ""
-        const data = [6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion)
+        const data = [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion)
           ? (() => {
             const raw = readFile(path)
             return raw.then(bytes => {
@@ -198,14 +295,11 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       await assertNotDeleted("session", sessionId)
-      await assertPublicBootstrap(sessionId)
-      const text = await readFile(filePath(sessionId), "utf-8")
-      const lines = text.split("\n")
-      if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
-      const header = parseHeader(lines[0]!)
-      const events = [6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events : parseEventLines(lines.slice(1))
-      if (![6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
-      return { version: header.formatVersion, events, meta: header }
+      return archiveReads.run(filePath(sessionId),async(handle,extent)=>{
+        const candidate=await readSessionArchive(handle,extent,false,prefix => assertPublicBootstrap(sessionId,false,prefix))
+        await assertNotDeleted("session",sessionId)
+        return {version:candidate.header.formatVersion,events:candidate.events,meta:candidate.header}
+      },false,sessionId,true)
     },
 
     async list(): Promise<string[]> {
@@ -226,7 +320,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const headerLine = lines[0]!
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
-      if ([6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion)) {
+      if ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion)) {
         const decoded = readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header)
         const closers = missingClosers(decoded.events).map((event, position) => ({ ...event, seq: decoded.events.length + position }))
         if (decoded.torn || closers.length) {
@@ -280,7 +374,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         await replaceRawSessionFile(path, Buffer.concat([raw.subarray(0, raw.indexOf(10) + 1), birth.bytes, Buffer.from(frame)]))
         return
       }
-      if ([6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion)) {
+      if ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion)) {
         const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
         const frame = events.length ? encodeFactBatch(randomUUID(), journal.legacyPrefixDigest, events).bytes : new Uint8Array()
         await replaceRawSessionFile(path, Buffer.concat([Buffer.from(serializeHeader({ ...header, journal }) + '\n'), Buffer.from(frame)]))
@@ -292,7 +386,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     async upgradeSessionFormat(sessionId, expected, target) {
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
-      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
+      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
       const path = filePath(sessionId)
       return upgradeFactJournal(path, expected)
     },
@@ -307,7 +401,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         const lines = (await readFile(path, "utf-8")).split("\n")
         return {
           meta: parseHeader(lines[0]!),
-          blank: ([6, 7, 8, 9, 10, 11, 12, 13].includes(parseHeader(lines[0]!).formatVersion)
+          blank: ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(parseHeader(lines[0]!).formatVersion)
             ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), parseHeader(lines[0]!).journal!, parseHeader(lines[0]!).formatVersion, parseHeader(lines[0]!)).events
             : parseEventLines(lines.slice(1))).every((ev) => ev.type !== "turn/start"), updatedAt,
         }
@@ -323,17 +417,15 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       // (a torn tail is preserved as-is, repair's business). Atomic temp +
       // rename (putDocument pattern) — a concurrent reader sees either the
       // old or the new file, never a truncated one.
-      const text = await readFile(path, "utf-8")
-      const lines = text.split("\n")
-      if (lines.length === 0 || lines[0]!.trim() === "") {
-        throw new Error(`empty session file: ${sessionId}`)
-      }
-      const previous = parseHeader(lines[0]!)
-      const snapshot = snapshotMetadataUpdate(previous, patch)
-      const out = lines.slice()
-      out[0] = snapshot.line
+      const raw = await readFile(path), end=raw.indexOf(10)
+      if(end<0||end+1>65536||!raw.subarray(0,end).toString('utf8').trim())throw new Error(`empty session file: ${sessionId}`)
+      const previous=parseHeader(raw.subarray(0,end).toString('utf8'))
+      const birth=previous.semanticSeed?.version===3 ? await resolveSelectedBirth(path,sessionId,assertNotDeleted,{stage:ordinaryStageIO(path),readJournal:()=>readFile(path)}) : undefined
+      // Bind the rewrite to the same observed bytes, including the real resolver reread.
+      if(birth&&!(await readFile(path)).equals(raw))throw TypeError('Selected journal changed during metadata update')
+      const snapshot=birth ? snapshotSelectedMetadataUpdate(birth,patch) : snapshotMetadataUpdate(previous,patch)
       const tmp = `${path}.${randomUUID()}.tmp`
-      await writeFile(tmp, out.join("\n"), { encoding: "utf-8" })
+      await writeFile(tmp, Buffer.concat([Buffer.from(snapshot.line+'\n'),raw.subarray(end+1)]))
       await rename(tmp, path)
       return snapshot.meta
     },
@@ -349,9 +441,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       // Atomic write: temp file + rename so concurrent saves never
       // interleave/truncate the sidecar. A transient `<uuid>.tmp` matches
       // neither `*.jsonl` nor `*.doc.jsonl`, so list() stays correct.
-      const tmp = `${path}.${randomUUID()}.tmp`
-      await writeFile(tmp, JSON.stringify(data) + "\n", { encoding: "utf-8" })
-      await rename(tmp, path)
+      await writeLegacyDocument(path, data)
     },
     async getDocument(key: string): Promise<unknown | undefined> {
       const text = await readFile(docPath(key), "utf-8").catch(() => undefined)
@@ -417,10 +507,25 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       if (!current || !('value' in current) || current.value !== original.value) throw new Error('PROCESS_READ_UNAVAILABLE')
     }
   }
+  associateArchiveReadResources(backend,archiveReads.association)
+  associateArtifactPaths(backend, Object.freeze({
+    root() { assertOriginal(); return rootPath },
+    async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
+    session(id: string) { assertOriginal(); return filePath(id) },
+    document(key: string) { assertOriginal(); return docPath(key) },
+    taskForParent(id: string) { assertOriginal(); return docPath('task-' + id) },
+    async prepareDocumentParents(key: string) {
+      assertOriginal(); await assertNotDeleted('document', key); assertOriginal()
+      await mkdir(rootPath, { recursive: true }); assertOriginal()
+      await mkdir(dirname(docPath(key)), { recursive: true }); assertOriginal()
+    },
+    assertOriginal,
+  }))
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
     async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
-  processReadOwners.set(backend, { capability, assertOriginal, openTask(scope) {
-    assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope)
+  associateArchiveHistoryPrefixReader(backend,proof=>{assertOriginal();return capability.qualifiedHistoryPrefix(proof)})
+  function openOwnedTask(scope: HeldTaskDocumentScope, initialize: boolean): TaskDocumentBackendSession {
+    assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope, undefined, available)
     async function available() {
       for (const path of [tombPath('session', scope.parentSessionId), tombPath('document', scope.key)]) {
         try { await lstat(path); throw Object.assign(new Error('Task document is deleted'), { code: 'SESSION_DELETED' }) }
@@ -430,10 +535,30 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     const session = Object.freeze({
       async observe() { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); await available(); const result = await original.observe(); await available(); assertOriginal(); return result },
       async confirm(witness: Parameters<typeof original.confirm>[0]) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); await available(); const result = await original.confirm(witness); await available(); assertOriginal(); return result },
+      stageWrite(witness: Parameters<typeof original.stageWrite>[0], bytes: Uint8Array) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); return original.stageWrite(witness, bytes) },
+      ...(initialize ? { stageInitialize(bytes: Uint8Array) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); return original.stageInitialize(bytes) } } : {}),
       settleResources() { if (this !== session) return Promise.reject(new TypeError('Invalid task backend receiver')); return original.settleResources() },
     })
     return session
-  } })
+  }
+  processReadOwners.set(backend, {
+    capability, assertOriginal, trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth,
+    openTask(scope) { return openOwnedTask(scope, false) },
+    openTransitionTask(scope) { return openOwnedTask(scope, true) as TaskTransitionBackendSession },
+    stageUpgradeHeader(scope, proof, held) {
+      assertOriginal(); const original = capability.originalHistory(proof, scope)
+      return stageOwnedUpgrade(filePath(scope.parentSessionId), original.bytes, original.identity,
+        () => { assertOriginal(); capability.originalHistory(proof, scope); scope.assertActive() },
+        async () => { await proof.assertRoot(); assertOriginal(); scope.assertActive() }, trackedStageIO(scope.parentSessionId,held))
+    },    stageCreateHeader(scope, meta, proof) {
+      assertOriginal(); capability.assertFreshOwner(proof, scope); scope.assertActive()
+      if (meta.sessionId !== scope.parentSessionId || meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Invalid original session header')
+      const bytes = Buffer.from(initialHeader(meta))
+      return stageOwnedSessionFile(filePath(scope.parentSessionId), bytes,
+        () => { assertOriginal(); capability.assertFreshOwner(proof, scope); scope.assertActive() },
+        async () => { await proof.assertRoot(); assertOriginal(); scope.assertActive() })
+    },
+  })
   return backend
 }
 

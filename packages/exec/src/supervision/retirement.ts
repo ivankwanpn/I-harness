@@ -54,7 +54,11 @@ export function createRetirement({ owns, remove }: RetirementOwner) {
     if (entry.preparing) return entry.completion
     if (!owns(entry)) return cleaned
     if (entry.handle) {
-      try { return cleanupOutcome(await cancelEntry(entry, entry.stopReason ?? "shutdown")) }
+      try {
+        const result=cleanupOutcome(await cancelEntry(entry, entry.stopReason ?? "shutdown"))
+        if(result.kind==='cleaned')remove(entry)
+        return result
+      }
       catch (cause) { return { kind: "failed", cause } }
     }
     if (entry.rollbackFailed && entry.prepared) {
@@ -72,6 +76,7 @@ export function createRetirement({ owns, remove }: RetirementOwner) {
       }
       return entry.rollbackAttempt
     }
+    remove(entry)
     return cleaned
   }
 
@@ -81,5 +86,5 @@ export function createRetirement({ owns, remove }: RetirementOwner) {
     if (errors.length) throw new AggregateError(errors, `${operation} failed: ${errors.map(cleanupDetail).join("; ")}`)
   }
 
-  return { watch, markStopped, cancelEntry, drainAll }
+  return { watch, markStopped, cancelEntry, drain, drainAll }
 }

@@ -5,6 +5,7 @@ import { SandboxUnavailableError, snapshotProcessSpec } from "@i-harness/sandbox
 import { currentExecCaller } from "./caller-scope.ts"
 import { ExecutionAdmissionError } from "./execution-admission.ts"
 import type { ExecutionSupervisor, SupervisedExecution } from "./execution-supervisor.ts"
+import type { NativeAdmissionOwner } from './supervision/contracts.ts'
 import { resolveWindowsMsysPty } from "./windows-msys-pty.ts"
 import type { ExecExecutionHost, ExecServiceOptions, ExecTransportRequest } from "./index.ts"
 
@@ -58,7 +59,7 @@ export function createTransportLaunch(options: ExecServiceOptions, host: ExecExe
     return actual.sessionId === owner.sessionId || host.canAccessOwner?.(actual, owner) === true
   }
 
-  function launchTransport(request: ExecTransportRequest, automaticPromotion = false): Promise<SupervisedExecution> {
+  function launchTransport(request: ExecTransportRequest, automaticPromotion = false, admission?:NativeAdmissionOwner): Promise<SupervisedExecution> {
     try {
       if (isDisposed()) throw new Error("Exec service disposed")
       const owner = caller()
@@ -82,8 +83,10 @@ export function createTransportLaunch(options: ExecServiceOptions, host: ExecExe
         if (policy.mode !== "danger-full-access") throw new SandboxUnavailableError(policy.mode, cause instanceof Error ? cause.message : String(cause))
         throw cause
       }
+      admission?.begin()
       return supervisor.launch({ backend, spec, policy, requirements: requirements(policy, request),
-        validateAuthority: current => host.validateAuthority(current), signal: request.abortSignal }).catch(cause => {
+        validateAuthority: current => {host.validateAuthority(current);admission?.assertCurrent()}, signal: request.abortSignal,
+        ...(admission?{admission}:{}) }).catch(cause => {
           if (policy.mode !== "danger-full-access" && cause instanceof ExecutionAdmissionError) {
             throw new SandboxUnavailableError(policy.mode, cause.message)
           }

@@ -126,6 +126,7 @@ export class HarnessClient {
   private nextId = 1
   private pending = new Map<string, Pending>()
   private notificationListeners = new Set<(notification: RpcNotification) => void>()
+  private notificationFailures = new WeakMap<(notification: RpcNotification) => void, (error: unknown) => void>()
   private exitError: Error | undefined
   private child: ChildProcess | undefined
   private closed = false
@@ -190,9 +191,10 @@ export class HarnessClient {
   }
 
   /** Server → client notifications (e.g. session/event, session/status). */
-  onNotification(listener: (notification: RpcNotification) => void): () => void {
+  onNotification(listener: (notification: RpcNotification) => void, failed?: (error: unknown) => void): () => void {
     this.notificationListeners.add(listener)
-    return () => { this.notificationListeners.delete(listener) }
+    if(failed)this.notificationFailures.set(listener,failed)
+    return () => { this.notificationListeners.delete(listener);this.notificationFailures.delete(listener) }
   }
 
   /** High-level per-session handle. */
@@ -482,7 +484,15 @@ export class HarnessClient {
       return
     }
     // notification
-    for (const listener of [...this.notificationListeners]) listener(message as RpcNotification)
+    for (const listener of [...this.notificationListeners]) {
+      if(message.method!=='desktop/surface/changed'){listener(message as RpcNotification);continue}
+      try {listener(message as RpcNotification)} catch(error) {
+        this.notificationListeners.delete(listener)
+        const failed=this.notificationFailures.get(listener);this.notificationFailures.delete(listener)
+        if(failed){try{failed(error)}catch{}}
+        else {this.exitError=new SdkConnectionError('Surface notification delivery failed');this.rejectAll(this.exitError);this.transport.close()}
+      }
+    }
   }
 
   private rejectAll(error: Error): void {

@@ -35,8 +35,9 @@ export type SessionEvent =
   | (
     | import('./runtime-context.ts').RuntimeContextRecordV1
     | { type: "turn/start"; seq?: number }
-    | import('./bootstrap.ts').SeedManifestRecord
+    | import('./bootstrap.ts').SeedManifestEvent
     | import('./bootstrap.ts').SeedGroupRecord
+    | import('./bootstrap.ts').SeedResultsRecordV1
     | import('./bootstrap.ts').BootstrapCompleteRecord
     | { type: "step/start"; actionId?: string; attemptId?: string; seq?: number }
     | { type: "step/failed"; seq?: number }
@@ -59,7 +60,7 @@ export type SessionEvent =
     | { type: "tool/dispatch"; callId: string; eventSeq?: number; seq?: number }
     | ({ type: "tool/result"; callId: string; name: string; seq?: number } & import('../results/types.ts').ResultFactPayload)
     // Durable Code Mode inspection records; only outer exec/wait results enter inference.
-    | { type: "code/cell"; cellId: string; sessionId?: string; parentCallId?: string; state: "started" | "running" | "completed" | "failed" | "terminated" | "interrupted"; source?: string; error?: string; seq?: number }
+    | { type: "code/cell"; cellId: string; sessionId?: string; parentCallId?: string; state: "started" | "running" | "completed" | "failed" | "terminated" | "interrupted"; source?: string; error?: string; instructionReplan?: { code: 'INSTRUCTIONS_REPLAN_REQUIRED'; currentFingerprint: string; reason: 'missing-origin' | 'unseen-rules' | 'changed-dependency' | 'unavailable' | 'mixed-mutation' | 'revoked'; splitRequired?: true; applied?: readonly string[]; notApplied?: readonly string[]; effectsUnknown?: readonly string[] }; seq?: number }
     | { type: "code/call"; cellId: string; parentCallId?: string; callId: string; name: string; args: unknown; seq?: number }
     | { type: "code/dispatch"; cellId: string; callId: string; eventSeq?: number; seq?: number }
     | ({ type: "code/result"; cellId: string; callId: string; name: string; seq?: number } & import('../results/types.ts').ResultFactPayload)
@@ -259,4 +260,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 13
+export const CURRENT_FORMAT_VERSION = 14

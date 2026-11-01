@@ -2,7 +2,11 @@ import { expect, it, vi } from "vitest"
 import { mkdtemp, rm, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+const profileGate=vi.hoisted(()=>({path:'',blocked:false,entered:undefined as (()=>void)|undefined,release:undefined as Promise<void>|undefined}))
+vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,async readFile(...args:Parameters<typeof fs.readFile>){const value=await fs.readFile(...args);if(profileGate.blocked&&String(args[0])===profileGate.path){profileGate.entered?.();await profileGate.release}return value}}})
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import { createDesktopExecution, readDesktopSnapshot } from "../src/execution.ts"
@@ -131,11 +135,11 @@ it("reads a reopened cold journal without entering writable, recovery, or model 
   const f = await fixture()
   await f.service.close(); await f.coordinator.close()
   const backend = createJsonlBackend(join(f.root, "sessions"))
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const repair = vi.spyOn(backend, "repair").mockImplementation(async () => { throw new Error("repair") })
   const upgrade = vi.spyOn(backend as Required<typeof backend>, "upgradeSessionFormat").mockImplementation(async () => { throw new Error("upgrade") })
   const append = vi.spyOn(backend, "append").mockImplementation(async () => { throw new Error("append") })
   const replace = vi.spyOn(backend as Required<typeof backend>, "replaceEvents").mockImplementation(async () => { throw new Error("replace") })
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const load = vi.spyOn(coordinator, "load").mockImplementation(async () => { throw new Error("load") })
   const loadOwned = vi.spyOn(coordinator, "loadOwned").mockImplementation(async () => { throw new Error("loadOwned") })
   const sessionFor = vi.fn(async () => { throw new Error("sessionFor") })
@@ -188,3 +192,44 @@ it("flushes only after the real live owner has stopped the cell", async () => {
     expect(order).toEqual(["stop-start", "stop-end", "flush"])
   } finally { await f.close() }
 }, 15000)
+
+it('uses the retained profile port inside the real cold execution read', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-retained-profile-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+  try {
+    await coordinator.create({ sessionId: 's' }); await coordinator.releaseOwnership('s')
+    const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
+    const service = { liveAssembly: () => undefined }
+    const read = createDesktopExecution(coordinator, service).read
+    const ordinary = vi.spyOn(coordinator, 'profile')
+    const view = await ref.withRead(profile => read('s', {}, () => ref.assertCurrent(), profile))
+    expect(view.total).toBe(0)
+    expect(ordinary).not.toHaveBeenCalled()
+    await ref.release()
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('denies a held real retained profile after release and permits a fresh reference and manual read', async () => {
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'ih-held-retained-profile-'))
+  const backend = createJsonlBackend(root), entered = latch(), held = latch()
+  profileGate.path=join(root,'s.jsonl');profileGate.entered=entered.release;profileGate.release=held.promise
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true, lockRoot: root } })
+  const service = { liveAssembly: vi.fn(() => undefined) }, snapshot = vi.spyOn(coordinator, 'snapshot'), ordinary = vi.spyOn(coordinator, 'profile')
+  try {
+    await coordinator.create({ sessionId: 's' }); await coordinator.releaseOwnership('s')
+    const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
+    const read = createDesktopExecution(coordinator, service).read
+    profileGate.blocked = true
+    const pending = ref.withRead(profile => read('s', {}, () => ref.assertCurrent(), profile)); void pending.catch(() => {})
+    await entered.promise
+    const releasing = ref.release(); void releasing.catch(() => {})
+    expect(() => ref.assertCurrent()).toThrow()
+    held.release(); await expect(pending).rejects.toThrow(); await releasing
+    expect(service.liveAssembly).not.toHaveBeenCalled(); expect(snapshot).not.toHaveBeenCalled(); expect(ordinary).not.toHaveBeenCalled()
+    profileGate.blocked = false
+    const fresh = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
+    expect((await fresh.withRead(profile => read('s', {}, () => fresh.assertCurrent(), profile))).total).toBe(0)
+    await fresh.release()
+    ordinary.mockClear(); expect((await read('s')).total).toBe(0); expect(ordinary).toHaveBeenCalledOnce()
+  } finally { profileGate.blocked=false;held.release(); await coordinator.close(); await rm(root, { recursive: true, force: true });profileGate.path='';profileGate.entered=undefined;profileGate.release=undefined }
+})

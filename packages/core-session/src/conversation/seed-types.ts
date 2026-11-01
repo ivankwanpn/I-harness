@@ -89,8 +89,15 @@ export type SemanticSeedV2 = Omit<SemanticSeedV1, 'version' | 'selection'> & {
   version: 2; selection: Extract<SeedSelection, { kind: 'completed' }>
   passive: { codeStore: import('../projection/passive-code-store/types.ts').PassiveCodeStoreV1 }
 }
-export type SemanticSeed = SemanticSeedV1 | SemanticSeedV2
-export type SeedExport<T extends SemanticSeed = SemanticSeed> = { kind: 'none' }
+export type LegacySemanticSeed = SemanticSeedV1 | SemanticSeedV2
+type SemanticSeedV3Common = Omit<SemanticSeedV1, 'version' | 'selection'> & {
+  version: 3; results: { summary: import('./selected-results-types.ts').ResultsSummaryV1; pages: readonly import('./selected-results-types.ts').SelectedResultPageV1[] }
+}
+export type SemanticSeedV3Public = SemanticSeedV3Common & { profile: 'public-completed'; selection: Extract<SeedSelection, { kind: 'completed' }>; passive: SemanticSeedV2['passive'] }
+export type SemanticSeedV3Child = SemanticSeedV3Common & { profile: 'child-history'; selection: Extract<SeedSelection, { kind: 'all' | 'last-turns' }> }
+export type SemanticSeedV3 = SemanticSeedV3Public | SemanticSeedV3Child
+export type SemanticSeed = LegacySemanticSeed | SemanticSeedV3
+export type SeedExport<T extends SemanticSeed = LegacySemanticSeed> = { kind: 'none' }
   | { kind: 'seed'; seed: T; digest: Digest;
       sourceObservationDigest:Digest }
   | { kind: 'refused'; reason: SeedRefusal };

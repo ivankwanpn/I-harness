@@ -87,3 +87,23 @@ it.each(['before', 'after'])('preserves original canonical owners through the %s
   expect(await physicalBytes(root)).toBeLessThanOrEqual(held)
   expect((await readLedger(path)).owners).toEqual(next)
 })
+
+it.each(['before', 'after'])('retains an original selected owner handle across the %s publication cut', async where => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-selected-owner-cut-')), path = join(root, 'owners.json'), ledger = new OwnerLedger(root)
+  await writeFile(path, '["source"]')
+  const original = ledger.createTransfer(path, 'target', 'selected-original'); await original.prepare(() => {})
+  await original.fund(1_000_000, () => {})
+  cut.where = where
+  try { await expect(original.issue(() => {})).rejects.toThrow(/canonical rename/) } finally { cut.where = '' }
+  const bytes = await readFile(path)
+  if (where === 'before') {
+    await expect(original.settle()).rejects.toThrow(/unavailable/)
+    expect(await readFile(path)).toEqual(bytes)
+    await original.issue(() => {})
+  } else await original.settle()
+  expect((await readLedger(path)).owners).toEqual(new Set(['source', 'target']))
+  await original.issue(() => {}); await original.settle()
+  const foreign = ledger.createTransfer(path, 'target', 'selected-original')
+  await expect(foreign.prepare(() => {})).rejects.toThrow(/Foreign equal/)
+  await expect(foreign.settle()).rejects.toThrow(/not issued/)
+})

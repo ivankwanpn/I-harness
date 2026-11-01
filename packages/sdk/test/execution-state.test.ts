@@ -2,7 +2,8 @@ import { controlledModel } from '../../session-executor/test/controlled-model.ts
 import { expect, it } from "vitest"
 import { createSession, decodeFactBatch } from "@i-harness/core-session"
 import { createSessionService } from "@i-harness/session-executor"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -17,7 +18,7 @@ function gate() {
 }
 
 it.each(["stop", "flush"])("refreshes an internally submitted parent result after delayed %s settles", async delay => {
-  const root=await mkdtemp(join(tmpdir(),'ih-f1-sdk-receipt-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
+  const root=await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(),'ih-f1-sdk-receipt-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
   await coordinator.create({sessionId:'parent'})
   const session = delay==='flush'?(await coordinator.openManagedDocument('parent')).view:createSession(), stop = gate(), entered = gate(), read = gate()
   const actual=backend.appendOwnedBatch!

@@ -87,7 +87,15 @@ export async function resolveBoundaryAliases(plan: DiscoveryPlan): Promise<Bound
   return frozen({ aliases: [...aliases.values()], unavailableTargets })
 }
 export interface Slot { slotId: string; path: string; scopeRoot: string; scopeDirectory: string; kind: InstructionKind; presence: CandidatePresence; canonicalPath?: string; observedSize?: number; selected: boolean; outside: boolean; global: boolean }
-export interface DiscoveredTarget { target: InstructionTarget; scopeKey: string; slotIds: string[]; complete: boolean; message?: string }
+export interface ResolverMembership {
+  readonly root: string
+  readonly target: string
+  readonly selectedRoot: string
+  readonly boundary: string
+  readonly markers: readonly { readonly path: string; readonly canonicalPath: string; readonly state: 'absent' | 'valid' | 'invalid' }[]
+  readonly globals: readonly string[]
+}
+export interface DiscoveredTarget { target: InstructionTarget; scopeKey: string; slotIds: string[]; complete: boolean; message?: string; membership?: ResolverMembership }
 export interface Discovery { slots: Slot[]; targets: DiscoveredTarget[] }
 async function gitMarker(directory: string): Promise<'absent' | 'valid' | 'invalid'> {
   const path = join(directory, '.git')
@@ -124,7 +132,7 @@ export async function discover(scope: InstructionScope, plan: DiscoveryPlan): Pr
         try {
           const resolvedRoot = await canonical(root), resolved = await canonical(path)
           if (!inside(resolvedRoot, resolved)) { slot.outside = true; slot.presence = 'invalid' }
-          else { const stat = await fs.stat(path); slot.canonicalPath = await fs.realpath(path); slot.observedSize = stat.size; slot.presence = stat.isFile() ? 'regular' : 'invalid' }
+          else { slot.canonicalPath = resolved; const stat = await fs.stat(path); slot.canonicalPath = await fs.realpath(path); slot.observedSize = stat.size; slot.presence = stat.isFile() ? 'regular' : 'invalid' }
         } catch (e) { slot.presence = missing(e) ? 'absent' : 'unreadable' }
         slots.set(slotId, slot)
       }
@@ -138,15 +146,20 @@ export async function discover(scope: InstructionScope, plan: DiscoveryPlan): Pr
   const targets: DiscoveredTarget[] = []
   for (const p of plan.targets) {
     let complete = globalComplete && !p.limited; let boundary = p.root ?? ''; let message: string | undefined = globalComplete ? undefined : 'Instruction candidate limit reached'
+    let rootCanonical: string | undefined, targetCanonical: string | undefined
+    const markers: { path: string; canonicalPath: string; state: 'absent' | 'valid' | 'invalid' }[] = []
     let dirs: string[] = []
     if (p.limited) message = 'Instruction ancestor limit reached'
     else if (!p.root) { if (scope.roots.length) { complete = false; message = 'Target outside authorized roots' } }
     else {
       try {
-        if (!inside(await canonical(p.root), await canonical(p.target.path))) { complete = false; message = 'Target canonical path outside authorized root' }
+        rootCanonical = await canonical(p.root); targetCanonical = await canonical(p.target.path)
+        if (!inside(rootCanonical, targetCanonical)) { complete = false; message = 'Target canonical path outside authorized root' }
         else {
           for (const dir of p.directories) {
             const marker = await gitMarker(dir)
+            const markerPath = join(dir, '.git')
+            markers.push({ path: markerPath, canonicalPath: await canonical(markerPath), state: marker })
             if (marker === 'invalid') { complete = false; message = 'Invalid Git boundary'; dirs = []; break }
             dirs.push(dir)
             if (marker === 'valid') { boundary = dir; break }
@@ -156,7 +169,8 @@ export async function discover(scope: InstructionScope, plan: DiscoveryPlan): Pr
     }
     const ids = [...globalIds]
     for (const dir of dirs.reverse()) { const next = await group(p.root!, dir, [join(dir, 'AGENTS.md'), join(dir, 'CLAUDE.md')], false); if (!next) { complete = false; message = 'Instruction candidate limit reached'; break } ids.push(...next) }
-    targets.push({ target: p.target, scopeKey: digest(['instruction-scope-v1', p.root ? key(p.root) : null, key(boundary), plan.globals.map(g => [g.id, g.files.map(key)])]), slotIds: ids, complete, ...(message ? { message } : {}) })
+    const membership = rootCanonical && targetCanonical && p.root ? frozen({ root: rootCanonical, target: targetCanonical, selectedRoot: p.root, boundary, markers, globals: plan.globals.flatMap(g => g.files) }) : undefined
+    targets.push({ target: p.target, scopeKey: digest(['instruction-scope-v1', p.root ? key(p.root) : null, key(boundary), plan.globals.map(g => [g.id, g.files.map(key)])]), slotIds: ids, complete, ...(message ? { message } : {}), ...(membership ? { membership } : {}) })
   }
   return { slots: [...slots.values()], targets }
 }

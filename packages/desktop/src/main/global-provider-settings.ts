@@ -1,4 +1,5 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
+import {decodeUsageSnapshotV2,decodeLegacyUsageView} from '@i-harness/usage-stats/observation-snapshot'
 
 export type GlobalProviderRequest =
   | { kind: "desktop/global-provider/directory" }
@@ -8,7 +9,7 @@ export type GlobalProviderRequest =
 export type GlobalPreferencesRequest =
   | { kind: "desktop/global-preferences/state" }
   | { kind: "desktop/global-preferences/configure"; autoTitle: boolean }
-export interface ConfigurationClient { request(method: string, params: Record<string, unknown>): Promise<unknown> }
+export interface ConfigurationClient { request(method: string, params: Record<string, unknown>): Promise<unknown>;readonly capabilities?:Readonly<Record<string,readonly string[]>> }
 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value)
 const id = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128 && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value) && !["constructor", "prototype"].includes(value)
@@ -78,6 +79,20 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
         if (closed) throw new Error("Global provider settings closed")
         const target = await client()
         if (closed) throw new Error("Global provider settings closed")
+        if(method==='desktop/usage/query'){
+          const explicit=Object.hasOwn(target,'capabilities'),caps=target.capabilities
+          if(explicit&&!caps)throw Error('Usage capability negotiation is not ready')
+          const versions=caps?.['desktop-usage']
+          if(versions!==undefined&&(!Array.isArray(versions)||versions.some(version=>typeof version!=='string')))throw Error('Invalid negotiated usage capabilities')
+          if(caps&&!versions?.includes('1')&&!versions?.includes('2'))throw Error('Usage statistics are not supported by this gateway')
+          const v2=versions?.includes('2')===true
+          if(!v2&&record(params.query)&&params.query.route!==undefined)throw Error('Route coverage filters require an updated gateway')
+          const result=await target.request(v2?'desktop/usage/query-v2':method,params)
+          const warnings=options.usageWarnings?await options.usageWarnings():[]
+          if(warnings.some(warning=>typeof warning!=='string'))throw Error('Invalid usage recording warnings')
+          if(v2){const snapshot=decodeUsageSnapshotV2(result);snapshot.coverage.warnings=[...new Set([...snapshot.coverage.warnings,...warnings])];return {kind:'observations',snapshot:decodeUsageSnapshotV2(snapshot)}}
+          const view=decodeLegacyUsageView(result);if(view.kind==='legacy-only')view.warnings=[...new Set([...view.warnings,...warnings])];return view
+        }
         if (method === "desktop/coding-plans/start") {
           if (!options.openExternal) throw new Error("Browser opening unavailable")
           const result = await target.request(method, params)
@@ -96,10 +111,6 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
         if (method === "desktop/model-wait/state" || method === "desktop/model-wait/configure") {
           if (!record(result) || !waitSeconds(result.firstResponseSeconds) || !waitSeconds(result.progressSeconds)) throw new Error("Invalid model wait state")
           return { firstResponseSeconds: result.firstResponseSeconds, progressSeconds: result.progressSeconds }
-        }
-        if (method === "desktop/usage/query" && record(result) && options.usageWarnings) {
-          const warnings = await options.usageWarnings()
-          return { ...result, warnings: [...new Set([...(Array.isArray(result.warnings) ? result.warnings : []), ...warnings])] }
         }
         return result
       })

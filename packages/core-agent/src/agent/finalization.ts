@@ -8,7 +8,7 @@ import { acceptModelExchange } from "./exchange.ts"
 import { closeStepBoundary, closeTurnBoundary, failStepBoundary } from './boundaries.ts'
 import { savingFailure } from './saving-failure.ts'
 
-type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush" | 'facts' | 'sourceFacts' | 'generationAction' | 'captureModelExchange'>
+type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush" | 'facts' | 'sourceFacts' | 'generationAction' | 'captureModelExchange'> & { liveInvocation?: import('../tool-batch/live-continuation.ts').LiveInvocation }
 
 export async function failTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, error: unknown): Promise<never> {
   if (lifecycle.deferredFailure) {

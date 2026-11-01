@@ -69,7 +69,9 @@ export class InstructionSlot {
   private live(): boolean {
     return !this.retired && this.owner.available() && this.owner.invoke(this.lifetimeAvailable) && !this.retired && this.owner.available()
   }
-  retire(): void { this.retired = true }
+  retire(): void { if (this.retired) return; this.retired = true; this.manager?.diagnostics.invalidate() }
+  diagnostics() { return this.available() ? this.manager?.diagnostics : undefined }
+  invalidateDiagnostics() { this.manager?.diagnostics.invalidate() }
   get clean(): boolean { return !this.constructing && (!this.runtime || this.runtimeClosed) && (!this.manager || this.managerClosed) }
 
   retryConstructionCleanup(): void {
@@ -84,7 +86,7 @@ export class InstructionSlot {
       this.runtime = createRuntimeContext(this.session, createRuntimeContextSource(this.factOwner))
       this.settleRuntime = this.runtime.settleOriginals.bind(this.runtime)
       this.closeRuntime = this.runtime.close.bind(this.runtime)
-      this.manager = createMainInstructionManager({ ...options,
+      this.manager = createMainInstructionManager({ ...options, session: this.session,
         available: () => this.live(),
         publish: (signal, retain) => this.runtime!.render(signal, retain),
       })

@@ -13,12 +13,14 @@ import { appliedFor, canonicalRecord, checkBinding, checkRoot, commitment, count
 import { buildPages, walkPages } from './fork-pages.ts'
 import { expiryBase, expiredTuple, readSlots, revokedTuple } from './fork-disposition.ts'
 import { captureObservation, loadPlan, observedAllowed, prepareObservedIndex, rowCommitment, transferDirectory, verifiedRows } from './observed-read.ts'
+import { createSelectedLegacyTransfer } from './selected-transfer.ts'
 import { prepareLegacyIndex } from './fork-index.ts'
-import type { LegacyForkCapture, LegacyForkTransferScope, LegacyPreparationRequest, LegacyTransferOutcome, LegacyFacts, LegacyRow, LegacyPage } from './fork-types.ts'
+import type { LegacyForkCapture, LegacyForkTransferScope, LegacyPreparationRequest, LegacyTransferOutcome, LegacyFacts, LegacyRow, LegacyRowV1, LegacyPage } from './fork-types.ts'
 
 type Scope = { capture?: LegacyForkCapture; invalid: boolean; attempts: Set<Promise<LegacyTransferOutcome>>; count?: number; store?: ContextStore; dispose(): void }
 interface Ports {
   strict: boolean; workspaceId: string; quota(): number;
+  runPassive<T>(store:ContextStore,work:(signal:AbortSignal,store:ContextStore)=>Promise<T>):Promise<T>;
   mutate<T>(context: IndexedLegacyContext, work: (turn: WorkspaceMutationTurn) => Promise<T>): Promise<T>;
   run<T>(signal: AbortSignal | undefined, work: (signal: AbortSignal, context: IndexedLegacyContext) => Promise<T>): Promise<T>;
 }
@@ -27,6 +29,7 @@ const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'ab
 const addSignalListener = EventTarget.prototype.addEventListener, removeSignalListener = EventTarget.prototype.removeEventListener
 const aborted = (signal?: AbortSignal): boolean => signal === undefined ? false : Reflect.apply(signalAborted, signal, [])
 export function createLegacyForkOwner(ports: Ports) {
+  const selected=createSelectedLegacyTransfer(ports)
   const scopes = new Map<LegacyForkTransferScope, Scope>(), retired = new WeakSet<LegacyForkTransferScope>(); let closed = false
   function register(input: LegacyForkCapture): LegacyForkTransferScope {
     if (closed || !ports.strict) throw Error('Legacy fork requires strict observed recipient mode')
@@ -135,7 +138,7 @@ export function createLegacyForkOwner(ports: Ports) {
           check(); const actual = await store.canonicalRef(rowCommitment(row), c.sourceSessionId); check()
           if (!await observedAllowed(context, actual, source.read, check)) throw Error('Legacy source observation unavailable'); check()
         }
-        async function* rows(): AsyncGenerator<LegacyRow> {
+        async function* rows(): AsyncGenerator<LegacyRowV1> {
           // Inherited seed coordinates precede local journal coordinates;
           // within a seed anchor the immediate parent's row order is stable.
           if (source.read.bootstrap) {
@@ -143,14 +146,15 @@ export function createLegacyForkOwner(ports: Ports) {
             for await (const old of verifiedRows(context, parent.directory, parent.root, check)) {
               const position = ordinal++, included = selection.kind === 'selected' ? selection.inherited(old.extent, old.anchor) : { kind: 'omitted' as const }
               if (included.kind === 'omitted') continue
-              if (included.kind !== 'included') throw Error('Inherited legacy anchor unsupported')
-              const row: LegacyRow = { ...rowCommitment(old), extent: included.extent, anchor: included.anchor, original: old.original,
+              if (included.kind !== 'included' || included.anchor.kind === 'seed-result') throw Error('Inherited legacy anchor unsupported')
+              const row: LegacyRowV1 = { ...rowCommitment(old), extent: included.extent, anchor: included.anchor, original: old.original,
                 via: { sessionId: c.sourceSessionId, operationId: parent.root.binding.invocation.operationId, manifestDigest: parent.root.binding.manifestDigest, planDigest: recordHash('plan', parent.root), rowOrdinal: position } }
               await qualify(row); check(); yield row
             }
           }
           for (const local of selection.kind === 'selected' ? selection.local() : []) {
-            check(); const row: LegacyRow = { ...commitment(local.ref), extent: local.extent, anchor: local.anchor, original: { sessionId: c.sourceSessionId, ...local.original } }
+            if (local.anchor.kind === 'seed-result') throw Error('Local legacy anchor unsupported')
+            check(); const row: LegacyRowV1 = { ...commitment(local.ref), extent: local.extent, anchor: local.anchor, original: { sessionId: c.sourceSessionId, ...local.original } }
             await qualify(row); check(); yield row
           }
         }
@@ -201,9 +205,9 @@ export function createLegacyForkOwner(ports: Ports) {
     scopes.delete(token); retired.add(token)
   }
   return {
-    register, confirm: (scope: LegacyForkTransferScope, request: LegacyPreparationRequest, current: () => boolean, facts: LegacyFacts) => start(scope, request, facts, current, false),
+    selected,register, confirm: (scope: LegacyForkTransferScope, request: LegacyPreparationRequest, current: () => boolean, facts: LegacyFacts) => start(scope, request, facts, current, false),
     reconcile: (scope: LegacyForkTransferScope, request: LegacyPreparationRequest, facts: LegacyFacts) => start(scope, request, facts, () => true, true), closeScope,
-    retire(sessionId?: string) { for (const scope of scopes.values()) if (sessionId === undefined || scope.capture?.sourceSessionId === sessionId || scope.capture?.invocation.targetSessionId === sessionId) scope.invalid = true },
-    async close() { closed = true; const settled = await Promise.allSettled([...scopes.keys()].map(closeScope)); failuresTogether(settled.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : []), 'Original legacy scopes failed to close') },
+    retire(sessionId?: string) { selected.retire(sessionId);for (const scope of scopes.values()) if (sessionId === undefined || scope.capture?.sourceSessionId === sessionId || scope.capture?.invocation.targetSessionId === sessionId) scope.invalid = true },
+    async close() { closed = true; const settled = await Promise.allSettled([selected.close(),...[...scopes.keys()].map(closeScope)]); failuresTogether(settled.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : []), 'Original legacy scopes failed to close') },
   }
 }

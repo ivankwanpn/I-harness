@@ -105,8 +105,8 @@ it("waits for both owned policy refreshes before closing even when one refresh r
       return policyWork as ReturnType<typeof settings.state>
     } }
   })
-  vi.spyOn(pluginsModule, "createDesktopPlugins").mockImplementation((path) => {
-    const plugins = createDesktopPlugins(path)
+  vi.spyOn(pluginsModule, "createDesktopPlugins").mockImplementation((path, options) => {
+    const plugins = createDesktopPlugins(path, options)
     return { ...plugins, close: async () => { await plugins.close(); pluginsClosed() } }
   })
   const host = await createDesktopHost({ workspace, sessionDir: join(root, "sessions"), settingsPath, onWrite: () => {} })

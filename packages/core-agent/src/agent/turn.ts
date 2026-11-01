@@ -18,7 +18,7 @@ import { promoteTurnInput } from './input-promotion.ts'
 import { openDirectInput } from './direct-input.ts'
 import type { ExecutionDependencies } from './dependencies.ts'
 import type { ExecuteToolCallsOptions } from '../tool-batch/types.ts'
-import { issueLiveBatch, reserveLiveContinuation, consumeLiveContinuation, releaseLiveBatch } from '../tool-batch/live-continuation.ts'
+import { retainModelGeneration, issueLiveBatch, reserveLiveContinuation, consumeLiveContinuation, releaseLiveBatch } from '../tool-batch/live-continuation.ts'
 
 export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
   // This budget and both subordinate owners persist across run/followup calls.
@@ -60,12 +60,15 @@ export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies
       steps += 1
       if (maxTurns !== undefined && steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
       deps.generationAction = firstGeneration ?? await deps.generationLifecycle?.open('main', generationOrigin, { signal: abort, timeoutMs: deps.modelActionTimeoutMs, maxAttempts: deps.modelActionMaxAttempts })
+      retainModelGeneration(deps.liveInvocation, deps.generationAction)
       firstGeneration = undefined
       const stepStartSeq = await startStep(deps, lifecycle)
       await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
       promptSubmitted = true
       await drainHookContext(ctx, deps)
-      const { step, acceptedSeq, handoffBatch } = await respond(lifecycle, stepStartSeq, abort, requestScope)
+      const response = await respond(lifecycle, stepStartSeq, abort, requestScope)
+      const { step, acceptedSeq, handoffBatch } = response
+      let instructionBatch = response.instructionBatch
       if (acceptedSeq !== undefined) generationOrigin = { kind: 'predecessor', seq: acceptedSeq }
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {
@@ -77,23 +80,30 @@ export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies
               maxParallel, signal: abort, sessionId: deps.sessionId,
               facts: agentFacts(deps).tools, registerFactSource: drain => {
                 let pin: import('./request-context.ts').RequestContextPin | undefined
+                let ownedInstructionBatch: import('@i-harness/core-tools').AcceptedInstructionBatch | undefined
                 const source = (invocation ? invocation.registerBatchSource.bind(invocation) : deps.registerFactSource!)(async () => {
                   await drain()
                   if (pin) {
                     try { await pin.release(); pin = undefined }
                     catch (error) { source.holdRecovery(); throw error }
                   }
+                  if (ownedInstructionBatch) {
+                    try { await ownedInstructionBatch.release(); ownedInstructionBatch = undefined }
+                    catch (error) { source.holdRecovery(); throw error }
+                  }
                 })
                 pin = takeOwnership()
+                ownedInstructionBatch = instructionBatch; instructionBatch = undefined
                 return source
               }, assertFactOpen: deps.assertFactOpen,
               modelGeneration: toolGenerationFactory(deps),
+              ...(instructionBatch ? { instructionBatch } : {}),
               ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
               ...(deps.flush ? { flush: deps.flush } : {}),
             }
-            if (invocation) token = issueLiveBatch(invocation, requestScope, batch, batchOptions)
+            if (invocation) token = issueLiveBatch(invocation, requestScope, batch, batchOptions, response.accepted)
             return executeToolCalls(ctx, deps.session, deps.tools, batch, batchOptions)
-          })
+          }, async () => { if (instructionBatch) { await instructionBatch.release(); instructionBatch = undefined } })
         } catch (error) {
           // This catch is outside the ownership handoff. A cleanup aggregate
           // has a different identity and cannot borrow its cause's mark.
@@ -111,7 +121,7 @@ export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies
             consumeLiveContinuation(token!)
           } catch (guard) { throw savingFailure(error, [guard], 'Live batch continuation requires recovery') }
         } finally { if (token) releaseLiveBatch(token) }
-      }
+      } else if (instructionBatch) { await instructionBatch.release(); instructionBatch = undefined }
       const emptyThisStep = await closeStep(deps, lifecycle, getSteps, step)
       // Continuation: after a step with tool calls, run another step so the
       // model can produce its final message. A step without tool calls is a

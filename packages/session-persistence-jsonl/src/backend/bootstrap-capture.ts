@@ -1,45 +1,52 @@
-import { open, readdir, rename, stat, type FileHandle } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { assertSelectedCurrentHeader } from './selected-current-header.ts'
+import { resolveSelectedBirth } from './selected-birth.ts'
+import { readdir, rename, stat, lstat } from 'node:fs/promises'
+import type { BigIntStats } from 'node:fs'
+import { basename, dirname } from 'node:path'
+import { types } from 'node:util'
 import { canonicalJsonData } from '@i-harness/core-session'
-import { isHeldFactOwner, parseBootstrapCaptureReservation, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type IssuingFactOwner, type BootstrapCaptureInspection, type BootstrapCaptureRequest, type BootstrapCaptureReserveOutcome, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
+import { parseBootstrapCaptureReservation, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type IssuingFactOwner, type BootstrapCaptureInspection, type BootstrapCaptureRequest, type BootstrapCaptureReserveOutcome, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
 import { bootstrapPathsForRoute, bootstrapNamespace, lookupBootstrapStage } from './bootstrap-stage.ts'
 export { bootstrapNamespace } from './bootstrap-stage.ts'
 import { captureBootstrapCaptureRoute, parseOwnedCaptureReservation, encodeOwnedCaptureReservation, routeForReservation, type BootstrapCaptureRoute, type OwnedCaptureInspection } from '@i-harness/session-persistence'
+import { captureSelectedResultsRoute, parseSelectedResultsReservation, parseSelectedResultsHeaderStage, type SelectedResultsRoute, type SelectedResultsReservationV1, type SelectedResultsHeaderStageV2 } from '@i-harness/session-persistence'
+import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
+import { selectedBootstrapPaths } from './selected-results-route-path.ts'
 
-type Resource = { handle: FileHandle; error?: unknown; consumed?: boolean }
-type Ledger = { id: string; owner: HeldFactOwner['owner']; pending: Set<Promise<unknown>>; handles: Set<Resource>; settled: boolean; diagnostics: unknown[] }
-export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string) {
-  const ledgers = new WeakMap<object, Ledger>()
-  function scope(id: string, owner: HeldFactOwner) {
-    if (!isHeldFactOwner(owner) || owner.owner.sessionId !== id) throw new TypeError('Invalid capture IO owner')
-    owner.assertHeld()
+type SelectedCaptureInspection = {kind:'absent'} | {kind:'reserved';reservation:SelectedResultsReservationV1} | {kind:'materialized';route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2} | {kind:'conflict'|'unavailable'}
+
+import { createBootstrapCaptureIO, type BootstrapCaptureIO, type CaptureLedger as Ledger, type CaptureResource as Resource } from './bootstrap-capture-io.ts'
+// Capture caller containers without evaluating properties or proxy traps.
+function selectedFields<K extends string>(input:unknown,keys:readonly K[]):Record<K,unknown> {
+  if(!input||typeof input!=='object'||types.isProxy(input))throw new TypeError('Invalid selected header operation')
+  const prototype=Object.getPrototypeOf(input)
+  if(prototype!==Object.prototype&&prototype!==null)throw new TypeError('Invalid selected header operation')
+  const descriptors=Object.getOwnPropertyDescriptors(input),ownKeys=Reflect.ownKeys(descriptors)
+  if(ownKeys.length!==keys.length||ownKeys.some(key=>typeof key!=='string'||!keys.includes(key as K)))throw new TypeError('Invalid selected header operation')
+  const captured=Object.create(null) as Record<K,unknown>
+  for(const key of keys){
+    const descriptor=descriptors[key]
+    if(!descriptor||!descriptor.enumerable||!('value' in descriptor)||descriptor.value===undefined)throw new TypeError('Invalid selected header operation')
+    captured[key]=descriptor.value
   }
-  function tracked<T>(id: string, owner: HeldFactOwner, work: (ledger: Ledger) => Promise<T>): Promise<T> {
-    scope(id, owner)
-    let ledger = ledgers.get(owner.owner)
-    if (!ledger) { ledger = { id, owner: owner.owner, pending: new Set(), handles: new Set(), settled: false, diagnostics: [] }; ledgers.set(owner.owner, ledger) }
-    ledger.settled = false
-    const actual = ledger, flight = Promise.resolve().then(() => work(actual))
-    actual.pending.add(flight)
-    void flight.finally(() => actual.pending.delete(flight)).catch(() => {})
-    return flight
-  }
-  async function acquire(ledger: Ledger, path: string, flags: string): Promise<Resource> {
-    const handle = await open(path, flags)
-    const resource: Resource = { handle }; ledger.handles.add(resource)
-    return resource
-  }
-  async function close(ledger: Ledger, resource: Resource) {
-    if (resource.consumed) throw resource.error
-    try { await resource.handle.close(); ledger.handles.delete(resource); resource.error = undefined }
-    catch (error) { resource.error = error; resource.consumed = resource.handle.fd < 0; throw error }
-  }
-  async function bytes(ledger: Ledger, path: string, limit: number, guard: () => void): Promise<Buffer | undefined> {
-    let resource: Resource
-    try { resource = await acquire(ledger, path, 'r') } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
-    try { guard(); if ((await resource.handle.stat()).size > limit) throw new Error('Capture stage exceeds limit'); guard(); const value = await resource.handle.readFile(); guard(); return value }
-    finally { await close(ledger, resource) }
-  }
+  return captured
+}
+const selectedByteLength=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),'length')!.get!
+const selectedByteSet=Uint8Array.prototype.set
+function selectedByteSnapshot(input:unknown,limit:number):Buffer {
+  if(types.isProxy(input)||!types.isUint8Array(input))throw new TypeError('Invalid selected header bytes')
+  // Intrinsics ignore shadowed length/valueOf/buffer fields on real typed data.
+  const length=selectedByteLength.call(input)
+  if(length>limit)throw new TypeError('Invalid selected header bytes')
+  const snapshot=Buffer.allocUnsafe(length)
+  selectedByteSet.call(snapshot,input)
+  return snapshot
+}
+export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string, captureIO: BootstrapCaptureIO = createBootstrapCaptureIO()) {
+  const { scope, tracked, acquire, close, bytes, settleBootstrapCaptureIO } = captureIO
+  // A retry confirms the same original path revision under the retained owner.
+  // Equal bytes on a replacement inode cannot mint a new acknowledgment.
+  const selectedBirthRevisions = new WeakMap<object, Map<string, { chain: string; revision: BigIntStats }>>()
   async function checkBootstrapCaptureRoot() {
     const info = await stat(rootPath)
     if (!info.isDirectory()) throw new Error('Capture storage root unavailable')
@@ -70,17 +77,69 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     })
   }
   const readBootstrapCapture=(id:string,owner:HeldFactOwner,request:BootstrapCaptureRequest)=>readCapture(id,owner,{protocol:'public',request}) as Promise<BootstrapCaptureInspection>;
-  async function writeExact(ledger: Ledger, path: string, expected: Uint8Array, owner: IssuingFactOwner, existing: Buffer | undefined, onIssue: () => void = () => {}) {
+  async function readSelectedCapture(id:string,owner:HeldFactOwner,input:SelectedResultsRoute):Promise<SelectedCaptureInspection> {
+    const route=captureSelectedResultsRoute(input)
+    if(id!==route.request.invocation.targetSessionId)throw new TypeError('Capture target mismatch')
+    return tracked(id,owner,async ledger=>{
+      const guard=()=>scope(id,owner),path=filePath(id)
+      try {
+        guard();await checkBootstrapCaptureRoot();guard();await assertNotDeleted('session',id);guard()
+        const selected=await lookupSelectedBootstrapStage(path,{kind:'route',route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
+        guard();assertLookupCleanup(ledger)
+        let target=false;try{await stat(path);target=true}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error}
+        guard();await assertNotDeleted('session',id);guard();await checkBootstrapCaptureRoot();guard()
+        if(selected.kind==='reserved')return target?{kind:'unavailable'}:{kind:'reserved',reservation:selected.reservation}
+        if(selected.kind==='full')return {kind:'materialized',route:selected.route,stage:selected.stage}
+        if(selected.kind==='absent')return target?{kind:'unavailable'}:{kind:'absent'}
+        return {kind:selected.kind}
+      }catch(error){ledger.diagnostics.push(error);if(ledger.handles.size)throw error;return {kind:'unavailable'}}
+    })
+  }
+  async function writeExact(ledger: Ledger, path: string, expected: Uint8Array, owner: IssuingFactOwner, existing: Buffer | undefined, onIssue: () => void = () => {}, onAcquire: () => void = () => {}) {
     const guard = () => scope(ledger.id, owner), before = () => { guard(); owner.beforeIssue(); onIssue() }
     if (existing && (existing.length > expected.length || !existing.equals(Buffer.from(expected.subarray(0, existing.length))))) throw new Error('BOOTSTRAP_CONFLICT')
     before(); const resource = await acquire(ledger, path, existing === undefined ? 'wx' : 'r+')
     try {
+      onAcquire()
       guard(); let offset = existing?.length ?? 0
       while (offset < expected.length) { before(); const result = await resource.handle.write(expected, offset, expected.length - offset, offset); guard(); if (result.bytesWritten <= 0) throw new Error('Capture write made no progress'); offset += result.bytesWritten }
       before(); await resource.handle.sync(); guard()
       const actual = await bytes(ledger, path, expected.length, guard)
       if (!actual?.equals(Buffer.from(expected))) throw new Error('Capture readback mismatch')
     } finally { await close(ledger, resource) }
+  }
+  async function reserveSelectedCapture(id:string,owner:IssuingFactOwner,input:SelectedResultsRoute,inputBytes:Uint8Array):Promise<BootstrapCaptureReserveOutcome> {
+    const route=captureSelectedResultsRoute(input)
+    if(types.isProxy(inputBytes)||!(inputBytes instanceof Uint8Array)||inputBytes.byteLength>262144)throw new TypeError('Invalid reservation bytes')
+    const reservationBytes=Buffer.from(inputBytes),reservation=parseSelectedResultsReservation(reservationBytes)
+    if(id!==route.request.invocation.targetSessionId||id!==reservation.request.invocation.targetSessionId)throw new TypeError('Capture target mismatch')
+    if(canonicalJsonData(route.request)!==canonicalJsonData(reservation.request))throw new TypeError('Reservation route mismatch')
+    scope(id,owner)
+    if(typeof owner.beforeIssue!=='function')throw new TypeError('Invalid capture issuer')
+    return tracked(id,owner,async ledger=>{
+      let issued=false,acquired=false
+      const guard=()=>scope(id,owner)
+      try {
+        guard();await checkBootstrapCaptureRoot();guard();await assertNotDeleted('session',id);guard()
+        const paths=selectedBootstrapPaths(filePath(id),route)
+        const state=await readSelectedCapture(id,owner,route);guard()
+        if(state.kind==='reserved')return {kind:'present'}
+        if(state.kind!=='absent')return {kind:state.kind==='conflict'||state.kind==='materialized'?'conflict':'unknown'}
+        await writeExact(ledger,paths.stage,reservationBytes,owner,undefined,()=>{issued=true},()=>{acquired=true})
+        guard();await assertNotDeleted('session',id);guard();await checkBootstrapCaptureRoot();guard()
+        return {kind:'committed-new'}
+      }catch(error){
+        ledger.diagnostics.push(error)
+        let code:unknown
+        try {code=error!==null&&(typeof error==='object'||typeof error==='function')?(error as NodeJS.ErrnoException).code:undefined}catch{}
+        if(!issued&&(code==='FACT_CANCELLED'||code==='FACT_PRECONDITION_STALE'))return {kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
+        if(issued&&!acquired&&code==='EEXIST'){
+          try {const state=await readSelectedCapture(id,owner,route);guard();return {kind:state.kind==='reserved'?'present':state.kind==='conflict'||state.kind==='materialized'?'conflict':'unknown'}}
+          catch(inspectError){ledger.diagnostics.push(inspectError)}
+        }
+        return {kind:'unknown'}
+      }
+    })
   }
   async function reserveCapture(id: string, owner: IssuingFactOwner, input: BootstrapCaptureRoute, reservationBytes: Uint8Array): Promise<BootstrapCaptureReserveOutcome> {
     const route=captureBootstrapCaptureRoute(input), reservation = parseOwnedCaptureReservation(reservationBytes)
@@ -164,24 +223,137 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
         try {
           guard();const actual=Buffer.alloc(operation.headerBytes.length);let offset=0
           while(offset<actual.length){const read=await resource.handle.read(actual,offset,actual.length-offset,offset);guard();if(!read.bytesRead)break;offset+=read.bytesRead}
-          if(offset!==actual.length||!actual.equals(Buffer.from(operation.headerBytes)))return {kind:Buffer.from(operation.headerBytes).subarray(0,offset).equals(actual.subarray(0,offset))?'unknown':'conflict'}
+          let expected=Buffer.from(operation.headerBytes)
+          if(offset===actual.length&&!actual.equals(expected)) {
+            const original=JSON.parse(expected.toString('utf8'))
+            if(original.formatVersion===13) {const upgraded=Buffer.from(canonicalJsonData({...original,formatVersion:14})+'\n');if(actual.equals(upgraded))expected=upgraded}
+          }
+          if(offset!==actual.length||!actual.equals(expected))return {kind:expected.subarray(0,offset).equals(actual.subarray(0,offset))?'unknown':'conflict'}
           await resource.handle.sync();guard();await assertNotDeleted('session',id)
-          return {kind:'committed',headerDigest:rawHeaderDigest(operation.headerBytes)}
+          return {kind:'committed',headerDigest:rawHeaderDigest(expected)}
         }finally{await close(ledger,resource)}
       }catch(error){ledger.diagnostics.push(error);return {kind:'unknown'}}
     })
   }
-  async function settleBootstrapCaptureIO(id: string, owner: HeldFactOwner) {
-    scope(id, owner)
-    const ledger = ledgers.get(owner.owner)
-    if (!ledger || ledger.id !== id) throw new TypeError('Original capture IO owner required')
-    await Promise.allSettled([...ledger.pending])
-    const results = await Promise.allSettled([...ledger.handles].map(resource => close(ledger, resource)))
-    scope(id, owner)
-    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-    if (errors.length) throw new AggregateError(errors, 'Original capture IO cleanup unresolved')
-    ledger.settled = true
+  function selectedOperation(id:string,owner:HeldFactOwner,input:SelectedResultsRoute,operation:BootstrapHeaderOperation) {
+    const route=captureSelectedResultsRoute(input)
+    const captured=selectedFields(operation,['invocation','target','stageBytes','headerBytes'])
+    const invocationKeys=['version','operationId','targetSessionId','createdAt','requestDigest'] as const
+    const invocation=selectedFields(captured.invocation,invocationKeys),target=selectedFields(captured.target,['kind'])
+    if(target.kind!=='new'||invocationKeys.some(key=>invocation[key]!==route.request.invocation[key])||id!==route.request.invocation.targetSessionId)throw new TypeError('Selected header mismatch')
+    const stageBytes=selectedByteSnapshot(captured.stageBytes,262144),headerBytes=selectedByteSnapshot(captured.headerBytes,65536),stage=parseSelectedResultsHeaderStage(stageBytes)
+    if(canonicalJsonData(route.request)!==canonicalJsonData(stage.captureReservation.request)||!headerBytes.equals(Buffer.from(stage.headerBytes)))throw new TypeError('Selected header mismatch')
+    scope(id,owner)
+    return {route,stageBytes,headerBytes,reservationBytes:Buffer.from(canonicalJsonData(stage.captureReservation)+'\n')}
+  }
+  async function selectedHeader(id:string,owner:HeldFactOwner,input:SelectedResultsRoute,operation:BootstrapHeaderOperation,issue:boolean,onHeaderIssue?:()=>void):Promise<HeaderOutcome> {
+    const captured=selectedOperation(id,owner,input,operation)
+    if(issue&&typeof (owner as IssuingFactOwner).beforeIssue!=='function')throw new TypeError('Invalid capture issuer')
+    if(onHeaderIssue!==undefined&&(typeof onHeaderIssue!=='function'||types.isProxy(onHeaderIssue)))throw new TypeError('Invalid header issue observer')
+    return tracked(id,owner,async ledger=>{
+      const guard=()=>scope(id,owner),path=filePath(id),paths=selectedBootstrapPaths(path,captured.route),issuer=owner as IssuingFactOwner
+      let issued=false
+      try {
+        guard();await checkBootstrapCaptureRoot();guard();await assertNotDeleted('session',id);guard()
+        const selected=await lookupSelectedBootstrapStage(path,{kind:'route',route:captured.route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
+        assertLookupCleanup(ledger);guard()
+        if(selected.kind==='conflict')return {kind:'conflict'}
+        if(selected.kind!=='reserved'&&selected.kind!=='full')return {kind:'unknown'}
+        if(selected.kind==='reserved') {
+          if(!Buffer.from(selected.exactBytes).equals(captured.reservationBytes))return {kind:'conflict'}
+          const pending=selected.promotionBytes&&Buffer.from(selected.promotionBytes)
+          if(pending&&!captured.stageBytes.subarray(0,pending.length).equals(pending))return {kind:'conflict'}
+          if(!issue)return {kind:'unknown'}
+          const target=await bytes(ledger,path,65536,guard);if(target!==undefined)return {kind:'unknown'}
+          await writeExact(ledger,paths.promote,captured.stageBytes,issuer,pending,()=>{issued=true})
+          const original=await bytes(ledger,paths.stage,262144,guard)
+          if(!original?.equals(captured.reservationBytes))return {kind:'conflict'}
+          guard();issuer.beforeIssue();issued=true;await rename(paths.promote,paths.stage);guard()
+          if(!(await bytes(ledger,paths.stage,262144,guard))?.equals(captured.stageBytes))return {kind:'unknown'}
+        } else if(!Buffer.from(selected.exactBytes).equals(captured.stageBytes))return {kind:'conflict'}
+        const target=await bytes(ledger,path,65536,guard)
+        if(target&&!captured.headerBytes.subarray(0,target.length).equals(target))return {kind:'conflict'}
+        // Stage promotion uses the same owner and ledger, but only this original
+        // target write boundary can record target-header issuance provenance.
+        if(issue)await writeExact(ledger,path,captured.headerBytes,issuer,target,()=>{issued=true;onHeaderIssue?.()})
+        else {
+          if(!target||!target.equals(captured.headerBytes))return {kind:'unknown'}
+          const resource=await acquire(ledger,path,'r+')
+          try {guard();const actual=await resource.handle.readFile();guard();if(!actual.equals(captured.headerBytes))return {kind:'conflict'};await resource.handle.sync();guard()}finally{await close(ledger,resource)}
+        }
+        await assertNotDeleted('session',id);guard();await checkBootstrapCaptureRoot();guard()
+        return {kind:'committed',headerDigest:rawHeaderDigest(captured.headerBytes)}
+      }catch(error){ledger.diagnostics.push(error);let code:unknown;try{code=error!==null&&(typeof error==='object'||typeof error==='function')?(error as NodeJS.ErrnoException).code:undefined}catch{};if(issue&&!issued&&(code==='FACT_CANCELLED'||code==='FACT_PRECONDITION_STALE'))return {kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'};return {kind:'unknown'}}
+    })
+  }
+  const prepareSelectedHeader=(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void)=>selectedHeader(id,owner,route,operation,true,onHeaderIssue)
+  const reconcileSelectedHeader=(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,false)
+  async function confirmSelectedBirthHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,liveVersion:number):Promise<HeaderOutcome> {
+    const captured=selectedOperation(id,owner,route,operation)
+    const original=JSON.parse(captured.headerBytes.toString('utf8'))
+    if(liveVersion!==original.formatVersion && !(original.formatVersion===13 && liveVersion===14))throw new TypeError('Selected header version changed')
+    let liveHeader:Buffer|undefined
+    return tracked(id,owner,async ledger=>{
+      const guard=()=>scope(id,owner),path=filePath(id)
+      try {
+        guard();await assertNotDeleted('session',id)
+        const birth=await resolveSelectedBirth(path,id,assertNotDeleted,{
+          stage:{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard},
+          async readJournal(){const resource=await acquire(ledger,path,'r');try{guard();const raw=await resource.handle.readFile();guard();return raw}finally{await close(ledger,resource)}}
+        });guard()
+        if(!birth||!Buffer.from(canonicalJsonData(birth.stage)+'\n').equals(captured.stageBytes))return {kind:'conflict'}
+
+        const sameRevision=(a:BigIntStats,b:BigIntStats)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs
+        const parents=async()=>{
+          const chain:string[]=[];let parent=dirname(path),foundRoot=false
+          for(;;){
+            const info=await lstat(parent,{bigint:true});guard()
+            if(!info.isDirectory()||info.isSymbolicLink()||info.ino<=0n)throw Error('Selected header root unavailable')
+            chain.push(`${info.dev}/${info.ino}`);if(parent===rootPath)foundRoot=true
+            const next=dirname(parent);if(next===parent)break;parent=next
+          }
+          if(!foundRoot)throw Error('Selected header outside original root')
+          return chain.join(':')
+        }
+        const observedChain=await parents(),observedPath=await lstat(path,{bigint:true});guard()
+        const key=rawHeaderDigest(captured.stageBytes)+':'+liveVersion
+        let revisions=selectedBirthRevisions.get(owner.owner)
+        if(!revisions){revisions=new Map();selectedBirthRevisions.set(owner.owner,revisions)}
+        let originalRevision=revisions.get(key)
+        if(!originalRevision){originalRevision={chain:observedChain,revision:observedPath};revisions.set(key,originalRevision)}
+        const {chain,revision:originalPath}=originalRevision
+        if(!originalPath.isFile()||originalPath.isSymbolicLink()||originalPath.ino<=0n)throw Error('Selected header identity unavailable')
+        const current=async()=>{
+          guard();const actual=await lstat(path,{bigint:true});guard()
+          if(!actual.isFile()||actual.isSymbolicLink()||!sameRevision(originalPath,actual)||chain!==await parents())throw Error('Selected header path changed')
+          await assertNotDeleted('session',id);guard()
+        }
+        const stage=await lookupSelectedBootstrapStage(path,{kind:'route',route:captured.route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
+        if(stage.kind!=='full'||!Buffer.from(stage.exactBytes).equals(captured.stageBytes))return {kind:'conflict'}
+        await current();assertLookupCleanup(ledger)
+        const resource=await acquire(ledger,path,'r+')
+        try {
+          const read=async()=>{
+            await current();const before=await resource.handle.stat({bigint:true});guard()
+            if(!before.isFile()||!sameRevision(originalPath,before))throw Error('Selected header handle changed')
+            const value=Buffer.alloc(65536);let offset=0
+            while(offset<value.length){const result=await resource.handle.read(value,offset,value.length-offset,offset);guard();if(!result.bytesRead)break;offset+=result.bytesRead;if(value.subarray(0,offset).includes(10))break}
+            const after=await resource.handle.stat({bigint:true});guard();await current()
+            if(!sameRevision(originalPath,after))throw Error('Selected header revision changed')
+            const end=value.subarray(0,offset).indexOf(10)
+            if(end<0)throw TypeError('Invalid bounded selected header')
+            const header=value.subarray(0,end+1),meta=assertSelectedCurrentHeader(birth.stage,JSON.parse(header.toString('utf8')))
+            if(meta.formatVersion!==liveVersion)return false
+            if(!liveHeader){liveHeader=Buffer.from(header);return true}
+            return header.equals(liveHeader)
+          }
+          if(!await read())return {kind:'conflict'}
+          await resource.handle.sync();guard();if(!await read())return {kind:'conflict'}
+        } finally { await close(ledger,resource) }
+        await current();return {kind:'committed',headerDigest:rawHeaderDigest(liveHeader!)}
+      } catch(error) { ledger.diagnostics.push(error);return {kind:'unknown'} }
+    })
   }
   const prepareBootstrapCapture=(id:string,owner:IssuingFactOwner,value:Uint8Array)=>{const reservation=parseBootstrapCaptureReservation(value);return reserveCapture(id,owner,{protocol:'public',request:reservation.request},value)}
-  return { readCapture, reserveCapture, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
+  return { readCapture, reserveCapture, readSelectedCapture, reserveSelectedCapture, prepareSelectedHeader, reconcileSelectedHeader, confirmSelectedBirthHeader, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
 }

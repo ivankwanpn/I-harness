@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { conversationId, conversationSeq } from './conversation.ts';
 import { isStrictFactData } from '../managed/capture.ts';
 import { canonicalJsonData } from '../serialization/json-data.ts';
+import { validExecDeliveryEvent, type ExecDeliveryEvent, type ExecDeliverySourceEvent } from './exec-delivery.ts';
+export type { ExecDeliverySourceEvent, ExecDeliveryHandoffEvent, ExecTerminalEvent } from './exec-delivery.ts';
 export interface SubagentDeliveryKey {
   recipientSessionId: string;
   sourceNamespace: string;
@@ -9,6 +11,9 @@ export interface SubagentDeliveryKey {
   resultRevision: string;
   kind: 'subagent';
 }
+export type ExecDeliveryKey = Omit<SubagentDeliveryKey, 'kind' | 'sourceNamespace'> & { kind: 'exec'; sourceNamespace: 'exec' };
+export type DeliveryKey = SubagentDeliveryKey | ExecDeliveryKey;
+export type DeliverySourceEvent = SubagentDeliverySourceEvent | ExecDeliverySourceEvent;
 export type DeliveryGenerationEvent = {
   type: 'agent/delivery-generation';
   version: 1;
@@ -41,7 +46,7 @@ export interface SubagentDeliverySourceEvent {
 export interface DeliveryReceivedEvent {
   type: 'agent/delivery-received';
   version: 1;
-  key: SubagentDeliveryKey;
+  key: DeliveryKey;
   sourceSeq: number;
   terminalSeq: number;
   inputId: string;
@@ -65,6 +70,12 @@ export interface SubagentDeliveryEvidence {
   sourceSeq: number;
   terminalSeq: number;
 }
+/** Recipient lookup only. Persisted original facts, never this DTO, own authority. */
+export interface ExecDeliveryEvidence {
+  kind: 'exec';
+  sourceSeq: number;
+  terminalSeq: number;
+}
 export interface DeliveryAdmissionReceipt {
   inputId: string;
   disposition: 'pending' | 'claimed' | 'cancelled' | 'suppressed';
@@ -75,20 +86,24 @@ export interface DeliveryCloseReceipt {
   closeSeq: number;
   durability: 'durable' | 'nondurable';
 }
-export type DeliveryEvent = DeliveryGenerationEvent | SubagentDeliverySourceEvent | DeliveryReceivedEvent;
-export const isDeliveryEventType = (type: unknown): boolean => ['agent/delivery-generation', 'agent/delivery-source', 'agent/delivery-received'].includes(type as string);
+export type DeliveryEvent = DeliveryGenerationEvent | DeliverySourceEvent | DeliveryReceivedEvent | ExecDeliveryEvent;
+export const isDeliveryEventType = (type: unknown): boolean => ['agent/delivery-generation', 'agent/delivery-source', 'agent/delivery-received', 'agent/delivery-handoff', 'exec/end'].includes(type as string);
+export function deliveryMinimumFormat(event: DeliveryEvent): 13 | 14 {
+  return event.type === 'exec/end' || event.type === 'agent/delivery-handoff' || event.type === 'agent/delivery-source' && event.kind === 'exec'
+    || event.type === 'agent/delivery-received' && event.key.kind === 'exec' ? 14 : 13;
+}
 function closed(value: object, keys: string[]): boolean {
   return Reflect.ownKeys(value).every(key => typeof key === 'string' && keys.includes(key) && Object.getOwnPropertyDescriptor(value, key)?.enumerable && Object.getOwnPropertyDescriptor(value, key)?.value !== undefined);
 }
-export function validDeliveryKey(value: unknown): value is SubagentDeliveryKey {
+export function validDeliveryKey(value: unknown): value is DeliveryKey {
   if (!value || typeof value !== 'object' || !isStrictFactData(value))
     return false;
-  const k = value as SubagentDeliveryKey;
-  return closed(k, ['recipientSessionId', 'sourceNamespace', 'sourceId', 'resultRevision', 'kind']) && k.kind === 'subagent'
+  const k = value as DeliveryKey;
+  return closed(k, ['recipientSessionId', 'sourceNamespace', 'sourceId', 'resultRevision', 'kind']) && (k.kind === 'subagent' || k.kind === 'exec' && k.sourceNamespace === 'exec')
     && [k.recipientSessionId, k.sourceNamespace, k.sourceId, k.resultRevision].every(conversationId);
 }
-export function deliveryInputId(key: Readonly<SubagentDeliveryKey>): string {
-  return 'delivery-' + createHash('sha256').update(canonicalJsonData(['ih.delivery.v1', key.recipientSessionId, key.sourceNamespace, key.sourceId, key.resultRevision, 'subagent'])).digest('hex');
+export function deliveryInputId(key: Readonly<DeliveryKey>): string {
+  return 'delivery-' + createHash('sha256').update(canonicalJsonData(['ih.delivery.v1', key.recipientSessionId, key.sourceNamespace, key.sourceId, key.resultRevision, key.kind])).digest('hex');
 }
 export function validDeliveryEvent(value: unknown): value is DeliveryEvent {
   if (!value || typeof value !== 'object' || !isStrictFactData(value))
@@ -96,6 +111,7 @@ export function validDeliveryEvent(value: unknown): value is DeliveryEvent {
   const e = value as DeliveryEvent;
   if (e.version !== 1 || e.seq !== undefined && !conversationSeq(e.seq))
     return false;
+  if (e.type === 'exec/end' || e.type === 'agent/delivery-handoff' || e.type === 'agent/delivery-source' && e.kind === 'exec') return validExecDeliveryEvent(e);
   if (e.type === 'agent/delivery-received')
     return closed(e, ['type', 'version', 'seq', 'key', 'sourceSeq', 'terminalSeq', 'inputId']) && validDeliveryKey(e.key)
       && conversationSeq(e.sourceSeq) && conversationSeq(e.terminalSeq) && e.inputId === deliveryInputId(e.key);

@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./context-remaining": "./src/context-remaining.ts"
+    "./context-remaining": "./src/context-remaining.ts",
+    "./internal/task-caller": "./src/task-caller.ts",
+    "./model-origin": "./src/model-origin.ts"
   },
   "scripts": {
     "test": "vitest run",

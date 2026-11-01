@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { writeFile, mkdir } from "node:fs/promises"
 import { createHash } from "node:crypto"
-import { createFsTools, type RewindCapture } from "../src/index.ts"
+import type { RewindCapture } from "../src/index.ts"
+import { createFsTools } from "./helpers/registry-fs.ts"
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
 const H = (s: string) => createHash("sha256").update(utf8(s)).digest("hex")

@@ -5,6 +5,8 @@ import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { CURRENT_FORMAT_VERSION, freezeJsonData, readFactJournal } from '@i-harness/core-session';
 import { parseHeader } from '../format.ts';
+import { isHeldTaskDocumentScope, type HeldTaskDocumentScope } from '@i-harness/session-persistence';
+import { preflightSessionFormat } from '@i-harness/session-persistence/internal/task-document-operations';
 
 type Identity = { dev: bigint; ino: bigint; size: number; mtimeNs: bigint; ctimeNs: bigint };
 type DirectoryChain = { root: Identity; rootAncestry: string; pathAncestry: string };
@@ -23,6 +25,8 @@ const sameParents = (a: DirectoryChain, b: DirectoryChain) => sameRoot(a, b) && 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 /** Low-level byte adapter; cannot associate a backend with factory authority. */
 export function createJsonlProcessReadCapability(ports: Ports) {
+    const freshOwners = new WeakMap<object, HeldTaskDocumentScope>();
+    const historyOwners = new WeakMap<object, { scope: HeldTaskDocumentScope; bytes: Buffer; identity: Identity; prefix?: Readonly<import('@i-harness/core-session').JournalPrefix>; assertPrefixCurrent():void }>();
     function processHeader(line: string) {
         const raw = JSON.parse(line) as Record<string, unknown>;
         // Generic header normalization deliberately remains unchanged. This
@@ -59,8 +63,9 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             return { bytes: bytes.subarray(0, first.size), witness: { path, identity: first, digest: hash(bytes.subarray(0, first.size)), parents } };
         } finally { await handle.close(); }
     }
-    async function verify(w: Witness) {
-        if (!sameParents(w.parents, await ancestors(w.path))) bad();
+    async function verify(w: Witness, stableDirectories = false) {
+        const sameChain = stableDirectories ? (a: DirectoryChain, b: DirectoryChain) => a.root.dev === b.root.dev && a.root.ino === b.root.ino && a.rootAncestry === b.rootAncestry && a.pathAncestry === b.pathAncestry : sameParents;
+        if (!sameChain(w.parents, await ancestors(w.path))) bad();
         const before = await lstat(w.path, { bigint: true }); if (!before.isFile() || before.isSymbolicLink() || !same(w.identity, identity(before))) bad();
         const handle: FileHandle = await open(w.path, 'r');
         try {
@@ -70,7 +75,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 const length = Math.min(buffer.length, w.identity.size + 1 - offset), read = await handle.read(buffer, 0, length, offset);
                 if (!read.bytesRead) break; digest.update(buffer.subarray(0, read.bytesRead)); offset += read.bytesRead;
             }
-            if (offset !== w.identity.size || digest.digest('hex') !== w.digest || !same(w.identity, identity(await handle.stat({ bigint: true }))) || !same(w.identity, identity(await lstat(w.path, { bigint: true }))) || !sameParents(w.parents, await ancestors(w.path))) bad();
+            if (offset !== w.identity.size || digest.digest('hex') !== w.digest || !same(w.identity, identity(await handle.stat({ bigint: true }))) || !same(w.identity, identity(await lstat(w.path, { bigint: true }))) || !sameChain(w.parents, await ancestors(w.path))) bad();
         } finally { await handle.close(); }
     }
     async function captureCommon(id: string, requested: readonly string[], transcript: boolean) {
@@ -159,7 +164,119 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             },
         };
     }
+    async function observeFreshTaskParent(scope: HeldTaskDocumentScope) {
+        if (!isHeldTaskDocumentScope(scope)) bad();
+        scope.assertActive(); ports.assertOriginal();
+        const id = scope.parentSessionId, path = ports.file(id), parents = await ancestors(path);
+        async function rootCurrent() {
+            scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); await ports.checkDeleted('document', scope.key); await ports.checkNamespace(id);
+            const current = await ancestors(path);
+            if (parents.root.dev !== current.root.dev || parents.root.ino !== current.root.ino || parents.rootAncestry !== current.rootAncestry || parents.pathAncestry !== current.pathAncestry) bad();
+            scope.assertActive(); ports.assertOriginal();
+        }
+        async function absent() {
+            await rootCurrent();
+            try { await lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') { await ports.checkDeleted('session', id); await ports.checkDeleted('document', scope.key); await ports.checkNamespace(id); const after = await ancestors(path); if (parents.root.dev !== after.root.dev || parents.root.ino !== after.root.ino || parents.rootAncestry !== after.rootAncestry || parents.pathAncestry !== after.pathAncestry) bad(); scope.assertActive(); ports.assertOriginal(); return; } throw error; }
+            bad();
+        }
+        const proof = Object.freeze({ async assertCurrent() { if (this !== proof) bad(); await absent(); }, async assertRoot() { if (this !== proof) bad(); await rootCurrent(); } });
+        freshOwners.set(proof, scope); await proof.assertCurrent(); return proof;
+    }
+    async function observeReservedTaskParent(scope: HeldTaskDocumentScope, readNamespace: () => Promise<string>) {
+        if (!isHeldTaskDocumentScope(scope)) bad(); scope.assertActive(); ports.assertOriginal();
+        const id = scope.parentSessionId, path = ports.file(id), parents = await ancestors(path), baseline = await readNamespace();
+        async function rootCurrent() {
+            scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session',id); await ports.checkDeleted('document',scope.key);
+            const current = await ancestors(path); if (parents.root.dev !== current.root.dev || parents.root.ino !== current.root.ino || parents.rootAncestry !== current.rootAncestry || parents.pathAncestry !== current.pathAncestry) bad();
+            scope.assertActive(); ports.assertOriginal();
+        }
+        async function absent() {
+            await rootCurrent(); if (await readNamespace() !== baseline) bad();
+            try { await lstat(path); } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') { await rootCurrent(); if (await readNamespace() !== baseline) bad(); return } throw error }
+            bad();
+        }
+        const proof = Object.freeze({ async assertCurrent() { if (this !== proof) bad(); await absent() }, async assertRoot() { if (this !== proof) bad(); await rootCurrent() } })
+        freshOwners.set(proof,scope); await proof.assertCurrent(); return proof
+    }
+    function openTaskHistory(scope: HeldTaskDocumentScope, namespaceCheck?: () => Promise<void | string>) {
+        if (!isHeldTaskDocumentScope(scope)) bad();
+        scope.assertActive(); ports.assertOriginal();
+        const id = scope.parentSessionId, path = ports.file(id), checkNamespace = namespaceCheck ?? (() => ports.checkNamespace(id));
+        const resources = new Set<{ handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }>();
+        let observing: Promise<{ initial: import('@i-harness/core-session').SessionView; seedLength: number; assertCurrent(): Promise<void>; assertRoot(): Promise<void> }> | undefined;
+        let checking: Promise<void> | undefined, cleanup: Promise<void> | undefined, retiring = false;
+        async function closeResource(resource: { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }) {
+            if (resource.failed && resource.handle.fd < 0) throw resource.cause;
+            try { await Reflect.apply(resource.close, resource.handle, []); resources.delete(resource); }
+            catch (error) { resource.failed = true; resource.cause = error; throw error; }
+        }
+        async function readOriginal(parents: DirectoryChain) {
+            scope.assertActive(); if (resources.size) bad();
+            const before = await lstat(path, { bigint: true }); scope.assertActive(); if (!before.isFile() || before.isSymbolicLink()) bad();
+            const first = identity(before), handle = await open(path, 'r'), resource = { handle, close: handle.close, failed: false }; resources.add(resource);
+            let result: { bytes: Buffer; witness: Witness } | undefined, failed = false, cause: unknown;
+            try {
+                scope.assertActive(); if (!same(first, identity(await handle.stat({ bigint: true })))) bad();
+                const bytes = Buffer.alloc(first.size + 1); let offset = 0;
+                while (offset < bytes.length) { scope.assertActive(); const read = await handle.read(bytes, offset, Math.min(65536, bytes.length - offset), offset); if (!read.bytesRead) break; offset += read.bytesRead; }
+                scope.assertActive(); if (offset !== first.size || !same(first, identity(await handle.stat({ bigint: true }))) || !same(first, identity(await lstat(path, { bigint: true })))) bad();
+                result = { bytes: bytes.subarray(0, first.size), witness: { path, identity: first, digest: hash(bytes.subarray(0, first.size)), parents } };
+            } catch (error) { failed = true; cause = error; }
+            try { await closeResource(resource); } catch (error) { if (failed) throw new AggregateError([cause, error], 'Task history read and cleanup failed'); throw error; }
+            if (failed) throw cause; return result!;
+        }
+        const stableParents = (a: DirectoryChain, b: DirectoryChain) => a.root.dev === b.root.dev && a.root.ino === b.root.ino && a.rootAncestry === b.rootAncestry && a.pathAncestry === b.pathAncestry;
+        async function observeOriginal() {
+            scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); const sourceDigest = await checkNamespace(); scope.assertActive();
+            const parents = await ancestors(path), captured = await readOriginal(parents); scope.assertActive(); if (sourceDigest !== undefined && sourceDigest !== captured.witness.digest) bad();
+            if (!isUtf8(captured.bytes)) bad();
+            const end = captured.bytes.indexOf(10); if (end < 0) bad();
+            const line = captured.bytes.subarray(0, end).toString('utf8'), raw = JSON.parse(line) as Record<string, unknown>, meta = parseHeader(line);
+            if (meta.sessionId !== id || !Number.isSafeInteger(meta.formatVersion) || meta.formatVersion > CURRENT_FORMAT_VERSION) bad();
+            if (Object.hasOwn(raw, 'seedLength') && (!Number.isSafeInteger(raw.seedLength) || (raw.seedLength as number) < 0)) bad();
+            if (Object.hasOwn(raw, 'parentSession') && (typeof raw.parentSession !== 'string' || !raw.parentSession || !Object.hasOwn(raw, 'seedLength'))) bad();
+            const body = captured.bytes.subarray(end + 1);
+            if (meta.formatVersion >= 6 && captured.bytes.at(-1) !== 10) bad();
+            const decoded = meta.formatVersion >= 6 ? readFactJournal(body, meta.journal!, meta.formatVersion, meta) : undefined;
+            if (decoded?.torn || decoded && decoded.prefix.bodyBytes !== body.length) bad();
+            const events = decoded ? decoded.events : body.toString('utf8').split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+            const seedLength = meta.seedLength ?? 0;
+            if (seedLength > events.length) bad();
+            preflightSessionFormat(meta.formatVersion, events, meta); scope.assertActive();
+            const initial = freezeJsonData({ formatVersion: meta.formatVersion, header: meta, events }) as import('@i-harness/core-session').SessionView;
+            const proof = Object.freeze({ initial, seedLength, async assertRoot() { if (this !== proof || retiring) bad(); scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); await checkNamespace(); if (!stableParents(parents, await ancestors(path))) bad(); scope.assertActive(); ports.assertOriginal(); }, assertCurrent() {
+                if (this !== proof || retiring || checking || resources.size) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE'));
+                checking = Promise.resolve().then(async () => {
+                    scope.assertActive(); ports.assertOriginal(); await ports.checkDeleted('session', id); const currentDigest = await checkNamespace(); if (currentDigest !== undefined && currentDigest !== captured.witness.digest) bad();
+                    if (!stableParents(parents, await ancestors(path))) bad();
+                    const again = await readOriginal(parents);
+                    if (!same(captured.witness.identity, again.witness.identity) || captured.witness.digest !== again.witness.digest || !stableParents(parents, await ancestors(path))) bad();
+                    scope.assertActive(); ports.assertOriginal();
+                });
+                void checking.then(() => { checking = undefined }, () => { checking = undefined }); return checking;
+            } });
+            if(historyOwners.has(proof))bad();
+            const prefix=decoded?Object.freeze({eventCount:decoded.prefix.eventCount,bodyBytes:decoded.prefix.bodyBytes,prefixDigest:decoded.prefix.prefixDigest}):undefined;
+            historyOwners.set(proof, { scope, bytes: captured.bytes, identity: captured.witness.identity, prefix, assertPrefixCurrent(){if(retiring||checking||resources.size)bad();scope.assertActive();ports.assertOriginal()} }); await proof.assertCurrent(); return proof;
+        }
+        function settle(retire: boolean) {
+            if (retire) retiring = true; if (cleanup) return cleanup;
+            cleanup = Promise.resolve().then(async () => { await observing?.catch(() => {}); await checking?.catch(() => {}); let failed = false, cause: unknown; for (const resource of resources) try { await closeResource(resource); } catch (error) { if (!failed) { failed = true; cause = error; } } if (failed) throw cause; });
+            void cleanup.then(() => { cleanup = undefined }, () => { cleanup = undefined }); return cleanup;
+        }
+        const session = Object.freeze({
+            observe() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); if (retiring && !observing) return Promise.reject(new Error('TASK_HISTORY_UNAVAILABLE')); return observing ??= Promise.resolve().then(observeOriginal); },
+            hasDebt() { if (this !== session) throw new TypeError('Invalid history receiver'); return [...resources].some(resource => resource.failed) },
+            retryResources() { if (this !== session || retiring) return Promise.reject(new TypeError('Invalid history receiver')); return settle(false) },
+            settleResources() { if (this !== session) return Promise.reject(new TypeError('Invalid history receiver')); return settle(true) },
+        });
+        return session;
+    }
     return {
+        openTaskHistory, observeFreshTaskParent, observeReservedTaskParent,
+        assertFreshOwner(proof: object, scope: HeldTaskDocumentScope) { if (freshOwners.get(proof) !== scope) bad(); scope.assertActive(); },
+        qualifiedHistoryPrefix(proof:object){const value=historyOwners.get(proof);if(!value?.prefix)return undefined;try{value.assertPrefixCurrent();return value.prefix}catch{return undefined}},
+        originalHistory(proof: object, scope: HeldTaskDocumentScope) { const value = historyOwners.get(proof); if (!value || value.scope !== scope) return bad(); scope.assertActive(); return { bytes: value.bytes, identity: value.identity }; },
         async capture(id: string, requested: readonly string[]) {
             const result = await captureCommon(id, requested, true)
             if (!result.initial) return bad()

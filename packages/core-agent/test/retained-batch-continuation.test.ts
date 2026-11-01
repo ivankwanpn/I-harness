@@ -7,7 +7,10 @@ import { createSession, createNondurableFactOwner, FactRecoveryRequiredError, de
 import { createToolRegistry, declareToolResultOutcome, retainedToolOutcome, type PreparedCall } from '@i-harness/core-tools'
 import { createMockClient } from '@i-harness/llm-mock'
 import { observeModelClient } from '@i-harness/llm-seam'
-import { createSessionCoordinator, ownedContextReadiness } from '../../session-persistence/src/index.ts'
+import { ownedContextReadiness } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createAgent, executeToolCalls, type AgentDeps, type AgentConfig } from '../src/index.ts'
 import { localTestGeneration } from './fixtures/generation.ts'
@@ -236,7 +239,7 @@ it('keeps a failing transferred original instruction pin on its batch source thr
   const fault = new Error('original batch pin failed')
   f.deps.requestContext = { async reconcile() {}, capture: () => evidence, current: value => value === evidence,
     retain() { const ordinal = ++pins; return { async release() { releases++; if (ordinal === 2 && !failed) { failed = true; throw fault } } } },
-    succeeded() {}, promotedHumanRequest() {}, async close() {} }
+    succeeded() { return undefined }, promotedHumanRequest() {}, async close() {} }
   try {
     const error = await f.agent().run('one input').catch(error => error)
     expect(error).toBeInstanceOf(AggregateError); expect(error.errors[0]).toBe(f.originalErrors[0])

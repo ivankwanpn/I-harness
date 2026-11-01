@@ -31,6 +31,8 @@ import { createTeamTools } from "./tools.ts"
 import { AgentPath } from "./agent-path.ts"
 
 export interface TeamSubagentDeps {
+  createInstructionContext?: SpawnOptions['createInstructionContext']
+  retainInitialSetup?: SpawnOptions['retainInitialSetup']
   generationFactoryFor?: SpawnOptions['generationFactoryFor']
   modelActionTimeoutMs?: number
   modelActionMaxAttempts?: number

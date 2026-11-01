@@ -3,6 +3,7 @@ import type { AgentTable } from "../agent-table.ts"
 import type { SubagentToolDeps } from "../tools/types.ts"
 import { driveFollowups } from "./drive.ts"
 import { ensureResidentAgent, followupDepsWithRebuild } from "./resident.ts"
+import { isColdBoundChild } from '../task/cold-bindings.ts'
 
 // W6 T6: ONE module-scope handle for this file's one report; the phase is
 // `session` because the site is the cold-resume sweep (a session restored from
@@ -28,8 +29,10 @@ const d = diagnosticsFor("session")
 // as followup_task), so a caller asserting the OUTCOME awaits
 // entry.followupChain.
 export async function sweepPendingInbox(deps: SubagentToolDeps, table: AgentTable): Promise<void> {
+  deps.tasks?.assertReady()
   for (const entry of table.entries().values()) {
     if (entry.status !== "waiting" || !entry.sessionId) continue
+    if (isColdBoundChild(deps.tasks, entry.sessionId, entry.taskId)) continue
     const hasPending = entry.session.events.some(
       (e) => e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
     )

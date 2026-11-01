@@ -13,3 +13,13 @@ export type Capture = {
   output(): { stdout: CollectResult; stderr: CollectResult }
   diagnostics(): { outputAbandoned: boolean; discardedOutputBytes: number } | undefined
 }
+
+/** Private original owner, installed in the reservation before start. */
+export interface CaptureAttempt {
+  disposition(): { execution?: SupervisedExecution; frames?: import('./frames.ts').ExecFrameCapture; timedOut: boolean; settlement?: import('@i-harness/sandbox').ExecutionSettlement }
+  start(): Promise<Capture>
+  fail(cause: unknown): Promise<void>
+  retire(): Promise<void>
+  retryCleanup(): Promise<void>
+  isClean(): boolean
+}

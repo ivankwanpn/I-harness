@@ -1,4 +1,4 @@
-import type { UsageTotals } from "@i-harness/usage-stats"
+import type { UsageTotals } from "@i-harness/usage-stats/types"
 
 export type UsageRange = "today" | "7" | "30" | "custom"
 export function localDate(date: Date): string {

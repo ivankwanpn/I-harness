@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { FactRecoveryRequiredError, isNondurableSession } from "@i-harness/core-session"
-import { declareToolResultOutcome, userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
+import { declareToolResultOutcome, declareInstructionReplan, retainInstructionCell, backgroundEventForTool, userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeExecInput, CodeModeMount, CodeModeMountOptions, CodeModeWaitInput } from "./types.ts"
 import { createCodeModeRuntime } from "./runtime.ts"
 import { createCodeModeBroker } from "./broker.ts"
@@ -11,11 +11,17 @@ import { codeModeFactOwner } from './facts.ts'
 import { createCodeModeEventFacts } from './event-facts.ts'
 import { createCodeOutputPublisher } from './output-facts.ts'
 import { observationOutput } from './observation-output.ts'
+import { originalObservationReplan } from './runtime/replan-observation.ts'
+
+function declareObservationReplan(exec: ToolExec, out: import('./types.ts').CodeModeObservation) {
+  const error = originalObservationReplan(out)
+  if (error) { declareInstructionReplan(exec, error); declareToolResultOutcome(exec, 'failed') }
+}
 
 function retainedObservation(exec: ToolExec, refresh: () => Promise<void>): import('./types.ts').CodeModeObserveOptions['retained'] {
   const retained = exec.retainOutcome?.()
   retained?.beforeRead(refresh)
-  return retained && { ...retained, ready: output => retained.ready(observationOutput(output)) }
+  return retained && { ...retained, ready: output => { declareObservationReplan(exec, output); retained.ready(observationOutput(output)) } }
 }
 
 /** Assembly-owned orchestration capability. Nested authority is registry-owned. */
@@ -28,10 +34,12 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   let initialized = false, localTransitions = 0, installationFailed = false
   const surfaceListeners = new Set<() => void>()
   const surfaceChanged = () => { for (const listener of [...surfaceListeners]) { try { listener() } catch { /* Isolate consumers from publication. */ } } }
-  const broker = createCodeModeBroker(ctx, tools, options)
+  const broker = createCodeModeBroker(ctx, tools, options, (cellId, detail) => runtime.replan(cellId, detail))
   const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged)
   const publishOutput = createCodeOutputPublisher(facts, options.retainText)
-  const refreshObservation = async () => { await facts.refresh(); await runtime.drainRetainedObservations?.() }
+  const pendingFinishes = new Map<string, () => Promise<void>>()
+  const admissionDebts = new Map<string, () => Promise<void>>()
+  const refreshObservation = async () => { await facts.refresh(); for (const settle of admissionDebts.values()) await settle(); for (const finish of pendingFinishes.values()) await finish(); await runtime.drainRetainedObservations?.() }
   const liveCells = new Set<string>()
   const open = new Map<string, string | undefined>()
   for (const event of options.session.events) if (event.type === "code/cell" && event.sessionId === options.sessionId) {
@@ -46,6 +54,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     ...(!nondurable ? { retentionRecovery: () => facts.requireRecovery() } : {}),
     tools: () => broker.definitions(),
     invoke: call => broker.invoke(call),
+    drainInstructionCell: cellId => broker.drainCell(cellId),
     restoreStore: origin => replayCodeModeStore(options.session, options.sessionId ?? origin.sessionId),
     async commitStore({ cellId, origin, writes, signal, committed, cancelled, retainOutcome }) {
       localTransitions++; surfaceChanged()
@@ -67,11 +76,19 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
         if (event.type === "started") {
           try {
             await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
-            try { broker.startCell(event.cellId); liveCells.add(event.cellId) }
+            try { broker.startCell(event.cellId, event.origin.instructionOrigin); liveCells.add(event.cellId); event.instructionInstalled?.() }
             catch (error) { installationFailed = true; throw error }
             surfaceChanged()
           } catch (error) {
-            await facts.required({ type: 'code/cell', cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: 'interrupted', error: 'Code Mode admission did not complete' })
+            const terminal = { type: 'code/cell' as const, cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: 'interrupted' as const, error: 'Code Mode admission did not complete' }
+            let terminalDone = false, flight: Promise<void> | undefined
+            const settle = () => {
+              if (flight) return flight
+              const pending = (async () => { if (!terminalDone) { await facts.required(terminal); terminalDone = true }; await event.instructionAdmissionFailed?.(); admissionDebts.delete(event.cellId) })()
+              flight = pending; void pending.catch(() => { if (flight === pending) flight = undefined }); return pending
+            }
+            admissionDebts.set(event.cellId, settle)
+            await settle()
             throw error
           }
         } else if (event.type === "output") {
@@ -79,14 +96,39 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
           await publishOutput(event)
         }
         else {
-          const committed = () => { liveCells.delete(event.cellId); broker.retireCell(event.cellId); event.committed?.(); surfaceChanged() }
+          let receiptCommitted = false
+          let finishFlight: Promise<void> | undefined
+          const needsFinish = !!event.instructionReplan || !!event.origin.instructionOrigin
+          const finish = () => {
+            if (finishFlight) return finishFlight
+            const pending = (async () => {
+              if (!receiptCommitted) throw new FactRecoveryRequiredError()
+              try { if (event.instructionReplan) await broker.finishReplannedCell(event.cellId); else await broker.finishRetiredCell(event.cellId) }
+              catch (cause) { throw Object.assign(new FactRecoveryRequiredError(), { cause }) }
+              pendingFinishes.delete(event.cellId); event.committed?.(); surfaceChanged()
+            })()
+            finishFlight = pending; void pending.catch(() => { if (finishFlight === pending) finishFlight = undefined }); return pending
+          }
+          if (needsFinish) pendingFinishes.set(event.cellId, finish)
+          const committed = () => {
+            liveCells.delete(event.cellId)
+            receiptCommitted = true
+            if (needsFinish) event.retainOutcome?.()
+            if (!event.instructionReplan) broker.retireCell(event.cellId)
+            if (needsFinish) void finish().catch(() => {})
+            else event.committed?.()
+            surfaceChanged()
+          }
           if (!nondurable) event.retainOutcome?.()
-          await facts.required({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}) }, () => {
+          await facts.required({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}), ...(event.instructionReplan ? { instructionReplan: event.instructionReplan } : {}) }, () => {
             if (!nondurable) committed()
           })
           if (nondurable) {
             try { if (event.status === 'completed') await options.flush?.(); committed() }
             catch (error) { installationFailed = true; throw error }
+          }
+          if (needsFinish) {
+            await finish()
           }
         }
       } finally { localTransitions--; surfaceChanged() }
@@ -99,7 +141,8 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
       const retained = retainedObservation(exec, refreshObservation)
       await ready
-      const out = await runtime.exec(args as CodeModeExecInput, { sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage }, { userSteer: userSteerForTool(exec), retained })
+      const out = await runtime.exec(args as CodeModeExecInput, { sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage, bindInstructionCell: cellId => retainInstructionCell(exec, cellId) }, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained })
+      declareObservationReplan(exec, out)
       declareToolResultOutcome(exec, out.status === 'failed' ? 'failed' : out.status === 'terminated' ? 'canceled' : 'succeeded')
       return observationOutput(out)
     },
@@ -111,7 +154,9 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
       const retained = retainedObservation(exec, refreshObservation)
       await ready
-      return observationOutput(await runtime.wait(args as CodeModeWaitInput, exec.abortSignal, { userSteer: userSteerForTool(exec), retained }))
+      const out = await runtime.wait(args as CodeModeWaitInput, exec.abortSignal, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained })
+      declareObservationReplan(exec, out)
+      return observationOutput(out)
     },
   }
   const statusTool: Tool = {
@@ -152,7 +197,12 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       const pending = (async () => {
         const errors: unknown[] = []
         try { await runtime.cancel('Code Mode disposed') } catch (error) { errors.push(error) }
-        try { await broker.dispose() } catch (error) { errors.push(error) }
+        let brokerFailure: unknown, brokerFailed = false
+        try { await broker.dispose() } catch (error) { brokerFailure = error; brokerFailed = true }
+        try { await facts.refresh() } catch (error) { errors.push(error) }
+        for (const settle of admissionDebts.values()) try { await settle() } catch (error) { errors.push(error) }
+        for (const finish of pendingFinishes.values()) try { await finish() } catch (error) { errors.push(error) }
+        if (brokerFailed) try { await broker.dispose() } catch (error) { errors.push(error === brokerFailure ? error : new AggregateError([brokerFailure, error], 'Original broker cleanup failed')) }
         try { await facts.close() } catch (error) { errors.push(error) }
         if (errors.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(errors) })
         await runtime.dispose()

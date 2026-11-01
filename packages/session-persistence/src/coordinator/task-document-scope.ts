@@ -1,3 +1,4 @@
+import { assertHeldWithArtifactGuard } from './artifact-path-association.ts'
 import { types } from 'node:util'
 import { captureHeldOwnershipClaim, type Ownership } from './ownership.ts'
 import type { HeldTaskDocumentScope } from './task-document-types.ts'
@@ -28,8 +29,7 @@ export function issueHeldTaskDocumentScope(
   const check = () => {
     const current = Object.getOwnPropertyDescriptor(admission, 'assertActive')
     if (!current || !('value' in current) || current.value !== original) throw new TypeError('Changed operation admission assertion')
-    held.assertHeld()
-    Reflect.apply(original, admission, [])
+    assertHeldWithArtifactGuard(() => held.assertHeld(), original, admission)
   }
   check()
   const scope = Object.freeze({ parentSessionId, key: `task-${parentSessionId}`, assertActive() {

@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./internal/passive-observation": "./src/prepared/passive-observation.ts",
     "./internal/bedrock-terminal": "./src/prepared/bedrock-terminal.ts",
+    "./internal/stream-lifetime": "./src/prepared/stream-consumer.ts",
     ".": "./src/index.ts"
   },
   "scripts": {

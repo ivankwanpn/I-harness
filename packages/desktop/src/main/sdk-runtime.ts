@@ -17,6 +17,8 @@ export interface WorkspaceRuntime {
   client: HarnessClient
   info: ServerInfo
   sandbox?: SandboxState
+  /** Exact original connection cleanup/exit receipt; never a replacement runtime. */
+  whenClosed?(): Promise<void> | undefined
 }
 
 export interface LaunchedRuntime {
@@ -79,7 +81,7 @@ export function launchLocalGateway(workspace: WorkspaceEntry, sessionDir: string
   drainChildStream(child.stderr)
   const exited = new Promise<void>((resolveExit) => {
     child.once("exit", () => resolveExit())
-    child.once("error", () => resolveExit())
+    child.once("error", () => { if (child.pid === undefined) resolveExit() })
   })
   return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited }
 }
@@ -105,7 +107,7 @@ export function launchBundledGateway(
   drainChildStream(child.stderr)
   const exited = new Promise<void>((resolveExit) => {
     child.once("exit", () => resolveExit())
-    child.once("error", () => resolveExit())
+    child.once("error", () => { if (child.pid === undefined) resolveExit() })
   })
   return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited }
 }
@@ -143,7 +145,12 @@ export function createWorkspaceRuntimeManager(options: {
 
   function emit(event: DesktopEvent): void {
     activityVersion += 1
-    for (const listener of [...listeners]) listener(event)
+    const failures:unknown[]=[]
+    for (const listener of [...listeners]) {
+      if(event.kind!=='sdk/ready'&&event.kind!=='sdk/disconnected'&&(event.kind!=='sdk/notification'||event.method!=='desktop/surface/changed')){listener(event);continue}
+      try{listener(event)}catch(error){failures.push(error)}
+    }
+    if(failures.length)throw new AggregateError(failures,'Surface forwarding failed')
   }
 
   async function start(workspace: WorkspaceEntry, generation: number): Promise<WorkspaceRuntime> {
@@ -173,14 +180,19 @@ export function createWorkspaceRuntimeManager(options: {
           && frame.method !== "desktop/interaction/closed"
           && frame.method !== "desktop/workflow/changed"
           && frame.method !== "desktop/session/subagents/changed"
+          && frame.method !== 'desktop/instructions/changed'
+          && frame.method !== 'desktop/surface/changed'
           && frame.method !== "desktop/usage/recording-warning"
           && frame.method !== "desktop/context/diagnostic"
           && frame.method !== "desktop/session/navigation/changed") return
         const params = frame.method === "desktop/context/diagnostic" && frame.params && typeof frame.params === "object" && !Array.isArray(frame.params)
           ? { ...frame.params, runtimeGeneration: generation } : frame.params
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params })
-      })
-      return { client: launched.client, info, sandbox }
+      },()=>{void manager.invalidate!(workspace.id).catch(()=>{})})
+      return { client: launched.client, info, sandbox, whenClosed: () => {
+        const closing=closingClients.get(launched.client)
+        return closing ? closing.then(()=>launched.exited) : children.get(workspace.id)!==launched ? launched.exited : undefined
+      } }
     } catch (error) {
       if (children.get(workspace.id) === launched) children.delete(workspace.id)
       await closeClient(launched.client)
@@ -200,7 +212,7 @@ export function createWorkspaceRuntimeManager(options: {
       runtimes.delete(id)
       pending.delete(id)
       children.delete(id)
-      emit({ kind: "sdk/disconnected", workspaceId: id, message: "Project execution scope changed; reconnect to continue.", close: { generation, reason: "scope-changed" } })
+      try {emit({ kind: "sdk/disconnected", workspaceId: id, message: "Project execution scope changed; reconnect to continue.", close: { generation, reason: "scope-changed" } })} catch { /* The original generation is fenced; failed forwarding cannot skip child cleanup. */ }
       const client = child?.client ?? runtime?.client
       if (client) await closeClient(client)
       if (starting) await starting.catch(() => undefined)
@@ -261,6 +273,7 @@ export function createWorkspaceRuntimeManager(options: {
           }
           // No await between checking the epoch/generation and publication.
           runtimes.set(workspace.id, runtime)
+          try {emit({kind:'sdk/ready',method:'sdk/ready',workspaceId:workspace.id,runtimeGeneration:generation})} catch(error) {void manager.invalidate!(workspace.id).catch(()=>{});throw error}
           activityVersion += 1
           const launched = children.get(workspace.id)
           if (launched !== undefined) {

@@ -4,25 +4,83 @@ import { registerResultPrepared } from './result-finalization.ts'
 import { validateJsonSchemaValue, type JsonSchemaNode } from "../json-schema.ts"
 import { ToolArgsError, type ToolCall, type PreparedCall, type ToolExec, type ToolDecision, type PreparedApprovalInput, type ApprovalGuardian, type ToolRegistry } from "../types.ts"
 import { freezeArguments } from "../approval/arguments.ts"
-import { captureToolCall } from '../approval/capture-call.ts'
+import { captureToolCall, ordinaryJson } from '../approval/capture-call.ts'
+import { isAbsolute, win32 } from 'node:path'
+import { bindNativeExecution, bindInstructionCellRetainer, registerCaptureOwner, registerInstructionExec, instructionReplan } from '../instructions.ts'
+import type { CapturedToolCall, ToolPrepareIdentity, NativePlan, NativeMutation, AcceptedInstructionCall, InstructionCellLease } from '../types.ts'
 import { isDecision, mergeDecision } from "../approval/decision.ts"
 import { captureApproval } from "../approval/identity.ts"
 import type { createCatalog } from "./catalog.ts"
+import { createPreparedBodyInvoker, attachPreparedModelOrigin, type ToolExecutionOwnerContext } from './prepared-body.ts'
 
-export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry): ToolRegistry["prepare"] {
-  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: Parameters<ToolRegistry['prepare']>[2]): Promise<PreparedCall> {
-    assertToolSettlementScope(identity?.session, identity?.settlementSource)
-    // The validated snapshot is also the dispatched operation. A caller cannot
-    // mutate it while the human or guardian is deciding.
-    call = captureToolCall(call)
+export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined, executionOwner?: ToolExecutionOwnerContext) {
+  type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; executeBinding: ReturnType<typeof catalog.captureBinding>['executeBinding']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
+  const captures = new WeakMap<CapturedToolCall, Capture>()
+  const executions = new WeakMap<PreparedCall, () => Promise<unknown>>()
+  function invokePrepared(prepared: PreparedCall): Promise<unknown> {
+    const invoke = executions.get(prepared)
+    if (!invoke) throw new Error('Foreign prepared execution')
+    return invoke()
+  }
+  function owned(handle: CapturedToolCall): Capture {
+    const entry = handle && captures.get(handle)
+    if (!entry) throw new Error('Foreign tool capture')
+    return entry
+  }
+  function capture(input: ToolCall, identity: ToolPrepareIdentity = {}): CapturedToolCall {
+    assertToolSettlementScope(identity.session, identity.settlementSource)
+    const call = captureToolCall(input)
     freezeArguments(call)
-    const { tool, bindingGeneration, bindingValidation } = catalog.captureBinding(call)
+    const { tool, bindingGeneration, bindingValidation, planBinding, executeBinding } = catalog.captureBinding(call)
 
     // spec §3.7: BEFORE the policy layers, so a malformed call never reaches an
     // approval prompt — nobody should be asked to approve garbage. The refusal
     // is a TYPED disposition (§3.7.1), read by name at exactly one place.
     const violations = validateJsonSchemaValue(tool.inputSchema as JsonSchemaNode, call.args)
     if (violations.length > 0) throw new ToolArgsError(violations)
+    const planMethod = planBinding
+    let native: NativePlan | undefined
+    if (planMethod) {
+      const plan = planMethod.call(tool, call.args)
+      if (!ordinaryJson(plan)) throw new TypeError('Native plan must be ordinary JSON data')
+      const copied = structuredClone(plan) as NativePlan
+      if (!copied || !Array.isArray(copied.targets) || copied.targets.length > 1024 || !Object.hasOwn(copied, 'operation') || copied.targets.some(t => !t || typeof t.path !== 'string' || t.path.length > 4096 || !(isAbsolute(t.path) || win32.isAbsolute(t.path)) || !['file', 'directory'].includes(t.kind) || !['read', 'mutate'].includes(t.mode))) throw new TypeError('Invalid native plan targets')
+      freezeArguments(copied); native = copied
+    }
+    const handle: CapturedToolCall = Object.freeze({ kind: 'captured-tool-call' })
+    captures.set(handle, { call, identity: Object.freeze({ ...identity }), tool, executeBinding, bindingGeneration, bindingValidation, native, concurrencySafe: tool.isConcurrencySafe === true, used: false })
+    registerCaptureOwner(handle, getRegistry())
+    return handle
+  }
+  function inspectCapture(handle: CapturedToolCall) {
+    const entry = owned(handle)
+    return Object.freeze({ call: entry.call, identity: entry.identity, ...(entry.native ? { native: entry.native } : {}), concurrencySafe: entry.concurrencySafe })
+  }
+  function bindNativeInstructions(handle: CapturedToolCall, origin: AcceptedInstructionCall, authority: NativeMutation) {
+    const entry = owned(handle)
+    if (entry.used || entry.origin || !entry.native || !origin || !authority) throw new Error('Invalid native instruction binding')
+    if (instructionsRequired && (!verifyOrigin || !verifyOrigin(origin, handle))) throw new Error('Foreign accepted instruction origin')
+    function bind(name: keyof NativeMutation) {
+      for (let current: object | null = authority; current; current = Object.getPrototypeOf(current)) {
+        const descriptor = Object.getOwnPropertyDescriptor(current, name)
+        if (descriptor) {
+          if (!('value' in descriptor) || typeof descriptor.value !== 'function') break
+          return descriptor.value.bind(authority)
+        }
+      }
+      throw new TypeError(`Invalid native authority ${name}`)
+    }
+    entry.origin = origin; entry.authority = Object.freeze({ assertCurrent: bind('assertCurrent'), before: bind('before'), settle: bind('settle') })
+  }
+  async function prepareCaptured(handle: CapturedToolCall, signal?: AbortSignal, origin?: AcceptedInstructionCall): Promise<PreparedCall> {
+    const entry = owned(handle)
+    if (entry.used) throw new Error('Tool capture already prepared')
+    entry.used = true
+    if (!entry.bindingValidation()) throw new Error('Captured tool binding changed')
+    if (entry.origin !== undefined && entry.origin !== origin) throw new Error('Native instruction origin mismatch')
+    if (instructionsRequired && entry.native?.targets.some(t => t.mode === 'mutate') && (!entry.authority || !origin || entry.origin !== origin || !verifyOrigin?.(origin, handle))) throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'missing-origin', currentFingerprint: '' })
+    const { call, identity, tool, executeBinding, bindingGeneration, bindingValidation } = entry
+    assertToolSettlementScope(identity.session, identity.settlementSource)
     const commandDialect = tool.commandDialect?.(call.args)
     // Policy/hook identity comes only from the trusted host, never model JSON.
     const policyInput = { name: call.name, args: call.args,
@@ -108,12 +166,36 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     if (identity?.callId !== undefined) exec.callId = identity.callId
     if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
     if (identity?.resultConsumer === "code") exec.resultConsumer = "code"
+    if (origin && verifyOrigin?.(origin, handle) && retainCell) bindInstructionCellRetainer(exec, origin, handle, (cellId, request) => retainCell(origin, handle, cellId, request))
 
     const prepared = { call, tool, exec, bindingGeneration, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}), ...(commandDialect !== undefined ? { commandDialect } : {}) }
+    if (entry.native) {
+      const targets = new Set(entry.native.targets.filter(t => t.mode === 'mutate').map(t => t.path))
+      const assertCurrent = () => {
+        if (!bindingValidation() || authorityValidation?.() === false || approvalValidation?.() === false) throw new Error('Native authority changed')
+        const reason = ctx.checkGuards('tools/execute', { name: call.name, args: call.args })
+        if (reason !== undefined) throw new Error(`guard denied: ${reason}`)
+        entry.authority?.assertCurrent()
+        if (instructionsRequired && entry.native!.targets.some(t => t.mode === 'mutate') && (!entry.origin || !verifyOrigin?.(entry.origin, handle))) throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'revoked', currentFingerprint: '' })
+      }
+      bindNativeExecution(exec, entry.native, Object.freeze({
+        assertCurrent,
+        before(boundary) { if (!targets.has(boundary.target)) throw new Error('Native boundary outside captured plan'); assertCurrent(); entry.authority?.before(boundary) },
+        settle() { entry.authority?.settle() },
+      } satisfies NativeMutation))
+    }
     bindPreparedSettlement(prepared, identity?.settlementSource)
     registerResultPrepared(prepared, identity?.settlementSource)
+    registerInstructionExec(exec)
+    // The callback stays private to this registry; hooks cannot replace the
+    // executable, receiver, frozen arguments or exec through prepared metadata.
+    executions.set(prepared, createPreparedBodyInvoker(prepared, executeBinding, executionOwner, signal))
     return prepared
   }
 
-  return prepare
+  function attachModelOrigin(prepared: PreparedCall, proof: object, take: import('../model-origin.ts').ConstructorModelOriginVerifier['take']) {
+    if (!executions.has(prepared)) throw new Error('Foreign prepared execution')
+    attachPreparedModelOrigin(prepared, getRegistry(), proof, take)
+  }
+  return { capture, inspectCapture, bindNativeInstructions, prepareCaptured, invokePrepared, attachModelOrigin }
 }

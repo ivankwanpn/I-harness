@@ -18,7 +18,7 @@ export function promotedResult(
   promoted: PromotedRun,
   tool: "bash" | "pwsh" | "shell",
   deadlineMs: number | undefined,
-): { stdout: string; job_id: string; native_job?: NativeJobIdentity; promoted: true; ran_foreground_ms: number } {
+): { stdout: string; job_id: string; native_job?: NativeJobIdentity; promoted: true; ran_foreground_ms: number; yielded?: true; yield_reason?: "user-steer" | "background-event" } {
   // The deadline is named only when the host declared one: a mount without
   // `timeoutMs` has no deadline to explain, and quoting 120_000 here would be
   // asserting a number this layer never saw.
@@ -30,9 +30,10 @@ export function promotedResult(
     ...(promoted.nativeJob === undefined ? {} : { native_job: promoted.nativeJob }),
     promoted: true,
     ran_foreground_ms: promoted.ranForegroundMs,
+    ...(promoted.promotionReason === "user-steer" || promoted.promotionReason === "background-event" ? { yielded: true as const, yield_reason: promoted.promotionReason } : {}),
     stdout:
-      promoted.promotionReason === "user-steer"
-      ? `Yielded to new user input; command continues as job ${promoted.jobId}. Read its output with job_output({ job_id: "${promoted.jobId}" }); job_list lists it, job_kill stops it.`
+      (promoted.promotionReason === "user-steer" || promoted.promotionReason === "background-event")
+      ? `Yielded to ${promoted.promotionReason === "background-event" ? "a background completion" : "new user input"}; command continues as job ${promoted.jobId}. Read its output with job_output({ job_id: "${promoted.jobId}" }); job_list lists it, job_kill stops it.`
       :
       `[i-harness] the ${tool} command was still running after ${promoted.ranForegroundMs}ms, so the harness promoted it to background job ` +
       `${promoted.jobId} and returned this id instead of waiting. You did NOT ask for background — the harness did.${why} ` +

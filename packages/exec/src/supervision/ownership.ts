@@ -23,8 +23,10 @@ export function createSupervisionOwner(): ExecutionSupervisor {
   }
 
   function remove(entry: Entry): void {
-    entries.delete(entry)
+    if(entry.retired)return
     entry.unlink()
+    entry.retired=true
+    entries.delete(entry)
   }
 
   function register(owner: string, policy: CompiledSandboxPolicy, readValidator: () => ExecutionLaunch["validateAuthority"]): Entry {
@@ -34,7 +36,7 @@ export function createSupervisionOwner(): ExecutionSupervisor {
     const entry: Entry = {
       id: `execution-${++nextId}`, owner, policy,
       validateAuthority: readValidator(), controller: new AbortController(), unlink() {},
-      preparing: true, rollbackFailed: false, observed: new Set(),
+      preparing: true, retired:false, rollbackFailed: false, observed: new Set(),
       completion: new Promise(resolve => { complete = resolve }), complete,
     }
     // Register before invoking the asynchronous admission pipeline, including
@@ -43,10 +45,10 @@ export function createSupervisionOwner(): ExecutionSupervisor {
     return entry
   }
 
-  const { watch, markStopped, cancelEntry, drainAll } = createRetirement({ owns: entry => entries.has(entry), remove })
+  const { watch, markStopped, cancelEntry, drain, drainAll } = createRetirement({ owns: entry => entries.has(entry), remove })
   const launch = createAdmission({ isDisposed: () => disposed, ownerState, register,
     hasExecutionId: id => executionIds.has(id), rememberExecutionId: id => { executionIds.add(id) },
-    remove, watch, markStopped, cancelEntry })
+    remove, watch, markStopped, cancelEntry, drain })
   const { reconcile, closeOwner } = createReconciliation({ ownerState, entries: () => entries, isDisposed: () => disposed, markStopped, drainAll })
 
   function dispose(): Promise<void> {

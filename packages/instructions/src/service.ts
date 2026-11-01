@@ -1,8 +1,9 @@
-import { InstructionConfigurationError, InstructionReadCleanupError, type InstructionService, type InstructionServiceOptions, type InstructionSnapshot, type InstructionTarget, type InstructionObservationEvent, type InstructionObservationState, type InstructionObservationLease } from './contracts.ts'
-import { discover, frozen, key, overlaps, paths, planDiscovery, record, resolveBoundaryAliases, scopeData, targetData, type BoundaryAlias, type DiscoveryPlan, type Slot } from './discovery.ts'
+import { InstructionConfigurationError, InstructionReadCleanupError, type InstructionService, type InstructionServiceOptions, type InstructionSnapshot, type InstructionTarget, type InstructionObservationEvent, type InstructionObservationState, type InstructionObservationLease, type ApplicableInstructionProof, type OwnedInstructionWrite } from './contracts.ts'
+import { discover, frozen, key, overlaps, paths, planDiscovery, record, resolveBoundaryAliases, scopeData, targetData, type BoundaryAlias, type DiscoveryPlan, type Discovery, type Slot } from './discovery.ts'
 import { applicableFingerprint, buildSnapshot, candidateFingerprint, emptySnapshot, reliability, type CachedRead } from './snapshot.ts'
 import { basename, dirname } from 'node:path'
 import { inside } from './discovery.ts'
+import { createPendingEpochs } from './pending-epochs.ts'
 
 // Capture capabilities without evaluating accessors or freezing their owner.
 function method<T extends (...args: any[]) => any>(owner: unknown, name: string): T {
@@ -23,13 +24,16 @@ function observationData(value: unknown): InstructionObservationState {
   if (!Number.isSafeInteger(r.revision) || (r.revision as number) < 0 || typeof r.available !== 'boolean' || !Array.isArray(r.pending)) throw new InstructionConfigurationError('Invalid observation state')
   const seen = new Set<string>()
   const pending = r.pending.map(value => { const p = record(value); if (typeof p.id !== 'string' || !p.id || seen.has(p.id)) throw new InstructionConfigurationError('Invalid pending ID'); seen.add(p.id); return { id: p.id, paths: paths(p.paths) } }).sort((a, b) => a.id.localeCompare(b.id))
-  return frozen({ revision: r.revision as number, available: r.available, pending })
+  const mappingPaths = r.mappingPaths === undefined ? undefined : paths(r.mappingPaths)
+  if (mappingPaths && !mappingPaths.length) throw new InstructionConfigurationError('Invalid mapping scope')
+  return frozen({ revision: r.revision as number, available: r.available, pending, ...(mappingPaths ? { mappingPaths } : {}) })
 }
 const closedError = () => Object.assign(new Error('Instruction service closed'), { code: 'INSTRUCTIONS_CLOSED' })
 
 export function createInstructionService(options: InstructionServiceOptions): InstructionService {
   const input = record(options), scope = scopeData(input.scope)
   const subscribePort = method<InstructionServiceOptions['observation']['subscribe']>(input.observation, 'subscribe')
+  const beginPending = input.beginPending === undefined ? undefined : method<NonNullable<InstructionServiceOptions['beginPending']>>(input, 'beginPending')
   const disabled = !scope.enabled || scope.maxBytes === 0
   let current = emptySnapshot(disabled), closed = false, closing: Promise<void> | undefined, running: Promise<InstructionSnapshot> | undefined
   let updateLease: InstructionObservationLease['update'] | undefined, closeLease: InstructionObservationLease['close'] | undefined
@@ -39,10 +43,22 @@ export function createInstructionService(options: InstructionServiceOptions): In
   const cleanupFailures: unknown[] = []
   let plan: DiscoveryPlan = planDiscovery(scope, [])
   let boundaryAliases: readonly BoundaryAlias[] = []
+  let lastDiscovery: Discovery | undefined, healthEpoch = 0
+  const externalEpoch = new Map<string, number>(), markerEpoch = new Map<string, number>(), pendingEpoch = createPendingEpochs()
+  type Witness = { discovery: Discovery; external: Map<string, number>; markers: Map<string, number>; pending: Map<string, number>; health: number }
+  type ProofData = { slots: string[]; membership: Map<string, string>; baseline: Map<string, string>; external: Map<string, number>; markers: Map<string, number>; pending: Map<string, number>; health: number; active: boolean }
+  type OwnData = { proof: ApplicableInstructionProof; id: string; settle: () => void; candidatePaths: string[]; active: boolean }
+  const witnesses = new WeakMap<InstructionSnapshot, Witness>(), proofs = new WeakMap<ApplicableInstructionProof, ProofData>(), writes = new WeakMap<OwnedInstructionWrite, OwnData>()
+  const copyPending = () => pendingEpoch.snapshot()
+  const candidateData = (c: InstructionSnapshot['candidates'][number]) => { const { fingerprint: _f, reliability: _r, pendingIds: _p, ...rest } = c; return JSON.stringify(rest) }
+  const targetKey = (t: InstructionTarget) => `${t.kind}:${key(t.path)}`
+  const exactProjection = (t: Discovery['targets'][number]) => t.membership && JSON.stringify([t.membership, t.slotIds])
+  const projection = (t: Discovery['targets'][number]) => t.membership && JSON.stringify({ root: key(t.membership.root), selectedRoot: key(t.membership.selectedRoot), directory: key(t.target.kind === 'file' ? dirname(t.membership.target) : t.membership.target), boundary: key(t.membership.boundary), markers: t.membership.markers.map(m => [key(m.path), key(m.canonicalPath), m.state]), globals: t.membership.globals.map(key) })
 
-  function publish(next: InstructionSnapshot, reconcile = false) {
+  function publish(next: InstructionSnapshot, reconcile = false, discovery?: Discovery) {
     if (!reconcile && JSON.stringify({ ...next, revision: 0 }) === JSON.stringify({ ...current, revision: 0 })) return
     current = frozen({ ...next, revision: current.revision + 1 })
+    if (discovery) witnesses.set(current, { discovery, external: new Map(externalEpoch), markers: new Map(markerEpoch), pending: copyPending(), health: healthEpoch })
     const published = current
     for (const listener of [...listeners]) {
       if (current !== published) break // reentrant publication supersedes this notice
@@ -70,6 +86,18 @@ export function createInstructionService(options: InstructionServiceOptions): In
       }
     }
     return ids
+  }
+  function noteExternal(changed?: readonly string[]) {
+    const expanded = changed && withBoundaryAliases(changed)
+    for (const id of affectedIds(expanded)) externalEpoch.set(id, (externalEpoch.get(id) ?? 0) + 1)
+    for (const target of lastDiscovery?.targets ?? []) for (const marker of target.membership?.markers ?? []) {
+      if (!expanded || expanded.some(p => overlaps(p, marker.path) || overlaps(p, marker.canonicalPath))) {
+        const id = key(marker.path); markerEpoch.set(id, (markerEpoch.get(id) ?? 0) + 1)
+      }
+    }
+  }
+  function notePending(id: string, changed: readonly string[]) {
+    pendingEpoch.record(id, affectedIds(withBoundaryAliases(changed)), state.pending.some(p => p.id === id))
   }
   function mark(changed?: readonly string[], reconcile = false) {
     if (closed || disabled) return
@@ -113,13 +141,21 @@ export function createInstructionService(options: InstructionServiceOptions): In
       const event = frozen({ ...observationData(r), kind: r.kind as InstructionObservationEvent['kind'], paths: paths(r.paths) })
       const before = state; const changed = accept(event, event)
       if (!changed) return
-      const pendingChanges = [...before.pending, ...state.pending].filter(p => JSON.stringify(before.pending.find(x => x.id === p.id)) !== JSON.stringify(state.pending.find(x => x.id === p.id))).flatMap(p => p.paths)
-      if (event.kind === 'reset' || event.kind === 'availability' || before.available !== state.available) { interestsChanged = true; mark(undefined, true) }
+      const changedPending = [...new Map([...before.pending, ...state.pending].map(p => [p.id, p])).values()].filter(p => JSON.stringify(before.pending.find(x => x.id === p.id)) !== JSON.stringify(state.pending.find(x => x.id === p.id)))
+      for (const p of changedPending) notePending(p.id, [...(before.pending.find(x => x.id === p.id)?.paths ?? []), ...(state.pending.find(x => x.id === p.id)?.paths ?? [])])
+      const pendingChanges = changedPending.flatMap(p => [...(before.pending.find(x => x.id === p.id)?.paths ?? []), ...(state.pending.find(x => x.id === p.id)?.paths ?? [])])
+      if (event.kind === 'changed') {
+        if (event.paths.length) noteExternal(event.paths)
+        else { healthEpoch++; noteExternal() }
+      }
+      const scoped = !!event.mappingPaths && event.kind !== 'reset' && event.kind !== 'availability'
+      if (event.kind === 'reset' || event.kind === 'availability' || before.available !== state.available && !scoped) { healthEpoch++; noteExternal() }
+      if (event.kind === 'reset' || event.kind === 'availability' || before.available !== state.available && !scoped) { interestsChanged = true; mark(undefined, true) }
       else {
         if (!state.available) interestsChanged = true
         mark([...event.paths, ...pendingChanges], true)
       }
-    } catch { healthy = false; interestsChanged = true; mark() }
+    } catch { healthEpoch++; noteExternal(); healthy = false; interestsChanged = true; mark() }
   }
   function connect() {
     if (updateLease) return
@@ -167,17 +203,18 @@ export function createInstructionService(options: InstructionServiceOptions): In
         if (built.changed || generation !== captured) { for (const s of discovery.slots) dirty.add(s.slotId); continue }
         needsBuild = mappingIncomplete; dirty.clear()
         for (const target of discovery.targets) if (unavailableTargets.has(`${target.target.kind}:${key(target.target.path)}`)) for (const id of target.slotIds) dirty.add(id)
-        publish(built.snapshot)
+        lastDiscovery = discovery
+        publish(built.snapshot, false, discovery)
         if (closed) throw closedError()
         if (generation !== captured) continue
         return current
       } catch (error) {
         if (error instanceof InstructionReadCleanupError) cleanupFailures.push(error.cause)
         if (closed) throw closedError()
-        healthy = false; interestsChanged = true; mark(); return current
+        healthEpoch++; noteExternal(); healthy = false; interestsChanged = true; mark(); return current
       }
     }
-    mark(); return current
+    healthEpoch++; noteExternal(); mark(); return current
   }
   const service: InstructionService = {
     prepare(values) {
@@ -198,7 +235,100 @@ export function createInstructionService(options: InstructionServiceOptions): In
       } catch (error) { return Promise.reject(error) }
     },
     snapshot: () => current,
-    invalidate(values) { if (closed || disabled) return; mark(values === undefined ? undefined : paths(values), true) },
+    proveApplicable(issued, values) {
+      if (closed || !Array.isArray(values) || !values.length) throw new Error('Instruction proof unavailable')
+      if (disabled) {
+        if (issued !== current) throw new Error('Foreign instruction evidence')
+        values.forEach(targetData)
+        const proof: ApplicableInstructionProof = Object.freeze({ kind: 'applicable-instruction-proof' })
+        proofs.set(proof, { slots: [], membership: new Map(), baseline: new Map(), external: new Map(), markers: new Map(), pending: new Map(), health: healthEpoch, active: true })
+        return proof
+      }
+      const prior = witnesses.get(issued), now = witnesses.get(current)
+      if (!prior || !now) throw new Error('Instruction evidence unavailable')
+      const priorCandidates = new Map(issued.candidates.map(c => [c.slotId, c])), present = new Map(current.candidates.map(c => [c.slotId, c]))
+      const slotSet = new Set<string>(), markers = new Set<string>(), membership = new Map<string, string>()
+      for (const value of values) {
+        const target = targetData(value), actual = now.discovery.targets.find(t => targetKey(t.target) === targetKey(target))
+        const applicable = current.applicable.find(a => targetKey(a.target) === targetKey(target))
+        if (!actual || !actual.complete || !applicable?.complete || !projection(actual)) throw new Error('Target resolver evidence unavailable')
+        const originalTarget = prior.discovery.targets.find(t => targetKey(t.target) === targetKey(target))
+        if (originalTarget && (!originalTarget.complete || exactProjection(originalTarget) !== exactProjection(actual))) throw new Error('Issued target membership changed')
+        const compatible = prior.discovery.targets.find(t => t.complete && issued.applicable.some(a => targetKey(a.target) === targetKey(t.target) && a.complete) && projection(t) === projection(actual) && actual.slotIds.every(id => t.slotIds.includes(id)))
+        if (!compatible) throw new Error('Target instruction evidence not issued')
+        membership.set(targetKey(target), exactProjection(actual)!)
+        for (const id of actual.slotIds) {
+          const a = priorCandidates.get(id), b = present.get(id)
+          if (!a || !b || candidateData(a) !== candidateData(b)) throw new Error('Instruction dependency changed')
+          slotSet.add(id)
+        }
+        for (const marker of actual.membership!.markers) markers.add(key(marker.path))
+      }
+      const proof: ApplicableInstructionProof = Object.freeze({ kind: 'applicable-instruction-proof' })
+      proofs.set(proof, { slots: [...slotSet], membership, baseline: new Map([...slotSet].map(id => [id, candidateData(priorCandidates.get(id)!)])), external: prior.external, markers: new Map([...markers].map(id => [id, prior.markers.get(id) ?? 0])), pending: prior.pending, health: prior.health, active: true })
+      service.assertApplicable(proof)
+      return proof
+    },
+    assertApplicable(proof, own) {
+      const data = proof && proofs.get(proof), owned = own && writes.get(own)
+      if (!data || !data.active || closed || data.health !== healthEpoch || !healthy || !state.available && !state.mappingPaths || own && (!owned || !owned.active || owned.proof !== proof)) throw new Error('Instruction proof revoked')
+      if (!state.available && state.mappingPaths && [...affectedIds(withBoundaryAliases(state.mappingPaths))].some(id => data.slots.includes(id))) throw new Error('Instruction mapping unavailable')
+      for (const [id, epoch] of data.markers) if ((markerEpoch.get(id) ?? 0) !== epoch) throw new Error('Instruction membership changed')
+      for (const [id, projection] of data.membership) {
+        const target = lastDiscovery?.targets.find(t => targetKey(t.target) === id)
+        if (!target?.complete || exactProjection(target) !== projection) throw new Error('Instruction target membership changed')
+      }
+      const candidates = new Map(current.candidates.map(c => [c.slotId, c]))
+      for (const id of data.slots) {
+        const c = candidates.get(id)
+        if (!c || candidateData(c) !== data.baseline.get(id) || (externalEpoch.get(id) ?? 0) !== (data.external.get(id) ?? 0)) throw new Error('Instruction dependency changed')
+        if (!pendingEpoch.matches(id, data.pending, owned?.id)) throw new Error('Instruction pending write changed')
+        if (c.pendingIds.some(id => id !== owned?.id) || c.reliability !== 'ready' && (!owned || !c.pendingIds.includes(owned.id))) throw new Error('Instruction dependency unavailable')
+      }
+    },
+    beginOwnedWrite(proof, values) {
+      service.assertApplicable(proof)
+      const data = proofs.get(proof)!, candidates = current.candidates.filter(c => data.slots.includes(c.slotId)), candidatePaths = paths(values)
+      if (!beginPending || !candidatePaths.length || candidatePaths.some(path => !candidates.some(c => key(c.path) === key(path) || c.canonicalPath && key(c.canonicalPath) === key(path)))) throw new Error('Instruction write unavailable')
+      let lease: ReturnType<NonNullable<InstructionServiceOptions['beginPending']>>
+      try { lease = beginPending(candidatePaths) } catch (error) { healthEpoch++; healthy = false; mark(); cleanupFailures.push(error); throw error }
+      let settle: () => void
+      try { settle = method<() => void>(lease, 'settle') }
+      catch (error) { cleanupFailures.push(error); healthEpoch++; healthy = false; mark(); throw error }
+      let leaseRecord: Record<string, unknown>
+      try { leaseRecord = record(lease) }
+      catch (error) {
+        try { settle() } catch (cleanup) { cleanupFailures.push(cleanup) }
+        cleanupFailures.push(error); healthEpoch++; healthy = false; mark(); throw error
+      }
+      if (typeof leaseRecord.id !== 'string' || !leaseRecord.id) {
+        try { settle() } catch (error) { cleanupFailures.push(error) }
+        healthEpoch++; healthy = false; mark()
+        throw new Error('Invalid pending lease')
+      }
+      const own: OwnedInstructionWrite = Object.freeze({ kind: 'owned-instruction-write' })
+      writes.set(own, { proof, id: leaseRecord.id, settle, candidatePaths, active: true })
+      try { service.assertApplicable(proof, own) } catch (error) { try { service.settleOwnedWrite(own) } catch { /* Original cleanup debt remains. */ }; throw error }
+      return own
+    },
+    settleOwnedWrite(own) {
+      const data = own && writes.get(own)
+      if (!data) throw new Error('Foreign instruction write')
+      if (!data.active) return
+      try { data.settle(); data.active = false; mark(data.candidatePaths, true) }
+      catch (error) { healthEpoch++; healthy = false; mark(); cleanupFailures.push(error); throw error }
+    },
+    relation(candidatePath, inputTarget) {
+      try {
+        if (disabled) { paths([candidatePath]); targetData(inputTarget); return closed ? 'unknown' : 'independent' }
+        const path = paths([candidatePath])[0]!, target = targetData(inputTarget), actual = lastDiscovery?.targets.find(t => targetKey(t.target) === targetKey(target))
+        if (!actual?.complete || !actual.membership) return 'unknown'
+        const matches = current.candidates.filter(c => key(c.path) === key(path) || c.canonicalPath && key(c.canonicalPath) === key(path))
+        if (!matches.length) return 'unknown'
+        return matches.some(c => actual.slotIds.includes(c.slotId)) ? 'governs' : 'independent'
+      } catch { return 'unknown' }
+    },
+    invalidate(values) { if (closed || disabled) return; const changed = values === undefined ? undefined : paths(values); noteExternal(changed); mark(changed, true) },
     subscribe(listener) { if (closed) return () => {}; if (typeof listener !== 'function') throw new InstructionConfigurationError('Invalid listener'); listeners.add(listener); return () => { listeners.delete(listener) } },
     close() {
       if (closing) return closing
@@ -212,7 +342,7 @@ export function createInstructionService(options: InstructionServiceOptions): In
       // Retry the same captured original lease after a transient close failure.
       // The closed fence and irrecoverable file-cleanup failures remain held.
       void closing.catch(() => { closing = undefined })
-      closed = true; generation++; cache.clear(); publish({ ...emptySnapshot(false), applicable: current.applicable.map(a => ({ ...a, reliability: 'unavailable' as const, complete: false })) }); listeners.clear()
+      closed = true; healthEpoch++; generation++; cache.clear(); publish({ ...emptySnapshot(false), applicable: current.applicable.map(a => ({ ...a, reliability: 'unavailable' as const, complete: false })) }); listeners.clear()
       return closing
     },
   }

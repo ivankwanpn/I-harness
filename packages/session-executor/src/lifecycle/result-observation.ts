@@ -3,6 +3,7 @@ import { canonicalJsonData, createLegacyReadVisibility, freezeJsonData, isStrict
 import { captureLegacyRefCommitment, type ContextCapture, type LegacyCommitment, type LegacyReadObservation, type LegacyReadObservationRunner } from '@i-harness/context-output'
 import type { ExistingSessionBindingObservation, SessionBindingObservation, SessionCoordinator, SessionMeta, ManagedDocument } from '@i-harness/session-persistence'
 
+const originalResultDocuments=new WeakMap<ResultSourceObservation,ManagedDocument>()
 export interface ResultSourceObservation { sessionId: string; metadata: Readonly<SessionMeta>; view: SessionView; source: NonNullable<ContextCapture['source']>; assertCurrent(): void }
 export interface ResultObservationCapture {
   sessionId: string; sessionIds: readonly string[]; observation: ExistingSessionBindingObservation | SessionBindingObservation; document: ManagedDocument
@@ -31,7 +32,7 @@ export function createResultObservationScope(): ResultObservationScope {
       let closed=false,active=0,drain=Promise.withResolvers<void>()
       const assertCurrent=()=>{if(closed)throw Error('Result observation expired');observation.assertCurrent();host();document.assertReady();if(document.view!==view||view.events!==events||events.length!==count)throw Error('Result observation view changed');if(observation.metadata(sessionId)!==metadata||metadata.archived)throw Error('Result observation metadata changed')}
       const primary:ResultSourceObservation=Object.freeze({sessionId,metadata,view,source,assertCurrent}),ids=new Set(sessionIds)
-      assertCurrent()
+      originalResultDocuments.set(primary,document);assertCurrent()
       return Object.freeze({observation:primary,assertCurrent,revoke(){closed=true},async use<T>(work:()=>Promise<T>){assertCurrent();active++;const scope:Scope={active:true,ids,primary};try{return await contexts.run([...(contexts.getStore()??[]),scope],async()=>{assertCurrent();const result=await work();assertCurrent();return result})}finally{scope.active=false;if(!--active){drain.resolve();drain=Promise.withResolvers<void>()}}},async close(){if(contexts.getStore()?.some(scope=>scope.primary===primary&&scope.active))throw Error('Result observation self-close');closed=true;if(active)await drain.promise}})
     },
     async run(capture, use) {
@@ -50,6 +51,7 @@ export function createResultObservationScope(): ResultObservationScope {
       }
       const primary: ResultSourceObservation = { sessionId: capture.sessionId, metadata, view,
         get source() { assertCurrent(); const value = capture.currentSource(); assertCurrent(); return value }, assertCurrent }
+      originalResultDocuments.set(primary,capture.document)
       const scope: Scope = { active: true, ids: new Set(capture.sessionIds), primary }
       try { return await contexts.run([...(contexts.getStore() ?? []), scope], async () => { assertCurrent(); const value = await use(); assertCurrent(); return value }) }
       finally { active = false; scope.active = false }
@@ -107,8 +109,14 @@ export function legacyObservationFor(source: ResultSourceObservation): LegacyRea
   if (canonicalJsonData(seed ?? null) !== canonicalJsonData(header?.semanticSeed ?? null)
     || source.metadata.seedLength !== header?.seedLength) throw new Error('Legacy READY header changed')
   const bootstrap = seed ? { invocation: { version: 1 as const, operationId: seed.operationId, targetSessionId: source.sessionId, createdAt: source.metadata.createdAt, requestDigest: seed.requestDigest }, manifestDigest: seed.manifestDigest, seedDigest: seed.seedDigest } : undefined
-  return { sessionId: source.sessionId, sourceId: source.source.sourceId, ...(bootstrap ? { bootstrap } : {}), assertCurrent,
-    localVisible: c => predicate(() => local.has(commitmentKey(c))), anchorVisible: (anchor, extent) => predicate(() => visibility.anchorVisible(anchor, extent)) }
+  const selectedOwner=seed?.version===3?originalResultDocuments.get(source):undefined
+  if(seed?.version===3&&!selectedOwner)throw Error('Original selected result observation required')
+  return { sessionId: source.sessionId, sourceId: source.source.sourceId, ...(bootstrap ? { bootstrap } : {}), ...(selectedOwner?{selectedView:source.view,selectedOwner}:{}), assertCurrent,
+    localVisible: c => predicate(() => local.has(commitmentKey(c))), anchorVisible: (anchor, extent, commitment, original) => predicate(() => {
+      if(anchor.kind!=='seed-result')return visibility.anchorVisible(anchor,extent)
+      const row=visibility.resultRow(anchor,extent)
+      return !!row&&!!commitment&&!!original&&commitmentKey(captureLegacyRefCommitment(row.ref))===commitmentKey(commitment)&&canonicalJsonData(row.original)===canonicalJsonData({kind:'local',sessionId:original.sessionId,seq:original.seq,event:'context/result-ref',slot:'ref'})
+    }) }
 }
 export function createLegacyReadObservationRunner(options: {
   coordinator: Pick<SessionCoordinator, 'profile'|'openManagedDocument'|'withExistingSessionBindingObservation'>; observations: ResultObservationScope

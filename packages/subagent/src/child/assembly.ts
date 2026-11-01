@@ -1,3 +1,6 @@
+import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
+import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
+import { isNondurableSession } from '@i-harness/core-session'
 import { ownedContextReadiness } from "@i-harness/session-persistence"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { SessionView, FactOwner } from "@i-harness/core-session"
@@ -17,16 +20,22 @@ export async function assembleChild(
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"],
   suppliedController?: AbortController,
   sharedGeneration?: object,
+  instruction?: import('./instruction-context.ts').ChildInstructionContext,
+  retainRuntime?: (mount: import('@i-harness/code-mode').CodeModeMount) => void,
 ) {
   // child registry: register the role's allowed tools (resolved from the parent).
   // A declared tool the host does not mount is reported, never dropped silently.
-  const childReg = createToolRegistry(childCtx, { inheritResultRetention: opts.parentRegistry })
+  const modelOrigins = !sharedGeneration && !isNondurableSession(childSession) ? createAgentModelOriginOwner({view:childSession,factOwner}) : undefined
+  const modelPair = modelOrigins ? createToolRegistryWithModelOrigin(childCtx, { inheritResultRetention: opts.parentRegistry, executionOwner: {view:childSession,factOwner,context:childCtx,...sessionId!==undefined?{sessionId}:{}} }, modelOrigins.verifier) : undefined
+  const childReg = modelPair?.registry ?? createToolRegistry(childCtx, { inheritResultRetention: opts.parentRegistry, executionOwner: {view:childSession,factOwner,context:childCtx,...sessionId!==undefined?{sessionId}:{}} })
+  const modelCallOrigin = modelPair && modelOrigins!.bind(childReg, modelPair.driver)
   resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
   const codeModeMount = opts.role.tools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
     session: childSession, factOwner, sessionId, config: opts.codeMode,
   })
-  try { await codeModeMount?.ready?.() }
-  catch (error) { try { await codeModeMount?.cancel('Child preparation failed') } finally { await codeModeMount?.dispose() }; throw error }
+  // The initial setup owns original cleanup before ready can await or fail.
+  if (codeModeMount) retainRuntime?.(codeModeMount)
+  await codeModeMount?.ready?.()
   const modelToolSchemas = () => codeModeMount?.schemas() ?? childReg.schemas()
 
   // M73: the prompt is composed ONCE — the agent gets it, and the overhead
@@ -48,6 +57,7 @@ export async function assembleChild(
 
   const controller = suppliedController ?? new AbortController()
   const agent = createAgent(childCtx, {
+      modelCallOrigin,
     ...(sharedGeneration ? { sharedGeneration } : sessionId && opts.generationFactoryFor ? { generationFactory: opts.generationFactoryFor(factOwner, sessionId, () => model) } : {}),
     modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
     summaryFactory: opts.summaryFactory,
@@ -57,6 +67,7 @@ export async function assembleChild(
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
     factOwner,
+    ...(instruction ? { requestContext: instruction.requestContext } : {}),
     tools: childReg,
     modelToolSchemas,
     ...(codeModeMount ? { modelOverheadTokens } : {}),

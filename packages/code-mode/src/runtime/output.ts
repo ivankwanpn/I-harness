@@ -7,6 +7,7 @@ import type { CodeModeItem, CodeModeObservation, CodeModeObserveOptions, CodeMod
 import type { Retirement } from './retirement.js';
 import { FactRecoveryRequiredError } from '@i-harness/core-session';
 import { TEXT_CAP, ITEM_CAP, message, textSlice } from './limits.js';
+import { bindObservationReplan } from './replan-observation.js';
 
 /** Map one host retention disposition onto the bounded model/archive descriptor.
  * Only a verified artifact makes `stored` true; everything else is explicit. */
@@ -65,7 +66,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                     cell.retainedOutputItems--;
                     retained = false;
                 }
-                if (!cell.pendingOutputReceipts && !cell.terminalReceiptPending) {
+                if (!cell.pendingOutputReceipts && (!cell.terminalReceiptPending || cell.instructionReplan && !cell.replanTerminalStarted)) {
                     cell.recoveryRequired = false;
                     cell.error = undefined;
                     cell.resumeCompletion?.();
@@ -99,7 +100,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
         });
         track(cell.admission, cell);
     }
-    async function project(cell: Cell, tokens: number, steered: boolean, signal?: AbortSignal, passive = false): Promise<CodeModeObservation> {
+    async function project(cell: Cell, tokens: number, steered: "user-steer" | "background-event" | undefined, signal?: AbortSignal, passive = false): Promise<CodeModeObservation> {
         const admitted = cell.items;
         const incomplete = cell.textIncomplete;
         let truncated = cell.truncated;
@@ -252,10 +253,12 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
             const status = cell.items.length || cell.truncated || cell.textIncomplete || cell.status === 'running' && cell.pendingItems ? 'running' : cell.status;
             const out: CodeModeObservation = {
                 cellId: cell.id, status, items, text, truncated,
-                ...(steered && cell.status === 'running' && !signal?.aborted ? { yielded: true as const, yieldReason: 'user-steer' as const } : {}),
+                ...(steered && cell.status === 'running' && !signal?.aborted ? { yielded: true as const, yieldReason: steered } : {}),
                 ...(textRetention ? { textRetention } : {}),
+                ...(cell.instructionReplan ? { instructionReplan: cell.instructionReplan.data } : {}),
                 ...(error === undefined ? {} : { error }), ...(cell.policyRefusal ? { policyRefusal: true } : {})
             };
+            if (cell.instructionReplan) bindObservationReplan(out, cell.instructionReplan);
             if (out.status !== 'running')
                 state.retire(cell.id);
             else if (!passive && cell.status === 'running' && !cell.finishing)
@@ -294,7 +297,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                 }
                 projecting = true;
                 retained.progress();
-                const projection = project(cell, tokens, false, undefined, true).then(output => {
+                const projection = project(cell, tokens, undefined, undefined, true).then(output => {
                     retained.ready(output);
                     finished = true;
                     cleanup();
@@ -321,7 +324,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
         observation?.retained?.observed();
         cell.observer = true;
         let removeAbort: (() => void) | undefined;
-        let steered = false;
+        let steered: "user-steer" | "background-event" | undefined;
         let retained = false;
         try {
             if (terminate && cell.status === 'running')
@@ -345,9 +348,9 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                             };
                         }
                     },
-                    timeoutMs: duration, abortSignal: signal, userSteer: observation?.userSteer,
+                    timeoutMs: duration, abortSignal: signal, userSteer: observation?.userSteer, backgroundEvent: observation?.backgroundEvent,
                 });
-                steered = reason === 'user-steer';
+                steered = reason === 'user-steer' || reason === 'background-event' ? reason : undefined;
             }
             if (cell.recoveryRequired || cell.terminalReceiptPending)
                 throw new FactRecoveryRequiredError();

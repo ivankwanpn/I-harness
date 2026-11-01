@@ -1,10 +1,12 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { inspect } from 'node:util'
 import { decodeFactBatch, subscribe, readDeliveries } from '@i-harness/core-session'
-import { createSessionCoordinator, compileSemanticSeed } from '@i-harness/session-persistence'
+import { compileSemanticSeed } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { composeJsonlTaskTransitionCoordinator } from '../../../session-persistence-jsonl/src/backend-factory.ts'
+import { taskDocumentStorageContract } from '../../../subagent/src/task/storage-contract.ts'
 import { createContextOutputService } from '@i-harness/context-output'
 import type { LLMRequest } from '@i-harness/llm-seam'
 import { createSessionService, createDurableSessionLoader } from '../../src/index.ts'
@@ -13,16 +15,30 @@ import { createTelemetry, type TelemetryEvent } from '@i-harness/telemetry'
 import { receivedInputsFor } from '../../src/lifecycle/received-inputs.ts'
 import { afterEach, expect, vi } from 'vitest'
 import { generationError } from '@i-harness/llm-seam'
+import { writeLegacyDocument, createOwnedDocumentWrite } from '../../../session-persistence-jsonl/src/backend/document-write.ts'
+
+// Physical fault controls stay behind the original constructor's descriptors.
+vi.mock('../../../session-persistence-jsonl/src/backend/fact-journal.ts', async original => {
+  const actual = await original<typeof import('../../../session-persistence-jsonl/src/backend/fact-journal.ts')>()
+  return { ...actual, createFactJournalBackend(...args: Parameters<typeof actual.createFactJournalBackend>) {
+    const journal = actual.createFactJournalBackend(...args)
+    return { ...journal, appendOwnedBatch: vi.fn(journal.appendOwnedBatch), reconcileOwnedBatch: vi.fn(journal.reconcileOwnedBatch) }
+  } }
+})
+vi.mock('../../../session-persistence-jsonl/src/backend/document-write.ts', async original => {
+  const actual = await original<typeof import('../../../session-persistence-jsonl/src/backend/document-write.ts')>()
+  return { ...actual, writeLegacyDocument: vi.fn(actual.writeLegacyDocument), createOwnedDocumentWrite: vi.fn(actual.createOwnedDocumentWrite) }
+})
 
 const warningRestorers = new Set<() => void>()
 afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-service-'))
-  const backend = createJsonlBackend(join(root, 'sessions'))
-  let coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let backend = createJsonlBackend(join(root, 'sessions'))
+  let coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   if (options.compatibilityOrigin === 'b2') {
     const now = Date.now()
     const outcome = await coordinator.bootstrapSemanticTarget({ invocation: { version: 1, operationId: 'delivery-b2-fixture', targetSessionId: 'parent', createdAt: new Date(now).toISOString(), requestDigest: 'a'.repeat(64) }, target: { kind: 'new' }, metadata: {},
@@ -70,6 +86,7 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
   const telemetryEvents: TelemetryEvent[] = []
   const telemetry = createTelemetry([{ onEvent(event) { telemetryEvents.push(event) } }])
   const childGate = Promise.withResolvers<void>(), delivery = Promise.withResolvers<void>(), terminal = Promise.withResolvers<void>()
+  const foregroundGate = Promise.withResolvers<void>(), foregroundStarted = Promise.withResolvers<void>()
   const terminalGate = Promise.withResolvers<void>()
   const terminalCommitted = Promise.withResolvers<void>()
   const consumed = Promise.withResolvers<void>(), receiptUnknown = Promise.withResolvers<void>()
@@ -90,15 +107,17 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
   })
   let launches = 0, heldTerminal = false, closed = false, resultRead = false
   if (!options.holdTerminal) terminalGate.resolve()
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+  const append = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(backend.reconcileOwnedBatch!).getMockImplementation()!
   let heldReceiptKey: import('@i-harness/core-session').BatchKey | undefined, allowReceipt = !options.holdReceiptUnknown
   let heldOpenKey: import('@i-harness/core-session').BatchKey | undefined, allowOpen = !options.holdOpenUnknown
   let heldTerminalKey: import('@i-harness/core-session').BatchKey | undefined, allowTerminal = !options.holdTerminalUnknown
   const terminalKeys: string[] = []
   const backendTrace: unknown[] = []
   const receiptKeys: string[] = []
-  const putDocument = backend.putDocument
-  backend.putDocument = async (key, data) => {
+  const putDocument = vi.mocked(writeLegacyDocument).getMockImplementation()!
+  vi.mocked(writeLegacyDocument).mockImplementation(async (path, data) => {
+    if (!path.startsWith(join(root, 'sessions'))) return putDocument(path, data)
+    const key = basename(path).replace(/\.doc\.jsonl$/, '')
     const snapshot = JSON.parse(JSON.stringify(data))
     backendTrace.push({ phase: 'document-entered', key, at: Date.now(), data: snapshot })
     try {
@@ -106,14 +125,31 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
         taskSaveFailed.resolve()
         throw Object.assign(new Error('Controlled original task document save refused'), { code: 'EPERM' })
       }
-      await putDocument(key, data)
+      await putDocument(path, data)
       backendTrace.push({ phase: 'document-returned', key, at: Date.now() })
     } catch (error) {
       backendTrace.push({ phase: 'document-failed', key, at: Date.now(), error: inspect(error, { depth: 8 }) })
       throw error
     }
-  }
-  backend.appendOwnedBatch = async (...args) => {
+  })
+  const createWrite = vi.mocked(createOwnedDocumentWrite).getMockImplementation()!
+  vi.mocked(createOwnedDocumentWrite).mockImplementation(input => {
+    const original = createWrite(input), write = original.handle
+    if (!input.path.startsWith(join(root, 'sessions'))) return original
+    const key = basename(input.path).replace(/\.doc\.jsonl$/, ''), data = JSON.parse(Buffer.from(input.bytes).toString('utf8'))
+    const save = async (retry: boolean) => {
+      backendTrace.push({ phase: 'document-entered', key, at: Date.now(), data })
+      if (!allowTaskSave && key === 'task-parent' && data.tasks?.some((task: { result?: { kind: string } }) => task.result?.kind === 'retained')) {
+        taskSaveFailed.resolve()
+        throw Object.assign(new Error('Controlled original task document save refused'), { code: 'EPERM' })
+      }
+      const outcome = retry ? await write.retry() : await write.issue()
+      backendTrace.push({ phase: 'document-returned', key, at: Date.now(), kind: outcome.kind })
+      return outcome
+    }
+    return { handle: { issue: () => save(false), retry: () => save(true), reconcile: write.reconcile.bind(write), outcome: write.outcome.bind(write) }, settle: original.settle.bind(original) }
+  })
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     const events = decodeFactBatch(args[3].bytes).events
     backendTrace.push({ phase: 'entered', sessionId: args[0], key: args[3].key.batchId, at: Date.now(), events: events.map(e => ({ type: e.type, ...('op' in e ? { op: e.op } : {}) })) })
     if (events.some(e => e.type === 'agent/delivery-received')) { receiptPrepared.resolve(); await receiptGate.promise }
@@ -135,8 +171,8 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
       return { kind: 'unknown', key: heldReceiptKey }
     }
     return outcome
-  }
-  backend.reconcileOwnedBatch = async (...args) => {
+  })
+  vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
     if (args[3].key.batchId === heldTerminalKey?.batchId) {
       terminalKeys.push(args[3].key.batchId)
       if (!allowTerminal) { terminalReconcile.resolve(); return { kind: 'unknown', key: heldTerminalKey } }
@@ -148,10 +184,11 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
       if (!allowReceipt) return { kind: 'unknown', key: heldReceiptKey }
     }
     return reconcile(...args)
-  }
+  })
   const child = controlledModel(async function* () {
-    launches++
-    await childGate.promise
+    const number = ++launches
+    if (options.activeForeground && number === 2) { foregroundStarted.resolve(); await foregroundGate.promise }
+    else await childGate.promise
     yield { type: 'text/chunk', text: 'original child result' }
     if (options.failChild) { yield { type: 'error', error: new Error('Controlled dispatched child failure') }; return }
     yield { type: 'end' }
@@ -163,6 +200,10 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
       for (let i = 0; i < (options.spawnCount ?? 1); i++) yield { type: 'tool_call', call: { id: 'original-spawn-' + i, name: 'spawn_agent', args: { task_name: 'original' + i, agent_type: 'probe', message: 'return original result', fork_turns: 'none' } } }
     }
     else {
+      if (options.activeForeground && parentRequests.length === 2) {
+        yield { type: 'tool_call', call: { id: 'foreground-a', name: 'spawn_agent', args: { task_name: 'held-a', agent_type: 'probe', message: 'hold original work', fork_turns: 'none', background: false } } }
+        yield { type: 'end' }; return
+      }
       if (options.holdParentStep && parentRequests.length === 2) {
         parentStep.resolve(); await parentGate.promise
         yield { type: 'tool_call', call: { id: 'normal-parent-step', name: 'fixture_step', args: {} } }
@@ -197,8 +238,10 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
     await writeFile(join(process.env.IH_DELIVERY_EVIDENCE_ROOT, `${label}.json`), JSON.stringify({ root, launches, heldTerminal, terminalKeys, receiptKeys, backendTrace, warnings, telemetryEvents, pending: assembly?.inbox.pending(), deliveryPending: readDeliveries(view).pending(), requests: parentRequests.map(r => r.messages), events: (await backend.read('parent')).events, failure: inspect(failure, { depth: 8 }) }, null, 2))
   }
   return {
-    root, output, get service() { return service }, backend, get coordinator() { return coordinator }, parentRequests,
+    root, output, get service() { return service }, get backend() { return backend }, get coordinator() { return coordinator }, parentRequests,
     launchCount: () => launches,
+    waitForForeground: () => foregroundStarted.promise,
+    releaseForeground: () => foregroundGate.resolve(),
     settleOriginalSpawnSources: async () => { for (const original of spawnSources) await original.source.close() },
     async start() {
       if (options.compatibilityOrigin === 'unknown') {
@@ -244,12 +287,13 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
     evidence,
     async reopen() {
       await service.close(); await coordinator.close()
-      coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }); service = mount()
+      backend = createJsonlBackend(join(root, 'sessions'))
+      coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract); service = mount()
       await service.assemblyFor('parent')
     },
     async close() {
       if (closed) return
-      childGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
+      childGate.resolve(); foregroundGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
       const failures: unknown[] = []
       off()
       try {

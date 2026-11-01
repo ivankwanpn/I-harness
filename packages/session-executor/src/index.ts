@@ -7,6 +7,8 @@ export {
   type SessionProjectContext,
 } from "./assembly.ts"
 export { createDurableSessionLoader } from "./durable-session.ts"
+export { createUnmanagedTaskChildHost } from './lifecycle/task-child-host.ts'
+export type { InstructionReport, InstructionPublication } from './context/instructions/diagnostics.ts'
 export { openExecutorDocument } from './lifecycle/managed-document.ts'
 export { createTitleGenerationContext } from './lifecycle/title-generation.ts'
 export { actionMetadataFacts } from './lifecycle/action-facts.ts'

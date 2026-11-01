@@ -2,6 +2,8 @@ import type { CodeModeRuntimeOptions, CodeModeRuntimeEvent } from '../types.js';
 import type { Cell, CellState } from './cell-state.js';
 import type { CodeModeStatus, CodeModeStoreEntries } from '../types.js';
 import { diagnostic, message } from './limits.js';
+import type { InstructionReplanError } from '@i-harness/core-tools';
+import { FactRecoveryRequiredError } from '@i-harness/core-session';
 /** Sole stop, commit queue, cancellation barrier, and disposal authority. */
 export function createRetirement(options: CodeModeRuntimeOptions, errorCap: number, state: Pick<CellState, 'entries' | 'currentStore' | 'track' | 'installStore' | 'values' | 'drain' | 'clear'>, event: (event: CodeModeRuntimeEvent) => void | Promise<void>, cancelRuntime: (reason: string) => Promise<void>) {
     const { entries, currentStore, track } = state;
@@ -17,8 +19,45 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
         const pending = cell.worker.terminate();
         cell.stop = pending;
         stopping.add(pending);
-        void pending.finally(() => stopping.delete(pending));
+        void pending.then(() => stopping.delete(pending), () => stopping.delete(pending));
         return pending;
+    }
+    function replan(cell: Cell, error: InstructionReplanError) {
+        if (cell.status !== 'running' || cell.instructionReplan) return;
+        cell.instructionReplan = error;
+        cell.finishing = true;
+        cell.yielded = false;
+        cell.terminalReceiptPending = true;
+        clearTimeout(cell.watchdog);
+        void stop(cell);
+        let terminalStarted = false, running = false;
+        const committed = () => {
+            if (cell.status !== 'running') return;
+            cell.status = 'failed'; cell.error = error.message; cell.terminalReceiptPending = false;
+            cell.completionPending = false; cell.completionRetained = false;
+            cell.recoveryRequired = false; cell.removeOwner?.(); cell.resumeCompletion = undefined; cell.wake?.();
+        };
+        const schedule = () => {
+            if (running || terminalStarted || cell.status !== 'running') return;
+            running = true;
+            const work = Promise.resolve().then(async () => {
+                await cell.stop;
+                await Promise.allSettled([...cell.invocations]);
+                await options.drainInstructionCell?.(cell.id);
+                await cell.admission;
+                if (cell.status !== 'running') return;
+                if (cell.pendingOutputReceipts || cell.recoveryRequired) { cell.recoveryRequired = true; cell.wake?.(); return; }
+                terminalStarted = true;
+                cell.replanTerminalStarted = true;
+                cell.completionPending = true;
+                await event({ type: 'closed', cellId: cell.id, status: 'failed', error: error.message, instructionReplan: error.data, origin: cell.origin, committed, retainOutcome() { cell.terminalReceiptPending = true; cell.completionRetained = true; } });
+                committed();
+            }).catch(() => { cell.recoveryRequired = true; cell.wake?.(); }).finally(() => { running = false; });
+            cell.replanDrain = work;
+            track(work);
+        };
+        cell.resumeCompletion = schedule;
+        schedule(); cell.wake?.();
     }
     function close(cell: Cell, status: Exclude<CodeModeStatus, 'running'>, error?: string, policyRefusal?: true) {
         if (cell.status !== 'running')
@@ -31,7 +70,10 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
             return;
         }
         const bounded = error === undefined ? undefined : diagnostic(error, errorCap);
+        const joinTermination = !!cell.instructionReplan || !!cell.origin.instructionOrigin;
+        if (joinTermination) cell.terminalReceiptPending = true;
         cell.status = status;
+        if (status === 'terminated') { cell.instructionReplan = undefined; cell.replanTerminalStarted = false; }
         cell.error = bounded?.text;
         cell.truncated ||= bounded?.truncated ?? false;
         cell.policyRefusal = policyRefusal;
@@ -65,11 +107,16 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
                 cell.recoveryRequired = false;
                 cell.wake?.();
             };
-            const pending = event({
+            const publish = () => {
+              const receipt = event({
                 type: 'closed', cellId: cell.id, status, error: cell.error, policyRefusal, origin: cell.origin, committed, retainOutcome() {
                     cell.terminalReceiptPending = true;
                 }
-            });
+              });
+              if (!receipt) committed();
+              return receipt;
+            };
+            const pending = joinTermination ? cell.stop!.then(publish, cause => { throw Object.assign(new FactRecoveryRequiredError(), { cause }); }) : publish();
             if (pending)
                 track(Promise.resolve(pending).catch(failed).finally(() => cell.wake?.()), cell);
             else
@@ -83,6 +130,15 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
         }
     }
     function complete(cell: Cell, encoded: string) {
+        if (cell.instructionReplan) return;
+        if (cell.origin.instructionOrigin && cell.invocations.size) {
+            cell.finishing = true; clearTimeout(cell.watchdog); void stop(cell);
+            const pending = Promise.allSettled([...cell.invocations]).then(() => {
+                if (cell.status !== 'running' || cell.instructionReplan) return;
+                cell.finishing = false; complete(cell, encoded);
+            });
+            track(pending, cell); return;
+        }
         cell.finishing = true;
         clearTimeout(cell.watchdog);
         // Executable lifetime ends when the guest module ends. Persistence retains
@@ -262,8 +318,10 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
             close(cell, 'terminated', reason);
         }
         try {
-            await Promise.allSettled([...stopping]);
+            const acknowledgements = await Promise.allSettled([...new Set([...stopping, ...[...state.values()].flatMap(cell => cell.stop ? [cell.stop] : [])])]);
             await state.drain();
+            const failures = acknowledgements.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+            if (failures.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(failures, 'Original worker termination failed') });
         }
         finally {
             cancelling = undefined;
@@ -280,7 +338,7 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
         return disposing;
     }
     return {
-        stop, close, complete, cancel, dispose,
+        stop, close, complete, replan, cancel, dispose,
         isDisposed: () => disposed, isCancelling: () => cancelling, epoch: () => cancellationEpoch,
     };
 }

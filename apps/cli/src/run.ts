@@ -25,6 +25,7 @@ import { maybeAutoTitle } from "@i-harness/session-title"
 import { createMetricsSink, createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
 import {
   createSessionAssembly,
+  createUnmanagedTaskChildHost,
   createInstructionEnvironment, type InstructionEnvironment,
   openExecutorDocument, actionMetadataFacts, createTitleGenerationContext,
   type AssemblyOptions,
@@ -70,7 +71,34 @@ const CLI_COMMAND_NAMES = [
   "session-cancel",
   "session-pending",
   "session-compact",
+  'instruction-status',
+  'instruction-refresh',
 ] as const
+
+/** Register passive commands against this exact live assembly. */
+export function registerInstructionCommands(assembly: import('@i-harness/session-executor').SessionAssembly): void {
+  const outputFormat = (input: string) => {
+    const options = JSON.parse(input || '{}') as { format?: unknown }
+    if (options.format !== undefined && options.format !== 'json' && options.format !== 'text') throw new TypeError('Invalid instruction output format')
+    return options.format
+  }
+  const format = (kind: unknown, report: import('@i-harness/session-executor').InstructionReport) => {
+    if (kind !== 'text') return JSON.stringify(report)
+    const lines = [`Instruction context: ${report.state}`]
+    if (report.publication) { lines.push(`Published fingerprint: ${report.publication.fingerprint}`); for (const source of report.publication.sources) lines.push(`${source.kind} ${source.state} ${source.bytes} bytes ${source.path}`) }
+    return lines.join('\n')
+  }
+  registerCommand(assembly.ctx, {
+    name: 'instruction-status', description: 'Show metadata from the current published instruction context',
+    argumentHints: '{ format?: "json" | "text" }',
+    execute: async input => format(outputFormat(input), assembly.instructionDiagnostics?.()?.read() ?? { state: 'not-published' }),
+  })
+  registerCommand(assembly.ctx, {
+    name: 'instruction-refresh', description: 'Refresh instruction context for this live session without a model request',
+    argumentHints: '{ format?: "json" | "text" }',
+    execute: async input => { const kind = outputFormat(input); return format(kind, await assembly.instructionDiagnostics?.()?.refresh() ?? { state: 'not-published' }) },
+  })
+}
 
 /**
  * The tools a PLUGIN's subagent role may use, as a host permit list.
@@ -643,6 +671,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
     runSignal.throwIfAborted()
     assembly = await createSessionAssembly({
+      ...(opts.coordinator?{prepareTaskChild:createUnmanagedTaskChildHost({coordinator:opts.coordinator,policy:'unmanaged'})}:{}),
       instructionEnvironment: opts.instructionEnvironment ?? (ownedInstructions ??= createInstructionEnvironment({ settingsPath })),
       modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
       videoAudioAnalyzer: async input => (await runtimeNow()).analyzeVideoAudio?.(input) ?? { status: "unconfigured", reason: "Video audio analysis is unavailable in this provider runtime." },
@@ -973,6 +1002,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         input,
       ),
     })
+    registerInstructionCommands(assembly)
     // Initial task through the executor (serial lane; a resumed session's
     // recovered pending inputs precede it FIFO). drain REJECTS on the first
     // turn failure — thrown into the catch below → exitCode 1 (the CLI's

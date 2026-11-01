@@ -1,6 +1,6 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { NativeJobIdentity } from '@i-harness/exec'
-import { declareToolResultOutcome, userSteerForTool } from "@i-harness/core-tools"
+import { declareToolResultOutcome, backgroundEventForTool, userSteerForTool } from "@i-harness/core-tools"
 import { ESCALATION_TARGETS, SandboxUnavailableError } from "@i-harness/sandbox"
 import type { ShellToolDeps } from "../types.ts"
 import { getArgv } from "../command/argv.ts"
@@ -13,7 +13,7 @@ import type { RetainedRunResult } from "./retention.ts"
 import type { VersionIdentity } from "../command/identity.ts"
 import { declareNativeResult } from './outcome.ts'
 
-type NativeDeps = Pick<ShellToolDeps, "wslShell" | "exec" | "cwd" | "backgroundAfterMs" | "timeoutMs">
+type NativeDeps = Pick<ShellToolDeps, "wslShell" | "exec" | "cwd" | "backgroundAfterMs" | "timeoutMs" | "directEntry">
 
 export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<object, string>, versionIdentity: VersionIdentity, retainedRunResult: RetainedRunResult, resolveCall: ResolveShellCall) {
   // M62 Task 3: `stderr` is declared because the refusals below RETURN it — the
@@ -50,6 +50,7 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
     // If bash is absent, exec.run exits -1 (fail-loud) rather than silently
     // executing PowerShell.
     execute: async (args: { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
+      const direct = bashEntry?.enter(exec)
       // M59: legible failure instead of a silent spawn-fail (-1 with empty
       // output) — the model can then pick the pwsh tool immediately.
       if (!deps.wslShell && !bashAvailable()) {
@@ -77,7 +78,7 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId, nativeJob } = await deps.exec.runBackground({ argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          const { jobId, nativeJob } = await (direct ?? deps.exec).runBackground({ argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId, ...(nativeJob === undefined ? {} : { native_job: nativeJob }) }
         }
         // A deadline or direct user steer changes observation of this one
@@ -85,11 +86,13 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
         const cmd = { argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
         const backgroundAfterMs = deps.backgroundAfterMs
         const promotionWake = userSteerForTool(exec)
+        const backgroundEventWake = backgroundEventForTool(exec)
         const runOptions = {
           ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
           ...(promotionWake === undefined ? {} : { promotionWake }),
+          ...(backgroundEventWake === undefined ? {} : { backgroundEventWake }),
         }
-        const result = await deps.exec.run(cmd, runOptions)
+        const result = await (direct ?? deps.exec).run(cmd, runOptions)
         if ("promoted" in result) return promotedResult(result, "bash", deps.timeoutMs)
         declareNativeResult(exec, result)
         return retainedRunResult(result, "bash-stdout")
@@ -124,6 +127,7 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
     // PowerShell resolves aliases/invocation itself; no proven reusable shape.
     approvalIdentity: () => undefined,
     execute: async (args: { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
+      const direct = pwshEntry?.enter(exec)
       const argv = [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
       // M62: the ladder runs once, before exec; `ladder.policy` is the granted
       // policy when this call carried an approved escalation, and the session's
@@ -133,18 +137,20 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId, nativeJob } = await deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          const { jobId, nativeJob } = await (direct ?? deps.exec).runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId, ...(nativeJob === undefined ? {} : { native_job: nativeJob }) }
         }
         // Observe the same capture through the deadline and direct steer source.
         const cmd = { argv, ...shellCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
         const backgroundAfterMs = deps.backgroundAfterMs
         const promotionWake = userSteerForTool(exec)
+        const backgroundEventWake = backgroundEventForTool(exec)
         const runOptions = {
           ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
           ...(promotionWake === undefined ? {} : { promotionWake }),
+          ...(backgroundEventWake === undefined ? {} : { backgroundEventWake }),
         }
-        const result = await deps.exec.run(cmd, runOptions)
+        const result = await (direct ?? deps.exec).run(cmd, runOptions)
         if ("promoted" in result) return promotedResult(result, "pwsh", deps.timeoutMs)
         declareNativeResult(exec, result)
         return retainedRunResult(result, "pwsh-stdout")
@@ -158,5 +164,7 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
       }
     },
   }
+  const bashEntry = deps.directEntry?.(bash as Tool,bash.execute as Tool["execute"])
+  const pwshEntry = deps.directEntry?.(pwsh as Tool,pwsh.execute as Tool["execute"])
   return [bash, pwsh] as const
 }

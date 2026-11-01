@@ -25,13 +25,14 @@ export interface JobSnapshot extends ResultPublication {
   endedAt?: number
 }
 interface JobRecord extends JobSnapshot { owner: string; terminal: boolean }
+export interface JobRegistration {id:string;finish?(status:Exclude<JobStatus,'running'|'recovery-required'>,output:string):boolean}
 
 export interface JobRegistry {
   // M24a (G2): `id` is optional — when provided (restore path) it is used
   // verbatim so persisted job ids survive resume; duplicates fail loud.
   // Task 4.4: `startedAt` (optional, restore path) seeds the creation stamp —
   // the live registry mints Date.now() when absent.
-  registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string }): { id: string; finish?(status:Exclude<JobStatus,"running"|"recovery-required">,output:string):boolean }
+  registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string }, acquired?:(registration:JobRegistration)=>void): JobRegistration
   // M24a (G2/Ruling M24a-P4): returns false for an unknown id (observable
   // instead of a silent no-op). Existing callers may ignore the return.
   // Task 4.4: the patch may also carry startedAt/endedAt — the restore path
@@ -73,7 +74,7 @@ export function createJobRegistry(): JobRegistry {
   }
   return {
     subscribe,
-    registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string }) {
+    registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string },acquired?:(registration:JobRegistration)=>void) {
       const resolved = id ?? nextId(kind)
       // Fail loud on a persisted-id collision: silent re-count would break
       // post-resume jobId links (agent-table entries + followups).
@@ -94,9 +95,8 @@ export function createJobRegistry(): JobRegistry {
       // check above runs first), and is O(1) instead of scan-per-spawn.
       const m = id !== undefined ? new RegExp(`^${kind}-(\\d+)$`).exec(id) : null
       if (m) counters.set(kind, Math.max(counters.get(kind) ?? 0, Number(m[1])))
-      publish(records.get(resolved)!)
       let settled=false
-      return { id:resolved,...(cancel ? { finish(status:Exclude<JobStatus,"running"|"recovery-required">,output:string) {
+      const registration={ id:resolved,...(cancel ? { finish(status:Exclude<JobStatus,"running"|"recovery-required">,output:string) {
         const rec=records.get(resolved)
         if(!rec)return false
         // Only this registered producer can enrich its terminal row. A late
@@ -107,6 +107,9 @@ export function createJobRegistry(): JobRegistry {
         publish(rec)
         return true
       } } : {}) }
+      acquired?.(registration)
+      publish(records.get(resolved)!)
+      return registration
     },
     updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output" | "startedAt" | "endedAt" | "result" | "publication" | "savedObservation" | "taskId">>): boolean {
       const rec = records.get(id)

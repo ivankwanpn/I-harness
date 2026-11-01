@@ -1,3 +1,5 @@
+import { createRetainedCleanupOperation, finishRetainedCleanupOperation, closeCoordinatorWithRetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
+import { createAgentProcessReadRunner } from './agent-process-read.ts'
 import type { ContextResultRef } from "@i-harness/context-output"
 import type { ManagedArtifactRef } from "@i-harness/core-session"
 import { createModelWaitSettings } from "./model-wait-settings.ts"
@@ -9,13 +11,16 @@ import { buildModelClient } from "@i-harness/provider"
 import { prepareModelRequest, withPreparedSignal, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
+import {createUsageHandlers} from './usage-host.ts'
+import { createUsageObservationSink } from './usage-observation-sink.ts'
 import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
 import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
 import { maybeAutoTitle } from "@i-harness/session-title"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createForkSessionController } from "@i-harness/session-persistence"
+import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
+import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-storage-contract"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
@@ -25,10 +30,14 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
+import { createGatewayForkHost } from './fork-session.ts'
+import { assertOutsideForkController } from '../../session-persistence/src/fork-controller.ts'
 import { createContextPicker } from "./context-picker.ts"
 import { createDraftSession } from "./draft-session.ts"
 import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
 import { createDesktopSubagents } from "./session-subagents.ts"
+import { createInstructionViews } from './instructions/views.ts'
+import { createInstructionSettings } from './instructions/settings.ts'
 import { createDesktopRewind } from "./rewind.ts"
 import { createDesktopPlugins } from "./plugins.ts"
 import { pluginExtensions, expandPluginPrompt, mountedHookAuthority } from "./plugin-mount.ts"
@@ -48,6 +57,7 @@ import { createProjectContentSearch } from "./project-content-search.ts"
 import { createSessionManagementFence } from "./session-management-fence.ts"
 import { createConversationResultReader } from './result-reader.ts'
 import { createCodeModeSettings, createDesktopExecution } from "./execution.ts"
+import { createExecutionHostObservation } from "./execution-host-observation.ts"
 import { createAgentProcesses } from "./agent-processes.ts"
 import { createDesktopDiagnostics } from "./environment-diagnostics.ts"
 import { createApprovalRulesAdapter } from "./approval-rules.ts"
@@ -85,6 +95,8 @@ export interface DesktopHostOptions {
   workspaceRuntime?: ReturnType<typeof import("@i-harness/workspace-runtime").createWorkspaceRuntime>
   /** Trusted host dependency only; never read from saved settings or RPC data. */
   buildProviderClient?: FileProviderRuntimeOptions["buildClient"]
+  /** Inactive constructor-only producer bridge. No wire capability2 activation. */
+  experimentalUsageObservations?:boolean
   onWrite: (frame: RpcMessage) => void
 }
 
@@ -104,16 +116,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   // A fresh missing profile selects this store's native first-run defaults.
   await settings.loadObserved({ validate: validateDesktopSettingsDocument })
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
-  const usageCapture = createUsageCapture({ workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
+  const usageObservations=options.experimentalUsageObservations?createUsageObservationSink({record:value=>usageStore.recordObservation(value)}):undefined
+  const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
     onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
-  const usageStats: NonNullable<DesktopHandlers["usageStats"]> = {
-    async query(query) {
-      const snapshot = await usageStore.query(query)
-      return { ...snapshot, warnings: [...snapshot.warnings, ...usageCapture.warnings()] }
-    },
-    setPricing: price => usageStore.setPricing(price),
-  }
+  const usageStats:NonNullable<DesktopHandlers['usageStats']>=createUsageHandlers(usageStore,{recordingMode:usageObservations?'observations':'legacy',warnings:()=>[...usageCapture.warnings(),...(usageObservations?.warnings()??[])]})
   let mode = settings.get().sandboxMode
   let windowsSandboxBackend = settings.get().windowsSandboxBackend
   let wslExecution = { ...settings.get().wslExecution }
@@ -121,12 +128,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   let approvalMode = settings.get().approvalMode
   const codexAccounts = createCodexManagement({ directory: join(dirname(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json")), "coding-plans", "openai-codex") })
   const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"), codex: codexAccounts,
+    passiveUsageWorkspace:usageObservations?options.workspace:undefined,
     buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
   const codingPlans = createCodingPlans(codexAccounts, runtime)
   await mkdir(options.sessionDir, { recursive: true })
-  const coordinator = createSessionCoordinator(createJsonlBackend(options.sessionDir), {
+  const coordinator = createJsonlTaskTransitionCoordinator(options.sessionDir, {
     lock: { enabled: true, lockRoot: options.sessionDir },
-  })
+  }, taskDocumentStorageContract)
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
   const fence = createSessionManagementFence()
@@ -193,10 +201,16 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const nativeContext=await createNativeContextRuntime({workspace:options.workspace,storageRoot:join(options.sessionDir,"native-context"),coordinator,
     projectFor:projects.nativeScopeFor,
     resultReadScopeFor:projects.resultReadScopeFor,
+    withBindingObservation:projects.withBindingObservation,
+    retainSelectedProjectRead:projects.retainSelectedBindingRead.bind(projects),
     prepareBootstrapInheritance:projects.prepareBootstrapInheritance,
+    prepareTaskChildInheritance:projects.prepareTaskChildInheritance,
+    prepareSelectedInheritance:projects.prepareSelectedInheritance.bind(projects),
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
-      const snapshot=service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
+      const observed=nativeContext.observations.current(id)
+      const snapshot=observed?.view ?? service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
+      observed?.assertCurrent()
       const cuts=rewindCuts(snapshot)
       return [...semanticSeedResultRefs(snapshot), ...snapshot.events.flatMap<ContextResultRef | ManagedArtifactRef>(event=>!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?event.type==="context/result-ref"?[event.ref]:managedResultRefs(event):[])]
     },
@@ -219,7 +233,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await contextSubsystems.sync();nativeContext.syncAutoRefresh()
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
   const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval)]
-  const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
+  const instructionWatch = createFsWatchService()
+  const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"), { watch: instructionWatch })
   const terminal = createDesktopTerminal(options.workspace)
   let roleModelsEnabled = settings.get().plugins.subagentModel
   let autoCompactionEnabled = settings.get().compaction.auto
@@ -233,9 +248,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     return project && inputs ? approvalPolicyIdentity(assembly, { workspace: options.workspace, sandbox: mode, approval: approvalMode, project, executionAuthority: executionAuthorities.get(assembly.sessionId!),
       hookConfigs: inputs.hookConfigs, hookAuthority: () => mountedHookAuthority(assembly, inputs.hookConfigs), grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
-  const instructionWatch = createFsWatchService()
+
   const instructionEnvironment = createInstructionEnvironment({ settingsPath, watch: instructionWatch })
   const service: SessionService = createSessionService({
+    passiveGeneration:usageObservations?.observer,
+    prepareTaskChild:nativeContext.prepareTaskChild,
     instructionEnvironment,
     telemetry: { close() {}, emit(event) {
       if (event.type !== "compaction/attempt" && !(event.type === "provider/context" && event.data.operation === "summary")) return
@@ -275,6 +292,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     additionalTools,
     contextOutput:nativeContext.contextOutput,
     contextOutputSourceFor:nativeContext.sourceFor,
+    contextOutputLegacyReadObservation:nativeContext.withLegacyReadObservation,
     resultReadScopeFor:projects.resultReadScopeFor,
     sessionQuery,
     workspace: options.workspace,
@@ -368,18 +386,22 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       return page
     },
     onChanged: sessionId => options.onWrite(makeNotification("desktop/session/subagents/changed", { sessionId })) })
+  const instructions = createInstructionViews(coordinator, service, async input => {
+    const { meta } = await coordinator.profile(input.sessionId)
+    if (!await isConversation(input.sessionId, meta)) throw new Error('Conversation unavailable')
+    const parent = await projects.nativeScopeFor(input.sessionId)
+    if (!input.childSessionId) return JSON.stringify(parent)
+    const child = await projects.nativeScopeFor(input.childSessionId)
+    if (child.projectId !== parent.projectId) throw new Error('Child is outside the parent project')
+    return JSON.stringify([parent, child])
+  }, event => options.onWrite(makeNotification('desktop/instructions/changed', event)))
   const review = createWorkspaceReview(options.workspace)
   const projectContentSearch = createProjectContentSearch(options.workspace)
   const rawWorkflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }
   management = createSessionManagement(coordinator, service, isConversation, { workspace: options.workspace, sessionDir: options.sessionDir, fence,
-    projectFor: projects.projectFor, onFork: async(parent,target)=>{
-      await projects.inherit(parent,target)
-      const snapshot=await coordinator.snapshot!(target)
-      const refs=snapshot.session.events.flatMap(event=>event.type==="context/result-ref"?[event.ref]:[])
-      await nativeContext.inheritFork(parent,target,refs)
-    }, moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
+    projectFor: projects.projectFor, onVisibilityWithdrawn: id => instructions.revokeSession(id), moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
     activeWork: async id => (await workflow.read(id)).goalRun?.running === true, drainSession })
   const schedules = createDesktopSchedules(coordinator, service)
   const rewind = createDesktopRewind(options.sessionDir, options.workspace, coordinator, service)
@@ -388,11 +410,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     return state.status === "ready" ? (await service.assemblyFor(id)).session : await createDurableSessionLoader(coordinator)(id)
   } })
   const execution = createDesktopExecution(coordinator, service)
-  const agentProcesses = createAgentProcesses(coordinator, service)
+  const executionObservation = createExecutionHostObservation(coordinator, projects, service, execution)
+  const conversationRead = createConversationResultReader(coordinator, service, isConversation, fence)
+  const agentProcesses = createAgentProcesses(coordinator, service, { runRead: createAgentProcessReadRunner({ coordinator, service, isConversation, fence, resultReadScopeFor: projects.resultReadScopeFor, readResultPage: conversationRead }) })
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
     workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), modelWait: createModelWaitSettings(settingsPath), codeSettings, approvalRules, usageStats,
     assertSession: async id => { const { meta } = await coordinator.profile(id); if (!await isConversation(id, meta)) throw new Error("Conversation unavailable") },
+    executionObservation,
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
     diagnostics: createDesktopDiagnostics(service, { shell: agentShell }),
@@ -404,7 +429,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     projectContentSearch,
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await createEffectiveLocalInputs(options.workspace, dirname(settingsPath), await plugins.inputs())).hookConfigs, () => service.refreshExtensions(), { workspace: options.workspace }),
-    subagents, sessionSubagents,
+    subagents, sessionSubagents, instructions, instructionSettings: createInstructionSettings(settingsPath),
     agentSettings,
     contextSubsystems,
     terminal,
@@ -434,10 +459,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     review,
   }
   const internalIds = new Set<string>()
+  const forkController=createForkSessionController(coordinator,createGatewayForkHost({workspace:options.workspace,coordinator,projects,nativeContext,
+    assertAvailable(){if(shutdownRequested)throw new Error('Desktop host is closing')}}))
   const base = createSdkServer(service, {
-    readResultPage: createConversationResultReader(coordinator, service, isConversation, fence),
+    readResultPage: conversationRead,
     supportsResultDependencyMembership: true,
     coordinator,
+    prepareForkSession:request=>forkController.prepare(request),
+    executeForkSession:(command,control)=>forkController.execute(command,control),
     modelState: async (sessionId) => {
       await coordinator.profile(sessionId)
       return service.modelState(sessionId)
@@ -498,9 +527,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   return {
     handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
     close: () => {
+      assertOutsideForkController(coordinator)
+      executionObservation.fence()
       if (shutdownComplete) return Promise.resolve()
       if (closing) return closing
+      const cleanupOperation = createRetainedCleanupOperation()
       shutdownRequested = true
+      let pluginFenceFailure: { cause: unknown } | undefined
+      try { stopPluginObserver.dispose() } catch (cause) { pluginFenceFailure = { cause } }
       instructionEnvironment.dispose()
       const attempt = (async () => {
         const failures: Array<{ name: string; cause: unknown }> = []
@@ -509,37 +543,44 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
           try { await dispose(); cleaned.add(name) }
           catch (cause) { failures.push({ name, cause }) }
         }
+        if (pluginFenceFailure) failures.push({ name: "plugin observer fence", cause: pluginFenceFailure.cause })
         await once("trust watcher fence", () => trustWatcher.dispose())
         await once("policy timer", () => clearInterval(policyTimer))
         await once("interaction", () => interaction.close())
-        await once("plugin observer", () => stopPluginObserver())
+
         await once("terminal", () => terminal.close())
         await once("interaction subscription", () => offInteraction())
         await once("input", () => input.close())
         await once("project content search", () => projectContentSearch.close())
         await once("router", () => router.close())
+        await once("execution observation", () => executionObservation.close(cleanupOperation))
+        await once('fork controller',()=>forkController.close())
         await once("coding plans", () => codingPlans.close())
         await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())
-        await once("projects", () => projects.close())
+        await once('instruction subscriptions', () => instructions.close())
+        const forksJoined=cleaned.has('router')&&cleaned.has('fork controller')&&cleaned.has('execution observation')
+        if(forksJoined)await once("projects", () => projects.close())
         await once("review", () => review.close())
-        await once("workflow", () => workflow.close())
-        await once("session service", () => service.close())
-        await once("native context", () => nativeContext.close())
+        if(forksJoined)await once("workflow", () => workflow.close())
+        if(forksJoined)await once("session service", () => service.close())
+        if(forksJoined&&cleaned.has('session service'))await once('usage observations',async()=>{await usageObservations?.close()})
+        if(forksJoined)await once("native context", () => nativeContext.close())
         await once("approvals", () => approvals.flush())
+        await once("plugin observer", () => stopPluginObserver.close())
         await once("plugins", () => plugins.close())
         // A refresh may await creating session assemblies. Fence early, but
         // join only after their owners can settle shutdown dependencies.
         await once("trust watcher", () => trustWatcher.close())
         if (cleaned.has('session service')) await once('instructions', () => instructionEnvironment.close())
-        if (cleaned.has('trust watcher') && cleaned.has('instructions')) await once('instruction watch', () => instructionWatch.close())
+        if (cleaned.has('trust watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
-        if (cleaned.has("session service")) await once("coordinator", () => coordinator.close())
+        if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => closeCoordinatorWithRetainedCleanupOperation(coordinator, cleanupOperation))
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),
           `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)
         shutdownComplete = true
-      })()
+      })().finally(() => finishRetainedCleanupOperation(cleanupOperation))
       closing = attempt
       void attempt.finally(() => { if (closing === attempt) closing = undefined }).catch(() => {})
       return attempt

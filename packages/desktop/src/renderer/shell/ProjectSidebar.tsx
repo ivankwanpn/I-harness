@@ -2,7 +2,7 @@ import type { SessionDashboardResult } from "@i-harness/sdk"
 import type { ProjectEntry } from "../../main/projects.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import type { SessionManagementAction } from "@i-harness/desktop-gateway/src/session-management.ts"
+import type { SessionAction } from './SessionActions.tsx'
 import { useEffect, useState } from "react"
 import { ChevronRight, FolderOpen, Pin, Plus, Settings, SlidersHorizontal } from "lucide-react"
 import { useText, useLocale } from "../design/i18n.ts"
@@ -31,7 +31,7 @@ export interface ProjectSidebarProps {
   onSelectProject(id: string): void
   onSelectWorkspace(workspaceId: string, projectId?: string): void
   onSelectSession(workspaceId: string, sessionId: string, projectId?: string): void
-  onManageSession(workspaceId: string, id: string, action: SessionManagementAction, title?: string): Promise<void>
+  onManageSession(workspaceId: string, id: string, action: SessionAction | 'delete', title?: string): Promise<void>
   onManageArchived(workspaceId: string): void
 }
 

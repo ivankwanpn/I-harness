@@ -1,10 +1,23 @@
 import { types } from 'node:util'
 import { captureBootstrapRequestIntent, type BootstrapInvocation, type BootstrapRequestIntent, type BootstrapTargetPreparationPort } from '@i-harness/session-persistence'
+import {captureChildBootstrapCaptureRequest,type ChildBootstrapCaptureRequest} from '@i-harness/session-persistence'
 import type { SessionProjectContext } from '@i-harness/session-executor'
 
 export interface BootstrapProjectCapture {
   invocation: BootstrapInvocation; requestIntent: BootstrapRequestIntent; sourceSessionId?: string;
   sourceAvailable(): boolean; assertNewWorkCurrent(): void; targetAvailable(): boolean;
+}
+export interface TaskChildProjectCapture {
+ request:ChildBootstrapCaptureRequest;sourceSessionId:string;
+ sourceAvailable():boolean;assertNewWorkCurrent():void;targetAvailable():boolean;
+}
+export function captureTaskChildProject(value:TaskChildProjectCapture){
+ if(!value||typeof value!=='object'||types.isProxy(value)||![Object.prototype,null].includes(Object.getPrototypeOf(value)))throw TypeError('Invalid task child project capture')
+ const keys=['request','sourceSessionId','sourceAvailable','assertNewWorkCurrent','targetAvailable'],fields=Object.getOwnPropertyDescriptors(value)
+ if(Reflect.ownKeys(value).length!==keys.length||keys.some(key=>!fields[key]?.enumerable||!('value'in fields[key]!))||keys.slice(2).some(key=>typeof fields[key]!.value!=='function'||types.isProxy(fields[key]!.value)))throw TypeError('Invalid task child project fields')
+ const request=captureChildBootstrapCaptureRequest(value.request)
+ if(request.core.caller.kind!=='task'||request.core.history.selection.kind!=='none'||request.core.caller.parentSessionId!==value.sourceSessionId||request.requestIntent.project.kind==='unmanaged')throw TypeError('Foreign task child project source')
+ return Object.freeze({request,invocation:request.invocation,requestIntent:request.requestIntent,sourceSessionId:value.sourceSessionId,sourceAvailable:value.sourceAvailable,assertNewWorkCurrent:value.assertNewWorkCurrent,targetAvailable:value.targetAvailable})
 }
 export interface BootstrapTargetScope { projectId?: string; scope?: SessionProjectContext; revision: string }
 export interface BootstrapProjectPreparation {
@@ -26,4 +39,20 @@ export function captureBootstrapProject(value: BootstrapProjectCapture): Bootstr
   return Object.freeze({ invocation: Object.freeze({ ...value.invocation }), requestIntent,
     ...(value.sourceSessionId === undefined ? {} : { sourceSessionId: value.sourceSessionId }),
     sourceAvailable: value.sourceAvailable, assertNewWorkCurrent: value.assertNewWorkCurrent, targetAvailable: value.targetAvailable })
+}
+import { readSelectedResultsOperation, type ForkOperationV2 } from '../../session-persistence/src/selected-results-fork-contract.ts'
+/** Trusted selected-runtime construction; inspection closes over the original entry identity. */
+export interface SelectedProjectCapture {
+  operation: ForkOperationV2; sourceAvailable(): boolean; assertNewWorkCurrent(): void; targetAvailable(): boolean;
+  target: object;
+}
+export function captureSelectedProject(value: SelectedProjectCapture) {
+  if(!value||typeof value!=='object'||types.isProxy(value)||![Object.prototype,null].includes(Object.getPrototypeOf(value)))throw TypeError('Invalid selected project capture')
+  const fields=Object.getOwnPropertyDescriptors(value),keys=['operation','sourceAvailable','assertNewWorkCurrent','targetAvailable','target']
+  if(Reflect.ownKeys(value).length!==keys.length||keys.some(key=>!fields[key]||!fields[key]!.enumerable||!('value' in fields[key]!))||keys.slice(1,4).some(key=>typeof fields[key]!.value!=='function'||types.isProxy(fields[key]!.value))||!fields.target!.value||typeof fields.target!.value!=='object'||types.isProxy(fields.target!.value))throw TypeError('Invalid selected project capture')
+  const operation=readSelectedResultsOperation(fields.operation!.value)
+  if(operation.prepared.requestIntent.project.kind==='unmanaged')throw TypeError('Project broker cannot prepare unmanaged bootstrap')
+  return Object.freeze({invocation:operation.invocation,requestIntent:operation.prepared.requestIntent,sourceSessionId:operation.prepared.core.sourceSessionId,
+    sourceAvailable:fields.sourceAvailable!.value as ()=>boolean,assertNewWorkCurrent:fields.assertNewWorkCurrent!.value as ()=>void,
+    targetAvailable:fields.targetAvailable!.value as ()=>boolean,target:fields.target!.value as object})
 }

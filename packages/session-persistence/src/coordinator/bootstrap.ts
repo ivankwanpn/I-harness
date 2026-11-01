@@ -1,3 +1,4 @@
+import { createArtifactCurrentGuard } from './artifact-path-association.ts'
 import { captureChildBootstrapCaptureRequest, type ChildBootstrapCaptureRequest, type ChildBootstrapCaptureInspection, type OwnedCaptureReservation, type OwnedCaptureInspection } from './child-bootstrap-intent.ts'
 import { captureBootstrapRoute, captureBootstrapCaptureRoute, encodeOwnedCaptureReservation, routeForReservation, routeInvocation, validateOwnedCaptureStage, type BootstrapRoute, type BootstrapCaptureRoute } from './bootstrap-route.ts'
 import { randomUUID } from 'node:crypto'
@@ -9,33 +10,45 @@ import { SessionBindingObservationError } from './types.ts'
 import { captureBootstrapCaptureRequest } from './bootstrap-capture.ts'
 import type { BootstrapCaptureRequest, BootstrapCaptureInspection } from './bootstrap-types.ts'
 import type { HeldFactOwner, IssuingFactOwner } from './fact-types.ts'
-import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, encodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, encodeFactBatch, decodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
 import { buildSession } from '../format/validation.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapInvocation, captureBootstrapRequest, parseBootstrapHeaderStage, sameBootstrapData } from './bootstrap-header.ts'
-import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest } from './bootstrap-types.ts'
+import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest, HeaderOutcome } from './bootstrap-types.ts'
 import type { createManagedDocument } from './managed-document.ts'
-import type { PersistenceBackend } from './types.ts'
+import type { PersistenceBackend, SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
 import { heldFactOwner, issuingFactOwner } from './fact-owner.ts'
 import { compileSemanticSeed } from '../semantic-seed.ts'
-import { isStrictFactData } from '@i-harness/core-session'
+import { isStrictFactData,canonicalJsonData } from '@i-harness/core-session'
 import { ownBackendOutcome } from './fact-outcome.ts'
 import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPreparationPort, captureBootstrapTargetPreparationRequest } from './bootstrap-preparation.ts'
 import { preparationFacts } from './bootstrap-preparation-facts.ts'
 import { captureManagedReadyObservation, type ManagedReadyObservation } from './managed-document.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import { assertOriginalProcessMutation } from './process-read-latches.ts'
+import type { createTaskDocumentTransitions } from './task-document-transition.ts'
+import { captureSelectedResultsRoute, type SelectedResultsRoute } from './selected-results-route.ts'
+import { selectedResultsPreparationFacts } from './selected-results-preparation.ts'
+import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
+import { createColdSelectedInspection, type ColdSelectedTarget, type ColdSelectedObservation } from './cold-selected-target.ts'
 
 export interface ManagedEntry {
+  coldFinalization?:import('./cold-finalization-types.ts').ColdFinalization;
+  revokeColdFinalization?:()=>void;
+  metadataRevision?: object;
+  coldSelected?: ReturnType<typeof createColdSelectedInspection>;
+  selected?: {cold?:true;route:SelectedResultsRoute;identity:object;taskBarrier?:ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
-  document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
+  document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl; cachedTaskBarrier?: ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;
   flight?: Promise<unknown>; revoked?: boolean; revocation?: object; ready?: boolean; headerUnknown?: boolean;
-  bootstrap?: { invocation: BootstrapInvocation; manifestDigest?: string; request?: BootstrapRequest; stage?: BootstrapHeaderStage; operation?: BootstrapHeaderOperation; phase: BootstrapPhase; issued: boolean; pending?: FactOutcome;
+  bootstrap?: { invocation: BootstrapInvocation; manifestDigest?: string; request?: BootstrapRequest; stage?: BootstrapHeaderStage; operation?: BootstrapHeaderOperation; phase: BootstrapPhase; issued: boolean; pending?: FactOutcome; taskBarrier?: ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>; headerOutcome?: import('./bootstrap-types.ts').HeaderOutcome;
     capture?: { request: BootstrapCaptureRequest|ChildBootstrapCaptureRequest; reservation: OwnedCaptureReservation; phase: 'unreserved'|'reserving'|'reserved'|'capturing'|'captured'|'spent'; entered: boolean; ownedRequest?: BootstrapRequest } };
 }
 /** New-work revocation stays terminal; its identity also fences in-flight observations. */
 export function markManagedEntryRevoked(entry:ManagedEntry) {
+  entry.revokeColdFinalization?.()
   entry.revoked=true;entry.revocation={}
   if(entry.captureIO)entry.captureIO.activeIssue=undefined
 }
@@ -82,18 +95,24 @@ function framesFor(stage:BootstrapHeaderStage,events:readonly SessionEvent[]):Bo
 function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
   if(stage.captureReservation)validateOwnedCaptureStage(stage.captureReservation,stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])
   const meta=state.meta!,original=JSON.parse(stage.headerBytes)
-  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION && readyState(state))) throw new Error('Bootstrap storage format conflict')
+  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION && readyState(state)) && !(original.formatVersion===13 && meta.formatVersion===14 && readyState(state))) throw new Error('Bootstrap storage format conflict')
   for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
   if(bootstrapManifest(stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])!==manifest(stage))throw new Error('Bootstrap manifest conflict')
   const first=state.events![0]
   if(stage.seed.seedLength&&first?.type==='conversation/seed-manifest') {
     if(stage.seed.sourceObservation.kind!=='semantic')throw new Error('Bootstrap source binding conflict')
     const seed=semanticSeedFromRecords(meta.semanticSeed!,state.events!.slice(0,stage.seed.seedLength))
+    if(seed.version!==1&&seed.version!==2)throw new TypeError('Legacy bootstrap birth required')
     const compiled=compileSemanticSeed({kind:'seed',seed,digest:stage.seed.digest,sourceObservationDigest:stage.seed.sourceObservation.digest})
     if(compiled.dependencyDigest!==stage.seed.dependencyDigest)throw new Error('Bootstrap dependency binding conflict')
   } else if(stage.seed.sourceObservation.kind!=='none')throw new Error('Bootstrap empty source binding conflict')
 }
-export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>) {
+const originalBootstrapEntries = new WeakMap<object, { id: string; documents: Map<string, ManagedEntry> }>()
+export function assertOriginalBootstrapEntry(entry: object, id: string): void {
+  const record = originalBootstrapEntries.get(entry)
+  if (!record || record.id !== id || record.documents.get(id) !== entry) throw new TypeError('Invalid original bootstrap entry')
+}
+export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>,transitions?:ReturnType<typeof createTaskDocumentTransitions>,activateSelected?:(id:string,entry:ManagedEntry)=>void,prepareActivateSelected?:(id:string,entry:ManagedEntry)=>()=>void) {
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
   const captureSupported=()=>supported()&&(process.platform==='win32'||process.platform==='linux')&&!!backend.checkBootstrapCaptureRoot&&!!backend.readBootstrapCapture&&!!backend.prepareBootstrapCapture&&!!backend.settleBootstrapCaptureIO
   const childSupported=()=>captureSupported()&&!!backend.bootstrapRoutes&&['readState','readCapture','reserveCapture','resolveBirth'].every(key=>typeof (backend.bootstrapRoutes as any)[key]==='function')
@@ -121,6 +140,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     })
   }
   let captureClosed=false
+  const coldTargets = new WeakMap<object, ReturnType<typeof createColdSelectedInspection>>()
   function assertOutsideCapture(id?:string) { const scope=callbackScope.getStore();if(scope?.active&&(id===undefined||scope.id===id))throw new SessionBindingObservationError('conflict') }
   function captureSelfConflict(input:unknown,wrapped=false) {
     const scope=callbackScope.getStore();if(!scope?.active)return false
@@ -131,15 +151,16 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   async function captureBundle(entry:ManagedEntry) {
     if(entry.captureIO)return entry.captureIO
-    const id=entry.bootstrap!.invocation.targetSessionId,claim=await ownership.pinOwnership(id)
-    const held=heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim.assertHeld())
+    const id=(entry.bootstrap?.invocation??entry.selected!.route.request.invocation).targetSessionId, existing=entry.bootstrap?.taskBarrier
+    const claim=existing ? existing.transferClaim() : await ownership.pinOwnership(id)
+    const held=existing ? existing.held() : heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>claim.assertHeld()))
     const bundle:NonNullable<ManagedEntry['captureIO']>={claim,held,issuer:undefined!,settled:true,released:false}
     bundle.issuer=issuingFactOwner(held,()=>{if(!bundle.activeIssue)throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'});bundle.activeIssue()})
     entry.captureIO=bundle;return bundle
   }
   async function settleCapture(entry:ManagedEntry) {
     const io=entry.captureIO
-    if(io&&!io.settled){await backend.settleBootstrapCaptureIO!(entry.bootstrap!.invocation.targetSessionId,io.held);io.settled=true}
+    if(io&&!io.settled){await backend.settleBootstrapCaptureIO!((entry.bootstrap?.invocation??entry.selected!.route.request.invocation).targetSessionId,io.held);io.settled=true}
   }
   type InspectionResource={request:BootstrapCaptureRequest|ChildBootstrapCaptureRequest;done:Promise<OwnedCaptureInspection>;claim?:Awaited<ReturnType<Ownership['pinOwnership']>>;held?:HeldFactOwner;ioStarted:boolean;ioSettled:boolean;released:boolean}
   const inspections=new Set<InspectionResource>()
@@ -159,7 +180,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         await backend.checkBootstrapCaptureRoot!()
         if(captureClosed)throw new Error('Capture inspection closed')
         item.claim=await ownership.pinOwnership(request.invocation.targetSessionId)
-        item.held=heldFactOwner({sessionId:request.invocation.targetSessionId,incarnation:randomUUID()},ownership,()=>item.claim!.assertHeld())
+        item.held=heldFactOwner({sessionId:request.invocation.targetSessionId,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>item.claim!.assertHeld()))
         if(captureClosed)throw new Error('Capture inspection closed')
         item.ioStarted=true
         result=await ownership.withSessionOperation(request.invocation.targetSessionId,()=>route.protocol==='child-v1'?backend.bootstrapRoutes!.readCapture(request.invocation.targetSessionId,item.held!,route):backend.readBootstrapCapture!(request.invocation.targetSessionId,item.held!,request as BootstrapCaptureRequest))
@@ -174,7 +195,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   function closeCaptureAdmission() {
     assertOutsideCapture();captureClosed=true
-    for(const entry of documents.values()){if(entry.captureIO)entry.captureIO.activeIssue=undefined;if(entry.bootstrap?.capture)revokeManagedEntry(entry)}
+    for(const entry of documents.values()){if(entry.captureIO)entry.captureIO.activeIssue=undefined;if(entry.bootstrap?.capture||entry.selected)revokeManagedEntry(entry)}
     const original=[...inspections]
     return async()=>{
       const results=await Promise.allSettled(original.map(async item=>{await item.done.catch(()=>{});if(inspections.has(item))await cleanupInspection(item)}))
@@ -183,11 +204,20 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
   }
   async function releaseCapture(entry:ManagedEntry) {
+    await entry.coldFinalization?.retryClose()
+    const retireColdWitness=()=>{
+      if(entry.selected?.cold&&entry.selected.processToken){entry.selected.processToken.end('settled');entry.selected.processToken=undefined}
+    }
+    // The task transition borrows this exact claim. Its original file and
+    // document-lease cleanup must finish before the capture owner retires it.
+    await entry.bootstrap?.taskBarrier?.retryClose()
+    await entry.selected?.taskBarrier?.retryClose()
+    await entry.cachedTaskBarrier?.retryClose()
     await settleCapture(entry)
     const io=entry.captureIO
-    if(!io||io.released)return
+    if(!io||io.released){retireColdWitness();return}
     if(io.releasing)return io.releasing
-    const flight=io.claim.release().then(()=>{io.released=true}).finally(()=>{if(io.releasing===flight)io.releasing=undefined})
+    const flight=io.claim.release().then(()=>{io.released=true;retireColdWitness()}).finally(()=>{if(io.releasing===flight)io.releasing=undefined})
     io.releasing=flight
     await flight
   }
@@ -221,7 +251,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(!reconcile)current(guards,entry)
     return outcome.kind==='confirmed'?outcome.closureDigest:undefined
   }
-  async function adopt(entry:ManagedEntry,state:BootstrapReadState,guards:BootstrapGuards,cached?:ManagedReadyObservation,observation={revocation:entry.revocation}):Promise<BootstrapOutcome> {
+  async function adopt(entry:ManagedEntry,state:BootstrapReadState,guards:BootstrapGuards,cached?:ManagedReadyObservation,observation={revocation:entry.revocation},taskEntry:ManagedEntry=entry):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,stage=b.stage!
     cached?.assertCurrent()
     if(state.torn)return blocked(entry)
@@ -247,8 +277,27 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       receipts.push(checked.receipt)
     }
     targetCurrent(guards)
+    if (transitions && !b.taskBarrier?.completed) {
+      if (![11,12,13,CURRENT_FORMAT_VERSION].includes(state.meta!.formatVersion) || !state.stageBytes) return blocked(entry)
+      b.taskBarrier ??= transitions.bootstrap(b.invocation.targetSessionId,taskEntry,entry.route ?? {protocol:'public',invocation:b.invocation},'completed',entry.captureIO ? {claim:entry.captureIO.claim,held:entry.captureIO.held} : undefined)
+      b.taskBarrier.setMode('completed'); b.taskBarrier.setGuard(() => { if (guards.signal?.aborted || taskEntry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); cached?.assertCurrent(); targetCurrent(guards) })
+      try {
+        await b.taskBarrier.prepare(); await b.taskBarrier.settleHeader()
+        let headerOutcome = b.taskBarrier.headerOutcome ?? b.headerOutcome
+        if (!b.taskBarrier.headerCommitted || headerOutcome?.kind !== 'committed') {
+          const operation:BootstrapHeaderOperation = { invocation:stage.invocation, target:stage.originalTarget, stageBytes:state.stageBytes, headerBytes:Buffer.from(stage.headerBytes) }
+          if (entry.captureIO) entry.captureIO.settled = false
+          headerOutcome = await b.taskBarrier.runHeader(h => backend.reconcileBootstrapHeader!(b.invocation.targetSessionId,h,operation))
+          await settleCapture(entry)
+          if (headerOutcome.kind !== 'committed') return blocked(entry)
+          b.headerOutcome = headerOutcome; b.taskBarrier.markHeaderCommitted()
+        }
+        if (state.meta!.formatVersion < CURRENT_FORMAT_VERSION || b.taskBarrier.upgradePending) await b.taskBarrier.upgrade()
+        await b.taskBarrier.finishHeader()
+      } catch { return blocked(entry) }
+    }
     // Confirm the original birth frames before changing only the writable header.
-    if ([11,12].includes(state.meta!.formatVersion) && state.meta!.formatVersion < CURRENT_FORMAT_VERSION) await ownership.withSessionOperation(b.invocation.targetSessionId, async () => {
+    if (!transitions && [11,12].includes(state.meta!.formatVersion) && state.meta!.formatVersion < CURRENT_FORMAT_VERSION) await ownership.withSessionOperation(b.invocation.targetSessionId, async () => {
       if (!backend.upgradeSessionFormat) throw new Error('Bootstrap writer cannot upgrade current storage')
       const upgraded = await backend.upgradeSessionFormat(b.invocation.targetSessionId, state.meta!.formatVersion, CURRENT_FORMAT_VERSION)
       if (upgraded.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Bootstrap storage upgrade incomplete')
@@ -271,7 +320,8 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const flight=Promise.resolve().then(async():Promise<BootstrapOutcome>=>{
       try{
         await previous;assertCurrent()
-        const state=await read(invocation,route);assertCurrent()
+        if (transitions) { originalBootstrapEntries.set(entry,{id:invocation.targetSessionId,documents}); if (entry.cachedTaskBarrier?.retired) entry.cachedTaskBarrier = undefined; entry.cachedTaskBarrier ??= transitions.bootstrap(invocation.targetSessionId,entry,route,undefined); candidate.bootstrap!.taskBarrier = entry.cachedTaskBarrier; entry.cachedTaskBarrier.setGuard(() => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); assertCurrent() }); await entry.cachedTaskBarrier.openOwner() }
+        const state=entry.cachedTaskBarrier ? await entry.cachedTaskBarrier.readState() : await read(invocation,route);assertCurrent()
         // Cached observation changes no original namespace/publication fence.
         // In particular, usable READY bytes cannot erase a foreign sibling or
         // an unfinished/conflicting original existing-empty publication.
@@ -298,28 +348,54 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(!sameBootstrapData(cached.prefix,state.prefix)||cached.view.formatVersion!==state.meta.formatVersion
           ||['semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion'].some(key=>!sameBootstrapData((cached.view.header as any)?.[key],(state.meta as any)[key])))return{kind:'refused',reason:'wrong-view'}
         checkBirth(stage,state);assertCurrent()
-        return await adopt(candidate,state,guards,cached)
+        const result = await adopt(candidate,state,guards,cached,undefined,entry); if (entry.cachedTaskBarrier?.completed) entry.cachedTaskBarrier = undefined; return result
       }catch(error){
         const code=(error as {code?:string}|null|undefined)?.code
         if(code==='FACT_TARGET_UNAVAILABLE')return blocked(candidate,'dependency-unavailable')
         if(error instanceof FactRecoveryRequiredError)return{kind:'refused',reason:'wrong-view'}
         return blocked(candidate)
       }
-    }).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
+    }).finally(async()=>{ if(entry.flight===flight)entry.flight=undefined; if(entry.cachedTaskBarrier && !entry.cachedTaskBarrier.completed && !entry.cachedTaskBarrier.taskIssued) { await entry.cachedTaskBarrier.close(); entry.cachedTaskBarrier=undefined } })
     entry.flight=flight;return flight
   }
   async function run(entry:ManagedEntry,guards:BootstrapGuards,observation={revocation:entry.revocation}):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,id=b.invocation.targetSessionId
+    // Target currentness is a post-preparation capability for this invocation.
+    // Header/task ownership must be acquired before the project can prepare it.
+    let targetPrepared = false
+    if (documents.get(id) !== entry) throw new Error('Invalid original bootstrap entry')
+    originalBootstrapEntries.set(entry,{id,documents})
     let held=entry.captureIO?.held??heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>{})
-    if(entry.captureIO)entry.captureIO.activeIssue=()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
+    if(entry.captureIO)entry.captureIO.activeIssue=()=>{if (b.taskBarrier?.mode) b.taskBarrier.markHeaderIssued();current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
     try {
+      // Reconcile only the original completed Task14 birth; this path cannot issue work.
+      if (entry.document && b.stage && b.taskBarrier?.completed) {
+        if (b.pending) {
+          const pending = b.pending, key = 'key' in pending ? pending.key : 'receipt' in pending ? pending.receipt.key : undefined
+          if (!key) return blocked(entry)
+          const outcome = await entry.document.reconcile(key)
+          b.pending = outcome
+          if (outcome.kind !== 'committed') return blocked(entry)
+          b.pending = undefined
+        }
+        const state = await read(b.invocation,entry.route)
+        const publication = publicationStatus(state,b.stage)
+        if (publication === 'conflict') return {kind:'refused',reason:'conflict'}
+        if (publication !== 'valid' || !readyState(state)) return blocked(entry)
+        return await adopt(entry,state,guards,undefined,observation)
+      }
       await settleCapture(entry)
       await ownership.withSessionOperation(id,async()=>{mutations.assertWritableBootstrap(id);await ownership.ensureOwnership(id)})
+      if (transitions) {
+        if (b.taskBarrier?.retired || b.taskBarrier?.completed) b.taskBarrier = undefined
+        b.taskBarrier ??= transitions.bootstrap(id,entry,entry.route ?? {protocol:'public',invocation:b.invocation},undefined,entry.captureIO ? {claim:entry.captureIO.claim,held:entry.captureIO.held} : undefined)
+        b.taskBarrier.setGuard(() => { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); if (targetPrepared) targetCurrent(guards) }); await b.taskBarrier.openOwner(); held = b.taskBarrier.held()
+      }
       if(b.pending&&entry.document) {
         const pending=b.pending,key='key' in pending?pending.key:'receipt' in pending?pending.receipt.key:undefined
         if(key){const outcome=await entry.document.reconcile(key);b.pending=outcome;if(outcome.kind==='committed'||outcome.kind==='absent')b.pending=undefined;else return blocked(entry)}
       }
-      let state=await read(b.invocation,entry.route)
+      let state=b.taskBarrier ? await b.taskBarrier.readState() : await read(b.invocation,entry.route)
       if(state.foreign)return {kind:'refused',reason:'conflict'}
       if(entry.route?.protocol==='child-v1'&&(state.kind==='unavailable'||state.kind==='absent'))return blocked(entry)
       if(state.stagePresent||state.promotionPresent){b.issued=true;if(!state.captureReservation&&!state.stageBytes)entry.headerUnknown=true}
@@ -345,7 +421,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       }
       if(b.stage?.captureReservation&&captureSupported()&&!entry.captureIO) {
         const io=await captureBundle(entry);held=io.held
-        io.activeIssue=()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true;io.settled=false}
+        io.activeIssue=()=>{if (b.taskBarrier?.mode) b.taskBarrier.markHeaderIssued();current(guards,entry);b.issued=true;entry.headerUnknown=true;io.settled=false}
       }
       if(b.issued&&!state.meta?.semanticSeed&&!state.captureReservation)entry.headerUnknown=true
       if(b.stage&&b.request) {
@@ -364,30 +440,45 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         b.stage=built.stage;b.operation=built.operation
       }
       if(publicationStatus(state,b.stage)!=='valid')return blocked(entry)
+      const predecessorBirth = !!state.meta?.semanticSeed && state.meta.formatVersion === 13 && !b.taskBarrier?.mode
+      if (transitions && !predecessorBirth) {
+        if (!b.taskBarrier?.mode && (b.request.target.kind === 'resume' || b.request.target.kind === 'new' && !!state.meta)) return {kind:'not-issued',reason:'unsupported'}
+        const barrier = b.taskBarrier; if (!barrier) return blocked(entry)
+        barrier.setMode(b.request.target.kind === 'existing-empty' ? 'existing-empty' : 'new'); barrier.setGuard(() => { if (barrier.headerWasIssued) { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}) } else current(guards,entry); if (targetPrepared) targetCurrent(guards) })
+        try { await barrier.prepare(); held = barrier.held(); await barrier.settleHeader() }
+        catch (error) { const conflict = barrier.taskConflict; if (!barrier.taskIssued || conflict) { await barrier.close(); b.taskBarrier = undefined }; return conflict ? {kind:'refused',reason:'conflict'} : blocked(entry) }
+      }
       b.phase='header'
       if(entry.captureIO)entry.captureIO.settled=false
-      let outcome=await ownership.withSessionOperation(id,()=>backend.reconcileBootstrapHeader!(id,held,b.operation!))
+      let outcome = !predecessorBirth && b.taskBarrier?.headerCommitted && b.taskBarrier.headerOutcome?.kind === 'committed' ? b.taskBarrier.headerOutcome : !predecessorBirth && b.taskBarrier ? await b.taskBarrier.runHeader(h => backend.reconcileBootstrapHeader!(id,h,b.operation!)) : await ownership.withSessionOperation(id,()=>backend.reconcileBootstrapHeader!(id,held,b.operation!))
       await settleCapture(entry)
       if(outcome.kind!=='committed') {
         if(outcome.kind==='conflict')return {kind:'refused',reason:'conflict'}
         current(guards,entry)
-        outcome=await ownership.withSessionOperation(id,async()=>{
+        const issue = async (headerHeld: HeldFactOwner, beforeIssue: () => void) => {
           if(mutations.pendingWriteBehind(id)?.hasWork)return {kind:'conflict' as const}
-          const issuing=entry.captureIO?.issuer??issuingFactOwner(held,()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true})
+          const issuing=entry.captureIO?.issuer??issuingFactOwner(headerHeld,()=>{beforeIssue();current(guards,entry);b.issued=true;entry.headerUnknown=true})
           return backend.prepareBootstrapHeader!(id,issuing,b.operation!)
-        })
+        }
+        outcome = !predecessorBirth && b.taskBarrier ? await b.taskBarrier.runHeader(issue) : await ownership.withSessionOperation(id,()=>issue(held,()=>{}))
       }
       if(outcome.kind!=='committed') {
         if(outcome.kind==='conflict')return {kind:'refused',reason:'conflict'}
         if(!b.issued&&outcome.kind==='not-issued')return {kind:'not-issued',reason:outcome.reason}
         return blocked(entry)
       }
+      if (predecessorBirth && b.taskBarrier) { try { await b.taskBarrier.settleHeader() } catch { return blocked(entry) } }
+      if (!predecessorBirth && b.taskBarrier) { b.headerOutcome = outcome; b.taskBarrier.markHeaderCommitted() }
       entry.headerUnknown=false
-      state=await read(b.invocation,entry.route)
+      state=b.taskBarrier && !b.taskBarrier.completed ? await b.taskBarrier.readState() : await read(b.invocation,entry.route)
       if(!state.meta||!state.events||!state.prefix)return blocked(entry)
       const doc=entry.document??attach(id,entry,buildSession(state.meta,state.events),state.prefix)
       b.phase='dependencies'
       if (!await prepareTarget(b.stage, guards, false, entry, b.request.seed.records)) return blocked(entry, 'dependency-unavailable')
+      targetPrepared = true
+      // Keep the original task/header operation through a blocked preparation.
+      // A warm retry must not classify its already-issued birth as a new target.
+      if (!predecessorBirth && b.taskBarrier) { try { await b.taskBarrier.finishHeader() } catch { return blocked(entry) } }
       const closure=await dependencies(b.stage,state.events,guards,false,entry)
       if(!closure)return blocked(entry,'dependency-unavailable')
       current(guards,entry)
@@ -422,16 +513,16 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           return blocked(entry,result.kind==='not-issued'&&result.code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown')
         }
         targetCurrent(guards)
-        state=await read(b.invocation,entry.route)
+        state=b.taskBarrier && !b.taskBarrier.completed ? await b.taskBarrier.readState() : await read(b.invocation,entry.route)
       }
       const adopted=await adopt(entry,state,guards,undefined,observation)
       return adopted.kind==='already-ready'?{...adopted,kind:'ready'}:adopted
     } catch(error) {
-      const code=(error as {code?:string}).code
+      const code=(error as {code?:string}|null|undefined)?.code
       if(code==='FACT_TARGET_UNAVAILABLE')return blocked(entry,'dependency-unavailable')
       if(code==='FACT_PRECONDITION_STALE'||code==='FACT_CANCELLED')return b.issued?blocked(entry,code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown'):{kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
-      return b.issued?blocked(entry):{kind:'refused',reason:'manifest-invalid'}
-    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)} }
+      return b.issued || b.taskBarrier?.taskIssued ? blocked(entry) : {kind:'refused',reason:'manifest-invalid'}
+    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)}; if (b.taskBarrier && b.issued && entry.headerUnknown) await b.taskBarrier.allowObservation(); if (b.taskBarrier && !b.taskBarrier.completed && !b.taskBarrier.taskIssued && !b.issued) { await b.taskBarrier.close(); b.taskBarrier = undefined } }
   }
   function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation}):Promise<BootstrapOutcome> {
     let captured: BootstrapInvocation
@@ -471,7 +562,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       entry.bootstrap!.request??=r
     }else{entry={route,bootstrap:{invocation:captured,request:r,phase:'header',issued:false}};documents.set(id,entry)}
     const owned=entry
-    const flight=run(owned,guards).finally(()=>{if(owned.flight===flight)owned.flight=undefined;if(!owned.bootstrap!.issued&&!owned.document&&documents.get(id)===owned)documents.delete(id)})
+    const flight=run(owned,guards).finally(()=>{if(owned.flight===flight)owned.flight=undefined;if(!owned.bootstrap!.issued&&!owned.bootstrap!.taskBarrier&&!owned.document&&documents.get(id)===owned)documents.delete(id)})
     owned.flight=flight;return flight
   }
   function captureTarget(input:BootstrapCaptureRoute,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>):Promise<BootstrapOutcome> {
@@ -547,7 +638,282 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       }).finally(async()=>{if(owned.flight===flight)owned.flight=undefined;if(!b.issued&&!owned.document&&documents.get(id)===owned&&(!owned.captureIO||owned.captureIO.settled)){await releaseCapture(owned);documents.delete(id)}})
       owned.flight=flight;return flight
     }
+  function prepareSelectedCapture(input:SelectedResultsRoute,identity:object,guard:()=>void,capture:()=>Promise<unknown>) {
+    if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+    const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
+    if(!selected||typeof selected.prepareSelectedHeader!=='function'||typeof selected.reconcileSelectedHeader!=='function'||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)throw new TypeError('Selected capture unavailable')
+    if(typeof guard!=='function'||typeof capture!=='function'||utilTypes.isProxy(guard)||utilTypes.isProxy(capture))throw TypeError('Invalid selected capture')
+    if(captureClosed)throw Error('Selected capture closed')
+    let entry=documents.get(id)
+    if(entry&&(!entry.selected||entry.selected.identity!==identity||!sameBootstrapData(entry.selected.route,route)))throw Error('Selected target conflict')
+    if(!entry){entry={selected:{route,identity,issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}};documents.set(id,entry)}
+    const owned=entry,selectedEntry=owned.selected!
+    if(selectedEntry.capture&&selectedEntry.capture!==capture)throw Error('Original selected capture required')
+    selectedEntry.capture??=capture
+    return
+  }
+  function captureSelected(input:SelectedResultsRoute,identity:object,guard:()=>void,capture:()=>Promise<unknown>) {
+    prepareSelectedCapture(input,identity,guard,capture)
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,owned=documents.get(id)!,selectedEntry=owned.selected!
+    const selected=(backend as PersistenceBackend & {selectedCapture:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
+    if(owned.flight)return owned.flight as ReturnType<ReturnType<typeof createSelectedCaptureAttempt>['capture']>
+    const check=()=>{if(captureClosed||owned.revoked)throw Error('Selected capture revoked');guard()}
+    const flight=Promise.resolve().then(async()=>{
+      await settleCapture(owned);check();await backend.checkBootstrapCaptureRoot!();check()
+      const io=await captureBundle(owned);check()
+      selectedEntry.attempt??=createSelectedCaptureAttempt({reserveSelectedCapture(...args){io.settled=false;return selected.reserveSelectedCapture(...args)}},io.issuer,route,capture)
+      io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;io.settled=false}
+      try{
+        const state=await ownership.withSessionOperation(id,()=>selectedEntry.attempt!.capture());await settleCapture(owned);check()
+        if(state.kind==='captured'){
+          const journal=(backend as PersistenceBackend & {selectedJournal?:{bindCapturedLane(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,stage:import('./selected-results-header.ts').SelectedResultsHeaderStageV2,records:unknown,attempt:object,prior?:Readonly<{kind:'selected-lane'}>):Readonly<{kind:'selected-lane'}>}}).selectedJournal
+          if(!journal)throw TypeError('Selected journal unavailable')
+          check();const lane=journal.bindCapturedLane(id,io.issuer,route,state.stage,state.seed.records,selectedEntry.attempt!,selectedEntry.lane);check()
+          if(selectedEntry.lane&&selectedEntry.lane!==lane)throw Error('Original selected lane changed')
+          selectedEntry.lane=lane
+        }
+        if(state.kind==='captured'&&(selectedEntry.header?.kind!=='committed'||!!selectedEntry.taskBarrier&&!selectedEntry.taskBarrier.completed)){
+          const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(state.stageBytes),headerBytes:Buffer.from(state.headerBytes)}
+          if (transitions) {
+            originalBootstrapEntries.set(owned,{id,documents})
+            selectedEntry.taskBarrier ??= transitions.bootstrap(id,owned,route,'new',{claim:io.claim,held:io.held})
+            selectedEntry.taskBarrier.setGuard(check)
+            try { await selectedEntry.taskBarrier.prepare() }
+            catch (error) { if (!selectedEntry.taskBarrier.taskIssued || selectedEntry.taskBarrier.taskConflict) { await selectedEntry.taskBarrier.close(); selectedEntry.taskBarrier=undefined }; throw error }
+          }
+          const reconcile=selectedEntry.headerIssued===true
+          if(selectedEntry.header?.kind!=='committed'&&(!selectedEntry.headerAttempted||reconcile||selectedEntry.header?.kind==='not-issued'||selectedEntry.header?.kind==='unknown'&&!selectedEntry.headerIssued)){
+            selectedEntry.headerAttempted=true;io.settled=false
+            const issue = (held:HeldFactOwner,beforeIssue:()=>void) => {
+              io.activeIssue=()=>{beforeIssue();check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;io.settled=false}
+              return reconcile?selected.reconcileSelectedHeader(id,held,route,operation):selected.prepareSelectedHeader(id,io.issuer,route,operation,()=>{selectedEntry.headerIssued=true})
+            }
+            selectedEntry.header=selectedEntry.taskBarrier ? await selectedEntry.taskBarrier.runHeader(issue) : await ownership.withSessionOperation(id,()=>issue(io.held,()=>{}))
+            await settleCapture(owned);check()
+          }
+          if (selectedEntry.header?.kind==='committed' && selectedEntry.taskBarrier) { selectedEntry.taskBarrier.markHeaderCommitted(); await selectedEntry.taskBarrier.finishHeader() }
+        }
+        return state
+      }
+      finally{io.activeIssue=undefined;await settleCapture(owned)}
+    }).finally(()=>{if(owned.flight===flight)owned.flight=undefined})
+    owned.flight=flight;return flight
+  }
+  function publishSelected(input:SelectedResultsRoute,identity:object,guard:()=>void,target:()=>void,closure:string) {
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
+    if(!entry||!selected||selected.identity!==identity||!io||io.released||!selected.lane||!sameBootstrapData(route,selected.route)||!selected.headerIssued||selected.header?.kind!=='committed'||!/^[a-f0-9]{64}$/.test(closure))return Promise.resolve({kind:'blocked' as const})
+    if(entry.flight)return Promise.resolve({kind:'blocked' as const})
+    const state=selected.attempt?.inspect();if(!state||state.kind!=='captured')return Promise.resolve({kind:'blocked' as const})
+    const journal=(backend as PersistenceBackend & {selectedJournal?:{
+      prepareCapturedCompletion(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>,frame:BootstrapFrame):void;
+      appendOwnedBatch(id:string,owner:IssuingFactOwner,lane:Readonly<{kind:'selected-lane'}>,prefix:JournalPrefix,batch:BootstrapFrame['batch']):Promise<import('./fact-types.ts').BackendFactOutcome>;
+      reconcileOwnedBatch(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>,prefix:JournalPrefix,batch:BootstrapFrame['batch']):Promise<import('./fact-types.ts').BackendFactOutcome>;
+      confirmFrames(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>,frames:readonly BootstrapFrame[]):Promise<{kind:'committed';receipts:import('@i-harness/core-session').FactReceipt[]}|{kind:'unknown'|'conflict'}>;
+      readJournalPrefix(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>):Promise<JournalPrefix>;
+    }}).selectedJournal
+    if(!journal)return Promise.resolve({kind:'blocked' as const})
+    const check=()=>{if(captureClosed||entry.revoked)throw Error('Selected target revoked');guard();target();io.held.assertHeld()}
+    const flight=Promise.resolve().then(async()=>{
+      check();await settleCapture(entry);check();if(entry.ready&&entry.document&&selected.resultReceipt)return {kind:'ready' as const,document:entry.document,receipt:selected.resultReceipt}
+      const initial=emptyPrefix(),seedBatch=encodeFactBatch('bootstrap:'+route.request.invocation.operationId+':seed',initial.prefixDigest,state.seed.records),seedPrefix={eventCount:seedBatch.key.count,bodyBytes:seedBatch.bytes.length,prefixDigest:decodeFactBatch(seedBatch.bytes).prefixDigest}
+      const complete:SessionEvent={type:'session/bootstrap',version:1,seq:state.seed.records.length,operationId:route.request.invocation.operationId,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest,dependencyClosureDigest:closure,seedLength:state.seed.records.length}
+      const completion=encodeFactBatch('bootstrap:'+route.request.invocation.operationId+':complete',seedPrefix.prefixDigest,[complete]),frames:BootstrapFrame[]=[{prefix:initial,batch:seedBatch},{prefix:seedPrefix,batch:completion}]
+      if(selected.closure!==undefined&&selected.closure!==closure)throw Error('Selected dependency closure changed')
+      if(selected.frames&&selected.frames.some((frame,index)=>!sameBootstrapData(frame.prefix,frames[index]!.prefix)||!Buffer.from(frame.batch.bytes).equals(Buffer.from(frames[index]!.batch.bytes))))throw Error('Selected frame changed')
+      selected.closure??=closure;selected.frames??=frames;selected.receipts??=[]
+      journal.prepareCapturedCompletion(id,io.held,selected.lane!,selected.frames[1]!);check()
+      for(let index=selected.receipts.length;index<2;index++){
+        const frame=selected.frames[index]!;let issued=false
+        if(selected.pending!==undefined){
+          if(selected.pending!==index)return {kind:'blocked' as const}
+          io.settled=false;const recovered=await ownership.withSessionOperation(id,()=>journal.reconcileOwnedBatch(id,io.held,selected.lane!,frame.prefix,frame.batch));await settleCapture(entry);check()
+          const checked=ownBackendOutcome(recovered,frame.batch.key,io.held.owner,true)
+          if(checked.kind==='committed'){selected.receipts.push(checked.receipt);selected.pending=undefined;continue}
+          if(checked.kind!=='absent')return {kind:'blocked' as const};selected.pending=undefined
+        }
+        io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selected.issued=true;issued=true;selected.pending=index;io.settled=false}
+        let raw:import('./fact-types.ts').BackendFactOutcome
+        try{io.settled=false;raw=await ownership.withSessionOperation(id,()=>journal.appendOwnedBatch(id,io.issuer,selected.lane!,frame.prefix,frame.batch))}finally{io.activeIssue=undefined}
+        await settleCapture(entry);const result=ownBackendOutcome(raw,frame.batch.key,io.held.owner,issued)
+        if(result.kind!=='committed'){if(issued)selected.pending=index;return {kind:'blocked' as const}}
+        selected.receipts.push(result.receipt);selected.pending=undefined;check()
+      }
+      io.settled=false;const confirmed=await ownership.withSessionOperation(id,()=>journal.confirmFrames(id,io.held,selected.lane!,selected.frames!));await settleCapture(entry);check()
+      if(confirmed.kind!=='committed'||confirmed.receipts.length!==2)return {kind:'blocked' as const}
+      for(let i=0;i<2;i++){const verified=ownBackendOutcome({kind:'committed',receipt:confirmed.receipts[i]},selected.frames[i]!.batch.key,io.held.owner,true);if(verified.kind!=='committed'||!sameBootstrapData(verified.receipt,selected.receipts[i]))return {kind:'blocked' as const}}
+      io.settled=false;const prefix=await ownership.withSessionOperation(id,()=>journal.readJournalPrefix(id,io.held,selected.lane!));await settleCapture(entry);check()
+      const expected={eventCount:seedPrefix.eventCount+completion.key.count,bodyBytes:seedPrefix.bodyBytes+completion.bytes.length,prefixDigest:decodeFactBatch(completion.bytes).prefixDigest}
+      if(!sameBootstrapData(prefix,expected))return {kind:'blocked' as const}
+      const doc=entry.document??attach(id,entry,buildSession(JSON.parse(state.headerBytes),[...(JSON.parse(canonicalJsonData(state.seed.records)) as SessionEvent[]),complete]),prefix)
+      if(!entry.control?.bindSelected)return {kind:'blocked' as const}
+      await entry.control.bindSelected();check();const facts=selectedResultsPreparationFacts(state.stage,state.seed.records)
+      selected.resultReceipt=Object.freeze({version:2,invocation:route.request.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:closure,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
+      io.claim.retainLive();entry.control.ready();entry.ready=true;activateSelected?.(id,entry);selected.processToken?.end('settled');selected.processToken=undefined
+      return {kind:'ready' as const,document:doc,receipt:selected.resultReceipt}
+    }).catch(()=>({kind:'blocked' as const})).finally(async()=>{io.activeIssue=undefined;try{await settleCapture(entry)}finally{if(entry.flight===flight)entry.flight=undefined}})
+    entry.flight=flight;return flight
+  }
+  /** Cold admission retains the original entry and owner, but does not release
+   * readiness until the completed-target transition and target qualification. */
+  function inspectColdSelected(input:SelectedResultsRoute):Promise<{kind:'qualification-required';target:ColdSelectedTarget}|{kind:'conflict'|'blocked'}> {
+    if (!transitions) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+    assertColdInspectionAdmission(id)
+    assertOutsideCapture(id)
+    let entry=documents.get(id)
+    if(entry) {
+      if(!entry.selected||!sameBootstrapData(entry.selected.route,route))return Promise.resolve({kind:'conflict'})
+      if(entry.revoked||captureClosed)return Promise.resolve({kind:'blocked'})
+      if(entry.flight)return entry.flight.then(()=>({kind:'blocked' as const}),()=>({kind:'blocked' as const}))
+      if(entry.document) {
+        try { entry.coldSelected?.assertCurrent() } catch { return Promise.resolve({kind:'blocked'}) }
+        return Promise.resolve(entry.coldSelected ? {kind:'qualification-required',target:entry.coldSelected.target} : {kind:'blocked'})
+      }
+      if(!entry.selected.cold)return Promise.resolve({kind:'conflict'})
+    }
+    if(captureClosed||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)return Promise.resolve({kind:'blocked'})
+    const journal=(backend as PersistenceBackend & {selectedJournal?:{inspectCheckedBirth(route:SelectedResultsRoute,held:HeldFactOwner):Promise<
+      {kind:'unavailable'|'conflict'}|{kind:'checked';birth:{stage:import('./selected-results-header.ts').SelectedResultsHeaderStageV2;facts:ReturnType<typeof selectedResultsPreparationFacts>};history:{events:SessionEvent[];prefix:JournalPrefix};meta:SessionMeta}
+    >}}).selectedJournal
+    if(!journal)return Promise.resolve({kind:'blocked'})
+    if(!entry){entry={selected:{cold:true,route,identity:Object.freeze({}),issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}};documents.set(id,entry)}
+    const owned=entry
+    const check=()=>{if(captureClosed||owned.revoked||documents.get(id)!==owned)throw new FactRecoveryRequiredError()}
+    const flight=Promise.resolve().then(async()=>{
+      await backend.checkBootstrapCaptureRoot!();check();const io=await captureBundle(owned);await settleCapture(owned);check()
+      io.settled=false
+      let result=await ownership.withSessionOperation(id,()=>journal.inspectCheckedBirth(route,io.held))
+      await settleCapture(owned);check()
+      if(result.kind!=='checked')return {kind:result.kind==='conflict'?'conflict' as const:'blocked' as const}
+      if(transitions&&!owned.selected?.taskBarrier?.completed){
+        originalBootstrapEntries.set(owned,{id,documents})
+        const selected=owned.selected!; selected.taskBarrier ??= transitions.bootstrap(id,owned,route,'completed',{claim:io.claim,held:io.held})
+        const barrier=selected.taskBarrier;barrier.setGuard(check);await barrier.prepare();check()
+        const capture=(backend as PersistenceBackend & {selectedCapture?:{confirmSelectedBirthHeader(id:string,held:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,version:number):Promise<HeaderOutcome>}}).selectedCapture
+        if(!capture)throw new FactRecoveryRequiredError()
+        const stage=result.birth.stage,operation:BootstrapHeaderOperation={invocation:stage.invocation,target:stage.originalTarget,stageBytes:Buffer.from(canonicalJsonData(stage)+'\n'),headerBytes:Buffer.from(stage.headerBytes)}
+        if(!barrier.headerCommitted){
+          io.settled=false;const header=await barrier.runHeader(held=>capture.confirmSelectedBirthHeader(id,held,route,operation,result.kind==='checked'?result.meta.formatVersion:-1));await settleCapture(owned);check()
+          if(header.kind!=='committed')throw new FactRecoveryRequiredError()
+          barrier.markHeaderCommitted()
+        }
+        if(result.meta.formatVersion<CURRENT_FORMAT_VERSION||barrier.upgradePending)await barrier.upgrade()
+        await barrier.finishHeader();check()
+        io.settled=false;const current=await ownership.withSessionOperation(id,()=>journal.inspectCheckedBirth(route,io.held));await settleCapture(owned);check()
+        if(current.kind!=='checked'||current.meta.formatVersion!==CURRENT_FORMAT_VERSION||!sameBootstrapData(current.birth.stage,result.birth.stage)||!sameBootstrapData(current.history.events,result.history.events)||!sameBootstrapData(current.history.prefix,result.history.prefix))throw new FactRecoveryRequiredError()
+        result=current
+      }
+      const {birth,history}=result,completion=history.events[birth.stage.seed.seedLength]
+      if(!completion||completion.type!=='session/bootstrap')return {kind:'blocked' as const}
+      const facts=birth.facts,meta=result.meta
+      const doc=attach(id,owned,buildSession(meta,history.events),history.prefix)
+      await owned.control!.bindSelected!();check()
+      owned.selected!.resultReceipt=Object.freeze({version:2,invocation:birth.stage.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:completion.dependencyClosureDigest,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
+      const originalControl=owned.control!,prepareReady=originalControl.prepareReady,originalClaim=owned.captureIO!.claim,retainLive=originalClaim.retainLive,originalToken=owned.selected!.processToken
+      const inspection=createColdSelectedInspection(owned,route,birth,history.prefix,meta,{
+        assertCurrent:check,assertOutside:()=>assertOutsideCapture(id),settle:()=>settleCapture(owned),
+        commit(){
+          check();const io=owned.captureIO!,control=owned.control!,selected=owned.selected!,token=selected.processToken
+          if(control!==originalControl||!prepareReady||control.prepareReady!==prepareReady||io.claim!==originalClaim||originalClaim.retainLive!==retainLive||token!==originalToken||!prepareActivateSelected||!token||!selected.taskBarrier?.completed||!io.settled||io.released||io.releasing||owned.flight||owned.ready)throw new FactRecoveryRequiredError()
+          io.held.assertHeld();io.claim.assertHeld();assertOriginalProcessMutation(token)
+          const ready=Reflect.apply(prepareReady,originalControl,[]),activate=prepareActivateSelected(id,owned),document=owned.document!,receipt=selected.resultReceipt!
+          Reflect.apply(retainLive,originalClaim,[]);ready();owned.ready=true;activate();token.end('settled');selected.processToken=undefined
+          return Object.freeze({kind:'ready' as const,document,receipt})
+        },
+        async enter<T>(work:()=>Promise<T>):Promise<T>{const scope={id,active:true};try{return await callbackScope.run(scope,work)}finally{scope.active=false}},
+      })
+      owned.coldSelected=inspection;coldTargets.set(inspection.target,inspection)
+      void doc
+      return {kind:'qualification-required' as const,target:inspection.target}
+    }).catch(()=>({kind:'blocked' as const})).finally(async()=>{
+      try {
+        await settleCapture(owned)
+        if(!owned.document&&!owned.selected?.taskBarrier) {
+          await releaseCapture(owned)
+          if(documents.get(id)===owned)documents.delete(id)
+        }
+      } finally {if(owned.flight===flight)owned.flight=undefined}
+    })
+    owned.flight=flight;return flight
+  }
+  function coldSelectedRoute(target:object) {
+    const original=coldTargets.get(target);if(!original)throw new TypeError('Original cold selected target required')
+    assertOutsideCapture(original.route.request.invocation.targetSessionId);original.assertCurrent();if(documents.get(original.route.request.invocation.targetSessionId)?.coldFinalization)throw new FactRecoveryRequiredError();return original.route
+  }
+  function assertColdInspectionAdmission(id:string){assertOutsideCapture(id);if(documents.get(id)?.coldFinalization)throw new FactRecoveryRequiredError()}
+  async function useColdSelected<T>(target:object,work:(observation:ColdSelectedObservation)=>Promise<T>):Promise<T> {
+    const original=coldTargets.get(target);if(!original)throw new TypeError('Original cold selected target required')
+    if(typeof work!=='function'||utilTypes.isProxy(work))throw new TypeError('Invalid cold target callback')
+    return original.use(work)
+  }
+  function inspectSelected(input:SelectedResultsRoute,identity:object) {
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
+    if(!entry||entry.revoked||!selected||selected.identity!==identity||!sameBootstrapData(selected.route,route)||!io||io.released||!selected.lane||!selected.headerIssued||selected.header?.kind!=='committed')throw Error('Original selected target unavailable')
+    const state=selected.attempt?.inspect();if(!state||state.kind!=='captured')throw Error('Original selected capture unavailable')
+    io.held.assertHeld();return Object.freeze({invocation:route.request.invocation,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest as string,facts:selectedResultsPreparationFacts(state.stage,state.seed.records),seed:state.seed,stage:state.stage})
+  }
+  async function releaseSelected(input:SelectedResultsRoute,identity:object) {
+    const route=captureSelectedResultsRoute(input),entry=documents.get(route.request.invocation.targetSessionId)
+    if(!entry||!entry.selected||entry.selected.identity!==identity)return
+    if(!sameBootstrapData(entry.selected.route,route))throw Error('Selected target conflict')
+    entry.captureIO&&(entry.captureIO.activeIssue=undefined)
+    await entry.flight?.catch(()=>{});if(entry.selected.pending!==undefined){await reconcileSelected(entry.selected.route,identity);if(entry.selected.pending!==undefined)throw new FactRecoveryRequiredError()}
+    if(entry.selected.taskBarrier && !entry.selected.taskBarrier.completed) await entry.selected.taskBarrier.close()
+    await releaseCapture(entry)
+    entry.selected.processToken?.end(entry.selected.issued?'unknown':'settled');entry.selected.processToken=undefined
+    if(!entry.selected.issued&&!entry.document&&documents.get(route.request.invocation.targetSessionId)===entry)documents.delete(route.request.invocation.targetSessionId)
+  }
+  function reconcileSelected(input:SelectedResultsRoute,identity:object):Promise<HeaderOutcome> {
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
+    const backendSelected=(backend as PersistenceBackend & {selectedCapture?:{reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
+    if(!entry||!selected||selected.identity!==identity||!io||io.released||!backendSelected||!sameBootstrapData(selected.route,route))return Promise.resolve({kind:'unknown'})
+    if(entry.flight)return Promise.resolve({kind:'unknown'})
+    const captured=selected.attempt?.inspect();if(!captured||captured.kind!=='captured'||!selected.headerIssued)return Promise.resolve({kind:'unknown'})
+    const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(captured.stageBytes),headerBytes:Buffer.from(captured.headerBytes)}
+    const flight=Promise.resolve().then(async()=>{await settleCapture(entry);io.held.assertHeld();io.settled=false;try{
+      if(selected.pending!==undefined&&selected.frames&&selected.lane){
+        const journal=(backend as PersistenceBackend & {selectedJournal?:{reconcileOwnedBatch(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>,prefix:JournalPrefix,batch:BootstrapFrame['batch']):Promise<import('./fact-types.ts').BackendFactOutcome>}}).selectedJournal
+        if(!journal)return {kind:'unknown' as const};const index=selected.pending,frame=selected.frames[index]!
+        const outcome=await ownership.withSessionOperation(id,()=>journal.reconcileOwnedBatch(id,io.held,selected.lane!,frame.prefix,frame.batch)),checked=ownBackendOutcome(outcome,frame.batch.key,io.held.owner,true)
+        if(checked.kind==='committed'){selected.receipts??=[];if(selected.receipts.length!==index)return {kind:'unknown' as const};selected.receipts.push(checked.receipt);selected.pending=undefined;return selected.header??{kind:'unknown' as const}}
+        if(checked.kind==='absent'){selected.pending=undefined;return {kind:'absent' as const}}
+        return {kind:checked.kind==='conflict'?'conflict' as const:'unknown' as const}
+      }
+      const barrier=selected.taskBarrier
+      const outcome=barrier && !barrier.completed ? await barrier.runHeader(held=>backendSelected.reconcileSelectedHeader(id,held,route,operation)) : await ownership.withSessionOperation(id,()=>backendSelected.reconcileSelectedHeader(id,io.held,route,operation))
+      selected.header=outcome
+      if(outcome.kind==='committed' && barrier && !barrier.completed){barrier.markHeaderCommitted();await settleCapture(entry);await barrier.finishHeader()}
+      return outcome
+    }finally{await settleCapture(entry)}}).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
+    entry.flight=flight;return flight
+  }
+  async function inspectRoute(invocation:BootstrapInvocation,route:BootstrapRoute):Promise<BootstrapInspection>{
+      const captured=captureBootstrapInvocation(invocation)
+      if(!backend.readBootstrapState)return {kind:'unavailable',invocation:captured,needsConfirmation:true}
+      try {
+        const original=documents.get(captured.targetSessionId),revocation=original?.revocation
+        const currentRead=()=>!captureClosed&&documents.get(captured.targetSessionId)===original&&original?.revocation===revocation&&!original?.revoked
+        if(route.protocol==='child-v1'&&!currentRead())return {kind:'unavailable',invocation:captured,needsConfirmation:true}
+        const state=await read(captured,route)
+        if(route.protocol==='child-v1'&&!currentRead())return {kind:'unavailable',invocation:captured,needsConfirmation:true}
+        if(state.kind==='absent')return {kind:'absent',invocation:captured,needsConfirmation:false}
+        if(state.foreign)return {kind:'conflict',invocation:captured,needsConfirmation:true}
+        let stage:BootstrapHeaderStage|undefined
+        if(state.stageBytes)try{stage=parseBootstrapHeaderStage(state.stageBytes)}catch{}
+        if(stage&&!sameBootstrapData(stageRoute(stage),route))return {kind:'conflict',invocation:captured,needsConfirmation:true}
+        const publication=publicationStatus(state,stage)
+        if(publication==='conflict')return {kind:'conflict',invocation:captured,needsConfirmation:true}
+        if(stage&&!sameBootstrapData(stage.invocation,captured)||state.meta?.semanticSeed&&(state.meta.semanticSeed.operationId!==captured.operationId||state.meta.semanticSeed.requestDigest!==captured.requestDigest)||state.meta&&state.meta.createdAt!==captured.createdAt)return {kind:'conflict',invocation:captured,needsConfirmation:true}
+        const digest=stage?manifest(stage):state.meta?.semanticSeed?.manifestDigest
+        const token:BootstrapResumeToken=digest?{version:1,invocation:captured,manifestDigest:digest,phase:readyState(state)?'completion':'header'}:{version:1,invocation:captured,phase:'header',manifest:'unknown'}
+        return {kind:stage&&publication==='valid'?(readyState(state)&&!state.torn?'ready':'reserved'):'unavailable',invocation:captured,token,needsConfirmation:true}
+      }catch{return {kind:'unavailable',invocation:captured,needsConfirmation:true}}
+  }
+  const originalColdBootstrap=Object.freeze({capture(target:ColdSelectedTarget){if(this!==originalColdBootstrap)throw TypeError('Original cold bootstrap receiver required');const original=coldTargets.get(target);if(!original)throw TypeError('Original cold selected target required');return original.captureAccess()}})
   return {
+    originalColdBootstrap,
+    assertColdInspectionAdmission,prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,coldSelectedRoute,useColdSelected,publishSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,
@@ -560,24 +926,8 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       return start(field.value,guards,request)
     },
     resumeSemanticTarget:(invocation:BootstrapInvocation,guards:BootstrapGuards,original?:BootstrapRequest)=>start(invocation,guards,original),
-    async inspectBootstrap(invocation:BootstrapInvocation):Promise<BootstrapInspection> {
-      const captured=captureBootstrapInvocation(invocation)
-      if(!backend.readBootstrapState)return {kind:'unavailable',invocation:captured,needsConfirmation:true}
-      try {
-        const state=await read(captured)
-        if(state.kind==='absent')return {kind:'absent',invocation:captured,needsConfirmation:false}
-        if(state.foreign)return {kind:'conflict',invocation:captured,needsConfirmation:true}
-        let stage:BootstrapHeaderStage|undefined
-        if(state.stageBytes)try{stage=parseBootstrapHeaderStage(state.stageBytes)}catch{}
-        if(stage&&stageRoute(stage).protocol!=='public')return {kind:'conflict',invocation:captured,needsConfirmation:true}
-        const publication=publicationStatus(state,stage)
-        if(publication==='conflict')return {kind:'conflict',invocation:captured,needsConfirmation:true}
-        if(stage&&!sameBootstrapData(stage.invocation,captured)||state.meta?.semanticSeed&&(state.meta.semanticSeed.operationId!==captured.operationId||state.meta.semanticSeed.requestDigest!==captured.requestDigest)||state.meta&&state.meta.createdAt!==captured.createdAt)return {kind:'conflict',invocation:captured,needsConfirmation:true}
-        const digest=stage?manifest(stage):state.meta?.semanticSeed?.manifestDigest
-        const token:BootstrapResumeToken=digest?{version:1,invocation:captured,manifestDigest:digest,phase:readyState(state)?'completion':'header'}:{version:1,invocation:captured,phase:'header',manifest:'unknown'}
-        return {kind:stage&&publication==='valid'?(readyState(state)&&!state.torn?'ready':'reserved'):'unavailable',invocation:captured,token,needsConfirmation:true}
-      }catch{return {kind:'unavailable',invocation:captured,needsConfirmation:true}}
-    },
+    async inspectBootstrap(invocation:BootstrapInvocation):Promise<BootstrapInspection>{const captured=captureBootstrapInvocation(invocation);return inspectRoute(captured,{protocol:'public',invocation:captured})},
+    async inspectChildBootstrap(input:ChildBootstrapCaptureRequest):Promise<BootstrapInspection>{const request=captureChildBootstrapCaptureRequest(input);return inspectRoute(request.invocation,{protocol:'child-v1',request})},
   }
 }
 function importOutcome(value:unknown):value is import('./bootstrap-types.ts').BootstrapDependencyOutcome {

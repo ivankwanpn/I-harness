@@ -1,3 +1,5 @@
+import { failuresTogether } from '../workspace-mutation.ts'
+import type { ArtifactQualificationIO } from './qualification-io.ts'
 import { open, lstat, realpath, rename, readdir, link, unlink, mkdir } from 'node:fs/promises'
 import { basename, dirname, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -15,7 +17,7 @@ export async function writeAll(handle: FileHandle, bytes: Uint8Array, position: 
     offset += result.bytesWritten
   }
 }
-const pendingPath = (path: string, bytes: Buffer) => `${path}.${createHash('sha256').update(bytes).digest('hex')}.pending`
+export const pendingPath = (path: string, bytes: Buffer) => `${path}.${createHash('sha256').update(bytes).digest('hex')}.pending`
 export async function readExact(handle: FileHandle, length: number, position: number): Promise<Buffer> {
   if (!Number.isSafeInteger(position + length) || position < 0 || length < 0) throw new Error('Artifact range overflow')
   const bytes = Buffer.alloc(length)
@@ -26,13 +28,16 @@ export async function readExact(handle: FileHandle, length: number, position: nu
   }
   return bytes
 }
-export async function boundedJson(path: string, budget = 65536, retire?: RetireFile): Promise<unknown> {
-  const handle = await open(path, 'r')
+export async function boundedJson(path: string, budget = 65536, retire?: RetireFile, io?: ArtifactQualificationIO): Promise<unknown> {
+  const handle = await (io ? io.open(path, 'r') : open(path, 'r')), failures:unknown[]=[]
+  let value:unknown
   try {
     const info = await handle.stat()
     if (!info.isFile() || info.size > budget) throw new Error('Invalid artifact metadata')
-    return JSON.parse((await readExact(handle, info.size, 0)).toString('utf8'))
-  } finally { await retireFile(handle, retire) }
+    value=JSON.parse((await readExact(handle, info.size, 0)).toString('utf8'))
+  } catch(error){failures.push(error)}
+  try{await retireFile(handle, io?.retire ?? retire)}catch(error){failures.push(error)}
+  failuresTogether(failures,'Original metadata read/cleanup failed');return value
 }
 export async function atomicJson(path: string, value: unknown, renameRejected?: (cause: unknown) => void): Promise<void> {
   const bytes = Buffer.from(JSON.stringify(value))
@@ -46,11 +51,11 @@ export async function atomicJson(path: string, value: unknown, renameRejected?: 
     const info = await existing.stat()
     if (info.size > 65536) throw new Error('Artifact metadata corrupt')
     if (info.size === bytes.length && (await readExact(existing, info.size, 0)).equals(bytes)) { await existing.sync(); return }
-  } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause }
+  } catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw cause }
   finally { await existing?.close() }
   let handle: FileHandle
   try { handle = await open(temporary, 'wx+') }
-  catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause; handle = await open(temporary, 'r+') }
+  catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'EEXIST') throw cause; handle = await open(temporary, 'r+') }
   try {
     const info = await handle.stat()
     if (!info.isFile() || info.size > bytes.length || info.size && !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) throw new Error('Artifact metadata transaction conflict')
@@ -74,7 +79,7 @@ function immutableBytes(value: unknown): Buffer {
   if (bytes.length > 65536) throw new MetadataConflict('Artifact metadata exceeds limit')
   return bytes
 }
-async function inspectImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile): Promise<{ final: boolean; pending: boolean }> {
+export async function inspectImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile, io?: ArtifactQualificationIO): Promise<{ final: boolean; pending: boolean }> {
   const temporary = pendingPath(path, bytes)
   try {
     if (resolve(dirname(path)) === resolve(root)) {
@@ -82,7 +87,7 @@ async function inspectImmutable(root: string, path: string, bytes: Buffer, retir
       if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Artifact path unavailable')
     } else await ownedPath(root, dirname(path))
   }
-  catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return { final: false, pending: false }; throw cause }
+  catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') return { final: false, pending: false }; throw cause }
   const prefix = basename(path) + '.'
   // All siblings in this transaction namespace are retained and accounted for,
   // including foreign hashes and malformed pending names.
@@ -92,47 +97,124 @@ async function inspectImmutable(root: string, path: string, bytes: Buffer, retir
   async function inspect(target: string, partial: boolean): Promise<boolean> {
     let handle: FileHandle | undefined
     try {
-      await ownedPath(root, target); handle = await open(target, 'r')
+      await ownedPath(root, target); handle = await (io ? io.open(target, 'r') : open(target, 'r'))
       const info = await handle.stat()
       if (!info.isFile() || info.size > bytes.length || !partial && info.size !== bytes.length
         || !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) throw new MetadataConflict('Immutable artifact metadata conflict')
       return true
-    } catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false; throw cause }
-    finally { if (handle) await retireFile(handle, retire) }
+    } catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') return false; throw cause }
+    finally { if (handle) await retireFile(handle, io?.retire ?? retire) }
   }
   return { final: await inspect(path, false), pending: await inspect(temporary, true) }
 }
-async function syncImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile): Promise<string[]> {
+async function syncImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile, io?: ArtifactQualificationIO): Promise<string[]> {
   await ownedPath(root, path)
   // Windows FlushFileBuffers requires a writable handle; no bytes are written.
-  const handle = await open(path, 'r+')
-  let failure: unknown
+  const handle = await (io ? io.open(path, 'r+') : open(path, 'r+'))
+  let failure: unknown, failed=false
   const diagnostics: string[] = []
   try {
     const info = await handle.stat()
     if (!info.isFile() || info.size !== bytes.length || !(await readExact(handle, info.size, 0)).equals(bytes)) throw new MetadataConflict('Immutable artifact metadata conflict')
     await handle.sync()
-  } catch (cause) { failure = cause }
-  try { await retireFile(handle, retire) }
+  } catch (cause) { failure = cause; failed=true }
+  try { await retireFile(handle, io?.retire ?? retire) }
   catch (cause) { diagnostics.push('Post-sync metadata handle cleanup: ' + (cause instanceof Error ? cause.message : String(cause))) }
-  if (failure) throw failure
+  if (failed) throw failure
   return diagnostics
 }
 function confirmed(diagnostics: readonly string[]): ImmutableMetadataOutcome { return { kind: 'confirmed', ...(diagnostics.length ? { diagnostics } : {}) } }
 function metadataFailure(cause: unknown): ImmutableMetadataOutcome { return { kind: cause instanceof MetadataConflict ? 'conflict' : 'unknown', diagnostics: [cause instanceof Error ? cause.message : String(cause)] } }
-export async function confirmAtomicJson(root: string, path: string, value: unknown, retire?: RetireFile): Promise<ImmutableMetadataOutcome> {
+export async function confirmAtomicJson(root: string, path: string, value: unknown, retire?: RetireFile, io?: ArtifactQualificationIO): Promise<ImmutableMetadataOutcome> {
   try {
-    const bytes = immutableBytes(value), state = await inspectImmutable(root, path, bytes, retire)
+    const bytes = immutableBytes(value), state = await inspectImmutable(root, path, bytes, retire, io)
     if (!state.final) return { kind: state.pending ? 'unknown' : 'absent' }
-    const diagnostics = await syncImmutable(root, path, bytes, retire)
+    const diagnostics = await syncImmutable(root, path, bytes, retire, io)
     if (state.pending) diagnostics.push('Retained exact pending metadata')
     return confirmed(diagnostics)
   } catch (cause) { return metadataFailure(cause) }
 }
+export interface OriginalPublicationStaging {
+  onCreated(handle: FileHandle): Promise<void>;
+  allowExisting(handle: FileHandle): Promise<boolean>;
+  retire: RetireFile;
+}
+/** Original immutable publication operation. Allocate and retain before issue. */
+export function createAtomicJsonPublication(root: string, path: string, value: unknown, retire?: RetireFile) {
+  const bytes = immutableBytes(value), snapshot = JSON.parse(bytes.toString('utf8'))
+  let identity: { dev: bigint; ino: bigint } | undefined, created: FileHandle | undefined
+  const debt = new Set<FileHandle>()
+  const identify = async (handle: FileHandle) => {
+    const info = await handle.stat({ bigint: true })
+    if (!info.isFile() || info.dev === 0n || info.ino === 0n) throw Error('Original metadata identity unavailable')
+    identity = { dev: info.dev, ino: info.ino }
+  }
+  const retireOwned: RetireFile = async handle => {
+    debt.add(handle)
+    // The original handle is retained synchronously on create, before stat can
+    // fail. Never close the only native proof until its identity is retained.
+    if (handle === created && !identity) await identify(handle)
+    await retireFile(handle, retire); debt.delete(handle)
+  }
+  const close = async () => { for (const handle of debt) await retireOwned(handle) }
+  const matches = async (handle: FileHandle) => {
+    const info = await handle.stat({ bigint: true })
+    return !!identity && info.isFile() && info.dev === identity.dev && info.ino === identity.ino
+  }
+  const onCreated = async (handle: FileHandle) => { created = handle; await identify(handle) }
+  const staging: OriginalPublicationStaging = Object.freeze({ onCreated, allowExisting: matches, retire: retireOwned })
+  const settleStaging = async (current: () => boolean): Promise<ImmutableMetadataOutcome> => {
+    await close()
+    if (!identity) return { kind: 'not-issued' }
+    const pending = pendingPath(path, bytes)
+    await ownedPath(root, pending)
+    const handle = await open(pending, 'r+')
+    try {
+      if (!await matches(handle)) return { kind: 'conflict' }
+      const info = await handle.stat()
+      if (info.size > bytes.length || !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) return { kind: 'conflict' }
+      await writeAll(handle, bytes.subarray(info.size), info.size, current)
+      if (!current()) return { kind: 'unknown' }
+      await handle.sync()
+      if (!(await readExact(handle, bytes.length, 0)).equals(bytes)) return { kind: 'conflict' }
+    } finally { await retireOwned(handle) }
+    await close()
+    const named = await lstat(pending, { bigint: true })
+    return { kind: named.isFile() && !named.isSymbolicLink() && named.dev === identity.dev && named.ino === identity.ino ? 'confirmed' : 'conflict' }
+  }
+  const confirm = async (): Promise<ImmutableMetadataOutcome> => {
+    await close()
+    if (!identity) return { kind: 'not-issued' }
+    let handle: FileHandle | undefined
+    try {
+      await ownedPath(root, path); handle = await open(path, 'r')
+      if (!await matches(handle)) return { kind: 'conflict' }
+    } catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') return metadataFailure(cause); return { kind: 'unknown' } }
+    finally { if (handle) await retireOwned(handle) }
+    const result = await confirmAtomicJson(root, path, snapshot, retireOwned)
+    await close()
+    const final = await lstat(path, { bigint: true })
+    if (!final.isFile() || final.isSymbolicLink() || final.dev !== identity.dev || final.ino !== identity.ino) return { kind: 'conflict' }
+    return result
+  }
+  const issue = async (current: () => boolean, passive = false): Promise<ImmutableMetadataOutcome> => {
+    await close()
+    const state = await inspectImmutable(root, path, bytes, retireOwned)
+    if (state.final) return confirm()
+    if (identity && !state.pending) return { kind: 'unknown' }
+    if (passive && !identity) return { kind: 'not-issued' }
+    return continueAtomicJson(root, path, snapshot, current, retireOwned, {
+      resumeOnly: passive,
+      onCreated,
+      allowExisting: matches,
+    }).then(async outcome => outcome.kind === 'confirmed' ? confirm() : outcome)
+  }
+  return Object.freeze({ close, staging, wasIssued: () => created !== undefined, settleStaging: (current: () => boolean) => settleStaging(current).catch(metadataFailure), confirm: () => confirm().catch(metadataFailure), issue: (current: () => boolean) => issue(current).catch(metadataFailure), settle: (current: () => boolean) => issue(current, true).catch(metadataFailure) })
+}
 /** Run under the existing artifact mutation lease. Never replaces a known
  * conflicting final or pending file. Each create/write/link/unlink checks current
  * after the immediately preceding await; partial issuance remains unknown. */
-export async function continueAtomicJson(root: string, path: string, value: unknown, current: () => boolean, retire?: RetireFile): Promise<ImmutableMetadataOutcome> {
+export async function continueAtomicJson(root: string, path: string, value: unknown, current: () => boolean, retire?: RetireFile, issuance?:{onCreated(handle:FileHandle):Promise<void>;allowExisting(handle:FileHandle):Promise<boolean>;resumeOnly?:boolean}): Promise<ImmutableMetadataOutcome> {
   try {
     const bytes = immutableBytes(value), temporary = pendingPath(path, bytes), state = await inspectImmutable(root, path, bytes, retire)
     if (state.final) {
@@ -141,14 +223,18 @@ export async function continueAtomicJson(root: string, path: string, value: unkn
       return confirmed(diagnostics)
     }
     if (!current()) return { kind: state.pending ? 'unknown' : 'not-issued' }
-    let handle: FileHandle
-    try { handle = await open(temporary, 'wx+') }
+    let handle: FileHandle,created=false
+    if(issuance?.resumeOnly){
+      if(!state.pending)return {kind:'not-issued'}
+      await ownedPath(root,temporary);handle=await open(temporary,'r+')
+    }else try { handle = await open(temporary, 'wx+');created=true }
     catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause
+      if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'EEXIST') throw cause
       await ownedPath(root, temporary)
       handle = await open(temporary, 'r+')
     }
     try {
+      if(issuance){if(created)await issuance.onCreated(handle);else if(!await issuance.allowExisting(handle))return {kind:'unknown'}}
       const info = await handle.stat()
       if (!info.isFile() || info.size > bytes.length || !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) throw new MetadataConflict('Immutable artifact metadata transaction conflict')
       await writeAll(handle, bytes.subarray(info.size), info.size, current)
@@ -163,7 +249,7 @@ export async function continueAtomicJson(root: string, path: string, value: unkn
     // Unsupported links have no overwriting fallback; pending work survives.
     try { await link(temporary, path) }
     catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause
+      if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'EEXIST') throw cause
       const state = await inspectImmutable(root, path, bytes, retire)
       if (!state.final) return { kind: 'unknown' }
     }

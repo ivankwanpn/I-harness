@@ -5,19 +5,29 @@ import { isHeldFactOwner, bootstrapManifest, validateOwnedCaptureStage } from '@
 import { parseHeader } from '../format.ts'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import type { BootstrapBackend } from '@i-harness/session-persistence'
-import { lookupBootstrapStage, ordinaryStageIO } from './bootstrap-stage.ts'
+import { lookupBootstrapStage, ordinaryStageIO, type StageLookupIO } from './bootstrap-stage.ts'
+import { resolveSelectedBirth } from './selected-birth.ts'
 
 /** Ordinary replacement may rewrite a suffix, never the actual birth frames
  * whose keys/bytes establish the retained operation's historical receipts. */
-export async function preserveBootstrapBirth(path: string, raw: Buffer, meta: SessionMeta, candidate: readonly SessionEvent[]) {
+export async function preserveBootstrapBirth(path: string, raw: Buffer, meta: SessionMeta, candidate: readonly SessionEvent[], stageIO?: StageLookupIO) {
   const reservation = meta.semanticSeed
   if (!reservation) throw new TypeError('Bootstrap reservation required')
+  if (reservation.version === 3) {
+    const birth=await resolveSelectedBirth(path,meta.sessionId,async()=>{}, {readJournal:async()=>raw,stage:stageIO ?? ordinaryStageIO(path)})
+    if (!birth) throw new TypeError('Selected birth unavailable')
+    const end=raw.indexOf(10),body=raw.subarray(end+1),decoded=readBootstrapFactJournal(body,meta.journal!,meta.formatVersion,meta)
+    const count=reservation.seedLength+1,last=decoded.frames[1]
+    if (!last || canonicalJsonData(candidate.slice(0,count))!==canonicalJsonData(decoded.events.slice(0,count))) throw new TypeError('Selected birth records are immutable')
+    const bytes=last.prefix.bodyBytes+last.batch.bytes.length
+    return {bytes:body.subarray(0,bytes),eventCount:count,prefixDigest:decodeFactBatch(last.batch.bytes).prefixDigest}
+  }
   const invocation = { version: 1 as const, operationId: reservation.operationId, targetSessionId: meta.sessionId, createdAt: meta.createdAt, requestDigest: reservation.requestDigest }
-  const selected = await lookupBootstrapStage(path,{kind:'header',meta},ordinaryStageIO(path))
+  const selected = await lookupBootstrapStage(path,{kind:'header',meta},stageIO ?? ordinaryStageIO(path))
   if(selected.kind!=='full')throw new TypeError('Unique bootstrap birth unavailable')
   const stage=selected.stage
   const original = JSON.parse(stage.headerBytes) as SessionMeta
-  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION)) throw new TypeError('Bootstrap storage format changed')
+  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION) && !(original.formatVersion===13 && meta.formatVersion===14)) throw new TypeError('Bootstrap storage format changed')
   for (const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'] as const) {
     if (canonicalJsonData(meta[key]) !== canonicalJsonData(original[key])) throw new TypeError('Bootstrap birth scope changed')
   }
@@ -56,7 +66,7 @@ async function header(handle: FileHandle, path: string, batch: EncodedFactBatch)
   if(meta.semanticSeed&&selected?.kind!=='full')throw new TypeError('Unique bootstrap birth unavailable')
   if (meta.formatVersion !== CURRENT_FORMAT_VERSION) {
     const seed = meta.semanticSeed
-    if (![11,12].includes(meta.formatVersion) || !seed) throw new TypeError('Current managed journal format required')
+    if (![11,12,13].includes(meta.formatVersion) || !seed) throw new TypeError('Current managed journal format required')
     if(selected?.kind!=='full')throw new TypeError('Unique bootstrap birth unavailable')
     const stage=selected.stage
     if (!bytes.subarray(0, end + 1).equals(Buffer.from(stage.headerBytes))) throw new TypeError('Original bootstrap header required')
@@ -104,6 +114,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       let handle:FileHandle|undefined
       try {
         const bytes=await readFile(filePath(id)),end=bytes.indexOf(10),meta=parseHeader(bytes.subarray(0,end).toString('utf8'))
+        if(meta.semanticSeed?.version===3)throw new TypeError('Legacy acknowledgment cannot confirm selected results')
         const decoded=readBootstrapFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
         if(decoded.torn)return {kind:'unknown'}
         readFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
@@ -119,7 +130,8 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       const path = filePath(id), bytes = await readFile(path)
       const end = bytes.indexOf(0x0a)
       const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-      if (![6, 7, 8, 9, 10, 11, 12, 13].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
+      if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy owned prefix cannot repair selected results')
+      if (![6, 7, 8, 9, 10, 11, 12, 13, 14].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
       const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal, meta.formatVersion, meta)
       const handle = await open(path, 'r+')
       try {

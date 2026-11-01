@@ -1,5 +1,5 @@
 import type { Tool } from "@i-harness/core-tools"
-import { declareToolResultOutcome, userSteerForTool } from "@i-harness/core-tools"
+import { declareToolResultOutcome, backgroundEventForTool, userSteerForTool } from "@i-harness/core-tools"
 import { SandboxUnavailableError } from "@i-harness/sandbox"
 import type { ResolvedAgentShell, ShellToolDeps } from "../types.ts"
 import { capturedShell, agentShellPrompt, shellFlags, boundShellEnvironment } from "../command/resolve.ts"
@@ -10,7 +10,7 @@ import { promotedResult } from "./background.ts"
 import type { RetainedRunResult } from "./retention.ts"
 import { declareNativeResult } from './outcome.ts'
 
-type SelectedDeps = Pick<ShellToolDeps, "agentShell" | "exec" | "cwd" | "backgroundAfterMs" | "timeoutMs">
+type SelectedDeps = Pick<ShellToolDeps, "agentShell" | "exec" | "cwd" | "backgroundAfterMs" | "timeoutMs" | "directEntry">
 
 export function createSelectedShellTool(deps: SelectedDeps, bash: Tool, versionIdentity: VersionIdentity, retainedRunResult: RetainedRunResult, resolveCall: ResolveShellCall): Tool {
   type Args = { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }
@@ -46,6 +46,7 @@ export function createSelectedShellTool(deps: SelectedDeps, bash: Tool, versionI
       return "error" in binding || binding.shell.executionTarget === "wsl" ? undefined : versionIdentity(args, binding.shell.command, binding.shell.dialect)
     },
     execute: async (args, exec) => {
+      const direct = shellEntry?.enter(exec)
       const binding = bindingFor(args)
       bindings.delete(args)
       if ("error" in binding) {
@@ -66,17 +67,19 @@ export function createSelectedShellTool(deps: SelectedDeps, bash: Tool, versionI
       const spec = { argv, ...boundShellEnvironment(selected), ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
       try {
         if (args.background === true) {
-          const result = await deps.exec.runBackground(spec)
+          const result = await (direct ?? deps.exec).runBackground(spec)
           return { job_id: result.jobId, ...(result.nativeJob === undefined ? {} : { native_job: result.nativeJob }) }
         }
         const command = { ...spec, abortSignal: exec.abortSignal }
         const backgroundAfterMs = deps.backgroundAfterMs
         const promotionWake = userSteerForTool(exec)
+        const backgroundEventWake = backgroundEventForTool(exec)
         const runOptions = {
           ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
           ...(promotionWake === undefined ? {} : { promotionWake }),
+          ...(backgroundEventWake === undefined ? {} : { backgroundEventWake }),
         }
-        const result = await deps.exec.run(command, runOptions)
+        const result = await (direct ?? deps.exec).run(command, runOptions)
         if ('promoted' in result) return promotedResult(result, 'shell', deps.timeoutMs)
         declareNativeResult(exec, result)
         return retainedRunResult(result, 'shell-stdout')
@@ -89,5 +92,6 @@ export function createSelectedShellTool(deps: SelectedDeps, bash: Tool, versionI
       }
     },
   }
+  const shellEntry = deps.directEntry?.(shell,shell.execute)
   return shell
 }

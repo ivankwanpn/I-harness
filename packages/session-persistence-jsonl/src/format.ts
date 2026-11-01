@@ -1,5 +1,5 @@
 import type { SessionEvent } from "@i-harness/core-session"
-import { canonicalJsonData, isStrictFactData, validJournalMetadata, validateSubagentHeader } from '@i-harness/core-session'
+import { validJournalMetadata, validateSubagentHeader } from '@i-harness/core-session'
 import type { SessionMeta, SessionModelSelection } from "@i-harness/session-persistence"
 // The closed set is settings' — imported, never copied (a local list of the
 // five names would be a second place to edit one enum).
@@ -7,46 +7,14 @@ import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/se
 
 export function serializeHeader(meta: SessionMeta): string {
   validateSubagentHeader(meta)
+  if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy header writer cannot install selected results')
   return JSON.stringify(meta)
 }
 
-/** Public metadata edits cannot mint or change a semantic birth reservation.
- * Inspect protected descriptors before the later merge/serializer can read them;
- * the preserved body (including a torn tail) is deliberately not parsed here. */
-function protectedMetadataKeys(previous: SessionMeta): string[] {
-  return ['formatVersion', 'journal', 'semanticSeed', ...(previous.semanticSeed === undefined ? []
-    : ['seedLength', 'parentSession', 'origin', 'delegationDepth', 'subagentProtocolVersion', 'sessionId', 'createdAt'])]
-}
-function protectedMetadataError(key: string): Error {
-  return new Error(key === 'formatVersion' ? 'format changes require durable upgrade; downgrade refused'
-    : key === 'journal' ? 'Journal metadata changes require fenced recovery' : 'Protected session metadata changes require a qualified owner')
-}
-function assertMetadataUpdate(previous: SessionMeta, patch: Partial<SessionMeta>, protectedKeys: readonly string[]): void {
-  for (const key of protectedKeys) {
-    const field = Object.getOwnPropertyDescriptor(patch, key)
-    if (!field) continue
-    if (!field.enumerable || !('value' in field) || !isStrictFactData(field.value)) throw new TypeError('Invalid protected session metadata')
-    const old = (previous as unknown as Record<string, unknown>)[key], next = field.value
-    const equal = Object.is(old, next) || old !== undefined && next !== undefined && canonicalJsonData(old) === canonicalJsonData(next)
-    if (!equal) throw protectedMetadataError(key)
-  }
-}
+import { captureMetadataUpdate } from './backend/metadata-snapshot.ts'
 
-/** Bind the exact final serialized header to expectations captured before any
- * ordinary getter/toJSON callback. No caller-owned aliases or callbacks remain
- * after the final comparison; the writer uses this line and detached data. */
 export function snapshotMetadataUpdate(previous: SessionMeta, patch: Partial<SessionMeta>): { line: string; meta: SessionMeta } {
-  const keys = protectedMetadataKeys(previous), old = previous as unknown as Record<string, unknown>
-  const expected = keys.map(key => ({ key, present: Object.hasOwn(previous, key), encoded: canonicalJsonData(old[key]) }))
-  assertMetadataUpdate(previous, patch, keys)
-  const line = serializeHeader({ ...previous, ...patch })
-  if (typeof line !== 'string') throw new TypeError('Invalid session metadata snapshot')
-  const meta = JSON.parse(line) as SessionMeta
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) throw new TypeError('Invalid session metadata snapshot')
-  const actual = meta as unknown as Record<string, unknown>
-  for (const field of expected) if (Object.hasOwn(meta, field.key) !== field.present || canonicalJsonData(actual[field.key]) !== field.encoded) throw protectedMetadataError(field.key)
-  validateSubagentHeader(meta)
-  return { line, meta }
+  return captureMetadataUpdate(previous, patch, serializeHeader)
 }
 
 // C5: parseHeader passthrough — a repair/read rewrites the header line and
@@ -79,7 +47,7 @@ export function parseHeader(line: string): SessionMeta {
   validateSubagentHeader(h)
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
-  if ([6, 7, 8, 9, 10, 11, 12, 13].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
+  if ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
   const modelSelection = parseModelSelection(h.modelSelection)
   return {
     formatVersion: h.formatVersion,
