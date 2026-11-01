@@ -3,6 +3,8 @@ import type { UsageObservationV1 } from './observation-types.js'
 
 type Check = (value: unknown) => boolean
 const id: Check = v => typeof v === 'string' && v.length > 0 && v.length <= 256 && !!v.trim()
+// Attribution preserves the existing usage text domain; it is not an F4 ID.
+const attributionText: Check = v => typeof v === 'string' && v.length > 0 && v.length <= 4096 && !!v.trim()
 const integer: Check = v => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 const positive: Check = v => integer(v) && (v as number) > 0
 const digest: Check = v => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)
@@ -28,7 +30,7 @@ const origin: Check = v => fields(v, { kind: oneOf('input', 'predecessor', 'comm
 const identity = { ownerSessionId: id, actionId: id }, fact = { ...identity, factSeq: integer }
 const candidate = { semanticId: digest, payloadId: digest, payloadKind: oneOf('http-json-body', 'sdk-command-estimate', 'audio-json-body') }
 const lane = oneOf('main', 'recovery', 'summary', 'auxiliary')
-const attribution = { providerId: id, modelId: id, workspace: id, billing: oneOf('api', 'subscription', 'unknown') }
+const attribution = { providerId: attributionText, modelId: attributionText, workspace: attributionText, billing: oneOf('api', 'subscription', 'unknown') }
 const counters = { inputTokens: integer, outputTokens: integer, cacheReadTokens: integer, cacheCreationTokens: integer, inputTokenSemantics: oneOf('includes-cache', 'excludes-cache') }
 const coverage = { validity: oneOf('valid', 'invalid'), terminalCoverage: oneOf('complete', 'partial', 'unknown') }
 function payload(value: unknown, source: unknown): boolean {
@@ -45,9 +47,9 @@ function payload(value: unknown, source: unknown): boolean {
     case 'local-settle': return fields(value, { ...tag, ...fact, localInvocationId: id, disposition: oneOf('unsent', 'completed', 'failed') })
   }
   if (source !== 'live-owner') return false
-  if (type === 'handoff') return fields(value, { ...tag, ...identity, ...candidate, attemptId: id, sendId: id, rebind: integer, incarnation: id })
+  if (type === 'handoff') return fields(value, { ...tag, ...identity, ...candidate, attemptId: id, sendId: id, rebind: v => integer(v) && (v as number) <= 3, incarnation: id })
   const required = type === 'usage-snapshot' ? { ...tag, ...identity, ...attribution, ...coverage, attemptId: id, sendId: id, snapshotOrdinal: positive } : type === 'unattributed-invocation' ? { ...tag, ...attribution, ...coverage } : undefined
-  if (!required || !fields(value, required, { ...counters, projectId: id })) return false
+  if (!required || !fields(value, required, { ...counters, projectId: attributionText })) return false
   return !(value.inputTokenSemantics === 'includes-cache' && typeof value.inputTokens === 'number' && ((value.cacheReadTokens as number | undefined) ?? 0) + ((value.cacheCreationTokens as number | undefined) ?? 0) > value.inputTokens)
 }
 /** Fixed recursive lexical field order gives identical bytes regardless of caller insertion order. */
