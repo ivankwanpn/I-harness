@@ -106,42 +106,108 @@ def require_same_mount(fd, expected):
 
 
 def canonical_directory(fd):
-    """Resolve spelling from verified directory entries, preserving Linux case rules."""
-    current = os.dup(fd)
-    names, ancestors, examined = [], [], 0
+    """Prove the selected location; proc text only nominates exact entry names.
+
+    Other names need no metadata. This deliberately no longer rejects a selected
+    location merely because another sibling attachment reaches the same object.
+    """
+    owner = Prepared.__new__(Prepared)
+    owner.directories = []
+    examined = 0
     deadline = time.monotonic() + 2.0
+    flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+    def bounded():
+        require(time.monotonic() <= deadline, 'directory canonicalization limit exceeded')
+
+    def identity(current):
+        bounded()
+        info, mount = metadata(current)
+        require(type(mount) is int and 0 < mount < 2 ** 64
+                and stat.S_ISDIR(info[2]) and Directory.key(os.fstat(current)) == info[:2],
+                'directory identity changed')
+        return info[:2] + (mount,)
+
+    def parent_edge(child, parent_identity):
+        parent = temporary_directory(owner, '..', flags, dir_fd=child)
+        require(identity(parent) == parent_identity, 'directory parent edge changed')
+
     try:
-        for _ in range(128):
-            child_identity = Directory.key(os.fstat(current))
+        original = identity(fd)  # Borrowed input never enters the retirement list.
+        hint_path = os.fsencode('/proc/self/fd/' + str(fd))
+        hint = os.readlink(hint_path)
+        require(isinstance(hint, bytes) and hint.startswith(b'/') and len(hint) <= 32768
+                and not hint.endswith(b' (deleted)'), 'directory selected spelling unavailable')
+        names = [] if hint == b'/' else hint[1:].split(b'/')
+        require(len(names) < 128 and all(name not in (b'', b'.', b'..') and b'\0' not in name for name in names),
+                'directory selected spelling unavailable')
+        root = temporary_directory(owner, '/', flags)
+        root_identity = identity(root)
+        current, ancestors, edges = root, [root_identity], []
+        for name in names:
+            parent_identity = identity(current)
+            readable = temporary_directory(owner, '.', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                           dir_fd=current)
+            require(identity(readable) == parent_identity, 'directory parent changed')
+            matches = 0
+            with os.scandir(readable) as entries:
+                for entry in entries:
+                    examined += 1
+                    bounded()
+                    require(examined <= 8192, 'directory canonicalization limit exceeded')
+                    # NAME bytes only: no d_ino, type, stat or casefold premise.
+                    matches += os.fsencode(entry.name) == name
+            require(matches == 1, 'directory exact selected name unavailable')
+            selected, mount = metadata(current, name)
+            require(stat.S_ISDIR(selected[2]), 'selected directory changed')
+            child = temporary_directory(owner, name, flags, dir_fd=current)
+            child_identity = identity(child)
+            require(child_identity == selected[:2] + (mount,), 'selected directory changed')
+            parent_edge(child, parent_identity)
+            require(child_identity not in ancestors, 'directory ancestry cycle')
+            edges.append((current, child, name, parent_identity, child_identity))
             ancestors.append(child_identity)
-            parent = os.open('..', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=current)
-            try:
-                if Directory.key(os.fstat(parent)) == child_identity:
-                    os.close(parent)
-                    return '/' + '/'.join(reversed(names)), tuple(ancestors)
-                matches = []
-                with os.scandir(parent) as entries:
-                    for entry in entries:
-                        examined += 1
-                        require(examined <= 8192 and time.monotonic() <= deadline,
-                                'directory canonicalization limit exceeded')
-                        info = os.stat(entry.name, dir_fd=parent, follow_symlinks=False)
-                        if stat.S_ISDIR(info.st_mode) and Directory.key(info) == child_identity:
-                            matches.append(entry.name)
-                require(len(matches) == 1, 'ambiguous directory identity')
-                names.append(matches[0])
-            except Exception:
-                os.close(parent)
-                raise
-            os.close(current)
-            current = parent
-        raise Refusal('directory canonicalization limit exceeded')
-    finally:
-        os.close(current)
+            current = child
+        require(identity(current) == original, 'selected directory does not match original descriptor')
+        for parent, child, name, parent_identity, child_identity in edges:
+            require(identity(parent) == parent_identity and identity(child) == child_identity,
+                    'directory ancestor changed')
+            selected, mount = metadata(parent, name)
+            require(stat.S_ISDIR(selected[2]) and selected[:2] + (mount,) == child_identity,
+                    'selected directory edge changed')
+            parent_edge(child, parent_identity)
+        namespace_root = temporary_directory(owner, '/', flags)
+        require(identity(namespace_root) == root_identity and identity(fd) == original
+                and os.readlink(hint_path) == hint, 'directory selected location changed')
+        bounded()
+        result = os.fsdecode(hint), tuple(ancestors)
+    except BaseException as primary:
+        try:
+            owner.close()
+        except BaseException as cleanup:
+            raise WorkerFailure('directory proof cleanup incomplete', [primary, cleanup], owner=owner) from primary
+        raise
+    # No proof or cache can escape before every temporary close is acknowledged.
+    owner.close()
+    return result
+
+
+def temporary_directory(owner, path, flags, **kwargs):
+    entry = Directory.__new__(Directory)
+    entry.fd = os.open(path, flags, **kwargs)
+    entry.close_state, entry.close_error = 'live', None
+    owner.directories.append(entry)
+    return entry.fd
 
 
 def directory_contains(root, child):
-    return root.identity in child.ancestors
+    return (contains(root.physical, child.physical)
+            and root.ancestors == child.ancestors[:len(root.ancestors)])
+
+
+def directory_object_contains(root, child):
+    # Protected-reference exclusion is deliberately mount/location insensitive.
+    return root.identity in tuple(identity[:2] for identity in child.ancestors)
 
 
 class Directory:
@@ -163,12 +229,7 @@ class Directory:
         try:
             self.identity = self.key(os.fstat(self.fd))
             self.mount_identity = read_mount_id(self.fd)
-            if canonical_cache is not None and self.identity in canonical_cache:
-                self.physical, self.ancestors = canonical_cache[self.identity]
-            else:
-                self.physical, self.ancestors = canonical_directory(self.fd)
-                if canonical_cache is not None:
-                    canonical_cache[self.identity] = self.physical, self.ancestors
+            self.physical, self.ancestors = canonical_directory(self.fd)
             self.validate(canonical_cache)
         except BaseException as primary:
             try:
@@ -184,6 +245,8 @@ class Directory:
 
     def validate(self, canonical_cache=None):
         require(self.close_state == 'live', 'directory original descriptor is retiring')
+        owner = Prepared.__new__(Prepared)
+        owner.directories = []
         try:
             require(self.key(os.stat(self.mapped)) == self.identity
                     and self.key(os.stat(self.physical)) == self.identity
@@ -191,21 +254,28 @@ class Directory:
             require_same_mount(self.fd, self.mount_identity)
             # A same-inode mount replacement at either spelling must not pass the fence.
             for path in (os.path.realpath(self.mapped, strict=True), self.physical):
-                current_fd = os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-                try:
-                    require_same_mount(current_fd, self.mount_identity)
-                    require(self.key(os.fstat(current_fd)) == self.identity, 'directory identity changed')
-                finally:
-                    os.close(current_fd)
-            if canonical_cache is not None and self.identity in canonical_cache:
-                current = canonical_cache[self.identity]
-            else:
-                current = canonical_directory(self.fd)
-                if canonical_cache is not None:
-                    canonical_cache[self.identity] = current
+                current_fd = temporary_directory(owner, path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                require_same_mount(current_fd, self.mount_identity)
+                require(self.key(os.fstat(current_fd)) == self.identity, 'directory identity changed')
+                require(canonical_directory(current_fd) == (self.physical, self.ancestors),
+                        'directory selected spelling changed')
+            current = canonical_directory(self.fd)
             require(current == (self.physical, self.ancestors), 'directory identity or ancestry changed')
-        except OSError:
-            raise Refusal('directory identity changed') from None
+            cache_key = self.identity + (self.mount_identity, self.physical)
+            if canonical_cache is not None:
+                require(cache_key not in canonical_cache or canonical_cache[cache_key] == current,
+                        'directory cache proof changed')
+        except BaseException as primary:
+            try:
+                owner.close()
+            except BaseException as cleanup:
+                raise WorkerFailure('directory validation cleanup incomplete', [primary, cleanup], owner=owner) from primary
+            if isinstance(primary, OSError):
+                raise Refusal('directory identity changed') from primary
+            raise
+        owner.close()
+        if canonical_cache is not None:
+            canonical_cache[cache_key] = current
 
     def close(self):
         if self.close_state == 'closed':
@@ -374,12 +444,13 @@ class Prepared:
                     raise Refusal('managed runtime directory unavailable or changed') from None
                 require(directory_contains(directory, binary_directory), 'managed runtime bin escapes release')
                 self.runtimes.append(directory)
-            require(self.authority and any(a.identity == self.primary.identity for a in self.authority), 'missing primary authority')
+            require(self.authority and any(a.physical == self.primary.physical and a.ancestors == self.primary.ancestors
+                                          for a in self.authority), 'missing primary authority')
             require(policy['authorityKind'] != 'unbound' or len(self.authority) == 1, 'invalid unbound authority')
             require(any(directory_contains(a, self.cwd) for a in self.authority), 'cwd outside authority')
             require(self.mode != 'read-only' or not self.writes, 'read-only cannot grant writes')
             require(all(any(directory_contains(a, w) for a in self.authority) for w in self.writes), 'write outside authority')
-            require(all(not directory_contains(r, w) and not directory_contains(w, r)
+            require(all(not directory_object_contains(r, w) and not directory_object_contains(w, r)
                         for w in self.writes for r in self.references), 'write overlaps reference')
             require(all(not contains('/tmp', d.physical) and not contains('/run/WSL', d.physical)
                         and d.physical not in ('/', '/proc', '/dev') for d in self.directories), 'unsupported root location')
