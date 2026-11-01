@@ -25,6 +25,8 @@ export interface ObservationSend {
 }
 export interface ObservationProjection {
  actions:ObservationAction[]; sends:ObservationSend[]; warnings:string[];
+ /** unknownUsage counts unmatched observation updates, not attempts or sends.
+  * unknownReservations counts unresolved owner/action/attempt entities once. */
  totals:{logicalActions:number;transportHandoffs:number;localInvocations:number;unknownReservations:number;knownUnsentCandidates:number;unknownUsage:number;unattributedInvocations:number;legacyInvocations:number;measuredSends:number;unavailableSends:number;
  measuredInputSubtotal:number|null;measuredOutputSubtotal:number|null;measuredTokenSubtotal:number|null;cacheHitRate:number|null};
 }
@@ -49,6 +51,12 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
   if(old&&old.bytes!==bytes){inputIncomplete=true;conflicts.add(row.observationId);warn('Conflicting observation ID: '+row.observationId)}else if(!old)byId.set(row.observationId,{row,bytes})
  }catch{inputIncomplete=true;warn('Invalid observation skipped; coverage is incomplete')}}
  const rows=[...byId.values()].filter(x=>!conflicts.has(x.row.observationId)).map(x=>x.row)
+ // Journal coordinates belong to the original owner document, across actions.
+ const coordinates=new Map<string,{bytes:string;actions:Set<string>}>(),badActions=new Set<string>()
+ for(const row of rows){if(!isFact(row))continue;const o=row.observation,key=tuple(o.ownerSessionId,o.factSeq),action=tuple(o.ownerSessionId,o.actionId)
+  const bytes=encodeUsageObservation({...row,observationId:'coordinate'}),old=coordinates.get(key)
+  if(old){old.actions.add(action);if(old.bytes!==bytes){for(const a of old.actions)badActions.add(a);warn('Conflicting owner journal coordinate: '+key)}}else coordinates.set(key,{bytes,actions:new Set([action])})
+ }
  const groups=new Map<string,Row[]>()
  let unattributedInvocations=0,unknownUsage=0
  for(const row of rows){const o=row.observation;if(o.type==='unattributed-invocation'){if(inRange(row.observedAt))unattributedInvocations++;continue}
@@ -60,8 +68,8 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
  // Stable entity ordering also stabilizes diagnostics and projected rows.
  for(const [actionKey,group] of [...groups].sort(([a],[b])=>a.localeCompare(b))){
   const facts=group.filter(isFact).sort((a,b)=>a.observation.factSeq-b.observation.factSeq||a.observationId.localeCompare(b.observationId))
-  const factCoordinates=new Map<number,string>();let corrupt=false
-  for(const row of facts){const bytes=encodeUsageObservation({...row,observationId:'coordinate',observedAt:0});const prior=factCoordinates.get(row.observation.factSeq);if(prior&&prior!==bytes)corrupt=true;factCoordinates.set(row.observation.factSeq,bytes)}
+  const factCoordinates=new Map<number,string>();let corrupt=badActions.has(actionKey)
+  for(const row of facts){const bytes=encodeUsageObservation({...row,observationId:'coordinate'});const prior=factCoordinates.get(row.observation.factSeq);if(prior&&prior!==bytes)corrupt=true;factCoordinates.set(row.observation.factSeq,bytes)}
   const uniqueFacts=facts.filter((row,index)=>facts.findIndex(x=>x.observation.factSeq===row.observation.factSeq)===index)
   function one<T extends UsageFactObservation['type']>(type:T):{row:Row;value:Fact<T>}|undefined{
    const found=uniqueFacts.filter(row=>row.observation.type===type);if(found.length>1){corrupt=true;warn('Conflicting action phase: '+actionKey)}
@@ -83,15 +91,25 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
    projectedAttempts.add(reserve.attemptId)
    let candidate={semanticId:reserve.semanticId,payloadId:reserve.payloadId,payloadKind:reserve.payloadKind,incarnation:reserve.incarnation},rebind=0,lastSeq=reserve.factSeq
    let valid=physical&&!badAttempts.has(reserve.attemptId)&&reserve.factSeq>bound!.value.factSeq&&(!closed||reserve.factSeq<closed.value.factSeq)
-   const rebound=uniqueFacts.filter(x=>x.observation.type==='attempt-rebind'&&x.observation.attemptId===reserve.attemptId)
    const candidates=new Map<number,typeof candidate>([[0,candidate]])
-   for(const item of rebound){const r=item.observation as Fact<'attempt-rebind'>;if(r.rebind!==rebind+1||r.factSeq<=lastSeq||[...candidates.values()].some(c=>c.incarnation===r.incarnation)||closed&&r.factSeq>=closed.value.factSeq)valid=false;rebind=r.rebind;lastSeq=r.factSeq;candidate={semanticId:r.semanticId,payloadId:r.payloadId,payloadKind:r.payloadKind,incarnation:r.incarnation};candidates.set(rebind,candidate)}
+   let settled:Fact<'attempt-settle'>|undefined
+   // Mirror the original reservation projection: known-unsent may rebind the
+   // SAME incarnation; an issued disposition may advance to terminal once.
+   const transitions=uniqueFacts.filter(x=>(x.observation.type==='attempt-rebind'||x.observation.type==='attempt-settle')&&x.observation.attemptId===reserve.attemptId)
+   for(const item of transitions){const r=item.observation as Fact<'attempt-rebind'>|Fact<'attempt-settle'>
+    if(r.factSeq<=lastSeq||(closed&&r.factSeq>=closed.value.factSeq))valid=false
+    if(r.type==='attempt-rebind'){
+     if(settled?.disposition!=='unsent'||r.rebind!==rebind+1||r.incarnation!==reserve.incarnation)valid=false
+     rebind=r.rebind;candidate={semanticId:r.semanticId,payloadId:r.payloadId,payloadKind:r.payloadKind,incarnation:r.incarnation};candidates.set(rebind,candidate);settled=undefined
+    }else{
+     if((settled&&settled.disposition!=='issued')||(settled?.sendId!==undefined&&r.sendId!==settled.sendId)||(r.disposition!=='unsent'&&!r.sendId)||(settled?.disposition==='issued'&&r.disposition==='unsent'))valid=false
+     settled=r
+    }
+    lastSeq=r.factSeq
+   }
    const handoffs=group.filter(x=>x.observation.type==='handoff'&&x.observation.attemptId===reserve.attemptId)
    // Exactly one transport entry per reservation; retries require another reservation.
    const uniqueHandoffs=handoffs.filter((x,index)=>handoffs.findIndex(y=>same(y.observation,x.observation)&&y.observedAt===x.observedAt)===index)
-   const settlements=uniqueFacts.filter(x=>x.observation.type==='attempt-settle'&&x.observation.attemptId===reserve.attemptId)
-   const settled=settlements.at(-1)?.observation as Fact<'attempt-settle'>|undefined
-   if(settlements.length>1||settled&&settled.factSeq<=lastSeq)valid=false
    if(!uniqueHandoffs.length){if(inRange(row.observedAt)){if(valid&&settled?.disposition==='unsent')knownUnsentCandidates++;else unknownReservations++}continue}
    if(uniqueHandoffs.length!==1)valid=false
    const hrow=uniqueHandoffs[0]!,h=hrow.observation as Live<'handoff'>,expected=candidates.get(h.rebind)
@@ -102,7 +120,11 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
    const snapshots=group.filter(x=>x.observation.type==='usage-snapshot'&&x.observation.attemptId===reserve.attemptId&&x.observation.sendId===h.sendId).sort((a,b)=>(a.observation as Live<'usage-snapshot'>).snapshotOrdinal-(b.observation as Live<'usage-snapshot'>).snapshotOrdinal||a.observationId.localeCompare(b.observationId))
    const snapshotGroups=new Map<number,Row[]>();for(const snapshot of snapshots){matchedSnapshots.add(snapshot.observationId);const ordinal=(snapshot.observation as Live<'usage-snapshot'>).snapshotOrdinal;const list=snapshotGroups.get(ordinal)??[];list.push(snapshot);snapshotGroups.set(ordinal,list)}
    let incomplete=inputIncomplete,seen=false,terminal:Live<'usage-snapshot'>['terminalCoverage']='unknown'
-   for(const list of snapshotGroups.values()){
+   // This DTO carries cumulative PARTIAL updates, not self-contained snapshots:
+   // completeness requires every ordinal from 1 through the latest observed.
+   let expectedOrdinal=1
+   for(const [ordinal,list] of snapshotGroups){
+    if(ordinal!==expectedOrdinal){incomplete=true;warn('Missing cumulative snapshot ordinal: '+attemptKey)}expectedOrdinal=ordinal+1
     const s=list[0]!.observation as Live<'usage-snapshot'>
     if(list.some(x=>!same(x.observation,s))||s.validity!=='valid'){incomplete=true;warn('Invalid or conflicting usage update: '+attemptKey);continue}
     if(seen&&(attribution.some(key=>send[key]!==s[key])||s.inputTokenSemantics!==undefined&&send.inputTokenSemantics!==undefined&&s.inputTokenSemantics!==send.inputTokenSemantics)){incomplete=true;warn('Usage attribution or token semantics changed: '+attemptKey);continue}
@@ -120,7 +142,9 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
    send.costCoverage=send.billing==='subscription'?'subscription-no-api-cost':'unavailable'
    if(inRange(send.handoffAt))sends.push(send)
   }
-  for(const row of group){const o=row.observation;if(o.type==='usage-snapshot'&&!matchedSnapshots.has(row.observationId)&&inRange(row.observedAt)){unknownUsage++;warn('Usage has no complete physical association: '+actionKey)}if(o.type==='handoff'&&!attemptIds.has(o.attemptId)&&inRange(row.observedAt)){unknownReservations++;warn('Handoff has no reservation: '+actionKey)}}
+  const unmatched=new Map<string,Row[]>()
+  for(const row of group){const o=row.observation;if(o.type==='usage-snapshot'&&!matchedSnapshots.has(row.observationId)&&inRange(row.observedAt)){unknownUsage++;warn('Usage has no complete physical association: '+actionKey)}if(o.type==='handoff'&&!attemptIds.has(o.attemptId)){const key=tuple(o.attemptId),list=unmatched.get(key)??[];list.push(row);unmatched.set(key,list)}}
+  for(const list of unmatched.values()){const times=new Set(list.map(row=>row.observedAt));if(times.size>1||list.some(row=>!same(row.observation,list[0]!.observation)))warn('Conflicting unresolved handoff association: '+actionKey);if(inRange(Math.min(...times)))unknownReservations++;warn('Handoff has no reservation: '+actionKey)}
   const locals=uniqueFacts.filter(x=>x.observation.type==='local-invocation')
   for(const row of locals){const local=row.observation as Fact<'local-invocation'>;const collisions=locals.filter(x=>{const v=x.observation as Fact<'local-invocation'>;return v.localInvocationId===local.localInvocationId||v.ordinal===local.ordinal});if(validAction&&bound&&bound.value.executionDomain==='local-test'&&local.factSeq>bound.value.factSeq&&(!closed||local.factSeq<closed.value.factSeq)&&collisions.length===1){if(inRange(row.observedAt))localInvocations++}else warn('Incomplete or conflicting local invocation: '+actionKey)}
  }
@@ -129,7 +153,7 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
  const subtotal=(key:'totalInputTokens'|'outputTokens'|'totalTokens')=>{let total=0,measured=false;for(const send of sends){const value=send[key];if(value!==undefined&&value!==null){total+=value;measured=true;if(!Number.isSafeInteger(total)){warn('Measured subtotal overflow');return null}}}return measured?total:null}
  const inputSubtotal=subtotal('totalInputTokens'),outputSubtotal=subtotal('outputTokens'),tokenSubtotal=subtotal('totalTokens')
  let cacheNumerator=0,cacheDenominator=0
- for(const send of sends)if(send.totalInputTokens!==null&&send.cacheReadTokens!==undefined&&send.cacheCreationTokens!==undefined){cacheNumerator+=send.cacheReadTokens;cacheDenominator+=send.totalInputTokens}
+ for(const send of sends)if(send.totalInputTokens!==null&&send.cacheReadTokens!==undefined){cacheNumerator+=send.cacheReadTokens;cacheDenominator+=send.totalInputTokens}
  const cacheHitRate=Number.isSafeInteger(cacheNumerator)&&Number.isSafeInteger(cacheDenominator)&&cacheDenominator>0?cacheNumerator/cacheDenominator:null
  return {actions,sends,warnings:[...warnings].sort(),totals:{logicalActions:actions.length,transportHandoffs:sends.length,localInvocations,unknownReservations,knownUnsentCandidates,unknownUsage,unattributedInvocations,legacyInvocations:[...legacyIds].filter(([id,bytes])=>!legacyConflicts.has(id)&&inRange((JSON.parse(bytes) as UsageRecord).startedAt)).length,measuredSends:sends.filter(s=>s.totalTokens!==null).length,unavailableSends:sends.filter(s=>s.coverage!=='complete').length,measuredInputSubtotal:inputSubtotal,measuredOutputSubtotal:outputSubtotal,measuredTokenSubtotal:tokenSubtotal,cacheHitRate}}
 }

@@ -27,10 +27,38 @@ it('does not promote unmatched snapshots or conflicting IDs to known sends',()=>
  expect(result.totals.transportHandoffs).toBe(0);expect(result.warnings.length).toBeGreaterThan(0)
 })
 it('binds rebind incarnation and candidate, requires complete rebind chain',()=>{
- const rebind=fact(4,{type:'attempt-rebind',...candidate,payloadId:other,attemptId:'t',rebind:1,incarnation:'i2'})
- const sent=live('h2',{type:'handoff',...candidate,payloadId:other,attemptId:'t',sendId:'send',rebind:1,incarnation:'i2'})
- expect(reduceUsageObservations([sent,reserve,bind,open,rebind],query).totals.transportHandoffs).toBe(1)
+ const unsent=fact(4,{type:'attempt-settle',attemptId:'t',disposition:'unsent'})
+ const rebind=fact(5,{type:'attempt-rebind',...candidate,payloadId:other,attemptId:'t',rebind:1,incarnation:'i'})
+ const sent=live('h2',{type:'handoff',...candidate,payloadId:other,attemptId:'t',sendId:'send',rebind:1,incarnation:'i'})
+ const issued=fact(6,{type:'attempt-settle',attemptId:'t',disposition:'issued',sendId:'send'})
+ const complete=fact(7,{type:'attempt-settle',attemptId:'t',disposition:'completed',sendId:'send'})
+ expect(reduceUsageObservations([sent,reserve,bind,open,rebind,unsent,issued,complete,snapshot(1,{inputTokens:8,outputTokens:3,inputTokenSemantics:'includes-cache'})],query).sends[0]).toMatchObject({disposition:'completed',rebind:1,totalTokens:11})
+ expect(reduceUsageObservations([sent,reserve,bind,open,rebind],query).totals.transportHandoffs).toBe(0)
+ expect(reduceUsageObservations([sent,reserve,bind,open,unsent,{...rebind,observation:{...rebind.observation,incarnation:'wrong'}} as UsageObservationV1],query).totals.transportHandoffs).toBe(0)
  expect(reduceUsageObservations([sent,reserve,bind,open],query).totals.transportHandoffs).toBe(0)
+})
+it('rejects cross-action owner journal coordinates',()=>{
+ const second=[open,bind,reserve,handoff].map(row=>({...row,observationId:'second'+row.observationId,observation:{...row.observation,actionId:'other'}} as UsageObservationV1))
+ expect(reduceUsageObservations([open,bind,reserve,handoff,...second],query).totals.logicalActions).toBe(0)
+})
+it('rejects conflicting original time at one journal coordinate',()=>{
+ expect(reduceUsageObservations([open,{...open,observationId:'different-time',observedAt:99},bind,reserve,handoff],query).totals.logicalActions).toBe(0)
+})
+it('deduplicates missing-reservation associations',()=>{
+ expect(reduceUsageObservations([handoff,{...handoff,observationId:'replay'}],query).totals.unknownReservations).toBe(1)
+})
+it('detects a missing partial cumulative update that could contain a downward correction',()=>{
+ const result=reduceUsageObservations([open,bind,reserve,handoff,snapshot(1,{inputTokens:10,outputTokens:1,inputTokenSemantics:'includes-cache'}),snapshot(3,{outputTokens:3})],query)
+ expect(result.sends[0]).toMatchObject({inputTokens:10,outputTokens:3,coverage:'incomplete'})
+})
+it('refuses contradictory terminal facts instead of selecting the latest disposition',()=>{
+ const done=fact(4,{type:'attempt-settle',attemptId:'t',disposition:'completed',sendId:'send'})
+ const failed=fact(5,{type:'attempt-settle',attemptId:'t',disposition:'failed',sendId:'send'})
+ expect(reduceUsageObservations([open,bind,reserve,handoff,done,failed],query).totals.transportHandoffs).toBe(0)
+})
+it('uses known includes-cache denominator without inventing absent creation tokens',()=>{
+ const result=reduceUsageObservations([open,bind,reserve,handoff,snapshot(1,{inputTokens:100,outputTokens:10,cacheReadTokens:25,inputTokenSemantics:'includes-cache'})],query)
+ expect(result.totals.cacheHitRate).toBe(0.25);expect(result.sends[0].cacheCreationTokens).toBeUndefined();expect(result.sends[0].uncachedInputTokens).toBeNull()
 })
 it('keeps absent counters distinct from zero, rejects inconsistent cache and invalid updates',()=>{
  const base=[open,bind,reserve,handoff]
