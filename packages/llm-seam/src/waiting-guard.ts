@@ -75,11 +75,13 @@ function createWaitingExecution(client: ModelClient, policy: ModelWaitPolicy): M
     }
     try {
       if (terminal) throw terminal
-      iterator = client.stream({ ...request, signal: controller.signal, onTransportIssue() {
+      // Owned wrappers may already carry the captured request callback. Keep
+      // its composition provenance so that one real issue notifies it once.
+      iterator = client.stream({ ...request, signal: controller.signal, onTransportIssue:preparedControls({onTransportIssue() {
         if (closed || terminal) return
         issued = true; startedAt = Date.now(); responseAt = undefined; lastProgressAt = undefined; quiet = false
         schedule()
-      }, onTerminalResponse(hint) {
+      }},{onTransportIssue:request.onTransportIssue}).onTransportIssue, onTerminalResponse(hint) {
         if (closed || terminal) return
         if (!["AUTH", "QUOTA", "INVALID_ARGUMENT"].includes(hint.code) || !Number.isInteger(hint.httpStatus)
           || hint.httpStatus < 400 || hint.httpStatus >= 500 || hint.httpStatus === 408 || hint.httpStatus === 429) return
@@ -143,7 +145,7 @@ function createWaitingExecution(client: ModelClient, policy: ModelWaitPolicy): M
   } }
 }
 
-import { preparedModelClient } from "./prepared/wrappers.ts"
+import { preparedModelClient,preparedControls } from "./prepared/wrappers.ts"
 import { withOwnedPreparedRequests } from './prepared/owned-wrappers.ts'
 import { rememberModelSource } from './prepared/client-source.ts'
 export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy): ModelClient {

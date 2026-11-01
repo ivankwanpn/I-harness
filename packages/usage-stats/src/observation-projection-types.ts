@@ -14,8 +14,8 @@ export interface ObservationSend {
  providerId?:string; modelId?:string; workspace?:string; projectId?:string; billing?:'api'|'subscription'|'unknown';
  totalInputTokens:number|null; uncachedInputTokens:number|null; totalTokens:number|null;
  coverage:'complete'|'incomplete'|'unavailable';
- /** No price authority is bound by this inactive projection. Subscription is never API cost. */
- estimatedCostUsd:null; costCoverage:'subscription-no-api-cost'|'unavailable'
+ /** Reducer leaves cost unavailable; pure query binds effective configured prices. Subscription is never API cost. */
+ estimatedCostUsd:number|null; costCoverage:'priced'|'unpriced'|'subscription-no-api-cost'|'unavailable'
 }
 export interface ObservationProjection {
  entities:ObservationEntity[];
@@ -31,4 +31,4 @@ export type ObservationEntity =
  | {kind:'local';key:string;at:number;value:{ownerSessionId:string;actionId:string;localInvocationId:string;lane:string}}
  | {kind:'unknown-reservation'|'known-unsent';key:string;at:number;value:{ownerSessionId:string;actionId:string;attemptId:string}}
  | {kind:'unmatched-update';key:string;at:number;value:{ownerSessionId:string;actionId:string;attemptId:string;sendId:string}}
- | {kind:'unattributed';key:string;at:number;value:{providerId:string;modelId:string;workspace:string;projectId?:string;billing:'api'|'subscription'|'unknown'}}
+ | {kind:'unattributed';key:string;at:number;value:{providerId:string;modelId:string;workspace:string;projectId?:string;billing:'api'|'subscription'|'unknown';inputTokens?:number;outputTokens?:number;cacheReadTokens?:number;cacheCreationTokens?:number;inputTokenSemantics?:'includes-cache'|'excludes-cache';validity?:'valid'|'invalid';terminalCoverage?:'complete'|'partial'|'unknown'}}

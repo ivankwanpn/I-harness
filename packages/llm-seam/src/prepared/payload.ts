@@ -86,6 +86,7 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
         if (actual.generation) assertOwnedPreparedTerminal(prepared)
         actual.signal?.throwIfAborted()
         let confirmation: ExecutionConfirmation | undefined, issued = false, failed = false
+        let diagnosticOutcome:'completed'|'failed'|'cancelled'='cancelled'
         const passive=owned?createOriginalPassiveExecution(prepared):undefined
         const execution = preparedExecution(measurement, owned ? { ...actual,
           confirmExecution(value) { confirmation = value; associateOwnedConfirmation(value); actual.confirmExecution?.(value) },
@@ -105,11 +106,13 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
             }
             yield event
           }
+          diagnosticOutcome='completed'
         } catch (error) {
+          diagnosticOutcome='failed'
           if (confirmation) ownedConfirmations.delete(confirmation)
           throw error
         } finally {
-          try { passive?.finish('unknown') } catch { /* Capture before original settlement await. */ }
+          try { passive?.finish('unknown',actual.signal?.aborted?'cancelled':diagnosticOutcome) } catch { /* Capture before original settlement await. */ }
           // Fixed waiting/retry composition closes after observing end, and
           // waiting aborts its private controller during cleanup. Successful
           // terminal end survives that cleanup; any observed failure revokes it.

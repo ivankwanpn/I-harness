@@ -3,8 +3,9 @@ import type {UsageObservationV1} from './observation-types.js'
 import type {ObservationEntity,ObservationProjection} from './observation-projection-types.js'
 export type ObservationQuery=UsageQuery&{route?:'unknown'}
 export interface UsagePopulation {observations:UsageObservationV1[];legacyRecords:UsageRecord[];prices:UsagePrice[];warnings:string[];observationNamespace:'absent'|'present'}
-export type ObservationSummary=ObservationProjection['totals']
-export interface ObservationGroup {key:string;label:string;transportHandoffs:number;measuredSends:number;unavailableSends:number;measuredTokenSubtotal:number|null}
+export interface ObservationCosts {pricedApiSends?:number;unpricedApiSends?:number;measuredEstimatedCostUsd?:number|null}
+export type ObservationSummary=ObservationProjection['totals']&ObservationCosts
+export interface ObservationGroup extends ObservationCosts {key:string;label:string;transportHandoffs:number;measuredSends:number;unavailableSends:number;measuredTokenSubtotal:number|null}
 export type UsageV2Row=ObservationEntity
 export interface UsageSnapshotV2 {
  kind:'usage-observation-snapshot';version:2;query:ObservationQuery;

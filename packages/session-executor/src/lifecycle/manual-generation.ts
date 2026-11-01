@@ -14,11 +14,12 @@ export async function runManualGeneration(options: {
   instructions?: string
   timeoutMs?: number
   localTestEnabled?: boolean
+  passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
 }) {
   const start = { wall: Date.now(), monotonic: performance.now() }, commandId = randomUUID()
   const attachment = await options.acquire(), action = attachment.factOwner.beginAction(options.signal)
   let assembly: SessionAssembly | undefined
-  const lifecycle = createGenerationLifecycle(attachment.session, options.ownerSessionId, action, { enabled: options.localTestEnabled === true, selectedClient: () => assembly?.selectedModel() })
+  const lifecycle = createGenerationLifecycle(attachment.session, options.ownerSessionId, action, { enabled: options.localTestEnabled === true, selectedClient: () => assembly?.selectedModel() },{passiveGeneration:options.passiveGeneration})
   let generation: Awaited<ReturnType<typeof lifecycle.open>> | undefined
   try {
     const [seq] = committedFactSeqs(await action.facts.metadata.admit({ type: 'command/run', commandId, name: 'compact', ...(options.instructions !== undefined ? { args: options.instructions } : {}), source: { kind: 'user' } }))

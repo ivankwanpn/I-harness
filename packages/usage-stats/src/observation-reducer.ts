@@ -37,7 +37,7 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
  }
  const groups=new Map<string,Row[]>(),entities:ObservationEntity[]=[]
  let unattributedInvocations=0,unknownUsage=0
- for(const row of rows){const o=row.observation;if(o.type==='unattributed-invocation'){if(inRange(row.observedAt)){unattributedInvocations++;entities.push({kind:'unattributed',key:tuple('unattributed',row.observationId),at:row.observedAt,value:{providerId:o.providerId,modelId:o.modelId,workspace:o.workspace,...(o.projectId!==undefined?{projectId:o.projectId}:{}),billing:o.billing}})}continue}
+ for(const row of rows){const o=row.observation;if(o.type==='unattributed-invocation'){if(inRange(row.observedAt)){const {type:_type,...value}=o;unattributedInvocations++;entities.push({kind:'unattributed',key:tuple('unattributed',row.observationId),at:row.observedAt,value})}continue}
   const key=tuple(o.ownerSessionId,o.actionId),group=groups.get(key)??[];group.push(row);groups.set(key,group)}
  const actions:ObservationAction[]=[],sends:ObservationSend[]=[]
  let localInvocations=0,unknownReservations=0,knownUnsentCandidates=0

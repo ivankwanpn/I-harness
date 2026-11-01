@@ -22,6 +22,8 @@ import { InvalidImageError, validateImage } from '@i-harness/image-validation'
  * protocols. Unknown accounting stays uncalibrated.
  */
 export interface LLMUsage {
+  /** Explicit adapter accounting conflict; missing counters alone are not invalid. */
+  measurementValidity?: 'invalid'
   inputTokens?: number
   outputTokens?: number
   cacheReadTokens?: number

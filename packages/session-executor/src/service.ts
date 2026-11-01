@@ -1031,6 +1031,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (state.isBound(id) && !state.isEligible(id)) return
         }
         const assembly = opts.coordinator ? await prepareInputExecution({
+          passiveGeneration:opts.passiveGeneration,
           ownerSessionId: sessionId,
           acquire: async () => openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) }),
           assemble: () => getOrCreate(sessionId),
@@ -1066,6 +1067,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           record.postTurn = true
           try {
             await runPostSubmit({
+              passiveGeneration:opts.passiveGeneration,
               sessionId, assembly, signal: controller.signal, localTestEnabled: opts.modelPolicy === 'test-mock',
               binding: () => bindingFor(sessionId), callback: (...args) => opts.afterSuccessfulSubmit!(...args),
               warn: error => d.warn('[i-harness] post-turn host callback failed for ' + sessionId + ': ' + (error instanceof Error ? error.message : String(error))),
@@ -1392,6 +1394,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if (state.running || state.queued > 0) throw new Error('session is busy')
         if (!opts.coordinator) return (await getOrCreate(sessionId)).compactNow(instructions)
         return runManualGeneration({ ownerSessionId: sessionId, signal, instructions, timeoutMs: opts.modelActionTimeoutMs,
+          passiveGeneration:opts.passiveGeneration,
           localTestEnabled: opts.modelPolicy === 'test-mock',
           acquire: async () => {
             await opts.coordinator!.profile(sessionId)

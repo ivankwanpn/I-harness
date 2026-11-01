@@ -83,11 +83,7 @@ function detail(r: UsageRecord, prices: UsagePrice[], warnings: string[]): Usage
     r.inputTokenSemantics === "includes-cache" && bucketsKnown ? input - read - creation : null
   const totalTokens = safeNumber(totalInputTokens !== null && r.outputTokens !== undefined ? totalInputTokens + r.outputTokens : null, warnings)
   const price = prices.find(p => p.providerId === r.providerId && p.modelId === r.modelId)
-  let estimatedCostUsd: number | null = null
-  if (r.billing === "api" && price && uncachedInputTokens !== null && r.outputTokens !== undefined && read !== null && creation !== null &&
-      (read === 0 || price.cacheReadPerMillion !== undefined) && (creation === 0 || price.cacheCreationPerMillion !== undefined)) {
-    estimatedCostUsd = safeNumber((uncachedInputTokens * price.inputPerMillion + r.outputTokens * price.outputPerMillion + read * (price.cacheReadPerMillion ?? 0) + creation * (price.cacheCreationPerMillion ?? 0)) / 1_000_000, warnings, false)
-  }
+  const estimatedCostUsd = configuredUsageCost(r, price, uncachedInputTokens, warnings)
   return { ...r, totalInputTokens, uncachedInputTokens, totalTokens, estimatedCostUsd, ...(price ? { price } : {}) }
 }
 
@@ -163,4 +159,10 @@ export function aggregateUsage(records: UsageRecord[], input: UsageQuery, prices
     totalRecords: filtered.length, page, pageSize, options: { workspaces: options("workspace"), projects: options("projectId"), providers: options("providerId"), models: options("modelId") },
     prices: validPrices, warnings: [...warnings], ...(valid.length ? { recordingSince: valid.reduce((earliest, r) => Math.min(earliest, r.startedAt), Infinity) } : {}),
   }
+}
+
+export function configuredUsageCost(r: Partial<Pick<UsageRecord,'billing'|'outputTokens'|'cacheReadTokens'|'cacheCreationTokens'>>, price: UsagePrice | undefined, uncached: number | null, warnings: string[]): number | null {
+ const read=r.cacheReadTokens,creation=r.cacheCreationTokens
+ if(r.billing!=='api'||!price||uncached===null||uncached<0||r.outputTokens===undefined||read===undefined||creation===undefined||(read>0&&price.cacheReadPerMillion===undefined)||(creation>0&&price.cacheCreationPerMillion===undefined))return null
+ return safeNumber((uncached*price.inputPerMillion+r.outputTokens*price.outputPerMillion+read*(price.cacheReadPerMillion??0)+creation*(price.cacheCreationPerMillion??0))/1e6,warnings,false)
 }
