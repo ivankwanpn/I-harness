@@ -280,6 +280,16 @@ class RunTests(unittest.TestCase):
             frames = f.execute()
             self.assertIsNotNone(f.failure)
             self.assertIn('setup stderr', str(f.loop.failures[0]))
+            # Failure cleanup can correctly retain a still-running notifier.
+            # Acknowledge its exact original thread before requiring the
+            # independent descriptor-close injection to have been attempted.
+            f.loop.wait_thread.join(2)
+            self.assertFalse(f.loop.wait_thread.is_alive())
+            if f.fd_close_error is not None:
+                with mock.patch.object(worker.os, 'close', side_effect=f.close_fd), \
+                     mock.patch.object(worker.os, 'killpg', side_effect=f.kill):
+                    with self.assertRaises(worker.WorkerFailure):
+                        f.loop.cleanup()
             self.assertIn('wait_read', f.loop.wait_close_unknown)
             self.assertNotIn('settled', [frame['type'] for frame in frames])
             self.assertEqual(f.waits, 1)

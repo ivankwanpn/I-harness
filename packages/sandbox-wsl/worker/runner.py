@@ -159,8 +159,9 @@ class Directory:
         self.mapped = mapped
         self.physical = os.path.realpath(mapped, strict=True)
         self.fd = os.open(self.physical, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
-        self.identity = self.key(os.fstat(self.fd))
+        self.close_state, self.close_error = 'live', None
         try:
+            self.identity = self.key(os.fstat(self.fd))
             self.mount_identity = read_mount_id(self.fd)
             if canonical_cache is not None and self.identity in canonical_cache:
                 self.physical, self.ancestors = canonical_cache[self.identity]
@@ -169,8 +170,12 @@ class Directory:
                 if canonical_cache is not None:
                     canonical_cache[self.identity] = self.physical, self.ancestors
             self.validate(canonical_cache)
-        except Exception:
-            os.close(self.fd)
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup:
+                raise WorkerFailure('directory initialization cleanup incomplete',
+                                    [primary, cleanup], owner=self) from primary
             raise
 
     @staticmethod
@@ -178,6 +183,7 @@ class Directory:
         return info.st_dev, info.st_ino
 
     def validate(self, canonical_cache=None):
+        require(self.close_state == 'live', 'directory original descriptor is retiring')
         try:
             require(self.key(os.stat(self.mapped)) == self.identity
                     and self.key(os.stat(self.physical)) == self.identity
@@ -202,7 +208,23 @@ class Directory:
             raise Refusal('directory identity changed') from None
 
     def close(self):
-        os.close(self.fd)
+        if self.close_state == 'closed':
+            return
+        if self.close_state == 'unknown':
+            raise self.close_error
+        # Install uncertainty BEFORE issue. Linux may have consumed this FD
+        # even if the call raises; its number must never authorize a retry.
+        self.close_error = RuntimeError('original directory close outcome unknown')
+        self.close_state = 'unknown'
+        try:
+            result = os.close(self.fd)
+            if result is not None:
+                raise RuntimeError('directory close acknowledgment unknown')
+        except BaseException as error:
+            self.close_error = error
+            raise
+        self.fd = None
+        self.close_state = 'closed'
 
 
 def write_inventory(roots, checkpoint=lambda: None, statistics=None):
@@ -364,8 +386,12 @@ class Prepared:
             self.inventory_statistics = {}
             self.inventory = write_inventory(self.writes, checkpoint, self.inventory_statistics)
             self.runtime_inventory = write_inventory(self.runtimes, checkpoint)
-        except Exception:
-            self.close()
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup:
+                raise WorkerFailure('preparation cleanup incomplete',
+                                    [primary, cleanup], owner=self) from primary
             raise
 
     def validate(self, checkpoint=lambda: None):
@@ -378,9 +404,19 @@ class Prepared:
         require(write_inventory(self.runtimes, checkpoint) == self.runtime_inventory, 'managed runtime inventory changed')
 
     def close(self):
+        retained, errors = [], []
         for directory in self.directories:
-            directory.close()
-        self.directories.clear()
+            try:
+                directory.close()
+            except BaseException as error:
+                retained.append(directory)
+                errors.append(error)
+        # Remove acknowledged originals immediately; keep exact unknown
+        # entries/errors reachable. Independent siblings were all attempted.
+        self.directories = retained
+        if errors:
+            raise WorkerFailure('prepared directory cleanup incomplete',
+                                errors, owner=self)
 
 
 def seccomp_fd():
@@ -447,9 +483,10 @@ def probe():
 
 class WorkerFailure(Exception):
     """Identity-preserving aggregate, including on the supported Python 3.10."""
-    def __init__(self, message, errors):
+    def __init__(self, message, errors, owner=None):
         super().__init__(message)
         self.exceptions = tuple(errors)
+        self.owner = owner
 
 
 class Worker:
