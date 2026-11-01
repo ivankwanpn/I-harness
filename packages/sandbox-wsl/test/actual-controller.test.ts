@@ -168,6 +168,64 @@ it('controller guard continues protocol diagnostic and backend audits after inde
 })
 
 type LinuxIdentity = { pid: number; parent: number; start: string; exe: string; argv: string[] }
+async function releaseNaturalRoot(owned: LinuxIdentity[], worker: LinuxIdentity, rootPid: number,
+  write: (bytes: Buffer) => Promise<void>, endInput: () => Promise<void>) {
+  const ids = new Map<number, LinuxIdentity>()
+  for (const entry of owned) {
+    if (!Number.isSafeInteger(entry.pid) || entry.pid <= 0 || !/^[1-9]\d*$/.test(entry.start) || ids.has(entry.pid)) throw new Error('ambiguous captured lifetime')
+    ids.set(entry.pid, entry)
+  }
+  const original = ids.get(worker.pid), root = ids.get(rootPid)
+  if (!original || JSON.stringify(original) !== JSON.stringify(worker) || !root || root.parent !== worker.pid) throw new Error('original worker/root edge absent')
+  const belowRoot = (entry: LinuxIdentity) => {
+    const seen = new Set<number>()
+    while (entry.pid !== rootPid) {
+      if (seen.has(entry.pid)) return false
+      seen.add(entry.pid)
+      const parent = ids.get(entry.parent)
+      if (!parent || parent.pid === worker.pid) return false
+      entry = parent
+    }
+    return true
+  }
+  const writer = (marker: string) => {
+    const matches = owned.filter(entry => entry.exe === '/usr/bin/bash'
+      && JSON.stringify(entry.argv) === JSON.stringify(['/bin/bash', '-c', `sleep 4; touch ${marker}`]))
+    if (matches.length !== 1 || !belowRoot(matches[0])) throw new Error('required original named writer absent/ambiguous')
+    return matches[0]
+  }
+  const roles = { root, detachedCommand: writer('detached-late'), ordinaryCommand: writer('ordinary-late') }
+  // Only command stdin opens this gate. No cancellation/control frame is issued.
+  await write(Buffer.from('GO\n'))
+  await endInput()
+  return roles
+}
+it('controller C4 forbids GO for missing changed duplicate or disconnected named lifetimes', async () => {
+  const worker: LinuxIdentity = { pid: 1, parent: 9, start: '100', exe: '/usr/bin/python3.12', argv: ['original'] }
+  const root = { pid: 2, parent: 1, start: '101', exe: '/usr/bin/bwrap', argv: ['root'] }
+  const detached = { pid: 3, parent: 2, start: '102', exe: '/usr/bin/bash', argv: ['/bin/bash', '-c', 'sleep 4; touch detached-late'] }
+  const ordinary = { pid: 4, parent: 2, start: '103', exe: '/usr/bin/bash', argv: ['/bin/bash', '-c', 'sleep 4; touch ordinary-late'] }
+  for (const owned of [[worker, root, detached], [worker, root, detached, { ...ordinary, start: '' }],
+    [worker, root, detached, ordinary, { ...ordinary }], [worker, root, detached, { ...ordinary, parent: 999 }],
+    [{ ...worker, start: '999' }, root, detached, ordinary], [worker, { ...root, parent: 999 }, detached, ordinary]]) {
+    const calls: string[] = []
+    await expect(releaseNaturalRoot(owned, worker, root.pid, async () => { calls.push('GO') }, async () => { calls.push('EOF') })).rejects.toThrow()
+    expect(calls).toEqual([])
+  }
+  const calls: string[] = []
+  const roles = await releaseNaturalRoot([worker, root, detached, ordinary], worker, root.pid,
+    async bytes => { calls.push(bytes.toString('hex')) }, async () => { calls.push('endInput') })
+  expect(calls).toEqual(['474f0a', 'endInput'])
+  expect(roles.detachedCommand).toBe(detached); expect(roles.ordinaryCommand).toBe(ordinary)
+})
+it('controller C4 retains GO delivery failure without issuing endInput or inventing natural completion', async () => {
+  const worker: LinuxIdentity = { pid: 1, parent: 9, start: '100', exe: 'python', argv: [] }
+  const root = { pid: 2, parent: 1, start: '101', exe: 'bwrap', argv: [] }
+  const writers = ['detached-late', 'ordinary-late'].map((marker, index) => ({ pid: index + 3, parent: 2, start: '102', exe: '/usr/bin/bash', argv: ['/bin/bash', '-c', `sleep 4; touch ${marker}`] }))
+  const cause = new Error('original write failed'), calls: string[] = []
+  await expect(releaseNaturalRoot([worker, root, ...writers], worker, 2, async () => { calls.push('write'); throw cause }, async () => { calls.push('endInput') })).rejects.toBe(cause)
+  expect(calls).toEqual(['write'])
+})
 async function identity(guard: ControllerGuard, request: object): Promise<{ worker: LinuxIdentity; owned: LinuxIdentity[]; survivors?: LinuxIdentity[] }> {
   const payload = Buffer.from(JSON.stringify(request)).toString('base64')
   return guard.track('read-only original identity', new Promise((resolve, reject) => {
@@ -181,15 +239,16 @@ async function identity(guard: ControllerGuard, request: object): Promise<{ work
 
 const actual = process.platform === 'win32' && process.env.IH_WSL_ACTUAL_CONTROLLER === '1'
 it.skipIf(!actual).each([
-  ['C1 public-probe-binary-echo', false], ['C2 public-cancel-tree', true],
-] as const)('actual-controller %s', async (_name, cancelled) => {
+  ['C1 public-probe-binary-echo', 'echo'], ['C2 public-cancel-tree', 'cancel'], ['C4 public-natural-root-tree', 'natural'],
+] as const)('actual-controller %s', async (_name, mode) => {
+  const cancelled = mode === 'cancel', natural = mode === 'natural', tree = mode !== 'echo'
   if (process.env.I_HARNESS_DIST !== undefined) throw new Error('source mode required')
   const digest = createHash('sha256').update(readFileSync(new URL('../worker/runner.py', import.meta.url))).digest('hex')
   expect(digest).toBe('2c90059a35ccae024dc96806e603d1261626f883a8984cd59cc38e7ed8ace857')
   expect(existsSync(new URL('../worker/manifest.json', import.meta.url))).toBe(false)
   const base = process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT
   if (!base) throw new Error('fresh six-root evidence required')
-  const fixture = mkdtempSync(join(base, cancelled ? 'controller-C2-' : 'controller-C1-'))
+  const fixture = mkdtempSync(join(base, natural ? 'controller-C4-' : cancelled ? 'controller-C2-' : 'controller-C1-'))
   const work = join(fixture, 'work'), reference = join(fixture, 'reference')
   mkdirSync(work); mkdirSync(reference); writeFileSync(join(reference, 'sentinel'), 'REFERENCE_KEPT')
   const backend = createWslExecutionBackend({ distribution: 'Ubuntu' })
@@ -197,15 +256,16 @@ it.skipIf(!actual).each([
   state.guard = guard
   const caseDeadline = setTimeout(() => { guard.fail(new Error('whole case deadline; cleanup unconfirmed')); guard.closeControls() }, 90_000)
   let prepared: PreparedTransportExecution | undefined, handle: TransportExecutionHandle | undefined
-  let worker: LinuxIdentity | undefined, owned: LinuxIdentity[] = [], authorityCalls = 0, completed = false
-  const owner = { sessionId: cancelled ? 'actual-controller-C2' : 'actual-controller-C1' }
+  let worker: LinuxIdentity | undefined, owned: LinuxIdentity[] = [], namedWriters: Awaited<ReturnType<typeof releaseNaturalRoot>> | undefined, authorityCalls = 0, completed = false
+  const owner = { sessionId: natural ? 'actual-controller-C4' : cancelled ? 'actual-controller-C2' : 'actual-controller-C1' }
   const policy: CompiledSandboxPolicy = { mode: 'workspace-write', owner, authorityKind: 'bound', authorityRevision: 'fixture',
     primaryRoot: work, readable: 'caller', authorityRoots: [work], writeRoots: [work], referenceRoots: [reference], fingerprint: owner.sessionId }
-  const script = "/usr/bin/setsid /bin/bash -c 'sleep 4; touch detached-late' & /bin/bash -c 'sleep 4; touch ordinary-late' & sleep 0.1; printf READY; sleep 10"
-  const spec: ProcessSpec = { argv: cancelled ? ['/bin/bash', '-c', script] : ['/usr/bin/cat'], cwd: work, env: { PATH: '/usr/bin:/bin', LANG: 'C' },
+  const script = "/usr/bin/setsid /bin/bash -c 'sleep 4; touch detached-late' & /bin/bash -c 'sleep 4; touch ordinary-late' & sleep 0.1; printf READY; "
+    + (natural ? "IFS= read -r -t 10 token && test \"$token\" = GO || exit 23; printf ROOT_EXIT; exit 0" : 'sleep 10')
+  const spec: ProcessSpec = { argv: tree ? ['/bin/bash', '-c', script] : ['/usr/bin/cat'], cwd: work, env: { PATH: '/usr/bin:/bin', LANG: 'C' },
     owner, transport: 'pipe', lifetime: 'complete-tree', argumentEncoding: 'crt' }
   try {
-    if (!cancelled) { calls.push('probe'); expect((await guard.track('public probe', backend.probe())).availability).toBe('available') }
+    if (!tree) { calls.push('probe'); expect((await guard.track('public probe', backend.probe())).availability).toBe('available') }
     calls.push('prepare'); prepared = await guard.track('public prepare', backend.prepare(spec, policy))
     const entry = guard.entries.filter(item => item.role === 'worker').at(-1)!
     const hello = Buffer.concat(entry.bytes.stdout).toString().split('\n').filter(Boolean).map(strictFrame).find(frame => frame.type === 'hello')!
@@ -223,13 +283,23 @@ it.skipIf(!actual).each([
       }
     })())
     let settlement
-    if (cancelled) {
+    if (tree) {
       await guard.track('public READY', readiness)
       const lineage = await identity(guard, { mode: 'tree', pid: worker.pid, start: worker.start, argv: worker.argv, root: handle.pid })
       owned = lineage.owned
       expect(owned.length).toBeGreaterThanOrEqual(5)
-      calls.push('cancel'); settlement = await guard.track('public cancel', handle.cancel('cancelled'))
-      expect(handle.terminationObservation?.()).toEqual({ kind: 'confirmed', reason: 'cancelled' })
+      if (natural) {
+        writeFileSync(join(fixture, 'before-GO-lineage.json'), JSON.stringify({ worker, owned, calls, termination: handle.terminationObservation?.() }, null, 2))
+        expect(handle.terminationObservation?.()).toEqual({ kind: 'none' })
+        namedWriters = await releaseNaturalRoot(owned, worker, handle.pid,
+          bytes => { calls.push('GO'); return guard.track('public GO input', handle!.io.write(bytes)) },
+          () => { calls.push('endInput'); return guard.track('public endInput', handle!.io.endInput()) })
+        settlement = await guard.track('public natural settlement', handle.settled)
+        expect(handle.terminationObservation?.()).toEqual({ kind: 'none' })
+      } else {
+        calls.push('cancel'); settlement = await guard.track('public cancel', handle.cancel('cancelled'))
+        expect(handle.terminationObservation?.()).toEqual({ kind: 'confirmed', reason: 'cancelled' })
+      }
     } else {
       const payload = Buffer.concat([Buffer.from([0, 255, 128]), Buffer.from('{"type":"shutdown"}\n{"type":"settled"}\n')])
       calls.push('write'); await guard.track('public input', handle.io.write(payload))
@@ -244,9 +314,9 @@ it.skipIf(!actual).each([
     expect(await guard.track('public release', handle.release())).toEqual(settlement)
     await output; expect(Buffer.concat(stderr)).toHaveLength(0)
     writeFileSync(join(fixture, 'output.bin'), Buffer.concat(stdout))
-    writeFileSync(join(fixture, 'public-result.json'), JSON.stringify({ root, settlement, receipt: handle.receipt, authorityCalls, worker, owned, calls }, null, 2))
-    if (cancelled) {
-      expect(Buffer.concat(stdout).toString()).toBe('READY')
+    writeFileSync(join(fixture, 'public-result.json'), JSON.stringify({ root, settlement, receipt: handle.receipt, authorityCalls, worker, owned, namedWriters, calls, termination: handle.terminationObservation?.() }, null, 2))
+    if (tree) {
+      expect(Buffer.concat(stdout).toString()).toBe(natural ? 'READYROOT_EXIT' : 'READY')
       expect((await identity(guard, { mode: 'check', owned: owned.filter(value => value.pid !== worker!.pid) })).survivors).toEqual([])
       await new Promise(resolve => setTimeout(resolve, 4500))
       expect(existsSync(join(work, 'ordinary-late'))).toBe(false); expect(existsSync(join(work, 'detached-late'))).toBe(false)
@@ -268,9 +338,9 @@ it.skipIf(!actual).each([
     const workers = guard.entries.filter(entry => entry.role === 'worker')
     errors.push(...guard.runAudits([
       ['original ownership/cleanup', () => guard.audit()],
-      ['worker cardinality', () => expect(workers).toHaveLength(cancelled ? 1 : 2)],
+      ['worker cardinality', () => expect(workers).toHaveLength(tree ? 1 : 2)],
       ...workers.map((entry, index) => [`worker-${index} protocol`, () => {
-        const frames = auditWorker(Buffer.concat(entry.bytes.stdout), digest, cancelled, !cancelled && index === 0)
+        const frames = auditWorker(Buffer.concat(entry.bytes.stdout), digest, cancelled, !tree && index === 0)
         writeFileSync(join(fixture, `worker-${index}-frames.json`), JSON.stringify(frames, null, 2))
       }] as const),
       ...guard.entries.map((entry, index) => [`child-${index} diagnostic`, () => {
