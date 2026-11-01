@@ -25,6 +25,7 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
       recordPreparationFailure(index, call, error, records, cancellation); return
     }
     // Approval may await. A cancelled prepared call has no dispatch marker.
+    records.prepared(index,prepared)
     if (cancellation.batchSignal.aborted) return
     if (parkReplan()) return
     try { await markDispatch(session, index, call, records, opts) }
@@ -59,6 +60,9 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
           if (replan && !replan.value) replan.value = err.data
           records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'failed', dispatch: 'not-dispatched' }, output: err.data })
           return
+        }
+        if(isManagedBatchSource(session)&&resultExecution(prepared).dispatch==='not-dispatched'){
+          cancellation.recordFailure(index,err);cancellation.stopForRefusal(err);return
         }
         // A canceled real dispatch may subsequently receive an ordinary
         // synthetic failure fill. The fill cannot prove its effects known.

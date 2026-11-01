@@ -1,4 +1,5 @@
 export { createAgent } from "./agent/create.ts"
+export {createManagedAgent} from './agent/managed-create.ts'
 export type {ManagedAgent,ManagedAgentHost,ManagedAgentDeps,ManagedAgentInputOptions,ManagedGenerationAction,ManagedGenerationLifecycle,ManagedGenerationFactory,ManagedInputPreparation,ManagedAcknowledgedFact,ManagedSuccessfulInstructionHandoff,ManagedRequestContext} from './agent/managed-types.ts'
 export type { SessionRequestContext, InstructionRequestEvidence, RequestContextPin, SuccessfulInstructionHandoff } from './agent/request-context.ts'
 export type { AgentGenerationAction, AgentGenerationLifecycle, AgentGenerationDependencies, DocumentGenerationFactory } from './agent/generation.ts'
@@ -12,7 +13,8 @@ export {
   type BatchCall,
   type ExecuteToolCallsOptions,
 } from "./execute-tool-calls.ts"
-export { createSessionExecutor, createSessionExecutorRegistry, mapSubmitToAdmission } from "./executor.ts"
+export { createSessionExecutor,createManagedSessionExecutor, createSessionExecutorRegistry, mapSubmitToAdmission } from "./executor.ts"
+export type {ManagedSessionExecutor,ManagedSessionExecutorDeps} from './executor.ts'
 // NOTE: `SessionExecutorFailure` is deliberately NOT re-exported here yet. It is
 // the shape a rejection carries (`pendingCount` on the failure), but no
 // production consumer narrows on it — only this package's own tests do — and the

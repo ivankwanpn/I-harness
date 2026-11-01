@@ -5,7 +5,7 @@ import { agentFacts, committedFactSeqs } from './facts.ts'
 import { randomUUID } from "node:crypto"
 import type { LLMRequest } from "@i-harness/llm-seam"
 import type { RequestEvidence } from "./request-snapshot.ts"
-import type { AgentDeps, AgentConfig, TurnLifecycle } from "./types.ts"
+import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import { buildContextRequest } from "./request-input.ts"
 import { openStepBoundary } from './boundaries.ts'

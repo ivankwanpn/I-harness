@@ -8,6 +8,7 @@ import { createStartCall } from "./dispatch.ts"
 import { prepareLiveBatch, bindLiveBatchSource, markLiveBatchClosed } from './live-continuation.ts'
 import { recordPreparationFailure } from './prepare.ts'
 import {isManagedBatchSource,type BatchSource} from './managed-source.ts'
+import {savingFailure} from '../agent/saving-failure.ts'
 
 // M13 bounded rolling-pool scheduler. Model-order guarantees:
 //   - start order = model order (groups walk the batch left-to-right);
@@ -144,6 +145,7 @@ export async function executeToolCalls(ctx: PluginContext, session: BatchSource,
   cancellation.observeAbort()
   if (cancellation.aborted) return await finishCancelledBatch(session, batch, records, cancellation)
   if (cancellation.hasRefusal) {
+    if(isManagedBatchSource(session))records.cancelNeverDispatched()
     try { await records.drainSettled() }
     catch (cause) { throw Object.assign(new AggregateError([cancellation.firstRefusal, cause], `${cancellation.firstRefusal instanceof Error ? cancellation.firstRefusal.message : 'Tool execution failed'}; real tool settlement requires recovery`), { code: 'FACT_RECOVERY_REQUIRED' }) }
     throw cancellation.firstRefusal
@@ -156,7 +158,7 @@ export async function executeToolCalls(ctx: PluginContext, session: BatchSource,
     }
     await records.commitReady()
   }
-  } catch (error) { executionFailed = true; executionFailure = error; throw error }
+  } catch (error) { executionFailed = true; executionFailure = error;try{if(isManagedBatchSource(session))records.cancelNeverDispatched()}catch(cleanup){executionFailure=savingFailure(error,[cleanup],'Original never-dispatched cancellation failed')}throw executionFailure }
   finally {
     finished.resolve()
     try { await closeSource() }

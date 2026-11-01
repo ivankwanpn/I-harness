@@ -1,4 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
+import {captureExecutionHookChannel} from '@i-harness/core-plugin'
 import { assertToolSettlementScope, bindPreparedSettlement } from './retained-outcome.ts'
 import { registerResultPrepared } from './result-finalization.ts'
 import { validateJsonSchemaValue, type JsonSchemaNode } from "../json-schema.ts"
@@ -15,6 +16,7 @@ import { createPreparedBodyInvoker, attachPreparedModelOrigin, type ToolExecutio
 
 export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined, executionOwner?: ToolExecutionOwnerConfiguration) {
   const domain=executionOwner&&'kind'in executionOwner?executionOwner.domain:undefined
+  const hooks=domain?captureExecutionHookChannel(ctx):undefined
   type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; executeBinding: ReturnType<typeof catalog.captureBinding>['executeBinding']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
   const captures = new WeakMap<CapturedToolCall, Capture>()
   const executions = new WeakMap<PreparedCall, () => Promise<unknown>>()
@@ -30,6 +32,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
   }
   function capture(input: ToolCall, identity: ToolPrepareIdentity = {}): CapturedToolCall {
     assertToolSettlementScope(identity.session, identity.settlementSource,domain)
+    hooks?.capture()
     if(domain&&identity.sessionId!==undefined&&identity.sessionId!==domain.sessionId)throw Error('Foreign managed capture session')
     const call = captureToolCall(input)
     freezeArguments(call)
@@ -83,6 +86,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     if (instructionsRequired && entry.native?.targets.some(t => t.mode === 'mutate') && (!entry.authority || !origin || entry.origin !== origin || !verifyOrigin?.(origin, handle))) throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'missing-origin', currentFingerprint: '' })
     const { call, identity, tool, executeBinding, bindingGeneration, bindingValidation } = entry
     assertToolSettlementScope(identity.session, identity.settlementSource,domain)
+    const hookSurface=hooks?.capture()
     const commandDialect = tool.commandDialect?.(call.args)
     // Policy/hook identity comes only from the trusted host, never model JSON.
     const policyInput = { name: call.name, args: call.args,
@@ -98,7 +102,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     //    call payload when no decision was produced — see the handler's
     //    CRITICAL comment); no shared slot, so concurrent prepares are
     //    independent.
-    const chainValue = await ctx.emit("tools/pre-execute", policyInput)
+    const chainValue = hooks?await hooks.emit('tools/pre-execute',policyInput,hookSurface):await ctx.emit("tools/pre-execute", policyInput)
     const decision: ToolDecision = isDecision(chainValue) ? chainValue : { kind: "allow" }
 
     // 1b. Cross-scope fail-open fix (Task 10 mechanism B): `emit` propagates
@@ -186,12 +190,13 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
         settle() { entry.authority?.settle() },
       } satisfies NativeMutation))
     }
+    if(hookSurface)hooks!.assertCurrent(hookSurface)
     bindPreparedSettlement(prepared, identity?.settlementSource,domain)
     registerResultPrepared(prepared, identity?.settlementSource,domain)
     registerInstructionExec(exec)
     // The callback stays private to this registry; hooks cannot replace the
     // executable, receiver, frozen arguments or exec through prepared metadata.
-    executions.set(prepared, createPreparedBodyInvoker(prepared, executeBinding, executionOwner, signal))
+    executions.set(prepared, createPreparedBodyInvoker(prepared, executeBinding, executionOwner, signal,hooks&&hookSurface?Object.freeze({channel:hooks,surface:hookSurface}):undefined))
     return prepared
   }
 

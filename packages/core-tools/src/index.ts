@@ -11,7 +11,7 @@ import { installPreExecuteDecision } from "./approval/decision.ts"
 import { assertSyntheticResult,assertManagedSyntheticResult, bindSyntheticFinalization, type ToolResultRetention } from './registry/result-finalization.ts'
 import { isNativePlanValidationError } from './instructions.ts'
 import { isPolicyRefusal } from './types.ts'
-export { assertResultPrepared, assertSyntheticResult, declareToolResultOutcome, declareToolResultPresentation, resultExecution, resultPresentation, isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from './registry/result-finalization.ts'
+export { assertResultPrepared, assertSyntheticResult, declareToolResultOutcome, declareToolResultPresentation, resultExecution, resultPresentation, isOriginalResultFinalization, isOriginalSyntheticResultFinalization,retainedFinalizedToolResult,releaseFinalizedToolResult } from './registry/result-finalization.ts'
 export type { ResultFinalization, ResultProgram, ToolResultRetention, SyntheticResultContext,ManagedSyntheticResultContext } from './registry/result-finalization.ts'
 export { currentToolResultProducer, registerToolResultDependency, toolResultDependencies } from './registry/result-dependencies.ts'
 export type { ToolResultDependency } from './registry/result-dependencies.ts'

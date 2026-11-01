@@ -1,5 +1,5 @@
-import { FactRecoveryRequiredError, isManagedSettlementSource, isNondurableSession, isOwnedSettlementSource, type ProducerFactOutcome, type ResultEnvelope, type ResultExecution, type SessionView, type SettlementFacts } from '@i-harness/core-session'
-import type { PreparedCall, ToolExec } from '../types.ts'
+import { FactRecoveryRequiredError,captureLegacyFact, isManagedSettlementSource, isNondurableSession, isOwnedSettlementSource, type ProducerFactOutcome, type ResultEnvelope, type ResultExecution, type SessionView, type SettlementFacts } from '@i-harness/core-session'
+import type { PreparedCall, ToolExec,ToolResult } from '../types.ts'
 import { registerResultProducer } from './result-dependencies.ts'
 import {isManagedExecutionSource,readManagedAcknowledgedMembers,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
@@ -16,7 +16,7 @@ export interface ToolResultRetention {
   captureSynthetic(context: SyntheticResultContext, output: unknown, execution: ResultExecution): ResultFinalization
   captureManagedSynthetic?(context:ManagedSyntheticResultContext,output:unknown,execution:ResultExecution):ResultFinalization
 }
-const prepared = new WeakMap<PreparedCall, { exec: ToolExec; call: PreparedCall['call']; tool: PreparedCall['tool']; name: string; view?: SessionView;domain?:ManagedExecutionDomain; callId?: string; source?: SettlementFacts<ProducerFactOutcome> }>()
+const prepared = new WeakMap<PreparedCall, { exec: ToolExec; call: PreparedCall['call']; tool: PreparedCall['tool']; name: string; view?: SessionView;domain?:ManagedExecutionDomain; callId?: string; source?: SettlementFacts<ProducerFactOutcome>;hasDispatch?:true;dispatched?:unknown;finalized?:ToolResult }>()
 const execution = new WeakMap<ToolExec, ResultExecution & { declared?: true; presentation?: 'mcp' }>()
 const finalizations = new WeakMap<PreparedCall, ResultFinalization>()
 const syntheticFinalizations = new WeakMap<ResultFinalization, Readonly<SyntheticResultContext|ManagedSyntheticResultContext>>()
@@ -53,6 +53,12 @@ export function assertSyntheticResult(context: SyntheticResultContext): void {
   if (calls.length !== 1) throw new FactRecoveryRequiredError()
 }
 export function assertManagedSyntheticResult(context:ManagedSyntheticResultContext){if(!isManagedExecutionSource(context.domain,context.source))throw new FactRecoveryRequiredError();context.source.assertHeld();const members=readManagedAcknowledgedMembers(context.domain,context.capture,context.outcome);if(members.length!==1||members[0]?.type!=='tool/call'||members[0].callId!==context.callId||members[0].name!==context.name)throw new FactRecoveryRequiredError()}
+/** Only the original dispatcher or its branded retained-body take calls this.
+ * Data/seq/ToolExec labels cannot register a completed private result. */
+export function recordDispatchedToolResult(call:PreparedCall,output:unknown){const owned=prepared.get(call);if(!owned?.domain)return;assertResultPrepared(call);if(owned.hasDispatch&&!Object.is(owned.dispatched,output))throw new FactRecoveryRequiredError();owned.hasDispatch=true;owned.dispatched=output}
+export function capturePrivateFinalizedToolResult(call:PreparedCall,output:unknown):ToolResult|undefined{assertResultPrepared(call);const owned=prepared.get(call)!;if(!owned.domain)return;if(!owned.hasDispatch||!Object.is(owned.dispatched,output))throw new FactRecoveryRequiredError();const actual=execution.get(owned.exec);if(actual?.outcome!=='succeeded'||actual.dispatch!=='dispatched')throw new FactRecoveryRequiredError();if(!owned.finalized){const captured=captureLegacyFact(output);if(captured.kind!=='captured')throw new FactRecoveryRequiredError();owned.finalized=Object.freeze({name:owned.name,output:captured.value})}return owned.finalized}
+export function retainedFinalizedToolResult(call:PreparedCall):ToolResult|undefined{const owned=prepared.get(call);if(!owned?.finalized||!owned.domain)return;if(!owned.source||!isManagedExecutionSource(owned.domain,owned.source))throw new FactRecoveryRequiredError();return owned.finalized}
+export function releaseFinalizedToolResult(call:PreparedCall):void{const owned=prepared.get(call);if(owned){delete owned.dispatched;delete owned.hasDispatch;delete owned.finalized}}
 export function dispatchResultStarted(exec: ToolExec): void {
   if (!execution.has(exec)) throw new FactRecoveryRequiredError()
   execution.set(exec, { outcome: 'unknown', dispatch: 'dispatched' })

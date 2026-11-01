@@ -49,6 +49,7 @@ export function createWaterfalls(getMountingPlugin: () => string | null) {
       }
       const res = handlers[i]!(p, next)
       const resolved = isPromiseLike(res) ? await res : res
+      current?.()
       if (!nextCalled) {
         throw new Error(`waterfall handler ${i} for '${event}' forgot next()`)
       }

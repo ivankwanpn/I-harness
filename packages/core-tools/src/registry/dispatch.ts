@@ -1,9 +1,10 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { PreparedCall, Tool, ToolDispatchMetadata, ToolRegistry } from "../types.ts"
 import { beginRetainedDispatch } from './retained-outcome.ts'
-import { dispatchResultStarted, dispatchResultReturned, declareToolResultOutcome } from './result-finalization.ts'
+import { dispatchResultStarted, dispatchResultReturned, declareToolResultOutcome,recordDispatchedToolResult } from './result-finalization.ts'
 import { withToolResultProducer } from './result-dependencies.ts'
 import { assertNativeInstructions, isInstructionReplan, runInstructionBody } from '../instructions.ts'
+import {preparedExecutionHooks,assertPreparedModelOriginCurrent} from './prepared-body.ts'
 
 export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry, invokePrepared: (prepared: PreparedCall) => Promise<unknown>): ToolRegistry["dispatch"] {
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
@@ -27,10 +28,16 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
   }
 
   async function dispatch(prepared: PreparedCall): Promise<unknown> {
+    const hooks=preparedExecutionHooks(prepared)
+    hooks?.channel.assertCurrent(hooks.surface)
+    assertPreparedModelOriginCurrent(prepared)
     validatePrepared(prepared)
+    hooks?.channel.assertCurrent(hooks.surface)
     const retained = beginRetainedDispatch(prepared)
+    let bodyReturned=false
     try {
-    const output = await ctx.cascade(
+    const cascade:PluginContext['cascade']=hooks?(event,input,final)=>hooks.channel.cascade(event as 'tools/execute',input,final,hooks.surface):ctx.cascade.bind(ctx)
+    const output = await cascade(
       "tools/execute",
       { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool,
         registry: getRegistry(), bindingGeneration: prepared.bindingGeneration, validateBinding: prepared.bindingValidation,
@@ -38,7 +45,9 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
       async () => {
         // Hooks may await before next(). No await is allowed between this final
         // authority check and invoking the body whose binding was validated.
+        assertPreparedModelOriginCurrent(prepared)
         validatePrepared(prepared)
+        hooks?.channel.assertCurrent(hooks.surface)
         try { assertNativeInstructions(prepared.exec) }
         catch (error) {
           if (isInstructionReplan(error)) throw error
@@ -47,15 +56,17 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
         dispatchResultStarted(prepared.exec)
         const result = await withToolResultProducer(prepared.exec, () => runInstructionBody(prepared.exec, () => invokePrepared(prepared)))
         dispatchResultReturned(prepared.exec)
+        bodyReturned=true
         retained?.body.observed(); retained?.body.ready(result)
         return result
       },
     )
+    recordDispatchedToolResult(prepared,output)
     retained?.success()
     return output
     } catch (error) {
       // The actual throw site owns failure; payload fields never do.
-      try { declareToolResultOutcome(prepared.exec, prepared.exec.abortSignal?.aborted ? 'unknown' : 'failed') } catch { /* Authority gate may precede actual dispatch. */ }
+      if(!hooks||!bodyReturned)try { declareToolResultOutcome(prepared.exec, prepared.exec.abortSignal?.aborted ? 'unknown' : 'failed') } catch { /* Authority gate may precede actual dispatch. */ }
       throw retained?.failure(error) ?? error
     }
   }

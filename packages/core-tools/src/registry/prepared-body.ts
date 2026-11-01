@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
 import { isManagedFactOwner, isNondurableFactOwner, isOwnedSettlementSource, type FactOwner, type SessionView, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
 import type { PluginContext } from '@i-harness/core-plugin'
+import type {ExecutionHookChannel} from '@i-harness/core-plugin'
 import type { PreparedCall, Tool, ToolExec } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
 import {isManagedExecutionDomain,isManagedExecutionSource,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
@@ -9,6 +10,7 @@ import {isManagedExecutionDomain,isManagedExecutionSource,type ManagedExecutionD
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
 export interface ManagedToolExecutionOwnerContext {readonly kind:'managed-execution';readonly domain:ManagedExecutionDomain;readonly context:PluginContext;readonly sessionId:string}
 export type ToolExecutionOwnerConfiguration=ToolExecutionOwnerContext|ManagedToolExecutionOwnerContext
+export interface PreparedExecutionHooks {readonly channel:ExecutionHookChannel;readonly surface:object}
 export interface PreparedShellBodyClaim {
   readonly context: ToolExecutionOwnerContext
   readonly source: SettlementFacts<ProducerFactOutcome>
@@ -37,7 +39,7 @@ export function captureExecutionOwnerContext(ctx: PluginContext, value: unknown)
   return Object.freeze({ view,factOwner,context:ctx,...sessionId !== undefined ? {sessionId:sessionId as string} : {} })
 }
 const identityFields = ['session','sessionId','callId','callEventSeq','resultConsumer','modelGeneration'] as const
-type Body = { prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; managed?:ManagedToolExecutionOwnerContext;foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; claimed: boolean; permit?: { assertCurrent(): void }; attaching?: boolean; entered?: boolean }
+type Body = { prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; managed?:ManagedToolExecutionOwnerContext;hooks?:PreparedExecutionHooks;foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; claimed: boolean; permit?: { assertCurrent(): void }; attaching?: boolean; entered?: boolean }
 type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal; domain?: object }
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
@@ -58,6 +60,7 @@ function checkIdentity(body: Body) {
 function check(body: Body, frame?: Frame) {
   if (frame && !frame.active) throw new Error('Prepared body expired')
   checkIdentity(body)
+  body.hooks?.channel.assertCurrent(body.hooks.surface)
   body.managed?.domain.assertCurrent()
   body.permit?.assertCurrent()
   for(const key of ['bindingValidation','authorityValidation','approvalValidation'] as const)if(own(body.prepared,key)!==body.validations[key])throw new Error('Prepared validation changed')
@@ -79,7 +82,7 @@ export function attachPreparedModelOrigin(prepared: PreparedCall, registry: impo
     body.permit = Object.freeze({assertCurrent,...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{}})
   } finally { body.attaching = false }
 }
-export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerConfiguration | undefined, signal?: AbortSignal): () => Promise<unknown> {
+export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerConfiguration | undefined, signal?: AbortSignal,hooks?:PreparedExecutionHooks): () => Promise<unknown> {
   if (records.has(prepared) || byExec.has(prepared.exec)) throw new Error('Prepared body already registered')
   const original = assertResultPrepared(prepared)
   let context: ToolExecutionOwnerContext | undefined
@@ -93,10 +96,11 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
     // Shell privilege is unavailable without proof and refuses a foreign view.
     if (!foreignContext && original.source && (configured.sessionId === undefined || configured.sessionId === prepared.exec.sessionId)) context = configured
   }
-  const body: Body = {prepared,tool:prepared.tool,leaf,exec:prepared.exec,call:prepared.call,context,managed,foreignContext,source:original.source,view:original.view,
+  const body: Body = {prepared,tool:prepared.tool,leaf,exec:prepared.exec,call:prepared.call,context,managed,hooks,foreignContext,source:original.source,view:original.view,
     snapshots:new Map(identityFields.map(key=>[key,Object.getOwnPropertyDescriptor(prepared.exec,key)])),validations:{bindingValidation:prepared.bindingValidation,authorityValidation:prepared.authorityValidation,approvalValidation:prepared.approvalValidation},signal,claimed:false}
   records.set(prepared,body);byExec.set(body.exec,body)
   return async () => {
+    body.hooks?.channel.assertCurrent(body.hooks.surface)
     if(body.managed&&!body.permit)throw new Error('Original private model member required')
     if (body.permit) { checkIdentity(body); if (body.entered) throw new Error('Model body already entered'); body.permit.assertCurrent() }
     body.entered = true
@@ -111,6 +115,10 @@ export function preparedExecutionOwnerContext(prepared: PreparedCall): ToolExecu
   return body.context
 }
 export function preparedManagedExecutionDomain(prepared:PreparedCall){const body=records.get(prepared);if(!body)throw Error('Foreign prepared execution');if(body.managed)checkIdentity(body);return body.managed?.domain}
+/** Original passive result bookkeeping can read its scope after hook admission
+ * expired. Fresh callback/body entry still asserts the captured surface. */
+export function preparedExecutionHooks(prepared:PreparedCall){const body=records.get(prepared);if(body?.hooks)checkIdentity(body);return body?.hooks}
+export function assertPreparedModelOriginCurrent(prepared:PreparedCall){const body=records.get(prepared);if(!body?.managed)return;checkIdentity(body);body.hooks?.channel.assertCurrent(body.hooks.surface);if(!body.permit)throw Error('Original private model member required');body.permit.assertCurrent()}
 export function assertPreparedExecutionOwnerContext(prepared: PreparedCall, context: ToolExecutionOwnerContext | undefined): void {
   if (preparedExecutionOwnerContext(prepared) !== context) throw new Error('Original prepared execution context required')
 }
@@ -122,6 +130,7 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
     if(!body){if(frame?.active)throw new Error('Foreign prepared exec');return}
     if(!frame?.active||frame.body!==body||body.tool!==tool||body.leaf!==leaf||!['shell','bash','pwsh'].includes(body.call.name))throw new Error('Not the original prepared Shell body')
     check(body,frame)
+    if(body.managed)throw new Error('Original private Shell source adapter is not connected')
     if(body.foreignContext)throw new Error('Foreign prepared execution context')
     if(body.claimed)throw new Error('Prepared Shell body already claimed')
     if(!body.context||!body.source||!frame.domain||body.exec.resultConsumer==='code')return

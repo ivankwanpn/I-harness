@@ -47,8 +47,8 @@ export function createScope(
     on: (event,handler)=>listeners.register(event,handler),
     emit: (event,payload)=>listeners.emit(event,payload),
     waterfall: (event,handler)=>waterfall.register(event,handler),
-    cascade: cascades.dispatch,
-    onCascade: cascades.register,
+    cascade: (event,input,final)=>cascades.dispatch(event,input,final),
+    onCascade: (event,handler)=>cascades.register(event,handler),
     guard: listeners.guard,
     checkGuards: listeners.checkGuards,
     resolveDecision: listeners.resolveDecision,
@@ -57,6 +57,6 @@ export function createScope(
     unmount: lifecycle.unmount,
   }
 
-  associateExecutionHookScope(ctx,{parent:parentScope,lookup,surface(event){const plain=listeners.surface(event),chain=waterfall.surface(event);return {version:plain.version+':'+chain.version,compatible:plain.compatible&&chain.compatible}},on:(event,handler)=>listeners.register(event,handler,true),waterfall:(event,handler)=>waterfall.register(event,handler,true),emit:listeners.emit})
+  associateExecutionHookScope(ctx,{parent:parentScope,lookup,surface(event,kind){if(kind==='cascade')return cascades.surface(event);const plain=listeners.surface(event),chain=waterfall.surface(event);return {version:plain.version+':'+chain.version,compatible:plain.compatible&&chain.compatible}},on:(event,handler)=>listeners.register(event,handler,true),waterfall:(event,handler)=>waterfall.register(event,handler,true),onCascade:(event,handler)=>cascades.register(event,handler,true),emit:listeners.emit,cascade:cascades.dispatch})
   return ctx
 }

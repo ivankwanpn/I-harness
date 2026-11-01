@@ -31,7 +31,7 @@ export interface ManagedAgent extends Omit<Agent,'run'|'runAdmitted'|'followup'|
  followup(message:string,signal?:AbortSignal,options?:ManagedAgentInputOptions):ReturnType<Agent['followup']>
  compact(instructions?:string,options?:CompactionRunOptions&{generation?:ManagedGenerationAction}):Promise<CompactionResult>
 }
-export interface ManagedAgentDeps extends Omit<AgentDeps,'session'|'factOwner'|'modelCallOrigin'|'generationFactory'|'generationLifecycle'|'generationAction'|'inputPreparationFactory'|'inputPreparation'|'sharedGeneration'|'sharedBudget'|'requestContext'> {
+export interface ManagedAgentDeps extends Omit<AgentDeps,'session'|'factOwner'|'modelCallOrigin'|'generationFactory'|'generationLifecycle'|'generationAction'|'inputPreparationFactory'|'inputPreparation'|'sharedGeneration'|'sharedBudget'|'requestContext'|'ensureWritableContext'|'facts'|'sourceFacts'|'assertFactOpen'|'registerFactSource'|'captureContextReduction'|'captureSoftReduction'|'captureInputPromotion'|'captureModelExchange'> {
  readonly execution:ManagedExecutionAttachment
  readonly domain:ManagedExecutionDomain
  readonly hooks:ExecutionHookChannel

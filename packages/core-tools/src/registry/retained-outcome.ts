@@ -1,6 +1,7 @@
 import { committedFactSeqs, FactRecoveryRequiredError, isManagedSettlementSource, isNondurableSession, type CapturedSettlementFact, type ProducerFactOutcome, type SessionView, type SettlementFacts } from '@i-harness/core-session'
 import type { PreparedCall, ToolExec } from '../types.ts'
 import {isManagedExecutionSource,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {recordDispatchedToolResult} from './result-finalization.ts'
 
 export interface RetainedOutcomeSink {
   beforeRead(refresh: () => Promise<void>): void
@@ -104,13 +105,14 @@ export function beginRetainedDispatch(prepared: PreparedCall) {
     dispatch.references.delete(fact)
   } })
   const body = register()
+  const bodyValue=dispatch.sources[0]!
   const finish = () => { dispatch.open = false; delete prepared.exec.retainOutcome; delete prepared.exec.retainResultReference }
   return {
     body,
     success() { finish(); dispatches.delete(prepared.exec); for (const source of dispatch.sources) { source.output = undefined; source.state = 'consumed' } },
     failure(error: unknown) {
       finish()
-      const source = isRecovery(error) ? selected(dispatch) : undefined
+      const source = isRecovery(error) ? selected(dispatch) : scope.domain&&bodyValue.observed&&bodyValue.state==='ready'?bodyValue:undefined
       if (!source) { dispatches.delete(prepared.exec); return error }
       // This genuinely observed original outcome precedes registry finalization.
       // Its own registered source must fence optional work until the retained
@@ -131,6 +133,7 @@ export function beginRetainedDispatch(prepared: PreparedCall) {
           while (source.state === 'progress') { await source.changed.promise; assertScope(scope, prepared) }
           if (source.state !== 'ready') return { kind: 'recovery-required' }
           const output = source.output; source.output = undefined; source.state = 'consumed'
+          if(scope.domain)recordDispatchedToolResult(prepared,output)
           return { kind: 'ready', output }
         },
         async drainReferences() {

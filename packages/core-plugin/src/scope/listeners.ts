@@ -88,6 +88,7 @@ export function createListeners(
       current?.()
       const res = handler(payload)
       const resolved = isPromiseLike(res) ? await res : res
+      current?.()
       if (waterfallHandlers.length > 0 && resolved !== undefined) {
         chainPayload = resolved
         seeded = true
@@ -98,7 +99,7 @@ export function createListeners(
       resolvedPayload = (await waterfall.run(event, waterfallHandlers, chainPayload,current)) ?? chainPayload
     }
     if (seeded) decisions.set(event, chainPayload)
-    current?.();await parentEmit(event, resolvedPayload,current)
+    current?.();await parentEmit(event, resolvedPayload,current);current?.()
     return resolvedPayload
   }
 
