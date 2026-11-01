@@ -11,7 +11,8 @@
     "./internal/task-document-operations": "./src/task-document-internal.ts",
     "./internal/selected-source-owner": "./src/selected-source-owner.ts",
     "./internal/retained-inspection": "./src/retained-inspection-internal.ts",
-    "./internal/artifact-path": "./src/artifact-path-internal.ts"
+    "./internal/artifact-path": "./src/artifact-path-internal.ts",
+    "./internal/deletion-preparation": "./src/deletion-preparation-internal.ts"
   },
   "scripts": {
     "test": "vitest run",

@@ -1,13 +1,15 @@
 import type { PersistenceBackend } from "./types.ts"
-import type { Ownership } from "./ownership.ts"
+import type { Ownership, OwnershipCleanup } from "./ownership.ts"
 import { createBindingObservations } from './binding-observation.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 import { createTaskDocumentOperations, type TaskDocumentConfiguration } from './task-document-operation.ts'
 import { createTaskDocumentTransitions, type TaskTransitionConfiguration } from './task-document-transition.ts'
 
+export interface DeletionDocumentCleanup { assertCovered(keys: readonly string[]): void; assertSettled(): void; close(): Promise<void> }
+
 export function createDocuments(
   backend: Pick<PersistenceBackend, 'putDocument'|'getDocument'> & Partial<Pick<PersistenceBackend, 'profile'|'readDocumentObserved'>>,
-  ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'|'pinDocumentOwnership'|'acquireDocumentLease'|'exclusionScope'|'artifacts'>>,
+  ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'|'pinDocumentOwnership'|'pinDocumentOwnershipRetained'|'acquireDocumentLease'|'exclusionScope'|'artifacts'>>,
   report: (error: unknown) => void,
   processLatches?: ReturnType<typeof createProcessReadLatches>,
   taskConfiguration?: TaskDocumentConfiguration,
@@ -17,7 +19,7 @@ export function createDocuments(
   const observations = createBindingObservations(backend, ownership)
   const deletedDocuments = new Set<string>()
   const isDeleted = (key: string) => [...deletedDocuments].some(value => ownership.exclusionScope ? ownership.exclusionScope([], [key]).keys.some(resource => ownership.exclusionScope!([], [value]).keys.includes(resource)) : value === key)
-  type Disposal = { pins: Awaited<ReturnType<Ownership['pinDocumentOwnership']>>[]; locks: Awaited<ReturnType<Ownership['acquireLease']>>[] }
+  type Disposal = { pins: Awaited<ReturnType<Ownership['pinDocumentOwnership']>>[]; locks: Awaited<ReturnType<Ownership['acquireLease']>>[]; acquisitions: OwnershipCleanup[] }
   const disposalDebt = new Set<Disposal>()
   function trackLease(raw: Awaited<ReturnType<Ownership['acquireLease']>>) {
     let failed = false, cause: unknown
@@ -28,8 +30,8 @@ export function createDocuments(
     } }
   }
   async function dispose(record: Disposal) {
-    while (record.locks.length) { await record.locks.at(-1)!.release(); record.locks.pop() }
-    while (record.pins.length) { await record.pins.at(-1)!.release(); record.pins.pop() }
+    while (record.acquisitions.length) { await record.acquisitions.at(-1)!.close(); record.acquisitions.at(-1)!.assertSettled(); record.acquisitions.pop() }
+    record.locks.length = 0; record.pins.length = 0
     disposalDebt.delete(record)
   }
   let docChain: Promise<void> = Promise.resolve()
@@ -37,8 +39,33 @@ export function createDocuments(
     ? createTaskDocumentOperations(ownership as Ownership, observations, taskConfiguration, run => { const p = docChain.then(run); docChain = p.then(() => {}, () => {}); return p }, processLatches) : undefined
   const taskTransitions = transitionConfiguration && ownership.pinOwnership && ownership.withSessionOperation
     ? createTaskDocumentTransitions(ownership as Ownership, observations, transitionConfiguration, () => docChain, processLatches) : undefined
-  async function withDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>, queued = false): Promise<T> {
-    const record: Disposal = { pins: [], locks: [] }
+  async function withDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>, queued = false, retain?: (cleanup: DeletionDocumentCleanup) => void): Promise<T> {
+    const record: Disposal = { pins: [], locks: [], acquisitions: [] }
+    async function acquire<T extends { release(): void | Promise<void> }>(start: (retain: (cleanup: OwnershipCleanup) => void) => Promise<T>, protectLease = false): Promise<T> {
+      let captured = false
+      const resource = await start(cleanup => { captured = true; record.acquisitions.push(cleanup) })
+      // Compatibility for a minimal custom Ownership test adapter. The original
+      // owner always registers before its first acquisition await.
+      if (!captured) { let settled = false; const disposal = protectLease ? trackLease(resource as unknown as Awaited<ReturnType<Ownership['acquireLease']>>) : resource; record.acquisitions.push({ assertSettled() { if (!settled) throw Error('Document cleanup unresolved') }, async close() { await disposal.release(); settled = true } }) }
+      return resource
+    }
+    let active = false
+    let captured: ReturnType<NonNullable<typeof ownership.exclusionScope>> | undefined
+    const cleanup = Object.freeze({
+      assertSettled() { if (this !== cleanup || active || record.locks.length || record.pins.length || record.acquisitions.length) throw new Error('Deletion document cleanup unresolved') },
+      assertCovered(requested: readonly string[]) {
+        if (this !== cleanup || !active) throw new Error('Deletion document coverage unavailable')
+        captured?.assertCurrent()
+        const coverage = captured?.keys ?? keys
+        const wanted = ownership.exclusionScope?.([], requested)
+        wanted?.assertCurrent()
+        if ((wanted?.keys ?? requested).some(key => !coverage.includes(key))) throw new Error('Deletion document is not covered')
+        for (const pin of record.pins) pin.assertHeld()
+        if (record.locks.some(lock => !lock.held)) throw new Error('Deletion document lease unavailable')
+      },
+      async close() { if (this !== cleanup || active) throw new Error('Deletion document cleanup conflict'); await dispose(record) },
+    })
+    retain?.(cleanup)
     let result: T | undefined, failure: unknown, failed = false
     let completion: PromiseWithResolvers<void> | undefined
     try {
@@ -46,11 +73,13 @@ export function createDocuments(
       const canonical = new Map<string, string>()
       for (const key of keys) canonical.set(ownership.exclusionScope?.([], [key]).keys[0] ?? key, key)
       const ordered = [...canonical].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, key]) => key)
-      if (lockEnabled && ownership.pinDocumentOwnership) for (const key of ordered) record.pins.push(await ownership.pinDocumentOwnership(key))
+      captured = retain ? ownership.exclusionScope?.([], keys) : undefined
+      if (lockEnabled && ownership.pinDocumentOwnership) for (const key of ordered) record.pins.push(await acquire(retain => ownership.pinDocumentOwnershipRetained ? ownership.pinDocumentOwnershipRetained(key, retain) : ownership.pinDocumentOwnership!(key)))
       const execute = async () => {
-        if (lockEnabled) for (const key of ordered) record.locks.push(trackLease(await (ownership.acquireDocumentLease ? ownership.acquireDocumentLease(key) : acquireLease('doc:' + key))))
+        if (lockEnabled) for (const key of ordered) record.locks.push(trackLease(await acquire(retain => ownership.acquireDocumentLease ? ownership.acquireDocumentLease(key, retain) : acquireLease('doc:' + key, retain), true)))
         for (const pin of record.pins) pin.assertHeld()
-        return run()
+        active = true
+        try { return await run() } finally { active = false }
       }
       if (queued) { const p = docChain.then(execute); completion = Promise.withResolvers<void>(); docChain = completion.promise; result = await p } else result = await execute()
     } catch (error) { failed = true; failure = error }
@@ -90,6 +119,7 @@ export function createDocuments(
     } finally { try { finalToken?.end(outcome); token?.end(outcome) } catch (error) { outcome = 'unknown'; throw error } finally { finalAdmission?.finish(outcome); admission?.finish(outcome) } }
   }
   return {
+    withDeletionDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>, retain: (cleanup: DeletionDocumentCleanup) => void) { return withDocumentLeases(keys, run, false, retain) },
     observations, withDocumentLeases, taskOperations, taskTransitions,
     // Deletion closes this key for this coordinator lifetime; the retained token
     // keeps a later capture from treating the retired document as available.

@@ -6,6 +6,7 @@ import { createMutations } from './coordinator/mutations.ts'
 import { createDocuments } from './coordinator/documents.ts'
 import { createLoads } from './coordinator/load.ts'
 import { createLifecycle } from './coordinator/lifecycle.ts'
+import { associateDeletionPreparation } from './coordinator/deletion-preparation.ts'
 import { createManagedDocuments } from './coordinator/managed-documents.ts'
 import { assertOutsideForkController, closeForkControllerAdmission } from './fork-controller.ts'
 import { associateObservationCleanupOwner } from './coordinator/binding-observation.ts'
@@ -187,6 +188,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       }
   }
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
+  if (backend.deleteOwnedSession) associateDeletionPreparation(coordinator, lifecycle)
   associateColdExecutionWrites(coordinator, coldWrites)
   observations.associateRetainedCoordinator(coordinator)
   associateObservationCleanupOwner(coordinator, observations.cleanupForError)
