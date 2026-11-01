@@ -21,7 +21,7 @@ export type UsageFactObservation =
   | (Fact & { type: 'local-invocation'; localInvocationId: string; ordinal: number; lane: ObservationLane; incarnation: string })
   | (Fact & { type: 'local-settle'; localInvocationId: string; disposition: 'unsent' | 'completed' | 'failed' })
 export type UsageLiveObservation =
-  | (Identity & Candidate & { type: 'handoff'; attemptId: string; sendId: string; rebind: number; incarnation: string })
+  | (Identity & Candidate & { type: 'handoff'; attemptId: string; sendId: string; rebind: number; incarnation: string; attribution?:Attribution })
   | (Identity & Attribution & Counters & { type: 'usage-snapshot'; attemptId: string; sendId: string; snapshotOrdinal: number; validity: 'valid' | 'invalid'; terminalCoverage: 'complete' | 'partial' | 'unknown' })
   | (Attribution & Counters & { type: 'unattributed-invocation'; validity: 'valid' | 'invalid'; terminalCoverage: 'complete' | 'partial' | 'unknown' })
 export type UsageObservationV1 = { kind: 'usage-observation'; version: 1; observationId: string; observedAt: number } & (

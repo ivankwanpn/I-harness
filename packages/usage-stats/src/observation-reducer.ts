@@ -118,9 +118,10 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
    const sendKey=tuple(reserve.ownerSessionId,h.sendId);if(sendAssociations.get(sendKey)?.size!==1)valid=false
    if(!valid){warn('Incomplete or conflicting handoff association: '+attemptKey);if(inRange(row.observedAt))unknownReservations++;continue}
    const send:ObservationSend={ownerSessionId:reserve.ownerSessionId,actionId:reserve.actionId,attemptId:reserve.attemptId,sendId:h.sendId,handoffAt:hrow.observedAt,lane:reserve.lane,rebind:h.rebind,durable:uniqueFacts.every(row=>row.source==='journal-fact'),disposition:settled?.disposition??null,totalInputTokens:null,uncachedInputTokens:null,totalTokens:null,coverage:'unavailable',estimatedCostUsd:null,costCoverage:'unavailable'}
+   if(h.attribution)Object.assign(send,h.attribution)
    const snapshots=group.filter(x=>x.observation.type==='usage-snapshot'&&x.observation.attemptId===reserve.attemptId&&x.observation.sendId===h.sendId).sort((a,b)=>(a.observation as Live<'usage-snapshot'>).snapshotOrdinal-(b.observation as Live<'usage-snapshot'>).snapshotOrdinal||a.observationId.localeCompare(b.observationId))
    const snapshotGroups=new Map<number,Row[]>();for(const snapshot of snapshots){matchedSnapshots.add(snapshot.observationId);const ordinal=(snapshot.observation as Live<'usage-snapshot'>).snapshotOrdinal;const list=snapshotGroups.get(ordinal)??[];list.push(snapshot);snapshotGroups.set(ordinal,list)}
-   let incomplete=inputIncomplete,seen=false,terminal:Live<'usage-snapshot'>['terminalCoverage']='unknown'
+   let incomplete=inputIncomplete,seen=false,attributionConflict=false,terminal:Live<'usage-snapshot'>['terminalCoverage']='unknown'
    // This DTO carries cumulative PARTIAL updates, not self-contained snapshots:
    // completeness requires every ordinal from 1 through the latest observed.
    let expectedOrdinal=1
@@ -128,7 +129,7 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
     if(ordinal!==expectedOrdinal){incomplete=true;warn('Missing cumulative snapshot ordinal: '+attemptKey)}expectedOrdinal=ordinal+1
     const s=list[0]!.observation as Live<'usage-snapshot'>
     if(list.some(x=>!same(x.observation,s))||s.validity!=='valid'){incomplete=true;warn('Invalid or conflicting usage update: '+attemptKey);continue}
-    if(seen&&(attribution.some(key=>send[key]!==s[key])||s.inputTokenSemantics!==undefined&&send.inputTokenSemantics!==undefined&&s.inputTokenSemantics!==send.inputTokenSemantics)){incomplete=true;warn('Usage attribution or token semantics changed: '+attemptKey);continue}
+    if(((seen||h.attribution)&&attribution.some(key=>send[key]!==s[key]))||(s.inputTokenSemantics!==undefined&&send.inputTokenSemantics!==undefined&&s.inputTokenSemantics!==send.inputTokenSemantics)){incomplete=true;attributionConflict=true;warn('Usage attribution or token semantics changed: '+attemptKey);continue}
     const next={...send};for(const key of counters)if(s[key]!==undefined)Object.assign(next,{[key]:s[key]})
     if(next.inputTokenSemantics==='includes-cache'&&next.inputTokens!==undefined&&((next.cacheReadTokens??0)+(next.cacheCreationTokens??0)>next.inputTokens)){incomplete=true;warn('Inconsistent cumulative cache update: '+attemptKey);continue}
     Object.assign(send,next);for(const key of attribution)if(s[key]!==undefined)Object.assign(send,{[key]:s[key]});seen=true;terminal=s.terminalCoverage
@@ -139,7 +140,7 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
    send.uncachedInputTokens=send.inputTokenSemantics==='excludes-cache'?safe(input):input!==undefined&&read!==undefined&&creation!==undefined&&send.inputTokenSemantics==='includes-cache'?safe(input-read-creation):null
    send.totalTokens=send.totalInputTokens!==null&&send.outputTokens!==undefined?safe(send.totalInputTokens+send.outputTokens):null
    if((send.totalInputTokens===null&&input!==undefined&&read!==undefined&&creation!==undefined&&send.inputTokenSemantics!==undefined)||(send.totalTokens===null&&send.totalInputTokens!==null&&send.outputTokens!==undefined)){incomplete=true;warn('Usage total is incomplete or outside safe numeric range: '+attemptKey)}
-   send.coverage=!seen?'unavailable':incomplete||terminal!=='complete'||send.totalTokens===null?'incomplete':'complete'
+   send.coverage=attributionConflict?'incomplete':!seen?'unavailable':incomplete||terminal!=='complete'||send.totalTokens===null?'incomplete':'complete'
    send.costCoverage=send.billing==='subscription'?'subscription-no-api-cost':'unavailable'
    if(inRange(send.handoffAt))sends.push(send)
   }

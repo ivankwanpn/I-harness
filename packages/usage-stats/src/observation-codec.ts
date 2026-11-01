@@ -47,7 +47,7 @@ function payload(value: unknown, source: unknown): boolean {
     case 'local-settle': return fields(value, { ...tag, ...fact, localInvocationId: id, disposition: oneOf('unsent', 'completed', 'failed') })
   }
   if (source !== 'live-owner') return false
-  if (type === 'handoff') return fields(value, { ...tag, ...identity, ...candidate, attemptId: id, sendId: id, rebind: v => integer(v) && (v as number) <= 3, incarnation: id })
+  if (type === 'handoff') return fields(value, { ...tag, ...identity, ...candidate, attemptId: id, sendId: id, rebind: v => integer(v) && (v as number) <= 3, incarnation: id },{attribution:v=>fields(v,attribution,{projectId:attributionText})})
   const required = type === 'usage-snapshot' ? { ...tag, ...identity, ...attribution, ...coverage, attemptId: id, sendId: id, snapshotOrdinal: positive } : type === 'unattributed-invocation' ? { ...tag, ...attribution, ...coverage } : undefined
   if (!required || !fields(value, required, { ...counters, projectId: attributionText })) return false
   return !(value.inputTokenSemantics === 'includes-cache' && typeof value.inputTokens === 'number' && ((value.cacheReadTokens as number | undefined) ?? 0) + ((value.cacheCreationTokens as number | undefined) ?? 0) > value.inputTokens)

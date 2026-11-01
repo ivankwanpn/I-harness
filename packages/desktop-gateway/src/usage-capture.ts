@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto"
 import { createRetryingClient, resolveRetryPolicy, mapModelRequest, observeModelClient, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
 import type { buildModelClient } from "@i-harness/provider"
 import { validateRequestMetrics, type UsageRecord } from "@i-harness/usage-stats"
+import { withOriginalPassiveClientAttribution } from '@i-harness/llm-seam/internal/passive-observation'
 
 /** Captures provider attempts, below retries and above protocol adapters. The
  * only durable data is the explicit UsageRecord allowlist. */
 export function createUsageCapture(options: {
   workspace: string
+  observationMode?:boolean
+  passiveObserver?:import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
   record: (record: UsageRecord) => Promise<void>
   onRequestFacts?: (record: Pick<UsageRecord, "id" | "projectId" | "sessionId" | "providerId" | "modelId" | "requestMetrics" | "status">) => void
   projectFor?: (sessionId: string) => Promise<string | undefined>
@@ -36,6 +39,7 @@ export function createUsageCapture(options: {
         // The provider builder ordinarily installs retries. Move that one layer
         // outside capture so usage from failed attempts is not discarded by it.
         const client = build({ ...profile, retryPolicy: undefined }, model, extra)
+        if(options.observationMode){const attributed=withOriginalPassiveClientAttribution(client,{providerId:profile.name,modelId:model??profile.defaultModel??'unknown',workspace:options.workspace,billing:profile.codexSubscription?'subscription':'api'},options.passiveObserver);return profile.retryPolicy===undefined?attributed:createRetryingClient(attributed,resolveRetryPolicy(profile.retryPolicy),{providerId:profile.name,modelId:model??profile.defaultModel})}
         const capture = observeModelClient(mapModelRequest(client, request => {
           const { sessionId: _sessionId, ...providerRequest } = request
           return providerRequest

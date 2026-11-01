@@ -10,6 +10,7 @@ import { normalizePreparedTextOutput, readPreparedTextOutput, type PreparedTextO
 import { NO_GENERATION_RETRY } from './generation.ts'
 import { assertOwnedPreparedTerminal, isOwnedPreparedTerminal, preparedExecutionSource } from './owned-terminal.ts'
 import { associateOwnedConfirmation } from './stream-lifetime.ts'
+import { createOriginalPassiveExecution, inheritOriginalPassivePrepared } from './passive-observation.ts'
 
 type OwnedExecutionConfirmation = Readonly<Pick<ExecutionConfirmation, 'version' | 'sendId' | 'semanticId' | 'payloadId' | 'payloadKind'>>
 const ownedConfirmations = new WeakMap<ExecutionConfirmation, { source: PreparedModelRequest; facts: OwnedExecutionConfirmation }>()
@@ -78,19 +79,21 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
         if (options.validate && cap !== undefined && (!Number.isSafeInteger(cap) || cap < output.minimumCap))
           throw finalValidationError('output-limit', createPreparedValidation({ ...validation, status: 'invalid', issues: [{ rule: 'output-range', site: 'generation' }], omittedIssueCount: 0 }))
         validateOutputCap(cap, output.minimumCap)
-        return derive(options.cap(snapshotModelData(original), cap), { ...options.request, maxOutputTokens: cap })
+        const derived=derive(options.cap(snapshotModelData(original), cap), { ...options.request, maxOutputTokens: cap });inheritOriginalPassivePrepared(prepared,derived);return derived
       },
       async *stream(control?: PreparedStreamControl) {
         const actual = preparedControls(options.request, control)
         if (actual.generation) assertOwnedPreparedTerminal(prepared)
         actual.signal?.throwIfAborted()
         let confirmation: ExecutionConfirmation | undefined, issued = false, failed = false
+        const passive=owned?createOriginalPassiveExecution(prepared):undefined
         const execution = preparedExecution(measurement, owned ? { ...actual,
           confirmExecution(value) { confirmation = value; associateOwnedConfirmation(value); actual.confirmExecution?.(value) },
           onTransportIssue() { issued = true; actual.onTransportIssue?.() },
-        } : actual, validation)
+        } : actual, validation,passive)
         try {
           for await (const event of options.execute(snapshotModelData(actualBody), serialized, actual, execution)) {
+            try { passive?.event(event) } catch { /* Passive observation cannot mask original event/settlement. */ }
             if (event.type === 'error') failed = true
             if (event.type === 'end' || event.type === 'error') await execution.settle(event.type === 'end' ? 'completed' : (event.error as Error & { code?: string }).code === 'TRANSPORT' ? 'unknown' : 'failed')
             if (owned && confirmation) {
@@ -106,6 +109,7 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
           if (confirmation) ownedConfirmations.delete(confirmation)
           throw error
         } finally {
+          try { passive?.finish('unknown') } catch { /* Capture before original settlement await. */ }
           // Fixed waiting/retry composition closes after observing end, and
           // waiting aborts its private controller during cleanup. Successful
           // terminal end survives that cleanup; any observed failure revokes it.
