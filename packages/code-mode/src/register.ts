@@ -41,7 +41,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const originalCells = new Map<string, { terminal: ReturnType<typeof Promise.withResolvers<void>>; fence: ReturnType<typeof Promise.withResolvers<void>>; broker?: Pick<OriginalCellFinalization, 'settle'> }>()
   const finalOutputFactory=options.finalOutput
   const finalOutputs = createFinalCodeOutputs(factOwner, finalOutputFactory, () => facts.refresh())
-  const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged, finalOutputFactory ? record => finalOutputs.commit(record) : undefined)
+  const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged, finalOutputFactory ? {retains:cellId=>finalOutputs.retains(cellId),commit:record=>finalOutputs.commit(record)} : undefined)
   const publishOutput = createCodeOutputPublisher(facts, options.retainText)
   const pendingFinishes = new Map<string, () => Promise<void>>()
   const admissionDebts = new Map<string, () => Promise<void>>()

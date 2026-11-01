@@ -4,7 +4,7 @@ import { createOutputQueue, recoveryError } from './event-facts/queue.ts'
 
 /** A mount owns one ordered queue. Each actual admission retains its one
  * original output source until its terminal has synchronously sealed it. */
-export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () => Promise<void>, onObservationChange?: () => void, committedDescriptor?: (record: object) => Promise<void>) {
+export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () => Promise<void>, onObservationChange?: () => void, committedDescriptor?: { retains(cellId:string):boolean; commit(record:object):Promise<void> }) {
   const cells = new Map<string, CellFacts>(), pending = new Set<Pending>()
   const admissionHolds = new Map<string, { action?: ManagedAction<ProducerFactOutcome> }>()
   const held = new Set<CellFacts>(), failedAdmissions = new Set<string>()
@@ -40,10 +40,10 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
   })
   const enroll = (record: Pick<Pending, 'kind'> & Partial<Pending>) => {
     const enrolled = queue.enroll({ attempted: false, disposed: false, cancelled: false, settled: false, commit: callback(), cancel: callback(), settle: callback(), ...record })
-    if (committedDescriptor && record.kind !== 'reference') {
+    if (committedDescriptor && record.expectedMember && committedDescriptor.retains(record.expectedMember.cellId)) {
       const token=(record.action??record.cell?.action??mountAction).owner
       if(token)enrolled.expectedOwner=Object.freeze({sessionId:token.sessionId,incarnation:token.incarnation})
-      enrolled.descriptor = () => committedDescriptor(enrolled)
+      enrolled.descriptor = () => committedDescriptor.commit(enrolled)
     }
     pending.add(enrolled); return enrolled
   }

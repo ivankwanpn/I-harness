@@ -31,6 +31,7 @@ export function createFinalCodeOutputs(owner: FactOwner, factory: CodeFinalOutpu
     bind(mount:object) { if(mounts.has(mount))throw new Error('Original Code mount already associated');mounts.set(mount, registry) },
     observe(listener:(id:string,handle:Slot['handle'])=>void){listeners.add(listener);return()=>{listeners.delete(listener)}},
     capture(id:string) { return slots.get(id)?.handle },
+    retains(id:string) { return slots.has(id) },
     reserve(cellId:string, sessionId:string|undefined, original:OriginalCellFinalization, runtime:OriginalCellFinalization, instruction:boolean) {
       if (!factory || !sessionId || instruction || isNondurableSession(owner.view) || owner.view.formatVersion!==14) return
       if(slots.has(cellId))throw new Error('Original Code output cell still owned')

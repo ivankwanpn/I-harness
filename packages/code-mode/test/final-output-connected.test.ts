@@ -11,7 +11,7 @@ import { createCodeFinalOutputRetention } from '../../session-executor/src/lifec
 import { registerCodeMode } from '../src/register.ts'
 import { captureOriginalCodeFinalOutput, observeOriginalCodeFinalOutputs } from '../src/final-output.ts'
 import { observeOriginalCellFinalizations } from '../src/finalization.ts'
-import { subscribe, type ManagedArtifactRef } from '@i-harness/core-session'
+import { subscribe, createNondurableFactOwner, createSession, type ManagedArtifactRef } from '@i-harness/core-session'
 
 async function setup() {
   const base=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'code-final-')), sessionRoot=join(base,'sessions')
@@ -24,6 +24,32 @@ async function setup() {
   const factory:import('../src/final-output.ts').CodeFinalOutputFactory=input=>createCodeFinalOutputRetention({service,sourceFor})(input)
   return {coordinator,id,document,ctx,tools,service,factory,sourceFor,revoke(){authorized=false},revokeDuringRead(){cutoff=reads+2}}
 }
+it.each(['original-service','copied-service'] as const)('keeps genuine nondurable Code and its consumed cursor intact with an inactive optional manifest factory: %s',async mode=>{
+  const session=createSession(),owner=createNondurableFactOwner(session),ctx=createContext(),tools=createToolRegistry(ctx)
+  const root=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'inactive-final-')),service=createContextOutputService({root,workspaceId:'inactive'})
+  const begin=vi.spyOn(service,'beginResult'),sourceFor=vi.fn(async()=>({sourceId:'must-not-be-consulted'}))
+  const factory=vi.fn(createCodeFinalOutputRetention({service:mode==='copied-service'?{...service}:service,sourceFor}))
+  const body=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>()
+  tools.register({name:'boundary',description:'',inputSchema:{},execute:async()=>{entered.resolve();await body.promise;return null}})
+  const mount=registerCodeMode(ctx,tools,{session,sessionId:'nondurable',factOwner:owner,config:{mode:'mixed'},finalOutput:factory})
+  const observed=vi.fn(),off=observeOriginalCodeFinalOutputs(mount,observed)
+  let clean=false
+  try{
+    const first=await tools.get('code_exec')!.execute({code:'text("ordinary first");await tools.boundary({});text("ordinary second");store("key",7)',yield_time_ms:1000},{session}) as {status:string;text?:string;cell_id:string}
+    await entered.promise
+    expect(first).toMatchObject({status:'running',text:'ordinary first'})
+    expect(await tools.get('code_wait')!.execute({cell_id:first.cell_id,yield_time_ms:0},{session})).toMatchObject({status:'running',text:''})
+    body.resolve()
+    expect(await tools.get('code_wait')!.execute({cell_id:first.cell_id,yield_time_ms:1000},{session})).toMatchObject({status:'completed',text:'ordinary second'})
+    await expect(tools.get('code_wait')!.execute({cell_id:first.cell_id,yield_time_ms:0},{session})).rejects.toThrow(/Cell unavailable/)
+    expect(session.events.filter(event=>event.type==='code/output')).toHaveLength(2)
+    expect(session.events.filter(event=>event.type==='code/store')).toHaveLength(1)
+    expect(()=>captureOriginalCodeFinalOutput(mount,first.cell_id)).toThrow(/unavailable/)
+    expect(()=>captureOriginalCodeFinalOutput({...mount},first.cell_id)).toThrow(/unavailable/)
+    expect(observed).not.toHaveBeenCalled();expect(factory).not.toHaveBeenCalled();expect(sourceFor).not.toHaveBeenCalled();expect(begin).not.toHaveBeenCalled()
+    clean=true
+  }finally{body.resolve();off();if(clean)await mount.dispose();else await mount.dispose().catch(()=>{});await service.close();vi.restoreAllMocks()}
+},10000)
 it('binds the original immutable committed member despite a retention alias mutation in the genuine commit observer',async()=>{
   const f=await setup(),text=createCodeTextRetention({service:f.service,sourceFor:f.sourceFor})
   let alias:ManagedArtifactRef|undefined,canonical:ManagedArtifactRef|undefined,captures=0,observed=0,output!:ReturnType<typeof captureOriginalCodeFinalOutput>
