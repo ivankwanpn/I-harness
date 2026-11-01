@@ -6,6 +6,9 @@ import { generationClock } from './generation-clock.ts'
 import { OwnedGenerationAction } from './generation-action.ts'
 import { readOwnedGenerationActions } from '../../../core-session/src/managed/view.ts'
 import { retainGenerationClose } from './generation-close-settlement.ts'
+import { isManagedExecutionOwner, readAcknowledgedExecutionMembers } from '@i-harness/core-session/internal/execution'
+import type { ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts'
+import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
 
 const sameOrigin = (a: GenerationOrigin, b: GenerationOrigin) => a.kind === b.kind && a.seq === b.seq
   && (a.kind === 'observation-input' ? a.inputId === (b.kind === 'observation-input' ? b.inputId : undefined) : true)
@@ -16,8 +19,18 @@ const sameOrigin = (a: GenerationOrigin, b: GenerationOrigin) => a.kind === b.ki
 /** One lifecycle per real F1 action. Durable facts alone determine allowance;
  * the only private spend information is live proof that a handoff was unsent. */
 export function createGenerationLifecycle(view: SessionView, ownerSessionId: string, action: ManagedAction<ProducerFactOutcome>, localTest?: { enabled: boolean; selectedClient(): import('@i-harness/llm-seam').ModelClient | undefined }, dependencies?: AgentGenerationDependencies): AgentGenerationLifecycle {
+  return generationLifecycle({view},ownerSessionId,action,localTest,dependencies)
+}
+/** Internal original fold/capture branch; never constructs a Session surrogate. */
+export function createExecutionGenerationLifecycle(execution: ManagedExecutionAttachment, ownerSessionId: string, action: ManagedAction<ProducerFactOutcome>, localTest?: { enabled: boolean; selectedClient(): import('@i-harness/llm-seam').ModelClient | undefined }, dependencies?: AgentGenerationDependencies): ExecutionGenerationLifecycle {
+  if(!isManagedExecutionOwner(execution.identity,execution.owner)||!execution.owner.ownsAction(action))throw generationError('GENERATION_UNSUPPORTED')
+  return generationLifecycle({execution},ownerSessionId,action,localTest,dependencies)
+}
+export interface ExecutionGenerationLifecycle { drain():Promise<void>; open(...args:Parameters<AgentGenerationLifecycle['open']>):Promise<OwnedGenerationAction> }
+function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:never;execution:ManagedExecutionAttachment}, ownerSessionId:string,action:ManagedAction<ProducerFactOutcome>,localTest?:{enabled:boolean;selectedClient():import('@i-harness/llm-seam').ModelClient|undefined},dependencies?:AgentGenerationDependencies):ExecutionGenerationLifecycle {
+  const {view,execution}=domain
   const descriptor = Object.getOwnPropertyDescriptor(action, 'owner'), owner = descriptor && 'value' in descriptor ? descriptor.value as import('@i-harness/core-session').OwnerToken : undefined
-  if (!isNondurableSession(view) && (!owner || !Object.isFrozen(owner) || descriptor?.writable !== false || descriptor.configurable !== false || owner.sessionId !== ownerSessionId || typeof owner.incarnation !== 'string' || !owner.incarnation)) throw generationError('GENERATION_UNSUPPORTED')
+  if ((!view || !isNondurableSession(view)) && (!owner || !Object.isFrozen(owner) || descriptor?.writable !== false || descriptor.configurable !== false || owner.sessionId !== ownerSessionId || typeof owner.incarnation !== 'string' || !owner.incarnation)) throw generationError('GENERATION_UNSUPPORTED')
   const incarnation = owner?.incarnation ?? randomUUID(), retained = new Set<CapturedActionFact<ProducerFactOutcome>>()
   const expected=new WeakMap<CapturedActionFact<ProducerFactOutcome>,readonly GenerationEvent[]>()
   const passive=dependencies?.passiveGeneration
@@ -25,7 +38,7 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
     if(!passive)return
     try{
       const originals=expected.get(capture);if(!originals)throw Error('Original generation operation absent')
-      const acknowledged=outcome.seqs.map(seq=>({seq,event:view.events[seq]}))
+      const acknowledged=execution ? outcome.kind==='committed' ? readAcknowledgedExecutionMembers(capture,outcome).map(event=>({seq:event.seq!,event})) : [] : outcome.seqs.map(seq=>({seq,event:view!.events[seq]}))
       for(const original of originals){const matches=acknowledged.filter(({event})=>event?.type===original.type&&'actionId' in event&&event.actionId===original.actionId&&'op' in event&&event.op===original.op&&Object.keys(original).every(key=>JSON.stringify((event as unknown as Record<string,unknown>)[key])===JSON.stringify((original as unknown as Record<string,unknown>)[key])))
         if(matches.length!==1)throw Error('Acknowledged generation member unavailable')
         const {seq,event}=matches[0]!;passive.capture({kind:'fact',source:outcome.kind==='committed'?'journal-fact':'memory-committed',event:JSON.parse(JSON.stringify(event)) as GenerationEvent,factSeq:seq})
@@ -46,9 +59,9 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
       throw generationError('GENERATION_UNCERTAIN')
     }
   }, dependencies?.beforeDrain)
-  const scope = { ...view.header, sessionId: ownerSessionId }
-  const read = () => readOwnedGenerationActions(view, scope) ?? readGenerationActions(view.events, scope, view.formatVersion)
-  const state = (id: string) => read().find(value => value.opened.actionId === id)
+  const scope = { ...view?.header, sessionId: ownerSessionId }
+  const read = (): readonly import('@i-harness/core-session').DeepReadonly<import('@i-harness/core-session').GenerationActionState>[] => execution ? execution.observe().generations() : readOwnedGenerationActions(view!, scope) ?? readGenerationActions(view!.events, scope, view!.formatVersion)
+  const state = (id: string) => {const original=read().find(value => value.opened.actionId === id);return original&&execution?copyConversationData(original):original}
   const own = <T>(operation: Promise<T>): Promise<T> => {
     running.add(operation)
     void operation.then(() => running.delete(operation), () => running.delete(operation))
@@ -87,8 +100,8 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
       persisted = state(persisted.opened.actionId)!
     }
     const clock = generationClock(persisted.opened.startedAt, persisted.expiresAt, persisted.trustedAt, options.signal ? AbortSignal.any([action.signal, options.signal]) : action.signal, options.start)
-    return new OwnedGenerationAction(persisted, clock, {
-      view, ownerSessionId, incarnation, assertOpen: action.assertOpen, read: state,
+    return new OwnedGenerationAction(execution?copyConversationData(persisted):persisted, clock, {
+      view, execution, ownerSessionId, incarnation, assertOpen: execution ? () => {action.assertOpen();source.assertHeld();if(!execution.owner.ownsAction(action))throw generationError('GENERATION_UNSUPPORTED')} : action.assertOpen, read: state,
       append: async (events, current) => { await commit(events, current) },
       settle: async event => { await receipt(remember(source.generation.capture(event),[event])) },
       captureClose: event => {

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { generationLimits, type GenerationAcceptanceDraft, type GenerationActionEvent, type GenerationActionState, type GenerationAttemptEvent, type GenerationCandidate, type GenerationEvent, type GenerationLane, type SessionEvent, type SessionView } from '@i-harness/core-session'
+import { generationLimits, isStrictFactData, type GenerationAcceptanceDraft, type GenerationActionEvent, type GenerationActionState, type GenerationAttemptEvent, type GenerationCandidate, type GenerationEvent, type GenerationLane, type SessionEvent, type SessionView } from '@i-harness/core-session'
 import { modelExecutionSource, assertOwnedPreparedTerminal, createGenerationControl, generationError, NO_GENERATION_RETRY, type ExecutionConfirmation, type GenerationControl, type GenerationReservation, type ModelClient, type PreparedModelRequest } from '@i-harness/llm-seam'
 import { isMockClient, mockExecutionClient, mockPreparedClient } from '@i-harness/llm-mock'
 import type { AgentGenerationAction } from '@i-harness/core-agent'
@@ -8,11 +8,14 @@ import type { generationClock } from './generation-clock.ts'
 import type { GenerationIssue } from '@i-harness/llm-seam'
 import type { OriginalGenerationCloseSettlement } from './generation-close-settlement.ts'
 import { registerOriginalPassiveReservation, type OriginalPassiveObserver } from '@i-harness/llm-seam/internal/passive-observation'
+import type { ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts'
+import { assertExecutionPreparation } from './execution-input-preparation.ts'
 
 type Reserved = Extract<GenerationAttemptEvent, { op: 'reserve' }>
 type Settlement = Extract<GenerationAttemptEvent, { op: 'settle' }> | Extract<GenerationActionEvent, { op: 'close' | 'local-settle' }>
 export interface GenerationActionDocument {
-  readonly view: SessionView; readonly ownerSessionId: string; readonly incarnation: string
+  readonly view?: SessionView; readonly ownerSessionId: string; readonly incarnation: string
+  readonly execution?: ManagedExecutionAttachment
   assertOpen(): void
   read(actionId: string): GenerationActionState | undefined
   append(events: readonly GenerationEvent[], current: () => boolean): Promise<void>
@@ -57,8 +60,32 @@ export class OwnedGenerationAction implements AgentGenerationAction {
   }
   private stillCurrent = () => { try { this.current(); return true } catch { return false } }
   assertOpen() { this.current() }
+  adoptExecution(identity: import('@i-harness/core-session/internal/execution').ManagedExecutionIdentity, inputId:string, preparation:import('@i-harness/core-session').PreparedInputResult, signal:AbortSignal) {
+    this.current();signal.throwIfAborted()
+    const execution=this.document.execution,origin=this.initial.opened.origin
+    if(!execution||execution.identity!==identity||this.adopted||this.initial.opened.purpose!=='main'||!['input','observation-input'].includes(origin.kind))throw generationError('GENERATION_STALE')
+    assertExecutionPreparation(execution,preparation,this.actionId,inputId)
+    if(origin.seq!==preparation.admissionSeq||!execution.observe().inbox.isPending(inputId))throw generationError('GENERATION_STALE')
+    this.adopted=true
+  }
+  adoptManualExecution(identity:import('@i-harness/core-session/internal/execution').ManagedExecutionIdentity,signal:AbortSignal) {
+    this.current();signal.throwIfAborted()
+    if(!this.document.execution||this.document.execution.identity!==identity||this.adopted||this.initial.opened.purpose!=='manual'||this.initial.opened.origin.kind!=='command')throw generationError('GENERATION_STALE')
+    this.adopted=true
+  }
+  adoptDelegatedExecution(identity:import('@i-harness/core-session/internal/execution').ManagedExecutionIdentity,origin:Extract<import('@i-harness/core-session').GenerationOrigin,{kind:'delegated-input'}>,signal:AbortSignal) {
+    this.current();signal.throwIfAborted()
+    if(!isStrictFactData(origin))throw generationError('GENERATION_STALE')
+    if(Object.keys(origin).some(key=>!['kind','ref','seq',origin.ref==='admitted'?'inputId':'messageId'].includes(key)))throw generationError('GENERATION_STALE')
+    const execution=this.document.execution,expected=this.initial.opened.origin,header=execution?.observe().header
+    if(!execution||execution.identity!==identity||this.adopted||this.initial.opened.purpose!=='main'||expected.kind!=='delegated-input'||!header?.parentSession||origin.seq<(header.seedLength??0)
+      ||origin.kind!==expected.kind||origin.seq!==expected.seq||origin.ref!==expected.ref
+      ||(expected.ref==='admitted'?(origin.ref!=='admitted'||origin.inputId!==expected.inputId):(origin.ref!=='inbox'||origin.messageId!==expected.messageId)))throw generationError('GENERATION_STALE')
+    this.adopted=true
+  }
   adopt(target: SessionView, inputId: string, preparationId: string, signal: AbortSignal) {
     this.current(); signal.throwIfAborted()
+    if(!this.document.view)throw generationError('GENERATION_UNSUPPORTED')
     const admission = this.document.view.events[this.initial.opened.origin.seq]
     const result = this.document.view.events.findLast(event => event.type === 'agent/input/preparation' && event.preparationId === preparationId)
     if (target !== this.document.view || this.adopted || this.initial.opened.purpose !== 'main' || !['input', 'observation-input'].includes(this.initial.opened.origin.kind)
@@ -68,12 +95,14 @@ export class OwnedGenerationAction implements AgentGenerationAction {
   }
   adoptManual(target: SessionView, signal: AbortSignal) {
     this.current(); signal.throwIfAborted()
+    if(!this.document.view)throw generationError('GENERATION_UNSUPPORTED')
     const command = this.document.view.events[this.initial.opened.origin.seq]
     if (target !== this.document.view || this.adopted || this.initial.opened.purpose !== 'manual' || this.initial.opened.origin.kind !== 'command' || command?.type !== 'command/run') throw generationError('GENERATION_STALE')
     this.adopted = true
   }
   adoptDelegated(target: SessionView, origin: Extract<import('@i-harness/core-session').GenerationOrigin, { kind: 'delegated-input' }>, signal: AbortSignal) {
     this.current(); signal.throwIfAborted()
+    if(!this.document.view)throw generationError('GENERATION_UNSUPPORTED')
     const expected = this.initial.opened.origin, event = this.document.view.events[origin.seq]
     const matches = expected.kind === 'delegated-input' && expected.ref === origin.ref && expected.seq === origin.seq
       && (expected.ref === 'admitted' ? origin.ref === 'admitted' && expected.inputId === origin.inputId && event?.type === 'agent/input/admitted' && event.inputId === origin.inputId
