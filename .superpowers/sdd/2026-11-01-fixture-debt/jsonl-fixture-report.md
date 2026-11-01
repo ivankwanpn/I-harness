@@ -30,3 +30,11 @@ All commands used mandatory runner with fresh six-root isolation. Evidence under
 - final-types-3c3a85a1e8b348a0a610a0b1ae5f7f85: final JSONL typecheck exit0.
 
 Manifest scope is tracked package sources/config, exact tests and explicit bootstrap.ts/task storage extras, not complete transitive closure. git diff --check passes. No tests skipped in whole-file gate; no weakened original assertions, fake owner, dependency change, protected broad gate or MAIN edit. Independent review and ROOT acceptance remain outstanding. Passing populations overlap and must not be added.
+
+## Independent review P2 correction
+
+Read ROOT jsonl-fixture-review.md against frozen e6d95c06. The historical branch had omitted publicationStatus despite actual JSONL diagnostic fallback exposing READY bytes alongside a conflicting same-route publication. Reproduced with genuine completed Task14 target, same original owner, and actual .publish sibling: publication-red-0db309f2dc4c4de782e5c6c9cdcd374b returned already-ready instead of refusal.
+
+Restored original publicationStatus decision immediately after historical state acquisition and before adoption: conflict refuses, unknown blocks, valid still requires readyState. This changes only coordinator/bootstrap.ts production; passive original operation/owner path remains intact. The new bootstrap-public-compatibility control first proves valid original historical completion, then adds conflict and verifies exact refusal, unchanged protected bytes, same original header owner, zero new append/prepare calls, and no frame confirmation/adoption effects. Factory-level prepare mock delegates to original implementation and is installed before descriptor capture.
+
+Mandatory-runner publication-green-8f311effc0794c1c82b2f107d94dbb29 passes both the causal conflict case and original lost-completion passive positive (2/2). publication-types-667770b9330247eda111a4eaf804e684 passes JSONL types on final changed bytes. No unchanged 36-case rerun. Independent scoped rereview by the original reviewer remains pending. Prior reports/failed hypotheses remain preserved.

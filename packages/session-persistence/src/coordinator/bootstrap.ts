@@ -379,7 +379,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           b.pending = undefined
         }
         const state = await read(b.invocation,entry.route)
-        if (!readyState(state)) return blocked(entry)
+        const publication = publicationStatus(state,b.stage)
+        if (publication === 'conflict') return {kind:'refused',reason:'conflict'}
+        if (publication !== 'valid' || !readyState(state)) return blocked(entry)
         return await adopt(entry,state,guards,undefined,observation)
       }
       await settleCapture(entry)

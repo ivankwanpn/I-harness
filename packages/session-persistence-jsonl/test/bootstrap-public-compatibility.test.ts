@@ -65,6 +65,7 @@ vi.mock('../src/backend/bootstrap-header.ts', async importOriginal => {
  const original = await importOriginal<typeof import('../src/backend/bootstrap-header.ts')>()
  return {...original, createBootstrapHeaderBackend(...args: Parameters<typeof original.createBootstrapHeaderBackend>) {
   const backend = original.createBootstrapHeaderBackend(...args)
+  backend.prepareBootstrapHeader = vi.fn(backend.prepareBootstrapHeader)
   return {...backend, trackHeaderOwner(id: string, owner: p.HeldFactOwner) { backend.trackHeaderOwner(id,owner); headerOwners.set(id,{owner,backend}) }}
  }}
 })
@@ -92,4 +93,20 @@ it('keeps original unknown completion blocked after revocation and refuses new i
  expect(vi.mocked(backend.appendOwnedBatch!).mock.calls.length).toBe(count)
  await expect(coordinator.openManagedDocument('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
  expect(vi.mocked(backend.appendOwnedBatch!).mock.calls.length).toBe(count)
+})
+
+it('refuses same-route publication conflict on an original completed Task14 birth without effects', async () => {
+ const {root,backend,coordinator}=await setup('historical-publication'),request=payload()
+ expect((await coordinator.bootstrapSemanticTarget(request,guards)).kind).toBe('ready')
+ const captured=headerOwners.get('target')!,owner=captured.owner
+ expect((await coordinator.resumeSemanticTarget(request.invocation,guards)).kind).toBe('already-ready')
+ const paths=bootstrapPaths(join(root,'target.jsonl'),request.invocation)
+ await writeFile(paths.publish,'conflicting publication\n')
+ const before=await snapshot(root),appendCount=vi.mocked(backend.appendOwnedBatch!).mock.calls.length,prepareCount=vi.mocked(captured.backend.prepareBootstrapHeader).mock.calls.length,confirmCount=vi.mocked(backend.confirmBootstrapFrames!).mock.calls.length
+ expect(await coordinator.resumeSemanticTarget(request.invocation,guards)).toEqual({kind:'refused',reason:'conflict'})
+ expect(await snapshot(root)).toEqual(before)
+ expect(headerOwners.get('target')!.owner).toBe(owner)
+ expect(vi.mocked(backend.appendOwnedBatch!).mock.calls.length).toBe(appendCount)
+ expect(vi.mocked(captured.backend.prepareBootstrapHeader).mock.calls.length).toBe(prepareCount)
+ expect(vi.mocked(backend.confirmBootstrapFrames!).mock.calls.length).toBe(confirmCount)
 })
