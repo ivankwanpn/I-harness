@@ -7,7 +7,7 @@ import type { OriginalConversationRestorationSource } from '../conversation/rest
 import type { CapturedFactGroup } from './groups.ts'
 import type { EncodedFactBatch,FactReceipt,FactOutcome,BatchKey } from './types.ts'
 import type { ManagedExecutionIdentity,ManagedExecutionOwner,ManagedExecutionDomain,OriginalExecutionWriterBinding,OriginalWriterDependencyScope,OriginalExecutionCaptureHooks,ExecutionObservation,PreparedExecutionRequest } from './execution-types.ts'
-import {freezeJsonData} from './capture.ts'
+import {freezeJsonData,isStrictFactData} from './capture.ts'
 import {captureOriginalRestorationSource} from './restoration-source.ts'
 import {originalDeliveryObservation} from './delivery-control.ts'
 
@@ -32,7 +32,7 @@ export function isManagedExecutionOwner(identity:ManagedExecutionIdentity,owner:
 export function readManagedActionMembers(domain:ManagedExecutionDomain,action:object,capture:object,outcome:FactOutcome){const original=domains.get(domain);if(!original||!original.owner.ownsAction(action)||!isExecutionCaptureSource(capture,action))throw TypeError('Original same-action capture required');return readManagedAcknowledgedMembers(domain,capture,outcome)}
 /** The original managed constructor supplies a separate held writer binding.
  * A readonly restored candidate alone cannot construct or authenticate an owner. */
-export async function restoreManagedExecutionState(input:OriginalConversationRestorationSource,binding:OriginalExecutionWriterBinding){
+export async function restoreManagedExecutionState(input:OriginalConversationRestorationSource,binding:OriginalExecutionWriterBinding,foldFactory?:import('./execution-types.ts').OriginalExecutionFoldFactory){
   const source=captureOriginalRestorationSource(input)
   let compatibility:ReturnType<typeof import('./view.ts').createManagedIndexedView>|undefined
   const liveEvents=new Map<number,WeakRef<import('./types.ts').SessionEventView>>()
@@ -45,7 +45,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   const assertHeld=()=>{if(Object.getOwnPropertyDescriptor(binding,'token')?.value!==token||Object.getOwnPropertyDescriptor(binding,'assertHeld')?.value!==heldField.value||Object.getOwnPropertyDescriptor(binding,'openDependencies')?.value!==openField.value)throw new TypeError('Held writer binding changed');held()}
   assertHeld()
   if(!token.sessionId||!token.incarnation)throw new TypeError('Original writer incarnation required')
-  const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId)
+  const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId,foldFactory)
   assertHeld()
   const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>()
   let stopped=false,ownerBound=false,closed=false,pendingWrite:object|undefined
@@ -60,7 +60,10 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     const floor=(value:number)=>{if(!Number.isSafeInteger(value)||value<0||value>expected.eventCount)throw RangeError('Invalid original inbox floor')}
     const inbox:ExecutionObservation['inbox']=Object.freeze({pending(fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.pending(fromSeq)},isPending(inputId:string,fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.isPending(inputId)&&(original.intake.admission(inputId)??-1)>=fromSeq},everAdmitted(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.everAdmitted(inputId)},isExecutable(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return delivery.isExecutable(inputId)}})
     const header=original.header===undefined?undefined:freezeJsonData(structuredClone(original.header))
-    const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:original.formatVersion,...header?{header}:{},prefix:Object.freeze({...expected}),projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules:Object.freeze({kind:'unavailable' as const,reason:'original-schedule-adapter-not-connected' as const,revision:original.context.scheduleRevision()}),inbox,
+    current();const folded=original.hasFold?original.foldSnapshot(expected):undefined;current()
+    if(original.hasFold && (!folded || !isStrictFactData(folded)))throw TypeError('Synchronous original fold data required')
+    const schedules:ExecutionObservation['schedules']=original.hasFold?Object.freeze({kind:'available' as const,revision:original.context.scheduleRevision(),snapshot:freezeJsonData(structuredClone(folded))}):Object.freeze({kind:'unavailable' as const,reason:'original-schedule-adapter-not-connected' as const,revision:original.context.scheduleRevision()})
+    const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:original.formatVersion,...header?{header}:{},prefix:Object.freeze({...expected}),projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules,inbox,
       assertCurrent(){if(this!==observation)throw TypeError('Original observation receiver required');current()},
       plan(){if(this!==observation)throw TypeError('Original observation receiver required');current();return freezeJsonData(original.context.plan())},
       sandboxMode(fromSeq=0){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.context.sandboxMode(fromSeq)},

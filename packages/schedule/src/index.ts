@@ -543,3 +543,33 @@ export function renderEveryReminderBatchFraming(
     `reminders_json: ${JSON.stringify(payload)}`,
   ].join("\n")
 }
+
+/** Adapter for the original validated stream. A failed apply poisons this instance. */
+export function createScheduleFoldSink({seedLength}: {seedLength:number}) {
+  if (!Number.isSafeInteger(seedLength) || seedLength < 0) throw new ScheduleLogError('invalid schedule seedLength')
+  const accumulator = createScheduleAccumulator()
+  let ordinal = 0, poisoned = false
+  let installed: {eventCount:number;bodyBytes:number;prefixDigest:string} | undefined
+  const check = () => { if (poisoned) throw new ScheduleLogError('schedule fold poisoned') }
+  return {
+    appendValidated(unit: readonly SessionEvent[], firstOrdinal: number) {
+      check()
+      if (firstOrdinal !== ordinal) throw new ScheduleLogError('schedule fold ordinal mismatch')
+      installed = undefined
+      for (const event of unit) {
+        try { if (ordinal >= seedLength) accumulator.apply(event) } catch (error) { poisoned = true; throw error }
+        ordinal++
+      }
+    },
+    finishRestore(prefix: Readonly<{eventCount:number;bodyBytes:number;prefixDigest:string}>) {
+      check()
+      if (prefix.eventCount !== ordinal || seedLength > ordinal) throw new ScheduleLogError('schedule fold prefix mismatch')
+      installed = {...prefix}
+    },
+    snapshot(prefix: Readonly<{eventCount:number;bodyBytes:number;prefixDigest:string}>) {
+      check()
+      if (!installed || prefix.eventCount !== installed.eventCount || prefix.bodyBytes !== installed.bodyBytes || prefix.prefixDigest !== installed.prefixDigest) throw new ScheduleLogError('schedule fold prefix mismatch')
+      return accumulator.current()
+    },
+  }
+}
