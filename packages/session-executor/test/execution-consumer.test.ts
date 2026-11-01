@@ -109,3 +109,10 @@ it('Stop during original preparation refuses adoption and settles retained clean
  await expect(owner.prepare('held',generation)).rejects.toThrow();expect(transforms).toBe(1)
  await generation.close('stopped');await owner.close();await lifecycle.drain();action.finish();await cache.close('owner')
 })
+it('whole execution revoke still closes the same original generation source without fresh observation',async()=>{
+ const {cache}=await setup(),{execution,inputs}=await cache.get('owner'),seq=await inputs.inbox.admit({inputId:'parent-revoke',text:'original',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}})
+ const action=execution.owner.beginAction(),rows:PassiveProducerRecord[]=[],gaps:string[]=[],lifecycle=createExecutionGenerationLifecycle(execution,'owner',action,undefined,{async beforeDrain(){},passiveGeneration:{capture(row){rows.push(row)},unavailable(reason){gaps.push(reason)}}}),generation=await lifecycle.open('main',{kind:'input',seq})
+ try{execution.revokeNewWork();expect(()=>execution.observe()).toThrow();expect(()=>assertExecutionGeneration(execution,generation,action)).toThrow()
+  await generation.close('stopped');await lifecycle.drain();expect(gaps).toEqual([]);expect(rows.filter(row=>row.kind==='fact').map(row=>row.event.op)).toEqual(['open','close'])
+ }finally{await lifecycle.drain();action.finish();await cache.close('owner')}
+})

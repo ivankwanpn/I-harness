@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp,writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
+import { createToolRegistry } from '@i-harness/core-tools'
 import { committedFactSeqs,renderConversation } from '@i-harness/core-session'
 import { createManagedExecutionDomain,readManagedAcknowledgedMembers,retainAcknowledgedExecutionMembers } from '@i-harness/core-session/internal/execution'
 import { captureRestoredContextSnapshot } from '../../context-engine/src/snapshot/build.ts'
@@ -17,7 +18,7 @@ import { taskDocumentStorageContract } from '../../subagent/src/task/storage-con
 import { createExecutorExecutionCache } from '../src/durable-session.ts'
 import { createExecutionGenerationLifecycle } from '../src/lifecycle/generation-actions.ts'
 import { createRuntimeContextSource } from '../src/lifecycle/action-facts.ts'
-import { createMainInstructionManager } from '../src/context/instructions/manager.ts'
+import { createMainInstructionManager,isOriginalAcceptedInstructionOrigin } from '../src/context/instructions/manager.ts'
 import { createProjectInstructionEnvironment } from '../src/context/instructions/host.ts'
 import { acquireManagedExecution } from '../../session-persistence/src/execution-internal.ts'
 const resources:(()=>Promise<void>)[]=[]
@@ -53,7 +54,7 @@ async function fixture(){
  const callerPins=[retainAcknowledgedExecutionMembers(acceptedCapture,outcome),retainAcknowledgedExecutionMembers(callCapture,callOutcome)]
  defer(async()=>{for(const pin of callerPins)pin.release()})
  await request.settle();transport.close()
- return {manager,handoff,domain,coordinator,execution,callerPins,sends:()=>sends,finish,async close(){for(const pin of callerPins)pin.release();await manager.close();await cache.closeAll();await environment.close();await coordinator.close()}}
+ return {manager,handoff,domain,ctx,coordinator,execution,callerPins,sends:()=>sends,finish,async close(){for(const pin of callerPins)pin.release();await manager.close();await cache.closeAll();await environment.close();await coordinator.close()}}
 }
 it('managed handoff retains actual same-domain ACK obligations after original caller pins release',async()=>{
  const f=await fixture();let batch:ReturnType<typeof f.manager.managedSucceeded>|undefined
@@ -70,6 +71,7 @@ it('managed handoff refuses copied/foreign proof and changed physical receipt be
  const capture=action.captureToolCall({type:'tool/call',callId:'original-call',name:'read',args:{}}),outcome=await capture.admit();if(outcome.kind!=='committed')throw Error('Foreign capture unacknowledged')
  expect(()=>f.manager.managedSucceeded({...f.handoff,calls:[{...f.handoff.calls[0]!,capture,outcome}]})).toThrow();action.finish();await foreign.close()
  expect(()=>f.manager.managedSucceeded({...f.handoff,domain:{...f.domain}})).toThrow()
+ const otherAction=f.execution.owner.beginAction();expect(()=>f.manager.managedSucceeded({...f.handoff,action:otherAction})).toThrow();otherAction.finish()
  expect(()=>f.manager.managedSucceeded({...f.handoff,outcome:{...f.handoff.outcome}})).toThrow()
  expect(()=>f.manager.managedSucceeded({...f.handoff,accepted:{...f.handoff.accepted,capture:{...f.handoff.accepted.capture}}})).toThrow()
  expect(()=>f.manager.managedSucceeded({...f.handoff,physicalExecutionReceipt:{...f.handoff.physicalExecutionReceipt,sendId:'different'}})).toThrow()
@@ -77,4 +79,20 @@ it('managed handoff refuses copied/foreign proof and changed physical receipt be
  let callbacks=0;const hostile=Object.defineProperty({...f.handoff},'accepted',{get(){callbacks++;throw Error('hostile')}})
  expect(()=>f.manager.managedSucceeded(hostile)).toThrow();expect(callbacks).toBe(0);await f.finish()
  }finally{await f.close()}
+})
+it('action-bound manager adopts genuine private captures and Stop refuses fresh preflight without granting a model body',async()=>{
+ const f=await fixture(),action=f.handoff.action,source=action.registerSettlementSource(async()=>{});let effects=0,batch:ReturnType<typeof f.manager.managedSucceeded>|undefined
+ const tools=createToolRegistry(f.ctx,{executionOwner:{kind:'managed-execution',domain:f.domain,context:f.ctx,sessionId:f.domain.sessionId},instructionsRequired:true,instructionOriginVerifier:isOriginalAcceptedInstructionOrigin})
+ tools.register({name:'read',description:'actual controlled leaf',inputSchema:{type:'object'},captureNativePlan(){return{operation:'read',targets:[]}},async execute(){effects++;return'actual'}})
+ try{
+  batch=f.manager.managedSucceeded(f.handoff)!
+  const tuple=f.handoff.calls[0]!,capture=tools.capture(tuple.call,{sessionId:f.domain.sessionId,callId:tuple.callId,callEventSeq:tuple.eventSeq,settlementSource:source})
+  const origin=batch.bind(0,capture);expect(isOriginalAcceptedInstructionOrigin(origin,capture)).toBe(true)
+  const prepared=await tools.prepareCaptured(capture,undefined,origin);await expect(tools.dispatch(prepared)).rejects.toThrow('Original private model member');expect(effects).toBe(0)
+  const original=Object.getOwnPropertyDescriptor(action,'assertOpen')!;let getters=0
+  Object.defineProperty(action,'assertOpen',{configurable:true,get(){getters++;throw Error('Replaced currentness')}})
+  await expect(batch.preflight([{registry:tools,capture,origin}])).rejects.toThrow();expect(getters).toBe(0);Object.defineProperty(action,'assertOpen',original)
+  action.stop();await expect(batch.preflight([{registry:tools,capture,origin}])).rejects.toThrow();expect(effects).toBe(0)
+  await batch.release();batch=undefined;await source.close();await f.finish()
+ }finally{await batch?.release();await source.close();await f.close()}
 })
