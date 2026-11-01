@@ -1,6 +1,7 @@
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {createExecutorExecutionCache} from './durable-session.ts'
 import {createManagedExecutionRuntime} from './managed-assembly.ts'
+import {supportsManagedServiceOptions} from './service/execution-mode.ts'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
 // packages/session-executor/src/service.ts — R-C0 (engine-owned posture).
 // The GLOBAL per-session service. A-region owns the per-session serial lane
@@ -292,7 +293,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const extensionRefreshes = new Map<string, Promise<void>>()
   const extensionCleanups = new Map<string, () => void | Promise<void>>()
   const hooks = new Set<(assembly: SessionAssembly) => void>()
-  const managedCompatible=()=>!!opts.managedRuntime&&!opts.session&&!opts.sessionFor&&!opts.policySession&&!opts.detachedSession&&!opts.detachedPolicySession&&!opts.transformPrompt&&!opts.afterSuccessfulSubmit&&!opts.extensionsFor&&!opts.additionalSystemPrompt&&!opts.hookContext&&!opts.prepareHumanInput&&!opts.guardian&&!opts.contextOutput&&!opts.skills&&!opts.pluginMcp&&!opts.pluginAgents&&!opts.mcp&&!opts.lsp&&!opts.team&&hooks.size===0
+  const completeSelections=new Set<string>()
+  const managedCompatible=(id:string)=>!completeSelections.has(id)&&supportsManagedServiceOptions(opts)&&hooks.size===0
+  const selectComplete=(id:string)=>{if(privateEntries.has(id))throw Error('Private entry requires explicit complete compatibility adapter');completeSelections.add(id)}
   const privateCache=opts.coordinator?createExecutorExecutionCache({coordinator:opts.coordinator,assertOpen:assertWritableOpen}):undefined
   const privateEntries=new Set<string>()
   type SurfaceLifecycle = { sessionId: string; assembly: SessionAssembly; kind: "published" | "retiring" | "removed" }
@@ -658,6 +661,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
   async function writableSessionUnfenced(sessionId: string, fallback?: (sessionId: string) => Promise<Session | undefined>): Promise<Session | undefined> {
     assertWritableOpen(sessionId)
+    selectComplete(sessionId)
     const owned = assemblies.get(sessionId)?.session ?? mountingAssemblies.get(sessionId)?.session ?? writableSessions.get(sessionId)
     if (owned) return owned
     let pending = loadingWriters.get(sessionId)
@@ -678,8 +682,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   async function receivedInputFor(sessionId: string): Promise<Pick<AsyncInbox, 'pending' | 'admit' | 'cancel'>> {
-    if(privateEntries.has(sessionId)&&!managedCompatible())throw Error('Private entry cannot switch to Session-shaped compatibility')
-    if(managedCompatible()){
+    if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))throw Error('Private entry cannot switch to Session-shaped compatibility')
+    if(managedCompatible(sessionId)){
       if(!privateCache)throw Error('Managed runtime requires original coordinator')
       privateEntries.add(sessionId)
       return (await privateCache.get(sessionId)).inputs.inbox
@@ -696,6 +700,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
   async function getOrCreateUnfenced(sessionId: string): Promise<SessionAssembly> {
     if(privateEntries.has(sessionId)||managedRuntimes.has(sessionId))throw Error('Private runtime requires explicit complete compatibility adapter')
+    selectComplete(sessionId)
     if (closed) throw new Error("session service closed")
     if (failedClose.has(sessionId)) throw new Error("Session process cleanup incomplete; retry close before admission")
     const pendingClose = closing.get(sessionId)
@@ -948,7 +953,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const existing=managedRuntimes.get(sessionId);if(existing)return Promise.resolve(existing)
     const prior=creating.get(sessionId)
     if(prior){if(prior.failed)return Promise.reject(Error('Session process cleanup incomplete'));if(!prior.managedWork)return Promise.reject(Error('Complete compatibility construction already selected'));return prior.managedWork}
-    if(!managedCompatible()||!privateCache||!opts.managedRuntime)return Promise.reject(Error('Managed runtime configuration unavailable'))
+    if(!managedCompatible(sessionId)||!privateCache||!opts.managedRuntime)return Promise.reject(Error('Managed runtime configuration unavailable'))
     const work=Promise.withResolvers<ManagedRuntime>()
     const row:CreatingAssembly={work:work.promise,managedWork:work.promise,failed:false,residentActivation:createResidentActivation(()=>false)}
     creating.set(sessionId,row);privateEntries.add(sessionId)
@@ -959,11 +964,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const binding=opts.modelBindingFor?await bindingFor(sessionId):undefined
       const meta=!binding&&opts.loadMeta?await opts.loadMeta(sessionId):undefined
       const model=binding?.status==='ready'?binding.binding.model:binding?undefined:opts.modelBuilder?await opts.modelBuilder(sessionId,meta):opts.model
+      const contextWindow=binding?.status==='ready'?binding.binding.contextWindow:opts.contextWindowFor===undefined?opts.contextWindow:opts.contextWindowFor(sessionId,meta)
+      const reasoningEffort=binding?.status==='ready'?binding.binding.reasoningEffort:opts.reasoningEffortFor===undefined?opts.reasoningEffort:opts.reasoningEffortFor(sessionId,meta)
       assertWritableOpen(sessionId)
       if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
-      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,execution:entry.execution,model,contextWindow:binding?.status==='ready'?binding.binding.contextWindow:opts.contextWindow,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
+      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,execution:entry.execution,model,contextWindow,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
-        reasoningEffort:binding?.status==='ready'?binding.binding.reasoningEffort:opts.reasoningEffort,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata,
+        reasoningEffort,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})})
       assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime)
       return runtime
@@ -975,9 +982,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)) : submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)
   }
   function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
-    if(privateEntries.has(sessionId)&&!managedCompatible())return Promise.reject(Error('Private entry cannot switch to Session-shaped compatibility'))
-    if(managedCompatible()&&(options?.prepareInput||deliveryOwner))return Promise.reject(Error('Session-shaped input preparation requires complete compatibility before private acquisition'))
-    if(managedCompatible()&&options?.context!==undefined)return Promise.reject(Error('Private supplemental context requires original owned preparation'))
+    if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))return Promise.reject(Error('Private entry cannot switch to Session-shaped compatibility'))
+    if(managedCompatible(sessionId)&&(options?.prepareInput||deliveryOwner))return Promise.reject(Error('Session-shaped input preparation requires complete compatibility before private acquisition'))
+    if(managedCompatible(sessionId)&&options?.context!==undefined)return Promise.reject(Error('Private supplemental context requires original owned preparation'))
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     const clientToken = options?.clientToken
@@ -1059,7 +1066,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       void completeSubmission(async () => {
         const input: AdmittedInput = { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
           ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }
-        if(managedCompatible()){
+        if(managedCompatible(sessionId)){
           if(options?.prepareInput||deliveryOwner)throw Error('Session-shaped input preparation requires complete compatibility before private acquisition')
           const inbox=await receivedInputFor(sessionId)
           if(options?.admittedInputId){const original=inbox.pending().find(p=>p.inputId===id);if(!original)return;if(original.text!==prompt)throw Error('Admitted input does not match submitted text');if(original.supplementalContext!==undefined)throw Error('Private supplemental context requires original owned preparation')}
@@ -1352,6 +1359,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       throw new AggregateError(failures, "Session service process cleanup incomplete")
     }
     if (failure !== undefined) throw failure
+    completeSelections.clear()
   }
 
   function closeSession(sessionId: string): Promise<void> {
@@ -1412,6 +1420,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       executionSubscriptions.delete(sessionId)
       notifyExecutionState(sessionId)
       if (stopFailure !== undefined) throw stopFailure
+      completeSelections.delete(sessionId)
     })().finally(() => {
       if (closing.get(sessionId) === pending) closing.delete(sessionId)
     })
