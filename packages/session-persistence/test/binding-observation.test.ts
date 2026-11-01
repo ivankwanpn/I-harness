@@ -5,10 +5,75 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
-import { exportConversationSeed, deriveMessages, legacyPrefixDigest, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
+import { exportConversationSeed, deriveMessages, legacyPrefixDigest } from '@i-harness/core-session'
 import { createOwnership } from '../src/coordinator/ownership.ts'
-import { createSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionBindingObservation, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
+import { createSessionCoordinator as createBareSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionBindingObservation, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
 
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: PersistenceBackend, options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
+
+import { artifactPathsFor } from '../src/coordinator/artifact-path-association.ts'
+const backends = new Map<string, PersistenceBackend>()
+function resourcePath(root: string, kind: 'session' | 'task' | 'document' | 'lease', id: string) {
+  const paths = artifactPathsFor(backends.get(root)!)!
+  const capture = kind === 'session' ? paths.session(id) : kind === 'task' ? paths.taskForParent(id) : paths.document(id)
+  if (capture.kind !== 'ready') throw new Error('Fixture artifact parent must be ready')
+  return lockPathFor(root, (kind === 'lease' ? 'artifact-document-lease:' : 'artifact-ownership:') + capture.key)
+}
+const documentPaths = (root: string, id: string) => [resourcePath(root, 'document', id), resourcePath(root, 'lease', id)]
+// Observe the original read paths without replacing captured backend descriptors.
+const io = vi.hoisted(() => ({ profile: vi.fn<(id: string) => void>(), readDocumentObserved: vi.fn<(key: string) => void>(), getDocument: vi.fn<(key: string) => void>(), append: vi.fn(), putDocument: vi.fn() }))
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, async open(...args: Parameters<typeof actual.open>) {
+    if (args[1] === 'r+' && String(args[0]).endsWith('.jsonl')) io.append(args[0])
+    return actual.open(...args)
+  }, async writeFile(...args: Parameters<typeof actual.writeFile>) {
+    if (String(args[0]).includes('.doc.jsonl.') && String(args[0]).endsWith('.tmp')) io.putDocument(args[0])
+    return actual.writeFile(...args)
+  }, async readFile(...args: Parameters<typeof actual.readFile>) {
+    const path = String(args[0]).replaceAll('\\', '/'), file = path.slice(path.lastIndexOf('/') + 1), encoding = args[1]
+    if (file.endsWith('.doc.jsonl')) {
+      if (encoding === 'utf8') io.readDocumentObserved(file.slice(0, -10))
+      if (encoding === 'utf-8') io.getDocument(file.slice(0, -10))
+    } else if (file.endsWith('.jsonl') && encoding === 'utf-8') io.profile(file.slice(0, -6))
+    return actual.readFile(...args)
+  } }
+})
+function monitor(name: keyof typeof io) { io[name].mockClear(); return io[name] }
+// Fault controls change behavior inside methods captured by the original backend.
+const backendCalls = vi.hoisted(() => ({ readBootstrapState: vi.fn(), prepareBootstrapHeader: vi.fn(), reconcileBootstrapHeader: vi.fn(), appendOwnedBatch: vi.fn(), confirmBootstrapFrames: vi.fn() }))
+const faults = vi.hoisted(() => ({ headerUnknown: false, headerGate: undefined as undefined | (() => Promise<void>), appendUnknown: false, reconcileUnknown: false }))
+vi.mock('../../session-persistence-jsonl/src/backend/bootstrap-header.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../session-persistence-jsonl/src/backend/bootstrap-header.ts')>()
+  return { ...actual, createBootstrapHeaderBackend(...args: Parameters<typeof actual.createBootstrapHeaderBackend>) {
+    const original = actual.createBootstrapHeaderBackend(...args)
+    return { ...original,
+      readBootstrapState(...input: Parameters<typeof original.readBootstrapState>) { backendCalls.readBootstrapState(...input); return original.readBootstrapState(...input) },
+      reconcileBootstrapHeader(...input: Parameters<typeof original.reconcileBootstrapHeader>) { backendCalls.reconcileBootstrapHeader(...input); return original.reconcileBootstrapHeader(...input) }, async prepareBootstrapHeader(...input: Parameters<typeof original.prepareBootstrapHeader>) {
+      backendCalls.prepareBootstrapHeader(...input)
+      await faults.headerGate?.()
+      const outcome = await original.prepareBootstrapHeader(...input)
+      return faults.headerUnknown ? { kind: 'unknown' as const } : outcome
+    } }
+  } }
+})
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>()
+  return { ...actual, createFactJournalBackend(...args: Parameters<typeof actual.createFactJournalBackend>) {
+    const original = actual.createFactJournalBackend(...args)
+    return { ...original, async confirmBootstrapFrames(...input: Parameters<typeof original.confirmBootstrapFrames>) {
+      backendCalls.confirmBootstrapFrames(...input); return original.confirmBootstrapFrames(...input)
+    }, async appendOwnedBatch(...input: Parameters<typeof original.appendOwnedBatch>) {
+      backendCalls.appendOwnedBatch(...input)
+      const outcome = await original.appendOwnedBatch(...input)
+      return faults.appendUnknown && input[0] === 'source' ? { kind: 'unknown' as const, key: input[3].key } : outcome
+    }, async reconcileOwnedBatch(...input: Parameters<typeof original.reconcileOwnedBatch>) {
+      return faults.reconcileUnknown && input[0] === 'source' ? { kind: 'unknown' as const, key: input[3].key } : original.reconcileOwnedBatch(...input)
+    } }
+  } }
+})
 vi.mock('@i-harness/fs-lock', async importOriginal => {
   const actual = await importOriginal<typeof import('@i-harness/fs-lock')>()
   return { ...actual, acquireSessionLock: vi.fn(actual.acquireSessionLock) }
@@ -20,10 +85,10 @@ const fast = { acquireRetryMs: 1, acquireDeadlineMs: 20 }
 const key = (id: string) => `desktop-session-project-${createHash('sha256').update(id).digest('hex')}`
 const invocation = { version: 1 as const, operationId: 'observe', targetSessionId: 'target', createdAt: '2026-10-24T00:00:00.000Z', requestDigest: 'a'.repeat(64) }
 const request = { existingSessionIds: ['source'], target: invocation }
-afterEach(async () => { vi.restoreAllMocks(); vi.mocked(acquireSessionLock).mockImplementation(nativeAcquire); for (const c of coordinators.splice(0)) await c.close(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { for (const probe of [...Object.values(io), ...Object.values(backendCalls)]) probe.mockReset(); faults.headerUnknown = false; faults.headerGate = undefined; faults.appendUnknown = false; faults.reconcileUnknown = false; vi.restoreAllMocks(); vi.mocked(acquireSessionLock).mockImplementation(nativeAcquire); for (const c of coordinators.splice(0)) await c.close(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'binding-observe-')); roots.push(root)
-  const backend = createJsonlBackend(root)
+  const backend = createJsonlBackend(root); backends.set(root, backend)
   const coordinator = createSessionCoordinator(backend, { ...fast, maxDelayMs: 60_000, lock: { enabled: true, lockRoot: root } }); coordinators.push(coordinator)
   await coordinator.create({ sessionId: 'source' })
   return { root, backend, coordinator }
@@ -62,11 +127,11 @@ it('ownerOf reports a demonstrably held native resource after failed release, wh
   const owner = createOwnership({ lockRoot: root }, { ...fast, lock: { enabled: true } })
   await owner.ensureOwnership('target')
   try {
-    await expect(owner.releaseOwnershipUnlocked('target')).rejects.toThrow('before native')
+    await expect(owner.releaseOwnershipUnlocked('target')).rejects.toMatchObject({ errors: [expect.objectContaining({ message: 'release before native action' })] })
     expect(owner.ownerOf('target')).toBe(true)
     expect(() => owner.assertHeld('target')).toThrow()
     await expect(owner.pinOwnership('target')).rejects.toThrow('before native')
-  } finally { await owner.releaseOwnershipUnlocked('target') }
+  } finally { await Promise.all(owner.releaseHeldLocks()) } // retry retained cleanup debt on the same owner/handle
   expect([calls, owner.ownerOf('target')]).toEqual([2, false])
 })
 it('captures strict immutable values, excludes external writes and keeps other keys progressing', async () => {
@@ -125,18 +190,18 @@ it('close revokes synchronously, joins callback and permanently fences observati
 })
 it('partial document acquire releases obtained target/session claims', async () => {
   const { root, coordinator: c } = await fixture()
-  const held = await acquireSessionLock({ lockPath: lockPathFor(root, `doc:${key('target')}`) })
+  const held = await acquireSessionLock({ lockPath: resourcePath(root, 'lease', key('target')) })
   try { await expect(c.withSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ reason: 'conflict' }) } finally { await held.release() }
   expect(c.ownerOf('target')).toBe(false)
-  const released = await acquireSessionLock({ lockPath: lockPathFor(root, `doc:${key('source')}`) }); await released.release()
+  const released = await acquireSessionLock({ lockPath: resourcePath(root, 'lease', key('source')) }); await released.release()
 })
 it('passive target-only observation never profiles any session and refuses unsupported capability', async () => {
   const { backend, coordinator: c } = await fixture()
-  vi.spyOn(backend, 'profile').mockImplementation(async () => { throw new Error('source trap') })
+  monitor('profile').mockImplementation(() => { throw new Error('source trap') })
   await c.withSessionBindingObservation!({ existingSessionIds: [], target: invocation }, async observed => { expect(observed.binding('target')).toEqual({ kind: 'absent' }) })
-  const unsupported = createSessionCoordinator({ ...backend, readDocumentObserved: undefined } as PersistenceBackend, { lock: { enabled: true } }); coordinators.push(unsupported)
+  const unsupported = createBareSessionCoordinator({ ...backend, readDocumentObserved: undefined } as PersistenceBackend, { lock: { enabled: true } }); coordinators.push(unsupported)
   expect(unsupported.withSessionBindingObservation).toBeUndefined()
-  const unlocked = createSessionCoordinator(backend); coordinators.push(unlocked)
+  const unlocked = createBareSessionCoordinator(backend); coordinators.push(unlocked)
   expect(unlocked.withSessionBindingObservation).toBeUndefined()
 })
 it('validates own fields, canonical invocation, bounded distinct IDs and genuine signal before acquiring', async () => {
@@ -196,9 +261,10 @@ it('close joins an already running disposal without invoking its release twice',
   const { coordinator: c } = await fixture()
   const releaseEntered = Promise.withResolvers<void>(), releaseLeave = Promise.withResolvers<void>()
   let calls = 0
+  const acquired: string[] = [], released: string[] = []
   vi.mocked(acquireSessionLock).mockImplementation(async options => {
-    const raw = await nativeAcquire(options)
-    return { get held() { return raw.held }, async release() { if (options.lockPath.endsWith('never')) return; calls++; if (calls === 1) { releaseEntered.resolve(); await releaseLeave.promise }; await raw.release() } }
+    const raw = await nativeAcquire(options); acquired.push(options.lockPath)
+    return { get held() { return raw.held }, async release() { released.push(options.lockPath); calls++; if (calls === 1) { releaseEntered.resolve(); await releaseLeave.promise }; await raw.release() } }
   })
   const running = c.withSessionBindingObservation!(request, async () => 'ok')
   await releaseEntered.promise
@@ -207,7 +273,7 @@ it('close joins an already running disposal without invoking its release twice',
   expect(calls).toBe(1)
   releaseLeave.resolve()
   await running; await closing
-  expect(calls).toBe(3) // two document locks and target temporary ownership
+  expect(released.toSorted()).toEqual(acquired.toSorted()); expect(new Set(released).size).toBe(acquired.length) // each canonical temporary claim releases exactly once
 })
 it('only the captured original invocation may bootstrap an observed target', async () => {
   const { coordinator: c } = await fixture()
@@ -228,6 +294,7 @@ it('bootstrap facade preserves original owner refusal without executing an acces
 })
 it.each([1, 2, 3, 4, 5])('close joins pending acquisition %s, revokes callback authority and leaves zero temporary native leases', async cut => {
   const { coordinator: c } = await fixture()
+  await c.create({ sessionId: 'ancestor', createdAt: invocation.createdAt }); await c.releaseOwnership('ancestor')
   const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>()
   let acquisitions = 0, releases = 0, live = 0, callbacks = 0
   vi.mocked(acquireSessionLock).mockImplementation(async options => {
@@ -235,9 +302,6 @@ it.each([1, 2, 3, 4, 5])('close joins pending acquisition %s, revokes callback a
     const raw = await nativeAcquire(options); live++
     return { get held() { return raw.held }, async release() { await raw.release(); live--; releases++ } }
   })
-  // source is already persistent, so add an ancestor for two new session pins.
-  const backend = createJsonlBackend(roots.at(-1)!)
-  await backend.create('ancestor', { sessionId: 'ancestor', createdAt: invocation.createdAt, formatVersion: CURRENT_FORMAT_VERSION })
   const running = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['source', 'ancestor'] }, async () => { callbacks++ })
   const rejected = expect(running).rejects.toMatchObject({ reason: 'revoked' })
   await entered.promise
@@ -245,20 +309,21 @@ it.each([1, 2, 3, 4, 5])('close joins pending acquisition %s, revokes callback a
   const closing = c.close().then(() => { closed = true })
   await Promise.resolve(); expect(closed).toBe(false)
   leave.resolve(); await rejected; await closing
-  expect([callbacks, live, releases]).toEqual([0, 0, cut])
+  expect([callbacks, live, releases]).toEqual([0, 0, 2 * Math.ceil(cut / 2)]) // the in-flight two-resource bundle finishes before revocation joins
   expect(c.ownerOf('source')).toBe(false)
 })
 it('failed native disposal stays explicit debt after a later no-op, attempts all disposers and preserves dependent source owner', async () => {
   const raws: Awaited<ReturnType<typeof nativeAcquire>>[] = []
   let calls = 0, cut = false
+  const attempted: string[] = []
   vi.mocked(acquireSessionLock).mockImplementation(async options => {
     const raw = await nativeAcquire(options); raws.push(raw)
-    return { get held() { return raw.held }, async release() { calls++; await raw.release(); if (cut && options.lockPath === lockPathFor(roots.at(-1)!, `doc:${key('target')}`)) throw new Error('native close outcome unknown') } }
+    return { get held() { return raw.held }, async release() { calls++; if (cut) attempted.push(options.lockPath); await raw.release(); if (cut && options.lockPath === resourcePath(roots.at(-1)!, 'lease', key('target'))) throw new Error('native close outcome unknown') } }
   })
   const { coordinator: c } = await fixture(); cut = true
   const before = calls
   await expect(c.withSessionBindingObservation!(request, async () => 'original-result')).rejects.toMatchObject({ callbackResult: 'original-result', invocation })
-  expect(calls - before).toBe(3)
+  expect(calls - before).toBe(attempted.length); expect(attempted.toSorted()).toEqual([...documentPaths(roots.at(-1)!, key('source')), resourcePath(roots.at(-1)!, 'lease', key('target'))].sort()) // target guard/session claims remain dependent debt
   expect(c.ownerOf('source')).toBe(true)
   await expect(c.close()).rejects.toThrow('unresolved')
   const attempts = calls
@@ -269,16 +334,15 @@ it('failed native disposal stays explicit debt after a later no-op, attempts all
   for (const raw of raws) await raw.release() // fixture-only native handle cleanup
 })
 it('actual managed unknown close retains original session lease and same-owner recovery', async () => {
-  const { backend, coordinator: c } = await fixture()
+  const { coordinator: c } = await fixture()
   const document = await c.openManagedDocument('source')
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { await append(...args); return { kind: 'unknown', key: args[3].key } }
-  backend.reconcileOwnedBatch = async (...args) => ({ kind: 'unknown', key: args[3].key })
+  faults.appendUnknown = true
+  faults.reconcileUnknown = true
   const outcome = await document.metadata.admit({ type: 'plan/mode', mode: 'on' })
   expect(outcome.kind).toBe('unknown')
   await expect(c.close()).rejects.toThrow('unresolved')
   expect(c.ownerOf('source')).toBe(true)
-  backend.appendOwnedBatch = append; backend.reconcileOwnedBatch = reconcile
+  faults.appendUnknown = false; faults.reconcileUnknown = false
   if (outcome.kind !== 'unknown') throw new Error('expected controlled unknown')
   expect((await document.reconcile(outcome.key)).kind).toBe('committed')
   await c.close()
@@ -287,18 +351,17 @@ it('actual managed unknown close retains original session lease and same-owner r
 it('managed unknown close still drains independent write-behind while preserving dependent original ownership', async () => {
   const { backend, coordinator: c } = await fixture()
   await c.create({ sessionId: 'independent' })
-  const document = await c.openManagedDocument('source'), append = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { await append(...args); return { kind: 'unknown', key: args[3].key } }
+  const document = await c.openManagedDocument('source')
+  faults.appendUnknown = true
   const outcome = await document.metadata.admit({ type: 'plan/mode', mode: 'on' })
-  const reconcile = backend.reconcileOwnedBatch!
-  backend.reconcileOwnedBatch = async (...args) => ({ kind: 'unknown', key: args[3].key })
+  faults.reconcileUnknown = true
   c.enqueue('independent', [{ type: 'plan/mode', mode: 'off', seq: 0 }])
   try {
     await expect(c.close()).rejects.toThrow('unresolved')
     expect(c.ownerOf('source')).toBe(true)
     expect((await backend.read('independent')).events).toHaveLength(1)
   } finally {
-    backend.appendOwnedBatch = append; backend.reconcileOwnedBatch = reconcile
+    faults.appendUnknown = false; faults.reconcileUnknown = false
     if (outcome.kind === 'unknown') await document.reconcile(outcome.key)
     await c.close()
   }
@@ -315,8 +378,8 @@ it('local deletion synchronously revokes and joins, and external deletion shares
   await expect(c.withSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ reason: 'deleted' })
   // A fresh session has no local observation. Holding only its document lease
   // still excludes another coordinator's actual tombstone/unlink path.
-  await backend.create('external', { sessionId: 'external', createdAt: invocation.createdAt, formatVersion: CURRENT_FORMAT_VERSION })
-  const held = await nativeAcquire({ lockPath: lockPathFor(root, `doc:${key('external')}`) })
+  await c.create({ sessionId: 'external', createdAt: invocation.createdAt }); await c.releaseOwnership('external')
+  const held = await nativeAcquire({ lockPath: resourcePath(root, 'lease', key('external')) })
   const other = createSessionCoordinator(backend, { ...fast, lock: { enabled: true } }); coordinators.push(other)
   try { await expect(other.deleteOwnedSession!('external', { documents: [key('external')] })).rejects.toThrow() } finally { await held.release() }
   expect((await backend.profile('external')).meta.sessionId).toBe('external')
@@ -336,8 +399,8 @@ it('deletion locks and tombstones the same captured manifest even if caller chan
   expect((await backend.deletionReceipt!('source'))!.manifest.documents).toEqual([key('source')])
 })
 it('R1 deletion closes ordinary session and declared-document admissions synchronously before observation join',async()=>{
-  const {backend,coordinator:c}=await fixture(),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>()
-  const appends=vi.spyOn(backend,'append'),writes=vi.spyOn(backend,'putDocument')
+  const {coordinator:c}=await fixture(),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>()
+  const appends=io.append,writes=io.putDocument;appends.mockClear();writes.mockClear()
   const observing=c.withSessionBindingObservation!(request,async()=>{entered.resolve();await leave.promise})
   const revoked=expect(observing).rejects.toMatchObject({reason:'revoked'});await entered.promise
   const deleting=c.deleteOwnedSession!('source',{documents:[key('source')]}),deletion=deleting.then(()=>({kind:'deleted' as const}),error=>({kind:'error' as const,error}))
@@ -356,8 +419,8 @@ it('R1 deletion closes ordinary session and declared-document admissions synchro
   expect(await deletion).toEqual({kind:'deleted'});expect(await document).toMatchObject({kind:'refused'});expect(appends).not.toHaveBeenCalled();expect(writes).not.toHaveBeenCalled()
 })
 it('actual original bootstrap runs outside target lane and promotes its temporary pin to original live owner', async () => {
-  const { backend, coordinator: c } = await fixture()
-  const profile = vi.spyOn(backend, 'profile')
+  const { coordinator: c } = await fixture()
+  const profile = monitor('profile')
   const original = { invocation, target: { kind: 'new' as const }, metadata: {}, lineage: { origin: 'fork' as const, parentSession: 'source' }, seed: compileSemanticSeed({ kind: 'none' }) }
   const never = async (): Promise<never> => { throw new Error('empty dependency closure must not use transfer confirmation') }
   const result = await c.withSessionBindingObservation!(request, async observed => {
@@ -395,7 +458,7 @@ it('explicit target retirement also refuses a later bootstrap adopter until the 
 })
 it('metadata lineage discovery is revalidated from immutable capture and fact append still requires the actual source witness', async () => {
   const { coordinator: c } = await fixture()
-  await c.updateMeta('source', { parentSession: 'changed-after-discovery', origin: 'fork' })
+  await c.updateMeta('source', { parentSession: 'changed-after-discovery', seedLength: 0, origin: 'fork' })
   const source = await c.openManagedDocument('source'), before = source.view.events.length
   await c.withSessionBindingObservation!(request, async observed => {
     expect(observed.metadata('source').parentSession).toBe('changed-after-discovery')
@@ -429,7 +492,7 @@ it('bootstrap carries a genuine nonempty semantic source prefix under the origin
 const noDependencies = async (): Promise<never> => { throw new Error('empty closure must not call dependency transfer') }
 const originalGuards = { assertCurrent() {}, dependencies: { confirm: noDependencies, reconcile: noDependencies } }
 async function existingAncestor(f: Awaited<ReturnType<typeof fixture>>): Promise<BootstrapRequest> {
-  await f.coordinator.create({ sessionId: 'ancestor', createdAt: invocation.createdAt, parentSession: 'old-parent', origin: 'fork', title: 'header-only profile '.repeat(100) })
+  await f.coordinator.create({ sessionId: 'ancestor', createdAt: invocation.createdAt, parentSession: 'old-parent', seedLength: 0, origin: 'fork', title: 'header-only profile '.repeat(100) })
   const raw = await readFile(join(f.root, 'ancestor.jsonl'))
   return { invocation: { ...invocation, targetSessionId: 'ancestor', operationId: 'ancestor-bootstrap' },
     target: { kind: 'existing-empty', expectedHeaderDigest: createHash('sha256').update(raw).digest('hex'), expectedPrefix: { eventCount: 0, bodyBytes: 0, prefixDigest: legacyPrefixDigest(0, new Uint8Array()) } },
@@ -452,8 +515,8 @@ it('fix I1 external existing-empty ancestor bootstrap synchronously revokes and 
 })
 it('fix I1 bootstrap-first pending header work blocks intersecting observation admission', async () => {
   const f = await fixture(), original = await existingAncestor(f), c = f.coordinator
-  const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>(), prepare = f.backend.prepareBootstrapHeader!
-  f.backend.prepareBootstrapHeader = async (...args) => { entered.resolve(); await leave.promise; return prepare(...args) }
+  const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>()
+  faults.headerGate = async () => { entered.resolve(); await leave.promise }
   const bootstrap = c.bootstrapSemanticTarget(original, originalGuards)
   await entered.promise
   const observing = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async () => 0).then(value => value, error => error)
@@ -462,10 +525,10 @@ it('fix I1 bootstrap-first pending header work blocks intersecting observation a
   expect((await bootstrap).kind).toBe('ready')
 })
 it('fix I1 external original resume after unknown header response revokes before original owner recovery', async () => {
-  const f = await fixture(), original = await existingAncestor(f), c = f.coordinator, prepare = f.backend.prepareBootstrapHeader!
-  f.backend.prepareBootstrapHeader = async (...args) => { await prepare(...args); return { kind: 'unknown' } }
+  const f = await fixture(), original = await existingAncestor(f), c = f.coordinator
+  faults.headerUnknown = true
   expect(await c.bootstrapSemanticTarget(original, originalGuards)).toMatchObject({ kind: 'blocked' })
-  f.backend.prepareBootstrapHeader = prepare
+  faults.headerUnknown = false
   expect((await f.backend.profile('ancestor')).meta.sessionId).toBe('ancestor')
   const entered = Promise.withResolvers<SessionBindingObservation>(), leave = Promise.withResolvers<void>()
   const running = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async observed => { entered.resolve(observed); await leave.promise })
@@ -481,13 +544,13 @@ it('fix I1 captured original existing-empty target can recover unknown and share
   await c.create({ sessionId: 'target', createdAt: invocation.createdAt })
   const raw = await readFile(join(f.root, 'target.jsonl'))
   const original: BootstrapRequest = { invocation, target: { kind: 'existing-empty', expectedHeaderDigest: createHash('sha256').update(raw).digest('hex'), expectedPrefix: { eventCount: 0, bodyBytes: 0, prefixDigest: legacyPrefixDigest(0, new Uint8Array()) } }, metadata: {}, lineage: { origin: 'fork', parentSession: 'source' }, seed: compileSemanticSeed({ kind: 'none' }) }
-  const prepare = f.backend.prepareBootstrapHeader!, profile = vi.spyOn(f.backend, 'profile')
-  f.backend.prepareBootstrapHeader = async (...args) => { await prepare(...args); return { kind: 'unknown' } }
+  const profile = monitor('profile')
+  faults.headerUnknown = true
   await c.withSessionBindingObservation!(request, async observed => {
     const guards = { ...originalGuards, assertCurrent: observed.assertCurrent }
     const [a, b] = await Promise.all([c.bootstrapSemanticTarget(original, guards), c.bootstrapSemanticTarget(original, guards)])
     expect(a).toBe(b); expect(a.kind).toBe('blocked'); observed.assertCurrent()
-    f.backend.prepareBootstrapHeader = prepare
+    faults.headerUnknown = false
     const recovered = await c.resumeSemanticTarget(invocation, guards, original)
     expect(recovered).toMatchObject({ kind: 'ready', receipt: { invocation } }); observed.assertCurrent()
   })
@@ -501,14 +564,14 @@ it.each(['bootstrap', 'resume'] as const)('fix R1-04 %s captures invocation meta
   const exported = exportConversationSeed(source.view, { kind: 'session', sessionId: 'source' }, { kind: 'all' })
   if (exported.kind !== 'seed') throw new Error('expected genuine semantic seed')
   original.seed = compileSemanticSeed(exported); original.lineage.parentSession = 'source'
-  const intended = structuredClone(original), resumeInvocation = { ...original.invocation }, prepare = f.backend.prepareBootstrapHeader!
+  const intended = structuredClone(original), resumeInvocation = { ...original.invocation }
   const guards = { ...originalGuards, assertCurrent() { source.assertReady(); expect(source.view.events).toBe(events); expect(events.length).toBe(length) } }
   if (mode === 'resume') {
-    f.backend.prepareBootstrapHeader = async (...args) => { await prepare(...args); return { kind: 'unknown' } }
+    faults.headerUnknown = true
     expect((await c.bootstrapSemanticTarget(original, guards)).kind).toBe('blocked')
-    f.backend.prepareBootstrapHeader = prepare
+    faults.headerUnknown = false
   }
-  await c.create({ sessionId: 'other-ancestor', createdAt: invocation.createdAt, origin: 'fork', parentSession: 'untouched' })
+  await c.create({ sessionId: 'other-ancestor', createdAt: invocation.createdAt, origin: 'fork', parentSession: 'untouched', seedLength: 0 })
   const otherBefore = await readFile(join(f.root, 'other-ancestor.jsonl'))
   const enteredA = Promise.withResolvers<SessionBindingObservation>(), enteredB = Promise.withResolvers<SessionBindingObservation>(), leaveA = Promise.withResolvers<void>(), leaveB = Promise.withResolvers<void>()
   const a = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async observed => { enteredA.resolve(observed); await leaveA.promise }).then(() => 'success', error => error)
@@ -598,7 +661,7 @@ it.each([
 ] as const)('fix R2 %s capture refusal is terminal after one-shot guard %s failure', async (mode, trap) => {
   const f = await fixture(), original = await existingAncestor(f), c = f.coordinator
   const before = await readFile(join(f.root, 'ancestor.jsonl'))
-  const backendCalls: { mock: { calls: unknown[][] } }[] = [vi.spyOn(f.backend, 'readBootstrapState'), vi.spyOn(f.backend, 'prepareBootstrapHeader'), vi.spyOn(f.backend, 'reconcileBootstrapHeader'), vi.spyOn(f.backend, 'appendOwnedBatch'), vi.spyOn(f.backend, 'confirmBootstrapFrames')]
+  const calls = Object.values(backendCalls); for (const call of calls) call.mockClear()
   const entered = Promise.withResolvers<SessionBindingObservation>(), leave = Promise.withResolvers<void>()
   const observing = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async observed => { entered.resolve(observed); await leave.promise }).then(() => 'completed', error => error)
   const observed = await entered.promise
@@ -618,10 +681,10 @@ it.each([
     const result = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve('waited-on-observation'), 200))])
     const after = await readFile(join(f.root, 'ancestor.jsonl'))
     observed.assertCurrent()
-    console.info(JSON.stringify({ control: 'R2 terminal capture', mode, trap, inspections, backendCalls: backendCalls.map(call => call.mock.calls.length), headerUnchanged: after.equals(before) }))
+    console.info(JSON.stringify({ control: 'R2 terminal capture', mode, trap, inspections, backendCalls: calls.map(call => call.mock.calls.length), headerUnchanged: after.equals(before) }))
     expect(result).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
     expect(inspections).toBe(1)
-    for (const call of backendCalls) expect(call).not.toHaveBeenCalled()
+    for (const call of calls) expect(call).not.toHaveBeenCalled()
     expect(after).toEqual(before)
     expect((await f.backend.profile('ancestor')).meta.parentSession).toBe('old-parent')
   } finally { leave.resolve(); await observing; await pending }
@@ -630,7 +693,7 @@ it.each([
 })
 it.each(['bootstrap', 'resume'] as const)('fix R2 unsupported %s refuses before inspecting caller guards', async mode => {
   const f = await fixture(), original = await existingAncestor(f)
-  const unsupported = createSessionCoordinator({ ...f.backend, prepareBootstrapHeader: undefined }, { lock: { enabled: true } }); coordinators.push(unsupported)
+  const unsupported = createBareSessionCoordinator({ ...f.backend, prepareBootstrapHeader: undefined }, { lock: { enabled: true } }); coordinators.push(unsupported)
   let inspections = 0
   const guards = new Proxy(originalGuards, { getOwnPropertyDescriptor(target, property) { if (property === 'targetPreparation') { inspections++; throw new Error('unsupported must not inspect') }; return Reflect.getOwnPropertyDescriptor(target, property) } })
   const outcome = mode === 'bootstrap' ? await unsupported.bootstrapSemanticTarget(original, guards) : await unsupported.resumeSemanticTarget(original.invocation, guards, original)
