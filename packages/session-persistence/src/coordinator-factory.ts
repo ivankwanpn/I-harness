@@ -162,11 +162,14 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       assertDurableTransition()
       managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertOutsideOwnedOperations([id]);observations.assertSessionAdmission(id);managed.assertMutation(id)
       if(typeof id!=='string'||!patch||typeof patch!=='object'||utilTypes.isProxy(patch))throw TypeError('Invalid metadata update')
-      managed.invalidateMetadataWitness(id)
-      if(!transitionStorage)return mutations.updateMeta(id,patch)
-      let updated: Awaited<ReturnType<typeof mutations.updateMetaTransitionUnlocked>> | undefined
-      await loads.transitionLoad(id, async (_check, markIssue) => { updated = await mutations.updateMetaTransitionUnlocked(id, patch, markIssue) })
-      return updated!
+      const taskMetadata=managed.beginTaskMetadataUpdate(id);let succeeded=false
+      try {
+        managed.invalidateMetadataWitness(id)
+        if(!transitionStorage)return await mutations.updateMeta(id,patch)
+        let updated: Awaited<ReturnType<typeof mutations.updateMetaTransitionUnlocked>> | undefined
+        await loads.transitionLoad(id, async (_check, markIssue) => { updated = await mutations.updateMetaTransitionUnlocked(id, patch, markIssue,taskMetadata) })
+        succeeded=true;return updated!
+      } finally { taskMetadata?.finish(succeeded) }
     },
     async flush(id) { observations.assertOutsideOwnedOperations([id]); await mutations.flush(id); await documents.joinTaskDocumentIO() },
     async close() {
