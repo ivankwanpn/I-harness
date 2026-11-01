@@ -1,10 +1,12 @@
+import { composeJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, writeFile, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonlBackend } from '../src/index.ts'
-import { createSessionCoordinator, ownedContextReadiness, forkSession } from '@i-harness/session-persistence'
+import { ownedContextReadiness, forkSession } from '@i-harness/session-persistence'
 import { append, createSession } from '@i-harness/core-session'
 import * as core from '@i-harness/core-session'
 
@@ -15,7 +17,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 it('quarantines a same-size committed-prefix conflict before issuance instead of proving absence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-prefix-conflict-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const originalOpen = vi.mocked(open).getMockImplementation()!
   try {
@@ -43,7 +45,7 @@ it('quarantines a same-size committed-prefix conflict before issuance instead of
 
 it('publishes an atomic source-order frame only after a scoped receipt and reopens it', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   try {
     const document = await coordinator.openManagedDocument(id)
@@ -62,14 +64,14 @@ it('publishes an atomic source-order frame only after a scoped receipt and reope
 it('quarantines an unknown issued frame, reconciles exactly it, and never installs a foreign receipt', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-unknown-'))
   const backend = createJsonlBackend(root)
-  const appendOwned = backend.appendOwnedBatch!
+  const appendOwned = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
   let writes = 0
-  backend.appendOwnedBatch = async (...args) => {
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     writes++
     await appendOwned(...args)
     return { kind: 'unknown', key: args[3].key }
-  }
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   try {
     const document = await coordinator.openManagedDocument(id)
@@ -79,15 +81,15 @@ it('quarantines an unknown issued frame, reconciles exactly it, and never instal
     await expect(coordinator.snapshot!(id)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     expect(await document.metadata.admit({ type: 'plan/mode', mode: 'off' })).toEqual({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
     if (outcome.kind !== 'unknown') throw new Error('Expected unknown')
-    const reconcile = backend.reconcileOwnedBatch!
-    backend.reconcileOwnedBatch = async (...args) => {
+    const reconcile = vi.mocked(backend.reconcileOwnedBatch!).getMockImplementation()!
+    vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
       const result = await reconcile(...args)
       if (result.kind !== 'committed') return result
       return { ...result, receipt: { ...result.receipt, owner: { ...result.receipt.owner, sessionId: 'another-document' } } }
-    }
+    })
     expect((await document.reconcile(outcome.key)).kind).toBe('unknown')
     expect(document.view.events).toEqual([])
-    backend.reconcileOwnedBatch = reconcile
+    vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(reconcile)
     const committed = await document.reconcile(outcome.key)
     expect(committed.kind).toBe('committed')
     expect(document.view.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
@@ -99,7 +101,7 @@ it('quarantines an unknown issued frame, reconciles exactly it, and never instal
 it('returns FIFO actual seqs, coalesces ready metadata, and releases the lane before recursive observers', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-seqs-'))
   const backend = createJsonlBackend(root)
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   const seed = createSession()
   for (let index = 0; index < 7; index++) append(seed, { type: 'plan/mode', mode: index % 2 ? 'off' : 'on' })
@@ -128,7 +130,7 @@ it('returns FIFO actual seqs, coalesces ready metadata, and releases the lane be
 it('completes actual short writes 3+2+remaining and installs the same single frame', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-short-'))
   const backend = createJsonlBackend(root)
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
   const lengths: number[] = []
@@ -156,7 +158,7 @@ it('completes actual short writes 3+2+remaining and installs the same single fra
 it('keeps complete bytes private when sync and rollback fail and reconciles without writing again', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-sync-'))
   const backend = createJsonlBackend(root)
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
   let writes = 0
@@ -186,14 +188,14 @@ it('keeps complete bytes private when sync and rollback fail and reconciles with
 it('revokes the old optional action before issue while its already-real settlement and a later human action survive', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-stop-'))
   const backend = createJsonlBackend(root)
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   try {
     const action = document.beginAction()
     const source = action.registerSettlementSource(async () => {})
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-    const actual = backend.appendOwnedBatch!
-    backend.appendOwnedBatch = async (...args) => { entered.resolve(); await release.promise; return actual(...args) }
+    const actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => { entered.resolve(); await release.promise; return actual(...args) })
     const optional = action.facts.metadata.admit({ type: 'plan/mode', mode: 'on' })
     await entered.promise
     action.stop()
@@ -209,7 +211,7 @@ it('revokes the old optional action before issue while its already-real settleme
 
 it('allocates input-start 7/8/9 atomically and rejects a second claim without writes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-input-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), seed = createSession()
   for (let index = 0; index < 6; index++) append(seed, { type: 'plan/mode', mode: 'on' })
   append(seed, { type: 'agent/input/admitted', version: 1, inputId: 'input-A', text: 'hello', delivery: 'queue', intent: 'user' })
@@ -227,7 +229,7 @@ it('allocates input-start 7/8/9 atomically and rejects a second claim without wr
 
 it('retries only backend-proven absent source settlement explicitly with one capture and one final installation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-absent-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const action = document.beginAction(), source = action.registerSettlementSource(async () => {})
   let conversions = 0
@@ -260,7 +262,7 @@ it('retries only backend-proven absent source settlement explicitly with one cap
 
 it('rejects a structural fake owner callback even for an identical empty document prefix', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-scope-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   try {
     const before = await readFile(join(root, `${id}.jsonl`))
@@ -271,7 +273,7 @@ it('rejects a structural fake owner callback even for an identical empty documen
 
 it('keeps actual asynchronous Inbox admission private until receipt and claims steer atomically', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-inbox-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   try {
     const inbox = new core.AsyncInbox(document.view, () => document.inputs)
@@ -285,7 +287,7 @@ it('keeps actual asynchronous Inbox admission private until receipt and claims s
 
 it('counts 64 issued groups, retains required ticket65 through failed close, and drains it after exact reconciliation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-ticket65-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   let requiredFlight: Promise<core.FactOutcome>
   const source = document.beginAction().registerSettlementSource(async () => {
@@ -335,7 +337,7 @@ it('counts 64 issued groups, retains required ticket65 through failed close, and
 
 it('retains a source-local capture failure while saving unrelated real settlements and refusing new work', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-source-fault-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const action = document.beginAction()
   let invalid!: core.CapturedSettlementFact
@@ -360,15 +362,15 @@ it('retains a source-local capture failure while saving unrelated real settlemen
 
 it('freezes required allocation for issued unknown despite a separate source fault, then permits only real settlement after reconcile', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-source-unknown-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const action = document.beginAction()
   let invalid!: core.CapturedSettlementFact
   const failed = action.registerSettlementSource(async () => { core.committedFactSeqs(await invalid.admit()) })
   const real = action.registerSettlementSource(async () => {})
-  const actual = backend.appendOwnedBatch!
+  const actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
   let writes = 0
-  backend.appendOwnedBatch = async (...args) => { writes++; await actual(...args); return { kind: 'unknown', key: args[3].key } }
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => { writes++; await actual(...args); return { kind: 'unknown', key: args[3].key } })
   try {
     const valid = real.tools.captureResult({ type: 'tool/result', callId: 'valid', name: 'read', output: 'already completed' })
     const issued = await action.facts.metadata.admit({ type: 'plan/mode', mode: 'on' })
@@ -378,7 +380,7 @@ it('freezes required allocation for issued unknown despite a separate source fau
     expect(writes).toBe(1)
     if (issued.kind !== 'unknown') throw new Error('Expected issued uncertainty')
     expect(await document.reconcile(issued.key)).toMatchObject({ kind: 'committed', seqs: [0] })
-    backend.appendOwnedBatch = actual
+    vi.mocked(backend.appendOwnedBatch!).mockImplementation(actual)
     expect(await valid.admit()).toMatchObject({ kind: 'committed', seqs: [1] })
     expect(await action.facts.metadata.admit({ type: 'plan/mode', mode: 'off' })).toEqual({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
     expect(() => document.beginAction()).toThrow(core.FactRecoveryRequiredError)
@@ -389,7 +391,7 @@ it('freezes required allocation for issued unknown despite a separate source fau
 
 it('latches a registered source finalization failure before capture and still drains a distinct real result', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-finalize-fault-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const action = document.beginAction()
   const failed = action.registerSettlementSource(async () => { throw new core.FactRecoveryRequiredError() })
@@ -409,7 +411,7 @@ it('latches a registered source finalization failure before capture and still dr
 
 it('releases only the successfully drained source hold and preserves Stop and another unresolved source', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-r4a-source-holds-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), action = document.beginAction()
   let finishB = false
   const a = action.registerSettlementSource(async () => {}), b = action.registerSettlementSource(async () => { if (!finishB) throw new core.FactRecoveryRequiredError() })
@@ -431,7 +433,7 @@ it('releases only the successfully drained source hold and preserves Stop and an
 
 it('preserves image intake validation and computes source summaries before encoding a managed input-start', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-images-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   try {
     const before = await readFile(join(root, `${id}.jsonl`))
@@ -446,7 +448,7 @@ it('preserves image intake validation and computes source summaries before encod
 it('keeps committed facts committed when an observer and its diagnostic reporter throw, without logging the observer body', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-observer-'))
   const backend = createJsonlBackend(root), diagnostics: unknown[] = []
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true }, reportBackgroundFailure(error) { diagnostics.push(error); throw new Error('reporter unavailable') } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true }, reportBackgroundFailure(error) { diagnostics.push(error); throw new Error('reporter unavailable') } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const off = core.subscribe(document.view, () => { throw new Error('private observer body sentinel') })
   try {
@@ -461,31 +463,31 @@ it('keeps committed facts committed when an observer and its diagnostic reporter
 
 it('keeps malformed receipts unknown through reconcile and owns immutable receipt, key and actual seq aliases', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-receipt-shape-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const actual = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+  const actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(backend.reconcileOwnedBatch!).getMockImplementation()!
   let backendReceipt: core.FactReceipt | undefined
-  backend.appendOwnedBatch = async (...args) => {
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     const result = await actual(...args)
     if (result.kind !== 'committed') return result
     return { kind: 'committed', receipt: { key: result.receipt.key } } as any
-  }
-  backend.reconcileOwnedBatch = async (...args) => {
+  })
+  vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
     const result = await reconcile(...args)
     if (result.kind !== 'committed') return result
     return { kind: 'committed', receipt: { key: result.receipt.key } } as any
-  }
+  })
   try {
     const outcome = await document.metadata.admit({ type: 'plan/mode', mode: 'on' })
     if (outcome.kind !== 'unknown') throw new Error('Expected unknown receipt')
     expect(document.view.events).toEqual([])
     expect(await document.reconcile(outcome.key)).toMatchObject({ kind: 'unknown', key: outcome.key })
     expect(document.view.events).toEqual([])
-    backend.reconcileOwnedBatch = async (...args) => {
+    vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
       const result = await reconcile(...args)
       if (result.kind === 'committed') backendReceipt = result.receipt
       return result
-    }
+    })
     const committed = await document.reconcile(outcome.key)
     if (committed.kind !== 'committed') throw new Error('Expected scoped receipt')
     expect(committed.seqs).toEqual([0])
@@ -500,10 +502,10 @@ it('keeps malformed receipts unknown through reconcile and owns immutable receip
 
 it('refuses an otherwise matching receipt when the backend never crossed the final issuance fence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-unissued-receipt-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (_id, owner, _prefix, batch) => ({ kind: 'committed', receipt: { owner: owner.owner, key: batch.key, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest: core.factPrefixDigest(batch.key.previousPrefixDigest, batch.key.batchDigest) } })
+  const actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (_id, owner, _prefix, batch) => ({ kind: 'committed', receipt: { owner: owner.owner, key: batch.key, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest: core.factPrefixDigest(batch.key.previousPrefixDigest, batch.key.batchDigest) } }))
   try {
     const outcome = await document.metadata.admit({ type: 'plan/mode', mode: 'on' })
     expect(outcome.kind).toBe('unknown')
@@ -511,22 +513,22 @@ it('refuses an otherwise matching receipt when the backend never crossed the fin
     expect((await backend.read(id)).events).toEqual([])
     if (outcome.kind !== 'unknown') throw new Error('Expected unknown unissued evidence')
     expect((await document.reconcile(outcome.key)).kind).toBe('absent')
-    backend.appendOwnedBatch = actual
+    vi.mocked(backend.appendOwnedBatch!).mockImplementation(actual)
     expect(await document.metadata.admit({ type: 'plan/mode', mode: 'off' })).toMatchObject({ kind: 'committed', seqs: [0] })
   } finally { await coordinator.close().catch(() => {}) }
 })
 
 it('returns the exact active managed view from legacy load APIs without a second repair or writable mirror', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-load-alias-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const repair = vi.spyOn(backend, 'repair'), actual = backend.appendOwnedBatch!
+  const repair = vi.spyOn(backend, 'repair'), actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
   try {
     await document.metadata.admit({ type: 'plan/mode', mode: 'on' })
     expect((await coordinator.load(id)).session).toBe(document.view)
     expect((await coordinator.loadOwned(id)).session).toBe(document.view)
     expect(repair).not.toHaveBeenCalled()
-    backend.appendOwnedBatch = async (...args) => { await actual(...args); return { kind: 'unknown', key: args[3].key } }
+    vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => { await actual(...args); return { kind: 'unknown', key: args[3].key } })
     const outcome = await document.metadata.admit({ type: 'plan/mode', mode: 'off' })
     await expect(coordinator.load(id)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     await expect(coordinator.loadOwned(id)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
@@ -538,7 +540,7 @@ it('returns the exact active managed view from legacy load APIs without a second
 
 it('refuses a detached mutable readiness alias instead of upgrading it into a writable facade', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-ready-alias-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), alias = { formatVersion: 5, events: [] }
   try {
     const before = await readFile(join(root, `${id}.jsonl`))
@@ -552,19 +554,19 @@ it('refuses a detached mutable readiness alias instead of upgrading it into a wr
 
 it('publishes a structural fork only after its fresh scoped seed receipt without copying the parent framing', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-fork-receipt-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), parent = await coordinator.openManagedDocument(id)
   await parent.inputs.start(undefined, { type: 'user/message', text: 'inherited work' })
   await parent.agent.lifecycle({ type: 'turn/end' })
   const sourceFrames = (await readFile(join(root, `${id}.jsonl`), 'utf8')).trimEnd().split('\n').slice(1).map(line => JSON.parse(line))
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = backend.appendOwnedBatch!
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
   let seedReceiptOwner: string | undefined, seedKey: core.BatchKey | undefined, returned = false
-  backend.appendOwnedBatch = async (...args) => {
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     if (args[0] !== id) { entered.resolve(); await release.promise }
     const result = await actual(...args)
     if (args[0] !== id && result.kind === 'committed') { seedReceiptOwner = result.receipt.owner.sessionId; seedKey = result.receipt.key }
     return result
-  }
+  })
   const forking = forkSession(coordinator, id).then(result => { returned = true; return result })
   try {
     await Promise.race([entered.promise, forking])
@@ -583,13 +585,13 @@ it('publishes a structural fork only after its fresh scoped seed receipt without
 
 it('drains an already-captured required fact before releasing its source and refuses the stale handle', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-source-close-fence-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const action = document.beginAction(), source = action.registerSettlementSource(async () => {})
   const retained = source.tools.captureResult({ type: 'tool/result', callId: 'real', name: 'read', output: 'completed' })
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = backend.appendOwnedBatch!
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
   let attempts = 0
-  backend.appendOwnedBatch = async (...args) => { attempts++; entered.resolve(); await release.promise; return actual(...args) }
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => { attempts++; entered.resolve(); await release.promise; return actual(...args) })
   try {
     const saving = retained.admit()
     await entered.promise
@@ -609,7 +611,7 @@ it('drains an already-captured required fact before releasing its source and ref
 
 it('keeps a successful fsync committed when file close cleanup fails, with no rollback', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-known-sync-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
   let syncs = 0, truncates = 0, closes = 0
@@ -636,12 +638,12 @@ it('keeps a successful fsync committed when file close cleanup fails, with no ro
 
 it('rejects cross-document and old-incarnation actual owner contexts despite identical empty prefixes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-real-owner-scope-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const a = (await coordinator.create()).id, b = (await coordinator.create()).id
   const left = await coordinator.openManagedDocument(a), right = await coordinator.openManagedDocument(b)
-  const actualAppend = backend.appendOwnedBatch!
+  const actualAppend = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
   let context: Parameters<typeof actualAppend>[1] | undefined
-  backend.appendOwnedBatch = async (...args) => { context = args[1]; return actualAppend(...args) }
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => { context = args[1]; return actualAppend(...args) })
   const before = await readFile(join(root, `${b}.jsonl`))
   try {
     // Capture the actual branded context while its original operation owns it.
@@ -659,7 +661,7 @@ it('rejects cross-document and old-incarnation actual owner contexts despite ide
 
 it('preserves body-relative committed prefix addressing across a longer header rewrite', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-header-boundary-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   try {
     expect(await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', seqs: [0] })
@@ -675,11 +677,11 @@ it('preserves body-relative committed prefix addressing across a longer header r
 
 it('rejects invalid typed structural references with zero backend writes while preserving literal argument refs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-typed-ref-zero-write-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   let writes = 0
-  const actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { writes++; return actual(...args) }
+  const actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => { writes++; return actual(...args) })
   try {
     await document.agent.lifecycle({ type: 'turn/start' })
     writes = 0
@@ -698,4 +700,13 @@ it('rejects invalid typed structural references with zero backend writes while p
     expect(await document.tools.dispatch('actual', { kind: 'prior', seq: 1, expectedType: 'tool/call' })).toMatchObject({ kind: 'committed', seqs: [2] })
     expect((await backend.read(id)).events.find(event => event.type === 'tool/call')).toMatchObject({ args })
   } finally { await coordinator.close().catch(() => {}) }
+})
+
+// Stable factory-level delegates preserve the backend's original descriptor identity.
+vi.mock('../src/backend/fact-journal.ts', async importOriginal => {
+ const original = await importOriginal<typeof import('../src/backend/fact-journal.ts')>()
+ return {...original, createFactJournalBackend(...args: Parameters<typeof original.createFactJournalBackend>) {
+  const backend = original.createFactJournalBackend(...args)
+  return {...backend, appendOwnedBatch: vi.fn(backend.appendOwnedBatch), reconcileOwnedBatch: vi.fn(backend.reconcileOwnedBatch), confirmBootstrapFrames: vi.fn(backend.confirmBootstrapFrames)}
+ }}
 })
