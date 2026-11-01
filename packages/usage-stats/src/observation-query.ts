@@ -1,4 +1,4 @@
-import {aggregateUsage,validateUsageQuery} from './aggregate.js'
+import {aggregateUsage,validateUsageQuery,configuredUsageCost} from './aggregate.js'
 import {reduceUsageObservations} from './observation-reducer.js'
 import type {ObservationEntity,ObservationSend} from './observation-projection-types.js'
 import type {ObservationQuery,ObservationSummary,UsagePopulation,UsageSnapshotV2,ObservationGroup} from './observation-snapshot-types.js'
@@ -17,19 +17,22 @@ function routeMatches(value:{workspace?:string;projectId?:string;providerId?:str
 }
 const hasFilter=(q:ObservationQuery)=>q.route!==undefined||(['workspace','projectId','providerId','modelId'] as const).some(k=>q[k]!==undefined)
 function safeSubtotal(values:(number|null|undefined)[]):number|null{const present=values.filter((n):n is number=>n!==null&&n!==undefined);if(!present.length)return null;const total=present.reduce((a,b)=>a+b,0);return Number.isSafeInteger(total)?total:null}
+function costTotals(sends:ObservationSend[]){const priced=sends.filter(s=>s.costCoverage==='priced'),total=priced.reduce((n,s)=>n+s.estimatedCostUsd!,0);return {pricedApiSends:priced.length,unpricedApiSends:sends.filter(s=>s.billing==='api'&&s.costCoverage!=='priced').length,measuredEstimatedCostUsd:priced.length&&Number.isFinite(total)?total:null}}
 function summarize(rows:ObservationEntity[],legacyInvocations=0):ObservationSummary{
  const sends=rows.filter(r=>r.kind==='send').map(r=>r.value)
  const cache=sends.filter(s=>s.totalInputTokens!==null&&s.cacheReadTokens!==undefined),read=safeSubtotal(cache.map(s=>s.cacheReadTokens)),input=safeSubtotal(cache.map(s=>s.totalInputTokens))
- return {logicalActions:rows.filter(r=>r.kind==='action').length,transportHandoffs:sends.length,localInvocations:rows.filter(r=>r.kind==='local').length,unknownReservations:rows.filter(r=>r.kind==='unknown-reservation').length,knownUnsentCandidates:rows.filter(r=>r.kind==='known-unsent').length,unknownUsage:rows.filter(r=>r.kind==='unmatched-update').length,unattributedInvocations:rows.filter(r=>r.kind==='unattributed').length,legacyInvocations,measuredSends:sends.filter(s=>s.totalTokens!==null).length,unavailableSends:sends.filter(s=>s.coverage!=='complete').length,measuredInputSubtotal:safeSubtotal(sends.map(s=>s.totalInputTokens)),measuredOutputSubtotal:safeSubtotal(sends.map(s=>s.outputTokens)),measuredTokenSubtotal:safeSubtotal(sends.map(s=>s.totalTokens)),cacheHitRate:read!==null&&input!==null&&input>0?read/input:null}
+ return {...costTotals(sends),logicalActions:rows.filter(r=>r.kind==='action').length,transportHandoffs:sends.length,localInvocations:rows.filter(r=>r.kind==='local').length,unknownReservations:rows.filter(r=>r.kind==='unknown-reservation').length,knownUnsentCandidates:rows.filter(r=>r.kind==='known-unsent').length,unknownUsage:rows.filter(r=>r.kind==='unmatched-update').length,unattributedInvocations:rows.filter(r=>r.kind==='unattributed').length,legacyInvocations,measuredSends:sends.filter(s=>s.totalTokens!==null).length,unavailableSends:sends.filter(s=>s.coverage!=='complete').length,measuredInputSubtotal:safeSubtotal(sends.map(s=>s.totalInputTokens)),measuredOutputSubtotal:safeSubtotal(sends.map(s=>s.outputTokens)),measuredTokenSubtotal:safeSubtotal(sends.map(s=>s.totalTokens)),cacheHitRate:read!==null&&input!==null&&input>0?read/input:null}
 }
 function groups(sends:ObservationSend[],field:'modelId'|'providerId'):ObservationGroup[]{
  const result=new Map<string,ObservationSend[]>()
  for(const send of sends){const key=send[field]===undefined?'unknown':JSON.stringify([send.providerId??null,send[field]]),values=result.get(key)??[];values.push(send);result.set(key,values)}
- return [...result].sort(([a],[b])=>a.localeCompare(b)).map(([key,values])=>({key,label:values[0]![field]??'Unknown route',transportHandoffs:values.length,measuredSends:values.filter(s=>s.totalTokens!==null).length,unavailableSends:values.filter(s=>s.coverage!=='complete').length,measuredTokenSubtotal:safeSubtotal(values.map(s=>s.totalTokens))}))
+ return [...result].sort(([a],[b])=>a.localeCompare(b)).map(([key,values])=>({...costTotals(values),key,label:values[0]![field]??'Unknown route',transportHandoffs:values.length,measuredSends:values.filter(s=>s.totalTokens!==null).length,unavailableSends:values.filter(s=>s.coverage!=='complete').length,measuredTokenSubtotal:safeSubtotal(values.map(s=>s.totalTokens))}))
 }
 /** Reads complete populations; no IO, projection callbacks or mutation authority. */
 export function queryUsageObservations(population:UsagePopulation,input:ObservationQuery,recordingMode:'legacy'|'observations'):UsageSnapshotV2{
  const query=validateObservationQuery(input),fold=reduceUsageObservations(population.observations,{start:0,end:Number.MAX_SAFE_INTEGER},population.legacyRecords)
+ const warningsForCost:string[]=[]
+ for(const send of fold.sends){const price=population.prices.find(p=>p.providerId===send.providerId&&p.modelId===send.modelId);send.estimatedCostUsd=send.coverage==='complete'?configuredUsageCost(send,price,send.uncachedInputTokens,warningsForCost):null;send.costCoverage=send.billing==='subscription'?'subscription-no-api-cost':send.estimatedCostUsd!==null?'priced':send.billing==='api'?'unpriced':'unavailable'}
  const completeSends=fold.sends,linked=new Map<string,ObservationSend[]>()
  for(const send of completeSends){const key=actionKey(send),values=linked.get(key)??[];values.push(send);linked.set(key,values)}
  const all=fold.entities.filter(row=>{
@@ -41,7 +44,7 @@ export function queryUsageObservations(population:UsagePopulation,input:Observat
  const filtered=all.filter(row=>row.at>=query.start&&row.at<query.end)
  const legacy=aggregateUsage(population.legacyRecords,query,population.prices,population.warnings)
  const summary=summarize(filtered,legacy.totalRecords),sends=filtered.filter(r=>r.kind==='send').map(r=>r.value)
- const warnings=[...new Set([...population.warnings,...fold.warnings,...(recordingMode==='legacy'?['Observation recording is not enabled; only previously recorded observations are shown.']:[]),'Usage is a point-in-time read; missing observations and active writes may make coverage incomplete.'])]
+ const warnings=[...new Set([...population.warnings,...fold.warnings,...warningsForCost,...(recordingMode==='legacy'?['Observation recording is not enabled; only previously recorded observations are shown.']:[]),'Usage is a point-in-time read; missing observations and active writes may make coverage incomplete.'])]
  if(population.observationNamespace==='absent')warnings.push('Observation storage is absent; action and send coverage is unavailable.')
  const date=new Intl.DateTimeFormat('en-CA',{timeZone:query.timeZone,year:'numeric',month:'2-digit',day:'2-digit'})
  const days=new Map<string,ObservationEntity[]>()

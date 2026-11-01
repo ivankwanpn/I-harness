@@ -20,8 +20,9 @@ afterEach(()=>{cleanup();useLocale.getState().setLocale('zh-TW')})
 async function inventory(root:string){const values:Record<string,string>={};async function walk(path:string,prefix:string){for(const item of await readdir(path,{withFileTypes:true})){const p=join(path,item.name);if(item.isDirectory())await walk(p,prefix+'/'+item.name);else values[prefix+'/'+item.name]=(await readFile(p)).toString('hex')}}await walk(root,'');return values}
 it('actual store→host wire→bound main bridge→renderer stays read-only until explicit price save',async()=>{
  const root=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'consumer-ui-')),store=createUsageStore(root),base=Date.now()-10000
- for(const original of observations){const row=structuredClone(original);row.observedAt+=base;if(row.observation.type==='action-open'){row.observation.startedAt+=base;row.observation.expiresAt+=base}await store.recordObservation(row)}
+ for(const original of observations){const row=structuredClone(original);if(row.observation.type==='usage-snapshot')Object.assign(row.observation,{cacheReadTokens:0,cacheCreationTokens:0});row.observedAt+=base;if(row.observation.type==='action-open'){row.observation.startedAt+=base;row.observation.expiresAt+=base}await store.recordObservation(row)}
  await store.record({id:'legacy',startedAt:base+5,durationMs:1,workspace:'w',providerId:'older-provider',modelId:'older-model',billing:'subscription',status:'failed'})
+ await store.setPricing({providerId:'child-provider',modelId:'child-model',inputPerMillion:1,outputPerMillion:2,source:'fixture',updatedAt:1})
  const before=await inventory(root),record=vi.spyOn(store,'record'),recordObservation=vi.spyOn(store,'recordObservation'),price=vi.spyOn(store,'setPricing'),host=createUsageHandlers(store,{recordingMode:'legacy',warnings:()=>[]})
  const resolveModel=vi.fn(async()=>{throw Error('read must not resolve/authenticate a model')}),service=createSessionService({workspace:root,modelPolicy:'required',modelBindingFor:resolveModel}),frames:RpcMessage[]=[],send=(frame:RpcMessage)=>{frames.push(frame)},handlers={usageStats:host},router=createDesktopRouter(createSdkServer(service,{onWrite:createGatewayWrite(send,handlers)}),send,handlers);let sequence=0
  await router.handleLine(encodeFrame(makeRequest(++sequence,'initialize',{})))
@@ -31,6 +32,7 @@ it('actual store→host wire→bound main bridge→renderer stays read-only unti
  const view=render(<UsageStatistics active request={request}/>)
  try{
   await screen.findByTestId('usage-actions');expect(within(screen.getByTestId('usage-actions')).getByText('1')).toBeTruthy();expect(within(screen.getByTestId('usage-sends')).getByText('1')).toBeTruthy()
+  expect(within(screen.getByTestId('usage-cost')).getByText('$0.000014')).toBeTruthy()
   expect(screen.getByText(/recording is not enabled/)).toBeTruthy();expect(screen.getAllByText('child-model').length).toBeGreaterThan(0)
   fireEvent.click(screen.getByRole('button',{name:'Line'}));const inspect=screen.getByRole('combobox',{name:'Inspect trend date'}) as HTMLSelectElement;fireEvent.change(inspect,{target:{value:inspect.options[1]!.value}});expect(screen.getByText(/Measured tokens: Unavailable/)).toBeTruthy()
   fireEvent.click(screen.getByRole('tab',{name:'Records'}));fireEvent.click(screen.getAllByRole('button',{name:/View record/})[0]!)
@@ -40,9 +42,10 @@ it('actual store→host wire→bound main bridge→renderer stays read-only unti
   await screen.findByTestId('usage-actions');expect(await inventory(root)).toEqual(before);expect(record).not.toHaveBeenCalled();expect(recordObservation).not.toHaveBeenCalled();expect(price).not.toHaveBeenCalled()
   fireEvent.change(screen.getByRole('combobox',{name:'Route coverage'}),{target:{value:'unknown'}});await waitFor(()=>expect(request).toHaveBeenLastCalledWith(expect.objectContaining({query:expect.objectContaining({route:'unknown'})})));await screen.findByTestId('usage-actions')
   expect(wire.mock.calls.every(([method])=>method==='desktop/usage/query-v2')).toBe(true);expect(resolveModel).not.toHaveBeenCalled()
+  fireEvent.change(screen.getByRole('combobox',{name:'Route coverage'}),{target:{value:''}});await screen.findByTestId('usage-sends')
   fireEvent.click(screen.getByRole('button',{name:'API pricing'}));const pricing=screen.getByRole('dialog',{name:'API pricing'})
   fireEvent.change(within(pricing).getByLabelText('Input / million'),{target:{value:'0'}});fireEvent.change(within(pricing).getByLabelText('Output / million'),{target:{value:'2'}});fireEvent.change(within(pricing).getByLabelText('Price source'),{target:{value:'Explicit fixture price'}});fireEvent.click(within(pricing).getByRole('button',{name:'Save pricing'}))
-  await waitFor(()=>expect(price).toHaveBeenCalledTimes(1));expect(record).not.toHaveBeenCalled();expect(recordObservation).not.toHaveBeenCalled()
+  await waitFor(()=>expect(price).toHaveBeenCalledTimes(1));await waitFor(()=>expect(within(screen.getByTestId('usage-cost')).getByText('$0.000006')).toBeTruthy());expect(record).not.toHaveBeenCalled();expect(recordObservation).not.toHaveBeenCalled()
  }finally{view.unmount();await bridge.close();await router.close();await service.close()}
 })
 it('inactive absent observation history shows unavailable counts while older records remain separately visible',async()=>{
