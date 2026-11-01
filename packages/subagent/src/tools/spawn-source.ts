@@ -27,7 +27,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   // Retain the original acquisition before any later constructor step can
   // throw. The same handle gains its actual source below, before beforeRead.
   retainUnused?.(Object.freeze({ async close() {
-    unused = true
+    if(!start&&!published)unused = true
     try { await closeAcquired?.() } finally { action.finish() }
   } }))
   let start: CapturedActionFact<ProducerFactOutcome> | undefined

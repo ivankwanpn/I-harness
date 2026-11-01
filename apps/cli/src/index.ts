@@ -17,7 +17,7 @@ import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persist
 import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-storage-contract"
 import type { SessionCoordinator, ForkPrepareRequest, ForkCommand, ForkExecutionControl } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
-import { createDurableSessionLoader, createSessionService, createCliForkHost } from "@i-harness/session-executor"
+import { createDurableSessionLoader, createSessionService, createCliForkHost, createUnmanagedTaskChildHost } from "@i-harness/session-executor"
 import type { SessionAssembly, SessionServiceOptions } from "@i-harness/session-executor"
 import type { SandboxMode } from "@i-harness/sandbox"
 export { HeadlessCleanupError } from "./run.ts"
@@ -666,6 +666,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
   // validation), so no record is being missed.
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
+    ...(coordinator?{prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'})}:{}),
     ...executionServiceOptionsFor(settings, settingsPath),
     // Explicit process consent uses the existing answerer; no flag preserves
     // this stdio host's unanswered asks, independently of Desktop settings.
@@ -930,6 +931,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
   // W6 T4: same seam as the sdk path above, same reason — see there.
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
+    ...(coordinator?{prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'})}:{}),
     ...executionServiceOptionsFor(settings, settingsPath),
     codeMode: settings.get().codeMode,
     workspace: process.cwd(),

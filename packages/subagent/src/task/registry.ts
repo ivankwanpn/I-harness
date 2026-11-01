@@ -12,6 +12,7 @@ import { TaskResultOwner } from "./result.ts"
 import { TaskNotifications } from "./notifications.ts"
 import { TaskPersistence } from "./persistence.ts"
 import { associateTaskSaveOwner } from './save-owner.ts'
+import {captureTaskSnapshot} from '@i-harness/session-persistence/internal/task-document-operations'
 import { TaskRecords } from "./records.ts"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
@@ -51,6 +52,12 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const maxConcurrency = opts.maxConcurrency ?? Infinity
   const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask)
   const retentionSaves = new WeakMap<TaskRecord, import('./persistence.ts').OwnedTaskSave>()
+  type RetentionIdentity={revision:string|undefined;fingerprint:string}
+  const acknowledgedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
+  const capturedRetention = new WeakMap<TaskRecord, RetentionIdentity>()
+  const retentionIdentity=(task:TaskRecord):RetentionIdentity=>({revision:task.result?.revision,fingerprint:JSON.stringify(captureTaskSnapshot(task.result??null))})
+  const sameRetention=(identity:RetentionIdentity,task:TaskRecord)=>identity.revision===task.result?.revision&&identity.fingerprint===retentionIdentity(task).fingerprint
+  const retentionPrerequisites=new WeakMap<TaskRecord,()=>Promise<void>>()
   const retentionFlights = new WeakMap<TaskRecord, Promise<void>>()
   const save = async () => { assertReady(); await persistence.save() }
 
@@ -101,13 +108,17 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     // The in-memory authoritative outcome is already complete. Persistence
     // failure changes delivery evidence only; it never reopens execution.
     if (!opts.coordinator || !opts.stateId) { task.retention = "memory"; return }
+    const acknowledged=acknowledgedRetention.get(task)
+    if(acknowledged&&sameRetention(acknowledged,task))return
     if (task.retention === "durable") return
     task.retention = "pending"
     try {
       const previous = retentionSaves.get(task)
-      const originalSave = previous ?? persistence.captureSave(true)
-      if (originalSave) { retentionSaves.set(task, originalSave); if (previous) await originalSave.retry(); else await originalSave.done; originalSave.assertHandoff() }
+      const captured=previous?capturedRetention.get(task)!:retentionIdentity(task)
+      const originalSave = previous ?? persistence.captureSave(true,retentionPrerequisites.get(task))
+      if (originalSave) { retentionSaves.set(task, originalSave);capturedRetention.set(task,captured); await completeOriginalRetention(task,originalSave,Boolean(previous));return }
       else await save()
+      if(!sameRetention(captured,task))throw Error('Original saved task result changed')
       if (task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'unavailable') {
         task.retention = 'failed'
         task.retentionError = task.result.envelope.retention.reason
@@ -115,7 +126,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         task.retention = "durable"
         delete task.retentionError
       }
-      originalSave?.release()
+      acknowledgedRetention.set(task,captured)
     } catch (error) {
       task.retention = "failed"
       task.retentionError = error instanceof Error ? error.message : String(error)
@@ -123,6 +134,27 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       throw error
     }
     publish(task)
+  }
+
+  async function completeOriginalRetention(task:TaskRecord,save:import('./persistence.ts').OwnedTaskSave,retry:boolean):Promise<void>{
+    if(currentState.records.get(task.id)!==task)throw Error('Original terminal task replaced')
+    const captured=capturedRetention.get(task);if(!captured)throw Error('Original terminal result identity unavailable')
+    if(retry)await save.retry();else await save.done
+    save.assertHandoff()
+    save.release();acknowledgedRetention.set(task,captured);retentionSaves.delete(task);capturedRetention.delete(task)
+    if(!sameRetention(captured,task))throw Error('Original saved task result changed')
+    if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else task.retention='durable'
+    publish(task)
+  }
+  function resumeOriginalRetention(task:TaskRecord):Promise<void>{
+    if(currentState.records.get(task.id)!==task)return Promise.reject(Error('Original terminal task replaced'))
+    const active=retentionFlights.get(task);if(active)return active
+    const acknowledged=acknowledgedRetention.get(task);if(acknowledged&&sameRetention(acknowledged,task))return Promise.resolve()
+    const save=retentionSaves.get(task)
+    if(!save)return retainResult(task.id)
+    const flight=completeOriginalRetention(task,save,true);retentionFlights.set(task,flight)
+    void flight.finally(()=>{if(retentionFlights.get(task)===flight)retentionFlights.delete(task)}).catch(()=>{})
+    return flight
   }
 
   function announceTerminal(t: TaskRecord, notify = true): void {
@@ -355,6 +387,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     flushPersistence: async () => { await ready; await persistence.flush() },
   }
   if (ownedTask && opts.launchContext) launchPort = createTaskLaunchPort(registry, opts.launchContext, {
+    beforeResultIssue(record,before){assertReady();if(currentState.records.get(record.id)!==record)throw Error('Original task replaced');retentionPrerequisites.set(record,before)},
+    retainResult:resumeOriginalRetention,
     current(record) { assertReady();if(record&&currentState.records.get(record.id)!==record)throw Error('Original slot task replaced'); ownedTask.operations.assertTaskV3Parent(ownedTask.parent, opts.stateId!) },
     insert: input => currentState.records.submit(input, maxConcurrency),
     protect: record => currentState.records.protectSubmission(record, true),

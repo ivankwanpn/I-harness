@@ -7,6 +7,7 @@ export type { JobRegistry, JobSnapshot, JobStatus } from "./jobs.ts"
 export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkflowRows } from "./projection.ts"
 export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"
 export { createRoleRegistry, builtinRoles } from "./roles.ts"
+export type { PrepareTaskChild, TaskChildHostInput, TaskChildHostPreparation } from './child/task-host.ts'
 export type { SubagentRole, RoleRegistry } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"
@@ -68,6 +69,7 @@ import { isColdBoundChild } from './task/cold-bindings.ts'
 import { createTaskStartupFacade } from './task/startup-facade.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
+  prepareTaskChild?: import('./child/task-host.ts').PrepareTaskChild
   residentActivation?: import('./followup/activation.ts').ResidentInboxActivation
   results?: import("./task/result.ts").TaskResultStore
   reportPolicy?: ReportPolicy
@@ -268,12 +270,14 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       if(!caller)throw Error('Original prepared task caller unavailable')
       const args=caller.call.args as {fork_turns?:unknown;agent_type?:string}
       if(args.fork_turns!==undefined&&args.fork_turns!=='none'||args.agent_type==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)return
+      if(!opts.prepareTaskChild||!opts.persist?.coordinator.bootstrapChildTargetWithCapture||!opts.persist.coordinator.resumeChildTarget)throw Error('Original task child host unavailable')
       if(caller.context.view!==opts.parentSession||caller.context.factOwner!==factOwner||caller.context.context!==ctx||caller.identity.parentSessionId!==ownedTask.stateId)throw Error('Foreign original task caller')
       ownedTask.operations.assertTaskV3Parent(ownedTask.parent,ownedTask.stateId)
       const role=roles.get(args.agent_type??'general');if(!role)throw Error('Original role unavailable')
       return taskLaunchPortFor(taskOwner).admit(caller,role)
     }} : {}),
     residentActivation: opts.residentActivation,
+    prepareTaskChild: opts.prepareTaskChild,
     createInstructionContext: opts.createInstructionContext,
     generationFactoryFor: opts.generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
     summaryFactory: opts.summaryFactory,

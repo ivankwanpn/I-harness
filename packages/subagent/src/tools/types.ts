@@ -15,6 +15,7 @@ import type { ReportPolicy } from "../report-policy.ts"
 import type { ParentInputAdmission } from '../task-notification.ts'
 
 export interface SubagentToolDeps extends RoleModelHost {
+  prepareTaskChild?: import('../child/task-host.ts').PrepareTaskChild
   taskLaunchCallerFor?(exec: import('@i-harness/core-tools').ToolExec): {kind:'new'|'same';slot:import('../task/launch-slots.ts').TaskLaunchSlot}|undefined
   residentActivation?: import('../followup/activation.ts').ResidentInboxActivation
   parentNotify?: ParentInputAdmission

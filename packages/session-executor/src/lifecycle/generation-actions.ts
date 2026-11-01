@@ -6,6 +6,7 @@ import { generationClock } from './generation-clock.ts'
 import { OwnedGenerationAction } from './generation-action.ts'
 import { readOwnedGenerationActions } from '../../../core-session/src/managed/view.ts'
 import { retainGenerationClose } from './generation-close-settlement.ts'
+import { captureGenerationBudget } from '@i-harness/core-agent'
 
 const sameOrigin = (a: GenerationOrigin, b: GenerationOrigin) => a.kind === b.kind && a.seq === b.seq
   && (a.kind === 'observation-input' ? a.inputId === (b.kind === 'observation-input' ? b.inputId : undefined) : true)
@@ -58,9 +59,8 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
     if (options.maxAttempts !== undefined && (!Number.isSafeInteger(options.maxAttempts) || options.maxAttempts <= 0)) throw new TypeError('Invalid generation attempt limit')
     let persisted = read().find(value => value.opened.purpose === purpose && sameOrigin(value.opened.origin, origin))
     if (!persisted) {
-      const startedAt = options.start?.wall ?? Date.now(), timeout = options.timeoutMs ?? (purpose === 'main' || purpose === 'manual' ? 3_600_000 : purpose === 'title' ? 30_000 : 90_000)
-      if (!Number.isSafeInteger(timeout) || timeout <= 0 || !Number.isSafeInteger(startedAt + timeout)) throw generationError('GENERATION_CLOCK_INVALID')
-      const event: GenerationActionEvent = { type: 'context/action', version: 1, op: 'open', ownerSessionId, actionId: randomUUID(), purpose, origin, startedAt, expiresAt: startedAt + timeout, trustedAt: startedAt }
+      const {startedAt,expiresAt}=captureGenerationBudget(purpose,options,options.start?.wall??Date.now())
+      const event: GenerationActionEvent = { type: 'context/action', version: 1, op: 'open', ownerSessionId, actionId: randomUUID(), purpose, origin, startedAt, expiresAt, trustedAt: startedAt }
       await commit([event])
       persisted = state(event.actionId)
     }

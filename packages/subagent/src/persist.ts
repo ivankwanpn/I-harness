@@ -235,8 +235,8 @@ export function persistentJobRegistry(
 ): JobRegistry {
   return {
     ...jobs,
-    registerJob(owner, kind, label, id, startedAt, cancel, identity) {
-      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity)
+    registerJob(owner, kind, label, id, startedAt, cancel, identity, acquired) {
+      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity, acquired)
       observe?.(jobs.read(result.id))
       void save()
       if(!result.finish)return result

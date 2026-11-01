@@ -1,6 +1,7 @@
 const publicationFault=vi.hoisted(()=>({target:'',armed:false}))
 vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,async rename(...args:Parameters<typeof fs.rename>){await fs.rename(...args);if(publicationFault.armed&&String(args[1])===publicationFault.target){publicationFault.armed=false;throw undefined}}}})
 import * as spawnSources from '../src/tools/spawn-source.ts'
+const originalSpawnSource=spawnSources.createSpawnSource
 import { expect,it,vi } from 'vitest'
 import {mkdtemp,rm} from 'node:fs/promises'
 import {join} from 'node:path'
@@ -15,6 +16,7 @@ import {registerExec} from '@i-harness/exec'
 import {receivedInputsFor} from '../../session-executor/src/lifecycle/received-inputs.ts'
 import * as slots from '../src/task/launch-slots.ts'
 import {TaskPersistence} from '../src/task/persistence.ts'
+import {createUnmanagedTaskChildHost} from '../../session-executor/src/lifecycle/task-child-host.ts'
 it.each([false,undefined])('mounted Boolean-disabled declared model refuses before task effects (%s)',async policy=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'slot-model-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
  let mounted:ReturnType<typeof registerSubagent>|undefined,action:ReturnType<Awaited<ReturnType<typeof coordinator.openManagedDocument>>['beginAction']>|undefined,port:slots.TaskLaunchPort|undefined
@@ -22,7 +24,7 @@ it.each([false,undefined])('mounted Boolean-disabled declared model refuses befo
  let saveSpy:ReturnType<typeof vi.spyOn>|undefined
  try{
   await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent'),ctx=createContext(),registry=createToolRegistry(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}})
-  mounted=registerSubagent(ctx,registry,{parentSession:document.view,factOwner:document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel:async()=>{throw Error('unexpected resolver')},allowSubagentModelSelection:policy,persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
+  mounted=registerSubagent(ctx,registry,{prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}),parentSession:document.view,factOwner:document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel:async()=>{throw Error('unexpected resolver')},allowSubagentModelSelection:policy,persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
   mounted.roles.register({name:'configured',description:'configured',systemPrompt:'work',tools:[],model:{provider:'unused',model:'unused'}})
   await mounted.flushPersistence()
   action=document.beginAction();const source=action.registerSettlementSource(async()=>{}),args={message:'work',task_name:'one',agent_type:'configured'},[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'call',name:'spawn_agent',args}));committedFactSeqs(await action.facts.tools.dispatch('call',{kind:'prior',seq:seq!,expectedType:'tool/call'}))
@@ -43,7 +45,7 @@ it.each([undefined,null])('mounted partial source retains original close debt af
  let saveSpy:ReturnType<typeof vi.spyOn>|undefined,beginSpy:{mockRestore():void}|undefined
  try{
   await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent'),ctx=createContext(),registry=createToolRegistry(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}})
-  mounted=registerSubagent(ctx,registry,{parentSession:document.view,factOwner:document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel:async()=>{throw Error('unexpected resolver')},persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
+  mounted=registerSubagent(ctx,registry,{prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}),parentSession:document.view,factOwner:document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel:async()=>{throw Error('unexpected resolver')},persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
   action=document.beginAction();const source=action.registerSettlementSource(async()=>{}),args={message:'work',task_name:'one'},[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'call',name:'spawn_agent',args}));committedFactSeqs(await action.facts.tools.dispatch('call',{kind:'prior',seq:seq!,expectedType:'tool/call'}))
   const begin=document.beginAction.bind(document)
   beginSpy=vi.spyOn(document,'beginAction').mockImplementation((...args)=>{const actual=begin(...args),register=actual.registerSettlementSource.bind(actual);vi.spyOn(actual,'registerSettlementSource').mockImplementation((...args)=>{acquired=register(...args);const close=acquired.close.bind(acquired);vi.spyOn(acquired,'close').mockImplementation(async()=>{closeAttempts++;if(closeFault)throw false;await close();closed++});return acquired});return actual})
@@ -66,9 +68,12 @@ it.each([{consumer:undefined,mode:'new'},{consumer:'code' as const,mode:'new'},{
  const make=slots.createTaskLaunchPort,spy=vi.spyOn(slots,'createTaskLaunchPort').mockImplementation((...args)=>{port=make(...args);return port})
  let mounted:ReturnType<typeof registerSubagent>|undefined,action:ReturnType<Awaited<ReturnType<typeof coordinator.openManagedDocument>>['beginAction']>|undefined
  let saveSpy:ReturnType<typeof vi.spyOn>|undefined,selections=0,policies=0
+ const createSource=originalSpawnSource
+ // Admission qualification ends at a real acquired-source failure, before B2.
+ sourceSpy.mockImplementation((...args)=>{const result=createSource(...args);if(mode==='new'||mode==='selection')throw Error('Original source constructor cut');return result})
  try{
   await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent'),ctx=createContext(),registry=createToolRegistry(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}})
-  mounted=registerSubagent(ctx,registry,{parentSession:document.view,factOwner:document,maxConcurrency:mode==='capacity'?0:undefined,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel:async()=>({status:'unconfigured',reason:'unused'}),...(mode==='selection'?{roleSelectionFor(){selections++;expect(port!.inspect('task-1')).toBeDefined();expect(mounted!.tasks.list()).toHaveLength(1);return {provider:'unused',model:'unused'}},allowSubagentModelSelection(){policies++;expect(port!.inspect('task-1')).toBeDefined();return true}}:{}),persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
+  mounted=registerSubagent(ctx,registry,{prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}),parentSession:document.view,factOwner:document,maxConcurrency:mode==='capacity'?0:undefined,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel:async()=>({status:'unconfigured',reason:'unused'}),...(mode==='selection'?{roleSelectionFor(){selections++;expect(port!.inspect('task-1')).toBeDefined();expect(mounted!.tasks.list()).toHaveLength(1);return {provider:'unused',model:'unused'}},allowSubagentModelSelection(){policies++;expect(port!.inspect('task-1')).toBeDefined();return true}}:{}),persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
   await receivedInputsFor(document,'parent').inbox.admit({inputId:'human',text:'work',intent:'user',delivery:'queue',provenance:{kind:'human',authority:'request',scope:'turn',producer:'session.prompt'}})
   action=document.beginAction();const source=action.registerSettlementSource(async()=>{}),args={message:'work',task_name:'one',background:false},[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'call',name:'spawn_agent',args}));committedFactSeqs(await action.facts.tools.dispatch('call',{kind:'prior',seq:seq!,expectedType:'tool/call'}))
   const prepare=()=>registry.prepare({name:'spawn_agent',args},action!.signal,{session:document.view,sessionId:'parent',callId:'call',callEventSeq:seq!,settlementSource:source,...consumer?{resultConsumer:consumer}:{}})
@@ -82,7 +87,7 @@ it.each([{consumer:undefined,mode:'new'},{consumer:'code' as const,mode:'new'},{
   const retain=vi.spyOn(prepared.exec,'retainOutcome')
   const status=port!.inspect('task-1')!;expect(status).toBeDefined();expect(mounted.tasks.list()).toHaveLength(1)
   mounted.tasks.get('task-1')!.delivery='parent';const duplicate=registry.dispatch(await prepare());void duplicate.catch(()=>{});await Promise.resolve();expect(port!.inspect('task-1')!.flight).toBe(status.flight);expect(saves).toBe(1);expect(sourceSpy).not.toHaveBeenCalled();expect(retain).not.toHaveBeenCalled();expect(selections).toBe(0);expect(policies).toBe(0)
-  gate.resolve();await expect(first).rejects.toMatchObject({code:'TASK_LAUNCH_NOT_CONNECTED'});await expect(duplicate).rejects.toMatchObject({code:'TASK_LAUNCH_NOT_CONNECTED'})
+  gate.resolve();await expect(first).rejects.toThrow('Original source constructor cut');await expect(duplicate).rejects.toThrow('Original source constructor cut')
   expect(sourceSpy).toHaveBeenCalledTimes(1);expect(retain).toHaveBeenCalledTimes(1);expect(mounted.agents.entries().size).toBe(0);expect(mounted.table.entries().size).toBe(0);expect(mounted.tasks.list()).toHaveLength(1);expect(selections).toBe(mode==='selection'?1:0);expect(policies).toBe(mode==='selection'?1:0)
   await source.close()
  }finally{gate.resolve();saveSpy?.mockRestore();spy.mockRestore();sourceSpy.mockRestore();action?.finish();await mounted?.dispose();await coordinator.close();await rm(root,{recursive:true,force:true})}
@@ -115,15 +120,17 @@ import {createCodeModeBroker} from '../../code-mode/src/broker.ts'
 it.each([false,true])('real Code Mode broker task caller with foreign view=%s',async foreign=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'warm-broker-')),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract),sourceSpy=vi.spyOn(spawnSources,'createSpawnSource')
  let mounted:ReturnType<typeof registerSubagent>|undefined,broker:ReturnType<typeof createCodeModeBroker>|undefined
+ const createSource=originalSpawnSource
+ sourceSpy.mockImplementation((...args)=>{createSource(...args);throw Error('Original source constructor cut')})
  try{
   await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent'),ctx=createContext(),registry=createToolRegistry(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}})
-  mounted=registerSubagent(ctx,registry,{parentSession:document.view,factOwner:document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel:async()=>({status:'unconfigured',reason:'unused'}),persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
+  mounted=registerSubagent(ctx,registry,{prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}),parentSession:document.view,factOwner:document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel:async()=>({status:'unconfigured',reason:'unused'}),persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready
   if(foreign)await coordinator.create({sessionId:'foreign'});const executing=foreign?await coordinator.openManagedDocument('foreign'):document,id=foreign?'foreign':'parent'
   broker=createCodeModeBroker(ctx,registry,{session:executing.view,sessionId:id,factOwner:executing});broker.startCell('cell')
   registry.register({name:'workflow',description:'',inputSchema:{},async execute(){return broker!.invoke({cellId:'cell',invocationId:'code-call',name:'spawn_agent',args:{message:'work',task_name:'nested',background:false},origin:{sessionId:id,callId:'outer'},signal:new AbortController().signal})}})
   const action=document.beginAction(),source=action.registerSettlementSource(async()=>{}),[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'outer',name:'workflow',args:{}}));committedFactSeqs(await action.facts.tools.dispatch('outer',{kind:'prior',seq:seq!,expectedType:'tool/call'}))
   const result=registry.dispatch(await registry.prepare({name:'workflow',args:{}},action.signal,{session:document.view,sessionId:'parent',callId:'outer',callEventSeq:seq!,settlementSource:source}))
-  await expect(result).rejects.toThrow(foreign?'Foreign':'connected B2')
+  await expect(result).rejects.toThrow(foreign?'Foreign':'Original source constructor cut')
   expect(mounted.tasks.list()).toHaveLength(foreign?0:1);expect(sourceSpy).toHaveBeenCalledTimes(foreign?0:1);expect(mounted.agents.entries().size).toBe(0)
   await source.close();action.finish()
  }finally{await broker?.dispose();sourceSpy.mockRestore();await mounted?.dispose();await coordinator.close();await rm(root,{recursive:true,force:true})}

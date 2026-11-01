@@ -113,6 +113,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     }:{}),
     ...(managed.childSupported()?{
       inspectChildBootstrapCapture:managed.inspectChildBootstrapCapture,
+      inspectChildBootstrap:managed.inspectChildBootstrap,
       bootstrapChildTargetWithCapture(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
         if(CURRENT_FORMAT_VERSION>=14&&!transitionStorage)return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'not-issued',reason:'unsupported'})
         if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})

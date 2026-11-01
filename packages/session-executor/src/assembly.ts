@@ -152,6 +152,7 @@ type RoleModelSelection = {
 }
 
 export interface AssemblyOptions {
+  prepareTaskChild?: import('@i-harness/subagent').PrepareTaskChild
   prepareExecDelivery?: import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery
   residentActivation?: ResidentActivationController
   /** Retain the original partial assembly's cleanup before Team construction. */
@@ -1314,6 +1315,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => (action, dependencies) =>
       createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, dependencies)
     const subagent = registerSubagent(ctx, tools, {
+      prepareTaskChild: opts.prepareTaskChild,
       residentActivation: residentActivation.ticket,
       createInstructionContext: childInstructionHost.create,
       results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
