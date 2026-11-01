@@ -2,6 +2,8 @@ import { validateResultFact, validateResultSourceMetadata } from '../results/val
 import { conversationFormatError as fail } from '../events/conversation.ts';
 import { deliveryInputId, deliveryMinimumFormat, isDeliveryEventType, validDeliveryEvent, type DeliveryAdmissionReceipt, type DeliveryReceivedEvent, type DeliveryKey, type DeliverySourceEvent, type ExecDeliverySourceEvent, type ExecTerminalEvent } from '../events/delivery.ts';
 import { eligibleExecTerminal } from '../events/exec-delivery.ts';
+import { eligibleWorkflowTerminal, workflowTerminalRef } from '../events/workflow-delivery.ts';
+import { createWorkflowDeliveryIndex, type WorkflowDeliveryCandidate } from './workflow-delivery.ts';
 import type { GenerationActionEvent } from '../events/generation.ts';
 import type { SessionEventView, SessionView } from '../managed/types.ts';
 import type { GenerationHistoryScope } from './generation.ts';
@@ -63,6 +65,7 @@ export interface DeliveryState {
   lastFenceSeq(): number | undefined;
   source(namespace: string, sourceId: string): Readonly<DeliverySourceEvent> | undefined;
   execPending(): readonly ExecDeliveryCandidate[];
+  workflowPending(): readonly WorkflowDeliveryCandidate[];
   receipt(key: DeliveryKey): Readonly<{
     event: DeliveryReceivedEvent;
     disposition: DeliveryAdmissionReceipt['disposition'];
@@ -100,7 +103,7 @@ export function validateDeliveryFrame(events: readonly SessionEventView[], forma
     }
     if (event.type === 'agent/delivery-received' && !admittedPair(event, events[i + 1]))
       fail('delivery receipt requires same-frame admission');
-    if (event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec'].includes(event.provenance?.producer ?? '')) {
+    if (event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow'].includes(event.provenance?.producer ?? '')) {
       const receipt = events[i - 1];
       if (receipt?.type !== 'agent/delivery-received' || !admittedPair(receipt, event) || formatVersion < deliveryMinimumFormat(receipt))
         fail('delivery admission requires same-frame receipt');
@@ -114,13 +117,14 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
   const validateTerminal = profile === semanticSourceStructure ? validateResultSourceMetadata : validateResultFact;
   const refs = new Map<number, Ref>(), sources = new Map<string, DeliverySourceEvent>(), receipts = new Map<string, Receipt>(), inputs = new Map<string, string>();
   const execTerminals = new Map<number, ExecTerminalEvent>(), parentHandoffs = new Set<number>(), execPending = new Map<number, ExecDeliveryCandidate>();
+  const workflows = createWorkflowDeliveryIndex();
   const dispatches = new Map<number, Dispatch>(), admissions = new Map<string, InputClass>(), opens = new Set<string>(), fences = new Set<string>();
   let active: ReturnType<DeliveryState['activeGeneration']>, fence: number | undefined, owner = scope.sessionId, turn: number | undefined, turnAction: string | undefined;
   const state = (): DeliveryState => ({
     activeGeneration: () => active, lastFenceSeq: () => fence, source: (ns, id) => {
       const value = sources.get(sourceKey(ns, id));
       return value && Object.freeze({ ...value });
-    }, execPending: () => [...execPending.values()].map(candidate => structuredClone(candidate)), receipt: key => {
+    }, execPending: () => [...execPending.values()].map(candidate => structuredClone(candidate)), workflowPending: workflows.pending, receipt: key => {
       const value = receipts.get(identity(key));
       return value && Object.freeze({ event: Object.freeze({ ...value.event, key: Object.freeze({ ...value.event.key }) }), disposition: disposition(value, active) });
     },
@@ -149,6 +153,14 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
         return binding?.kind === 'exec' && binding.seq === seq ? binding : undefined;
       };
       const execTerminal = (seq: number) => stagedExecTerminals.get(seq) ?? execTerminals.get(seq);
+      const workflow = workflows.stage({
+        source(seq) {
+          const ref = reference(seq)
+          if (ref?.type !== 'agent/delivery-source' || ref.sourceNamespace !== 'workflow' || !ref.sourceId) return
+          const binding = source(sourceKey('workflow', ref.sourceId))
+          return binding?.kind === 'workflow' && binding.seq === seq ? binding : undefined
+        }, generation: () => stagedActive?.generationId, received: key => !!receipt(identity(key)),
+      });
       const parentRoute = (binding: ExecDeliverySourceEvent) => binding.delivery === 'parent' || stagedHandoffs.has(binding.seq!) || parentHandoffs.has(binding.seq!);
       const refreshExecCandidate = (binding: ExecDeliverySourceEvent) => {
         const terminal = execTerminal(binding.seq!);
@@ -240,14 +252,19 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
                 const start = reference(event.startSeq);
                 if (event.startSeq !== event.seq! - 1 || start?.type !== 'subagent/start' || start.taskId !== event.sourceId || start.parentSessionId !== event.recipientSessionId
                     || call.name !== 'spawn_agent' || dispatched.seq >= event.startSeq) fail('uncertified delivery source');
-              } else if (!['shell', 'bash', 'pwsh'].includes(call.name ?? '')) fail('uncertified Exec delivery source');
+              } else if (event.kind === 'workflow') { if (call.name !== 'workflow_run') fail('uncertified Workflow delivery source'); }
+              else if (!['shell', 'bash', 'pwsh'].includes(call.name ?? '')) fail('uncertified Exec delivery source');
               stagedSources.set(sourceKey(event.sourceNamespace, event.sourceId), event);
             }
             if (event.type === 'agent/delivery-handoff') {
+              if (event.kind === 'workflow') workflow.handoff(event.sourceSeq, event.seq!);
+              else {
               const binding = execSource(event.sourceSeq);
               if (!binding || event.sourceSeq >= event.seq! || binding.generationId !== stagedActive?.generationId || parentRoute(binding)) fail('invalid Exec parent handoff');
               stagedHandoffs.add(event.sourceSeq); refreshExecCandidate(binding);
+              }
             }
+            if (event.type === 'workflow/end') workflow.end(event);
             if (event.type === 'exec/end') {
               const binding = execSource(event.sourceSeq);
               if (!binding || event.sourceSeq >= event.seq! || binding.sourceId !== event.instanceId || execTerminal(event.sourceSeq)) fail('invalid or duplicate Exec terminal');
@@ -259,10 +276,12 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
               if (!binding || binding.kind !== event.key.kind || binding.seq !== event.sourceSeq || binding.recipientSessionId !== event.key.recipientSessionId || binding.generationId !== stagedActive?.generationId || event.terminalSeq <= event.sourceSeq || event.terminalSeq >= event.seq! || terminal?.resultRevision !== event.key.resultRevision || !terminal.qualified || receipt(identity(event.key)) || stagedInputs.has(event.inputId) || inputs.has(event.inputId) || event.inputId !== deliveryInputId(event.key))
                 fail('unqualified or duplicate delivery receipt');
               if (binding.kind === 'subagent' ? terminal.type !== 'subagent/end' || terminal.taskId !== event.key.sourceId
+                  : binding.kind === 'workflow' ? terminal.type !== 'workflow/end' || terminal.sourceSeq !== binding.seq || terminal.sourceId !== binding.sourceId || !workflow.parent(binding)
                   : terminal.type !== 'exec/end' || terminal.sourceSeq !== binding.seq || terminal.sourceId !== binding.sourceId || !parentRoute(binding)) fail('unqualified delivery terminal kind');
               stagedReceipts.set(identity(event.key), { event, disposition: 'pending', admissionSeq: event.seq! + 1, generationId: binding.generationId });
               stagedInputs.set(event.inputId, identity(event.key));
               if (binding.kind === 'exec') stagedExecPending.set(binding.seq!, undefined);
+              if (binding.kind === 'workflow') workflow.received(binding.seq!);
               awaiting = event;
             }
           }
@@ -311,8 +330,8 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
               stagedDispatches.set(event.eventSeq, { callId: event.callId, seq: event.seq });
           }
           if (event.type === 'agent/input/admitted' && event.seq !== undefined)
-            stagedAdmissions.set(event.inputId, Object.freeze({ admissionSeq: event.seq, kind: ['session.delivery.subagent', 'session.delivery.exec'].includes(event.provenance?.producer ?? '') ? 'delivery' : event.provenance?.producer === 'session.notification' && event.synthetic?.display?.kind === 'task' ? 'legacy-task' : 'ordinary' }));
-          if (event.seq !== undefined && (['agent/input/admitted', 'tool/call', 'subagent/start', 'subagent/end', 'exec/end'].includes(event.type) || event.type === 'agent/delivery-source' && event.kind === 'exec' || event.type === 'user/message' && event.input)) {
+            stagedAdmissions.set(event.inputId, Object.freeze({ admissionSeq: event.seq, kind: ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow'].includes(event.provenance?.producer ?? '') ? 'delivery' : event.provenance?.producer === 'session.notification' && event.synthetic?.display?.kind === 'task' ? 'legacy-task' : 'ordinary' }));
+          if (event.seq !== undefined && (['agent/input/admitted', 'tool/call', 'subagent/start', 'subagent/end', 'exec/end', 'workflow/end'].includes(event.type) || event.type === 'agent/delivery-source' && event.kind !== 'subagent' || event.type === 'user/message' && event.input)) {
             const ref: Ref = { type: event.type };
             if (event.type === 'agent/input/admitted')
               Object.assign(ref, { inputId: event.inputId, human: event.intent === 'user' && !event.synthetic && event.provenance?.kind === 'human' && event.provenance.authority === 'request', originSessionId: event.provenance?.originSessionId });
@@ -327,6 +346,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
             if (event.type === 'agent/delivery-source') Object.assign(ref, { sourceNamespace: event.sourceNamespace, sourceId: event.sourceId });
             if (event.type === 'exec/end') Object.assign(ref, { sourceSeq: event.sourceSeq, sourceId: event.instanceId, qualified: eligibleExecTerminal(event),
               resultRevision: 'dependency' in event && event.dependency.retention.kind === 'artifact' ? event.dependency.retention.ref.revision : undefined });
+            if (event.type === 'workflow/end') Object.assign(ref, { sourceSeq: event.sourceSeq, sourceId: event.invocationId, qualified: eligibleWorkflowTerminal(event), resultRevision: workflowTerminalRef(event)?.revision });
             stagedRefs.set(event.seq, ref);
           }
           previous = event;
@@ -344,7 +364,9 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
           for (const [key, value] of stagedAdmissions) admissions.set(key, value);
           for (const [key, value] of stagedExecTerminals) execTerminals.set(key, value);
           for (const value of stagedHandoffs) parentHandoffs.add(value);
-          if (active?.generationId !== stagedActive?.generationId) execPending.clear();
+          const generationChanged = active?.generationId !== stagedActive?.generationId;
+          workflow.commit(generationChanged);
+          if (generationChanged) execPending.clear();
           for (const [key, value] of stagedExecPending) {
             if (value && value.source.generationId === stagedActive?.generationId) execPending.set(key, value);
             else execPending.delete(key);
