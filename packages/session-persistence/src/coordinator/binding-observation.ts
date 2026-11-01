@@ -180,6 +180,39 @@ export function createBindingObservations(
     if (original) { original.assertCurrent(); return original }
     const ticket = makeBootstrapTicket(id,entryObject,operations,current.allowed); bootstrapTickets.set(entryObject,ticket); return ticket
   }
+  function beginProjectBindingMutation(id: string, operations: { revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside(): void }) {
+    const key = bindingKey(id), current = bootstrapContext.getStore()
+    const allowed = current?.active && current.id === id ? current.allowed : []
+    if (closed || deletedIds.has(id) || deletedKeys.has(key) || retiringIds.has(id)) throw new Failure('conflict')
+    const covered = allowed.find(scope => scope.kind === 'fork' && [...scope.keys].some(value => equalDocument(value, key)))
+    const bootstrapOwned = current?.active && current.id === id ? [...ownedDocuments].filter(scope => {
+      if (!scope.bootstrapEntry || !ownedIntersects(scope, [id], [])) return false
+      assertOriginalBootstrapEntry(scope.bootstrapEntry, id); return true
+    }) : []
+    const captured = Object.getOwnPropertyDescriptors(operations)
+    const call = (name: keyof typeof operations) => {
+      const original = captured[name], now = Object.getOwnPropertyDescriptor(operations, name)
+      if (!original || !now || !('value' in original) || !('value' in now) || original.value !== now.value || typeof original.value !== 'function') throw TypeError('Changed binding mutation operation')
+      return Reflect.apply(original.value, operations, [])
+    }
+    const prior = admitMutation([id], [key], false, allowed, bootstrapOwned)
+    let revoked = false, finished = false
+    const owned: OwnedDocument = { id, key, closing: false, writing: false, revoke() { revoked = true; call('revoke') }, close: () => call('close'), retryClose: () => call('retryClose'), assertOutside() { call('assertOutside') } }
+    snapshot(owned, [id], [key]); ownedDocuments.add(owned)
+    const check = () => { if (finished || revoked || closed || !ownedDocuments.has(owned)) throw new Failure('revoked'); snapshot(owned, [id], [key]) }
+    const coverage = covered && Object.freeze({ assertCurrent() {
+      check()
+      if (!current?.active || bootstrapContext.getStore() !== current || !context.getStore()?.includes(covered) || covered.state !== 'active') throw new Failure('conflict')
+      snapshot(covered, [...covered.ids], [...covered.keys]); for (const pin of covered.pins) pin.assertHeld(); if (covered.locks.some(lock => !lock.held)) throw new Failure('revoked')
+    } })
+    const ticket = Object.freeze({ key,
+      join() { if (this !== ticket) throw TypeError('Invalid binding ticket'); return prior.join() },
+      assertCurrent() { if (this !== ticket) throw TypeError('Invalid binding ticket'); check() },
+      coveredDocument() { if (this !== ticket) throw TypeError('Invalid binding ticket'); check(); coverage?.assertCurrent(); return coverage },
+      finish(outcome: 'settled' | 'unknown') { if (this !== ticket || finished) throw TypeError('Invalid binding ticket'); finished = true; ownedDocuments.delete(owned); prior.finish(outcome) },
+    })
+    return ticket
+  }
   function refuseSelf(ids: readonly string[], keys: readonly string[], all = false) {
     retained.preflight(ids, keys, all)
     if (context.getStore()?.some(current => current.state !== 'done' && (all || intersects(current, ids, keys)))) throw new Failure('conflict')
@@ -666,7 +699,7 @@ export function createBindingObservations(
       },
     })
   }
-  return { captureColdBindingObservation(metadata: Readonly<SessionMeta>, observation: SessionBindingObservation) { const original = coldBindings.get(observation); if (!original || original.metadata !== metadata) throw new Failure('invalid'); original.assertCurrent(); return observation }, createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerOwnedDocumentOperation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
+  return { beginProjectBindingMutation, captureColdBindingObservation(metadata: Readonly<SessionMeta>, observation: SessionBindingObservation) { const original = coldBindings.get(observation); if (!original || original.metadata !== metadata) throw new Failure('invalid'); original.assertCurrent(); return observation }, createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerOwnedDocumentOperation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return retained.cleanupForError(error) ?? (error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined) } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

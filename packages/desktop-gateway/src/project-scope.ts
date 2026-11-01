@@ -12,6 +12,7 @@ import { captureBootstrapProject, captureSelectedProject as importSelectedProjec
 import { inspectSelectedTarget, captureOriginalColdObservation, captureOriginalColdBindingObservation, type ColdSelectedObservation } from '@i-harness/session-persistence/internal/selected-source-owner'
 import { requestRetainedReferenceRetirementFor, runRetainedRetirementSink, assertOutsideRetirementSink, joinRetainedRetirementSinks, assertRetainedBindingReferenceFor, preflightRetainedBindingReleaseFor, observeRetainedBindingRetirementFor, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedExistingBinding, type RetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
 import { isConversationMetadata } from './session-visibility.ts'
+import { projectBindingWritesFor } from '@i-harness/session-persistence/internal/project-binding-write'
 import type { BindingObservations } from '../../session-persistence/src/coordinator/binding-observation.ts'
 export type { BootstrapProjectCapture, BootstrapProjectPreparation, BootstrapTargetScope } from './bootstrap-project.ts'
 export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; drainSession?(id: string): Promise<void>; authorityChanged?(ids: readonly string[]): Promise<void>; fence?: SessionManagementFence }
@@ -168,6 +169,12 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     assertOpen()
     bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1)
     const document = { version: 1, ...(projectId ? { projectId } : {}) }
+    const original = projectBindingWritesFor(coordinator)
+    if (original) {
+      const confirmed = parseBinding(await original.write(id, document))
+      if (!confirmed.bound || confirmed.projectId !== projectId) throw new Error('Could not persist session project binding')
+      bindings.set(id, confirmed); return
+    }
     await coordinator.putDocument(key(id), document)
     // Coordinator background document errors are reported rather than thrown.
     // Readback is the commit check before exposing or acknowledging ownership.
@@ -358,7 +365,10 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
               if (passive || targetBaseline !== undefined) fail('unavailable')
               check()
               bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1)
-              await coordinator.putDocument(key(id), { version: 1, ...(projectId ? { projectId } : {}) }); check()
+              const original = projectBindingWritesFor(coordinator), value = { version: 1, ...(projectId ? { projectId } : {}) }
+              if (original) await original.write(id, value)
+              else await coordinator.putDocument(key(id), value)
+              check()
               const saved = await readTargetBinding(); check()
               if (!saved.bound || saved.projectId !== projectId) fail('unavailable')
               observeBinding(id, saved)

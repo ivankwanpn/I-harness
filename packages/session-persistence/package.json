@@ -13,7 +13,8 @@
     "./internal/retained-inspection": "./src/retained-inspection-internal.ts",
     "./internal/archive-read": "./src/archive-read-internal.ts",
     "./internal/artifact-path": "./src/artifact-path-internal.ts",
-    "./internal/deletion-preparation": "./src/deletion-preparation-internal.ts"
+    "./internal/deletion-preparation": "./src/deletion-preparation-internal.ts",
+    "./internal/project-binding-write": "./src/project-binding-write-internal.ts"
   },
   "scripts": {
     "test": "vitest run",
