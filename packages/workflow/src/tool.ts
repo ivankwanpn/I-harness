@@ -139,6 +139,7 @@ export interface WorkflowMountConfig {
   // The ExecService workflow steps spawn through. run.ts passes its composed
   // exec service (spec §4: registerWorkflow(ctx, tools, { workspace, exec })).
   exec: ExecService
+  steps?: import('@i-harness/exec/direct-reservation').WorkflowStepFactory
 }
 
 // run.ts wiring: registers the "workflow/executor" service + the
@@ -150,7 +151,7 @@ export function registerWorkflow(ctx: PluginContext, tools: ToolRegistry, config
   // process cwd. Absent workspace → registry falls back to process.cwd() and
   // the executor leaves step cwd unset (exec's own contract).
   const registry = createWorkflowRegistry({ workspace: config.workspace ?? process.cwd() })
-  const executor = createWorkflowExecutor({ exec: config.exec, ...(config.workspace !== undefined ? { cwd: config.workspace } : {}) })
+  const executor = createWorkflowExecutor({ exec: config.exec, steps: config.steps, ...(config.workspace !== undefined ? { cwd: config.workspace } : {}) })
   ctx.services.register(workflowExecutorServiceName, executor)
   const runTool = createWorkflowRunTool({ registry, executor })
   const listTool = createWorkflowListTool({ registry })

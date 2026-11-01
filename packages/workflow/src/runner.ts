@@ -34,6 +34,7 @@
 // verbatim so the model can see the unresolved hole.
 import { getArgv } from "@i-harness/shell"
 import { randomUUID } from 'node:crypto'
+import { isWorkflowStepFactory, type WorkflowStepFactory, type OwnedWorkflowStep } from '@i-harness/exec/direct-reservation'
 import type { BackgroundJobStatus, BackgroundJobView, ExecCommand, ExecResult, ExecService } from "@i-harness/exec"
 import type { WorkflowDefinition, WorkflowStep } from "./definition.ts"
 
@@ -162,13 +163,14 @@ export interface WorkflowLoopFailure {
 }
 export interface WorkflowLoopCompletion {
   readonly kind: 'loop-finished'
-  readonly cleanup: 'unqualified'
+  readonly cleanup: 'unqualified' | 'clean' | 'recovery-required'
   readonly status: BackgroundJobStatus
   readonly failures: readonly WorkflowLoopFailure[]
 }
 export interface OwnedWorkflowRunHandle extends WorkflowRunHandle {
   readonly invocationId: string
   join(): Promise<WorkflowLoopCompletion>
+  reconcile(): Promise<WorkflowLoopCompletion>
 }
 export interface WorkflowReservation {
   readonly invocationId: string
@@ -178,7 +180,8 @@ export interface WorkflowReservation {
 
 /** Allocation/validation only: no store publication, Exec call or observer effect. */
 export function reserveWorkflowIn(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService,
-  store: WorkflowJobStore, owner?: string, defaultCwd?: string): WorkflowReservation {
+  store: WorkflowJobStore, owner?: string, defaultCwd?: string, steps?: WorkflowStepFactory): WorkflowReservation {
+  if (steps && !isWorkflowStepFactory(steps)) throw new Error('Original Workflow step factory required')
   const values = resolveParams(def, params)
   const captured = { ...def, steps: def.steps.map(step => ({ ...step,
     ...(step.env ? { env: { ...step.env } } : {}), ...(step.retry ? { retry: { ...step.retry } } : {}),
@@ -186,6 +189,7 @@ export function reserveWorkflowIn(def: WorkflowDefinition, params: Record<string
   const invocationId = randomUUID(), completion = Promise.withResolvers<WorkflowLoopCompletion>()
   void completion.promise.catch(() => {})
   let handle: OwnedWorkflowRunHandle | undefined, starting = false, failed = false, failure: unknown
+  const ownedSteps: OwnedWorkflowStep[] = []
   const reservation: WorkflowReservation = Object.freeze({ invocationId,
     start() {
       if (this !== reservation) throw new Error('Foreign Workflow reservation receiver')
@@ -194,9 +198,17 @@ export function reserveWorkflowIn(def: WorkflowDefinition, params: Record<string
       if (starting) throw new Error('Workflow reservation start in progress')
       starting = true
       try {
-        const job = startWorkflowLoop(captured, values, exec, store, owner, defaultCwd, completion.resolve)
+        const job = startWorkflowLoop(captured, values, exec, store, owner, defaultCwd, completion.resolve, steps, ownedSteps)
         const original: OwnedWorkflowRunHandle = Object.freeze({ ...job, invocationId,
           join() { if (this !== original) throw new Error('Foreign Workflow handle receiver'); return completion.promise },
+          async reconcile() {
+            if (this !== original) throw new Error('Foreign Workflow handle receiver')
+            const prior = await completion.promise
+            let clean = true
+            for (const step of ownedSteps) { const result = await step.reconcile(); if (result.kind !== 'clean') clean = false }
+            if (clean) { for (const step of ownedSteps) step.release(); ownedSteps.length = 0 }
+            return Object.freeze({ ...prior, cleanup: steps ? clean ? 'clean' as const : 'recovery-required' as const : 'unqualified' as const })
+          },
         })
         return handle = original
       } catch (cause) { failed = true; failure = cause; completion.reject(cause); throw cause }
@@ -269,18 +281,20 @@ export function runWorkflowIn(
   // D1 (m55): default cwd for steps that do not declare one — the mount's
   // workspace. Absent → exec's own contract (process cwd).
   defaultCwd?: string,
+  steps?: WorkflowStepFactory,
 ): OwnedWorkflowRunHandle {
-  return reserveWorkflowIn(def, params, exec, store, owner, defaultCwd).start()
+  return reserveWorkflowIn(def, params, exec, store, owner, defaultCwd, steps).start()
 }
 
 function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, string>, exec: ExecService,
   store: WorkflowJobStore, owner: string | undefined, defaultCwd: string | undefined,
-  completed: (value: WorkflowLoopCompletion) => void): WorkflowRunHandle {
+  completed: (value: WorkflowLoopCompletion) => void, stepFactory?: WorkflowStepFactory, ownedSteps: OwnedWorkflowStep[] = []): WorkflowRunHandle {
   const job = store.createJob(owner)
   const { controller } = job
   const steps = def.steps
   const total = steps.length
   const failures: WorkflowLoopFailure[] = []
+  let cleanup: WorkflowLoopCompletion['cleanup'] = stepFactory ? 'clean' : 'unqualified'
 
   function setStatus(status: BackgroundJobStatus, exitCode: number): void {
     if (job.status !== "running") return // killed runs stay killed
@@ -303,17 +317,27 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
       const attempts = Math.max(1, step.retry?.attempts ?? 1)
       let result: ExecResult | undefined
       for (let attempt = 1; attempt <= attempts; attempt++) {
+        let owned: OwnedWorkflowStep | undefined
         appendLine(job, `[step ${i + 1}/${total} ${step.name}] started`)
         store.update(job.id, { stdout: job.stdout })
         try {
           const cmd = stepCommand(step, values, defaultCwd)
           cmd.abortSignal = controller.signal
-          result = await exec.run(cmd)
+          if (stepFactory) { owned = stepFactory.create(cmd); ownedSteps.push(owned); result = await owned.run() }
+          else result = await exec.run(cmd)
         } catch (e) {
           failures.push(Object.freeze({ phase: 'attempt', step: i, attempt, cause: e }))
           // exec.run can reject (e.g. sandbox unavailable) — translate into an
           // ordinary step failure so the failure discipline applies uniformly.
           result = { stdout: "", stderr: e instanceof Error ? e.message : String(e), exitCode: -1, timedOut: false }
+        }
+        if (owned) {
+          const ownership = await owned.join()
+          if (ownership.kind !== 'clean') {
+            cleanup = 'recovery-required'
+            failures.push(Object.freeze({ phase: 'loop', step: i, attempt, cause: ownership.cause }))
+            setStatus('error', -1); skipRest(i + 1); return
+          }
         }
         if (controller.signal.aborted) {
           skipRest(i + 1)
@@ -358,9 +382,12 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
       job.stderr += `workflow runner error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`
       setStatus("error", -1)
     } catch (cause) { failures.push(Object.freeze({ phase: 'loop', cause })) }
-  }).then(() => completed(Object.freeze({ kind: 'loop-finished', cleanup: 'unqualified',
+  }).then(() => {
+    // Original run-disposal boundary. No aggregate output proof is emitted.
+    if (cleanup === 'clean') { for (const step of ownedSteps) step.release(); ownedSteps.length = 0 }
+    completed(Object.freeze({ kind: 'loop-finished', cleanup,
     status: job.status, failures: Object.freeze([...failures]),
-  })))
+  })) })
 
   return { runId: job.id, jobId: job.id }
 }
@@ -387,6 +414,7 @@ export interface WorkflowExecutor {
 
 interface WorkflowExecutorDeps {
   exec: ExecService
+  steps?: WorkflowStepFactory
   // Inject an isolated store (tests); default = the shared run-level store.
   jobs?: WorkflowJobStore
   // D1 (m55): default cwd for steps without one — the mount's workspace.
@@ -399,9 +427,9 @@ export function createWorkflowExecutor(deps: WorkflowExecutorDeps): Omit<Workflo
 } {
   const jobs = deps.jobs ?? sharedJobs
   return {
-    reserveWorkflow(def, params = {}, owner) { return reserveWorkflowIn(def, params, deps.exec, jobs, owner, deps.cwd) },
+    reserveWorkflow(def, params = {}, owner) { return reserveWorkflowIn(def, params, deps.exec, jobs, owner, deps.cwd, deps.steps) },
     runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): OwnedWorkflowRunHandle {
-      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner, deps.cwd)
+      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner, deps.cwd, deps.steps)
     },
     getOutput(jobId: string): BackgroundJobView {
       return jobs.view(jobId)

@@ -20,16 +20,17 @@ interface FrameOwner {
 export function createCaptureFactory(options: ExecServiceOptions, supervisor: ExecutionSupervisor,
   launchTransport: (request: ExecTransportRequest, automaticPromotion?: boolean, admission?:NativeAdmissionOwner) => Promise<SupervisedExecution>, frameOwner: FrameOwner,
   resultRetention: ExecServiceOptions['resultRetention']) {
-  function prepare(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background = false, promotable = false, delivery?: import('../direct-delivery.ts').OriginalExecDeliveryOwner): CaptureAttempt {
+  function prepare(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background = false, promotable = false, delivery?: import('../direct-delivery.ts').OriginalExecDeliveryOwner, step?: import('../workflow-step.ts').OriginalStepBinding): CaptureAttempt {
     // No acquisition or caller getters before the registry installs this owner.
     let flight: Promise<Capture> | undefined, cleanupFlight: Promise<void> | undefined
     let execution: SupervisedExecution | undefined, handle: TransportExecutionHandle | undefined
     let nativeSettlement: ExecutionSettlement | undefined
     let admission:OriginalExecutionAdmission|undefined,admissionExpected=false
-    const admissionOwner:NativeAdmissionOwner|undefined=delivery?Object.freeze({
+    let nativeStarted = false
+    const admissionOwner:NativeAdmissionOwner|undefined=delivery || step?Object.freeze({
       begin(){if(this!==admissionOwner)throw new Error('Foreign native admission receiver');admissionExpected=true},
-      attach(original:OriginalExecutionAdmission){if(this!==admissionOwner||admission)throw new Error('Original admission already attached');admission=original},
-      assertCurrent(){if(this!==admissionOwner)throw new Error('Foreign native admission receiver');delivery.assertAdmissionCurrent()},
+      attach(original:OriginalExecutionAdmission){if(this!==admissionOwner||admission)throw new Error('Original admission already attached');admission=original;step?.admissionCreated()},
+      assertCurrent(){if(this!==admissionOwner)throw new Error('Foreign native admission receiver');delivery?.assertAdmissionCurrent();step?.assertAdmissionCurrent()},
     }):undefined
     let failed: { cause: unknown } | undefined, retiring = false, clean = false
     let capture: Capture | undefined, frames: ExecFrameCapture | undefined
@@ -194,6 +195,8 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
         if(delivery)await delivery.admit()
         if(retiring)throw new Error('Exec service disposed')
         delivery?.issued()
+        step?.assertAdmissionCurrent()
+        nativeStarted = true
         execution = await launchTransport(request, promotable && !background && target !== "wsl",admissionOwner)
         if (retiring) throw new Error('Exec service disposed')
         handle = execution.handle
@@ -280,7 +283,7 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
         const complete = completing.then(async result => {
           const diagnostics = result.outputDiagnostics
           await declareFrames(frameCaptureFailed || diagnostics?.outputAbandoned || (diagnostics?.discardedOutputBytes ?? 0) > 0 ? 'producer-incomplete' : stop !== undefined || captureStopped ? 'capture-canceled' : 'complete')
-          if (!frames) clean = true
+          if (!frames && !step) clean = true
           return result
         }, async cause => {
           try { await declareFrames('producer-incomplete') }
@@ -301,7 +304,7 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
       }
     }
     const attempt: CaptureAttempt = Object.freeze({
-      disposition(){if(this!==attempt)throw new Error('Invalid capture attempt receiver');return {execution,frames,timedOut:stop==='timeout',settlement:nativeSettlement}},
+      disposition(){if(this!==attempt)throw new Error('Invalid capture attempt receiver');return {execution,nativeStarted,frames,timedOut:stop==='timeout',settlement:nativeSettlement}},
       start() {
         if (this !== attempt) throw new Error('Invalid capture attempt receiver')
         // Publish flight before any caller getter or reentrant launch callback.
