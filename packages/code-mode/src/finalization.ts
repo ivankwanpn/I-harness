@@ -5,17 +5,9 @@ const constructors = new WeakMap<object, ReturnType<typeof createCellFinalizatio
 const originals = new WeakMap<object, object | undefined>()
 // The certifying map and mutation closure belong to the actual runtime factory.
 // Re-export only its reader; this observation constructor cannot certify work.
-export { readOriginalWorkerAcquisition } from './runtime.ts'
+export { readOriginalWorkerAcquisition, readOriginalOutputLifetime } from './runtime.ts'
 export function isOriginalCellFinalization(value:unknown,context?:object):value is OriginalCellFinalization {
   return !!value&&typeof value==='object'&&originals.has(value)&&(context===undefined||originals.get(value)===context)
-}
-interface OriginalOutputLifetime { accepted:number;truncated:boolean;policyRefusal?:true;instructionReplan?:import('@i-harness/core-tools').InstructionReplanError }
-const lifetimes = new WeakMap<OriginalCellFinalization, () => Readonly<OriginalOutputLifetime>>()
-export function bindOriginalOutputLifetime(handle: OriginalCellFinalization, read: () => Readonly<OriginalOutputLifetime>) { lifetimes.set(handle, read) }
-export function readOriginalOutputLifetime(handle: OriginalCellFinalization) {
-  const read = lifetimes.get(handle)
-  if (!read) throw new Error('Original runtime output lifetime unavailable')
-  return read()
 }
 export function captureOriginalCellFinalization(owner: object, id: string): OriginalCellFinalization {
   const handle = constructors.get(owner)?.capture(id)
