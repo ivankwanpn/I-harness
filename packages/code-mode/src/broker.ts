@@ -70,17 +70,30 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
   async function finishCell(id: string) {
     const cell = cells.get(id) ?? retiredCells.get(id)
     if (!cell) return
-    await drainCell(id)
-    if (cell.instructionOrigin) await releaseInstructionCell(cell.instructionOrigin)
-    if (cells.get(id) === cell) cells.delete(id)
-    if (retiredCells.get(id) === cell) retiredCells.delete(id)
+    return finishOriginalCell(id, cell)
+  }
+  function finishOriginalCell(id: string, cell: Cell): Promise<void> {
+    if (cell.finished) return Promise.resolve()
+    if (cell.finishing) return cell.finishing
+    const pending = Promise.resolve().then(async () => {
+      await cell.ending.promise
+      await drainCell(id)
+      if (cell.instructionOrigin) await releaseInstructionCell(cell.instructionOrigin)
+      cell.finished = true
+      if (cells.get(id) === cell) cells.delete(id)
+      if (retiredCells.get(id) === cell) retiredCells.delete(id)
+    })
+    cell.finishing = pending
+    void pending.catch(() => { if (cell.finishing === pending) cell.finishing = undefined })
+    return pending
   }
   function retireCell(id: string) {
     const cell = cells.get(id)
     if (!cell) return
-    cells.delete(id); cell.stop.abort()
-    if (!cell.instructionOrigin) { void pump(); return undefined }
+    cells.delete(id)
     retiredCells.set(id, cell)
+    cell.ending.resolve()
+    cell.stop.abort()
     void pump()
     return undefined
   }
@@ -88,6 +101,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
     const cell = cells.get(id) ?? retiredCells.get(id)
     if (!cell) return
     cell.terminalCommitted = true
+    cell.ending.resolve()
     await finishCell(id)
   }
   const track = (job: Promise<void>) => { jobs.add(job); void job.then(() => { jobs.delete(job); void pump() }, () => { jobs.delete(job); void pump() }) }
@@ -241,8 +255,10 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
   return {
     definitions() { return codeModeDefinitions(captureCodeModeTools(tools)) },
     startCell(id: string, instructionOrigin?: InstructionCellOrigin) {
-      if (disposed || cells.has(id)) throw new Error("Code Mode cell unavailable")
-      cells.set(id, { tools: captureCodeModeTools(tools), stop: new AbortController(), seen: new Set(), preflights: new Set(), instructionOrigin })
+      if (disposed || cells.has(id) || retiredCells.has(id)) throw new Error("Code Mode cell unavailable")
+      const cell: Cell = { tools: captureCodeModeTools(tools), stop: new AbortController(), seen: new Set(), preflights: new Set(), instructionOrigin, ending: Promise.withResolvers<void>() }
+      cells.set(id, cell)
+      return Object.freeze({ settle: () => finishOriginalCell(id, cell) })
     },
     retireCell,
     replanCell,
@@ -293,7 +309,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
         const errors: unknown[] = []
         for (const item of unsettled) try { await item.source.close(); unsettled.delete(item) } catch (error) { errors.push(error) }
         for (const [id, cell] of retiredCells) {
-          if (!cell.terminalCommitted) { errors.push(new FactRecoveryRequiredError()); continue }
+          if (cell.instructionOrigin && !cell.terminalCommitted) { errors.push(new FactRecoveryRequiredError()); continue }
           if (![...unsettled].some(item => item.call.cellId === id)) try { await finishCell(id) } catch (error) { errors.push(error) }
         }
         if ([...cells.values()].some(cell => cell.replan)) errors.push(new FactRecoveryRequiredError())
