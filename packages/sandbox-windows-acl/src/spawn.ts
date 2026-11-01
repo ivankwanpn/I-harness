@@ -186,30 +186,33 @@ export function spawnSandboxed(
  */
 export async function drainPipe(api: Win32Bindings, handle: NativePtr): Promise<Buffer> {
   const chunks: Buffer[] = []
-  for (;;) {
-    const bytesReadSlot = allocUint32()
-    const totalAvailSlot = allocUint32()
-    const leftThisMessageSlot = allocUint32()
-    const peeked = api.peekNamedPipe(handle, null, 0, bytesReadSlot, totalAvailSlot, leftThisMessageSlot)
-    if (peeked === 0) {
-      const win32Code = api.getLastError()
-      if (win32Code === abi.ERROR_BROKEN_PIPE || win32Code === abi.ERROR_NO_DATA) break // child closed its end: clean EOF
-      throwLastError(api, 'PeekNamedPipe', `drain failure after ${chunks.length} chunk(s)`)
-    }
-    const available = decodeUint32(totalAvailSlot)
-    if (available > 0) {
-      const chunk = Buffer.alloc(available)
-      const readSlot = allocUint32()
-      if (api.readFile(handle, chunk, chunk.length, readSlot, null) === 0) {
-        throwLastError(api, 'ReadFile', `drain failure after ${chunks.length} chunk(s)`)
+  try {
+    for (;;) {
+      const bytesReadSlot = allocUint32()
+      const totalAvailSlot = allocUint32()
+      const leftThisMessageSlot = allocUint32()
+      const peeked = api.peekNamedPipe(handle, null, 0, bytesReadSlot, totalAvailSlot, leftThisMessageSlot)
+      if (peeked === 0) {
+        const win32Code = api.getLastError()
+        if (win32Code === abi.ERROR_BROKEN_PIPE || win32Code === abi.ERROR_NO_DATA) break // child closed its end: clean EOF
+        throwLastError(api, 'PeekNamedPipe', `drain failure after ${chunks.length} chunk(s)`)
       }
-      chunks.push(chunk.subarray(0, decodeUint32(readSlot)))
+      const available = decodeUint32(totalAvailSlot)
+      if (available > 0) {
+        const chunk = Buffer.alloc(available)
+        const readSlot = allocUint32()
+        if (api.readFile(handle, chunk, chunk.length, readSlot, null) === 0) {
+          throwLastError(api, 'ReadFile', `drain failure after ${chunks.length} chunk(s)`)
+        }
+        chunks.push(chunk.subarray(0, decodeUint32(readSlot)))
+      }
+      // Small backoff instead of setImmediate: a bare next-tick would busy-poll
+      // the pipe at full event-loop speed while the child produces no output.
+      await new Promise<void>(resolve => setTimeout(resolve, 1))
     }
-    // Small backoff instead of setImmediate: a bare next-tick would busy-poll
-    // the pipe at full event-loop speed while the child produces no output.
-    await new Promise<void>(resolve => setTimeout(resolve, 1))
+  } finally {
+    api.closeHandle(handle)
   }
-  api.closeHandle(handle)
   return Buffer.concat(chunks)
 }
 

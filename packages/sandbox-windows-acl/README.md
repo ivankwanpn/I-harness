@@ -178,3 +178,35 @@ Provider disposal closes admission immediately. Failed grant or directory
 cleanup remains owned and a later `dispose()` retries it; successful grant
 release is idempotent. This lets the enclosing native Job owner settle before
 the ACL provider's grant lifecycle is acknowledged.
+
+## Direct child API compatibility: asynchronous inherited spawn
+
+Both `sandbox.spawn({stdio: 'inherit', ...})` and default/pipe spawn now return
+`Promise<AclSandboxChild>`. Direct callers must await spawn before reading `pid`:
+
+```ts
+try {
+  await sandbox.init()
+  const child = await sandbox.spawn({ command: 'cmd.exe', args: ['/c', 'echo ready'], stdio: 'inherit' })
+  const result = await child.wait()
+} finally {
+  await sandbox.disposeAsync()
+}
+```
+
+This intentionally changes the previous synchronous inherited-spawn API and
+native failure timing. Argument/admission validation can throw synchronously;
+bridge readiness, capacity and native launch failures reject spawn. No process
+is created before bridge admission. Execution and required cleanup failures
+reject the child's single memoized whole wait. Failed initialization or spawn
+still requires `disposeAsync()` to reach retained original cleanup debt.
+
+Inherited stdin remains the caller's live stream. Only three owned inheritable
+duplicates enter the startup whitelist; borrowed host std handles are not
+modified or closed. The child starts suspended, enters its original kill-on-close
+Job, and gets an event observer before one resume. Closing that Job after root
+exit terminates remaining assigned descendants; ACL root completion is not proof
+of outer provider tree settlement or inherited output EOF. The outer native
+owner retains its existing tree/I/O/cancellation/release obligations. The inner
+Job's host-death backstop applies after known assignment; standalone death before
+assignment has no such inner-Job guarantee. No init-time bridge warmup is added.
