@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import type { UsageQuery, UsageSnapshot, UsageTotals } from "@i-harness/usage-stats"
+import type { UsageQuery, UsageSnapshot, UsageTotals } from "@i-harness/usage-stats/types"
 import { usageCalendar, usageTokenSegments, usageTrendRuns, type UsageText } from "./usage-statistics-helpers.ts"
 
 type Metric = "tokens" | "requests" | "cost"

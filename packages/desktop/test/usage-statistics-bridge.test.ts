@@ -1,13 +1,14 @@
+import {usageConsumerSample} from './fixtures/usage-consumer-sample.ts'
 import { expect, it, vi } from "vitest"
 import { createGlobalProviderSettings } from "../src/main/global-provider-settings.ts"
 
 it("queries global usage without an active workspace or opening a browser", async () => {
   const query = { start: 0, end: 86400000, timeZone: "Asia/Hong_Kong", page: 1 }
-  const snapshot = { summary: { requests: 0 } }
+  const snapshot = usageConsumerSample.legacy
   const request = vi.fn(async () => snapshot)
   const openExternal = vi.fn()
   const service = createGlobalProviderSettings(async () => ({ request }), { openExternal })
-  expect(await service.request({ kind: "desktop/usage/query", query })).toEqual(snapshot)
+  expect(await service.request({ kind: "desktop/usage/query", query })).toMatchObject({kind:'legacy-only',snapshot})
   expect(request).toHaveBeenCalledWith("desktop/usage/query", { query })
   expect(openExternal).not.toHaveBeenCalled()
   await service.close()

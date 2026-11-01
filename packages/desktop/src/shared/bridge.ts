@@ -27,7 +27,7 @@ export type DesktopRequest =
   | import("./runtime-diagnostics.ts").RuntimeDiagnosticsRequest
   | import("./runtime-diagnostics.ts").GlobalRetryRequest
   | import("./runtime-diagnostics.ts").GlobalModelWaitRequest
-  | { kind: "desktop/usage/query"; query: import("@i-harness/usage-stats/types").UsageQuery }
+  | { kind: "desktop/usage/query"; query: import("@i-harness/usage-stats/observation-snapshot").ObservationQuery }
   | { kind: "desktop/usage/pricing"; price: import("@i-harness/usage-stats/types").UsagePrice }
   | import("@i-harness/desktop-gateway").WslSettingsRequest
   | ContextSubsystemRequest
