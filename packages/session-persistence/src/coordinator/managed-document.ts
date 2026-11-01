@@ -727,7 +727,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||!ready||!('value'in ready)||ready.value!==originalReady||!view||!('value'in view)||view.value!==originalView||state.view!==originalView)throw new FactRecoveryRequiredError();
             held.assertHeld();
         };
-        const check=()=>{checkOriginal();if(closing)throw new FactRecoveryRequiredError();Reflect.apply(originalReady,document,[])};check();
+        const check=()=>{checkOriginal();Reflect.apply(originalReady,document,[])};check();
         const result=Object.freeze({view:originalView,assertOriginal(){if(this!==result)throw TypeError('Invalid Task parent receiver');checkOriginal()},assertCurrent(){if(this!==result)throw TypeError('Invalid Task parent receiver');check()},assertTask14Ready(){if(this!==result)throw TypeError('Invalid Task parent receiver');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return result;
     }, captureRequiredParent(source) {
         const original=sourceDrains.get(source);if(!original?.action||original.action.stopped||original.closeRequested||!original.sourceMethods||!original.deliveryMethods||formatVersion!==14||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady)throw new FactRecoveryRequiredError();Reflect.apply(originalReady,document,[]);

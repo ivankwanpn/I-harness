@@ -6,6 +6,7 @@ import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createResultObservationScope, createLegacyReadObservationRunner, type ResultObservationScope } from './result-observation.ts'
 import { createProcessAwareResultService, lookupProcessResultService } from './process-result-service.ts'
 import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
+import { hasOriginalDeletionService } from '../../../context-output/src/service.ts'
 
 export interface ResultReadScope { projectId?: string; scope?: { id: string; roots: string[] }; revision: string }
 export type ResultReadScopeResolver = (sessionId: string) => Promise<(() => ResultReadScope) | undefined>
@@ -145,6 +146,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
       const service = bridge.service
       const entry: StoreEntry = { service, bridge, registrations, users: 0, sourceFor, observations,
         observeDeletion(coordinator) {
+          if (hasOriginalDeletionService(service, coordinator)) { deletionSources.get(coordinator)?.(); deletionSources.delete(coordinator); return }
           if (deletionSources.has(coordinator) || !coordinator.onDocumentDeleted) return
           deletionSources.set(coordinator, coordinator.onDocumentDeleted(async (id, manifest) => { for (const listener of deletionListeners) await listener([id, ...manifest.documents]) }))
         },

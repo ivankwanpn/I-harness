@@ -4,6 +4,7 @@ import { createBindingObservations } from '../src/coordinator/binding-observatio
 import { associateOriginalResultOrdering } from '../src/result-ordering-internal.ts'
 import { associateOriginalResultRevocation } from '../src/coordinator/result-revocation.ts'
 import { coldLegacyFixture } from '../../context-output/test/fixtures/cold-selected-legacy.ts'
+import { retryOriginalDeletionCleanup } from '../src/coordinator/deletion-preparation.ts'
 import { originalResultRevocationFor, captureOriginalRevocationDomain, beginOriginalRevocationOrdering, runOriginalRevocationOrdering, completeOriginalRevocationOrdering } from '../src/coordinator/result-revocation.ts'
 import { ContextStore, referenceId, digest } from '../../context-output/src/store.ts'
 import { createHash } from 'node:crypto'
@@ -14,7 +15,7 @@ import { createSessionCoordinatorCore } from '../src/coordinator-factory.ts'
 import {beforeEach,describe,expect,it,vi} from 'vitest'
 import {win32 as path} from 'node:path'
 import type {Win32ArtifactApi} from '../../fs-lock/src/win32-artifact-api.ts'
-const input=vi.hoisted(()=>({owners:[] as import('../src/coordinator/ownership.ts').Ownership[],api:undefined as Win32ArtifactApi|undefined,originalLock:true,originals:[] as import('../../fs-lock/src/index.ts').SessionLock[],countHeld:undefined as (()=>void)|undefined,heldHook:undefined as (()=>void)|undefined,heldResult:undefined as (()=>unknown)|undefined,failClose:false,failedPath:'',acquisitionOrder:[] as string[],acquireHook:undefined as undefined|((path:string)=>void),acquireWait:undefined as undefined|((path:string)=>Promise<void>),fileClose:undefined as undefined|((path:string,close:()=>Promise<void>)=>Promise<void>),removeHook:undefined as undefined|((path:string,remove:()=>Promise<void>)=>Promise<void>),bodyOpens:0,admission:undefined as undefined|import('../src/coordinator/result-revocation.ts').ResultRevocationAdmission,revocationScope:undefined as undefined|import('../src/coordinator/result-revocation.ts').OriginalResultRevocationScope,mutexCloses:0,mutexClosePaths:[] as string[],locks:new Map<string,object>()}))
+const input=vi.hoisted(()=>({owners:[] as import('../src/coordinator/ownership.ts').Ownership[],api:undefined as Win32ArtifactApi|undefined,originalLock:true,originals:[] as import('../../fs-lock/src/index.ts').SessionLock[],countHeld:undefined as (()=>void)|undefined,heldHook:undefined as (()=>void)|undefined,heldResult:undefined as (()=>unknown)|undefined,failClose:false,failedPath:'',acquisitionOrder:[] as string[],acquireHook:undefined as undefined|((path:string)=>void),acquireWait:undefined as undefined|((path:string)=>Promise<void>),releaseWait:undefined as undefined|((path:string)=>Promise<void>),fileClose:undefined as undefined|((path:string,close:()=>Promise<void>)=>Promise<void>),removeHook:undefined as undefined|((path:string,remove:()=>Promise<void>)=>Promise<void>),bodyOpens:0,admission:undefined as undefined|import('../src/coordinator/result-revocation.ts').ResultRevocationAdmission,revocationScope:undefined as undefined|import('../src/coordinator/result-revocation.ts').OriginalResultRevocationScope,mutexCloses:0,mutexClosePaths:[] as string[],locks:new Map<string,object>()}))
 vi.mock('../src/coordinator/ownership.ts',async original=>{
  const module=await original<typeof import('../src/coordinator/ownership.ts')>()
  return{...module,createOwnership(...args:Parameters<typeof module.createOwnership>){const owner=module.createOwnership(...args);input.owners.push(owner);return owner}}
@@ -24,9 +25,10 @@ vi.mock('../src/coordinator/result-revocation.ts',async original=>{
  const module=await original<typeof import('../src/coordinator/result-revocation.ts')>()
  return{...module,issueOriginalResultRevocationScope(...args:Parameters<typeof module.issueOriginalResultRevocationScope>){const scope=module.issueOriginalResultRevocationScope(...args);input.admission=args[0];input.revocationScope=scope;return scope}}
 })
+const identityInput=vi.hoisted(()=>({read:undefined as undefined|((name:string,info:import('node:fs').Stats|import('node:fs').BigIntStats,options:unknown)=>import('node:fs').Stats|import('node:fs').BigIntStats)}))
 vi.mock('node:fs/promises',async original=>{
  const fs=await original<typeof import('node:fs/promises')>()
- return{...fs,async rm(...args:Parameters<typeof fs.rm>){if(input.removeHook)return input.removeHook(String(args[0]),()=>fs.rm(...args));return fs.rm(...args)},async open(...args:Parameters<typeof fs.open>){const name=String(args[0]);if(/(?:[\\/](?:body|index|leaves)|blobs[\\/]|index.sqlite$)/.test(name))input.bodyOpens++;const handle=await fs.open(...args),close=handle.close.bind(handle);handle.close=()=>input.fileClose?input.fileClose(name,close):close();return handle}}
+ return{...fs,async lstat(...args:Parameters<typeof fs.lstat>){const info=await fs.lstat(...args);return identityInput.read?identityInput.read(String(args[0]),info,args[1]):info},async rm(...args:Parameters<typeof fs.rm>){if(input.removeHook)return input.removeHook(String(args[0]),()=>fs.rm(...args));return fs.rm(...args)},async open(...args:Parameters<typeof fs.open>){const name=String(args[0]);if(/(?:[\\/](?:body|index|leaves)|blobs[\\/]|index.sqlite$)/.test(name))input.bodyOpens++;const handle=await fs.open(...args),close=handle.close.bind(handle);handle.close=()=>input.fileClose?input.fileClose(name,close):close();return handle}}
 })
 vi.mock('@i-harness/fs-lock/internal/artifact-path',async()=>{
  const {createWin32ArtifactPathOwnerWithApi}=await import('../../fs-lock/src/win32-artifact-path.ts')
@@ -40,7 +42,7 @@ vi.mock('@i-harness/fs-lock',async()=>{
   if(input.locks.has(lockPath))throw Error('native conflict')
   const identity={};input.locks.set(lockPath,identity)
   const original=heldLock({createFileW(){throw Error('No real acquisition in injected held-constructor control')},lockFileEx(){throw Error('No real acquisition in injected held-constructor control')},unlockFileEx:()=>1,closeHandle:()=>{input.mutexCloses++;input.mutexClosePaths.push(lockPath);input.locks.delete(lockPath);if(input.failClose){input.failClose=false;input.failedPath=lockPath;throw undefined};return 1},getLastError:()=>0},1n,lockPath,2n)
-  input.originals.push(original);if(input.originalLock)return original
+  input.originals.push(original);if(input.releaseWait)return {get held(){return original.held},async release(){await input.releaseWait?.(lockPath);return original.release()}};if(input.originalLock)return original
   return{get held(){input.countHeld?.();input.heldHook?.();return input.heldResult?input.heldResult() as boolean:original.held},release:()=>original.release()}
  }}
 })
@@ -79,7 +81,7 @@ function fixture(pure:boolean,originalLock=true,taskPath?:(id:string)=>string){
  const delta=(before:ReturnType<typeof snapshot>)=>Object.fromEntries(Object.keys(counts).map(key=>[key,counts[key as keyof typeof counts]-before[key as keyof typeof counts]]))
  return{backend,owner,api,counts,snapshot,delta,directories,handles,onCallback(value:(()=>void)|undefined){if(pure&&value)throw Error('Unknown callback cannot enter pure constructor');callback=value}}
 }
-beforeEach(()=>{input.owners=[];input.api=undefined;input.originalLock=true;input.originals=[];input.countHeld=undefined;input.heldHook=undefined;input.heldResult=undefined;input.failClose=false;input.failedPath='';input.acquisitionOrder=[];input.acquireHook=undefined;input.acquireWait=undefined;input.fileClose=undefined;input.bodyOpens=0;input.removeHook=undefined;input.admission=undefined;input.revocationScope=undefined;input.mutexCloses=0;input.mutexClosePaths=[];input.locks.clear()})
+beforeEach(()=>{input.owners=[];input.api=undefined;input.originalLock=true;input.originals=[];input.countHeld=undefined;input.heldHook=undefined;input.heldResult=undefined;input.failClose=false;input.failedPath='';input.acquisitionOrder=[];input.acquireHook=undefined;input.acquireWait=undefined;input.releaseWait=undefined;input.fileClose=undefined;input.bodyOpens=0;input.removeHook=undefined;input.admission=undefined;input.revocationScope=undefined;input.mutexCloses=0;input.mutexClosePaths=[];input.locks.clear()})
 
 it.each(['replacement','lost'] as const)('refuses original slot held evidence %s before effects while original cleanup remains callable',async mode=>{
  const f=fixture(true),first=await f.owner.pinOwnership('source'),claim=await f.owner.pinOwnership('source');let substitutes=0,effects=0
@@ -655,4 +657,220 @@ describe('original covered public clear',()=>{
   }finally{await f.close()}
  })
 
+})
+describe('original covered lifecycle deletion',()=>{
+ it('connects both registered original services before backend deletion and removes only their captured managed pins',async()=>{
+  const f=fixture(true);let deleted=0,listeners=0
+  Object.assign(f.backend,{async deleteOwnedSession(){deleted++},async putDocument(){},async getDocument(){return undefined}})
+  const coordinator=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}}),root=await mkdtemp(join(process.env.IH_RESULT_INTEGRITY_EVIDENCE_ROOT!,'deletion-'))
+  const services=[createContextOutputService({root,workspaceId:'w'}),createContextOutputService({root,workspaceId:'w2'})],paths:string[]=[]
+  try{
+   for(const [index,service] of services.entries()){
+    registerOriginalLegacyOrdering(service,coordinator)
+    const scope=service.registerResultScope({operationId:'delete-'+index,sessionId:'a',documentId:'a',callId:'c'},()=>true),sink=await service.beginResult(scope,'text-utf8-v1')
+    await sink.write(Buffer.from('original body'));const result=await sink.finish('complete');if(result.kind!=='committed')throw Error('Original managed result unavailable')
+    paths.push(join(root,'context-output',digest(index===0?'w':'w2'),'managed-v1',result.ref.id,'pins',digest('a')+'.json'))
+   }
+   coordinator.onDocumentDeleted!(async()=>{listeners++})
+   await coordinator.deleteOwnedSession!('a',{documents:['a']})
+   expect(deleted).toBe(1);expect(listeners).toBe(1)
+   for(const path of paths)await expect(readFile(path)).rejects.toMatchObject({code:'ENOENT'})
+   expect(input.locks.size).toBe(0)
+  }finally{for(const service of services)await service.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
+ })
+})
+it('original deletion keeps every native claim until outer Documents close ACK and drains service lifetime first',async()=>{
+ const f=fixture(true);let deleted=0,listeners=0
+ Object.assign(f.backend,{async deleteOwnedSession(){deleted++},async putDocument(){},async getDocument(){return undefined}})
+ const coordinator=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}}),owner=input.owners.at(-1)!,root=await mkdtemp(join(process.env.IH_RESULT_INTEGRITY_EVIDENCE_ROOT!,'outer-doc-')),service=createContextOutputService({root,workspaceId:'w'})
+ registerOriginalLegacyOrdering(service,coordinator)
+ const capture=owner.artifacts!.document('a');if(capture.kind!=='ready')throw Error('ready original document required')
+ const docLease=path.join('C:\\store','.i-harness-locks',digest('artifact-document-lease:'+capture.key).slice(0,24)+'.lock'),lifetime=path.join(root,'.i-harness-locks',digest('context-output-legacy:w').slice(0,24)+'.lock')
+ const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>();let observedServiceClosed=false
+ input.releaseWait=async key=>{if(key===docLease){observedServiceClosed=!input.locks.has(lifetime);entered.resolve();await leave.promise}}
+ coordinator.onDocumentDeleted!(async()=>{listeners++})
+ const deleting=coordinator.deleteOwnedSession!('a',{documents:['a']});const outcome=deleting.then(()=>({ok:true}),error=>({error}))
+ try{
+  await entered.promise;expect(deleted).toBe(1);expect(listeners).toBe(1)
+  expect(owner.hasLiveOwnership('a')).toBe(true);expect(input.locks.has(docLease)).toBe(true)
+  expect(observedServiceClosed).toBe(true)
+  leave.resolve();expect(await outcome).toEqual({ok:true});expect(input.locks.size).toBe(0)
+ }finally{leave.resolve();await outcome;input.releaseWait=undefined;await service.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+async function originalDeletionFixture(taskPath?:(id:string)=>string,pure=true){
+ const f=fixture(pure,true,taskPath),calls={backend:0,listeners:0}
+ Object.assign(f.backend,{async deleteOwnedSession(){calls.backend++},async putDocument(){},async getDocument(){return undefined}})
+ const coordinator=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}}),owner=input.owners.at(-1)!,root=await mkdtemp(join(process.env.IH_RESULT_INTEGRITY_EVIDENCE_ROOT!,'deletion-control-')),service=createContextOutputService({root,workspaceId:'w'})
+ registerOriginalLegacyOrdering(service,coordinator);coordinator.onDocumentDeleted!(async()=>{calls.listeners++})
+ const document=owner.artifacts!.document('a');if(document.kind!=='ready')throw Error('Original ready document required')
+ const docLease=path.join('C:\\store','.i-harness-locks',digest('artifact-document-lease:'+document.key).slice(0,24)+'.lock')
+ return{...f,root,coordinator,nativeOwner:owner,service,calls,docLease,async close(){input.releaseWait=undefined;await service.close();await coordinator.close();await rm(root,{recursive:true,force:true})}}
+}
+it.each(['directory','metadata'] as const)('original deletion inventory preserves exact bigint identities above2^53 for %s',async kind=>{
+ const f=await originalDeletionFixture(),{passiveManagedReleaseInventory}=await import('../../context-output/src/artifact/release-inventory.ts'),{createArtifactQualificationIO}=await import('../../context-output/src/artifact/qualification-io.ts'),{physicalIdentity}=await import('../../context-output/src/artifact/quota.ts'),io=createArtifactQualificationIO()
+ try{
+  const scope=f.service.registerResultScope({operationId:'exact-inode',sessionId:'a',documentId:'a',callId:'c'},()=>true),sink=await f.service.beginResult(scope,'text-utf8-v1');await sink.write(Buffer.from('exact identity'));const result=await sink.finish('complete');if(result.kind!=='committed')throw Error('Original managed result unavailable')
+  const root=join(f.root,'context-output',digest('w')),target=kind==='directory'?join(root,'managed-v1'):join(root,'managed-v1',result.ref.id,'manifest.json'),first=9007199254740992n,second=first+1n;let inode=first,bigintCaptures=0
+  expect(Number(first)).toBe(Number(second));expect(physicalIdentity({dev:1,ino:Number(first)})).toBeUndefined()
+  identityInput.read=(name,info,options)=>{if(name!==target)return info;const bigint=(options as {bigint?:boolean}|undefined)?.bigint===true;if(bigint)bigintCaptures++;const copy=Object.create(Object.getPrototypeOf(info),Object.getOwnPropertyDescriptors(info));Object.defineProperty(copy,'ino',{value:bigint?inode:Number(inode)});return copy}
+  const before=await passiveManagedReleaseInventory(root,'w',['a'],io,()=>{});inode=second
+  const after=await passiveManagedReleaseInventory(root,'w',['a'],io,()=>{})
+  expect(after.identity).not.toBe(before.identity);expect(bigintCaptures).toBe(2);expect(after.targets).toEqual(before.targets);expect(before.recoveryRequired).toBe(false);expect(after.recoveryRequired).toBe(false);io.assertSettled()
+ }finally{identityInput.read=undefined;await io.settle();await f.close()}
+})
+it.each(['held','consumed'] as const)('original deletion retains all targets after falsey outer document cleanup mode=%s and retries only exact original handles',async mode=>{
+ const f=await originalDeletionFixture(),inventory=vi.spyOn(ContextStore.prototype,'passiveDeletionInventory');let attempts=0
+ input.releaseWait=async key=>{if(key===f.docLease){attempts++;if(mode==='held')throw undefined;input.failClose=true}}
+ try{
+  const failure=await f.coordinator.deleteOwnedSession!('a',{documents:['a']}).then(()=>({unexpected:true}),cause=>cause)
+  expect(failure).toBeInstanceOf(AggregateError);expect(failure.errors).toHaveLength(2);expect(failure.errors[0]).toBeInstanceOf(AggregateError);expect(failure.errors[0].errors).toEqual([undefined]);expect(failure.errors[1]).toMatchObject({message:'Deletion document cleanup unresolved'})
+  expect(f.calls).toEqual({backend:1,listeners:1});expect(f.nativeOwner.hasLiveOwnership('a')).toBe(true)
+  const nativeCount=input.originals.length,scans=inventory.mock.calls.length,closes=input.mutexClosePaths.filter(key=>key===f.docLease).length
+  expect(scans).toBe(2);await expect(f.service.configure({enabled:true})).rejects.toBe(failure.errors[0])
+  input.releaseWait=undefined
+  if(mode==='held'){
+   await retryOriginalDeletionCleanup(f.coordinator);expect(input.locks.size).toBe(0)
+  }else{
+   await expect(retryOriginalDeletionCleanup(f.coordinator)).rejects.toBeUndefined()
+   expect(input.mutexClosePaths.filter(key=>key===f.docLease)).toHaveLength(closes);expect(f.nativeOwner.hasLiveOwnership('a')).toBe(true)
+   await expect(f.service.close()).rejects.toBe(failure.errors[0])
+  }
+  expect(input.originals.length).toBe(nativeCount);expect(inventory.mock.calls.length).toBe(scans);expect(attempts).toBe(1);expect(f.calls).toEqual({backend:1,listeners:1})
+ }finally{inventory.mockRestore();input.releaseWait=undefined;input.failClose=false;if(mode==='held')await f.close();else{await f.service.close().catch(()=>{});await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}}
+})
+it.each([
+ {point:'document',primary:false,cleanup:undefined},
+ {point:'participant',primary:undefined,cleanup:false},
+ {point:'document',primary:false,cleanup:false},
+ {point:'participant',primary:undefined,cleanup:undefined},
+] as const)('original deletion preserves effect then independent cleanup occurrences point=$point primary=$primary cleanup=$cleanup',async({point,primary,cleanup})=>{
+ const f=await originalDeletionFixture(),inventory=vi.spyOn(ContextStore.prototype,'passiveDeletionInventory');let blocked=true,cleanupCalls=0,effects=0
+ const lifetime=path.join(f.root,'.i-harness-locks',digest('context-output-legacy:w').slice(0,24)+'.lock'),failedPath=point==='document'?f.docLease:lifetime
+ f.coordinator.onDocumentDeleted!(async()=>{effects++;throw primary})
+ input.releaseWait=async key=>{if(key===failedPath&&effects){cleanupCalls++;if(blocked)throw cleanup}}
+ try{
+  const failure=await f.coordinator.deleteOwnedSession!('a',{documents:['a']}).then(()=>({unexpected:true}),cause=>cause)
+  expect(failure).toBeInstanceOf(AggregateError)
+  const original=failure.errors[0]
+  expect(original).toBeInstanceOf(AggregateError);expect(original.errors).toEqual([primary,cleanup])
+  if(point==='participant')expect(failure.errors[1]).toBe(cleanup)
+  expect(failure.errors.at(-1)).toMatchObject({message:'Deletion document cleanup unresolved'})
+  expect(failure.errors).toHaveLength(point==='participant'?3:2)
+  expect(f.calls).toEqual({backend:1,listeners:1});expect(effects).toBe(1);expect(cleanupCalls).toBe(1)
+  f.nativeOwner.assertHeld('a');expect(input.locks.has(f.docLease)).toBe(true);expect(input.locks.has(failedPath)).toBe(true)
+  const handles=[...input.originals],scans=inventory.mock.calls.length,closed=input.mutexClosePaths.filter(key=>key===failedPath).length
+  expect(scans).toBe(2);blocked=false;await retryOriginalDeletionCleanup(f.coordinator)
+  expect(input.originals).toEqual(handles);expect(inventory).toHaveBeenCalledTimes(scans);expect(effects).toBe(1)
+  expect(f.calls).toEqual({backend:1,listeners:1});expect(cleanupCalls).toBe(2)
+  expect(input.mutexClosePaths.filter(key=>key===failedPath)).toHaveLength(closed+1);expect(input.locks.size).toBe(0)
+ }finally{blocked=false;input.releaseWait=undefined;inventory.mockRestore();await retryOriginalDeletionCleanup(f.coordinator).catch(()=>{});await f.service.close().catch(()=>{});await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}
+})
+it('original deletion lower Task-key refusal has zero backend listener or result effects and preserves the original held target',async()=>{
+ const f=await originalDeletionFixture(id=>path.join('C:\\store',id==='z'?'0.jsonl':'task-'+id+'.doc.jsonl'))
+ const original=await f.nativeOwner.pinOwnership('a');original.retainLive()
+ try{
+  const scope=f.service.registerResultScope({operationId:'lower',sessionId:'z',documentId:'a',callId:'c'},()=>true),sink=await f.service.beginResult(scope,'text-utf8-v1');await sink.write(Buffer.from('survivor'));const result=await sink.finish('complete');if(result.kind!=='committed')throw Error('Original result unavailable')
+  const before=input.acquisitionOrder.filter(key=>key.startsWith('C:\\store')).length
+  await expect(f.coordinator.deleteOwnedSession!('a',{documents:['a']})).rejects.toThrow(/reordered/)
+  original.assertHeld();expect(input.acquisitionOrder.filter(key=>key.startsWith('C:\\store'))).toHaveLength(before);expect(f.calls).toEqual({backend:0,listeners:0})
+  expect(await readFile(join(f.root,'context-output',digest('w'),'managed-v1',result.ref.id,'body'))).toEqual(Buffer.from('survivor'))
+ }finally{await original.release();await f.close()}
+})
+import * as deletionPreparation from '../src/coordinator/deletion-preparation.ts'
+it.each(['session','document'] as const)('original deletion captures the complete plan before every local drain and refuses copied borrowed scopes writer=%s',async mode=>{
+ const f=await originalDeletionFixture(),observations=createBindingObservations(f.backend,f.nativeOwner)
+ const alias={async create(){throw Error('unused')},withSessionBindingObservation:observations.withSessionBindingObservation} as unknown as import('../src/coordinator/types.ts').SessionCoordinator
+ associateOriginalResultOrdering(alias,f.nativeOwner);associateOriginalResultRevocation(alias,observations.createResultRevocationAdmission(f.nativeOwner),f.nativeOwner);registerOriginalLegacyOrdering(f.service,alias)
+ const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),captured=vi.spyOn(deletionPreparation,'captureOriginalDeletionPlan');let closed=false,getters=0,probe=true
+ const owned=observations.registerOwnedDocumentOperation(mode==='document'?'different-parent':'a',mode==='document'?'a':'alias-document',{revoke(){},assertOutside(){},async close(){if(closed)return;if(probe){const scope=captured.mock.calls[0]![1];expect(deletionPreparation.captureOriginalDeletionPlan(f.coordinator,scope,f.nativeOwner,['a'])).toBeDefined();const shaped=Object.defineProperty({},'assertCurrent',{get(){getters++;throw Error('caller getter')}});for(const fake of [shaped,{...scope},new Proxy(scope,{})])expect(()=>deletionPreparation.captureOriginalDeletionPlan(f.coordinator,fake as typeof scope,f.nativeOwner,['a'])).toThrow();entered.resolve()};await leave.promise;closed=true;owned.unregister()},async retryClose(){await this.close()}})
+ const deleting=f.coordinator.deleteOwnedSession!('a',{documents:['a']}),outcome=deleting.then(()=>({ok:true}),error=>({error}))
+ try{
+  expect(await Promise.race([entered.promise.then(()=> 'entered'),outcome.then(()=> 'ended')])).toBe('entered');expect(f.calls).toEqual({backend:0,listeners:0});expect(captured).toHaveBeenCalledTimes(5)
+  expect(getters).toBe(0);expect(input.acquisitionOrder.filter(key=>key.startsWith('C:\\store'))).toHaveLength(2)
+  leave.resolve();expect(await outcome).toEqual({ok:true});expect(f.calls).toEqual({backend:1,listeners:1});expect(input.locks.size).toBe(0)
+ }finally{probe=false;leave.resolve();await outcome;captured.mockRestore();await observations.closeAdmission()();await f.close()}
+})
+it('original deletion and a subsequent clear precede external fresh native issue through their exact early origins',async()=>{
+ const f=await originalDeletionFixture(),docEntered=Promise.withResolvers<void>(),docLeave=Promise.withResolvers<void>(),clearEntered=Promise.withResolvers<void>(),clearLeave=Promise.withResolvers<void>(),external=new AsyncLocalStorage<boolean>()
+ let deletionAck=false,clearAck=false,clearNative='';const flags:boolean[]=[]
+ input.releaseWait=async key=>{if(key===f.docLease){docEntered.resolve();await docLeave.promise}}
+ const deleting=f.coordinator.deleteOwnedSession!('a',{documents:['a']}).then(()=>{deletionAck=true}),deleted=deleting.then(()=>({ok:true}),error=>({error}))
+ let clearing:Promise<unknown>|undefined,pinning:Promise<Awaited<ReturnType<typeof f.nativeOwner.pinOwnership>>>|undefined
+ try{
+  await docEntered.promise
+  input.acquireWait=async key=>{if(!external.getStore()&&key.startsWith('C:\\store')&&!clearNative){clearNative=key;expect(deletionAck).toBe(true);clearEntered.resolve();await clearLeave.promise}}
+  input.acquireHook=key=>{if(external.getStore()&&key.startsWith('C:\\store'))flags.push(deletionAck&&clearAck)}
+  clearing=f.service.clear('z').then(()=>{clearAck=true});pinning=external.run(true,()=>f.nativeOwner.pinOwnership('zz'))
+  await Promise.resolve();expect(flags).toEqual([]);docLeave.resolve();expect(await deleted).toEqual({ok:true})
+  await clearEntered.promise;expect(flags).toEqual([]);clearLeave.resolve();await clearing
+  const pin=await pinning;await pin.release();expect(flags.length).toBeGreaterThan(0);expect(flags.every(Boolean)).toBe(true);expect(f.calls).toEqual({backend:1,listeners:1})
+ }finally{docLeave.resolve();clearLeave.resolve();await deleted;await clearing?.catch(()=>{});const pin=await pinning?.catch(()=>undefined);await pin?.release();input.acquireHook=undefined;input.acquireWait=undefined;input.releaseWait=undefined;await f.close()}
+})
+it('original deletion retains managed issued primitive debt without rediscovery replay or releasing any dependent document and target',async()=>{
+ const f=await originalDeletionFixture(),inventory=vi.spyOn(ContextStore.prototype,'passiveDeletionInventory');let removed=0
+ try{
+  const scope=f.service.registerResultScope({operationId:'lost-pin',sessionId:'a',documentId:'a',callId:'c'},()=>true),sink=await f.service.beginResult(scope,'text-utf8-v1');await sink.write(Buffer.from('managed original'));const result=await sink.finish('complete');if(result.kind!=='committed')throw Error('Original managed result unavailable')
+  input.removeHook=async(key,remove)=>{await remove();if(key.includes('pins')&&key.endsWith(digest('a')+'.json')){removed++;throw false}}
+  const failure=await f.coordinator.deleteOwnedSession!('a',{documents:['a']}).then(()=>({unexpected:true}),cause=>cause)
+  expect(failure).toBeInstanceOf(AggregateError);expect(failure.errors).toHaveLength(3);expect(failure.errors[0]).toBeInstanceOf(AggregateError);expect(failure.errors[0].errors).toEqual([false,false]);expect(failure.errors[1]).toBe(false);expect(failure.errors[2]).toMatchObject({message:'Deletion document cleanup unresolved'});expect(f.calls).toEqual({backend:1,listeners:0});expect(removed).toBe(1)
+  f.nativeOwner.assertHeld('a');expect(input.locks.has(f.docLease)).toBe(true)
+  const count=input.originals.length,scans=inventory.mock.calls.length;input.removeHook=undefined
+  await expect(retryOriginalDeletionCleanup(f.coordinator)).rejects.toBe(false)
+  expect(removed).toBe(1);expect(input.originals.length).toBe(count);expect(inventory.mock.calls.length).toBe(scans);expect(f.calls).toEqual({backend:1,listeners:0});f.nativeOwner.assertHeld('a');expect(input.locks.has(f.docLease)).toBe(true)
+ }finally{inventory.mockRestore();input.removeHook=undefined;await f.service.close().catch(()=>{});await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}
+})
+it('original deletion uses one multi-document inventory with surviving grants and fixed expiry despite outer close failure',async()=>{
+ const f=await originalDeletionFixture();let clock=Date.now(),blocked=true
+ const now=vi.spyOn(Date,'now').mockImplementation(()=>clock),prepareOriginal=ContextStore.prototype.prepareCoveredClear
+ let later:import('../../context-output/src/types.ts').ContextResultRef|undefined
+ const prepare=vi.spyOn(ContextStore.prototype,'prepareCoveredClear').mockImplementation(async function(this:ContextStore,...args:Parameters<ContextStore['prepareCoveredClear']>){const operation=await prepareOriginal.apply(this,args);clock=later!.expiresAt+1;return operation})
+ const inventory=vi.spyOn(ContextStore.prototype,'passiveDeletionInventory')
+ try{
+  await f.service.configure({enabled:true})
+  const old=await f.service.capture({sessionId:'z-expired-target-original',callId:'old',label:'old',text:'expired bytes',complete:true});if(!old)throw Error('Original old result unavailable')
+  clock+=1000
+  const first=await f.service.capture({sessionId:'a',callId:'first',label:'first',text:'first survivor',complete:true}),second=await f.service.capture({sessionId:'z-document-target-original',callId:'second',label:'second',text:'second survivor',complete:true})
+  later=await f.service.capture({sessionId:'z-later-target-original',callId:'late',label:'late',text:'later bytes',complete:true});if(!first||!second||!later)throw Error('Original result unavailable')
+  await f.service.grant({sessionId:'a'},[first.id],'z-survivor-target-original');await f.service.grant({sessionId:'z-document-target-original'},[second.id],'z-survivor-target-original')
+  clock=old.expiresAt+1
+  input.releaseWait=async key=>{if(key===f.docLease&&blocked)throw undefined}
+  const failure=await f.coordinator.deleteOwnedSession!('a',{documents:['a','z-document-target-original']}).then(()=>({unexpected:true}),cause=>cause)
+  expect(failure).toBeInstanceOf(AggregateError);expect(failure.errors).toHaveLength(2);expect(failure.errors[0]).toBeInstanceOf(AggregateError);expect(failure.errors[0].errors).toEqual([undefined]);expect(failure.errors[1]).toMatchObject({message:'Deletion document cleanup unresolved'});expect(f.calls).toEqual({backend:1,listeners:1});expect(prepare).toHaveBeenCalledTimes(1);expect(inventory).toHaveBeenCalledTimes(2)
+  for(const id of ['a','z-document-target-original','z-survivor-target-original','z-expired-target-original'])f.nativeOwner.assertHeld(id)
+  const directory=join(f.root,'context-output',digest('w'))
+  expect(JSON.parse((await readFile(join(directory,'owners',first.id+'.json'))).toString())).toEqual(['z-survivor-target-original'])
+  expect(JSON.parse((await readFile(join(directory,'owners',second.id+'.json'))).toString())).toEqual(['z-survivor-target-original'])
+  await expect(readFile(join(directory,'blobs',old.id+'.txt'))).rejects.toMatchObject({code:'ENOENT'})
+  expect((await readFile(join(directory,'blobs',later.id+'.txt'))).toString()).toBe('later bytes')
+  const count=input.originals.length;blocked=false;await retryOriginalDeletionCleanup(f.coordinator)
+  expect(input.originals.length).toBe(count);expect(inventory).toHaveBeenCalledTimes(2);expect(prepare).toHaveBeenCalledTimes(1);expect(f.calls).toEqual({backend:1,listeners:1});expect(input.locks.size).toBe(0)
+ }finally{blocked=false;input.releaseWait=undefined;prepare.mockRestore();inventory.mockRestore();now.mockRestore();await f.close()}
+})
+it('original deletion refuses distinct Ownership topology before target namespace or native effects',async()=>{
+ const f=await originalDeletionFixture(),other=createSessionCoordinatorCore(f.backend,{lock:{enabled:true}})
+ try{registerOriginalLegacyOrdering(f.service,other);const count=input.originals.length;await expect(f.coordinator.deleteOwnedSession!('a',{documents:['a']})).rejects.toThrow(/Distinct original Ownership/);expect(input.originals.length).toBe(count);expect(f.calls).toEqual({backend:0,listeners:0})}
+ finally{await other.close();await f.close()}
+})
+it('original deletion freezes same-owner facade membership before its first native wait',async()=>{
+ const f=await originalDeletionFixture(),observations=createBindingObservations(f.backend,f.nativeOwner)
+ const alias={async create(){throw Error('unused')},withSessionBindingObservation:observations.withSessionBindingObservation} as unknown as import('../src/coordinator/types.ts').SessionCoordinator
+ associateOriginalResultOrdering(alias,f.nativeOwner);associateOriginalResultRevocation(alias,observations.createResultRevocationAdmission(f.nativeOwner),f.nativeOwner)
+ const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>();let wait=true
+ input.acquireWait=async key=>{if(wait&&key.startsWith('C:\\store')){wait=false;entered.resolve();await leave.promise}}
+ const deleting=f.coordinator.deleteOwnedSession!('a',{documents:['a']}),outcome=deleting.then(()=>({ok:true}),error=>({error}))
+ try{
+  await entered.promise;expect(f.calls).toEqual({backend:0,listeners:0});expect(()=>registerOriginalLegacyOrdering(f.service,alias)).toThrow(/busy/)
+  leave.resolve();expect(await outcome).toEqual({ok:true});expect(f.calls).toEqual({backend:1,listeners:1});expect(input.locks.size).toBe(0)
+ }finally{leave.resolve();await outcome;input.acquireWait=undefined;await observations.closeAdmission()();await f.close()}
+})
+it('original deletion retains failed early reservation cleanup before any native issue and preserves the exact primary',async()=>{
+ const f=await originalDeletionFixture(undefined,false),method=f.coordinator.withSessionBindingObservation;let changed=false
+ f.onCallback(()=>{if(!changed){changed=true;f.coordinator.withSessionBindingObservation=()=>{throw Error('Replacement must not execute')}}})
+ try{
+  const count=input.originals.length,failure=await f.coordinator.deleteOwnedSession!('a',{documents:['a']}).then(()=>({unexpected:true}),cause=>cause)
+  expect(changed).toBe(true);expect(failure).toBeInstanceOf(TypeError);expect(input.originals.length).toBe(count);expect(f.calls).toEqual({backend:0,listeners:0})
+  await expect(f.nativeOwner.pinOwnership('fresh')).rejects.toBe(failure);expect(input.originals.length).toBe(count)
+  f.onCallback(undefined);await retryOriginalDeletionCleanup(f.coordinator);expect(input.originals.length).toBe(count)
+  f.coordinator.withSessionBindingObservation=method;const pin=await f.nativeOwner.pinOwnership('fresh');await pin.release();expect(input.locks.size).toBe(0)
+ }finally{f.onCallback(undefined);f.coordinator.withSessionBindingObservation=method;await retryOriginalDeletionCleanup(f.coordinator);await f.close()}
 })
