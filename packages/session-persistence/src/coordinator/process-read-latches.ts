@@ -1,4 +1,6 @@
 /** Request-local mutation witnesses. This registry never delays a writer. */
+const originalMutations=new WeakMap<object,()=>void>()
+export function assertOriginalProcessMutation(token:object){const check=originalMutations.get(token);if(!check)throw Error('Original mutation token required');check()}
 export function createProcessReadLatches() {
     type Mutation = { sessionIds: readonly string[]; documentKeys: readonly string[]; kind: 'managed-append' | 'other'; managedOwner?: object };
     type Capture = { sessionId: string; documentKeys: readonly string[]; mode: 'cold' | 'managed'; managedOwner?: object };
@@ -31,7 +33,7 @@ export function createProcessReadLatches() {
                     for (const reader of readers) if (matches(mutation, reader)) reader.invalid = true;
                 }
             } });
-            return token;
+            originalMutations.set(token,()=>{if(ended||!active.has(mutation))throw Error('Mutation token unavailable')});return token;
         },
         capture(input: Capture) {
             const reader: Reader = { input: { ...input, documentKeys: [...new Set(input.documentKeys)] }, invalid: false, retired: false, verified: false };

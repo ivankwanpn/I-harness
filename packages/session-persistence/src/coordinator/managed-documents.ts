@@ -82,7 +82,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     outcome='settled'
     } finally { token?.end(outcome) }
   }
-  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)})
+  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)},(id,entry)=>{if(documents.get(id)!==entry||entry.ready||!entry.document||entry.revoked)throw new FactRecoveryRequiredError();const document=entry.document;return ()=>{resolved.set(id,document)}})
   return {
     ...bootstrap,
     captureProcessRead(document: ManagedDocument, documentKeys: readonly string[]) {

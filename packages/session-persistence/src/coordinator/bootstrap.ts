@@ -25,6 +25,7 @@ import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPrepara
 import { preparationFacts } from './bootstrap-preparation-facts.ts'
 import { captureManagedReadyObservation, type ManagedReadyObservation } from './managed-document.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import { assertOriginalProcessMutation } from './process-read-latches.ts'
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 import { captureSelectedResultsRoute, type SelectedResultsRoute } from './selected-results-route.ts'
 import { selectedResultsPreparationFacts } from './selected-results-preparation.ts'
@@ -32,6 +33,8 @@ import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 import { createColdSelectedInspection, type ColdSelectedTarget, type ColdSelectedObservation } from './cold-selected-target.ts'
 
 export interface ManagedEntry {
+  coldFinalization?:import('./cold-finalization-types.ts').ColdFinalization;
+  revokeColdFinalization?:()=>void;
   metadataRevision?: object;
   coldSelected?: ReturnType<typeof createColdSelectedInspection>;
   selected?: {cold?:true;route:SelectedResultsRoute;identity:object;taskBarrier?:ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
@@ -44,6 +47,7 @@ export interface ManagedEntry {
 }
 /** New-work revocation stays terminal; its identity also fences in-flight observations. */
 export function markManagedEntryRevoked(entry:ManagedEntry) {
+  entry.revokeColdFinalization?.()
   entry.revoked=true;entry.revocation={}
   if(entry.captureIO)entry.captureIO.activeIssue=undefined
 }
@@ -107,7 +111,7 @@ export function assertOriginalBootstrapEntry(entry: object, id: string): void {
   const record = originalBootstrapEntries.get(entry)
   if (!record || record.id !== id || record.documents.get(id) !== entry) throw new TypeError('Invalid original bootstrap entry')
 }
-export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>,transitions?:ReturnType<typeof createTaskDocumentTransitions>,activateSelected?:(id:string,entry:ManagedEntry)=>void) {
+export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>,transitions?:ReturnType<typeof createTaskDocumentTransitions>,activateSelected?:(id:string,entry:ManagedEntry)=>void,prepareActivateSelected?:(id:string,entry:ManagedEntry)=>()=>void) {
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
   const captureSupported=()=>supported()&&(process.platform==='win32'||process.platform==='linux')&&!!backend.checkBootstrapCaptureRoot&&!!backend.readBootstrapCapture&&!!backend.prepareBootstrapCapture&&!!backend.settleBootstrapCaptureIO
   const childSupported=()=>captureSupported()&&!!backend.bootstrapRoutes&&['readState','readCapture','reserveCapture','resolveBirth'].every(key=>typeof (backend.bootstrapRoutes as any)[key]==='function')
@@ -199,6 +203,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
   }
   async function releaseCapture(entry:ManagedEntry) {
+    await entry.coldFinalization?.retryClose()
     const retireColdWitness=()=>{
       if(entry.selected?.cold&&entry.selected.processToken){entry.selected.processToken.end('settled');entry.selected.processToken=undefined}
     }
@@ -737,6 +742,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   function inspectColdSelected(input:SelectedResultsRoute):Promise<{kind:'qualification-required';target:ColdSelectedTarget}|{kind:'conflict'|'blocked'}> {
     if (!transitions) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+    assertColdInspectionAdmission(id)
     assertOutsideCapture(id)
     let entry=documents.get(id)
     if(entry) {
@@ -787,8 +793,17 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       const doc=attach(id,owned,buildSession(meta,history.events),history.prefix)
       await owned.control!.bindSelected!();check()
       owned.selected!.resultReceipt=Object.freeze({version:2,invocation:birth.stage.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:completion.dependencyClosureDigest,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
+      const originalControl=owned.control!,prepareReady=originalControl.prepareReady,originalClaim=owned.captureIO!.claim,retainLive=originalClaim.retainLive,originalToken=owned.selected!.processToken
       const inspection=createColdSelectedInspection(owned,route,birth,history.prefix,meta,{
         assertCurrent:check,assertOutside:()=>assertOutsideCapture(id),settle:()=>settleCapture(owned),
+        commit(){
+          check();const io=owned.captureIO!,control=owned.control!,selected=owned.selected!,token=selected.processToken
+          if(control!==originalControl||!prepareReady||control.prepareReady!==prepareReady||io.claim!==originalClaim||originalClaim.retainLive!==retainLive||token!==originalToken||!prepareActivateSelected||!token||!selected.taskBarrier?.completed||!io.settled||io.released||io.releasing||owned.flight||owned.ready)throw new FactRecoveryRequiredError()
+          io.held.assertHeld();io.claim.assertHeld();assertOriginalProcessMutation(token)
+          const ready=Reflect.apply(prepareReady,originalControl,[]),activate=prepareActivateSelected(id,owned),document=owned.document!,receipt=selected.resultReceipt!
+          Reflect.apply(retainLive,originalClaim,[]);ready();owned.ready=true;activate();token.end('settled');selected.processToken=undefined
+          return Object.freeze({kind:'ready' as const,document,receipt})
+        },
         async enter<T>(work:()=>Promise<T>):Promise<T>{const scope={id,active:true};try{return await callbackScope.run(scope,work)}finally{scope.active=false}},
       })
       owned.coldSelected=inspection;coldTargets.set(inspection.target,inspection)
@@ -807,8 +822,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   function coldSelectedRoute(target:object) {
     const original=coldTargets.get(target);if(!original)throw new TypeError('Original cold selected target required')
-    assertOutsideCapture(original.route.request.invocation.targetSessionId);original.assertCurrent();return original.route
+    assertOutsideCapture(original.route.request.invocation.targetSessionId);original.assertCurrent();if(documents.get(original.route.request.invocation.targetSessionId)?.coldFinalization)throw new FactRecoveryRequiredError();return original.route
   }
+  function assertColdInspectionAdmission(id:string){assertOutsideCapture(id);if(documents.get(id)?.coldFinalization)throw new FactRecoveryRequiredError()}
   async function useColdSelected<T>(target:object,work:(observation:ColdSelectedObservation)=>Promise<T>):Promise<T> {
     const original=coldTargets.get(target);if(!original)throw new TypeError('Original cold selected target required')
     if(typeof work!=='function'||utilTypes.isProxy(work))throw new TypeError('Invalid cold target callback')
@@ -855,8 +871,10 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }finally{await settleCapture(entry)}}).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
     entry.flight=flight;return flight
   }
+  const originalColdBootstrap=Object.freeze({capture(target:ColdSelectedTarget){if(this!==originalColdBootstrap)throw TypeError('Original cold bootstrap receiver required');const original=coldTargets.get(target);if(!original)throw TypeError('Original cold selected target required');return original.captureAccess()}})
   return {
-    prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,coldSelectedRoute,useColdSelected,publishSelected,releaseSelected,reconcileSelected,
+    originalColdBootstrap,
+    assertColdInspectionAdmission,prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,coldSelectedRoute,useColdSelected,publishSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,

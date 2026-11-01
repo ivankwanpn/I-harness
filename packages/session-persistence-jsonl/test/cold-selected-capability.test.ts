@@ -23,6 +23,111 @@ import { selectedBootstrapPaths } from '../src/backend/selected-results-route-pa
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { serializeHeader, snapshotMetadataUpdate } from '../src/format.ts'
+import type { OriginalColdQualifiers } from '../../session-persistence/src/coordinator/cold-finalization-types.ts'
+
+function installLifecycleTestQualifiers(qualifiers:OriginalColdQualifiers){
+ const original=bindings.createBindingObservations
+ return vi.spyOn(bindings,'createBindingObservations').mockImplementation((...args)=>{
+  const owner=original(...args),make=owner.createColdFinalizationFactory
+  owner.createColdFinalizationFactory=bootstrap=>make(bootstrap,qualifiers)
+  return owner
+ })
+}
+
+it('cold finalization requires missing production qualifiers and rejects copied targets/coordinators',async()=>{
+ const f=await fixture();try{
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route)
+  if(result.kind!=='qualification-required')throw Error('Missing target')
+  expect(()=>selected.beginColdSelectedFinalization(f.coordinator,result.target)).toThrow('UNSUPPORTED')
+  expect(()=>selected.beginColdSelectedFinalization(f.coordinator,{...result.target})).toThrow()
+  expect(()=>selected.beginColdSelectedFinalization({...f.coordinator},result.target)).toThrow()
+  await selected.useColdSelectedTarget(f.coordinator,result.target,async cold=>cold.assertCurrent())
+ }finally{await f.coordinator.close()}
+})
+
+it('lifecycle constructor test: retains target-only original F0 through settled one-time adoption',async()=>{
+ let coldGuard!:()=>void,bindingGuard!:()=>void,receipt:unknown,document:unknown,qualified=0,sealed=false,settled=false
+ let handle!:ReturnType<typeof selected.beginColdSelectedFinalization>
+ const injection=installLifecycleTestQualifiers({begin(cold,binding){
+  coldGuard=cold.assertCurrent;bindingGuard=binding.assertCurrent;receipt=cold.receipt;document=cold.document
+  expect(binding.metadata('target')).toEqual(cold.metadata);expect(binding.metadata('target')).toMatchObject({sessionId:'target',formatVersion:14,createdAt:'2026-10-31T00:00:00.000Z',workspaceId:'current-workspace'})
+  expect(()=>binding.metadata('source')).toThrow();expect(binding.binding('target')).toEqual({kind:'absent'})
+  return {async qualify(){qualified++;expect(()=>handle.commitReady()).toThrow();expect(()=>handle.close()).toThrow();cold.assertCurrent();binding.assertCurrent()},sealWhileActive(){cold.assertCurrent();binding.assertCurrent();sealed=true},async settle(){expect(coldGuard).toThrow();expect(bindingGuard).toThrow();settled=true},assertSettledCurrent(){if(!sealed||!settled)throw Error('Test seals unavailable')},revoke(){sealed=false},async close(){settled=true}}
+ }})
+ const f=await fixture();injection.mockRestore();try{
+  await f.coordinator.updateMeta('target',{workspaceId:'current-workspace'})
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target')
+  const raw=await readFile(f.path)
+  handle=selected.beginColdSelectedFinalization(f.coordinator,result.target)
+  expect(selected.beginColdSelectedFinalization(f.coordinator,result.target)).toBe(handle)
+  await expect((async()=>selected.inspectColdSelectedTarget(f.coordinator,f.route))()).rejects.toThrow()
+  await expect(selected.useColdSelectedTarget(f.coordinator,result.target,async()=>{})).rejects.toThrow()
+  expect(()=>handle.commitReady()).toThrow()
+  const first=handle.use();expect(handle.use()).toBe(first);await first
+  expect(coldGuard).toThrow();expect(bindingGuard).toThrow();expect(()=>handle.commitReady()).toThrow()
+  await handle.settle();expect(f.coordinator.ownerOf!('target')).toBe(true);expect(()=>handle.commitReady.call({} as never)).toThrow()
+  const ready=handle.commitReady();expect(handle.commitReady()).toBe(ready);expect(ready.document).toBe(document);expect(ready.receipt).toBe(receipt);ready.document.assertReady();expect(qualified).toBe(1)
+  expect(await readFile(f.path)).toEqual(raw)
+ }finally{injection.mockRestore();await f.coordinator.close()}
+})
+
+it.each([{mode:'lease',failure:undefined},{mode:'lease',failure:0},{mode:'pin',failure:undefined},{mode:'pin',failure:0}])('lifecycle constructor test: retains ordered resources and retries falsey cleanup $mode/$failure',async({mode,failure})=>{
+ let qualify=0,settle=0,fail=true,leaseCalls=0,pinCalls=0
+ const injection=installLifecycleTestQualifiers({begin(){return {async qualify(){qualify++},sealWhileActive(){},async settle(){settle++},assertSettledCurrent(){},revoke(){},async close(){}}}})
+ const registry=vi.spyOn(managedFactories,'createManagedDocuments')
+ const f=await fixture();injection.mockRestore();const ownership=registry.mock.calls.at(-1)![1];registry.mockRestore()
+ // Intercept the actual lease release through the existing native-lock mock.
+ const key='desktop-session-project-'+(await import('node:crypto')).createHash('sha256').update('target').digest('hex')
+ const native=await import('../../fs-lock/src/index.ts'),acquire=native.acquireSessionLock
+ // The original Ownership resolves this live imported function for the F0 lease.
+ const lock=vi.spyOn(native,'acquireSessionLock').mockImplementation(async(...args)=>{
+  const original=await acquire(...args)
+  if(args[0].lockPath!==lockPathFor(f.root,'doc:'+key))return original
+  return {get held(){return original.held},async release(){leaseCalls++;if(fail&&mode==='lease'){fail=false;throw failure}await original.release()}}
+ })
+ let owner:{mockRestore():void}|undefined
+ try{
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target')
+  const pin=ownership.pinOwnership;owner=vi.spyOn(ownership,'pinOwnership').mockImplementation(async id=>{const original=await pin(id);return {assertHeld:original.assertHeld,retainLive:original.retainLive,async release(){pinCalls++;if(fail&&mode==='pin'){fail=false;throw failure}await original.release()}}})
+  const attempt=selected.beginColdSelectedFinalization(f.coordinator,result.target);await attempt.use()
+  await expect(attempt.settle()).rejects.toThrow();expect(()=>attempt.commitReady()).toThrow();expect(leaseCalls).toBe(1);expect(pinCalls).toBe(mode==='lease'?0:1)
+  await attempt.retrySettlement();expect(leaseCalls).toBe(mode==='lease'?2:1);expect(pinCalls).toBe(mode==='lease'?1:2);expect(qualify).toBe(1);expect(settle).toBe(1)
+  attempt.commitReady().document.assertReady()
+ }finally{owner?.mockRestore();lock.mockRestore();await f.coordinator.close()}
+})
+
+it('lifecycle constructor test: a failed independent current seal is terminal and self-settlement refuses before effects',async()=>{
+ let valid=true,attempt!:ReturnType<typeof selected.beginColdSelectedFinalization>
+ const injection=installLifecycleTestQualifiers({begin(){return {async qualify(){},sealWhileActive(){},async settle(){expect(()=>attempt.close()).toThrow();expect(()=>attempt.settle()).toThrow()},assertSettledCurrent(){if(!valid)throw null},revoke(){},async close(){}}}})
+ const f=await fixture();injection.mockRestore();try{
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target')
+  attempt=selected.beginColdSelectedFinalization(f.coordinator,result.target);await attempt.use()
+  await expect(f.coordinator.withExistingSessionBindingObservation!({sessionIds:['target']},async()=>{})).rejects.toThrow()
+  valid=false;await expect(attempt.settle()).rejects.toBeNull();valid=true
+  await expect(attempt.retrySettlement()).rejects.toThrow();expect(()=>attempt.commitReady()).toThrow();await attempt.close()
+  const fresh=selected.beginColdSelectedFinalization(f.coordinator,result.target);expect(fresh).not.toBe(attempt);await fresh.close()
+ }finally{await f.coordinator.close()}
+})
+
+it.each(['stop','document-close','falsey-failure'] as const)('lifecycle constructor test: fences and drains finite qualification on %s',async mode=>{
+ const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),signal=new AbortController()
+ let calls=0,closed=0,failClose=true,document!:import('../../session-persistence/src/coordinator/fact-types.ts').ManagedDocument
+ const injection=installLifecycleTestQualifiers({begin(cold){document=cold.document;return {async qualify(){calls++;entered.resolve();await leave.promise;if(mode==='falsey-failure')throw undefined},sealWhileActive(){},async settle(){},assertSettledCurrent(){},revoke(){},async close(){closed++;if(failClose){failClose=false;throw 0}}}}})
+ const f=await fixture();injection.mockRestore();let closing:Promise<unknown>|undefined
+ try{
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target')
+  const attempt=selected.beginColdSelectedFinalization(f.coordinator,result.target,{signal:signal.signal}),use=attempt.use().then(()=>({failed:false}),cause=>({failed:true,cause}))
+  await entered.promise
+  if(mode==='stop')signal.abort()
+  if(mode==='document-close')closing=document.close().then(()=>({failed:false}),cause=>({failed:true,cause}))
+  else closing=attempt.close().then(()=>({failed:false}),cause=>({failed:true,cause}))
+  expect((await prompt(closing)).kind).toBe('pending');expect(()=>attempt.commitReady()).toThrow();expect(f.coordinator.ownerOf!('target')).toBe(true)
+  leave.resolve();const used=await use;expect(used.failed).toBe(true);if(mode==='falsey-failure')expect(used).toEqual({failed:true,cause:undefined})
+  const error=await closing;expect(error).toMatchObject({failed:true});if(mode!=='document-close')expect(error).toEqual({failed:true,cause:0});expect(closed).toBe(1);expect(calls).toBe(1);expect(f.coordinator.ownerOf!('target')).toBe(true)
+  if(mode==='document-close')await document.close();else await attempt.retryClose()
+  expect(closed).toBe(2);expect(()=>attempt.commitReady()).toThrow()
+ }finally{leave.resolve();await closing;await f.coordinator.close()}
+})
 
 
 async function fixture() {
