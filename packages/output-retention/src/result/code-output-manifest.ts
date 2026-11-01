@@ -37,6 +37,7 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
   let refusal: Extract<CodeManifestDisposition,{kind:'unavailable'}> | undefined
   let lastDescriptorDigest:string|undefined
   let currentDescriptorDigest:string|undefined
+  let encodingDiscarded:WeakRef<object>|undefined
   const recovery = (cause?: unknown) => Object.assign(new Error('Original Code manifest requires recovery'), { code: 'FACT_RECOVERY_REQUIRED', cause })
   async function write(bytes: Buffer, hash: boolean) {
     sink ??= await open()
@@ -71,7 +72,7 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
       const closed=await cancel('encoding')
       if(closed.kind!=='refused')throw recovery(closed.kind==='recovery-required'?closed.cause:undefined)
     }
-    pending=undefined;writeIssued=false;current=undefined;lastRecord=undefined
+    pending=undefined;writeIssued=false;current=undefined;lastRecord=undefined;encodingDiscarded=undefined
     return result=Object.freeze({...refusal})
   }
   const port = Object.freeze({
@@ -90,9 +91,16 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
       if(!refusal && (descriptor.member.receipt.owner.sessionId!==header.sessionId||descriptor.member.seq<=lastSeq||!Number.isSafeInteger(count+1)))return Promise.reject(new Error('Foreign or replayed Code output member'))
       const unavailableText = descriptor.item.kind === 'text' && descriptor.item.retention.kind === 'unavailable'
       let encoded:Buffer|undefined,encodedDigest:string|undefined
+      let refusedObservation=false
       if(!refusal) {
         try {encoded=encodeCodeOutputRecord({...descriptor,ordinal:count});encodedDigest=createHash('sha256').update(encoded).digest('hex')}
-        catch(cause){if(current)return Promise.reject(cause);current=record;refusal={kind:'unavailable',reason:'encoding'};return Promise.reject(recovery(cause))}
+        catch(cause){if(current)return Promise.reject(cause);current=record;encodingDiscarded=new WeakRef(record);refusal={kind:'unavailable',reason:'encoding'};return Promise.reject(recovery(cause))}
+      }else if(encodingDiscarded?.deref()!==record){
+        try{
+          encodeCodeOutputRecord({...descriptor,ordinal:count})
+          if(descriptor.member.receipt.owner.sessionId!==header.sessionId||descriptor.member.seq<=lastSeq||!Number.isSafeInteger(count+1))throw new Error('Foreign or replayed refused Code member')
+          refusedObservation=true
+        }catch(cause){return Promise.reject(recovery(cause))}
       }
       if(current && !refusal) {
         try {if(encodedDigest!==currentDescriptorDigest)throw new Error('Original pending Code descriptor changed')}
@@ -102,7 +110,12 @@ export function createCodeOutputManifest(header: CodeOutputHeader, options: {
       current = record
       currentDescriptorDigest=encodedDigest
       const work = Promise.resolve().then(async () => {
-        if (refusal) { lastRecord = new WeakRef(record); current = undefined; return }
+        if (refusal) {
+          // Logical valid observations still advance the terminal count, but
+          // never count as encoded ACKs or contribute native bytes/hashes.
+          if(refusedObservation){count++;lastSeq=descriptor.member.seq}
+          lastRecord = new WeakRef(record); current = undefined; return
+        }
         if (descriptor.member.receipt.owner.sessionId !== header.sessionId || descriptor.member.seq <= lastSeq || !Number.isSafeInteger(count + 1)) throw new Error('Foreign or replayed Code output member')
         const bytes=encoded!
         try { if(await initialize())await write(bytes, true) }

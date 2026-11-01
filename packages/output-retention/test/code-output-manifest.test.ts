@@ -52,6 +52,19 @@ it('returns known original quota unavailability instead of completing a descript
     expect(await f.stream.finish()).toEqual({kind:'unavailable',reason:'quota'})
   }finally{await f.source.close();await f.service.close()}
 })
+it('counts valid known-refused records once without manufacturing encoded acknowledgement or receipt',async()=>{
+ const f=await setup(1),first={},second={}
+ try{
+  const item={kind:'audio' as const,read:'current-fact-required' as const}
+  await f.stream.append(first,{kind:'output',member:member(1),item})
+  await f.stream.append(second,{kind:'output',member:member(2),item})
+  await f.stream.append(second,{kind:'output',member:member(2),item})
+  f.stream.seal({terminal:member(3),status:'completed',store:null,accepted:2,omitted:0,truncated:false})
+  expect(await f.stream.finish()).toEqual({kind:'unavailable',reason:'quota'})
+  expect(inspectCodeOutputManifest(f.stream)).toMatchObject({descriptorCount:0,encodedBytes:0,footer:{count:2}})
+  expect(inspectCodeOutputManifestReceipt(f.stream)).toBeUndefined()
+ }finally{await f.source.close();await f.service.close()}
+})
 
 it('inspects original acknowledged manifest bytes without granting authority',async()=>{
   const chunks:Buffer[]=[]
