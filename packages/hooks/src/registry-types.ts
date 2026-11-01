@@ -90,6 +90,8 @@ export interface InternalRegistry {
 }
 
 export interface HookRuntimeInput extends RunHookOptions {
+  /** Internal original invocation data; never a Session or command authority. */
+  domain?: object
   session?: ClaudeHookSession
   nativeOnly?: boolean
   claudeOnly?: boolean
