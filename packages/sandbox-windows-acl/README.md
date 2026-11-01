@@ -25,8 +25,11 @@ deepseek-harness Windows backend's documented vocabulary.
 
 A hidden console (`CREATE_NO_WINDOW` / `CREATE_NEW_CONSOLE`) is not attainable
 under this restriction scheme — children created with those flags die with
-`STATUS_DLL_INIT_FAILED`. Children therefore share the host console (stdio
-redirection is pipe-based and unaffected).
+`STATUS_DLL_INIT_FAILED`. Children therefore share the host console. IH's
+host-created output pipes have their own descriptors and lifecycle; that path
+does not establish support for pipes later created inside a restricted child.
+In particular, Node's piped-grandchild case remains an unresolved compatibility
+gap. Inherited/ignored child stdio qualification is separate.
 
 ## `danger-full-access` is handled at the exec layer
 
