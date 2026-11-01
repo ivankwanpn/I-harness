@@ -66,14 +66,33 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   let stopped=false,ownerBound=false,closed=false,pendingWrite:object|undefined
   let dependencyFailure:{cause:unknown}|undefined
   const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();debt.delete(scope)}catch(error){errors.push(error)}if(errors.length)throw new AggregateError(errors,'Exact writer dependency cleanup unresolved');dependencyFailure=undefined}
-  const assertNewWork=()=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size)throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
+  const assertFresh=(reading?:OriginalWriterDependencyScope)=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size>(reading&&debt.has(reading)?1:0))throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
+  const assertNewWork=()=>assertFresh()
   const requestActions=new WeakMap<object,()=>void>()
   function observe():ExecutionObservation{
     assertNewWork();const bound=owners.get(identity);if(!bound)throw TypeError('Original execution owner unbound');bound.current()
     const expected=original.prefix,delivery=originalDeliveryObservation(original.delivery),fence=delivery.revision();
-    const current=()=>{assertNewWork();bound.current();if(original.prefix!==expected||delivery.revision()!==fence)throw TypeError('Original execution observation expired')}
+    const current=(reading?:OriginalWriterDependencyScope)=>{assertFresh(reading);bound.current();if(original.prefix!==expected||delivery.revision()!==fence)throw TypeError('Original execution observation expired')}
     const floor=(value:number)=>{if(!Number.isSafeInteger(value)||value<0||value>expected.eventCount)throw RangeError('Invalid original inbox floor')}
-    const inbox:ExecutionObservation['inbox']=Object.freeze({pending(fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.pending(fromSeq)},isPending(inputId:string,fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.isPending(inputId)&&(original.intake.admission(inputId)??-1)>=fromSeq},everAdmitted(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.everAdmitted(inputId)},isExecutable(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return delivery.isExecutable(inputId)}})
+    const inbox:ExecutionObservation['inbox']=Object.freeze({pending(fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.pending(fromSeq)},isPending(inputId:string,fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.isPending(inputId)&&(original.intake.admission(inputId)??-1)>=fromSeq},everAdmitted(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.everAdmitted(inputId)},isExecutable(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return delivery.isExecutable(inputId)},
+      lastCancellationSeq(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.lastCancellationSeq(inputId)},
+      async admitted(inputId:string){
+        if(this!==inbox)throw TypeError('Original inbox receiver required');current()
+        const ordinal=original.intake.admission(inputId);if(ordinal===undefined)return undefined
+        const scope=captureWriterDependencies(open(expected));debt.add(scope)
+        // Only this synchronous invocation's original registered reader is
+        // exempt from its own debt check. Every public admission remains fenced.
+        let record:Extract<import('./types.ts').SessionEventView,{type:'agent/input/admitted'}>|undefined,failed=false,primary:unknown
+        try{
+          current(scope);scope.assertCurrent();const event=await scope.readEvent(ordinal);current(scope);scope.assertCurrent()
+          if(event.type!=='agent/input/admitted'||event.seq!==ordinal||event.inputId!==inputId)throw TypeError('Original indexed admission record required')
+          record=freezeJsonData(event)
+        }catch(error){failed=true;primary=error}
+        try{await scope.close();debt.delete(scope)}catch(cleanup){const cause=failed?new AggregateError([primary,cleanup],'Admission read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};throw cause}
+        if(failed)throw primary
+        current();return record
+      }
+    })
     const header=original.header===undefined?undefined:freezeJsonData(structuredClone(original.header))
     const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:original.formatVersion,...header?{header}:{},prefix:Object.freeze({...expected}),projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules:Object.freeze({kind:'unavailable' as const,reason:'original-schedule-adapter-not-connected' as const,revision:original.context.scheduleRevision()}),inbox,
       assertCurrent(){if(this!==observation)throw TypeError('Original observation receiver required');current()},
