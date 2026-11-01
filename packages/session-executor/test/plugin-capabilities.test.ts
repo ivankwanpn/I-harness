@@ -111,3 +111,40 @@ it('missing original registration cleanup retains debt rather than deleting an a
   original.remove('legacy')
   await managed.dispose()
 })
+
+it('a cloning registrar without an original cleanup retains every still-present registration as ambiguous debt', async () => {
+  const original = createRoleRegistry()
+  let published: import('@i-harness/subagent').SubagentRole | undefined
+  const registrar: import('@i-harness/subagent').RoleRegistry = {
+    ...original,
+    register(role) { published = role; original.register({ ...role, tools: [...role.tools] }) },
+    remove: vi.fn(name => original.remove(name)),
+  }
+  const managed = createPluginCapabilities({ skillDirs: [], handles: [], roles: registrar, mcpResults: new Map(), roleResults: new Map(), mount: async () => { throw new Error('No MCP') }, warn() {} })
+  const input = { name: 'cloned', description: 'p', systemPrompt: 'p', tools: [] }
+  await managed.update({ pluginAgents: [input] })
+  const installed = original.get(input.name)!
+  expect(published).toBeDefined()
+  expect(installed).not.toBe(published)
+  await expect(managed.dispose()).rejects.toThrow('Original role registration cleanup unavailable')
+  await expect(managed.dispose()).rejects.toThrow('Original role registration cleanup unavailable')
+  expect(original.get(input.name)).toBe(installed)
+  expect(registrar.remove).not.toHaveBeenCalled()
+  original.remove(input.name)
+  await managed.dispose()
+})
+
+it('proven absence retires missing-cap bookkeeping without a new role deletion', async () => {
+  const original = createRoleRegistry()
+  const registrar: import('@i-harness/subagent').RoleRegistry = {
+    ...original,
+    register(role) { original.register({ ...role }) },
+    remove: vi.fn(name => original.remove(name)),
+  }
+  const managed = createPluginCapabilities({ skillDirs: [], handles: [], roles: registrar, mcpResults: new Map(), roleResults: new Map(), mount: async () => { throw new Error('No MCP') }, warn() {} })
+  await managed.update({ pluginAgents: [{ name: 'absent', description: 'p', systemPrompt: 'p', tools: [] }] })
+  original.remove('absent')
+  await managed.dispose(); await managed.dispose()
+  expect(registrar.remove).not.toHaveBeenCalled()
+  expect(original.list()).toEqual([])
+})

@@ -30,7 +30,7 @@ export function createPluginCapabilities(deps: {
     const pending = Promise.resolve().then(async () => {
       if (roles.get(name) !== entry) return
       if (entry.cleanup) await entry.cleanup()
-      else if (deps.roles.get(name) === entry.role) throw new Error('Original role registration cleanup unavailable')
+      else if (deps.roles.get(name) !== undefined) throw new Error('Original role registration cleanup unavailable')
       roles.delete(name); entry.failure = undefined
     })
     entry.removing = pending
