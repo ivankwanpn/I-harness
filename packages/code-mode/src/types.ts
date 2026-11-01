@@ -94,5 +94,5 @@ export interface CodeModeMount {
   cancel(reason?: string): Promise<void>
   dispose(): Promise<void>
 }
-export interface CodeModeMountOptions { session: Session; factOwner?: FactOwner; sessionId?: string; config?: CodeModeConfig; retainText?: CodeModeRuntimeOptions['retainText']; flush?(): Promise<void>; maxParallel?: number }
+export interface CodeModeMountOptions { session: Session; factOwner?: FactOwner; sessionId?: string; config?: CodeModeConfig; retainText?: CodeModeRuntimeOptions['retainText']; finalOutput?: import('./final-output.ts').CodeFinalOutputFactory; flush?(): Promise<void>; maxParallel?: number }
 export type CodeModeFactory = (ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) => CodeModeMount

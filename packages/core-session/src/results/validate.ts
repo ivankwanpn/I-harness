@@ -6,7 +6,7 @@ const utf8 = new TextEncoder()
 const hash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
 const size = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 const completeness = ['complete', 'source-limited', 'capture-canceled', 'producer-incomplete']
-const codecs = ['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1']
+const codecs = ['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1', 'code-output-manifest-v1']
 
 /** Accessor-free, iterative closed-data preflight, independent of legacy JSON. */
 function data(input: unknown): boolean {

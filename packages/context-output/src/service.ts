@@ -1,3 +1,4 @@
+import { associateManagedResultRefusal } from './artifact/result-capabilities.ts'
 import type { SeedDependencyTransferScope } from './artifact/bootstrap-transfer.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { access as fileAccess } from 'node:fs/promises'
@@ -417,6 +418,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     async beginResult(scope, codec) { assertOpen(); return artifacts.beginResult(scope, codec) },
     confirmResultOwner: artifacts.confirmResultOwner,
     async readResult(access, query) { assertOpen(); return artifacts.readResult(access, query) },
+    async readCodeOutputResult(access,query) {assertOpen();return artifacts.readCodeOutputResult(access,query)},
     async readExecResult(access, query) { assertOpen(); return artifacts.readExecResult(access, query) },
     reconcileResult: artifacts.reconcileResult,
     status,
@@ -620,5 +622,6 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     try{assertOpen()}catch(error){await selected.close();throw error}
     return selected
   }})
+  associateManagedResultRefusal(service)
   return service
 }

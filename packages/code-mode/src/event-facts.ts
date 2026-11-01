@@ -4,7 +4,7 @@ import { createOutputQueue, recoveryError } from './event-facts/queue.ts'
 
 /** A mount owns one ordered queue. Each actual admission retains its one
  * original output source until its terminal has synchronously sealed it. */
-export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () => Promise<void>, onObservationChange?: () => void) {
+export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () => Promise<void>, onObservationChange?: () => void, committedDescriptor?: (record: object) => Promise<void>) {
   const cells = new Map<string, CellFacts>(), pending = new Set<Pending>()
   const admissionHolds = new Map<string, { action?: ManagedAction<ProducerFactOutcome> }>()
   const held = new Set<CellFacts>(), failedAdmissions = new Set<string>()
@@ -40,6 +40,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
   })
   const enroll = (record: Pick<Pending, 'kind'> & Partial<Pending>) => {
     const enrolled = queue.enroll({ attempted: false, disposed: false, cancelled: false, settled: false, commit: callback(), cancel: callback(), settle: callback(), ...record })
+    if (committedDescriptor && record.kind !== 'reference') enrolled.descriptor = () => committedDescriptor(enrolled)
     pending.add(enrolled); return enrolled
   }
   const settle = async (cell: CellFacts): Promise<SettlementOwnerProgress> => {
@@ -164,7 +165,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
     async store(event: Extract<SessionEvent, { type: 'code/store' }>, onCommit: () => void, onCancelled: () => void) {
       const cell = cells.get(event.cellId)
       if (!cell || cell.sealed) throw new FactRecoveryRequiredError()
-      const record = enroll({ kind: 'store', action: cell.action, actionCell: cell, fact: cell.action.captureCodeStore(event), commit: callback(onCommit), cancel: callback(onCancelled) })
+      const record = enroll({ kind: 'store', action: cell.action, actionCell: cell, fact: cell.action.captureCodeStore(event), source:cell.source, originalEvent:event, commit: callback(onCommit), cancel: callback(onCancelled) })
       changed()
       try { await refresh() } catch (reason) { if (!record.settled) throw record.failure ? record.failure.reason : reason }
     },

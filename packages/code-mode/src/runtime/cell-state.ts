@@ -44,6 +44,7 @@ export interface Cell {
   pendingBytes: number
   pendingItems: number
   pendingProjection?: { settle(): Promise<void> }
+  lifetimeOutput?: { accepted: number; truncated: boolean }
   recoveredProjection?: CodeModeObservation
 }
 

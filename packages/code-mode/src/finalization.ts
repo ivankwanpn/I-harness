@@ -2,6 +2,18 @@
  * a terminal DTO; successful settlement only describes the captured owners. */
 export interface OriginalCellFinalization { readonly scope: 'runtime-retirement' | 'cell-finalization'; settle(): Promise<void> }
 const constructors = new WeakMap<object, ReturnType<typeof createCellFinalizations>>()
+const originals = new WeakMap<object, object | undefined>()
+export function isOriginalCellFinalization(value:unknown,context?:object):value is OriginalCellFinalization {
+  return !!value&&typeof value==='object'&&originals.has(value)&&(context===undefined||originals.get(value)===context)
+}
+interface OriginalOutputLifetime { accepted:number;truncated:boolean;policyRefusal?:true;instructionReplan?:import('@i-harness/core-tools').InstructionReplanError }
+const lifetimes = new WeakMap<OriginalCellFinalization, () => Readonly<OriginalOutputLifetime>>()
+export function bindOriginalOutputLifetime(handle: OriginalCellFinalization, read: () => Readonly<OriginalOutputLifetime>) { lifetimes.set(handle, read) }
+export function readOriginalOutputLifetime(handle: OriginalCellFinalization) {
+  const read = lifetimes.get(handle)
+  if (!read) throw new Error('Original runtime output lifetime unavailable')
+  return read()
+}
 export function captureOriginalCellFinalization(owner: object, id: string): OriginalCellFinalization {
   const handle = constructors.get(owner)?.capture(id)
   if (!handle) throw new Error('Original Code cell finalization unavailable')
@@ -12,7 +24,7 @@ export function observeOriginalCellFinalizations(owner: object, listener: (id: s
   if (!registry) throw new Error('Original Code constructor required')
   return registry.observe(listener)
 }
-export function createCellFinalizations(scope: OriginalCellFinalization['scope']) {
+export function createCellFinalizations(scope: OriginalCellFinalization['scope'],context?:object) {
   const pending = new Map<string, OriginalCellFinalization>()
   const listeners = new Set<(id: string, handle: OriginalCellFinalization) => void>()
   const registry = {
@@ -34,6 +46,7 @@ export function createCellFinalizations(scope: OriginalCellFinalization['scope']
         return attempt
       } })
       pending.set(id, handle)
+      originals.set(handle,context)
       // Passive early capture only; listeners cannot supply producer authority.
       for (const listener of listeners) { try { listener(id, handle) } catch { /* Isolate passive capture consumers. */ } }
       return handle

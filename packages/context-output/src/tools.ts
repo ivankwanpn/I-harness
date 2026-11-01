@@ -8,7 +8,7 @@ import type { LegacyReadObservation } from './legacy/fork-types.ts'
 export type LegacyReadObservationRunner = <T>(access: ContextAccess, use: (observation: LegacyReadObservation) => Promise<T>) => Promise<T>
 
 const managedRefSchema = { type: 'object', properties: {
-  version: { enum: [1] }, id: { type: 'string' }, revision: { type: 'string' }, codec: { enum: ['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1'] },
+  version: { enum: [1] }, id: { type: 'string' }, revision: { type: 'string' }, codec: { enum: ['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1', 'code-output-manifest-v1'] },
   encodedBytes: { type: 'integer', minimum: 0 }, contentDigest: { type: 'string' }, completeness: { enum: ['complete', 'source-limited', 'capture-canceled', 'producer-incomplete'] },
 }, required: ['version', 'id', 'revision', 'codec', 'encodedBytes', 'contentDigest', 'completeness'], additionalProperties: false }
 
@@ -51,7 +51,8 @@ export function createContextOutputTools(service: ContextOutputService, options?
         refId: { type: 'string', description: 'Opaque immutable context reference ID.' }, offset: { type: 'integer', minimum: 0 }, maxBytes: { type: 'integer', minimum: 1 },
         ref: managedRefSchema,
         viaCatalog: managedRefSchema,
-        cursor: { type: 'object', properties: { recordOffset: { type: 'integer', minimum: 0 }, sliceOffset: { type: 'integer', minimum: 0 } }, required: ['recordOffset', 'sliceOffset'], additionalProperties: false },
+        cursor: { anyOf:[{ type: 'object', properties: { recordOffset: { type: 'integer', minimum: 0 }, sliceOffset: { type: 'integer', minimum: 0 } }, required: ['recordOffset', 'sliceOffset'], additionalProperties: false },
+          {type:'object',properties:{artifactId:{type:'string'},revision:{type:'string'},cellId:{type:'string'},sourceId:{type:'string'},offset:{type:'integer',minimum:0}},required:['artifactId','revision','cellId','sourceId','offset'],additionalProperties:false}] },
         textView: { type: 'boolean' },
       }, additionalProperties: false },
       async execute(args, exec) {

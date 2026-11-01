@@ -43,7 +43,7 @@ export async function reconcileArtifact(root: string, directory: string, workspa
   if (!operation || typeof operation !== 'object' || Array.isArray(operation) || operation.version !== 1
     || !operation.owner || typeof operation.owner !== 'object' || Array.isArray(operation.owner)
     || operation.id !== id || !['capturing', 'staged', 'committed', 'refused'].includes(operation.phase)
-    || !['text-utf8-v1', 'json-utf8-v1', 'exec-frames-v1'].includes(operation.codec)
+    || !['text-utf8-v1', 'json-utf8-v1', 'exec-frames-v1', 'code-output-manifest-v1'].includes(operation.codec)
     || !Number.isSafeInteger(operation.encodedBytes) || operation.encodedBytes < 0) throw new Error('Artifact operation corrupt')
   const owner = operation.owner
   for (const key of ['operationId', 'sessionId', 'callId'] as const) identity(owner[key], key)
