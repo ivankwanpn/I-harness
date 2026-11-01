@@ -1,4 +1,18 @@
 import { associateManagedResultRefusal } from './artifact/result-capabilities.ts'
+import { captureResultTargetIds } from '../../session-persistence/src/coordinator/result-revocation-data.ts'
+import { fields } from './artifact/transfer-codec.ts'
+import { createArtifactQualificationIO } from './artifact/qualification-io.ts'
+import { canonicalJsonData } from '@i-harness/core-session'
+import { originalResultRevocationFor, issueOriginalResultRevocationScope, type OriginalResultRevocationTicket } from '../../session-persistence/src/coordinator/result-revocation.ts'
+import type { WorkspaceMutationCleanup } from './workspace-mutation.ts'
+export interface OriginalResultRevocationPreparation { readonly frontier: number; assertCovered(ids: readonly string[]): void; close(): Promise<void> }
+export interface OriginalResultRevocationRequest { readonly kind: 'workspace' | 'session'; readonly sessionIds: readonly string[]; readonly documents: readonly string[] }
+const revocationPreparers = new WeakMap<ContextOutputService, (coordinator: SessionCoordinator, request: OriginalResultRevocationRequest, retain: (cleanup: OriginalResultRevocationPreparation) => void) => Promise<OriginalResultRevocationPreparation>>()
+export function prepareOriginalResultRevocation(service: ContextOutputService, coordinator: SessionCoordinator, request: OriginalResultRevocationRequest, retain: (cleanup: OriginalResultRevocationPreparation) => void) {
+  const prepare = revocationPreparers.get(service)
+  if (!prepare) throw TypeError('Original result service required')
+  return prepare(coordinator, request, retain)
+}
 import type { SeedDependencyTransferScope } from './artifact/bootstrap-transfer.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { access as fileAccess } from 'node:fs/promises'
@@ -86,6 +100,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const gate = createLegacyUseGate()
   const owner = createWorkspaceMutationOwner(options)
   const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes, owner)
+  const revocationPreparations = new Set<OriginalResultRevocationPreparation>()
   let unsubscribeDeletions: (() => void) | undefined
   const releaseDocuments = async (documents: readonly string[]) => {
     artifacts.revokeColdTransfers(documents)
@@ -512,6 +527,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       // admission fence while a later explicit call retries unfinished cleanup.
       if (!closeFlight) closeFlight = transition(async () => {
         const failures: unknown[] = []
+        for (const preparation of [...revocationPreparations]) try { await preparation.close() } catch (failure) { failures.push(failure) }
+        if (failures.length) failuresTogether(failures, 'Original revocation cleanup unresolved')
         for(const reader of [...selectedReaders])try{await reader.close()}catch(failure){failures.push(failure)}
         try { await legacy.close() } catch (failure) { failures.push(failure) }
         if (!deletionsUnsubscribed) {
@@ -554,6 +571,80 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     })
     orderingReservations.add(reservation); retain(reservation); return reservation
   } }))
+  revocationPreparers.set(service, async (coordinator, request, retain) => {
+    assertOpen(); assertOrderingOutside()
+    fields(request, ['kind', 'sessionIds', 'documents'])
+    if (typeof retain !== 'function' || !['workspace', 'session'].includes(request.kind)) throw TypeError('Original revocation request required')
+    const ids = captureResultTargetIds(request.sessionIds), documents = captureResultTargetIds(request.documents), kind = request.kind
+    for (const id of [...ids, ...documents]) identity(id, 'revocation identity')
+    const admission = originalResultRevocationFor(coordinator), participant = legacyOrderingOwners.get(service)!
+    const check = () => { assertOpen(); if (originalResultRevocationFor(coordinator) !== admission) throw TypeError('Changed original revocation association') }
+    let ticket: OriginalResultRevocationTicket | undefined, frontier = 0, finished = false, closingFlight: Promise<void> | undefined
+    const io = createArtifactQualificationIO(), workspaces: WorkspaceMutationCleanup[] = [], inventories: unknown[] = []
+    const original = candidate ?? new ContextStore(options.root, workspaceId, owner, gate.assertLease)
+    const done = Promise.withResolvers<void>(); let passFlight: Promise<unknown> | undefined
+    const dependentCleanup = Object.freeze({
+      assertSettled() { io.assertSettled(); original.assertLegacyFilesSettled(); for (const cleanup of workspaces) cleanup.assertSettled(); if (!original.lifetimeSettled()) throw Error('Original discovery lifetime cleanup unresolved') },
+      async close() {
+        await passFlight?.catch(() => {})
+        await io.settle(); io.assertSettled(); await original.joinLegacyFiles(); original.assertLegacyFilesSettled()
+        for (const cleanup of workspaces) { await cleanup.close(); cleanup.assertSettled() }
+        await gate.exclusive(undefined, lease => original.quiesce(lease))
+        dependentCleanup.assertSettled()
+      },
+    })
+    const handle: OriginalResultRevocationPreparation = Object.freeze({
+      get frontier() { if (this !== handle || !frontier || finished) throw Error('Original frontier unavailable'); return frontier },
+      assertCovered(requested: readonly string[]) { if (this !== handle || !frontier || finished) throw Error('Original revocation preparation unavailable'); check(); admission.assertCovered(ticket!, requested) },
+      close() {
+        if (this !== handle) return Promise.reject(TypeError('Original revocation preparation required'))
+        assertOrderingOutside()
+        if (finished) return Promise.resolve()
+        if (closingFlight) return closingFlight
+        const flight = (async () => {
+          await done.promise
+          if (ticket) await ticket.close(); else await dependentCleanup.close();
+          finished = true; revocationPreparations.delete(handle)
+        })()
+        closingFlight = flight; void flight.finally(() => { if (closingFlight === flight) closingFlight = undefined }).catch(() => {}); return flight
+      },
+    })
+    revocationPreparations.add(handle)
+    try { retain(handle) } catch (failure) { revocationPreparations.delete(handle); done.resolve(); throw failure }
+    async function pass() {
+      check(); ticket!.assertCurrent()
+      return gate.exclusive(undefined, async lease => {
+        await original.acquireLifetime(); check()
+        const inventory = await owner.mutate(async turn => {
+        const cutoff = Date.now()
+        const managed = await artifacts.passiveReleaseInventory(turn, documents, io); check()
+        const legacy = await original.passiveInventory(turn, kind === 'workspace' ? undefined : ids[0], cutoff); check()
+        if (kind === 'session' && ids.length !== 1) throw Error('One original session request required')
+        const targets = Object.freeze([...new Set([...ids, ...managed.targets, ...legacy.targets])].sort())
+        if (managed.recoveryRequired || legacy.recoveryRequired) throw Error('Original revocation inventory recovery required')
+        const inventory = { managed, legacy, targets }; inventories.push(inventory); return { inventory, cutoff }
+        }, cleanup => { workspaces.push(cleanup) })
+        await original.quiesce(lease); check()
+        return inventory
+      })
+    }
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        ticket = admission.begin(issueOriginalResultRevocationScope(admission, { kind, sessionIds: ids }, participant))
+        admission.retainCleanup(ticket, dependentCleanup)
+        await ticket.join()
+        const { inventory: first } = await (passFlight = pass()); io.assertSettled(); original.assertLegacyFilesSettled()
+        for (const cleanup of workspaces) cleanup.assertSettled()
+        await admission.acquireTargets(ticket, first.targets); check()
+        const { inventory: second, cutoff } = await (passFlight = pass())
+        for (const cleanup of workspaces) cleanup.assertSettled()
+        if (canonicalJsonData(first) === canonicalJsonData(second)) { admission.assertCovered(ticket, second.targets); frontier = cutoff; return handle }
+        // No effects exist in this unit. Drift retires only this original ticket.
+        await ticket.close(); ticket = undefined
+      }
+      throw Error('Original revocation inventory changed repeatedly')
+    } finally { done.resolve() }
+  })
   artifactSettlement.set(service,artifacts.settleSeedDependencyTransfer)
   coldManagedOwners.set(service, { acquireColdManagedQualification(...args) { assertOpen(); return artifacts.acquireColdManagedQualification(...args) }, revokeColdTransfers: artifacts.revokeColdTransfers })
   coldSelectedRevokers.set(service, revokeSelectedAuthorities)

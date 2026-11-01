@@ -35,7 +35,7 @@ function sameEntry(a: ResultDependency, b: ResultDependency): boolean {
   if (a.retention.kind === 'artifact') return b.retention.kind === 'artifact' && sameArtifactRef(a.retention.ref, b.retention.ref)
   return b.retention.kind === 'unavailable' && a.retention.reason === b.retention.reason && a.retention.observedEncodedBytes === b.retention.observedEncodedBytes
 }
-function validMembership(value: unknown): value is Membership {
+export function validMembership(value: unknown): value is Membership {
   if (!isStrictFactData(value) || !value || typeof value !== 'object' || Array.isArray(value)) return false
   const record = value as Membership
   if (Object.keys(record).length !== keys.length || Object.keys(record).some(key => !keys.includes(key)) || record.version !== 1 || record.kind !== 'result-dependency'

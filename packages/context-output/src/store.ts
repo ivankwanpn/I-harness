@@ -115,8 +115,9 @@ export class ContextStore {
     try { this.lifetime.assertSettled(); return true } catch { return false }
   }
   /** Read-only original authority. No open/recovery/body/index/cache effects. */
-  async passiveInventory(turn: WorkspaceMutationTurn, sessionId?: string): Promise<LegacyStoreInventory> {
+  async passiveInventory(turn: WorkspaceMutationTurn, sessionId?: string, cutoff = Date.now()): Promise<LegacyStoreInventory> {
     this.assertTurn(turn)
+    if (!Number.isSafeInteger(cutoff) || cutoff < 0) throw Error('Invalid original expiry frontier')
     const guard = () => this.assertTurn(turn), artifacts = new Map<string, Artifact>(), owners = new Map<string, Set<string>>()
     const targets = new Set<string>(sessionId === undefined ? [] : [sessionId]), expired: string[] = []
     let recoveryRequired = false
@@ -132,7 +133,7 @@ export class ContextStore {
       if (!membership.size) recoveryRequired = true
       artifacts.set(id, artifact); owners.set(id, membership)
       // clear(session) also performs the original global expiry sweep.
-      if (artifact.ref.expiresAt <= Date.now()) { expired.push(id); for (const target of membership) targets.add(target) }
+      if (artifact.ref.expiresAt <= cutoff) { expired.push(id); for (const target of membership) targets.add(target) }
       if (sessionId === undefined || membership.has(sessionId)) for (const target of membership) targets.add(target)
     }
     const namespace = resolve(this.directory, 'legacy-fork-v1')
