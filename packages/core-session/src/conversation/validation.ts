@@ -24,6 +24,7 @@ interface ConversationScanStage {
     advance(event: SessionEvent): void;
     dependencies(event: SessionEvent): readonly number[];
     finish(): ReturnType<ConversationValidationIndex['stage']>;
+    discard():void;
 }
 type ConversationScanBegin = (readCurrent?: (index: number) => SessionEvent | undefined, readStaged?: (index: number) => SessionEvent | undefined) => ConversationScanStage;
 interface StageOptions {
@@ -52,6 +53,15 @@ export interface ConversationValidationIndex {
 }
 const deliveryObservations = new WeakMap<ConversationValidationIndex, DeliveryReadIndex>();
 const generationObservations = new WeakMap<ConversationValidationIndex, () => readonly GenerationActionState[]>();
+type PreparedConversationAppend=ReturnType<ConversationValidationIndex['stage']>&{discard():void};
+const appendPreparations = new WeakMap<ConversationValidationIndex,(events:readonly SessionEvent[],readEvent:(ordinal:number)=>Promise<SessionEvent>,assertCurrent:()=>void)=>Promise<PreparedConversationAppend>>();
+/** Original constructor's staged validator, using only the already-held
+ * writer's dependency reader. Never reacquires a document or transition. */
+export function prepareConversationAppend(index:ConversationValidationIndex,events:readonly SessionEvent[],readEvent:(ordinal:number)=>Promise<SessionEvent>,assertCurrent:()=>void){
+    const prepare=appendPreparations.get(index);
+    if(!prepare)throw new TypeError('Original conversation index required');
+    return prepare(events,readEvent,assertCurrent);
+}
 export function readConversationGenerations(index: ConversationValidationIndex) {
     return generationObservations.get(index)?.();
 }
@@ -271,12 +281,21 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
                 nextStep = undefined;
         };
         return {
-            advance, dependencies(event) {
+            advance,discard(){if(deliveryOrigins===stagedDelivery)deliveryOrigins=undefined}, dependencies(event) {
                 const required = new Set(stagedPreparations.dependencies(event));
+                const requireAddress=(seq:number)=>{const target=lookup(seq);if(target&&target.index<count)required.add(target.index)};
+                if(event.type==='model/exchange-accepted')for(const seq of [event.stepStartSeq,event.assistantSeq,...event.callSeqs])requireAddress(seq);
+                if(event.type==='tool/dispatch'){
+                    const seq=event.eventSeq??(newCalls.has(event.callId)?newCalls.get(event.callId):callsById.get(event.callId));
+                    if(seq!==undefined&&seq!==null)requireAddress(seq);
+                }
+                for(const dependency of stagedHistory.dependencies(event))required.add(dependency);
                 if (event.type === 'context/usage' && event.version === 2 && event.op === 'sample') {
                     const actual = newAcceptances.get(event.checkpoint.accepted.acceptedSeq) ?? acceptances.get(event.checkpoint.accepted.acceptedSeq);
-                    if (actual)
+                    if (actual){
                         required.add(actual.index);
+                        for(const seq of [actual.stepStartSeq,actual.assistantSeq,...JSON.parse(actual.callSeqs) as number[]])requireAddress(seq);
+                    }
                 }
                 return [...required];
             }, finish() {
@@ -371,6 +390,27 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
             return staged.finish();
         },
     };
+    appendPreparations.set(index,async(suffix,readEvent,assertCurrent)=>{
+        const expected=revision,available=new Map<number,SessionEvent>(),first=count;
+        let discarded=false;
+        const current=()=>{assertCurrent();if(discarded||revision!==expected)fail('stale staged suffix')};
+        const staged=beginStage(position=>available.get(position),position=>suffix[position-first]);
+        try{
+            current();
+            if(restoredSource)validateCommittedBootstrapSuffix(suffix,formatVersion,scope,count);
+            else{
+                const prefixLength=scope.semanticSeed?Math.min(count,scope.semanticSeed.seedLength+1+(scope.semanticSeed.initialInputId===undefined?0:1)):0;
+                for(let position=0;position<prefixLength;position++){available.set(position,await readEvent(position));current()}
+                validateBootstrapReadiness([...Array.from({length:prefixLength},(_,position)=>available.get(position)!),...suffix],formatVersion,scope,capability);
+            }
+            for(const event of suffix){
+                for(const dependency of staged.dependencies(event))if(dependency<first&&!available.has(dependency)){available.set(dependency,await readEvent(dependency));current()}
+                staged.advance(event);
+            }
+            current();const prepared=staged.finish();
+            return {history:prepared.history,commit(){try{current();prepared.commit()}finally{available.clear()}},discard(){discarded=true;available.clear();staged.discard()}};
+        }catch(error){available.clear();staged.discard();throw error}
+    });
     if (scan) {
         const register = scan;
         scan = undefined; // no callback back-edge into the transient scan owner

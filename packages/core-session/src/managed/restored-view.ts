@@ -5,7 +5,12 @@ import { preparePrunedResultProjection } from '../conversation/payload.ts';
 import type { ConversationProjection } from '../conversation/types.ts';
 import type { PreparedConversationArchive, PreparedPrunedResult, PreparedResultProjection } from '../conversation/restoration-types.ts';
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts';
-import { createConversationValidationScan, takeConversationValidationScan, readConversationDeliveries, readConversationGenerations } from '../conversation/validation.ts';
+import { createConversationValidationScan, takeConversationValidationScan, readConversationDeliveries, readConversationGenerations,prepareConversationAppend } from '../conversation/validation.ts';
+import { createManagedIntakeIndex } from './intake-index.ts';
+import { prepareSessionEventWithDependencies } from '../events/intake.ts';
+import { freezeJsonData } from './capture.ts';
+import { resolveFactGroupWithDependencies,type CapturedFactGroup } from './groups.ts';
+import { validateDeliveryFrame } from '../conversation/delivery.ts';
 import { createConversationSourceCoordinates, archiveConversationSources } from '../conversation/sources.ts';
 import { createConversationStateIndex, readIndexedConversationState, type ConversationStateRead } from '../conversation/state.ts';
 import { createContextStateIndex } from '../projection/context.ts';
@@ -24,6 +29,7 @@ type Candidate = {
     state: ReturnType<typeof createConversationStateIndex>;
     context: ReturnType<typeof createContextStateIndex>;
     prune: ReturnType<typeof createPruneDependencyIndex>;
+    intake:ReturnType<typeof createManagedIntakeIndex>;
     installed: boolean;
     retired: boolean;
 };
@@ -46,7 +52,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     const source = captureOriginalRestorationSource(input);
     source.assertCurrent();
     const scan = createConversationValidationScan({ formatVersion: source.formatVersion, header: { ...source.header, sessionId }, readEvent: source.readEvent.bind(source) });
-    const sources = createConversationSourceCoordinates(), state = createConversationStateIndex(), context = createContextStateIndex(), prune = createPruneDependencyIndex();
+    const sources = createConversationSourceCoordinates(), state = createConversationStateIndex(), context = createContextStateIndex(), prune = createPruneDependencyIndex(),intake=createManagedIntakeIndex();
     await source.consume(async (unit) => {
         source.assertCurrent();
         await scan.push(unit);
@@ -55,6 +61,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
         state.stage(unit).commit();
         context.stage(unit).commit();
         prune.stage(unit).commit();
+        intake.stage(unit,false).commit();
     });
     const index = takeConversationValidationScan(scan.finish());
     if (index.eventCount !== source.prefix.eventCount)
@@ -62,7 +69,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     await source.settle();
     source.assertCurrent();
     const candidate = Object.freeze({});
-    candidates.set(candidate, { source, owner, sessionId, index, sources, state, context, prune, installed: false, retired: false });
+    candidates.set(candidate, { source, owner, sessionId, index, sources, state, context, prune,intake, installed: false, retired: false });
     return candidate;
 }
 /** Original managed constructor alone consumes its exact owner's candidate. */
@@ -89,7 +96,28 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         if (installationBlocked)
             failure('CONVERSATION_RESTORATION_RECOVERY_REQUIRED');
     };
+    function appendStage(events:readonly SessionEventView[],validation:ReturnType<Candidate['index']['stage']>,discardValidation?:()=>void){
+        const expected=revision,sources=owned.sources.stage(events),state=owned.state.stage(events),context=owned.context.stage(events),prune=owned.prune.stage(events),intake=owned.intake.stage(events);
+        let installed=false,started=false,discarded=false,sourceDone=false,validationDone=false,sourcesDone=false,stateDone=false,contextDone=false,pruneDone=false,intakeDone=false;
+        return {events,discard(){if(started)failure('CONVERSATION_RESTORATION_ISSUED_STAGE');discarded=true;discardValidation?.()},install(batch:EncodedFactBatch,receipt:FactReceipt){
+            if(discarded)failure('CONVERSATION_RESTORATION_DISCARDED_STAGE');
+            if(installed)return;
+            sourceCurrent();if(revision!==expected)failure('CONVERSATION_RESTORATION_STALE_SUFFIX');started=true;installationBlocked=true;
+            if(!sourceDone){if(batch.key.firstSeq!==owned.index.eventCount||batch.key.count!==events.length)failure('CONVERSATION_RESTORATION_PREFIX_MISMATCH');owned.source.appendCommitted(batch,receipt);sourceDone=true}
+            if(!validationDone){validation.commit();validationDone=true}
+            if(!sourcesDone){sources.commit();sourcesDone=true}
+            if(!stateDone){state.commit();stateDone=true}
+            if(!contextDone){context.commit();contextDone=true}
+            if(!pruneDone){prune.commit();pruneDone=true}
+            if(!intakeDone){intake.commit();intakeDone=true}
+            revision++;resident=undefined;installed=true;installationBlocked=false;
+        }};
+    }
     return {
+        get eventCount(){check();return owned.index.eventCount},
+        get prefix(){check();return owned.source.prefix},
+        get formatVersion(){check();return owned.source.formatVersion},
+        get header(){check();return owned.source.header},
         needsPreparation() {
             check();
             return !resident || resident.revision !== revision;
@@ -125,48 +153,35 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         },
         stageAppend(events: readonly SessionEventView[], readCurrentEvent: (index: number) => SessionEventView | undefined) {
             check();
-            const expected = revision, validation = owned.index.stage(events, { readCurrentEvent }), sources = owned.sources.stage(events), state = owned.state.stage(events), context = owned.context.stage(events), prune = owned.prune.stage(events);
-            let installed = false, sourceDone = false, validationDone = false, sourcesDone = false, stateDone = false, contextDone = false, pruneDone = false;
-            return {
-                install(batch: EncodedFactBatch, receipt: FactReceipt) {
-                    if (installed)
-                        return;
-                    sourceCurrent();
-                    if (revision !== expected)
-                        failure('CONVERSATION_RESTORATION_STALE_SUFFIX');
-                    installationBlocked = true;
-                    if (!sourceDone) {
-                        if (batch.key.firstSeq !== owned.index.eventCount || batch.key.count !== events.length)
-                            failure('CONVERSATION_RESTORATION_PREFIX_MISMATCH');
-                        owned.source.appendCommitted(batch, receipt);
-                        sourceDone = true;
+            return appendStage(events,owned.index.stage(events,{readCurrentEvent}));
+        },
+        /** Only the original already-held writer constructs this reader. */
+        async prepareWrite(groups:readonly CapturedFactGroup[],readEvent:(ordinal:number)=>Promise<SessionEventView>,assertCurrent:()=>void){
+            check();const expected=revision,available=new Map<number,SessionEventView>(),events:SessionEventView[]=[],members:{group:CapturedFactGroup;events:readonly SessionEventView[]}[]=[];
+            // The same staged validator commits while its own installation
+            // fence is raised. Source/revision checks remain active there.
+            const current=()=>{sourceCurrent();assertCurrent();if(expected!==revision)failure('CONVERSATION_RESTORATION_STALE_SUFFIX')};
+            class Missing extends Error{constructor(readonly ordinal:number){super('Writer dependency not prepared')}}
+            const read=async(ordinal:number)=>{current();let value=available.get(ordinal);if(!value){value=await readEvent(ordinal);current();if(!value||value.seq!==ordinal)failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');available.set(ordinal,value)}return value};
+            try{
+                for(const group of groups){
+                    let resolved:ReturnType<typeof resolveFactGroupWithDependencies>;
+                    for(;;){try{resolved=resolveFactGroupWithDependencies(group,{eventCount:owned.index.eventCount,readEvent(ordinal){const value=available.get(ordinal);if(!value)throw new Missing(ordinal);return value}},owned.index.eventCount+events.length);break}catch(error){if(!(error instanceof Missing))throw error;await read(error.ordinal)}}
+                    const first=events.length;
+                    for(const event of resolved){
+                        const inputId=event.type==='user/message'?event.imageInputId:undefined;
+                        const prior=inputId===undefined?undefined:events.findLast(value=>value.type==='agent/input/admitted'&&value.inputId===inputId);
+                        const position=inputId===undefined||prior?undefined:owned.intake.admission(inputId);
+                        if(position!==undefined)await read(position);
+                        const normalized=freezeJsonData(prepareSessionEventWithDependencies(owned.source.formatVersion,event,event.seq!,id=>events.findLast(value=>value.type==='agent/input/admitted'&&value.inputId===id)??(owned.intake.admission(id)===undefined?undefined:available.get(owned.intake.admission(id)!))));
+                        events.push(normalized);
                     }
-                    if (!validationDone) {
-                        validation.commit();
-                        validationDone = true;
-                    }
-                    if (!sourcesDone) {
-                        sources.commit();
-                        sourcesDone = true;
-                    }
-                    if (!stateDone) {
-                        state.commit();
-                        stateDone = true;
-                    }
-                    if (!contextDone) {
-                        context.commit();
-                        contextDone = true;
-                    }
-                    if (!pruneDone) {
-                        prune.commit();
-                        pruneDone = true;
-                    }
-                    revision++;
-                    resident = undefined;
-                    installed = true;
-                    installationBlocked = false;
+                    members.push(Object.freeze({group,events:Object.freeze(events.slice(first))}));
                 }
-            };
+                current();Object.freeze(events);validateDeliveryFrame(events,owned.source.formatVersion);
+                const validation=await prepareConversationAppend(owned.index,events,read,current);current();
+                return {...appendStage(events,validation,validation.discard),members:Object.freeze(members)};
+            }finally{available.clear()}
         },
         async close() {
             owned.retired = true;

@@ -1,5 +1,5 @@
 import { committedFactSeqs, type CapturedSettlementFact, type FactGroupDraft, type FactOutcome } from '@i-harness/core-session'
-import { captureSettlementFact, type InvalidNotIssued } from './settlement-fact.ts'
+import { captureSettlementFact,forwardSettlementCapture, type InvalidNotIssued } from './settlement-fact.ts'
 
 /** Source-local captures, never a history mirror. Drain reconciles each exact
  * issued key once; absence cannot silently turn into another issuance. */
@@ -20,9 +20,9 @@ export function createSourceFacts(operations: Parameters<typeof captureSettlemen
       if (outcome.kind === 'committed') remove(owned)
       return outcome
     }
-    const owned: CapturedSettlementFact = {
+    const owned: CapturedSettlementFact = forwardSettlementCapture(fact,{
       admit: run('admit'), reconcile: run('reconcile'), observe: run('observe'), retryAbsent: run('retryAbsent'),
-    }
+    })
     pending.set(owned, record)
     revision++
     return owned

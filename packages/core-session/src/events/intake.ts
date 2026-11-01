@@ -13,6 +13,16 @@ type IntakeSession = { readonly formatVersion: number; readonly events: readonly
 /** The existing event intake contract shared by explicit memory append and
  * owned staging. Only the newly allocated event is normalized. */
 export function prepareSessionEvent(session: IntakeSession, event: SessionEvent, seq: number, staged: IntakeSession['events'] = []): SessionEvent {
+  return prepareSessionEventWithDependencies(session.formatVersion,event,seq,inputId => {
+    const matches = (prior: IntakeSession['events'][number]) => prior.type === 'agent/input/admitted' && prior.inputId === inputId
+    return staged.findLast(matches) ?? session.events.findLast(matches)
+  })
+}
+
+/** Constructor-private writer input. The caller prepares actual admissions
+ * asynchronously; this original normalizer never performs getter I/O. */
+export function prepareSessionEventWithDependencies(formatVersion:number,event:SessionEvent,seq:number,admission:(inputId:string)=>IntakeSession['events'][number]|undefined):SessionEvent {
+  const session = {formatVersion}
   validateRuntimeContextDiscriminant(event, session.formatVersion)
   const resultType = Object.getOwnPropertyDescriptor(event, 'type')?.value
   if (resultType === 'tool/result' || resultType === 'code/result' || resultType === 'code/output' || resultType === 'subagent/end' || resultType === 'job/status') validateResultFact(event, session.formatVersion)
@@ -27,10 +37,9 @@ export function prepareSessionEvent(session: IntakeSession, event: SessionEvent,
   let imageSummaries: ImageSummary[] | undefined
   if (event.type === 'user/message' && event.imageInputId !== undefined) {
     if (typeof event.imageInputId !== 'string' || event.imageInputId.length === 0 || event.images !== undefined) throw new Error('image reference: user/message needs one non-empty imageInputId and no inline images')
-    const matches = (prior: IntakeSession['events'][number]) => prior.type === 'agent/input/admitted' && prior.inputId === event.imageInputId
-    const admission = staged.findLast(matches) ?? session.events.findLast(matches)
-    if (admission?.type !== 'agent/input/admitted' || !admission.images?.length) throw new Error(`image admission not found for user/message: ${event.imageInputId}`)
-    imageSummaries = admission.images.map(({ mediaType, name, width, height, dataBase64 }) => ({
+    const admitted = admission(event.imageInputId)
+    if (admitted?.type !== 'agent/input/admitted' || !admitted.images?.length) throw new Error(`image admission not found for user/message: ${event.imageInputId}`)
+    imageSummaries = admitted.images.map(({ mediaType, name, width, height, dataBase64 }) => ({
       mediaType, ...(name !== undefined ? { name } : {}), ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}),
       bytes: dataBase64.length * 3 / 4 - (dataBase64.match(/=+$/)?.[0].length ?? 0),
     }))

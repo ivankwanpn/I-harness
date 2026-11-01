@@ -1,4 +1,17 @@
 import { captureFactGroup, type BatchKey, type CapturedFactGroup, type CapturedSettlementFact, type FactGroupDraft, type FactOutcome } from '@i-harness/core-session'
+import type { CapturedActionFact } from '@i-harness/core-session'
+import type { OriginalExecutionCaptureHooks } from '@i-harness/core-session/internal/execution'
+
+const memberFactories=new WeakMap<object,OriginalExecutionCaptureHooks>()
+/** Actual factories construct their own wrapper. The incoming commands object
+ * is never registered; ordinary captures without this private hook stay ordinary. */
+export function forwardSettlementCapture<T extends CapturedActionFact<FactOutcome>>(original:CapturedActionFact<FactOutcome>,commands:T):T{
+  const factory=memberFactories.get(original)
+  if(!factory)return commands
+  const forwarded=factory.forward(original,commands)
+  memberFactories.set(forwarded,factory)
+  return forwarded
+}
 
 export type InvalidNotIssued = Extract<FactOutcome, { kind: 'not-issued' }> & { code: 'FACT_INVALID_GROUP' }
 interface CaptureRetirement { accepts(outcome: InvalidNotIssued): boolean; retired(): void }
@@ -11,6 +24,7 @@ export function captureSettlementFact(draft: FactGroupDraft, operations: {
   reconcile(key: BatchKey): Promise<FactOutcome>
   status(group: CapturedFactGroup): FactOutcome | undefined
   quarantineCapture(): void
+  captureMembers?:OriginalExecutionCaptureHooks
 }, synchronousAdmission = false, retirement?: CaptureRetirement, neverIssuedStale?:()=>void): CapturedSettlementFact {
   return retainSettlementCapture(captureFactGroup(draft), operations, synchronousAdmission, retirement, neverIssuedStale)
 }
@@ -53,7 +67,7 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
     latest = await operations.admit(capture.group); observeIssued(latest)
     return latest
   }
-  return {
+  const commands:CapturedSettlementFact={
     observe: () => track(async () => {
       operations.assertHeld()
       if (capture.kind !== 'captured') return capture
@@ -81,4 +95,10 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
       return latest
     }),
   }
+  if(capture.kind==='captured'&&operations.captureMembers){
+    const factory=operations.captureMembers,owned=factory.capture(capture.group,commands)
+    memberFactories.set(owned,factory)
+    return owned
+  }
+  return commands
 }
