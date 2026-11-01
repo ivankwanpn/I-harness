@@ -3,10 +3,11 @@ import { join } from 'node:path';
 import * as fs from 'node:fs/promises';
 import { createJsonlBackend } from '../src/index.ts';
 import { createSessionCoordinator } from '@i-harness/session-persistence';
-vi.mock('node:fs/promises', async (load) => { const actual = await load<typeof import('node:fs/promises')>(); return { ...actual, open: vi.fn(actual.open), readFile: vi.fn(actual.readFile) }; });
+vi.mock('node:fs/promises', async (load) => { const actual = await load<typeof import('node:fs/promises')>(); return { ...actual, open: vi.fn(actual.open), readFile: vi.fn(actual.readFile), writeFile: vi.fn(actual.writeFile) }; });
 const actualOpen = vi.mocked(fs.open).getMockImplementation()!;
 const actualReadFile = vi.mocked(fs.readFile).getMockImplementation()!;
-afterEach(() => { vi.mocked(fs.open).mockImplementation(actualOpen); vi.mocked(fs.readFile).mockImplementation(actualReadFile); });
+const actualWriteFile = vi.mocked(fs.writeFile).getMockImplementation()!;
+afterEach(() => { vi.mocked(fs.open).mockImplementation(actualOpen); vi.mocked(fs.readFile).mockImplementation(actualReadFile); vi.mocked(fs.writeFile).mockImplementation(actualWriteFile); });
 async function fixture() { const root = await fs.mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'archive-')); const path = join(root, 'a.jsonl'); await fs.writeFile(path, JSON.stringify({ formatVersion: 1, sessionId: 'a', createdAt: '' }) + '\n' + JSON.stringify({ type: 'user/message', text: '雪' }) + '\n'); return { root, path, backend: createJsonlBackend(root) }; }
 it('actual read streams without whole session readFile and preserves literal legacy final lines', async () => {
     const f = await fixture();
@@ -217,3 +218,27 @@ it('new coordinator construction cannot reopen admission while original close st
     entered.resolve();
     await release.promise;
 } return h; }); const reading = f.backend.read('a'); void reading.catch(() => { }); await entered.promise; const closing = first.close(); const second = createSessionCoordinator(f.backend); const secondRead = f.backend.read('a'); void secondRead.catch(() => { }); await new Promise<void>(resolve => setImmediate(resolve)); release.resolve(); const outcome = await secondRead.then(() => ({ ok: true, error: undefined }), error => ({ ok: false, error })); await Promise.allSettled([reading, closing]); expect(outcome.ok).toBe(false); vi.mocked(fs.open).mockImplementation(actualOpen); expect((await f.backend.read('a')).events).toHaveLength(1); await second.close(); });
+
+it('one settled coordinator cannot reopen reads while another original participant still drains',async()=>{
+ const f=await fixture(),a=createSessionCoordinator(f.backend),b=createSessionCoordinator(f.backend),c=createSessionCoordinator(f.backend);
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();
+ vi.mocked(fs.writeFile).mockImplementation((async(...args:any[])=>{if(String(args[0]).includes('held.doc.jsonl.')){entered.resolve();await release.promise}return (actualWriteFile as any)(...args)}) as typeof fs.writeFile);
+ const writing=b.putDocumentStrict!('held',{original:true});await entered.promise;
+ const closingB=b.close(),closingA=a.close();void closingB.catch(()=>{});await closingA;
+ const refused=await f.backend.read('a').then(()=>false,()=>true);
+ release.resolve();await writing;await closingB;
+ try{expect(refused).toBe(true);expect((await f.backend.read('a')).events).toHaveLength(1)}finally{await c.close()}
+});
+async function semanticFixture(){const f=await fixture();const from=join(import.meta.dirname,'fixtures/bootstrap13-public');for(const name of await fs.readdir(from))await fs.copyFile(join(from,name),join(f.root,name));return {...f,path:join(f.root,'target.jsonl')}}
+it.each(['missing','torn','corrupt-first-missing-second'] as const)('preserves coded incomplete birth %s for actual read and subordinate prefix',async mode=>{
+ const f=await semanticFixture(),raw=await fs.readFile(f.path),end=raw.indexOf(10);let bytes=mode==='missing'?raw.subarray(0,end+1):raw.subarray(0,-1);
+ if(mode==='corrupt-first-missing-second'){const header=JSON.parse(raw.subarray(0,end).toString());header.semanticSeed.seedLength=1;bytes=Buffer.from(JSON.stringify(header)+'\n{}\n')}
+ await fs.writeFile(f.path,bytes);const before=await fs.readFile(f.path);
+ for(const operation of [()=>f.backend.read('target'),()=>f.backend.append('target',[])])await expect(operation()).rejects.toMatchObject({code:'SESSION_BOOTSTRAP_INCOMPLETE'});
+ expect(await fs.readFile(f.path)).toEqual(before);
+});
+it.each([false,true])('ordinary header with recognized bootstrap namespace refuses with the original code before suffix parsing (corrupt=%s)',async corrupt=>{
+ const f=await managed();await fs.writeFile(f.path+'.bootstrap-'+ 'a'.repeat(64)+'.stage','{}');if(corrupt)await fs.appendFile(f.path,'{}\n');const before=await fs.readFile(f.path);
+ for(const operation of [()=>f.backend.read('a'),()=>f.backend.append('a',[])])await expect(operation()).rejects.toMatchObject({code:'SESSION_BOOTSTRAP_INCOMPLETE'});
+ expect(await fs.readFile(f.path)).toEqual(before);
+});

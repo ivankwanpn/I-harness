@@ -296,8 +296,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     async read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       await assertNotDeleted("session", sessionId)
       return archiveReads.run(filePath(sessionId),async(handle,extent)=>{
-        const candidate=await readSessionArchive(handle,extent)
-        await assertPublicBootstrap(sessionId,false,candidate)
+        const candidate=await readSessionArchive(handle,extent,false,prefix => assertPublicBootstrap(sessionId,false,prefix))
         await assertNotDeleted("session",sessionId)
         return {version:candidate.header.formatVersion,events:candidate.events,meta:candidate.header}
       })

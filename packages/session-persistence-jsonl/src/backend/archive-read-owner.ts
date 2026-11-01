@@ -46,7 +46,7 @@ export function createArchiveReadOwner() {
         await Promise.allSettled([...pending]); const results = await Promise.allSettled([...resources].map(close)); const errors = results.flatMap(r => r.status === 'rejected' ? [r.reason] : []); if (errors.length)
         throw new AggregateError(errors, 'Archive read cleanup unresolved'); }
     const association: ArchiveReadResources = { attach() { const p = { closed: false }; participants.add(p); if (![...resources].some(r => r.failed) && [...participants].every(p => !p.closed))
-            retired = false; return { fence() { p.closed = true; retired = true; }, async settle() { await settle(); participants.delete(p); if ([...participants].some(p => !p.closed))
+            retired = false; return { fence() { p.closed = true; retired = true; }, async settle() { await settle(); participants.delete(p); if (participants.size > 0 && [...participants].every(p => !p.closed) && ![...resources].some(r => r.failed))
                 retired = false; } }; } };
     function run<T>(path: string, work: (handle: FileHandle, extent: number) => Promise<T>, subordinate = false): Promise<T> {
         try {
