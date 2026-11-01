@@ -48,6 +48,22 @@ it('cold finalization requires missing production qualifiers and rejects copied 
  }finally{await f.coordinator.close()}
 })
 
+it('captures only the issued original cold observation of the exact coordinator and active callback',async()=>{
+ const f=await fixture(),foreign=createJsonlTaskTransitionCoordinator(f.root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{
+  const capture=(selected as unknown as Record<string,any>).captureOriginalColdObservation
+  expect(typeof capture).toBe('function')
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target')
+  let saved:unknown
+  await selected.useColdSelectedTarget(f.coordinator,result.target,async cold=>{
+   saved=cold;expect(capture(f.coordinator,cold)).toBe(cold)
+   for(const [owner,value] of [[foreign,cold],[f.coordinator,{...cold}],[{...f.coordinator},cold],[f.coordinator,new Proxy(cold,{})]])expect(()=>capture(owner,value)).toThrow()
+   expect(()=>cold.document.assertReady()).toThrow();cold.assertCurrent()
+  })
+  expect(()=>capture(f.coordinator,saved)).toThrow()
+ }finally{await f.coordinator.close();await foreign.close()}
+})
+
 it('lifecycle constructor test: retains target-only original F0 through settled one-time adoption',async()=>{
  let coldGuard!:()=>void,bindingGuard!:()=>void,receipt:unknown,document:unknown,qualified=0,sealed=false,settled=false
  let handle!:ReturnType<typeof selected.beginColdSelectedFinalization>
@@ -87,15 +103,14 @@ it.each([{mode:'lease',failure:undefined},{mode:'lease',failure:0},{mode:'pin',f
  // Intercept the original canonical document lease, retaining its actual handle.
  const key='desktop-session-project-'+(await import('node:crypto')).createHash('sha256').update('target').digest('hex')
  const acquire=ownership.acquireDocumentLease
- const lock=vi.spyOn(ownership,'acquireDocumentLease').mockImplementation(async documentKey=>{
-  const original=await acquire(documentKey)
-  if(documentKey!==key)return original
-  return {get held(){return original.held},async release(){leaseCalls++;if(fail&&mode==='lease'){fail=false;throw failure}await original.release()}}
- })
+ const lock=vi.spyOn(ownership,'acquireDocumentLease').mockImplementation((documentKey,retain)=>acquire(documentKey,retain===undefined?undefined:cleanup=>{
+  if(documentKey!==key){retain(cleanup);return}
+  retain({assertSettled:()=>cleanup.assertSettled(),async close(){leaseCalls++;if(fail&&mode==='lease'){fail=false;throw failure}await cleanup.close()}})
+ }))
  let owner:{mockRestore():void}|undefined
  try{
   const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target')
-  const pin=ownership.pinOwnership;owner=vi.spyOn(ownership,'pinOwnership').mockImplementation(async id=>{const original=await pin(id);return {assertHeld:original.assertHeld,retainLive:original.retainLive,async release(){pinCalls++;if(fail&&mode==='pin'){fail=false;throw failure}await original.release()}}})
+  const pin=ownership.pinOwnershipRetained;owner=vi.spyOn(ownership,'pinOwnershipRetained').mockImplementation((id,retain)=>pin(id,cleanup=>retain({assertSettled:()=>cleanup.assertSettled(),async close(){pinCalls++;if(fail&&mode==='pin'){fail=false;throw failure}await cleanup.close()}})))
   const attempt=selected.beginColdSelectedFinalization(f.coordinator,result.target);await attempt.use()
   await expect(attempt.settle()).rejects.toThrow();expect(()=>attempt.commitReady()).toThrow();expect(leaseCalls).toBe(1);expect(pinCalls).toBe(mode==='lease'?0:1)
   await attempt.retrySettlement();expect(leaseCalls).toBe(mode==='lease'?2:1);expect(pinCalls).toBe(mode==='lease'?1:2);expect(qualify).toBe(1);expect(settle).toBe(1)

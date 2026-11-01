@@ -153,6 +153,9 @@ export const MAX_PATH = 260
 // assign it to the kill-on-close job before any of its code runs.
 /** CREATE_SUSPENDED: create the child with its primary thread suspended until ResumeThread. */
 export const CREATE_SUSPENDED = 0x4
+/** STARTUPINFOEXW is supplied; use the explicit handle-list attribute. */
+export const EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+export const PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 // winbase.h lines ~497-499: GetStdHandle selectors.
 /** STD_INPUT_HANDLE: GetStdHandle selector for the standard input. */
 export const STD_INPUT_HANDLE = -10
@@ -258,5 +261,6 @@ export const TRUSTEE_W_OFFSET = 16
 export const TRUSTEE_W_PTSTRNAME_OFFSET = 24
 /** sizeof(STARTUPINFOW), verified against the headers. */
 export const STARTUPINFOW_SIZE = 104
+export const STARTUPINFOEXW_SIZE = 112
 /** sizeof(PROCESS_INFORMATION), verified against the headers. */
 export const PROCESS_INFORMATION_SIZE = 24

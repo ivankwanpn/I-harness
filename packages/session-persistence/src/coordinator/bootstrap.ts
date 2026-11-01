@@ -368,6 +368,22 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     let held=entry.captureIO?.held??heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>{})
     if(entry.captureIO)entry.captureIO.activeIssue=()=>{if (b.taskBarrier?.mode) b.taskBarrier.markHeaderIssued();current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
     try {
+      // Reconcile only the original completed Task14 birth; this path cannot issue work.
+      if (entry.document && b.stage && b.taskBarrier?.completed) {
+        if (b.pending) {
+          const pending = b.pending, key = 'key' in pending ? pending.key : 'receipt' in pending ? pending.receipt.key : undefined
+          if (!key) return blocked(entry)
+          const outcome = await entry.document.reconcile(key)
+          b.pending = outcome
+          if (outcome.kind !== 'committed') return blocked(entry)
+          b.pending = undefined
+        }
+        const state = await read(b.invocation,entry.route)
+        const publication = publicationStatus(state,b.stage)
+        if (publication === 'conflict') return {kind:'refused',reason:'conflict'}
+        if (publication !== 'valid' || !readyState(state)) return blocked(entry)
+        return await adopt(entry,state,guards,undefined,observation)
+      }
       await settleCapture(entry)
       await ownership.withSessionOperation(id,async()=>{mutations.assertWritableBootstrap(id);await ownership.ensureOwnership(id)})
       if (transitions) {
@@ -506,7 +522,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(code==='FACT_TARGET_UNAVAILABLE')return blocked(entry,'dependency-unavailable')
       if(code==='FACT_PRECONDITION_STALE'||code==='FACT_CANCELLED')return b.issued?blocked(entry,code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown'):{kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
       return b.issued || b.taskBarrier?.taskIssued ? blocked(entry) : {kind:'refused',reason:'manifest-invalid'}
-    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)}; if (b.taskBarrier && !b.taskBarrier.completed && !b.taskBarrier.taskIssued && !b.issued) { await b.taskBarrier.close(); b.taskBarrier = undefined } }
+    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)}; if (b.taskBarrier && b.issued && entry.headerUnknown) await b.taskBarrier.allowObservation(); if (b.taskBarrier && !b.taskBarrier.completed && !b.taskBarrier.taskIssued && !b.issued) { await b.taskBarrier.close(); b.taskBarrier = undefined } }
   }
   function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation}):Promise<BootstrapOutcome> {
     let captured: BootstrapInvocation

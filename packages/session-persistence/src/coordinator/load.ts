@@ -18,6 +18,7 @@ export function createLoads(
   processLatches?: ReturnType<typeof createProcessReadLatches>,
   transitions?: ReturnType<typeof createTaskDocumentTransitions>,
   executionChanges?: ReturnType<typeof createColdExecutionWrites>,
+  withMutationRead?: <T>(sessionId: string, work: () => Promise<T>) => Promise<T>,
 ) {
   async function processMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
@@ -31,7 +32,9 @@ export function createLoads(
       throw cause
     }
   }
-  async function transitionLoad(sessionId: string, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, skipPending = false) {
+  const transitionLoad = (...args: Parameters<typeof transitionLoadOriginal>) => withMutationRead
+    ? withMutationRead(args[0], () => transitionLoadOriginal(...args)) : transitionLoadOriginal(...args)
+  async function transitionLoadOriginal(sessionId: string, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, skipPending = false) {
       if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
         assertWritable(sessionId)
         let pending = skipPending ? undefined : pendingWriteBehind(sessionId)

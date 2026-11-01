@@ -57,10 +57,12 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
   type HeaderResource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
   type HeaderLedger = { id: string; handles: Set<HeaderResource>; pending: Set<Promise<unknown>>; settling?: Promise<void> }
   const headerLedgers = new WeakMap<object, HeaderLedger>()
+  const retainedOwners = new WeakMap<HeldFactOwner, string>()
+  function retainedScope(id:string,owner:HeldFactOwner) { if (retainedOwners.get(owner) !== id) scope(id,owner) }
   const headerFlight = new AsyncLocalStorage<{ ledger: HeaderLedger; active: boolean }>()
   const sameRevision = (left: BigIntStats, right: BigIntStats) => left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs
   function trackHeaderOwner(id:string, owner:HeldFactOwner) {
-    scope(id, owner); const existing = headerLedgers.get(owner.owner)
+    scope(id, owner); retainedOwners.set(owner,id); const existing = headerLedgers.get(owner.owner)
     if (existing && existing.id !== id) throw new TypeError('Invalid bootstrap header owner')
     if (!existing) headerLedgers.set(owner.owner, { id, handles: new Set(), pending: new Set() })
   }
@@ -97,13 +99,13 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     finally { await ownedClose(opened.resource,opened.ledger) }
   }
   function settleTrackedHeaderIO(id:string,owner:HeldFactOwner):Promise<void> {
-    scope(id,owner); const ledger = headerLedgers.get(owner.owner); if (!ledger) return Promise.resolve()
+    retainedScope(id,owner); const ledger = headerLedgers.get(owner.owner); if (!ledger) return Promise.resolve()
     if (ledger.id !== id) return Promise.reject(new TypeError('Invalid bootstrap header owner'))
     if (ledger.settling) return ledger.settling
     const flight = Promise.resolve().then(async () => {
       await Promise.allSettled([...ledger.pending]); const results = await Promise.allSettled([...ledger.handles].map(resource => ownedClose(resource,ledger)))
       const errors = results.flatMap(value => value.status === 'rejected' ? [value.reason] : []); if (errors.length) throw new AggregateError(errors,'Bootstrap header cleanup unresolved')
-      scope(id,owner)
+      retainedScope(id,owner)
     })
     ledger.settling = flight; void flight.then(() => { if (ledger.settling === flight) ledger.settling = undefined }, () => { if (ledger.settling === flight) ledger.settling = undefined }); return flight
   }
@@ -158,7 +160,7 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
       return{kind:'present',...artifacts,rawHeader,meta,...journal}
     }catch{return{kind:'unavailable',...retained}}
   }
-  function hasTrackedHeaderDebt(id:string,owner:HeldFactOwner) { scope(id,owner); const ledger=headerLedgers.get(owner.owner); return !!ledger && [...ledger.handles].some(resource=>resource.failed) }
+  function hasTrackedHeaderDebt(id:string,owner:HeldFactOwner) { retainedScope(id,owner); const ledger=headerLedgers.get(owner.owner); return !!ledger && [...ledger.handles].some(resource=>resource.failed) }
   function readTrackedState(route:BootstrapRoute,owner:HeldFactOwner) {
     const id=routeInvocation(route).targetSessionId
     return trackHeaderFlight(id,owner,async()=>{ const result=await readState(route,owner); if(hasTrackedHeaderDebt(id,owner))throw new Error('Bootstrap tracked read cleanup unresolved'); return result })

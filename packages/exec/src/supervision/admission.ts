@@ -1,7 +1,7 @@
 import type { BackendRequirements, CompiledSandboxPolicy, ExecutionOwner, ExecutionSettlement, ProcessSpec, StopReason, TransportExecutionBackend } from "@i-harness/sandbox"
 import { snapshotProcessSpec } from "@i-harness/sandbox"
 import { launchExecution } from "../execution-admission.ts"
-import { cleaned, type CleanupOutcome, type Entry, type ExecutionLaunch, type OwnerState, type SupervisedExecution } from "./contracts.ts"
+import { cleaned, type CleanupOutcome, type Entry, type ExecutionLaunch, type OwnerState, type SupervisedExecution, type NativeAdmissionOwner, type OriginalExecutionAdmission } from "./contracts.ts"
 import { cleanupDetail, cleanupOutcome } from "./retirement.ts"
 
 function sameOwner(a: Readonly<ExecutionOwner>, b: Readonly<ExecutionOwner>): boolean {
@@ -23,6 +23,7 @@ interface AdmissionOwner {
   watch(entry: Entry, attempt: Promise<ExecutionSettlement>): void
   markStopped(entry: Entry, reason: StopReason, cause?: unknown): void
   cancelEntry(entry: Entry, reason: StopReason): Promise<ExecutionSettlement>
+  drain(entry: Entry): Promise<CleanupOutcome>
 }
 
 export function createAdmission(owner: AdmissionOwner): ExecutionLaunchFunction {
@@ -40,17 +41,26 @@ export function createAdmission(owner: AdmissionOwner): ExecutionLaunchFunction 
 
   function fence(entry: Entry): void {
     checkState(entry)
+    entry.assertAdmissionCurrent?.()
+    checkState(entry)
     // Temporary reconciliation blocks new launches. Existing compatible
     // preparations use its replacement validator and may reach their fence.
     entry.validateAuthority(entry.policy)
     // A caller validator may synchronously close/reconcile this owner. Its
     // return cannot authorize a workload after that reentrant revocation.
     checkState(entry)
+    entry.assertAdmissionCurrent?.()
+    checkState(entry)
   }
 
   async function run(entry: Entry, input: ExecutionLaunch, spec: ProcessSpec, requirements: BackendRequirements): Promise<SupervisedExecution> {
     let backendId: string | undefined
     let cleanup: CleanupOutcome = cleaned
+    let rolledBack=false
+    const rollbackPrepared=async()=>{
+      try{await entry.prepared!.rollback();entry.rollbackFailed=false;rolledBack=true}
+      catch(cause){entry.rollbackFailed=true;cleanup={kind:'failed',cause};throw cause}
+    }
     const backend: TransportExecutionBackend = {
       async probe() {
         const probe = await input.backend.probe()
@@ -63,16 +73,7 @@ export function createAdmission(owner: AdmissionOwner): ExecutionLaunchFunction 
         return {
           policy: prepared.policy,
           commit: validate => prepared.commit(validate),
-          async rollback() {
-            try {
-              await prepared.rollback()
-              entry.rollbackFailed = false
-            } catch (cause) {
-              entry.rollbackFailed = true
-              cleanup = { kind: "failed", cause }
-              throw cause
-            }
-          },
+          rollback: rollbackPrepared,
         }
       },
     }
@@ -99,7 +100,12 @@ export function createAdmission(owner: AdmissionOwner): ExecutionLaunchFunction 
         try {
           cleanup = cleanupOutcome(await cancelEntry(entry, entry.stopReason ?? "cancelled"))
         } catch (failure) { cleanup = { kind: "failed", cause: failure } }
-      } else if (!entry.rollbackFailed) remove(entry)
+      } else {
+        // A returned preparation is already owned even if inspecting its
+        // policy throws before launchExecution receives the wrapper.
+        if(entry.prepared&&!rolledBack&&!entry.rollbackFailed)try{await rollbackPrepared()}catch{/* Original cleanup outcome is retained above. */}
+        if(!entry.rollbackFailed)remove(entry)
+      }
       if (cleanup.kind === "failed") {
         throw new AggregateError([cause, cleanup.cause], `Execution launch failed; cleanup failed: ${cleanupDetail(cleanup.cause)}`, { cause })
       }
@@ -111,7 +117,39 @@ export function createAdmission(owner: AdmissionOwner): ExecutionLaunchFunction 
   }
 
   function launch(input: ExecutionLaunch): Promise<SupervisedExecution> {
+    let admissionOwner:NativeAdmissionOwner|undefined
+    let entry:Entry|undefined, complete!:()=>void, cleanupFlight:Promise<CleanupOutcome>|undefined, running=false
+    const finished=new Promise<void>(resolve=>{complete=resolve})
+    const observe=async():Promise<CleanupOutcome>=>{
+      await finished
+      if(!entry||entry.retired)return cleaned
+      const initial=await entry.completion
+      if(entry.retired)return cleaned
+      if(initial.kind==='failed')return initial
+      return {kind:'failed',cause:new Error('Original admission cleanup is not acknowledged')}
+    }
+    const admission:OriginalExecutionAdmission=Object.freeze({
+      observeCleanup(){if(this!==admission)throw new Error('Foreign admission cleanup receiver');return observe()},
+      retryCleanup(){
+        if(this!==admission)throw new Error('Foreign admission cleanup receiver')
+        if(cleanupFlight)return cleanupFlight
+        // Stop before joining a preparation; retry only this original entry.
+        if(entry&&!entry.retired)markStopped(entry,'cancelled')
+        const pending=Promise.resolve().then(async():Promise<CleanupOutcome>=>{
+          await finished
+          if(!entry||entry.retired)return cleaned
+          const result=await owner.drain(entry)
+          return result.kind==='failed'?result:entry.retired?cleaned:{kind:'failed',cause:new Error('Original admission retirement is unresolved')}
+        })
+        cleanupFlight=pending
+        void pending.then(()=>{cleanupFlight=undefined},()=>{cleanupFlight=undefined})
+        return pending
+      },
+    })
     try {
+      // Associate cleanup before inspecting native fields or awaiting admission.
+      admissionOwner=input.admission
+      admissionOwner?.attach(admission)
       const spec = snapshotProcessSpec(input.spec)
       const requirements = Object.freeze({ ...input.requirements })
       const policy = input.policy
@@ -126,22 +164,34 @@ export function createAdmission(owner: AdmissionOwner): ExecutionLaunchFunction 
       if (isDisposed()) throw new Error("Execution supervisor disposed")
       if (state.closed) throw new Error("Execution owner closed")
       if (state.blocked || state.reconciles) throw new Error("Execution owner admission blocked")
-      const entry = register(spec.owner.sessionId, policy, () => input.validateAuthority)
+      entry = register(spec.owner.sessionId, policy, () => input.validateAuthority)
+      const original=entry
+      const admissionReceiver=admissionOwner
+      if(admissionReceiver)entry.assertAdmissionCurrent=()=>admissionReceiver.assertCurrent()
       const callerSignal = input.signal
       if (callerSignal) {
         const abort = () => {
-          markStopped(entry, stopReason(callerSignal.reason), callerSignal.reason)
-          if (entry.handle) void cancelEntry(entry, entry.stopReason!).catch(() => {})
+          markStopped(original, stopReason(callerSignal.reason), callerSignal.reason)
+          if (original.handle) void cancelEntry(original, original.stopReason!).catch(() => {})
         }
         entry.unlink = () => callerSignal.removeEventListener("abort", abort)
         callerSignal.addEventListener("abort", abort, { once: true })
         if (callerSignal.aborted) abort()
       }
       const launched = run(entry, { ...input, policy }, spec, requirements)
+      running=true
+      void launched.then(complete,complete)
       void launched.catch(() => {})
       return launched
     } catch (cause) {
-      const rejected = Promise.reject<SupervisedExecution>(cause)
+      let failure=cause
+      if(entry&&!running){
+        let cleanup:CleanupOutcome=cleaned
+        try{remove(entry)}catch(error){cleanup={kind:'failed',cause:error};failure=new AggregateError([cause,error],'Admission setup and cleanup failed')}
+        entry.preparing=false;entry.complete(cleanup)
+      }
+      complete()
+      const rejected = Promise.reject<SupervisedExecution>(failure)
       void rejected.catch(() => {})
       return rejected
     }

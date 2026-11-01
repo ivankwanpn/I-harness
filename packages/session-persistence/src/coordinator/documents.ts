@@ -4,12 +4,16 @@ import { createBindingObservations } from './binding-observation.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 import { createTaskDocumentOperations, type TaskDocumentConfiguration } from './task-document-operation.ts'
 import { createTaskDocumentTransitions, type TaskTransitionConfiguration } from './task-document-transition.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { createHash } from 'node:crypto'
+import { canonicalJsonData, isStrictFactData } from '@i-harness/core-session'
+import { captureHeldOwnershipClaim } from './ownership.ts'
 
 export interface DeletionDocumentCleanup { assertCovered(keys: readonly string[]): void; assertSettled(): void; close(): Promise<void> }
 
 export function createDocuments(
   backend: Pick<PersistenceBackend, 'putDocument'|'getDocument'> & Partial<Pick<PersistenceBackend, 'profile'|'readDocumentObserved'>>,
-  ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'|'pinDocumentOwnership'|'pinDocumentOwnershipRetained'|'acquireDocumentLease'|'exclusionScope'|'artifacts'>>,
+  ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'pinOwnershipRetained'|'withSessionOperation'|'pinDocumentOwnership'|'pinDocumentOwnershipRetained'|'acquireDocumentLease'|'exclusionScope'|'artifacts'>>,
   report: (error: unknown) => void,
   processLatches?: ReturnType<typeof createProcessReadLatches>,
   taskConfiguration?: TaskDocumentConfiguration,
@@ -35,6 +39,8 @@ export function createDocuments(
     disposalDebt.delete(record)
   }
   let docChain: Promise<void> = Promise.resolve()
+  const bindingContext = new AsyncLocalStorage<object>()
+  const bindingAttempts = new Set<{ close(): Promise<void> }>()
   const taskOperations = taskConfiguration && ownership.pinOwnership && ownership.withSessionOperation
     ? createTaskDocumentOperations(ownership as Ownership, observations, taskConfiguration, run => { const p = docChain.then(run); docChain = p.then(() => {}, () => {}); return p }, processLatches) : undefined
   const taskTransitions = transitionConfiguration && ownership.pinOwnership && ownership.withSessionOperation
@@ -118,7 +124,63 @@ export function createDocuments(
       outcome = 'settled'
     } finally { try { finalToken?.end(outcome); token?.end(outcome) } catch (error) { outcome = 'unknown'; throw error } finally { finalAdmission?.finish(outcome); admission?.finish(outcome) } }
   }
+  function writeOwnedProjectBinding(id: string, input: unknown): Promise<unknown> {
+    if (!ownership.lockEnabled || !ownership.pinOwnershipRetained) throw Error('Original binding ownership unavailable')
+    if (typeof id !== 'string' || !id || !isStrictFactData(input) || !input || typeof input !== 'object' || Array.isArray(input)) throw TypeError('Invalid binding write')
+    const value = JSON.parse(canonicalJsonData(input))
+    if (value.version !== 1 || Object.keys(value).some(name => !['version', 'projectId'].includes(name)) || Object.hasOwn(value, 'projectId') && (typeof value.projectId !== 'string' || !value.projectId || value.projectId.length > 256 || /[\u0000-\u001f\u007f]/.test(value.projectId))) throw TypeError('Invalid binding write')
+    const key = 'desktop-session-project-' + createHash('sha256').update(id).digest('hex')
+    let active = true, revoked = false, finished = false, effects = false, failed = false
+    let pinCleanup: OwnershipCleanup | undefined, documentCleanup: DeletionDocumentCleanup | undefined
+    let flight: Promise<unknown>, closeFlight: Promise<void> | undefined
+    const assertOutside = () => { if (active && bindingContext.getStore() === record) throw Error('Binding mutation reentry conflict') }
+    const cleanup = async () => {
+      if (finished) return
+      await documentCleanup?.close(); documentCleanup?.assertSettled()
+      await pinCleanup?.close(); pinCleanup?.assertSettled()
+      ticket.finish(failed && effects ? 'unknown' : 'settled'); finished = true; bindingAttempts.delete(record)
+    }
+    const record = Object.freeze({ revoke() { revoked = true }, assertOutside,
+      close() {
+        assertOutside(); if (closeFlight) return closeFlight
+        revoked = true
+        const task = (async () => { await flight?.catch(() => {}); await cleanup() })()
+        closeFlight = task; void task.finally(() => { if (closeFlight === task) closeFlight = undefined }).catch(() => {}); return task
+      }, retryClose() { return record.close() },
+    })
+    const ticket = observations.beginProjectBindingMutation(id, record)
+    bindingAttempts.add(record)
+    flight = Promise.resolve().then(() => bindingContext.run(record, async () => {
+      let primary: unknown, result: unknown
+      try {
+        await ticket.join(); ticket.assertCurrent()
+        const pin = await ownership.pinOwnershipRetained!(id, original => { pinCleanup = original })
+        const held = captureHeldOwnershipClaim(ownership as Ownership, id, pin)
+        const check = () => { ticket.assertCurrent(); held.assertHeld(); if (revoked || isDeleted(key)) throw Error('Binding write revoked') }
+        check()
+        const covered = ticket.coveredDocument()
+        const checkDocument = () => { covered?.assertCurrent(); documentCleanup?.assertCovered([key]) }
+        const write = async () => {
+          check(); checkDocument(); effects = true
+          await backend.putDocument(key, value); check(); checkDocument()
+          const actual = await backend.getDocument(key); check(); checkDocument()
+          if (!isStrictFactData(actual) || canonicalJsonData(actual) !== canonicalJsonData(value)) throw Error('Original binding readback conflict')
+          return actual
+        }
+        result = covered ? await write() : await withDocumentLeases([key], write, true, original => { documentCleanup = original })
+      } catch (failure) { failed = true; primary = failure }
+      active = false
+      if (!failed || !effects) {
+        try { await cleanup() } catch (failure) { if (failed) throw new AggregateError([primary, failure], 'Original binding write cleanup failed'); throw failure }
+      }
+      if (failed) throw primary
+      return result
+    }))
+    void flight.catch(() => {}); return flight
+  }
   return {
+    writeOwnedProjectBinding,
+    async retryProjectBindingCleanup() { const results = await Promise.allSettled([...bindingAttempts].map(record => record.close())); const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []); if (failures.length === 1) throw failures[0]; if (failures.length) throw new AggregateError(failures, 'Binding cleanup unresolved') },
     withDeletionDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>, retain: (cleanup: DeletionDocumentCleanup) => void) { return withDocumentLeases(keys, run, false, retain) },
     observations, withDocumentLeases, taskOperations, taskTransitions,
     // Deletion closes this key for this coordinator lifetime; the retained token

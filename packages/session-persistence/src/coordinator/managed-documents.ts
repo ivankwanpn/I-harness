@@ -10,6 +10,7 @@ import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type
 import { captureBootstrapRoute } from './bootstrap-route.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts'
+import { captureColdObservationEntry, type ColdSelectedObservation } from './cold-selected-target.ts'
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
@@ -86,6 +87,11 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)},(id,entry)=>{if(documents.get(id)!==entry||entry.ready||!entry.document||entry.revoked)throw new FactRecoveryRequiredError();const document=entry.document;return ()=>{resolved.set(id,document)}})
   return {
     ...bootstrap,
+    captureColdObservation(observation: ColdSelectedObservation) {
+      const entry = captureColdObservationEntry(observation), association = entry.document && documentEntries.get(entry.document)
+      if (!association || association.entry !== entry || documents.get(association.id) !== entry || entry.ready || entry.revoked || !entry.selected?.cold || observation.metadata.sessionId !== association.id) throw new FactRecoveryRequiredError()
+      return observation
+    },
     captureProcessRead(document: ManagedDocument, documentKeys: readonly string[]) {
       const association = documentEntries.get(document)
       if (!association) throw new FactRecoveryRequiredError()

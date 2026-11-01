@@ -1,3 +1,4 @@
+import { createJsonlBackend } from '../src/index.ts'
 import { it, expect } from 'vitest'
 import { mkdtemp, writeFile, readFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -26,6 +27,7 @@ it('resolves a complete birth with selected results without repairing a torn suf
  const complete=encodeFactBatch('bootstrap:op:complete',decodeFactBatch(first.bytes).prefixDigest,[{type:'session/bootstrap',version:1,seq:seed.records.length,operationId:'op',manifestDigest:meta.semanticSeed.manifestDigest,dependencyClosureDigest:seed.dependencyDigest,seedLength:seed.records.length}])
  const raw=Buffer.concat([Buffer.from(built.headerBytes),Buffer.from(first.bytes),Buffer.from(complete.bytes),Buffer.from('{')]);await writeFile(path,raw);await writeFile(selectedBootstrapPaths(path,route).stage,built.stageBytes)
  const birth=await resolveSelectedBirth(path,'target',async()=>{});expect(birth?.route).toEqual(route);expect(birth?.facts.resultPageCount).toBe(1);expect(await readFile(path)).toEqual(raw)
+ const observed = await createJsonlBackend(root).read('target'); expect(observed.meta?.semanticSeed?.version).toBe(3); expect(observed.events).toHaveLength(seed.records.length+1); expect(await readFile(path)).toEqual(raw)
  await unlink(selectedBootstrapPaths(path,route).stage); await expect(resolveSelectedBirth(path,'target',async()=>{})).rejects.toThrow(); expect(await readFile(path)).toEqual(raw)
  await writeFile(selectedBootstrapPaths(path,route).stage,built.stageBytes); await writeFile(path,Buffer.concat([Buffer.from(built.headerBytes),Buffer.from(first.bytes)]));await expect(resolveSelectedBirth(path,'target',async()=>{})).rejects.toThrow()
 })

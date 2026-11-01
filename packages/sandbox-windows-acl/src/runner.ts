@@ -51,6 +51,7 @@ import { join } from 'node:path'
 import { win32 } from './ffi.ts'
 import { AclSandbox, assertTempRootOutsideWorkspace } from './index.ts'
 import { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
+import { withRunnerCleanup, runInheritedCommand } from './runner-cleanup.ts'
 
 const RUNNER_SIGNATURE = 'windows-acl-run'
 const RUNNER_FAILURE_EXIT = 127
@@ -165,8 +166,7 @@ async function main(): Promise<number> {
 
   let ownedTempDir: string | undefined
   let sandbox: AclSandbox | undefined
-  let initialized = false
-  try {
+  return withRunnerCleanup(async () => {
     let privateTempDir: string | null = null
     let writeSids: string[] = []
     let privateTempSid: string | undefined
@@ -193,44 +193,22 @@ async function main(): Promise<number> {
       ...privateTempSid === undefined ? {} : { tempWriteSid: privateTempSid },
       manageDacls: !seamManaged,
     })
-    await sandbox.init()
-    initialized = true
-
-    if (privateTempDir !== null) {
+    const result = await runInheritedCommand(sandbox, {
+      command: parsed.command,
+      args: parsed.args,
+      argumentEncoding: parsed.argumentEncoding,
+      windowsHide: parsed.windowsHide,
+      stdio: 'inherit',
+    }, () => { if (privateTempDir !== null) {
       if (api.setEnvironmentVariableW('TMP', privateTempDir) === 0) {
         fail(`SetEnvironmentVariableW TMP failed (Win32 ${api.getLastError()})`)
       }
       if (api.setEnvironmentVariableW('TEMP', privateTempDir) === 0) {
         fail(`SetEnvironmentVariableW TEMP failed (Win32 ${api.getLastError()})`)
       }
-    }
-
-    const child = sandbox.spawn({
-      command: parsed.command,
-      args: parsed.args,
-      argumentEncoding: parsed.argumentEncoding,
-      windowsHide: parsed.windowsHide,
-      stdio: 'inherit',
-    })
-    const result = await child.wait()
+    } })
     return result.exitCode
-  } finally {
-    // Cleanup failures must not mask the child's exit code: report and keep going.
-    if (initialized) {
-      try {
-        sandbox?.dispose()
-      } catch (error) {
-        process.stderr.write(`${RUNNER_SIGNATURE}: cleanup: ${error instanceof Error ? error.message : String(error)}\n`)
-      }
-    }
-    if (ownedTempDir !== undefined) {
-      try {
-        rmSync(ownedTempDir, { recursive: true, force: true })
-      } catch (error) {
-        process.stderr.write(`${RUNNER_SIGNATURE}: cleanup: ${error instanceof Error ? error.message : String(error)}\n`)
-      }
-    }
-  }
+  },()=>({sandbox,temp:ownedTempDir}),error=>{process.stderr.write(`${RUNNER_SIGNATURE}: cleanup: ${error instanceof Error ? error.message : String(error)}\n`)},path=>rmSync(path,{recursive:true,force:true}))
 }
 
 main().then(

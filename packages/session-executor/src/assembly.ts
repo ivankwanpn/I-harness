@@ -15,7 +15,7 @@ import { ownedContextReadiness } from "@i-harness/session-persistence"
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
-import { createScopedExec } from "./scoped-exec.ts"
+import { createScopedExec, createScopedExecWithReservation } from "./scoped-exec.ts"
 import { createChildObservation } from "./child-observation.ts"
 import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
 import { inspectWslRuntime } from "@i-harness/sandbox-local"
@@ -49,7 +49,7 @@ import { acquireAssemblyResultStore } from './lifecycle/result-store.ts'
 import { createExecResultRetention } from './lifecycle/exec-result-retention.ts'
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
-import { registerExec, type ExecService } from "@i-harness/exec"
+import { registerExecWithReservation, type ExecService } from "@i-harness/exec"
 import { registerApprovalAnswerer, registerAskUserInput } from "@i-harness/interaction"
 import { createRuntimeContext } from "@i-harness/runtime-context"
 import { createInstructionEnvironment, createProjectInstructionEnvironment, type InstructionEnvironment } from './context/instructions/index.ts'
@@ -152,6 +152,7 @@ type RoleModelSelection = {
 }
 
 export interface AssemblyOptions {
+  prepareExecDelivery?: import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery
   residentActivation?: ResidentActivationController
   /** Retain the original partial assembly's cleanup before Team construction. */
   retainConstructionCleanup?: (cleanup: () => Promise<void>) => void
@@ -754,7 +755,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     () => ctx.services.get<ApprovalPrompt>("approval/answerer"),
   )
   // One assembly execution owner is registered before either transport surface.
-  const assemblyExec = registerExec(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution, resultRetention: createExecResultRetention(opts.contextOutput, opts.shellRetention?.maxBytes ?? 64000) })
+  const assemblyExecPair = registerExecWithReservation(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution, resultRetention: createExecResultRetention(opts.contextOutput, opts.shellRetention?.maxBytes ?? 64000) })
+  const assemblyExec=assemblyExecPair.service
   const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, {
     execService: assemblyExec,
     cwd: opts.workspace,
@@ -773,7 +775,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // per-call and transient, appends no `sandbox/mode` event, and never moves the
   // standing mode (spec §3.3 point 1). It reaches a tool through its own
   // arguments and the approver below, not through this resolver.
+  const directShell=createScopedExecWithReservation(assemblyExecPair,opts.workspace,sandboxPolicyNow,opts.prepareExecDelivery??(async()=>({kind:'unavailable',reason:'recipient-not-bound'})),ctx)
   registerShell(ctx, tools, {
+    directEntry: directShell.direct,
     ...(agentShell ? { agentShell } : {}),
     ...(wslShell ? { wslShell } : {}),
     timeoutMs: shellTimeoutMs,

@@ -83,3 +83,5 @@ export interface UsageSnapshot {
   warnings: string[]
   recordingSince?: number
 }
+
+export type { UsageObservationV1, UsageFactObservation, UsageLiveObservation, ObservationOrigin, ObservationLane } from './observation-types.js'

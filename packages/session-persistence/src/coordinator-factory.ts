@@ -1,3 +1,4 @@
+import { attachArchiveReadResources } from './archive-read-internal.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createOwnership } from './coordinator/ownership.ts'
@@ -6,6 +7,7 @@ import { createMutations } from './coordinator/mutations.ts'
 import { createDocuments } from './coordinator/documents.ts'
 import { createLoads } from './coordinator/load.ts'
 import { createLifecycle } from './coordinator/lifecycle.ts'
+import { associateProjectBindingWrites } from './coordinator/project-binding-write.ts'
 import { associateDeletionPreparation } from './coordinator/deletion-preparation.ts'
 import { createManagedDocuments } from './coordinator/managed-documents.ts'
 import { assertOutsideForkController, closeForkControllerAdmission } from './fork-controller.ts'
@@ -29,6 +31,13 @@ type OriginalSelectedOperation={first<T>(work:(handoff:SelectedHandoff)=>Promise
 const selectedSources=new WeakMap<SessionCoordinator,{acquire:ReturnType<typeof createDocuments>['observations']['acquireSelectedBindingRead'];cleanupForError:ReturnType<typeof createDocuments>['observations']['cleanupForError'];retain(document:import('./coordinator/fact-types.ts').ManagedDocument,onRevoke:()=>void):ReturnType<typeof retainSelectedSourceRead>}>()
 const selectedComposers=new WeakMap<SessionCoordinator,{beginCold:ReturnType<ReturnType<typeof createDocuments>["observations"]["createColdFinalizationFactory"]>["begin"];assertCapability():void;capture:ReturnType<typeof createManagedDocuments>['captureSelected'];prepare:ReturnType<typeof createManagedDocuments>['prepareSelectedCapture'];reconcile:ReturnType<typeof createManagedDocuments>['reconcileSelected'];inspect:ReturnType<typeof createManagedDocuments>['inspectSelected'];inspectCold:ReturnType<typeof createManagedDocuments>['inspectColdSelected'];coldRoute:ReturnType<typeof createManagedDocuments>['coldSelectedRoute'];useCold:ReturnType<typeof createManagedDocuments>['useColdSelected'];publish:ReturnType<typeof createManagedDocuments>['publishSelected'];release:ReturnType<typeof createManagedDocuments>['releaseSelected'];observations:ReturnType<typeof createDocuments>['observations'];targets:WeakMap<object,ReturnType<typeof createManagedDocuments>['inspectSelected'] extends (...args:any[])=>infer R?()=>R:never>}>()
 export function beginColdSelectedFinalization(coordinator:SessionCoordinator,target:import('./coordinator/cold-selected-target.ts').ColdSelectedTarget,options?:{signal?:AbortSignal}) {const owner=selectedComposers.get(coordinator);if(!owner)throw TypeError('Original coordinator required');return owner.beginCold(target,options)}
+const coldObservationOwners = new WeakMap<SessionCoordinator, { capture: ReturnType<typeof createManagedDocuments>['captureColdObservation']; binding: ReturnType<typeof createDocuments>['observations']['captureColdBindingObservation'] }>()
+export function captureOriginalColdObservation(coordinator: SessionCoordinator, observation: import('./coordinator/cold-selected-target.ts').ColdSelectedObservation) {
+  const original = coldObservationOwners.get(coordinator); if (!original) throw TypeError('Original cold coordinator required'); return original.capture(observation)
+}
+export function captureOriginalColdBindingObservation(coordinator: SessionCoordinator, cold: import('./coordinator/cold-selected-target.ts').ColdSelectedObservation, binding: import('./coordinator/types.ts').SessionBindingObservation) {
+  const original = coldObservationOwners.get(coordinator); if (!original) throw TypeError('Original cold coordinator required'); original.capture(cold); return original.binding(cold.metadata, binding)
+}
 export function selectedSourceFor(coordinator:SessionCoordinator) {const owner=selectedSources.get(coordinator);if(!owner)throw new TypeError('Original coordinator required');return owner}
 export function inspectSelectedTarget(coordinator:SessionCoordinator,target:object) {const inspect=selectedComposers.get(coordinator)?.targets.get(target);if(!inspect)throw TypeError('Original selected target required');return inspect()}
 export function inspectColdSelectedTarget(coordinator:SessionCoordinator,route:import('./coordinator/selected-results-route.ts').SelectedResultsRoute) {const owner=selectedComposers.get(coordinator);if(!owner)throw TypeError('Original coordinator required');return owner.inspectCold(route)}
@@ -51,6 +60,7 @@ export function createSelectedRuntimeCapture(coordinator:SessionCoordinator,make
 }
 export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>, transitionStorage?: TaskTransitionConfiguration): SessionCoordinator {
   const assertDurableTransition = () => { if (CURRENT_FORMAT_VERSION >= 14 && !transitionStorage) throw new Error('TASK_TRANSITION_UNSUPPORTED') }
+  const archiveReads = attachArchiveReadResources(backend)
   const report = opts?.reportBackgroundFailure
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
   const maxDelayMs = opts?.maxDelayMs ?? 200
@@ -62,7 +72,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   let loads: ReturnType<typeof createLoads>
   const coldWrites = createColdExecutionWrites()
   const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations, processLatches, documents.taskTransitions, transitionStorage ? async (id, events) => { if (isTaskTransitionDrain(ownership, id)) await runTaskTransitionDrain(ownership, id, () => mutations.appendQueuedDrainUnlocked(id, events)); else await loads.transitionLoad(id, (check, markIssue) => mutations.appendTransitionUnlocked(id, events, check, markIssue), true) } : undefined, coldWrites)
-  loads = createLoads(backend, ownership, mutations, processLatches, documents.taskTransitions, coldWrites)
+  loads = createLoads(backend, ownership, mutations, processLatches, documents.taskTransitions, coldWrites, archiveReads?.withMutationRead)
   managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations, processLatches, id => observations.assertOutsideOwnedOperations([id]), id => observations.revokeOwnedDocumentOperations(id), documents.taskTransitions, coldWrites)
   const coldFinalization=observations.createColdFinalizationFactory(managed.originalColdBootstrap)
   const lifecycle = createLifecycle(backend, ownership, mutations, documents, managed, processLatches)
@@ -115,7 +125,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       },
     }:{}),    inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
-    async openManagedDocument(sessionId) { assertDurableTransition(); managed.assertOutsideCapture(sessionId); observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
+    async openManagedDocument(sessionId) { assertDurableTransition(); managed.assertOutsideCapture(sessionId); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); return managed.open(sessionId) },
     revokeManagedDocumentNewWork: managed.revoke,
     closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
@@ -139,9 +149,9 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       if (managed.has(sessionId)) throw new Error('Managed document requires fact admission')
       mutations.enqueue(sessionId, events)
     },
-    async snapshot(sessionId) { const session = await managed.snapshot(sessionId); return session ? { session } : loads.snapshot(sessionId) },
-    async load(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.load(sessionId) },
-    async loadOwned(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
+    async snapshot(sessionId) { archiveReads?.assertPublicReadAdmission(); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.snapshot(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
+    async load(sessionId) { archiveReads?.assertPublicReadAdmission(); assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); const candidate = session ? { session } : await loads.load(sessionId); archiveReads?.assertPublicReadAdmission(); return candidate },
+    async loadOwned(sessionId) { assertDurableTransition(); observations.assertOutsideObservedSession(sessionId); observations.assertManagedSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
     async list() { return backend.list() },
     async profile(sessionId) { observations.assertOutsideObservedSession(sessionId); return backend.profile(sessionId) },
     updateMeta: async (id,patch) => {
@@ -173,6 +183,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       observations.assertOutsideOwnedOperations([], [], true)
       observations.preflightClose()
       assertOutsideRetirementSink(coordinator)
+      archiveReads?.fence()
       const join = observations.closeAdmission(operation)
       processLatches?.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()
@@ -181,13 +192,15 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       const joined=await Promise.allSettled([join(),joinCapture(),joinFork().then(() => managed.close())])
       for(const result of joined)if(result.status==='rejected')errors.push(result.reason)
       // Dependent original leases survive unresolved observation/managed work.
-      if (errors.length === 0) await lifecycle.close()
+      if (errors.length === 0) await lifecycle.close(true, archiveReads?.settle)
       else {
-        try { await lifecycle.close(false) } catch (error) { errors.push(error) }
+        try { await lifecycle.close(false, archiveReads?.settle) } catch (error) { errors.push(error) }
         throw new AggregateError(errors, 'Coordinator cleanup is unresolved')
       }
   }
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
+  if (ownership.lockEnabled) associateProjectBindingWrites(coordinator, documents)
+  coldObservationOwners.set(coordinator, { capture: managed.captureColdObservation, binding: observations.captureColdBindingObservation })
   if (backend.deleteOwnedSession) associateDeletionPreparation(coordinator, lifecycle)
   associateColdExecutionWrites(coordinator, coldWrites)
   observations.associateRetainedCoordinator(coordinator)

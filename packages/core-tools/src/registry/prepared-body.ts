@@ -6,12 +6,16 @@ import type { PreparedCall, Tool, ToolExec } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
 
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
-export interface PreparedShellBodyClaim {
+interface PreparedBodyClaim {
   readonly context: ToolExecutionOwnerContext
   readonly source: SettlementFacts<ProducerFactOutcome>
   readonly exec: ToolExec
   assertCurrent(): void
   consume(): void
+}
+export interface PreparedShellBodyClaim extends PreparedBodyClaim {
+  takeExecSourceIssuer(): import('../model-origin.ts').OriginalExecSourceIssuer | undefined
+  hasExecSourceIssuer(): boolean
 }
 const own = (value: object, key: PropertyKey): unknown => {
   const field = Object.getOwnPropertyDescriptor(value, key)
@@ -64,7 +68,7 @@ export function attachPreparedModelOrigin(prepared: PreparedCall, registry: impo
     if (!permit || typeof permit.assertCurrent !== 'function') throw new Error('Invalid model origin permit')
     const assertCurrent = permit.assertCurrent.bind(permit)
     assertCurrent()
-    body.permit = Object.freeze({assertCurrent})
+    body.permit = Object.freeze({assertCurrent,...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{}})
   } finally { body.attaching = false }
 }
 export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerContext | undefined, signal?: AbortSignal): () => Promise<unknown> {
@@ -114,13 +118,29 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
     const claim:PreparedShellBodyClaim=Object.freeze({ context:body.context,source:body.source,exec:body.exec,
       assertCurrent(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)},
       consume(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame);if(consumed)throw new Error('Prepared Shell body already consumed');consumed=true},
+      takeExecSourceIssuer(){
+        if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)
+        if(!consumed)throw new Error('Consume original Shell claim first')
+        const original=(body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)?.takeExecSourceIssuer?.()
+        if(!original)return
+        const issuer:import('../model-origin.ts').OriginalExecSourceIssuer=Object.freeze({
+          assertAdmissionCurrent(){if(this!==issuer)throw new Error('Foreign Body issuer receiver');check(body,frame);original.assertAdmissionCurrent()},
+          captureSource(binding:import('../model-origin.ts').ExecSourceBinding,recipientCurrent:()=>boolean){
+            if(this!==issuer)throw new Error('Foreign Body issuer receiver');check(body,frame)
+            return original.captureSource(binding,()=>{try{check(body,frame);return recipientCurrent()}catch{return false}})
+          },
+          registerCompletion(drain:()=>Promise<void>){if(this!==issuer)throw new Error('Foreign Body issuer receiver');check(body,frame);return original.registerCompletion(drain)},
+        })
+        return issuer
+      },
+      hasExecSourceIssuer(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame);return !!(body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)?.takeExecSourceIssuer},
     })
     return claim
   } })
   return entry
 }
 
-export interface OriginalTaskCaller extends PreparedShellBodyClaim {
+export interface OriginalTaskCaller extends PreparedBodyClaim {
   readonly call: Readonly<PreparedCall['call']>
   readonly identity: Readonly<{ parentSessionId: string; callEventSeq?: number; toolCallId?: string }>
 }

@@ -61,6 +61,8 @@ export interface ProcessInfoOutput {
 /** The lazy koffi binding table: every Win32 call the ACL backend uses, signature-verified against the real headers. */
 export interface Win32Bindings {
   // ---- process / token handles --------------------------------------------
+  getCurrentProcess(): NativePtr
+  duplicateHandle(sourceProcess: NativePtr, source: NativePtr, targetProcess: NativePtr, target: NativePtr, access: number, inherit: number, options: number): number
   openProcess(desiredAccess: number, inheritHandle: number, pid: number): NativePtr
   openProcessToken(process: NativePtr, desiredAccess: number, tokenHandle: NativePtr): number
   closeHandle(handle: NativePtr): number
@@ -72,6 +74,7 @@ export interface Win32Bindings {
   localFree(memory: NativePtr): NativePtr
   // ---- SIDs ----------------------------------------------------------------
   convertStringSidToSidW(stringSid: string, sid: NativePtr): number
+  convertSidToStringSidW(sid: NativePtr, stringSid: NativePtr): number
   createWellKnownSid(type: number, domainSid: null, sid: NativePtr, size: NativePtr): number
   isValidSid(sid: NativePtr): number
   getLengthSid(sid: NativePtr): number
@@ -113,6 +116,11 @@ export interface Win32Bindings {
     inheritHandles: number, creationFlags: number, environment: null,
     currentDirectory: string | null, startupInfo: NativePtr, processInfo: NativePtr,
   ): number
+  /** Same Win32 entry, with the genuine extended pointee; legacy inherit keeps its old binding. */
+  createProcessAsUserExW: Win32Bindings['createProcessAsUserW']
+  initializeProcThreadAttributeList(list: NativePtr | null, count: number, flags: number, size: NativePtr): number
+  updateProcThreadAttribute(list: NativePtr, flags: number, attribute: number, value: NativePtr, size: number, previous: null, returnedSize: null): number
+  deleteProcThreadAttributeList(list: NativePtr): void
   setEnvironmentVariableW(name: string, value: string): number
   readFile(file: NativePtr, buffer: Buffer, count: number, bytesRead: NativePtr, overlapped: null): number
   peekNamedPipe(
@@ -162,6 +170,7 @@ export const STARTUPINFOW = koffi.struct({
   hStdOutput: PVOID,
   hStdError: PVOID,
 })
+export const STARTUPINFOEXW = koffi.struct({ StartupInfo: STARTUPINFOW, lpAttributeList: PVOID })
 
 /** Anonymous koffi PROCESS_INFORMATION layout; see STARTUPINFOW above. */
 export const PROCESS_INFORMATION = koffi.struct({
@@ -174,6 +183,9 @@ export const PROCESS_INFORMATION = koffi.struct({
 /* v8 ignore start -- layout-mismatch guards fire only on ABI breakage; ./win32-abi.ts pins both sizes. */
 if (STARTUPINFOW.size !== abi.STARTUPINFOW_SIZE) {
   throw new Error(`STARTUPINFOW layout mismatch: koffi computed ${STARTUPINFOW.size}, header probe says ${abi.STARTUPINFOW_SIZE}`)
+}
+if (STARTUPINFOEXW.size !== abi.STARTUPINFOEXW_SIZE || koffi.offsetof(STARTUPINFOEXW, 'lpAttributeList') !== abi.STARTUPINFOW_SIZE) {
+  throw new Error('STARTUPINFOEXW layout mismatch')
 }
 if (PROCESS_INFORMATION.size !== abi.PROCESS_INFORMATION_SIZE) {
   throw new Error(`PROCESS_INFORMATION layout mismatch: koffi computed ${PROCESS_INFORMATION.size}, header probe says ${abi.PROCESS_INFORMATION_SIZE}`)
@@ -386,6 +398,8 @@ function bindings(): Win32Bindings {
     lib.func('__stdcall', name, result, args)
 
   cached = {
+    getCurrentProcess: bind(kernel32, 'GetCurrentProcess', PVOID, []),
+    duplicateHandle: bind(kernel32, 'DuplicateHandle', 'int', [PVOID, PVOID, PVOID, PPVOID, 'uint32', 'int', 'uint32']),
     openProcess: bind(kernel32, 'OpenProcess', PVOID, ['uint32', 'int', 'uint32']),
     openProcessToken: bind(advapi32, 'OpenProcessToken', 'int', [PVOID, 'uint32', PPVOID]),
     closeHandle: bind(kernel32, 'CloseHandle', 'int', [PVOID]),
@@ -394,6 +408,7 @@ function bindings(): Win32Bindings {
     localAlloc: bind(kernel32, 'LocalAlloc', PVOID, ['uint32', 'size_t']),
     localFree: bind(kernel32, 'LocalFree', PVOID, [PVOID]),
     convertStringSidToSidW: bind(advapi32, 'ConvertStringSidToSidW', 'int', ['str16', PPVOID]),
+    convertSidToStringSidW: bind(advapi32, 'ConvertSidToStringSidW', 'int', [PVOID, PPVOID]),
     createWellKnownSid: bind(advapi32, 'CreateWellKnownSid', 'int', ['int', PVOID, PVOID, koffi.pointer('uint32')]),
     isValidSid: bind(advapi32, 'IsValidSid', 'int', [PVOID]),
     getLengthSid: bind(advapi32, 'GetLengthSid', 'uint32', [PVOID]),
@@ -419,6 +434,13 @@ function bindings(): Win32Bindings {
       PVOID, 'str16', 'str16', PVOID, PVOID, 'int', 'uint32', PVOID, 'str16',
       koffi.pointer(STARTUPINFOW), koffi.pointer(PROCESS_INFORMATION),
     ]),
+    createProcessAsUserExW: bind(advapi32, 'CreateProcessAsUserW', 'int', [
+      PVOID, 'str16', 'str16', PVOID, PVOID, 'int', 'uint32', PVOID, 'str16',
+      koffi.pointer(STARTUPINFOEXW), koffi.pointer(PROCESS_INFORMATION),
+    ]),
+    initializeProcThreadAttributeList: bind(kernel32, 'InitializeProcThreadAttributeList', 'int', [PVOID, 'uint32', 'uint32', koffi.pointer('size_t')]),
+    updateProcThreadAttribute: bind(kernel32, 'UpdateProcThreadAttribute', 'int', [PVOID, 'uint32', 'size_t', PVOID, 'size_t', PVOID, koffi.pointer('size_t')]),
+    deleteProcThreadAttributeList: bind(kernel32, 'DeleteProcThreadAttributeList', 'void', [PVOID]),
     setEnvironmentVariableW: bind(kernel32, 'SetEnvironmentVariableW', 'int', ['str16', 'str16']),
     readFile: bind(kernel32, 'ReadFile', 'int', [PVOID, PVOID, 'uint32', koffi.pointer('uint32'), PVOID]),
     peekNamedPipe: bind(kernel32, 'PeekNamedPipe', 'int', [PVOID, PVOID, 'uint32', koffi.pointer('uint32'), koffi.pointer('uint32'), koffi.pointer('uint32')]),

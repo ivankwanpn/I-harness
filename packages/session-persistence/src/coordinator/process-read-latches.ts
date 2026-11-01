@@ -18,7 +18,7 @@ export function createProcessReadLatches(scope: (ids: readonly string[], keys: r
     const denied = () => { throw new Error('PROCESS_READ_UNAVAILABLE'); };
     return {
         assertUnpoisoned(sessionId: string, documentKeys: readonly string[]) {
-            if (closed || poisoned.size > 0 && scope([sessionId], documentKeys).keys.some(key => poisoned.has(key))) denied();
+            if (poisoned.size > 0 && scope([sessionId], documentKeys).keys.some(key => poisoned.has(key))) denied();
         },
         beginMutation(input: Mutation) {
             const mutation: Mutation = { ...input, sessionIds: [...new Set(input.sessionIds)], documentKeys: [...new Set(input.documentKeys)] };
