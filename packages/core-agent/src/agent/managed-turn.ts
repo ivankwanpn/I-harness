@@ -393,13 +393,14 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                 const stopSurface=host.hooks.capture(),header=host.execution.observe().header;
                 let agentType:string|undefined;
                 try{agentType=_ctx.services.get<string>('hooks/agent-type')}catch{/* original root-agent absence */}
-                const stopInput={domain:host.domain,sessionId:host.domain.sessionId,...typeof header?.origin==='string'?{origin:header.origin}:{},turns:steps,finalText,signal,stopHookActive:stopContinuations>0,...agentType!==undefined?{agentType}:{}};
+                const stopInput=Object.freeze({domain:host.domain,sessionId:host.domain.sessionId,...typeof header?.origin==='string'?{origin:header.origin}:{},turns:steps,finalText,signal,stopHookActive:stopContinuations>0,...agentType!==undefined?{agentType}:{}});
                 const verdict = await host.hooks.emit('agent/pre-stop',stopInput,stopSurface) as {
                     continuation?: {
                         reason?: unknown;
                     };
                 } | undefined;
                 assertManagedActionCurrent(host.domain,action);
+                if(stopInput.domain!==host.domain||stopInput.sessionId!==host.domain.sessionId)throw TypeError('Original runtime stop identity required');
                 const hookVerdict=await host.hooks.beforeStop(stopInput,stopSurface);
                 assertManagedActionCurrent(host.domain,action);
                 const reason=[verdict?.continuation?.reason,hookVerdict?.reason].filter(value=>typeof value==='string'&&value.trim()).join('\n\n');

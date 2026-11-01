@@ -19,10 +19,10 @@ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_c
 it('the real private Agent drains original runtime feedback and authenticates exact policy/exec domains before tool continuation',async()=>{
  const lookup=(tools as any).readToolInvocationDomain;expect(lookup).toBeTypeOf('function')
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-bridge-')),backend=createJsonlBackend(root),c=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
- await c.create({sessionId:'original'});const execution=await acquireManagedExecution(c,'original'),ctx=createContext(),origin=createManagedAgentModelOriginOwner(ctx,execution),order:string[]=[],pending=['actual runtime feedback'];let stops=0,bodies=0,savedPolicy:object|undefined,savedExec:object|undefined
- const runtime={drainContextExecution(domain:object){expect(this).toBe(runtime);expect(domain).toBe(origin.domain);order.push('drain');return pending.splice(0)},async beforeStopExecution(input:any){expect(this).toBe(runtime);expect(input.domain).toBe(origin.domain);expect(input.sessionId).toBe('original');order.push('runtime-stop');return ++stops===1?{reason:'actual runtime continuation'}:undefined}}
+ await c.create({sessionId:'original'});const execution=await acquireManagedExecution(c,'original'),ctx=createContext(),origin=createManagedAgentModelOriginOwner(ctx,execution),order:string[]=[],pending=['actual runtime feedback'];let stops=0,bodies=0,savedPolicy:object|undefined,savedExec:object|undefined,originalStop:object|undefined
+ const runtime={drainContextExecution(domain:object){expect(this).toBe(runtime);expect(domain).toBe(origin.domain);order.push('drain');return pending.splice(0)},async beforeStopExecution(input:any){expect(this).toBe(runtime);expect(input.domain).toBe(origin.domain);expect(input.sessionId).toBe('original');expect(input).toBe(originalStop);expect(Object.isFrozen(input)).toBe(true);order.push('runtime-stop');return ++stops===1?{reason:'actual runtime continuation'}:undefined}}
  ctx.services.register('hooks/claude-runtime',runtime);registerExecutionHookRuntime(ctx,runtime)
- onExecutionEvent(ctx,'agent/pre-step',()=>{order.push('pre-step')});onExecutionEvent(ctx,'agent/pre-stop',()=>{order.push('pre-stop')})
+ onExecutionEvent(ctx,'agent/pre-step',()=>{order.push('pre-step')});onExecutionEvent(ctx,'agent/pre-stop',input=>{originalStop=input as object;expect(Object.isFrozen(input)).toBe(true);order.push('pre-stop')})
  onExecutionEvent(ctx,'tools/pre-execute',payload=>{savedPolicy=payload as object;expect(lookup(payload)).toBe(origin.domain);expect(()=>lookup({...payload as object})).toThrow();order.push('tool-pre')})
  onExecutionCascade(ctx,'tools/execute',async(input,next)=>{const exec=(input as any).exec;expect(lookup(exec)).toBe(origin.domain);expect(()=>lookup({...exec})).toThrow();order.push('around');return next()})
  const pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:'original'}},origin.verifier)
@@ -47,4 +47,17 @@ it('action Stop during the captured runtime stop await refuses continuation befo
   const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),systemPrompt:'original',budget:{contextWindow:4096},maxOutputTokens:128,generationFactory:(actual,deps)=>{action=actual;return createExecutionGenerationLifecycle(execution,'original',actual,undefined,deps)}})
   const running=agent.run('finish');void running.catch(()=>{});await Promise.race([entered.promise,running.then(()=>{throw Error('Original runtime stop callback was omitted')})]);action!.stop();release.resolve();await expect(running).rejects.toThrow();expect(stops).toBe(1);expect(server.requests).toHaveLength(1)
  }finally{release.resolve();await c.close();await server.close()}
+},30000)
+
+it.each(['copied-domain','foreign-genuine-domain','session-id'] as const)('refuses a pre-stop listener retarget (%s) before the original runtime callback',async replacement=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-retarget-')),c=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await c.create({sessionId:'original'});const execution=await acquireManagedExecution(c,'original'),ctx=createContext(),origin=createManagedAgentModelOriginOwner(ctx,execution),other=createManagedAgentModelOriginOwner(ctx,execution);let runtimeCalls=0,mutations=0
+ const runtime={drainContextExecution(){return []},async beforeStopExecution(){runtimeCalls++;return undefined}}
+ ctx.services.register('hooks/claude-runtime',runtime);registerExecutionHookRuntime(ctx,runtime)
+ onExecutionEvent(ctx,'agent/pre-stop',payload=>{origin.domain.assertCurrent();mutations++;const input=payload as {domain:object;sessionId:string};if(replacement==='session-id')input.sessionId='retargeted';else input.domain=replacement==='copied-domain'?{...origin.domain}:other.domain})
+ const pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:'original'}},origin.verifier),server=await createLoopbackProvider('/v1/chat/completions',[async r=>{r.end(wire(false))}])
+ try{
+  const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),systemPrompt:'original',budget:{contextWindow:4096},maxOutputTokens:128,generationFactory:(action,deps)=>createExecutionGenerationLifecycle(execution,'original',action,undefined,deps)})
+  await expect(agent.run('finish')).rejects.toThrow();expect(mutations).toBe(1);expect(runtimeCalls).toBe(0);expect(server.requests).toHaveLength(1)
+ }finally{await c.close();await server.close()}
 },30000)
