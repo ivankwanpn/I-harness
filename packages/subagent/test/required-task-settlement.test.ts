@@ -154,3 +154,15 @@ it('retries the exact Stop-owned unknown save after retirement without replacing
   queueGate.blocked=false;queueGate.root='';const cleanup=await Promise.allSettled([tasks?.closeOwnedLoad(),c.close()]);const errors=cleanup.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(primary||errors.length)throw new AggregateError([...(primary?[primary.cause]:[]),...errors],'Original Stop unknown recovery failed')
  }
 })
+
+it.each(['revision','descriptor'] as const)('refuses a cached required Stop ACK for a changed %s while its original producer remains held',async change=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'required-stop-ack-alias-')),c=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract),producer=Promise.withResolvers<import('../src/task/types.ts').TaskTerminalizeInput>()
+ let tasks:ReturnType<typeof createTaskRegistry>|undefined,required:RequiredTaskSettlement|undefined,task:import('../src/task/types.ts').TaskRecord|undefined,original:import('../src/task/types.ts').TaskRecord['result'],source:import('@i-harness/core-session').SettlementFacts|undefined,action:ReturnType<import('@i-harness/session-persistence').ManagedDocument['beginAction']>|undefined
+ try{
+  await c.create({sessionId:'parent'});const document=await c.openManagedDocument('parent');tasks=createTaskRegistry({coordinator:c,stateId:'parent',ownedTask:captureOwnedTaskContext(c,document,document.view,'parent'),reportPolicy:SHIPPING_REPORT_POLICY,results:createTaskResultRetention(undefined,undefined,'parent')});await tasks.ready
+  task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'one',description:'one',prompt:'work',agent:'general',delivery:'tool'});await tasks.flushPersistence();action=document.beginAction();source=action.registerSettlementSource(async()=>{await required?.settle()});required=(await bindRequiredTaskSettlement(tasks,task,source,()=>producer.promise))!
+  tasks.cancelTree(task.id,'Original Stop won');await tasks.retainResult(task.id);const save=lastOriginalTaskSave(tasks);original=task.result;expect(original?.kind).toBe('retained');if(original?.kind!=='retained')throw Error('Actual retained Stop result required')
+  task.result=change==='revision'?{...original,revision:'11111111-1111-4111-8111-111111111111'}:{...original,envelope:{...original.envelope,retention:{kind:'unavailable',reason:'quota'}}}
+  await expect(tasks.retainResult(task.id)).rejects.toThrow('changed');await expect(tasks.retainResult(task.id)).rejects.toThrow('changed');expect(lastOriginalTaskSave(tasks)).toBe(save)
+ }finally{if(task&&original)task.result=original;producer.resolve({taskId:task?.id??'unissued',outcome:'completed',resultText:'late result'});if(required){await required.settle();await required.release()}await source?.close();action?.finish();await tasks?.closeOwnedLoad();await c.close()}
+})

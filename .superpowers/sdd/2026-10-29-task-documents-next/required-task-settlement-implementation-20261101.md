@@ -92,3 +92,13 @@ Final coherent correction receipts:
 The intermediate Stop route implementation type/guard failures855b29ee/a01683c6 and an unused former promise-map type failure44bf8132 are retained as failed receipts, not qualification. No repeated unrelated full routes/platform/native/provider gates ran. These populations overlap prior receipts; do not add them to a whole-version pass count.
 
 This is a correction candidate awaiting the SAME independent reviewer, not accepted MAIN work or full-goal completion. Actual CURRENT/B2 and final full R1 consumer integration remain separate required real paths. SOURCE ABI and exact source/receipt audit are packaged with the correction commit; original prerepair evidence remains immutable.
+
+## Scoped cached required-route ACK correction
+
+96ba9f0b453a561404b5242f245f6ac5e31aebab and its corrected-96ba9f0b packet remain immutable. Same reviewer closed the two P1 schedules but found one new P2: public retainResult on a live bound required route returned a cached projection without validating the current result identity, bypassing the accepted ordinary known-ACK guard.
+
+Actual original clean Stop ACK with held original producer, followed by live result revision or same-revision descriptor replacement, reproduced both wrong resolutions in required-cached-stop-ack-red-e02d061735e54066b77863bdc966e457. The one-line correction validates existing saveIdentity/sameRetention before returning its cached acknowledgment. It does not clear the memo, change task retention, reserve/capture a save, or perform native work. Private projection currentness remains intact.
+
+required-cached-stop-ack-green-4a296a5f0cb44b73bc6fc6c5c25c945d passes4/4: changed revision and descriptor each refuse repeatedly with the same original save, while original clean Stop and original unknown Stop recovery remain correct. required-cached-stop-ack-types-79db01b801d1479cb9508ee479def2a7 passes affected subagent types. Root explicitly requested no unchanged full actual matrix repeat for this bounded ACK delta. Prior actual8/owner24/three types remain disclosed prior evidence, not mislabeled as rerun on this one-line later source.
+
+Scope: registry.ts, its existing required-task owner test, this report. Same-reviewer scoped rereview remains required before integration acceptance. Overall B2/full R1 integration remains outstanding.

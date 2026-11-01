@@ -387,7 +387,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       save=persistence.captureRequiredSave(authority);retentionSaves.set(task,save)
     }
     const acknowledge=():Promise<Readonly<TaskRecord>>=>{
-      if(projection)return Promise.resolve(projection)
+      if(projection){if(!saveIdentity||!sameRetention(saveIdentity,task))return Promise.reject(Error('Original saved task result changed'));return Promise.resolve(projection)}
       if(ackFlight)return ackFlight
       // Reserve synchronously at the terminal CAS, including a live Stop winner.
       reserve()
