@@ -1,4 +1,5 @@
 import type {SessionServiceOptions} from '../service.ts'
+import {types} from 'node:util'
 
 /** Complete means the original full assembly must receive the supplied option.
  * Forward covers the original shared service or explicit-tools private builder.
@@ -23,7 +24,11 @@ export const executionOptionMode = Object.freeze({
 } satisfies Record<keyof SessionServiceOptions,'forward'|'complete'|'policy'>)
 
 export function supportsManagedServiceOptions(options:SessionServiceOptions):boolean{
- if(!options.managedRuntime)return false
+ if(types.isProxy(options))return false
+ const prototype=Object.getPrototypeOf(options)
+ if(prototype!==null&&prototype!==Object.prototype)return false
+ const requested=Object.getOwnPropertyDescriptor(options,'managedRuntime')
+ if(!requested||!('value'in requested)||!requested.value)return false
  for(const key of Reflect.ownKeys(options)){
   const field=Object.getOwnPropertyDescriptor(options,key)
   // Do not invoke an unknown option getter to decide whether to acquire privately.

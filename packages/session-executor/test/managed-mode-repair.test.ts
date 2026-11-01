@@ -8,8 +8,30 @@ import * as privateExecution from '../../session-persistence/src/execution-inter
 import {createOpenAICompatibleClient} from '../../llm-openai-compatible/src/index.ts'
 import {createLoopbackProvider} from '../../core-agent/test/helpers/provider-loopback.ts'
 import {createSessionService,type SessionServiceOptions} from '../src/service.ts'
+import {supportsManagedServiceOptions} from '../src/service/execution-mode.ts'
 const wire=`data: ${JSON.stringify({choices:[{delta:{content:'done'},finish_reason:'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'mode-repair-'));const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);return {root,coordinator}}
+
+it('inherited complete Session loader stays original public with zero private acquisition',async()=>{
+ const {root,coordinator}=await fixture();await coordinator.create({sessionId:'main'});let loads=0
+ const options=Object.assign(Object.create({async sessionFor(id:string){loads++;return (await coordinator.openManagedDocument(id)).view}}),{workspace:root,coordinator,managedRuntime:{systemPrompt:'original',tools:[]}})
+ const acquire=vi.spyOn(privateExecution,'acquireManagedExecution'),service=createSessionService(options)
+ try{expect((await service.receivedInputFor('main')).pending()).toEqual([]);expect(loads).toBe(1);expect(acquire).not.toHaveBeenCalled()}
+ finally{await service.close();acquire.mockRestore();await coordinator.close()}
+},30000)
+
+it('option classification keeps plain/null prototype data and refuses inherited/accessor surfaces without invoking them',()=>{
+ const fields={workspace:'controlled',managedRuntime:{systemPrompt:'original',tools:[]}}
+ expect(supportsManagedServiceOptions(fields)).toBe(true)
+ expect(supportsManagedServiceOptions(Object.assign(Object.create(null),fields))).toBe(true)
+ expect(supportsManagedServiceOptions({...fields,compact:{auto:false}})).toBe(false)
+ let getters=0
+ const inherited=Object.assign(Object.create({get sessionFor(){getters++;throw Error('Must not inspect inherited callback')}}),fields)
+ expect(supportsManagedServiceOptions(inherited)).toBe(false)
+ const accessor=Object.defineProperty({...fields},'compact',{get(){getters++;throw Error('Must not inspect option accessor')},enumerable:true})
+ expect(supportsManagedServiceOptions(accessor)).toBe(false)
+ expect(getters).toBe(0)
+})
 
 it('repair routes configured prompt/tool/compaction/policy families to complete before private input/model effects',async()=>{
  const {root,coordinator}=await fixture()
