@@ -47,6 +47,22 @@ it('cold finalization requires missing production qualifiers and rejects copied 
  }finally{await f.coordinator.close()}
 })
 
+it('captures only the issued original cold observation of the exact coordinator and active callback',async()=>{
+ const f=await fixture(),foreign=createJsonlTaskTransitionCoordinator(f.root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{
+  const capture=(selected as unknown as Record<string,any>).captureOriginalColdObservation
+  expect(typeof capture).toBe('function')
+  const result=await selected.inspectColdSelectedTarget(f.coordinator,f.route);if(result.kind!=='qualification-required')throw Error('Missing target')
+  let saved:unknown
+  await selected.useColdSelectedTarget(f.coordinator,result.target,async cold=>{
+   saved=cold;expect(capture(f.coordinator,cold)).toBe(cold)
+   for(const [owner,value] of [[foreign,cold],[f.coordinator,{...cold}],[{...f.coordinator},cold],[f.coordinator,new Proxy(cold,{})]])expect(()=>capture(owner,value)).toThrow()
+   expect(()=>cold.document.assertReady()).toThrow();cold.assertCurrent()
+  })
+  expect(()=>capture(f.coordinator,saved)).toThrow()
+ }finally{await f.coordinator.close();await foreign.close()}
+})
+
 it('lifecycle constructor test: retains target-only original F0 through settled one-time adoption',async()=>{
  let coldGuard!:()=>void,bindingGuard!:()=>void,receipt:unknown,document:unknown,qualified=0,sealed=false,settled=false
  let handle!:ReturnType<typeof selected.beginColdSelectedFinalization>
