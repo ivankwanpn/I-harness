@@ -1444,6 +1444,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // register rather than try/catch, mirroring the tool loop above: a taken
     // name is skipped, and RoleRegistry.register's duplicate throw is never
     // used as control flow.
+    // Startup roles use the same live facade as later updates. Join its
+    // original load and restoration before the first installation attempt.
+    await subagent.ready
     const pluginAgentResults = new Map<string, boolean>()
     pluginCapabilities = createPluginCapabilities({
       skillDirs: pluginSkillDirs, handles: mcpHandles, roles: subagent.roles,

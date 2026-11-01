@@ -1,3 +1,4 @@
+import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
 // packages/session-executor/src/service.ts — R-C0 (engine-owned posture).
 // The GLOBAL per-session service. A-region owns the per-session serial lane
@@ -861,7 +862,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const published = assembly
         const delivery = receivedInputsFor(published.factOwner, sessionId).delivery
         const deliveryDrain = createDeliveryDrain({
-          current: () => !closed && !closing.has(sessionId) && !failedClose.has(sessionId) && assemblies.get(sessionId) === published,
+          current: () => !closed && !closing.has(sessionId) && !failedClose.has(sessionId) && assemblies.get(sessionId) === published && (!published.managedDocument || managedExecutionStatus(published.managedDocument) !== 'retired'),
           reconcile: async () => {
             const failures: unknown[] = []
             try { await published.drainParentNotifications?.(true) } catch (error) { failures.push(error) }

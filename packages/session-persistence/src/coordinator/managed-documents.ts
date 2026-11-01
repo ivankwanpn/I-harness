@@ -6,7 +6,7 @@ import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
-import { invalidateManagedMetadataWitness, createManagedDocument, bindManagedRestoredStage, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
+import { invalidateManagedMetadataWitness, createManagedDocument, bindManagedRestoredStage, captureManagedParentReadiness, captureManagedRequiredParent, captureManagedProcessRead } from './managed-document.ts'
 import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
@@ -114,6 +114,13 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       if (!entry || !document || entry.revoked || entry.bootstrap || resolved.get(id) !== document) throw new FactRecoveryRequiredError()
       const check = () => { if (documents.get(id) !== entry || entry.document !== document || entry.revoked || entry.bootstrap || resolved.get(id) !== document) throw new FactRecoveryRequiredError() }
       return captureManagedProcessRead(document, ownership, documentKeys, check)
+    },
+    captureRequiredParent(document:ManagedDocument,source:import('@i-harness/core-session').SettlementFacts) {
+      const association=documentEntries.get(document);if(!association)throw new FactRecoveryRequiredError();const{id,entry}=association;
+      if(entry.revoked||documents.get(id)!==entry||entry.document!==document||!transitions||entry.headerUnknown)throw new FactRecoveryRequiredError();
+      const original=captureManagedRequiredParent(document,ownership,source);
+      const check=()=>{if(documents.get(id)!==entry||entry.document!==document||entry.headerUnknown||((entry.bootstrap||entry.selected)&&!entry.ready))throw new FactRecoveryRequiredError();original.assertCurrent()};check();
+      const result=Object.freeze({id,assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTaskV3Parent(){if(this!==result)throw new TypeError('Invalid required parent');check();original.assertTask14Ready()}});return result;
     },
     captureParent(document: ManagedDocument) {
       const association = documentEntries.get(document)

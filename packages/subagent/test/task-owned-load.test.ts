@@ -5,6 +5,7 @@ import { expect, it, vi } from 'vitest'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
 import { createTaskRegistry } from '../src/task/registry.ts'
+import { createTaskStartupFacade } from '../src/task/startup-facade.ts'
 import { captureOwnedTaskContext } from '../src/task/owned-context.ts'
 const spawnProbe=vi.hoisted(()=>({armed:false,sources:0}))
 vi.mock('../src/tools/spawn-source.ts',async original=>{const real=await original<typeof import('../src/tools/spawn-source.ts')>();return {...real,createSpawnSource(...args:Parameters<typeof real.createSpawnSource>){if(spawnProbe.armed){spawnProbe.sources++;throw Error('Unexpected cold spawn source')}return real.createSpawnSource(...args)}}})
@@ -167,7 +168,26 @@ it('actual dispose retires a held original save before flushing',async()=>{
   const task=mounted.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'a',description:'',prompt:'',agent:'general',delivery:'tool'});await mounted.tasks.flushPersistence()
   const handoff=mounted.tasks.bindForegroundHandoff(task.id)();expect(handoff.kind).toBe('parent');if(handoff.kind!=='parent')throw new Error('no held save')
   await handoff.save.done;await mounted.dispose();expect(()=>handoff.save.assertHandoff()).toThrow();await mounted.dispose()
+  await mounted.tasks.flushPersistence();await mounted.flushPersistence()
+  expect(()=>mounted.tasks.submit({identity:{parentSessionId:'parent'},agentPath:'late',description:'',prompt:'',agent:'general',delivery:'tool'})).toThrow()
+  await expect(mounted.tasks.readResult(task.id,{})).rejects.toThrow();await expect(mounted.tasks.save()).rejects.toThrow()
  }finally{await f.close()}
+})
+it.each(['ready','false','undefined'] as const)('original facade cleanup joins pending load and preserves %s readiness outcome',async cut=>{
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ const f=await fixture({formatVersion:2,tasks:[],notifications:[]},root=>{faults.releasePath=taskLeasePath(root);faults.entered=entered.resolve;faults.gate=release.promise;faults.releaseFails=cut!=='ready';faults.cause=cut==='false'?false:undefined})
+ const facade=createTaskStartupFacade(f.tasks,()=>{throw Error('Original work fenced')})
+ try{
+  await entered.promise;let settled=false
+  const flush=facade.flushPersistence();void flush.then(()=>{settled=true},()=>{settled=true})
+  await Promise.resolve();await Promise.resolve();expect(settled).toBe(false)
+  release.resolve();const [loaded,flushed]=await Promise.allSettled([f.tasks.ready,flush])
+  expect(flushed.status).toBe(loaded.status)
+  if(loaded.status==='rejected'){expect(flushed).toMatchObject({status:'rejected',reason:loaded.reason});if(flushed.status==='rejected')expect(flushed.reason).toBe(loaded.reason);await expect(facade.closeOwnedLoad()).rejects.toThrow()}
+  faults.releaseFails=false;f.tasks.retireOwnedLoad();await facade.closeOwnedLoad()
+  if(loaded.status==='fulfilled')await facade.flushPersistence();else await expect(facade.flushPersistence()).rejects.toBe(loaded.reason)
+  expect(()=>facade.submit({identity:{parentSessionId:'parent'},agentPath:'late',description:'',prompt:'',agent:'general',delivery:'tool'})).toThrow('work fenced');await expect(facade.save()).rejects.toThrow('work fenced')
+ }finally{release.resolve();faults.releaseFails=false;faults.releasePath='';faults.gate=undefined;faults.entered=undefined;await f.tasks.closeOwnedLoad();await f.close()}
 })
 it('owned runtime mutation stays fenced while a restored mirror is still pending',async()=>{
  const f=await fixture({formatVersion:2,tasks:[],notifications:[]})

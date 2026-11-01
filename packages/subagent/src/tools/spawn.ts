@@ -127,6 +127,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       source.bindTask(task.id, () => deps.tasks.retainResult(task.id))
       let observationAborted = false
       try {
+        await source.bindRequiredTask(deps.tasks,task)
         const resultStore = await deps.tasks.prepareResult(task.id, exec, source.settlementHeld)
         await deps.tasks.flushPersistence()
         const preparation = exec.resultConsumer !== 'code' && exec.session === deps.parentSession
@@ -184,27 +185,28 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
               : info.error !== undefined && info.finalText === undefined
                 ? "error"
                 : "completed"
+            let originalTerminal:Readonly<TaskRecord>|undefined
             try {
-              deps.tasks.terminalize({
+              const terminalInput = {
                 taskId: task.id,
                 outcome,
                 ...(info.finalText !== undefined ? { resultText: info.finalText } : {}),
                 ...(info.error !== undefined ? { error: info.error } : {}),
-              })
+              };originalTerminal=await source.terminalizeOriginal(terminalInput);if(!originalTerminal)deps.tasks.terminalize(terminalInput)
             } catch (error) {
-              source.failed(error, Object.freeze({ ...info }))
+              if(!source.hasRequiredTask())source.failed(error, Object.freeze({ ...info }))
               throw error
             }
             const observedEntry = deps.table.get(task.agentPath)
-            const observedTask = deps.tasks.get(task.id)!
-            if (observedEntry && observedTask.result) publishChildResult(deps, observedEntry, observedTask, observedTask.outcome ?? outcome, task.id)
+            const observedTask = originalTerminal??deps.tasks.get(task.id)!
+            if (!originalTerminal && observedEntry && observedTask.result) publishChildResult(deps, observedEntry, observedTask, observedTask.outcome ?? outcome, task.id)
             // subagent/end —— parent 側的 durable 記號（D2 通知的資料源）。
             // 若已被 stop_task/close_agent 先行終態化（cancelTree 寫入 cancelled），
             // 本次 terminalize 為 no-op（CAS），但仍據 record 現值 append。
             await source.prepareEnd(async () => {
-              await deps.tasks.retainResult(task.id)
-              const settled = deps.tasks.get(task.id)!
-              if (observedEntry && settled.result) publishChildResult(deps, observedEntry, settled, settled.outcome ?? outcome, task.id)
+              if(!await source.terminalizeOriginal({taskId:task.id,outcome}))await deps.tasks.retainResult(task.id)
+              const settled = originalTerminal??deps.tasks.get(task.id)!
+              if (!originalTerminal && observedEntry && settled.result) publishChildResult(deps, observedEntry, settled, settled.outcome ?? outcome, task.id)
               return { event: {
                 type: "subagent/end", version: 1, taskId: task.id, outcome: settled.outcome ?? outcome,
                 ...(settled.result?.kind === "retained" ? { envelope: settled.result.envelope, resultRevision: settled.result.revision } : {}),
@@ -212,7 +214,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
                 ...(settled.error !== undefined ? { error: settled.error } : {}),
               }, output: spawnObservation(source.identity(), settled) }
             })
-            const settled = deps.tasks.get(task.id)!
+            const settled = originalTerminal??deps.tasks.get(task.id)!
             return settled
           },
         })
@@ -260,8 +262,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         const outcome = exec.abortSignal?.aborted ? 'cancelled' as const : 'error' as const
         const failures: unknown[] = [error]
         try {
-          deps.tasks.terminalize({ taskId: task.id, outcome, error: error instanceof Error ? error.message : String(error) })
-        } catch (failure) { source.failed(failure, Object.freeze({ outcome, error })); failures.push(failure) }
+          const input={taskId:task.id,outcome,error:error instanceof Error?error.message:String(error)};if(!await source.terminalizeOriginal(input))deps.tasks.terminalize(input)
+        } catch (failure) { if(!source.hasRequiredTask())source.failed(failure, Object.freeze({ outcome, error })); failures.push(failure) }
         const settled = deps.tasks.get(task.id)
         if (settled?.outcome !== undefined) {
           try {

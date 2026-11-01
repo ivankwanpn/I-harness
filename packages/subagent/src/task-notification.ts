@@ -73,6 +73,7 @@ export function renderTaskNotification(state: TaskOutcome, taskId: string, descr
 }
 
 export interface NotificationDrainOptions {
+  current?:()=>boolean
   reconcileSources?: () => Promise<void>
   evidence?: (taskId: string) => { evidence: SubagentDeliveryEvidence; expectedInputId: string } | undefined
   reportPolicy?: ReportPolicy
@@ -102,13 +103,19 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
       const run = async () => {
         const failures: unknown[] = []
         try { await opts.reconcileSources?.() } catch (error) { failures.push(error) }
+        if(opts.current?.()===false){if(failures.length)throw failures[0];return 0}
         if (!opts.admit?.admitTaskDelivery || !opts.evidence) {
           if (failures.length) throw failures[0]
           return 0
         }
         let delivered = 0
         let changed = false
-        for (const n of opts.tasks.notifications()) {
+        let notifications:ReturnType<TaskRegistry['notifications']>
+        try { notifications=opts.tasks.notifications() } catch(readinessError) {
+          if(failures.length){const original=failures.flatMap(error=>error instanceof DeliverySourcesError?[...error.errors]:[error]);throw new DeliverySourcesError([...original,readinessError])}
+          throw readinessError
+        }
+        for (const n of notifications) {
           if (opts.tasks.get(n.submissionId)?.publication === 'unqualified') continue
           const candidate = n.status === "pending" || n.status === "error"
           if (!candidate) continue

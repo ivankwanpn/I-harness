@@ -10,7 +10,7 @@ import type { TaskDocumentWrite, TaskWriteOutcome } from './task-document-types.
 import type { createProcessReadLatches } from './process-read-latches.ts'
 
 type Parent = { id: string; assertCurrent(): void; assertTaskV3Parent?(): void }
-export type TaskDocumentConfiguration = { captureParent(document: ManagedDocument): Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
+export type TaskDocumentConfiguration = { captureParent(document: ManagedDocument): Parent; captureRequiredParent?(document:ManagedDocument,source:import('@i-harness/core-session').SettlementFacts):Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
 export interface TaskDocumentReadHandoff { consume(): void; abandon(): void }
 type Operation = { observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; prepareReadHandoff(witness: TaskDocumentWitness): TaskDocumentReadHandoff; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; assertHandoff(): void; close(): Promise<void>; retryClose(): Promise<void> }
 type MethodContext = { record: object; owner: object; ownership: Ownership; id: string; key: string; parent?: MethodContext }
@@ -35,9 +35,12 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
   }
   const validatorField = Object.getOwnPropertyDescriptor(config, 'validator'); if (!validatorField || !('value' in validatorField)) throw new TypeError('Invalid task validator')
   const validator = validatorField.value as TaskDocumentConfiguration['validator']
+  const captureRequiredParent = config.captureRequiredParent && method(config,'captureRequiredParent')
   const captureParent = method(config, 'captureParent'), open = method(config, 'open'), validate = method(validator, 'validate')
   const configCapture = Object.getOwnPropertyDescriptor(config, 'captureParent')!.value, configOpen = Object.getOwnPropertyDescriptor(config, 'open')!.value, validatorMethod = Object.getOwnPropertyDescriptor(validator, 'validate')!.value
+  const requiredCaptureField=Object.getOwnPropertyDescriptor(config,'captureRequiredParent')
   const assertConfiguration = () => {
+    const requiredNow=Object.getOwnPropertyDescriptor(config,'captureRequiredParent');if(requiredCaptureField?.value!==requiredNow?.value)throw new TypeError('Changed required task configuration')
     for (const [object, key, original] of [[config, 'captureParent', configCapture], [config, 'open', configOpen], [config, 'validator', validator], [validator, 'validate', validatorMethod]] as const) {
       const field = Object.getOwnPropertyDescriptor(object, key); if (!field || !('value' in field) || field.value !== original) throw new TypeError('Changed task configuration')
     }
@@ -45,8 +48,24 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
   const records = new Set<{ finite(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void> }>()
   const fail = () => { throw new Error('TASK_DOCUMENT_CONFLICT') }
   function parent(this: unknown, document: ManagedDocument) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = captureParent(document), token = Object.freeze({}); parents.set(token, captured); const field = captured && !types.isProxy(captured) && Object.getOwnPropertyDescriptor(captured, 'assertTaskV3Parent'); if (field && 'value' in field && typeof field.value === 'function' && !types.isProxy(field.value)) parentEligibility.set(token, method(captured, 'assertTaskV3Parent')!); return token }
+  type Required={pin:Awaited<ReturnType<Ownership['pinOwnership']>>;ticket:ReturnType<typeof admission.registerRequiredTaskObligation>;source:import('@i-harness/core-session').SettlementFacts;cleanup():Promise<void>}
+  const requiredParents=new WeakMap<object,Required>()
+  async function requiredParent(this:unknown,document:ManagedDocument,source:import('@i-harness/core-session').SettlementFacts) {
+    if(this!==operations||!captureRequiredParent)throw new TypeError('Required task owner unavailable');const captured=captureRequiredParent(document,source),token=Object.freeze({});
+    let pin:Required['pin']|undefined,released=false,acquiring:Promise<void>|undefined;
+    const acquisitions:import('./ownership.ts').OwnershipCleanup[]=[];
+    const cleanup=async()=>{await acquiring?.catch(()=>{});for(const original of acquisitions){await original.close();original.assertSettled()}released=true;ticket.finish();records.delete(record)};
+    const sourceClose=method(source,'close');let sourceClosed=false;
+    const drive=async()=>{if(!sourceClosed){await sourceClose();sourceClosed=true}await cleanup()};
+    const ticket=admission.registerRequiredTaskObligation(captured.id,()=>{if(released)fail();captured.assertCurrent();pin?.assertHeld()},drive);
+    const record={finite:async()=>{await acquiring},close:drive,retryClose:drive};records.add(record);
+    acquiring=Promise.resolve().then(async()=>{pin=await ownership.pinOwnershipRetained(captured.id,original=>acquisitions.push(original));captured.assertCurrent();source.assertHeld()});
+    try{await acquiring;parents.set(token,captured);parentEligibility.set(token,()=>captured.assertTaskV3Parent!());requiredParents.set(token,{pin:pin!,ticket,source,cleanup});return token}catch(error){try{await cleanup()}catch(cleanupCause){const failure=new AggregateError([error,cleanupCause],'Required Task pin cleanup unresolved');failures.set(failure,{retry:cleanup});throw failure}throw error}
+  }
+  async function releaseRequiredParent(this:unknown,token:object){if(this!==operations)throw new TypeError('Invalid task operations');const required=requiredParents.get(token);if(!required)fail();await required!.cleanup();requiredParents.delete(token);parents.delete(token)}
   async function begin(this: unknown, token: object, options?: { signal?: AbortSignal }): Promise<Operation> {
     if (this !== operations) throw new TypeError('Invalid task operations receiver')
+    const required=requiredParents.get(token)
     const captured = parents.get(token); if (!captured || !ownership.lockEnabled || types.isProxy(token)) return fail()
     const pinOwnership = method(ownership, 'pinOwnership'), acquireLease = method(ownership, 'acquireDocumentLease')
     if (options !== undefined && (!options || typeof options !== 'object' || types.isProxy(options) || ![Object.prototype, null].includes(Object.getPrototypeOf(options)) || Reflect.ownKeys(options).some(key => key !== 'signal'))) throw new TypeError('Invalid task operation options')
@@ -62,6 +81,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     let lastConfirmation: Confirmation | undefined, staged: TaskDocumentWrite | undefined, staging = false, stageConsumed = false, writeFlight: Promise<TaskWriteOutcome> | undefined, writeResult: TaskWriteOutcome | undefined
     let writeAdmission: ReturnType<ReturnType<typeof admission.registerOwnedDocumentOperation>['beginOwnedWrite']> | undefined, processToken: ReturnType<NonNullable<typeof processLatches>['beginMutation']> | undefined
     let rawObserve: ReturnType<OpenTaskDocumentSession>['observe'] | undefined, rawConfirm: ReturnType<OpenTaskDocumentSession>['confirm'] | undefined, rawStage: ReturnType<OpenTaskDocumentSession>['stageWrite'] | undefined, settleResources: ReturnType<OpenTaskDocumentSession>['settleResources'] | undefined
+    const requiredLeaseCleanup:import('./ownership.ts').OwnershipCleanup[]=[]
     let releasePin: (() => Promise<void>) | undefined, releaseLease: (() => void | Promise<void>) | undefined
     let cleanup: Promise<void> | undefined, cleanupPending = false, ioDebt = false, remove = () => {}, operation: Operation, signalAttached = false, sessionDescriptors: PropertyDescriptorMap | undefined
     let readPhase: 'none' | 'armed' | 'consumed' | 'abandoned' = 'none'
@@ -81,7 +101,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
         if (session) await settleResources!()
         if (processToken) { processToken.end(writeResult?.kind === 'committed' || writeResult?.kind === 'conflict' || writeResult?.kind === 'not-issued' ? 'settled' : 'unknown'); processToken = undefined }
         if (writeAdmission) { writeAdmission.finish(writeResult?.kind === 'committed' || writeResult?.kind === 'conflict' || writeResult?.kind === 'not-issued' ? 'settled' : 'unknown'); writeAdmission = undefined }
-        if (lease) { await releaseLease!(); lease = undefined }
+        if(required){for(const original of requiredLeaseCleanup){await original.close();original.assertSettled()};lease=undefined}else if (lease) { await releaseLease!(); lease = undefined }
         if (pin) { await releasePin!(); pin = undefined }
         if (readPhase !== 'armed') retireRecord(); closed = true
       })
@@ -96,12 +116,12 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     const record = { finite: async () => { if (inSelf()) fail(); await acquire.catch(() => {}); await observation?.catch(() => {}); await retrying?.catch(() => {}); await confirmation?.catch(() => {}); await writeFlight?.catch(() => {}); if (cleanup) await cleanup; if (ioDebt || writeResult?.kind === 'unknown') throw new Error('Task document IO requires cleanup') }, close, retryClose }
     records.add(record)
     let registration: ReturnType<typeof admission.registerOwnedDocumentOperation>
-    try { registration = admission.registerOwnedDocumentOperation(captured.id, `task-${captured.id}`, { revoke() { externallyRevoked = true; revoked = true; abandonRead() }, close() { externallyRevoked = true; abandonRead(); return close() }, retryClose() { externallyRevoked = true; abandonRead(); return retryClose() }, assertOutside() { if (inSelf()) fail() } }); remove = () => registration.unregister() }
+    try { const hooks={revoke(){if(!required){externallyRevoked=true;revoked=true;abandonRead()}},async close(){if(required)await required.source.close();else {externallyRevoked=true;abandonRead()}return close()},async retryClose(){if(required)await required.source.close();else {externallyRevoked=true;abandonRead()}return retryClose()},assertOutside(){if(inSelf())fail()}};registration=required?required.ticket.activate(`task-${captured.id}`,hooks):admission.registerOwnedDocumentOperation(captured.id,`task-${captured.id}`,hooks);remove=()=>registration.unregister() }
     catch (error) { records.delete(record); throw error }
     acquire = enqueue(async () => {
       await registration.join()
-      active(); pin = await pinOwnership(captured.id); releasePin = method(pin, 'release'); active()
-      lease = await acquireLease(`task-${captured.id}`); releaseLease = method(lease, 'release'); active()
+      active(); pin = required?required.pin:await pinOwnership(captured.id); releasePin = required?async()=>{}:method(pin, 'release'); active()
+      lease = required?await acquireLease(`task-${captured.id}`,original=>requiredLeaseCleanup.push(original)):await acquireLease(`task-${captured.id}`); releaseLease = method(lease, 'release'); active()
       const scope = issueHeldTaskDocumentScope(ownership, captured.id, pin, { assertActive: active })
       session = open(scope); rawObserve = method(session, 'observe'); rawConfirm = method(session, 'confirm'); settleResources = method(session, 'settleResources'); if (Object.hasOwn(session, 'stageWrite')) rawStage = method(session, 'stageWrite'); sessionDescriptors = Object.getOwnPropertyDescriptors(session); active()
     })
@@ -188,6 +208,6 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     })
     return operation
   }
-  const operations = Object.freeze({ parent, begin, assertParentSession(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token); if (!captured || captured.id !== id) throw new Error('TASK_DOCUMENT_CONFLICT'); captured.assertCurrent() }, assertTaskV3Parent(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token), eligible = parentEligibility.get(token); if (!captured || captured.id !== id || !eligible) throw new Error('TASK_DOCUMENT_CONFLICT'); assertConfiguration(); captured.assertCurrent(); eligible() }, cleanupFor(error: unknown) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); return typeof error === 'object' && error !== null ? failures.get(error) : undefined }, async joinTaskDocumentIO() { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const result = await Promise.allSettled([...records].map(record => record.finite())); const errors = result.flatMap(row => row.status === 'rejected' ? [row.reason] : []); if (errors.length) throw new AggregateError(errors, 'Task document cleanup unresolved') } })
+  const operations = Object.freeze({ parent, requiredParent, releaseRequiredParent, begin, assertParentSession(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token); if (!captured || captured.id !== id) throw new Error('TASK_DOCUMENT_CONFLICT'); captured.assertCurrent() }, assertTaskV3Parent(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token), eligible = parentEligibility.get(token); if (!captured || captured.id !== id || !eligible) throw new Error('TASK_DOCUMENT_CONFLICT'); assertConfiguration(); captured.assertCurrent(); eligible() }, cleanupFor(error: unknown) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); return typeof error === 'object' && error !== null ? failures.get(error) : undefined }, async joinTaskDocumentIO() { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const result = await Promise.allSettled([...records].map(record => record.finite())); const errors = result.flatMap(row => row.status === 'rejected' ? [row.reason] : []); if (errors.length) throw new AggregateError(errors, 'Task document cleanup unresolved') } })
   return operations
 }

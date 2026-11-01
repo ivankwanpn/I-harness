@@ -1,3 +1,4 @@
+import {associateJobProjection,assertJobProjectionCurrent,originalJobProjectionFor,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, isManagedFactOwner, validRetainedResultRevision, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
 import { retainedResultWitness, unknownResult, validResultPublication, type ResultPublication, type AuxiliaryResultStatus } from './result-publication.ts'
@@ -232,11 +233,17 @@ export function persistentJobRegistry(
   jobs: JobRegistry,
   save: () => Promise<void>,
   observe?: JobTransitionObserver,
+  retainRequiredProjection?:(drive:()=>Promise<void>)=>void,
+  settleRequiredFacts?:()=>Promise<void>,
 ): JobRegistry {
   return {
     ...jobs,
-    registerJob(owner, kind, label, id, startedAt, cancel, identity) {
-      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity)
+    registerJob(owner, kind, label, id, startedAt, cancel, identity, acquired) {
+      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity, registration=>{
+        const original=originalJobProjectionFor(registration)
+        if(original)associateJobProjection(registration,persistProjection(original,async()=>{assertJobProjectionCurrent(registration);observe?.(jobs.read(registration.id));await save()},()=>assertJobProjectionCurrent(registration),settleRequiredFacts),retainRequiredProjection)
+        acquired?.(registration)
+      })
       observe?.(jobs.read(result.id))
       void save()
       if(!result.finish)return result
@@ -314,8 +321,9 @@ export function emitRestoredJobTransitions(
 export function persistentAgentTable(
   table: AgentTable,
   save: () => Promise<void>,
+  settleRequiredFacts?:()=>Promise<void>,
 ): AgentTable {
-  return {
+  const result:AgentTable = {
     ...table,
     update(path, expected, patch) {
       const updated = table.update(path, expected, patch)
@@ -331,6 +339,7 @@ export function persistentAgentTable(
       void save()
     },
   }
+  associateTableProjection(result,(entry,current)=>persistProjection(captureTableProjection(table,entry),save,current,settleRequiredFacts));return result
 }
 
 export function persistentRoleRegistry(
@@ -370,8 +379,8 @@ export function wireSubagentPersistence(
   // caller uses the returned object for the 11 tools and later lookups.
   return {
     observe, flushFacts: async () => { await facts?.flush() }, closeFacts: async () => { await facts?.close() },
-    jobs: persistentJobRegistry(state.jobs, async () => { await saveAll() }, observe),
-    table: persistentAgentTable(state.table, async () => { await saveAll() }),
+    jobs: persistentJobRegistry(state.jobs, async () => { await saveAll() }, observe,facts?.retainProjection,facts?.flush),
+    table: persistentAgentTable(state.table, async () => { await saveAll() },facts?.flush),
     roles: persistentRoleRegistry(state.roles, async () => { await saveAll() }),
   }
 }
