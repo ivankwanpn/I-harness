@@ -3,6 +3,13 @@ import {readFileSync} from 'node:fs'
 import {exportConversationSeed,createSession,append,type SessionView} from '@i-harness/core-session'
 import {compileSemanticSeed} from '@i-harness/session-persistence'
 import {forkTurns} from '../src/fork.ts'
+import {parseTaskHistorySelection} from '../src/child/task-history.ts'
+
+it('accepts bounded safe counts and refuses invalid counts',()=>{
+  expect(parseTaskHistorySelection(1)).toBe(1)
+  expect(parseTaskHistorySelection('2')).toBe(2)
+  for(const value of [0,-1,Number.MAX_SAFE_INTEGER+1,'9007199254740992']) expect(()=>parseTaskHistorySelection(value)).toThrow()
+})
 
 it('projects the retained original through25 frontier without inherited delivery or a fabricated result',()=>{
   const events=JSON.parse(readFileSync(new URL('./fixtures/active-all-frontier-through25.json',import.meta.url),'utf8'))
@@ -40,4 +47,12 @@ it('keeps a closed signed component while omitting the whole open shared-call co
   expect(exported.seed.omissions).toHaveLength(1)
   expect(exported.seed.artifacts).toEqual([])
   expect(compileSemanticSeed(exported).records.length).toBeGreaterThan(1)
+  const one=exportConversationSeed(source,{kind:'session',sessionId:'parent'},{kind:'last-turns',count:1})
+  const two=exportConversationSeed(source,{kind:'session',sessionId:'parent'},{kind:'last-turns',count:2})
+  if(one.kind!=='seed'||two.kind!=='seed')throw Error('Bounded semantic selection refused')
+  const oneItems=JSON.stringify(one.seed.groups.flatMap(group=>group.items)),twoItems=JSON.stringify(two.seed.groups.flatMap(group=>group.items))
+  expect(oneItems).toContain('active input');expect(oneItems).not.toContain('original-signature')
+  expect(oneItems).not.toContain('not independently closed');expect(one.seed.omissions).toHaveLength(1)
+  expect(twoItems).toContain('original-signature');expect(twoItems).toContain('active input')
+  expect(twoItems).not.toContain('not independently closed')
 })
