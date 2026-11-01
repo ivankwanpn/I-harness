@@ -117,7 +117,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await settings.loadObserved({ validate: validateDesktopSettingsDocument })
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
   const usageObservations=options.experimentalUsageObservations?createUsageObservationSink({record:value=>usageStore.recordObservation(value)}):undefined
-  const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
+  const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),projectSnapshotFor:id=>projects.projectSnapshotFor(id),
     onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
   const usageStats:NonNullable<DesktopHandlers['usageStats']>=createUsageHandlers(usageStore,{recordingMode:usageObservations?'observations':'legacy',warnings:()=>[...usageCapture.warnings(),...(usageObservations?.warnings()??[])]})

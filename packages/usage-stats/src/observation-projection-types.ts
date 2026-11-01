@@ -31,4 +31,4 @@ export type ObservationEntity =
  | {kind:'local';key:string;at:number;value:{ownerSessionId:string;actionId:string;localInvocationId:string;lane:string}}
  | {kind:'unknown-reservation'|'known-unsent';key:string;at:number;value:{ownerSessionId:string;actionId:string;attemptId:string}}
  | {kind:'unmatched-update';key:string;at:number;value:{ownerSessionId:string;actionId:string;attemptId:string;sendId:string}}
- | {kind:'unattributed';key:string;at:number;value:{providerId:string;modelId:string;workspace:string;projectId?:string;billing:'api'|'subscription'|'unknown'}}
+ | {kind:'unattributed';key:string;at:number;value:{providerId:string;modelId:string;workspace:string;projectId?:string;billing:'api'|'subscription'|'unknown';inputTokens?:number;outputTokens?:number;cacheReadTokens?:number;cacheCreationTokens?:number;inputTokenSemantics?:'includes-cache'|'excludes-cache';validity?:'valid'|'invalid';terminalCoverage?:'complete'|'partial'|'unknown'}}

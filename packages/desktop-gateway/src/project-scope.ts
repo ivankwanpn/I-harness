@@ -850,6 +850,8 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       const projectId = await projectFor(id)
       return { sessionId: id, ...(projectId ? { projectId } : {}) }
     },
+    /** Passive metadata only. Never loads a document or grants project authority. */
+    projectSnapshotFor(id:string):string|undefined { return liveOwner(id) },
     async forSession(id: string): Promise<() => SessionProjectContext | undefined> {
       await resolveOwner(id)
       observed.add(id)

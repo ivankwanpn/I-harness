@@ -11,7 +11,9 @@ export function createUsageCapture(options: {
   observationMode?:boolean
   passiveObserver?:import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
   record: (record: UsageRecord) => Promise<void>
-  onRequestFacts?: (record: Pick<UsageRecord, "id" | "projectId" | "sessionId" | "providerId" | "modelId" | "requestMetrics" | "status">) => void
+  onRequestFacts?: (record: Pick<UsageRecord, "id" | "projectId" | "sessionId" | "providerId" | "modelId" | "requestMetrics" | "status" | "durationMs" | "firstTokenMs">) => void
+  /** Already-loaded original project metadata only; never load/resolve an owner. */
+  projectSnapshotFor?: (sessionId:string)=>string|undefined
   projectFor?: (sessionId: string) => Promise<string | undefined>
   onWarning?: (warnings: string[]) => void
   now?: () => number
@@ -39,7 +41,21 @@ export function createUsageCapture(options: {
         // The provider builder ordinarily installs retries. Move that one layer
         // outside capture so usage from failed attempts is not discarded by it.
         const client = build({ ...profile, retryPolicy: undefined }, model, extra)
-        if(options.observationMode){const attributed=withOriginalPassiveClientAttribution(client,{providerId:profile.name,modelId:model??profile.defaultModel??'unknown',workspace:options.workspace,billing:profile.codexSubscription?'subscription':'api'},options.passiveObserver);return profile.retryPolicy===undefined?attributed:createRetryingClient(attributed,resolveRetryPolicy(profile.retryPolicy),{providerId:profile.name,modelId:model??profile.defaultModel})}
+        if(options.observationMode){
+          const attributed=withOriginalPassiveClientAttribution(client,{providerId:profile.name,modelId:model??profile.defaultModel??'unknown',workspace:options.workspace,billing:profile.codexSubscription?'subscription':'api'},options.passiveObserver,request=>{
+            let projectId:string|undefined
+            if(request.sessionId&&options.projectSnapshotFor)try{projectId=options.projectSnapshotFor(request.sessionId)}catch{failedAttributions++;notifyWarning()}
+            return {projectId,start(measurement){
+              const id=randomUUID(),startedAt=now();let firstTokenMs:number|undefined
+              return {event(event){if(firstTokenMs===undefined&&((event.type==='text/chunk'||event.type==='reasoning')&&event.text.length>0||event.type==='tool_call'))firstTokenMs=Math.max(0,now()-startedAt)},finish(status){
+                let requestMetrics:UsageRecord['requestMetrics']
+                try{const {input,packet,output}=measurement;requestMetrics=validateRequestMetrics({version:1,coverage:input.coverage,...packet,systemTokens:input.components.system.heuristicTokens,schemaTokens:input.components.toolSchemas.heuristicTokens,reasoningTokens:input.components.replayedReasoning.heuristicTokens,imageCount:input.components.images.imageCount,capSupport:output.capSupport,configuredOutputCap:output.configuredCap,effectiveOutputCap:output.effectiveCap,minimumOutputCap:output.minimumCap,reasoningBudget:output.reasoningBudget})}catch{/* Optional diagnostics. */}
+                try{options.onRequestFacts?.({id,projectId,sessionId:request.sessionId,providerId:profile.name,modelId:model??profile.defaultModel??'unknown',status,durationMs:Math.max(0,now()-startedAt),...(firstTokenMs===undefined?{}:{firstTokenMs}),...(requestMetrics===undefined?{}:{requestMetrics})})}catch{/* Observer isolation. */}
+              }}
+            }}
+          })
+          return profile.retryPolicy===undefined?attributed:createRetryingClient(attributed,resolveRetryPolicy(profile.retryPolicy),{providerId:profile.name,modelId:model??profile.defaultModel})
+        }
         const capture = observeModelClient(mapModelRequest(client, request => {
           const { sessionId: _sessionId, ...providerRequest } = request
           return providerRequest
@@ -86,7 +102,7 @@ export function createUsageCapture(options: {
                 capSupport: output.capSupport, configuredOutputCap: output.configuredCap, effectiveOutputCap: output.effectiveCap,
                 minimumOutputCap: output.minimumCap, reasoningBudget: output.reasoningBudget })
             } catch { /* Optional diagnostics cannot fail inference or billing capture. */ }
-            try { options.onRequestFacts?.({ id: record.id, projectId: record.projectId, sessionId: record.sessionId, providerId: record.providerId, modelId: record.modelId, requestMetrics: record.requestMetrics, status: record.status }) } catch { /* Observer isolation. */ }
+            try { options.onRequestFacts?.({ id: record.id, projectId: record.projectId, sessionId: record.sessionId, providerId: record.providerId, modelId: record.modelId, requestMetrics: record.requestMetrics, status: record.status, durationMs:record.durationMs,...(record.firstTokenMs===undefined?{}:{firstTokenMs:record.firstTokenMs}) }) } catch { /* Observer isolation. */ }
             try { await options.record(record) } catch { failedWrites++; notifyWarning() }
           },
         })
