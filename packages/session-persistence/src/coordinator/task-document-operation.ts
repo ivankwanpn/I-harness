@@ -9,7 +9,7 @@ import { captureTaskSnapshot } from './task-document-snapshot.ts'
 import type { TaskDocumentWrite, TaskWriteOutcome } from './task-document-types.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 
-type Parent = { id: string; assertCurrent(): void }
+type Parent = { id: string; assertCurrent(): void; assertTaskV3Parent?(): void }
 export type TaskDocumentConfiguration = { captureParent(document: ManagedDocument): Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
 export interface TaskDocumentReadHandoff { consume(): void; abandon(): void }
 type Operation = { observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; prepareReadHandoff(witness: TaskDocumentWitness): TaskDocumentReadHandoff; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; assertHandoff(): void; close(): Promise<void>; retryClose(): Promise<void> }
@@ -25,7 +25,7 @@ export function assertOutsideTaskDocumentOperation(owner: object, ids: readonly 
   for (let context = methodContext.getStore(); context; context = context.parent) if (context.owner === owner && (all || context.ownership.exclusionScope([context.id], [context.key]).keys.some(key => context.ownership.exclusionScope(ids, keys).keys.includes(key)))) throw new Error('TASK_DOCUMENT_CONFLICT')
 }
 export function createTaskDocumentOperations(ownership: Ownership, admission: ReturnType<typeof createBindingObservations>, config: TaskDocumentConfiguration, enqueue: <T>(run: () => Promise<T>) => Promise<T>, processLatches?: ReturnType<typeof createProcessReadLatches>) {
-  const parents = new WeakMap<object, Parent>(), failures = new WeakMap<object, { retry(): Promise<void> }>()
+  const parents = new WeakMap<object, Parent>(), parentEligibility = new WeakMap<object, () => void>(), failures = new WeakMap<object, { retry(): Promise<void> }>()
   function method<T extends object, K extends keyof T>(object: T, key: K): T[K] {
     if (!object || types.isProxy(object)) throw new TypeError('Invalid task capability')
     const field = Object.getOwnPropertyDescriptor(object, key)
@@ -44,7 +44,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
   }
   const records = new Set<{ finite(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void> }>()
   const fail = () => { throw new Error('TASK_DOCUMENT_CONFLICT') }
-  function parent(this: unknown, document: ManagedDocument) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = captureParent(document), token = Object.freeze({}); parents.set(token, captured); return token }
+  function parent(this: unknown, document: ManagedDocument) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = captureParent(document), token = Object.freeze({}); parents.set(token, captured); const field = captured && !types.isProxy(captured) && Object.getOwnPropertyDescriptor(captured, 'assertTaskV3Parent'); if (field && 'value' in field && typeof field.value === 'function' && !types.isProxy(field.value)) parentEligibility.set(token, method(captured, 'assertTaskV3Parent')!); return token }
   async function begin(this: unknown, token: object, options?: { signal?: AbortSignal }): Promise<Operation> {
     if (this !== operations) throw new TypeError('Invalid task operations receiver')
     const captured = parents.get(token); if (!captured || !ownership.lockEnabled || types.isProxy(token)) return fail()
@@ -188,6 +188,6 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     })
     return operation
   }
-  const operations = Object.freeze({ parent, begin, assertParentSession(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token); if (!captured || captured.id !== id) throw new Error('TASK_DOCUMENT_CONFLICT'); captured.assertCurrent() }, cleanupFor(error: unknown) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); return typeof error === 'object' && error !== null ? failures.get(error) : undefined }, async joinTaskDocumentIO() { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const result = await Promise.allSettled([...records].map(record => record.finite())); const errors = result.flatMap(row => row.status === 'rejected' ? [row.reason] : []); if (errors.length) throw new AggregateError(errors, 'Task document cleanup unresolved') } })
+  const operations = Object.freeze({ parent, begin, assertParentSession(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token); if (!captured || captured.id !== id) throw new Error('TASK_DOCUMENT_CONFLICT'); captured.assertCurrent() }, assertTaskV3Parent(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token), eligible = parentEligibility.get(token); if (!captured || captured.id !== id || !eligible) throw new Error('TASK_DOCUMENT_CONFLICT'); assertConfiguration(); captured.assertCurrent(); eligible() }, cleanupFor(error: unknown) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); return typeof error === 'object' && error !== null ? failures.get(error) : undefined }, async joinTaskDocumentIO() { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const result = await Promise.allSettled([...records].map(record => record.finite())); const errors = result.flatMap(row => row.status === 'rejected' ? [row.reason] : []); if (errors.length) throw new AggregateError(errors, 'Task document cleanup unresolved') } })
   return operations
 }

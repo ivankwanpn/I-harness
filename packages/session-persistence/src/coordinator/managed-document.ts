@@ -66,7 +66,7 @@ const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unav
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
-const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; invalidateMetadata(revision:object):void; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; invalidateMetadata(revision:object):void; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
 export function captureManagedProcessRead(document: ManagedDocument, ownership: Ownership, documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture {
     const original = readyOwners.get(document);
     if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
@@ -687,6 +687,9 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         const result = Object.freeze({ view: originalView, assertCurrent() {
             if (this !== result) throw new TypeError('Invalid parent readiness receiver');
             check();
+        }, assertTask14Ready() {
+            if (this !== result) throw new TypeError('Invalid parent readiness receiver');
+            check(); if (formatVersion !== 14) throw new FactRecoveryRequiredError();
         } });
         return result;
     }, retainSelected(onRevoke) {

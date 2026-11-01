@@ -204,3 +204,16 @@ it('retains failed close debt and permanently abandons its read', async () => {
     fail=false; await op.retryClose(); await documents.taskOperations!.joinTaskDocumentIO(); expect(()=>read.consume()).toThrow()
   } finally { await managed.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root,{recursive:true,force:true}) }
 })
+it('v3 parent eligibility refuses original logical14 managed readiness without transitions',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'v3-parent-logical-')),backend=createJsonlBackend(root),opts={lock:{enabled:true}},ownership=createOwnership(backend,opts),mutations=createMutations(backend,ownership,200,()=>{}),loads=createLoads(backend,ownership,mutations),managed=createManagedDocuments(backend,ownership,loads.loadOwned,opts,()=>{},mutations)
+ const documents=createDocuments(backend,ownership,()=>{},undefined,{captureParent:document=>managed.captureParent(document),validator:taskDocumentStorageContract,open:scope=>createTaskDocumentObservation(root,join(root,`${scope.key}.doc.jsonl`),scope)})
+ try{await backend.create('parent',{sessionId:'parent',formatVersion:14,createdAt:'x'});const document=await managed.open('parent'),ops=documents.taskOperations!,parent=ops.parent(document);ops.assertParentSession(parent,'parent');expect(()=>ops.assertTaskV3Parent(parent,'parent')).toThrow()}finally{await managed.close();await Promise.all(ownership.releaseHeldLocks());await rm(root,{recursive:true,force:true})}
+})
+it('v3 parent capability descriptors cannot be missing, getters or replaced',async()=>{
+ const {createTaskDocumentOperations}=await import('../src/coordinator/task-document-operation.ts')
+ for(const kind of ['missing','getter','replaced']){let calls=0;const captured={id:'parent',assertCurrent(){},...(kind==='replaced'?{assertTaskV3Parent(){throw Error('original')}}:{})};if(kind==='getter')Object.defineProperty(captured,'assertTaskV3Parent',{get(){calls++;throw Error('getter')}})
+ const operations=createTaskDocumentOperations({} as never,{} as never,{captureParent:()=>captured,validator:{validate(){}},open(){throw Error('unused')}},async work=>work()),parent=operations.parent({} as never)
+ if(kind==='replaced')Object.defineProperty(captured,'assertTaskV3Parent',{value(){}})
+ expect(()=>operations.assertTaskV3Parent(parent,'parent')).toThrow();expect(calls).toBe(0)
+ }
+})

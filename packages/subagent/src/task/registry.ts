@@ -1,4 +1,5 @@
 import { stageTaskRestore } from './restore-stage.ts'
+import { associateColdBindings, assertColdTaskAdmission } from './cold-bindings.ts'
 import { isOwnedTaskContext } from './owned-context.ts'
 import { validateTaskDocument } from "./validation.ts"
 import { unqualifyRestoredTask, qualifyTaskPublication } from './publication.ts'
@@ -12,8 +13,9 @@ import { TaskRecords } from "./records.ts"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
   const ownedTask = opts.ownedTask
-  type State = { records: TaskRecords; notifications: TaskNotifications; version: 1 | 2; phase: 'pending' | 'ready' | 'poisoned' | 'retired'; failure?: { cause: unknown } }
+  type State = { records: TaskRecords; notifications: TaskNotifications; version: 1 | 2 | 3; phase: 'pending' | 'ready' | 'poisoned' | 'retired'; failure?: { cause: unknown } }
   let currentState: State = { records: new TaskRecords(), notifications: new TaskNotifications(), version: opts.results ? 2 : 1, phase: ownedTask ? 'pending' : 'ready' }
+  let coldBindings: ReadonlySet<string> = new Set()
   function assertReady() {
     if (currentState.phase !== 'ready') throw Object.assign(new Error('Task registry ' + currentState.phase, { cause: currentState.failure?.cause }), { code: 'TASK_REGISTRY_UNAVAILABLE' })
     if (ownedTask) ownedTask.operations.assertParentSession(ownedTask.parent, opts.stateId!)
@@ -42,6 +44,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
 
   function snapshot(): TaskProtocolDocument {
     assertReady()
+    // A loaded literal 1 remains literal until a subsequent result-aware save.
+    if (currentState.version === 1 && opts.results) currentState.version = 2
     return {
       formatVersion: currentState.version,
       tasks: [...currentState.records.values()].map(({ modelLabel, ...task }) => ({
@@ -78,7 +82,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   async function retainResultOnce(taskId: string): Promise<void> {
     const task = currentState.records.get(taskId)
     if (!task) throw new Error(`unknown task: ${taskId}`)
-    if (!task.result && (task.publication === 'unqualified' || currentState.version === 2 && task.legacyFormatVersion !== 1)) throw new Error('Retained task body incomplete')
+    if (!task.result && (task.publication === 'unqualified' || currentState.version >= 2 && task.legacyFormatVersion !== 1)) throw new Error('Retained task body incomplete')
     if (resultOwner) await resultOwner.settle(task)
     if (!opts.reportPolicy) return
     // The in-memory authoritative outcome is already complete. Persistence
@@ -160,16 +164,20 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       const observed = await operation.observe()
       if (observed.kind !== 'present') throw new Error('Owned task document is absent')
       const staged = stageTaskRestore(observed.value as TaskProtocolDocument, Boolean(opts.reportPolicy), resultOwner?.available?.() === true)
-      const readyState: State = { records: staged.records, notifications: staged.notifications, version: opts.results ? 2 : staged.version, phase: 'ready' }
+      if (staged.version === 3) owned.operations.assertTaskV3Parent(owned.parent, opts.stateId!)
+      const readyState: State = { records: staged.records, notifications: staged.notifications, version: staged.version, phase: 'ready' }
+      const stagedColdBindings = new Set(staged.version === 3 ? [...staged.records.values()].filter(task => task.childBirth).flatMap(task => [task.childBirth!.request.invocation.targetSessionId, 'task:' + task.id]) : [])
       const confirmed = await operation.confirm(observed.witness)
       if (confirmed.kind !== 'confirmed' || confirmed.cleanupPending) throw new Error('Owned task read was not confirmed', { cause: confirmed })
       handoff = operation.prepareReadHandoff(observed.witness)
       closeAttempted = true
       await operation.close(); resourcesClosed = true
       if (currentState.phase !== 'pending' || controller.signal.aborted) throw new Error('Original task load retired')
+      if (staged.version === 3) owned.operations.assertTaskV3Parent(owned.parent, opts.stateId!)
       // No callback, allocation, validation or await between consume and swap.
       handoff.consume()
       currentState = readyState
+      coldBindings = stagedColdBindings
       for (const task of currentState.records.values()) publish(task)
     } catch (cause) {
       if (!operation) beginCleanup = owned.operations.cleanupFor(cause)
@@ -237,7 +245,11 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     subscribe,
     submit(input) {
       assertReady()
+      if (input.identity.callEventSeq !== undefined || input.identity.toolCallId !== undefined) {
+        assertColdTaskAdmission(registry, currentState.records.getByIdentity(input.identity)?.id)
+      }
       const { record, inserted } = currentState.records.submit(input, maxConcurrency)
+      if (currentState.version === 3) currentState.records.protectSubmission(record)
       if (!inserted) return record
       void save().catch(() => {})
       publish(record)
@@ -296,7 +308,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     restore(doc) {
       if (ownedTask) throw new Error("Owned task restore requires original load")
       validateTaskDocument(doc)
-      if (doc.formatVersion === 2) currentState.version = 2
+      if (doc.formatVersion === 3) throw new Error('Task v3 adoption requires original eligible parent')
+      const restoredColdBindings = coldBindings
+      if (doc.formatVersion === 2 && currentState.version !== 3) currentState.version = doc.formatVersion
       // Counter seeding（Ruling M24a-T1a 同款）：還原的 id 是權威——task-<n> /
       // notif-<n> 從已知最大編號續增，避免 post-restore spawn 撞 id。
       currentState.records.seedRestoredCounter(doc.tasks)
@@ -314,12 +328,14 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         if (anon) restoredAnon += 1
         currentState.records.indexRestored(t, restoredAnon)
       }
+      coldBindings = restoredColdBindings
       for (const t of doc.tasks) publish(t)
     },
     save,
     flushPersistence: async () => { assertReady(); await persistence.flush() },
   }
   associateTaskSaveOwner(registry, persistence)
+  associateColdBindings(registry, () => coldBindings)
   return registry
 
 }

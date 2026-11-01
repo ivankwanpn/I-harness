@@ -1,3 +1,4 @@
+import { taskDocumentOperationsFor } from '@i-harness/session-persistence/internal/task-document-operations'
 import * as factOwners from '../../session-persistence/src/coordinator/fact-owner.ts'
 const prefixGate=vi.hoisted(()=>({path:'',armed:false,gate:undefined as Promise<void>|undefined,entered:undefined as (()=>void)|undefined}))
 const metadataPublication=vi.hoisted(()=>({path:'',writes:0,renames:0}))
@@ -52,6 +53,7 @@ it('lifecycle constructor test: retains target-only original F0 through settled 
  let handle!:ReturnType<typeof selected.beginColdSelectedFinalization>
  const injection=installLifecycleTestQualifiers({begin(cold,binding){
   coldGuard=cold.assertCurrent;bindingGuard=binding.assertCurrent;receipt=cold.receipt;document=cold.document
+  expect(()=>taskDocumentOperationsFor(f.coordinator)!.parent(cold.document)).toThrow()
   expect(binding.metadata('target')).toEqual(cold.metadata);expect(binding.metadata('target')).toMatchObject({sessionId:'target',formatVersion:14,createdAt:'2026-10-31T00:00:00.000Z',workspaceId:'current-workspace'})
   expect(()=>binding.metadata('source')).toThrow();expect(binding.binding('target')).toEqual({kind:'absent'})
   return {async qualify(){qualified++;expect(()=>handle.commitReady()).toThrow();expect(()=>handle.close()).toThrow();cold.assertCurrent();binding.assertCurrent()},sealWhileActive(){cold.assertCurrent();binding.assertCurrent();sealed=true},async settle(){expect(coldGuard).toThrow();expect(bindingGuard).toThrow();settled=true},assertSettledCurrent(){if(!sealed||!settled)throw Error('Test seals unavailable')},revoke(){sealed=false},async close(){settled=true}}
@@ -71,6 +73,7 @@ it('lifecycle constructor test: retains target-only original F0 through settled 
   const notifications:{id:string;status:string;same:boolean}[]=[]
   const stop=observeColdExecutionWrites(f.coordinator,id=>{notifications.push({id,status:managedLeaf.managedExecutionStatus(ready.document),same:handle.commitReady()===ready})})
   const ready=handle.commitReady();expect(handle.commitReady()).toBe(ready);expect(ready.document).toBe(document);expect(ready.receipt).toBe(receipt);ready.document.assertReady();expect(qualified).toBe(1)
+  const taskParent=taskDocumentOperationsFor(f.coordinator)!;taskParent.assertTaskV3Parent(taskParent.parent(ready.document),'target')
   expect(notifications).toEqual([]);await Promise.resolve();expect(notifications).toEqual([{id:'target',status:'available',same:true}]);stop()
   expect(await readFile(f.path)).toEqual(raw)
  }finally{injection.mockRestore();await f.coordinator.close()}
@@ -181,7 +184,7 @@ it('retains the original cold checked target for finite inspection without makin
       expect(Object.isFrozen(observation.birth)).toBe(true)
       expect(Object.isFrozen(observation.birth.stage.seed)).toBe(true)
       observation.assertCurrent()
-      expect(() => observation.document.assertReady()).toThrow()
+      expect(() => observation.document.assertReady()).toThrow();expect(()=>taskDocumentOperationsFor(f.coordinator)!.parent(observation.document)).toThrow()
     })
     await selected.useColdSelectedTarget(f.coordinator, result.target, async observation => { expect(observation.document).toBe(original) })
     await expect(f.coordinator.openManagedDocument('target')).rejects.toThrow()

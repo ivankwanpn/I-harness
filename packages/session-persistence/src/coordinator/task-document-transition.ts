@@ -22,6 +22,9 @@ type HistoryProof = { initial: SessionView; seedLength: number; assertCurrent():
 type HistoryHeader = { confirm(): Promise<import('./bootstrap-types.ts').HeaderOutcome | {kind:'not-required'}>; settle(): Promise<void> }
 type HistoryReader = { observe(): Promise<HistoryProof>; settleResources(): Promise<void>; retryResources(): Promise<void>; hasDebt(): boolean }
 type TransitionRoute = BootstrapRoute | SelectedResultsRoute
+function isTaskV3(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && !types.isProxy(value) && Object.getOwnPropertyDescriptor(value, 'formatVersion')?.value === 3
+}
 export type TaskTransitionBackendSession = TaskDocumentBackendSession & { stageInitialize(bytes: Uint8Array): TaskDocumentWrite }
 export type TaskTransitionConfiguration = {
   validator: { validate(value: unknown): void; empty(): unknown; consistency(parent: string, events: readonly SessionEventView[], seedLength: number, value: unknown): { kind: 'consistent' | 'recovery-required' } }
@@ -147,8 +150,11 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           }
           if (recover && !recoveryDone) {
             loaded = await recover(async (version,events,seedLength) => {
-              if (version < 14) return
               await ensureTask()
+              if (version < 14) {
+                if (observation!.kind === 'present' && isTaskV3(observation!.value)) throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
+                return
+              }
               if (observation!.kind !== 'present') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
               if (validate(observation!.value) !== undefined) throw new TypeError('Task validator must be synchronous')
               if (consistency(id,events,seedLength,observation!.value).kind !== 'consistent') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
@@ -172,6 +178,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           guard()
           if (recover) {
             if (taskObservation.kind === 'present') {
+              if (history!.initial.formatVersion < 14 && isTaskV3(taskObservation.value)) throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
               if (validate(taskObservation.value) !== undefined) throw new TypeError('Task validator must be synchronous')
               if (consistency(id, history!.initial.events, history!.seedLength, taskObservation.value).kind !== 'consistent') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
               if (!confirmed) {
@@ -311,6 +318,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           if (mode !== 'new') {
             const history = proof as HistoryProof
             if (observation.kind === 'present') {
+              if (history.initial.formatVersion < 14 && isTaskV3(observation.value)) throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
               if (validate(observation.value) !== undefined) throw new TypeError('Task validator must be synchronous')
               if (consistency(id,history.initial.events,history.seedLength,observation.value).kind !== 'consistent') { taskConflict = true; throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED') }
               if (!confirmed) {

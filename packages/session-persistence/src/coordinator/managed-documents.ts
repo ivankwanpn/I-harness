@@ -115,6 +115,11 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const parent = Object.freeze({ id, assertCurrent() {
         if (this !== parent) throw new TypeError('Invalid parent receiver')
         check()
+      }, assertTaskV3Parent() {
+        if (this !== parent) throw new TypeError('Invalid parent receiver')
+        check()
+        if (!transitions || entry.headerUnknown) throw new FactRecoveryRequiredError()
+        readiness.assertTask14Ready()
       } })
       return parent
     },

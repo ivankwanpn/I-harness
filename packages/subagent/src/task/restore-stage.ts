@@ -7,7 +7,7 @@ import type { TaskProtocolDocument } from './types.ts'
 /** Detached data and indexes only: no persistence, callbacks, or live producer. */
 export function stageTaskRestore(observation: TaskProtocolDocument, reportPolicy: boolean, resultReader: boolean) {
   validateTaskDocument(observation)
-  if (observation.formatVersion !== 1 && observation.formatVersion !== 2) throw new Error('Unsupported task document version')
+  if (observation.formatVersion !== 1 && observation.formatVersion !== 2 && observation.formatVersion !== 3) throw new Error('Unsupported task document version')
   const doc = structuredClone(observation), records = new TaskRecords(), notifications = new TaskNotifications()
   records.seedRestoredCounter(doc.tasks, true); notifications.restore(doc.notifications, true)
   let anonymous = 0
@@ -21,6 +21,7 @@ export function stageTaskRestore(observation: TaskProtocolDocument, reportPolicy
       else if (task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'artifact' && resultReader) { task.retention = 'durable'; delete task.retentionError }
       else { task.retention = 'failed'; task.retentionError = task.result?.kind === 'retained' ? 'Retained task body reader unavailable' : 'Retained task body incomplete' }
     }
+    if (doc.formatVersion === 3) records.protectSubmission(task)
     records.insertRestored(task)
     if (task.callEventSeq === undefined && task.toolCallId === undefined) anonymous++
     records.indexRestored(task, anonymous, true)

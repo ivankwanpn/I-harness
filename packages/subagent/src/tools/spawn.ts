@@ -1,3 +1,4 @@
+import { assertInitialTaskAdmission } from '../task/cold-bindings.ts'
 import { publishChildResult } from "../child/result.ts"
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
@@ -103,6 +104,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         ...(exec?.callEventSeq !== undefined ? { callEventSeq: exec.callEventSeq } : {}),
         ...(exec?.callId !== undefined ? { toolCallId: exec.callId } : {}),
       }
+      assertInitialTaskAdmission(deps.tasks, identity)
       let unregisterDelivery: (() => void) | undefined
       const source = createSpawnSource(subagentFactOwner(deps.parentSession, deps.factOwner), exec.abortSignal, exec.retainOutcome?.(), args.background !== false,
         () => { unregisterDelivery?.(); deps.onTaskTerminalCommitted?.() }, deps.onTaskTerminalRecovery)
