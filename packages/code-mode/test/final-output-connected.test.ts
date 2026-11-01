@@ -47,7 +47,7 @@ import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createCodeTextRetention } from '../../session-executor/src/lifecycle/code-text-retention.ts'
 import { createCodeFinalOutputRetention } from '../../session-executor/src/lifecycle/code-final-output-retention.ts'
-import { registerCodeMode } from '../src/register.ts'
+import { registerCodeMode, captureOriginalCodeCompletion } from '../src/register.ts'
 import { captureOriginalCodeFinalOutput, observeOriginalCodeFinalOutputs } from '../src/final-output.ts'
 import { observeOriginalCellFinalizations } from '../src/finalization.ts'
 import { subscribe, createNondurableFactOwner, createSession, type ManagedArtifactRef } from '@i-harness/core-session'
@@ -212,18 +212,20 @@ it('keeps final output unavailable while the actual original nested broker produ
   f.tools.register({name:'started',description:'',inputSchema:{},isConcurrencySafe:true,execute:async()=>{await bodyEntered.promise;return null}})
   native.afterFinish=async()=>{finishEntered.resolve();await finish.promise}
   const mount=registerCodeMode(f.ctx,f.tools,{session:f.document.view,sessionId:f.id,factOwner:f.document,config:{mode:'mixed'},finalOutput:f.factory})
-  let output!:ReturnType<typeof captureOriginalCodeFinalOutput>
-  const off=observeOriginalCodeFinalOutputs(mount,(_id,handle)=>{output=handle})
+  let output!:ReturnType<typeof captureOriginalCodeFinalOutput>,completion!:ReturnType<typeof captureOriginalCodeCompletion>
+  const off=observeOriginalCodeFinalOutputs(mount,(id,handle)=>{output=handle;completion=captureOriginalCodeCompletion(mount,id)})
   try{
     expect(await f.tools.get('code_exec')!.execute({code:'tools.late({});await tools.started({});audio({type:"audio",mimeType:"audio/wav",data:"YQ=="});',yield_time_ms:60000},{session:f.document.view,sessionId:f.id})).toMatchObject({status:'completed'})
     await bodyEntered.promise
-    let ready=false,finishing=false;void finishEntered.promise.then(()=>{finishing=true})
+    let ready=false,finishing=false,completed=false;void finishEntered.promise.then(()=>{finishing=true})
     const pending=output.settle().then(value=>{ready=true;return value})
+    const proof=completion.settle().then(value=>{completed=true;return value});void proof.catch(()=>{})
+    f.pending.push(proof)
     f.pending.push(pending);void pending.catch(()=>{})
-    await Promise.resolve();await Promise.resolve();expect(ready).toBe(false);expect(finishing).toBe(false)
+    await Promise.resolve();await Promise.resolve();expect(ready).toBe(false);expect(finishing).toBe(false);expect(completed).toBe(false)
     body.resolve('late original broker reply');await finishEntered.promise
-    expect(ready).toBe(false)
-    finish.resolve();expect((await pending).kind).toBe('ready')
+    expect(ready).toBe(false);expect(completed).toBe(false)
+    finish.resolve();expect((await pending).kind).toBe('ready');expect((await proof).kind).toBe('qualified')
     expect(f.document.view.events.filter(e=>e.type==='code/call')).toHaveLength(2)
     expect(f.document.view.events.filter(e=>e.type==='code/result')).toHaveLength(2)
   }catch(cause){f.primary={cause};throw cause}finally{body.resolve(null);finish.resolve();off();await closeFixture(f,mount);vi.restoreAllMocks()}
