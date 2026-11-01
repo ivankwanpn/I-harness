@@ -27,6 +27,7 @@ import { closeSync, openSync } from "node:fs"
 import { createRequire } from "node:module"
 
 import { SessionLockConflictError, SessionLockUnsupportedError } from "./errors.ts"
+import { associateOriginalHeldState } from './original-held-state.ts'
 import type { AcquireOptions, SessionLock } from "./index.ts" // type-only: index dynamically imports THIS file; type-only imports never form a runtime cycle
 
 type Koffi = typeof import("koffi")
@@ -118,7 +119,7 @@ function bindings(): FsLockBindings {
  */
 function heldLock(api: FsLockBindings, fd: number, lockPath: string): SessionLock {
   let held = true
-  return {
+  const lock:SessionLock = {
     get held(): boolean {
       return held
     },
@@ -140,6 +141,7 @@ function heldLock(api: FsLockBindings, fd: number, lockPath: string): SessionLoc
       }
     },
   }
+  associateOriginalHeldState(lock);return lock
 }
 
 /**

@@ -19,6 +19,7 @@
 import { createRequire } from "node:module"
 
 import { SessionLockConflictError, SessionLockUnsupportedError } from "./errors.ts"
+import { associateOriginalHeldState } from './original-held-state.ts'
 import type { AcquireOptions, SessionLock } from "./index.ts" // type-only: index dynamically imports THIS file; type-only imports never form a runtime cycle
 
 /** koffi 3 native pointer (a BigInt address). */
@@ -144,9 +145,9 @@ function bindings(): FsLockBindings {
  * @param overlapped - the zeroed OVERLAPPED used for lock/unlock.
  * @returns the held lease.
  */
-function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: string, overlapped: NativePtr): SessionLock {
+export function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: string, overlapped: NativePtr): SessionLock {
   let held = true
-  return {
+  const lock:SessionLock = {
     get held(): boolean {
       return held
     },
@@ -161,6 +162,7 @@ function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: string, over
       if (closeCode !== 0) throw new Error(`CloseHandle failed (Win32 ${closeCode}) for ${lockPath}`)
     },
   }
+  associateOriginalHeldState(lock);return lock
 }
 
 /**

@@ -1,7 +1,8 @@
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
+import { originalHeldStateFor } from '@i-harness/fs-lock/internal/held-state'
 import { createArtifactPathOwner } from '@i-harness/fs-lock/internal/artifact-path'
 import { basename, dirname, resolve } from 'node:path'
-import { assertArtifactCurrent, artifactPathsFor, artifactScope, type ArtifactCapture } from './artifact-path-association.ts'
+import { assertArtifactCurrent, artifactPathsFor, artifactScope, withArtifactCurrentChecks, withImmediateArtifactCurrentChecks, type ArtifactCapture } from './artifact-path-association.ts'
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types as utilTypes } from 'node:util'
@@ -122,11 +123,24 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     if (before?.kind === 'ready') { before.assertCurrent(); lockDirectory ??= before }
     const raw = await acquireSessionLock({ lockPath, retryMs: opts?.acquireRetryMs, deadlineMs: opts?.acquireDeadlineMs })
     let current: ArtifactCapture | undefined, debt: unknown, failed = false
+    const readRawHeld = () => {
+      const original = originalHeldStateFor(raw)
+      if (original) return original.read()
+      let held = false
+      withImmediateArtifactCurrentChecks(() => { held = raw.held; if (typeof held !== 'boolean') throw TypeError('Original lock held state unavailable') })
+      return held
+    }
     const lease: SessionLock = {
-      get held() { if (current) assertArtifactCurrent(current); return raw.held },
+      get held() {
+        const original = originalHeldStateFor(raw)
+        if (original) { if (current) assertArtifactCurrent(current); return original.read() }
+        let held = false
+        withImmediateArtifactCurrentChecks(() => { if (current) assertArtifactCurrent(current); held = readRawHeld(); if (current) assertArtifactCurrent(current) })
+        return held
+      },
       async release() {
-        if (failed && !raw.held) throw debt
-        try { await raw.release(); failed = false; debt = undefined; outstanding = undefined; acquisitionDebt.delete(lease) }
+        if (failed && !readRawHeld()) throw debt
+        try { let releasing: ReturnType<SessionLock['release']>; withImmediateArtifactCurrentChecks(() => { releasing = raw.release() }); await releasing!; failed = false; debt = undefined; outstanding = undefined; acquisitionDebt.delete(lease) }
         catch (error) { failed = true; debt = error; throw error }
       },
     }
@@ -271,7 +285,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     let bundles: Set<Bundle> | undefined
     if (bundle.role === 'session') { bundles = activeBundles.get(id); if (!bundles) { bundles = new Set(); activeBundles.set(id, bundles) }; bundles.add(bundle) }
     result = {
-      assertHeld() { if (retired) throw Error('Ownership claim retired'); checkHeld() },
+      assertHeld() { if (retired) throw Error('Ownership claim retired'); if (reuse) withArtifactCurrentChecks(checkHeld); else checkHeld(); if (retired) throw Error('Ownership claim retired') },
       retainLive() { if (document) throw Error('Document pin cannot retain session ownership'); this.assertHeld(); if (!live.has(id)) { for (const resource of held) resource.retainLive(id); live.set(id, bundle) } },
       async release() { if (!retired) { retired = true; if (bundles) { bundles.delete(bundle); if (!bundles.size && activeBundles.get(id) === bundles) activeBundles.delete(id) } }; const errors: unknown[] = []; for (const resource of [...held].reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length === 1) throw errors[0]; if (errors.length) throw new AggregateError(errors, 'Ownership bundle cleanup failed') },
     }
