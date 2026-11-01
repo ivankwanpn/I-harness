@@ -1,3 +1,4 @@
+import { associateOriginalResultRevocation } from './coordinator/result-revocation.ts'
 import { associateRestoredContextAcquisition } from './restored-context-internal.ts'
 import { attachArchiveReadResources } from './archive-read-internal.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
@@ -203,6 +204,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   associateRestoredContextAcquisition(coordinator,{acquire:id=>managed.acquireRestoredContext(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
   associateOriginalResultOrdering(coordinator, ownership)
+  if (ownership.lockEnabled) associateOriginalResultRevocation(coordinator, observations.createResultRevocationAdmission(ownership), ownership)
   if (ownership.lockEnabled) associateProjectBindingWrites(coordinator, documents)
   coldObservationOwners.set(coordinator, { capture: managed.captureColdObservation, binding: observations.captureColdBindingObservation })
   if (backend.deleteOwnedSession) associateDeletionPreparation(coordinator, lifecycle)
