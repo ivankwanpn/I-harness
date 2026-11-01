@@ -318,44 +318,57 @@ function dispatchedRecord(record: ScheduleRecord, change: Extract<ScheduleChange
  * ownership (subagent-style forked sessions). Id reuse and delete/dispatch of
  * an inactive id are schedule-log corruptions → ScheduleLogError.
  */
+export function createScheduleAccumulator(): {
+  apply(event: SessionEvent): void
+  current(): FoldedSchedules
+} {
+  const active = new Map<string, ScheduleRecord>()
+  const seen = new Set<string>()
+  return {
+    apply(event) {
+      if (event.type !== "schedule/change") return
+      const change = decodeScheduleEvent(event)
+      switch (change.operation) {
+        case "create":
+          if (seen.has(change.schedule.id)) {
+            throw new ScheduleLogError(`schedule id ${JSON.stringify(change.schedule.id)} was reused`)
+          }
+          seen.add(change.schedule.id)
+          active.set(change.schedule.id, change.schedule)
+          break
+        case "delete":
+          if (!active.delete(change.id)) {
+            throw new ScheduleLogError(`schedule delete targets inactive id ${JSON.stringify(change.id)}`)
+          }
+          break
+        case "dispatch": {
+          const record = active.get(change.id)
+          if (record === undefined) {
+            throw new ScheduleLogError(`schedule dispatch targets inactive id ${JSON.stringify(change.id)}`)
+          }
+          const next = dispatchedRecord(record, change)
+          if (next === undefined) active.delete(change.id)
+          else active.set(change.id, next)
+          break
+        }
+      }
+    },
+    current() {
+      return {
+        active: Object.freeze([...active.values()].map((record) => ({ ...record }))),
+        seenIds: Object.freeze([...seen]),
+      }
+    },
+  }
+}
+
 export function foldScheduleEvents(events: readonly SessionEvent[], seedLength = 0): FoldedSchedules {
   if (!Number.isSafeInteger(seedLength) || seedLength < 0 || seedLength > events.length) {
     throw new ScheduleLogError("schedule seedLength must be within the supplied event log")
   }
-  const active = new Map<string, ScheduleRecord>()
-  const seen = new Set<string>()
-  for (const event of events.slice(seedLength)) {
-    if (event.type !== "schedule/change") continue
-    const change = decodeScheduleEvent(event)
-    switch (change.operation) {
-      case "create":
-        if (seen.has(change.schedule.id)) {
-          throw new ScheduleLogError(`schedule id ${JSON.stringify(change.schedule.id)} was reused`)
-        }
-        seen.add(change.schedule.id)
-        active.set(change.schedule.id, change.schedule)
-        break
-      case "delete":
-        if (!active.delete(change.id)) {
-          throw new ScheduleLogError(`schedule delete targets inactive id ${JSON.stringify(change.id)}`)
-        }
-        break
-      case "dispatch": {
-        const record = active.get(change.id)
-        if (record === undefined) {
-          throw new ScheduleLogError(`schedule dispatch targets inactive id ${JSON.stringify(change.id)}`)
-        }
-        const next = dispatchedRecord(record, change)
-        if (next === undefined) active.delete(change.id)
-        else active.set(change.id, next)
-        break
-      }
-    }
-  }
-  return {
-    active: Object.freeze([...active.values()]),
-    seenIds: Object.freeze([...seen]),
-  }
+  const accumulator = createScheduleAccumulator()
+  for (const event of events.slice(seedLength)) accumulator.apply(event)
+  return accumulator.current()
 }
 
 /** Next readable id (`schedule-<n>`), never reusing a prior session-local id
