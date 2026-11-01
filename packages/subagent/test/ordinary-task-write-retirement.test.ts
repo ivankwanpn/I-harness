@@ -18,13 +18,15 @@ import {lockPathFor} from '../../fs-lock/src/index.ts'
 import {artifactPathsFor} from '../../session-persistence/src/coordinator/artifact-path-association.ts'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
 
-it.each(['known','unknown','unissued'] as const)('retires only the same original ordinary native write and preserves its proved disposition (%s)',async mode=>{
+it.each(['known','unknown','unissued','title-known','title-unknown'] as const)('retires only the same original ordinary native write and preserves its proved disposition (%s)',async scenario=>{
+ const mode=scenario==='title-known'?'known':scenario==='title-unknown'?'unknown':scenario
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'ordinary-issued-')),c=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
  let tasks:ReturnType<typeof createTaskRegistry>|undefined
  try{
   await c.create({sessionId:'parent'});const document=await c.openManagedDocument('parent'),owned=captureOwnedTaskContext(c,document,document.view,'parent')!
   tasks=createTaskRegistry({coordinator:c,stateId:'parent',reportPolicy:SHIPPING_REPORT_POLICY,ownedTask:owned,results:createTaskResultRetention(undefined,undefined,'parent')});await tasks.ready
   const task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'one',description:'one',prompt:'work',agent:'general',delivery:'tool'});await tasks.flushPersistence()
+  if(scenario.startsWith('title-')){await c.updateMeta('parent',{title:'Display update before original ordinary issue'});expect(tasks.notifications()).toEqual([])}
   cut.root=root;cut.mode=mode;cut.stages=cut.issues=0;cut.entered=entered.resolve;cut.gate=release.promise
   tasks.terminalize({taskId:task.id,outcome:'cancelled'});const retention=tasks.retainResult(task.id);void retention.catch(()=>{});await entered.promise
   const save=lastOriginalTaskSave(tasks)!,producer=originalTaskWriteLifetime(cut.write!)!;expect(producer.issued()).toBe(mode!=='unissued');expect(originalTaskWriteLifetime({...cut.write})).toBeUndefined()

@@ -1,3 +1,4 @@
+import {taskParentMetadataProjection} from './task-parent-metadata.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts';
 import { canJoinOriginalNativePrewrite } from '../native-fact-writer-internal.ts';
 import { createDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
@@ -18,6 +19,8 @@ import { cancellationRetirementFor } from './received-input-cancellation.ts';
 import { ownBackendOutcome, sameBatchKey } from './fact-outcome.ts';
 import { createActionCaptures } from './action-captures.ts';
 import type { createProcessReadLatches } from './process-read-latches.ts';
+type TaskMetadataUpdate={before(meta:unknown):void;after(meta:unknown):void;finish(success:boolean):void}
+type TaskParentReadiness=Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void}>
 type Ticket = {
     release(): void;
 };
@@ -70,7 +73,7 @@ const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unav
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
-const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; invalidateMetadata(revision:object):void; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
 type RestoredStage = (events: readonly import('@i-harness/core-session').SessionEventView[], readCurrentEvent:(index:number)=>import('@i-harness/core-session').SessionEventView|undefined)=>{install(batch:ReturnType<typeof encodeFactBatch>,receipt:FactReceipt):void}
 const restoredStages = new WeakMap<ManagedDocument, RestoredStage>()
 /** Only the actual managed constructor/ownership association may bind its read fold. */
@@ -106,6 +109,8 @@ export function invalidateManagedMetadataWitness(document:ManagedDocument,owners
  const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError()
  original.invalidateMetadata(revision)
 }
+export function captureManagedTaskParentReadiness(document:ManagedDocument,ownership:Ownership){const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.captureTaskParent()}
+export function beginManagedTaskMetadataUpdate(document:ManagedDocument,ownership:Ownership){const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.beginTaskMetadata()}
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
 export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>): ManagedDocument & {
@@ -132,6 +137,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const releaseRecoveryWitness = (source: object) => { const token = recoveryWitnesses.get(source); if (token) { recoveryWitnesses.delete(source); token.end('settled'); } };
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
     let metadataRevision:object={},metadataStale=false;
+    let taskRevision:object={},taskMetadataPending=0,taskMetadataStale=false;
     const selectedListeners=new Set<()=>void>();
     let selectedAdmissions=0;
     const invalidateSelected=()=>{for(const listener of [...selectedListeners]){selectedListeners.delete(listener);try{listener()}catch{}}};
@@ -710,12 +716,25 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             close() { if (this !== result) throw new TypeError('Invalid process capture receiver'); retired = true; latch.retire(); },
         });
         return result;
+    }, beginTaskMetadata() {
+        held.assertHeld();if(closed||closing)throw new FactRecoveryRequiredError();
+        const revision=taskRevision;taskMetadataPending++;let done=false,before:string|undefined,after:string|undefined,invalid=false;
+        return Object.freeze({before(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{before=taskParentMetadataProjection(meta)}catch{invalid=true}},after(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{after=taskParentMetadataProjection(meta)}catch{invalid=true}},finish(success:boolean){if(done)return;done=true;taskMetadataPending--;try{held.assertHeld()}catch{success=false}if(!success||invalid||before===undefined||after===undefined||before!==after||revision!==taskRevision||closed||closing){taskRevision={};taskMetadataStale=true}}});
+    }, captureTaskParent() {
+        const revision=taskRevision;
+        const checkOriginal=()=>{
+            const ready=Object.getOwnPropertyDescriptor(document,'assertReady'),view=Object.getOwnPropertyDescriptor(document,'view');
+            if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||!ready||!('value'in ready)||ready.value!==originalReady||!view||!('value'in view)||view.value!==originalView||state.view!==originalView)throw new FactRecoveryRequiredError();
+            held.assertHeld();
+        };
+        const check=()=>{checkOriginal();if(closing)throw new FactRecoveryRequiredError();Reflect.apply(originalReady,document,[])};check();
+        const result=Object.freeze({view:originalView,assertOriginal(){if(this!==result)throw TypeError('Invalid Task parent receiver');checkOriginal()},assertCurrent(){if(this!==result)throw TypeError('Invalid Task parent receiver');check()},assertTask14Ready(){if(this!==result)throw TypeError('Invalid Task parent receiver');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return result;
     }, captureRequiredParent(source) {
         const original=sourceDrains.get(source);if(!original?.action||original.action.stopped||original.closeRequested||!original.sourceMethods||!original.deliveryMethods||formatVersion!==14||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady)throw new FactRecoveryRequiredError();Reflect.apply(originalReady,document,[]);
         const sourceMethods=original.sourceMethods,deliveryMethods=original.deliveryMethods;
         const assertSource=()=>{for(const [object,fields]of [[source,sourceMethods],[sourceMethods.delivery!.value as object,deliveryMethods]]as const){for(const key of Reflect.ownKeys(fields)){const original=Reflect.get(fields,key)as PropertyDescriptor,now=Object.getOwnPropertyDescriptor(object,key);if(!now||!('value'in now)||now.value!==original.value)throw new FactRecoveryRequiredError()}}source.assertHeld()};
-        const revision=metadataRevision;
-        const checkIdentity=()=>{if(closed||metadataStale||revision!==metadataRevision||!sourceDrains.has(source)||state.view!==originalView||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||Object.getOwnPropertyDescriptor(document,'view')?.value!==originalView||quarantined||sourceFault)throw new FactRecoveryRequiredError();assertSource();held.assertHeld()};
+        const revision=taskRevision;
+        const checkIdentity=()=>{if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||!sourceDrains.has(source)||state.view!==originalView||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||Object.getOwnPropertyDescriptor(document,'view')?.value!==originalView||quarantined||sourceFault)throw new FactRecoveryRequiredError();assertSource();held.assertHeld()};
         const check=()=>{checkIdentity();if(pending)throw new FactRecoveryRequiredError()};check();
         const joinableWriter=()=>{ownership.assertOutsideSessionOperation(id);checkIdentity();const batch=pending;if(batch){if(batch.settlementSettled||(!batch.issued&&(!batch.issuer||!canJoinOriginalNativePrewrite(backend,id,batch.issuer,batch.batch)))||batch.entries.some(entry=>entry.authorization.source===source)||batch.receipt||batch.installationFailure)throw Object.assign(new FactRecoveryRequiredError(),{cause:{originalBatchIssued:batch.issued,sameRequiredSource:batch.entries.some(entry=>entry.authorization.source===source),receipt:!!batch.receipt,installationFailure:!!batch.installationFailure,eventTypes:batch.events.map(event=>event.type)}});}return batch};
         const joinIssuedWriter=async()=>{const batch=joinableWriter();if(batch)await batch.settlement.promise;check()};

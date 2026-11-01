@@ -6,7 +6,7 @@ import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
-import { invalidateManagedMetadataWitness, createManagedDocument, bindManagedRestoredStage, captureManagedParentReadiness, captureManagedRequiredParent, captureManagedProcessRead } from './managed-document.ts'
+import { beginManagedTaskMetadataUpdate, captureManagedTaskParentReadiness, invalidateManagedMetadataWitness, createManagedDocument, bindManagedRestoredStage, captureManagedRequiredParent, captureManagedProcessRead } from './managed-document.ts'
 import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
@@ -128,7 +128,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const association = documentEntries.get(document)
       if (!association) throw new FactRecoveryRequiredError()
       const { id, entry } = association
-      const readiness = captureManagedParentReadiness(document, ownership)
+      const readiness = captureManagedTaskParentReadiness(document, ownership)
       const check = () => {
         if (documents.get(id) !== entry || entry.document !== document || entry.revoked || ((entry.bootstrap||entry.selected) && !entry.ready)) throw new FactRecoveryRequiredError()
         readiness.assertCurrent()
@@ -147,6 +147,9 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     },
     has:(id:string)=>documents.has(id),
     assertMutation(id:string){assertEntry(documents.get(id))},
+    beginTaskMetadataUpdate(id:string){
+      assertTaskOutside(id);bootstrap.assertOutsideCapture(id);const entry=documents.get(id);assertEntry(entry);const document=entry?.document;if(!entry||!document)return;const original=beginManagedTaskMetadataUpdate(document,ownership);return Object.freeze({before:original.before,after:original.after,finish(success:boolean){original.finish(success&&documents.get(id)===entry&&entry.document===document&&!entry.revoked&&!entry.headerUnknown)}})
+    },
     invalidateMetadataWitness(id:string){
       assertTaskOutside(id);bootstrap.assertOutsideCapture(id)
       const entry=documents.get(id);assertEntry(entry)
