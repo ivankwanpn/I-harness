@@ -12,7 +12,7 @@ import * as core from '@i-harness/core-session'
 
 vi.mock('node:fs/promises', async importOriginal => {
   const original = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...original, open: vi.fn(original.open) }
+  return { ...original, open: vi.fn(original.open), readFile: vi.fn(original.readFile) }
 })
 
 it('quarantines a same-size committed-prefix conflict before issuance instead of proving absence', async () => {
@@ -522,17 +522,19 @@ it('returns the exact active managed view from legacy load APIs without a second
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-load-alias-'))
   const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const repair = vi.spyOn(backend, 'repair'), actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
+  const repairRead = vi.mocked(readFile), actual = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
   try {
     await document.metadata.admit({ type: 'plan/mode', mode: 'on' })
+    // repair() uses whole-file readFile; active loads must return the retained view without entering it.
+    repairRead.mockClear()
     expect((await coordinator.load(id)).session).toBe(document.view)
     expect((await coordinator.loadOwned(id)).session).toBe(document.view)
-    expect(repair).not.toHaveBeenCalled()
+    expect(repairRead).not.toHaveBeenCalled()
     vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => { await actual(...args); return { kind: 'unknown', key: args[3].key } })
     const outcome = await document.metadata.admit({ type: 'plan/mode', mode: 'off' })
     await expect(coordinator.load(id)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     await expect(coordinator.loadOwned(id)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
-    expect(repair).not.toHaveBeenCalled()
+    expect(repairRead).not.toHaveBeenCalled()
     if (outcome.kind !== 'unknown') throw new Error('Expected uncertainty')
     await document.reconcile(outcome.key)
   } finally { await coordinator.close().catch(() => {}) }
@@ -564,7 +566,7 @@ it('publishes a structural fork only after its fresh scoped seed receipt without
   vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     if (args[0] !== id) { entered.resolve(); await release.promise }
     const result = await actual(...args)
-    if (args[0] !== id && result.kind === 'committed') { seedReceiptOwner = result.receipt.owner.sessionId; seedKey = result.receipt.key }
+    if (args[0] !== id && args[3].key.firstSeq === 0 && result.kind === 'committed') { seedReceiptOwner = result.receipt.owner.sessionId; seedKey = result.receipt.key }
     return result
   })
   const forking = forkSession(coordinator, id).then(result => { returned = true; return result })
@@ -578,7 +580,9 @@ it('publishes a structural fork only after its fresh scoped seed receipt without
     expect(sourceFrames.some(frame => frame.batchId === seedKey?.batchId)).toBe(false)
     const bytes = (await readFile(join(root, `${fork.sessionId}.jsonl`), 'utf8')).trimEnd().split('\n')
     expect(JSON.parse(bytes[0]!).journal).toMatchObject({ legacyBodyBytes: 0, legacyEventCount: 0, separatorBytes: 0 })
-    expect(bytes).toHaveLength(2)
+    expect(bytes).toHaveLength(3)
+    expect(JSON.parse(bytes[1]!).firstSeq).toBe(0)
+    expect(JSON.parse(bytes[2]!).firstSeq).toBe(fork.seedLength)
     expect((await coordinator.openManagedDocument(fork.sessionId)).view.events).toEqual((await backend.read(fork.sessionId)).events)
   } finally { release.resolve(); await coordinator.close().catch(() => {}) }
 })

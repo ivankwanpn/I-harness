@@ -48,7 +48,7 @@ it.each(['revoke','close','repeat-revoke'] as const)('direct original document %
  const {root,backend,coordinator}=await setup('public-direct-'+mode),request=payload(),ready=await coordinator.bootstrapSemanticTarget(request,guards);expect(ready.kind).toBe('ready');if(ready.kind!=='ready')throw Error('actual document required');const document=ready.document,confirm=vi.mocked(backend.confirmBootstrapFrames!).getMockImplementation()!,entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
  if(mode==='repeat-revoke')coordinator.revokeManagedDocumentNewWork('target')
  vi.mocked(backend.confirmBootstrapFrames!).mockImplementation(async(...args)=>{const result=await confirm(...args);entered.resolve();await release.promise;return result})
- const before=await snapshot(root),retry=coordinator.resumeSemanticTarget(request.invocation,guards);await entered.promise;if(mode==='close')await document.close();else document.revokeNewWork();release.resolve();const outcome=await retry,after=await snapshot(root);await record(root,'outcome',{mode,kind:outcome.kind,before,after});expect(outcome.kind).toBe('blocked');expect(after).toEqual(before)
+ const before=await snapshot(root),retry=coordinator.resumeSemanticTarget(request.invocation,guards);await entered.promise;let closeSettled=false;const closing=mode==='close'?document.close().then(()=>{closeSettled=true}):undefined;if(closing){await Promise.resolve();expect(closeSettled).toBe(false)}if(mode!=='close')document.revokeNewWork();release.resolve();await closing;const outcome=await retry,after=await snapshot(root);await record(root,'outcome',{mode,kind:outcome.kind,before,after});expect(outcome.kind).toBe('blocked');expect(after).toEqual(before)
 })
 
 // Stable factory-level delegates preserve the backend's original descriptor identity.
@@ -58,4 +58,38 @@ vi.mock('../src/backend/fact-journal.ts', async importOriginal => {
   const backend = original.createFactJournalBackend(...args)
   return {...backend, appendOwnedBatch: vi.fn(backend.appendOwnedBatch), reconcileOwnedBatch: vi.fn(backend.reconcileOwnedBatch), confirmBootstrapFrames: vi.fn(backend.confirmBootstrapFrames)}
  }}
+})
+
+const headerOwners = vi.hoisted(() => new Map<string, { owner: p.HeldFactOwner; backend: ReturnType<typeof import('../src/backend/bootstrap-header.ts')['createBootstrapHeaderBackend']> }>())
+vi.mock('../src/backend/bootstrap-header.ts', async importOriginal => {
+ const original = await importOriginal<typeof import('../src/backend/bootstrap-header.ts')>()
+ return {...original, createBootstrapHeaderBackend(...args: Parameters<typeof original.createBootstrapHeaderBackend>) {
+  const backend = original.createBootstrapHeaderBackend(...args)
+  return {...backend, trackHeaderOwner(id: string, owner: p.HeldFactOwner) { backend.trackHeaderOwner(id,owner); headerOwners.set(id,{owner,backend}) }}
+ }}
+})
+it('retains only the registered original header ledger after retirement and refuses copied or foreign owners', async () => {
+ const {coordinator}=await setup('retained-ledger-identity'),request=payload()
+ const result=await coordinator.bootstrapSemanticTarget(request,guards);expect(result.kind).toBe('ready')
+ const captured=headerOwners.get('target')!;expect(captured).toBeDefined()
+ await coordinator.close()
+ expect(captured.backend.hasTrackedHeaderDebt('target',captured.owner)).toBe(false)
+ await expect(captured.backend.settleTrackedHeaderIO('target',captured.owner)).resolves.toBeUndefined()
+ expect(()=>captured.backend.hasTrackedHeaderDebt('target',{...captured.owner})).toThrow()
+ expect(()=>captured.backend.hasTrackedHeaderDebt('foreign',captured.owner)).toThrow()
+ expect(()=>captured.owner.assertHeld()).toThrow()
+})
+
+it('keeps original unknown completion blocked after revocation and refuses new issuance', async () => {
+ const {backend,coordinator}=await setup('unknown-original-debt'),request=payload()
+ const appendBatch=vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
+ vi.mocked(backend.appendOwnedBatch!).mockImplementation(async(...args)=>{const result=await appendBatch(...args);return args[3].key.batchId.endsWith(':complete')?{kind:'unknown',key:args[3].key}:result})
+ expect((await coordinator.bootstrapSemanticTarget(request,guards)).kind).toBe('blocked')
+ coordinator.revokeManagedDocumentNewWork('target')
+ vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(async(_id,_owner,_prefix,batch)=>({kind:'unknown',key:batch.key}))
+ const count=vi.mocked(backend.appendOwnedBatch!).mock.calls.length
+ expect((await coordinator.resumeSemanticTarget(request.invocation,guards)).kind).toBe('blocked')
+ expect(vi.mocked(backend.appendOwnedBatch!).mock.calls.length).toBe(count)
+ await expect(coordinator.openManagedDocument('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+ expect(vi.mocked(backend.appendOwnedBatch!).mock.calls.length).toBe(count)
 })
