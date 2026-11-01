@@ -35,7 +35,7 @@ type Candidate = {
     context: ReturnType<typeof createContextStateIndex>;
     prune: ReturnType<typeof createPruneDependencyIndex>;
     intake:ReturnType<typeof createManagedIntakeIndex>;
-    fold?: OriginalExecutionFoldSink;
+    fold?: Omit<OriginalExecutionFoldSink, 'validateSnapshot'>;
     installed: boolean;
     retired: boolean;
 };
@@ -58,6 +58,8 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     const source = captureOriginalRestorationSource(input);
     source.assertCurrent();
     const supplied = foldFactory?.(Object.freeze({sessionId, seedLength: source.header?.seedLength ?? 0, formatVersion: source.formatVersion}));
+    const validator = supplied && Object.getOwnPropertyDescriptor(supplied, 'validateSnapshot')?.value;
+    if (supplied && typeof validator !== 'function') throw TypeError('Original fold snapshot validator required');
     // Capture once. A callback that returns before its work is acknowledged
     // cannot later make this candidate usable, even if its promise settles.
     let foldFailure: TypeError | undefined;
@@ -70,7 +72,14 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     const synchronous = (method: (...args: any[]) => unknown, snapshot = false) => (...args: any[]) => {
         if (foldFailure) throw foldFailure;
         const result = method(...args);
-        if (snapshot ? !isStrictFactData(result) : result !== undefined) refuse(result);
+        if (snapshot) {
+            if (!isStrictFactData(result) || Object.getOwnPropertyDescriptor(supplied!, 'validateSnapshot')?.value !== validator) refuse(result);
+            let valid: unknown;
+            try { valid = Reflect.apply(validator, supplied, [result]); }
+            catch (cause) { foldFailure ??= new TypeError('Synchronous original fold snapshot validation failed', {cause}); throw foldFailure; }
+            if (valid !== true) refuse(valid);
+            if (Object.getOwnPropertyDescriptor(supplied!, 'validateSnapshot')?.value !== validator) refuse(result);
+        } else if (result !== undefined) refuse(result);
         return result;
     };
     const fold = supplied && Object.freeze({

@@ -76,5 +76,6 @@ export interface OriginalExecutionFoldSink {
   appendValidated(unit: readonly SessionEventView[], firstOrdinal: number): void
   finishRestore(prefix: Readonly<JournalPrefix>): void
   snapshot(prefix: Readonly<JournalPrefix>): unknown
+  validateSnapshot(value: unknown): boolean
 }
 export type OriginalExecutionFoldFactory = (source: Readonly<{sessionId:string; seedLength:number; formatVersion:number}>) => OriginalExecutionFoldSink

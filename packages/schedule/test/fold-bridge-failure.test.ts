@@ -128,3 +128,28 @@ for(const after of [false,true])it(`retains falsey live fold failure ${after?'af
   let failed=false;try{pending.install()}catch(error){failed=true;expect(error).toBeUndefined()}
   expect(failed).toBe(true);expect(()=>state.observe()).toThrow();expect(pending.install).toThrow(/RECOVERY_REQUIRED/);expect(calls).toBe(1)
 })
+
+for(const [name,invalid] of Object.entries({null:null,undefined:undefined,primitive:1,array:[],wrong:{other:[]},badRecord:{active:[{id:'bad'}],seenIds:['bad']},unseen:{active:[createAfterScheduleRecord('unseen','prompt',60,Date.parse('2026-08-31T10:00:00Z'))],seenIds:[]}})) {
+  it(`permanently refuses ${name} snapshot even when the next callback would be valid`,async()=>{
+    let calls=0
+    const state=await fixture().restore((info:any)=>{const sink=createScheduleFoldSink(info);return {...sink,snapshot(prefix:any){calls++;return calls===1?invalid:sink.snapshot(prefix)}}})
+    expect(()=>state.observe()).toThrow();expect(()=>state.observe()).toThrow();expect(calls).toBe(1)
+  })
+}
+
+for(const mode of ['throw','async','changed'] as const)it(`permanently refuses ${mode} validator without snapshot revival`,async()=>{
+  let snapshots=0,validations=0
+  const state=await fixture().restore((info:any)=>{
+    const sink=createScheduleFoldSink(info)
+    const supplied={...sink,snapshot(prefix:any){snapshots++;if(mode==='changed')supplied.validateSnapshot=()=>true;return sink.snapshot(prefix)},validateSnapshot(value:unknown):any{
+      validations++
+      if(validations>1)return true
+      if(mode==='throw')throw undefined
+      if(mode==='async')return Promise.reject(Error('late validator rejection'))
+      return sink.validateSnapshot(value)
+    }}
+    return supplied
+  })
+  expect(()=>state.observe()).toThrow();await Promise.resolve();await Promise.resolve()
+  expect(()=>state.observe()).toThrow();expect(snapshots).toBe(1)
+})
