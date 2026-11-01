@@ -14,7 +14,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { ExecService } from "@i-harness/exec"
 import type { ToolRegistry, ToolExec } from "@i-harness/core-tools"
-import type { AgentTable, ChildAgentEntry, JobRegistry, ParentInputAdmission, RoleRegistry, SpawnOptions, SubagentRole } from "@i-harness/subagent"
+import type { AgentTable, ChildAgentEntry, JobRegistry, ParentInputAdmission, RoleRegistry, RoleCleanup, SpawnOptions, SubagentRole } from "@i-harness/subagent"
 import type { TeamConfig } from "./types.ts"
 import { admitTeam, releaseTeam, resolveTeamCaller } from "./scheduler/admission.ts"
 import { TEAMMATE_BASE_TOOLS, TEAMMATE_ROLE_NAME, teammateRole, createTeammateSpawner, createTeammateControls, createMemberStatus } from "./scheduler/teammate-lifecycle.ts"
@@ -152,8 +152,11 @@ export async function mountAgentTeams(
   let mailbox: ReturnType<typeof createMailbox> | undefined
   let children: { path: string; entry: ChildAgentEntry; agent: ReturnType<AgentRegistry['get']>; disposed: boolean; jobClosed: boolean; detached: boolean; removeAgent: boolean }[] | undefined
   let generatedRole: SubagentRole | undefined
-  const removeGeneratedRole = () => {
-    if (generatedRole && deps.subagents.roles.get(TEAMMATE_ROLE_NAME) === generatedRole) deps.subagents.roles.remove(TEAMMATE_ROLE_NAME)
+  let generatedRoleCleanup: RoleCleanup | undefined
+  const removeGeneratedRole = async () => {
+    if (!generatedRole) return
+    if (generatedRoleCleanup) await generatedRoleCleanup()
+    else if (deps.subagents.roles.get(TEAMMATE_ROLE_NAME) !== undefined) throw new Error('Original Team role registration cleanup unavailable')
   }
   const handle: TeamMountHandle = {
     teamName: teamId,
@@ -197,7 +200,7 @@ export async function mountAgentTeams(
           } catch (error) { failures.push(error) }
         }
         try { if (!toolsClosed) { await toolMount?.close(); toolsClosed = true } } catch (error) { failures.push(error) }
-        try { if (!roleClosed) { removeGeneratedRole(); roleClosed = true } } catch (error) { failures.push(error) }
+        try { if (!roleClosed) { await removeGeneratedRole(); roleClosed = true } } catch (error) { failures.push(error) }
         if (factsClosed && children!.length === 0 && toolsClosed && roleClosed) { releaseTeam(teamId); phase = 'closed' }
         else phase = 'recovery'
         if (failures.length) throw Object.assign(new AggregateError(failures, 'Team cleanup incomplete'), { resourcesClosed: phase === 'closed' })
@@ -304,7 +307,7 @@ export async function mountAgentTeams(
     // user role; an existing custom definition remains authoritative.
     if (!sub.roles.get(TEAMMATE_ROLE_NAME)) {
       generatedRole = teammateRole(teamRoleTools)
-      sub.roles.register(generatedRole)
+      sub.roles.register(generatedRole, cleanup => { generatedRoleCleanup = cleanup })
     }
 
     // ---- recovery (crash restore), BEFORE the tools are live ----

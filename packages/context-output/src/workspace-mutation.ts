@@ -4,6 +4,7 @@ import { acquireSessionLock, lockPathFor, type SessionLock } from '@i-harness/fs
 export interface WorkspaceMutationTurn { assertCurrent(): void }
 export interface WorkspaceMutationCleanup { assertSettled(): void; close(): Promise<void> }
 export interface WorkspaceMutationOwner {
+  assertOutside(): void
   mutate<T>(work: (turn: WorkspaceMutationTurn) => Promise<T>, retain?: (cleanup: WorkspaceMutationCleanup) => void): Promise<T>
   cleanup<T>(work: (turn: WorkspaceMutationTurn) => Promise<T>, retain?: (cleanup: WorkspaceMutationCleanup) => void): Promise<T>
   assertTurn(turn: WorkspaceMutationTurn): void
@@ -96,7 +97,7 @@ export function createWorkspaceMutationOwner(identity: { root: string; workspace
   }
   const join = async () => { assertOutside(); await serial }
   return {
-    mutate: (work, retain) => enqueue(work, false, retain), cleanup: (work, retain) => enqueue(work, true, retain), assertTurn, join,
+    mutate: (work, retain) => enqueue(work, false, retain), cleanup: (work, retain) => enqueue(work, true, retain), assertTurn, assertOutside, join,
     close() {
       try { assertOutside() } catch (failure) { return Promise.reject(failure) }
       if (closed) return Promise.resolve()

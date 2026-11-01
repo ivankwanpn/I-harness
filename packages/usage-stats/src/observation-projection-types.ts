@@ -14,8 +14,8 @@ export interface ObservationSend {
  providerId?:string; modelId?:string; workspace?:string; projectId?:string; billing?:'api'|'subscription'|'unknown';
  totalInputTokens:number|null; uncachedInputTokens:number|null; totalTokens:number|null;
  coverage:'complete'|'incomplete'|'unavailable';
- /** No price authority is bound by this inactive projection. Subscription is never API cost. */
- estimatedCostUsd:null; costCoverage:'subscription-no-api-cost'|'unavailable'
+ /** Reducer leaves cost unavailable; pure query binds effective configured prices. Subscription is never API cost. */
+ estimatedCostUsd:number|null; costCoverage:'priced'|'unpriced'|'subscription-no-api-cost'|'unavailable'
 }
 export interface ObservationProjection {
  entities:ObservationEntity[];

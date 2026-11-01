@@ -1,4 +1,5 @@
 import type { SeedDependencyTransferScope } from './artifact/bootstrap-transfer.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { access as fileAccess } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { checkAbort, serializedBytes } from './bytes.ts'
@@ -18,9 +19,28 @@ import type { LegacyReadObservation, LegacyReadQuery, LegacySearchQuery } from '
 import { createSelectedMetadata, createColdSelectedMetadata } from './legacy/selected-metadata.ts'
 import { captureOriginalColdObservation, type ColdSelectedObservation } from '../../session-persistence/src/selected-source-owner.ts'
 import type { SessionCoordinator } from '../../session-persistence/src/coordinator/types.ts'
+import type { OriginalLegacyOrderingParticipant, OriginalOrderingReservation, OriginalOrderingRegistration } from '../../session-persistence/src/coordinator/result-ordering-types.ts'
+import { beginOriginalResultOrderingRegistration } from '../../session-persistence/src/result-ordering-internal.ts'
 import type { createSeedDependencyTransfer } from './artifact/bootstrap-transfer.ts'
 
 type ColdManagedOwner = Pick<ReturnType<typeof createSeedDependencyTransfer>, 'acquireColdManagedQualification' | 'revokeColdTransfers'>
+const legacyOrderingOwners = new WeakMap<ContextOutputService, OriginalLegacyOrderingParticipant>()
+const orderingRequired = new WeakSet<ContextOutputService>(), orderingConfigured = new WeakSet<ContextOutputService>()
+export function requireOriginalLegacyOrdering(service: ContextOutputService) {
+  if (!legacyOrderingOwners.has(service)) throw TypeError('Original legacy ordering service required')
+  orderingRequired.add(service)
+}
+export function commitOriginalLegacyOrdering(service: ContextOutputService, registration: OriginalOrderingRegistration) {
+  const participant = legacyOrderingOwners.get(service)
+  if (!participant) throw TypeError('Original legacy ordering service required')
+  registration.commit(participant); orderingConfigured.add(service)
+}
+export function registerOriginalLegacyOrdering(service: ContextOutputService, coordinator: SessionCoordinator) {
+  const participant = legacyOrderingOwners.get(service)
+  if (!participant) throw TypeError('Original legacy ordering service required')
+  const registration = beginOriginalResultOrderingRegistration(coordinator, service)
+  try { commitOriginalLegacyOrdering(service, registration) } catch (failure) { registration.cancel(); throw failure }
+}
 const coldManagedOwners = new WeakMap<ContextOutputService, ColdManagedOwner>()
 export function acquireColdManagedQualification(service: ContextOutputService, ...args: Parameters<ColdManagedOwner['acquireColdManagedQualification']>) {
   const original = coldManagedOwners.get(service); if (!original) throw Error('Original context service required')
@@ -110,6 +130,9 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let quiescence: Promise<void> | undefined
   let transitions: Promise<unknown> = Promise.resolve()
   const jobs = new Map<AbortController, Promise<unknown>>()
+  const orderingReservations = new Set<OriginalOrderingReservation>()
+  const originalJobContext = new AsyncLocalStorage<{ active: boolean }>()
+  const assertOrderingOutside = () => { if (originalJobContext.getStore()?.active) throw Error('Original legacy service job reentry'); gate.assertOutside(); owner.assertOutside() }
   const selectedReaders=new Set<Pick<SelectedMetadataRecord, 'revoke' | 'close' | 'cleanupForError'>>()
   const selectedReaderIds=new WeakMap<object,string>()
   const historicalSelectedReaders = new WeakSet<object>()
@@ -266,11 +289,16 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     })
   }
   function run<T>(signal: AbortSignal|undefined, operation: (signal: AbortSignal) => Promise<T>, mutation = false, hostMetadata = false): Promise<T> {
+    if (orderingRequired.has(service) && !orderingConfigured.has(service)) return Promise.reject(Error('Original result ordering registration required'))
+    if (orderingReservations.size) return Promise.reject(Error('Original fresh ownership ordering in progress'))
     if (closed || closing) return Promise.reject(new Error('Context output is closed'))
     if ((!config.enabled && !hostMetadata) || controls > 0) return Promise.reject(new Error('Context output is disabled or stopping'))
     const controller = new AbortController()
     const owned = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
-    const start = async () => { checkAbort(owned); return operation(owned) }
+    const start = async () => {
+      checkAbort(owned); const scope = { active: true }
+      try { return await originalJobContext.run(scope, () => operation(owned)) } finally { scope.active = false }
+    }
     const task = (mutation ? serial(start) : Promise.resolve().then(start))
     const result = (async () => {
       const failures: unknown[] = []; let value!: T
@@ -283,6 +311,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     return result
   }
   function transition<T>(operation: () => Promise<T>, permanent = false): Promise<T> {
+    if (orderingReservations.size && !permanent) return Promise.reject(Error('Original fresh ownership ordering in progress'))
     controls++
     if (permanent) closing = true
     state = 'stopping'
@@ -291,7 +320,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       await Promise.allSettled([...jobs.values()])
       await mutations
       const failures: unknown[] = []; let value!: T
-      try { value = await operation() } catch (failure) { failures.push(failure) }
+      const scope = { active: true }
+      try { value = await originalJobContext.run(scope, operation) } catch (failure) { failures.push(failure) } finally { scope.active = false }
       if (!failures.length && !permanent) try { await quiesceLegacy() } catch (failure) { failures.push(failure) }
       failuresTogether(failures, 'Legacy transition and original idle cleanup failed'); return value
     }).finally(() => {
@@ -500,6 +530,28 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       await closeFlight
     },
   }
+  legacyOrderingOwners.set(service, Object.freeze({ assertOutside: assertOrderingOutside, reserve(retain: (cleanup: OriginalOrderingReservation) => void) {
+    assertOrderingOutside(); if (closing && !closed) throw Error('Original result service cleanup unresolved')
+    const admittedTransitions = transitions
+    let settled = false, closedReservation = false, flight: Promise<void> | undefined
+    const reservation: OriginalOrderingReservation = Object.freeze({
+      join() {
+        if (this !== reservation) throw TypeError('Original ordering reservation receiver required')
+        if (closedReservation) return Promise.reject(Error('Original ordering reservation closed'))
+        if (settled) return Promise.resolve()
+        if (!flight) { flight = (async () => {
+          await Promise.allSettled([...jobs.values()]); await admittedTransitions
+          // The queue tail preserves each caller's original outcome. Only the
+          // actual retained cleanup below can acknowledge native settlement.
+          await quiesceLegacy(); settled = true
+        })().finally(() => { flight = undefined }) }
+        return flight
+      },
+      assertSettled() { if (this !== reservation) throw TypeError('Original ordering reservation receiver required'); if (!settled) throw Error('Original ordering cleanup unresolved') },
+      async close() { if (this !== reservation) throw TypeError('Original ordering reservation receiver required'); if (closedReservation) return; await reservation.join(); reservation.assertSettled(); closedReservation = true; orderingReservations.delete(reservation) },
+    })
+    orderingReservations.add(reservation); retain(reservation); return reservation
+  } }))
   artifactSettlement.set(service,artifacts.settleSeedDependencyTransfer)
   coldManagedOwners.set(service, { acquireColdManagedQualification(...args) { assertOpen(); return artifacts.acquireColdManagedQualification(...args) }, revokeColdTransfers: artifacts.revokeColdTransfers })
   coldSelectedRevokers.set(service, revokeSelectedAuthorities)

@@ -4,13 +4,36 @@ import { basename, dirname, resolve } from 'node:path'
 import { assertArtifactCurrent, artifactPathsFor, artifactScope, type ArtifactCapture } from './artifact-path-association.ts'
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { types as utilTypes } from 'node:util'
 import { assertOutsideTaskDocumentSessionOperation } from './task-document-operation.ts'
 import { assertOutsideTaskTransitionSession } from './task-document-transition.ts'
+import type { OriginalLegacyOrderingParticipant, OriginalOrderingRegistration, OriginalOrderingReservation } from './result-ordering-types.ts'
 
 type Claim = { assertHeld(): void; retainLive(): void; release(): Promise<void> }
 export interface OwnershipCleanup { assertSettled(): void; close(): Promise<void> }
 type ClaimRecord = { readonly role: 'session' | 'document'; id: string; claim: Claim; assertHeld: Claim['assertHeld']; retainLive: Claim['retainLive']; release: Claim['release'] }
 const ownerClaims = new WeakMap<object, WeakMap<object, ClaimRecord>>()
+function orderingMethod(original: object, key: string): Function {
+  if (!original || utilTypes.isProxy(original)) throw TypeError('Original ordering object required')
+  const field = Object.getOwnPropertyDescriptor(original, key)
+  if (!field || !('value' in field) || typeof field.value !== 'function' || utilTypes.isProxy(field.value)) throw TypeError('Original ordering data method required')
+  if (['assertOutside', 'assertSettled', 'reserve'].includes(key) && utilTypes.isAsyncFunction(field.value)) throw TypeError('Original ordering synchronous method required')
+  return field.value
+}
+function orderingMethods<T extends object>(original: T, keys: readonly string[]) {
+  const captured = new Map(keys.map(key => [key, orderingMethod(original, key)]))
+  const check = () => { for (const [key, method] of captured) if (orderingMethod(original, key) !== method) throw TypeError('Changed original ordering method') }
+  return { original, check, call(key: string, ...args: unknown[]) { check(); return Reflect.apply(captured.get(key)!, original, args) } }
+}
+function orderingReservation(original: OriginalOrderingReservation) {
+  let close: Function | undefined, settled: Function | undefined, active: ReturnType<typeof orderingMethods> | undefined, problem: unknown
+  try { close = orderingMethod(original, 'close'); settled = orderingMethod(original, 'assertSettled'); active = orderingMethods(original, ['join', 'assertSettled', 'close']) } catch (failure) { problem = failure }
+  const check = () => { if (!active) throw problem; active.check() }
+  return { original, check, async join() { check(); await active!.call('join'); check() }, assertActive() { check(); if (active!.call('assertSettled') !== undefined) throw TypeError('Original ordering assertion must be synchronous'); check() },
+    async close() { if (!close) throw problem; await Reflect.apply(close, original, []) },
+    assertSettled() { if (!settled) throw problem; if (Reflect.apply(settled, original, []) !== undefined) throw TypeError('Original ordering assertion must be synchronous') },
+  }
+}
 
 /** Internal prerequisite for the future acquired Documents owner; does not acquire a claim. */
 export function captureHeldOwnershipClaim(owner: Ownership, id: string, claim: Claim): Readonly<{ assertHeld(): void }> {
@@ -34,7 +57,7 @@ export function captureHeldOwnershipClaim(owner: Ownership, id: string, claim: C
 /** Claims belong to one slot incarnation; temporary cleanup cannot retire a live adopter. */
 export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, opts?: CoordinatorOptions) {
   const artifacts = artifactPathsFor(backend as PersistenceBackend)
-  type Bundle = { readonly role: 'session' | 'document'; resources: string[]; captures: ArtifactCapture[] }
+  type Bundle = { readonly role: 'session' | 'document'; resources: string[]; captures: ArtifactCapture[]; slots: Slot[] }
   const live = new Map<string, Bundle>()
   const activeBundles = new Map<string, Set<Bundle>>()
   const lockEnabled = opts?.lock?.enabled ?? false
@@ -49,6 +72,39 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   const documentLeaseDebt = new Set<DocumentLeaseDebt>()
   type Slot = { lock?: SessionLock; acquisition?: OwnershipCleanup; live: Set<string>; claims: Set<object>; acquiring?: Promise<void>; releasing?: Promise<void>; debt?: { cause: unknown } }
   const slots = new Map<string, Slot>()
+  const orderingParticipants = new Map<object, ReturnType<typeof orderingMethods<OriginalLegacyOrderingParticipant>>>()
+  const orderingPending = new Set<object>()
+  const pendingOrderingIdentities = new Set<object>()
+  const orderingDebt = new Set<ReturnType<typeof orderingReservation>>()
+  const orderingAttempts = new Set<OwnershipCleanup>()
+  let freshAcquisitions = 0, orderingIncarnation = {}
+  function beginResultOrderingRegistration(identity: object): OriginalOrderingRegistration {
+    if (!lockEnabled) throw Error('Original lock-enabled ordering required')
+    const existing = orderingParticipants.get(identity)
+    if (!existing && (freshAcquisitions || orderingDebt.size || orderingAttempts.size || pendingOrderingIdentities.has(identity))) throw Error('Result ordering registration busy')
+    const token = {}; let finished = false
+    if (!existing) { orderingPending.add(token); pendingOrderingIdentities.add(identity); orderingIncarnation = {} }
+    const registration: OriginalOrderingRegistration = Object.freeze({ commit(participant: OriginalLegacyOrderingParticipant) {
+      if (this !== registration) throw TypeError('Original ordering registration receiver required')
+      if (finished) throw Error('Original ordering registration expired')
+      if (existing && existing.original !== participant) throw Error('Changed original ordering participant')
+      if (existing) existing.check()
+      if (!existing) { orderingParticipants.set(identity, orderingMethods(participant, ['assertOutside', 'reserve'])); orderingPending.delete(token); pendingOrderingIdentities.delete(identity); orderingIncarnation = {} }
+      finished = true
+    }, cancel() { if (this !== registration) throw TypeError('Original ordering registration receiver required'); if (!finished) { finished = true; if (!existing) { orderingPending.delete(token); pendingOrderingIdentities.delete(identity); orderingIncarnation = {} } } } })
+    return registration
+  }
+  async function retryResultOrdering() {
+    for (const original of [...orderingAttempts]) { await original.close(); original.assertSettled(); orderingAttempts.delete(original) }
+  }
+  function checkBundle(bundle: Bundle) {
+    if (bundle.role !== 'session') throw Error('Original session bundle required')
+    for (const capture of bundle.captures) capture.assertCurrent()
+    for (const [index, key] of bundle.resources.entries()) {
+      const slot = bundle.slots[index]
+      if (!slot || slots.get(key) !== slot || !slot.lock?.held || slot.acquiring || slot.releasing || slot.debt || !slot.claims.size && !slot.live.size) throw Error('Original complete bundle unavailable')
+    }
+  }
   const sessionOperations = new Map<string, Promise<void>>()
   type SessionContext = { id: string; active: boolean; parent?: SessionContext }
   const sessionContext = new AsyncLocalStorage<SessionContext>()
@@ -152,38 +208,79 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     const acquisitions: OwnershipCleanup[] = []
     const done = Promise.withResolvers<void>(); let cleaned = false
     let result: Claim | undefined
+    const ordering: ReturnType<typeof orderingReservation>[] = []
+    let fresh = false, completed = false
+    let missingRetention: Error | undefined
+    let orderingCheck = () => {}
     // An original acquisition can fail before returning its claim. Its caller
     // must retain this exact rollback, rather than rediscovering owner slots.
-    retain?.(Object.freeze({ assertSettled() { if (!cleaned) throw Error('Bundle acquisition cleanup unresolved') }, async close() {
+    const originalCleanup = Object.freeze({ assertSettled() { if (!cleaned) throw Error('Bundle acquisition cleanup unresolved') }, async close() {
       await done.promise
-      if (result) { await result.release(); cleaned = true; return }
+      if (result) await result.release()
       const errors: unknown[] = []
-      for (const acquisition of [...acquisitions].reverse()) try { await acquisition.close() } catch (error) { errors.push(error) }
+      if (!result) for (const acquisition of [...acquisitions].reverse()) try { await acquisition.close() } catch (error) { errors.push(error) }
       if (errors.length === 1) throw errors[0]
       if (errors.length) throw new AggregateError(errors, 'Ownership acquisition cleanup failed')
-      cleaned = true
-    } }))
+      if (missingRetention) throw missingRetention
+      for (const original of [...ordering].reverse()) { await original.close(); original.assertSettled(); orderingDebt.delete(original) }
+      cleaned = true; orderingAttempts.delete(originalCleanup)
+    } })
+    retain?.(originalCleanup)
     try {
     if (!lockEnabled) return { assertHeld() {}, retainLive() {}, async release() {} }
-    if (artifacts) { if (document) await artifacts.prepareDocument(id); else await artifacts.prepareSession(id) }
-    const captures = artifacts ? (document ? [artifacts.document(id)] : [artifacts.session(id), artifacts.taskForParent(id)]) : []
-    const resources = [...new Set(artifacts ? captures.map(c => { if (c.kind !== 'ready') throw Error('Artifact preparation required'); return 'artifact-ownership:' + c.key }) : [document ? 'legacy-document:' + id : id])].sort()
-    const check = () => { for (const capture of captures) capture.assertCurrent(); for (const resource of held) resource.assertHeld() }
+    const reuse = document ? undefined : live.get(id) ?? activeBundles.get(id)?.values().next().value
+    if (reuse) checkBundle(reuse)
+    if (!document && !reuse) {
+      if (orderingPending.size || orderingDebt.size) throw Error('Original result ordering unresolved')
+      const incarnation = orderingIncarnation
+      for (const participant of orderingParticipants.values()) { if (participant.call('assertOutside') !== undefined) throw TypeError('Original ordering assertion must be synchronous'); participant.check() }
+      freshAcquisitions++; fresh = true
+      if (orderingParticipants.size) orderingAttempts.add(originalCleanup)
+      orderingCheck = () => {
+        if (orderingIncarnation !== incarnation || orderingPending.size) throw Error('Original result ordering changed')
+        for (const participant of orderingParticipants.values()) participant.check()
+        for (const original of ordering) original.check()
+      }
+      for (const participant of orderingParticipants.values()) {
+        const before = ordering.length
+        const returned = participant.call('reserve', (original: OriginalOrderingReservation) => {
+          const captured = orderingReservation(original); ordering.push(captured); orderingDebt.add(captured)
+        })
+        if (ordering.length === before) { missingRetention = Error('Original ordering reservation was not retained'); throw missingRetention }
+        if (ordering.length !== before + 1 || ordering[before]!.original !== returned) throw Error('Original returned ordering reservation differs from retained cleanup')
+        orderingCheck(); const reservation = ordering[before]!
+        await reservation.join(); reservation.assertActive(); orderingCheck()
+      }
+    }
+    orderingCheck()
+    if (!reuse && artifacts) { if (document) await artifacts.prepareDocument(id); else await artifacts.prepareSession(id) }
+    orderingCheck()
+    const captures = reuse ? reuse.captures : artifacts ? (document ? [artifacts.document(id)] : [artifacts.session(id), artifacts.taskForParent(id)]) : []
+    const resources = reuse ? reuse.resources : [...new Set(artifacts ? captures.map(c => { if (c.kind !== 'ready') throw Error('Artifact preparation required'); return 'artifact-ownership:' + c.key }) : [document ? 'legacy-document:' + id : id])].sort()
+    const checkHeld = () => { if (reuse) checkBundle(reuse); for (const capture of captures) capture.assertCurrent(); for (const resource of held) resource.assertHeld() }
+    const check = () => { orderingCheck(); checkHeld() }
     try { for (const resource of resources) { held.push(await borrowResource(resource, cleanup => { acquisitions.push(cleanup) })); check() } }
     catch (error) { const errors: unknown[] = []; for (const resource of held.reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length) throw new AggregateError([error,...errors], 'Ownership acquisition cleanup failed'); throw error }
+    // Acquisition currency remains finite: do not expose a reusable bundle or
+    // claim until every original ordering reservation acknowledges cleanup.
+    for (const original of [...ordering].reverse()) { await original.close(); original.assertSettled(); check(); orderingDebt.delete(original) }
+    check()
     let retired = false
-    const bundle: Bundle = Object.freeze({ role: document ? 'document' : 'session', resources, captures })
+    const bundle: Bundle = Object.freeze({ role: document ? 'document' : 'session', resources, captures, slots: resources.map(key => slots.get(key)!) })
     // Only complete original session claims enter this authority index.
     let bundles: Set<Bundle> | undefined
     if (bundle.role === 'session') { bundles = activeBundles.get(id); if (!bundles) { bundles = new Set(); activeBundles.set(id, bundles) }; bundles.add(bundle) }
     result = {
-      assertHeld() { if (retired) throw Error('Ownership claim retired'); check() },
+      assertHeld() { if (retired) throw Error('Ownership claim retired'); checkHeld() },
       retainLive() { if (document) throw Error('Document pin cannot retain session ownership'); this.assertHeld(); if (!live.has(id)) { for (const resource of held) resource.retainLive(id); live.set(id, bundle) } },
       async release() { if (!retired) { retired = true; if (bundles) { bundles.delete(bundle); if (!bundles.size && activeBundles.get(id) === bundles) activeBundles.delete(id) } }; const errors: unknown[] = []; for (const resource of [...held].reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length === 1) throw errors[0]; if (errors.length) throw new AggregateError(errors, 'Ownership bundle cleanup failed') },
     }
     claims.set(result, Object.freeze({ role: document ? 'document' : 'session', id, claim: result, assertHeld: result.assertHeld, retainLive: result.retainLive, release: result.release }))
-    return result
-    } finally { done.resolve() }
+    completed = true; return result
+    } finally {
+      try { if (completed) orderingAttempts.delete(originalCleanup) }
+      finally { if (fresh) freshAcquisitions--; done.resolve() }
+    }
   }
   const borrowOwnership = (id: string) => borrowBundle(id, false)
   async function disposeDocumentLease(record: DocumentLeaseDebt) {
@@ -232,6 +329,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     return bundle.resources.every(key => { const slot = slots.get(key); return !!slot?.lock?.held && !slot.debt && !slot.releasing })
   }
   const owner = {
+    beginResultOrderingRegistration, retryResultOrdering,
     assertHeld(id: string) { if (!lockEnabled || !heldBundle(id)) throw Object.assign(new Error('Exclusive managed ownership is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' }) },
     artifacts, acquireDocumentLease, pinDocumentOwnership: (key: string) => borrowBundle(key, true),
     pinDocumentOwnershipRetained: (key: string, retain: (cleanup: OwnershipCleanup) => void) => borrowBundle(key, true, retain),
@@ -264,7 +362,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     },
     hasLiveOwnership: heldLive,
     pendingOperations: () => [...sessionOperations.values()],
-    releaseHeldLocks: () => [Promise.resolve().then(async () => { const errors: unknown[] = []; for (const record of documentLeaseDebt) try { await disposeDocumentLease(record) } catch (e) { errors.push(e) }; for (const lease of acquisitionDebt) try { await lease.release(); acquisitionDebt.delete(lease) } catch (e) { errors.push(e) }; for (const id of [...live.keys()]) try { await releaseOwnershipUnlocked(id) } catch (e) { errors.push(e) }; for (const [id, slot] of slots) try { await dispose(id, slot) } catch (e) { errors.push(e) }; try { artifacts?.settleResources(); lockPaths?.settleResources() } catch (e) { errors.push(e) }; if (errors.length) throw new AggregateError(errors, 'Ownership cleanup unresolved') })],
+    releaseHeldLocks: () => [Promise.resolve().then(async () => { const errors: unknown[] = []; try { await retryResultOrdering() } catch (error) { errors.push(error) }; for (const record of documentLeaseDebt) try { await disposeDocumentLease(record) } catch (e) { errors.push(e) }; for (const lease of acquisitionDebt) try { await lease.release(); acquisitionDebt.delete(lease) } catch (e) { errors.push(e) }; for (const id of [...live.keys()]) try { await releaseOwnershipUnlocked(id) } catch (e) { errors.push(e) }; for (const [id, slot] of slots) try { await dispose(id, slot) } catch (e) { errors.push(e) }; try { artifacts?.settleResources(); lockPaths?.settleResources() } catch (e) { errors.push(e) }; if (errors.length) throw new AggregateError(errors, 'Ownership cleanup unresolved') })],
   }
   ownerClaims.set(owner, claims)
   return owner

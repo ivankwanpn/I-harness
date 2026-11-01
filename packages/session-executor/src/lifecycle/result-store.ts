@@ -125,7 +125,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
         return { sourceId: contextSourceIdentity(location.workspaceKey, location.canonical, scope), readonly: true }
       }
       const bridge = createProcessAwareResultService({ root: location.serviceRoot, workspaceId: location.workspaceKey, config, requireObservedLegacyRecipients: true,
-        coordinatorFor: () => [...registrations].at(-1)?.coordinator, sourceFor,
+        coordinatorFor: () => [...registrations].at(-1)?.coordinator, orderingCoordinators: [], sourceFor,
         documentDeletions: listener => { deletionListeners.add(listener); return () => { deletionListeners.delete(listener) } },
         genericVisible: async (sessionId, expected) => {
             const observed = observations.current(sessionId)
@@ -167,6 +167,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
   }
   const registration: Registration = { mode, sessionId: options.sessionId, coordinator: options.coordinator,
     ...(mode === 'producer' ? { projectContext: options.projectContext } : { readScope }), available: options.executionCallerAvailable }
+  entry.bridge.registerCoordinator(options.coordinator)
   entry.registrations.add(registration); entry.users++
   // Read the existing owner's current source resolver, which consults all
   // actual registrations rather than capturing the first assembly's scope.
