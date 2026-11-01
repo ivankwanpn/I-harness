@@ -98,3 +98,16 @@ it('original registration cleanup cannot remove a foreign re-registration of the
   await managed.dispose()
   expect(roles.get('same-object')).toBe(original)
 })
+
+it('missing original registration cleanup retains debt rather than deleting an ambiguous foreign same-object entry', async () => {
+  const original = createRoleRegistry()
+  const legacy = { ...original, register(role: import('@i-harness/subagent').SubagentRole) { original.register(role) } }
+  const managed = createPluginCapabilities({ skillDirs: [], handles: [], roles: legacy, mcpResults: new Map(), roleResults: new Map(), mount: async () => { throw new Error('No MCP') }, warn() {} })
+  await managed.update({ pluginAgents: [{ name: 'legacy', description: 'p', systemPrompt: 'p', tools: [] }] })
+  const role = original.get('legacy')!
+  original.remove('legacy'); original.register(role)
+  await expect(managed.dispose()).rejects.toThrow('Original role registration cleanup unavailable')
+  expect(original.get('legacy')).toBe(role)
+  original.remove('legacy')
+  await managed.dispose()
+})
