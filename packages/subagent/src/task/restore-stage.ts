@@ -25,5 +25,5 @@ export function stageTaskRestore(observation: TaskProtocolDocument, reportPolicy
     if (task.callEventSeq === undefined && task.toolCallId === undefined) anonymous++
     records.indexRestored(task, anonymous, true)
   }
-  return { records, notifications, version: doc.formatVersion }
+  return { records, notifications, version: observation.formatVersion }
 }

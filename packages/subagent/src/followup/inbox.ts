@@ -28,6 +28,7 @@ const d = diagnosticsFor("session")
 // as followup_task), so a caller asserting the OUTCOME awaits
 // entry.followupChain.
 export async function sweepPendingInbox(deps: SubagentToolDeps, table: AgentTable): Promise<void> {
+  deps.tasks?.assertReady()
   for (const entry of table.entries().values()) {
     if (entry.status !== "waiting" || !entry.sessionId) continue
     const hasPending = entry.session.events.some(

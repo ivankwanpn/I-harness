@@ -100,6 +100,13 @@ export interface TaskRegistryOptions {
   onTerminalized?: (task: TaskRecord) => void
 }
 export interface TaskRegistry {
+  /** Original owned document load; legacy manual registries are immediately ready. */
+  readonly ready: Promise<void>
+  assertReady(): void
+  /** Synchronously revoke installation/new work before disposal joins cleanup. */
+  retireOwnedLoad(): void
+  /** Cleanup only: original read debt, held consumers, then writer flush. */
+  closeOwnedLoad(): Promise<void>
   bindForegroundHandoff(taskId: string): () => { kind: 'manual' } | { kind: 'ready' } | { kind: 'parent'; save: import('./persistence.ts').OwnedTaskSave }
   prepareResult(taskId: string, context?: import('@i-harness/core-tools').ToolExec, current?: () => boolean): Promise<TaskResultStore | undefined>
   /** Qualify restored current rows from the original parent's committed F1 facts. */
