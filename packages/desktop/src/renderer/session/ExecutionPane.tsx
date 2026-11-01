@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from "react"
 import { Braces, RefreshCw } from "lucide-react"
-import type { DesktopExecutionView, ExecutionCallView, ExecutionRequest } from "@i-harness/desktop-gateway/src/execution.ts"
-import { useExecutionSurface } from "./execution-surface.ts"
+import type { DesktopExecutionView, ExecutionCallView } from "@i-harness/desktop-gateway/src/execution.ts"
+import { useExecutionObservation } from "../observation/use-observation.ts"
 import { useExecutionText } from "./execution-i18n.ts"
 import { useToolText } from "./tool-text.ts"
 import { OutputBlock } from "./OutputBlock.tsx"
@@ -11,7 +11,7 @@ import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import "./execution-processes.css"
 
-type ExecutionPaneProps = { bridge: { request(request: ExecutionRequest): Promise<unknown> }; workspaceId: string; sessionId: string }
+type ExecutionPaneProps = { bridge: Pick<import('../../shared/bridge.ts').DesktopBridge,'request'> & Partial<Pick<import('../../shared/bridge.ts').DesktopBridge,'onEvent'>>; workspaceId: string; sessionId: string }
 type ExecutionTab = "code" | "output" | "trace"
 
 /** Tab choice persists; records, pending replies and confirmations own one scope. */
@@ -25,8 +25,8 @@ function ExecutionScope({ bridge, workspaceId, sessionId, tab, setTab }: Executi
   const [offset, setOffset] = useState(0)
   const [stop, setStop] = useState<{ id: string; label: string }>()
   const [actionError, setActionError] = useState<string>()
-  const scope = workspaceId + ":" + sessionId
-  const view = useExecutionSurface<DesktopExecutionView>(() => bridge.request({ kind: "desktop/session/execution/read", workspaceId, sessionId, offset, limit: 10 }), scope + ":" + offset, true)
+
+  const view = useExecutionObservation(bridge, workspaceId, sessionId, offset, () => setOffset(0))
   const current = useRef({ state: view.state, busy: view.busy, stop })
   current.current = { state: view.state, busy: view.busy, stop }
   function canStop(state: DesktopExecutionView | undefined, id: string) {
