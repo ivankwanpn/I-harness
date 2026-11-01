@@ -97,8 +97,9 @@ export function reduceUsageObservations(input:readonly unknown[],query:{start:nu
    // SAME incarnation; an issued disposition may advance to terminal once.
    const transitions=uniqueFacts.filter(x=>(x.observation.type==='attempt-rebind'||x.observation.type==='attempt-settle')&&x.observation.attemptId===reserve.attemptId)
    for(const item of transitions){const r=item.observation as Fact<'attempt-rebind'>|Fact<'attempt-settle'>
-    if(r.factSeq<=lastSeq||(closed&&r.factSeq>=closed.value.factSeq))valid=false
+    if(r.factSeq<=lastSeq)valid=false
     if(r.type==='attempt-rebind'){
+     if(closed&&r.factSeq>=closed.value.factSeq)valid=false
      if(settled?.disposition!=='unsent'||r.rebind!==rebind+1||r.incarnation!==reserve.incarnation)valid=false
      rebind=r.rebind;candidate={semanticId:r.semanticId,payloadId:r.payloadId,payloadKind:r.payloadKind,incarnation:r.incarnation};candidates.set(rebind,candidate);settled=undefined
     }else{

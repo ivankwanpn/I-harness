@@ -56,6 +56,21 @@ it('refuses contradictory terminal facts instead of selecting the latest disposi
  const failed=fact(5,{type:'attempt-settle',attemptId:'t',disposition:'failed',sendId:'send'})
  expect(reduceUsageObservations([open,bind,reserve,handoff,done,failed],query).totals.transportHandoffs).toBe(0)
 })
+it('retains measured Stop usage when the original issued reservation settles after action close',()=>{
+ const stopped=fact(4,{type:'action-close',disposition:'stopped'})
+ const late=fact(5,{type:'attempt-settle',attemptId:'t',disposition:'unknown',sendId:'send'})
+ const result=reduceUsageObservations([open,bind,reserve,handoff,snapshot(1,{inputTokens:8,outputTokens:3,inputTokenSemantics:'includes-cache',terminalCoverage:'partial'},22),stopped,late],query)
+ expect(result.actions[0].disposition).toBe('stopped')
+ expect(result.sends[0]).toMatchObject({disposition:'unknown',totalTokens:11,coverage:'incomplete'})
+ expect(result.totals).toMatchObject({transportHandoffs:1,measuredTokenSubtotal:11})
+})
+it('still refuses a new rebind after action close while allowing original settlement drainage',()=>{
+ const unsent=fact(4,{type:'attempt-settle',attemptId:'t',disposition:'unsent'})
+ const stopped=fact(5,{type:'action-close',disposition:'stopped'})
+ const rebind=fact(6,{type:'attempt-rebind',...candidate,attemptId:'t',rebind:1,incarnation:'i'})
+ const sent=live('h-after',{type:'handoff',...candidate,attemptId:'t',sendId:'send',rebind:1,incarnation:'i'})
+ expect(reduceUsageObservations([open,bind,reserve,unsent,stopped,rebind,sent],query).totals.transportHandoffs).toBe(0)
+})
 it('uses known includes-cache denominator without inventing absent creation tokens',()=>{
  const result=reduceUsageObservations([open,bind,reserve,handoff,snapshot(1,{inputTokens:100,outputTokens:10,cacheReadTokens:25,inputTokenSemantics:'includes-cache'})],query)
  expect(result.totals.cacheHitRate).toBe(0.25);expect(result.sends[0].cacheCreationTokens).toBeUndefined();expect(result.sends[0].uncachedInputTokens).toBeNull()
