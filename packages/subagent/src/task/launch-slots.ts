@@ -3,7 +3,10 @@ import type { TaskRecord, TaskRegistry, TaskSubmissionInput, TaskChildBirthBindi
 import type { SubagentRole } from '../roles.ts'
 import type { OwnedTaskSave } from './persistence.ts'
 import { captureTaskSnapshot } from '@i-harness/session-persistence/internal/task-document-operations'
+import {canonicalJsonData} from '@i-harness/core-session'
+import {captureTaskChildHistory,type OriginalTaskChildHistory} from '../child/task-history.ts'
 export interface TaskLaunchSlot {
+ readonly history?:OriginalTaskChildHistory
  readonly task: Readonly<TaskRecord>; readonly caller: OriginalTaskCaller; readonly role: Readonly<SubagentRole>; readonly flight: Promise<TaskLaunchResult>
  readonly accepted: Promise<void>
  captureSelection<T>(read:()=>T):T
@@ -37,8 +40,13 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
   admit(caller,role){
    if(this!==port)throw TypeError('Foreign task launch port');checkCaller(caller)
    const args=caller.call.args as {task_name:string;message:string;agent_type?:string;fork_turns?:unknown;background?:boolean}
-   if(args.fork_turns!==undefined&&args.fork_turns!=='none'||role.name==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)throw Error('Unsupported task launch population')
+   if(args.fork_turns!==undefined&&args.fork_turns!=='none'&&args.fork_turns!=='all'||role.name==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)throw Error('Unsupported task launch population')
    if(role.name!==(args.agent_type??'general'))throw Error('Original task role mismatch')
+   for(const old of slots.values())if(canonicalJsonData(old.caller.identity)===canonicalJsonData(caller.identity)){
+    if(canonicalJsonData(old.caller.call)!==canonicalJsonData(caller.call))throw Error('Original caller identity conflict')
+    caller.consume();return {kind:'same',slot:old}
+   }
+   const history=captureTaskChildHistory(caller)
    const intent=freeze(captureTaskSnapshot({identity:caller.identity,agentPath:'root/'+args.task_name,description:args.task_name,prompt:args.message,agent:role.name,delivery:args.background===false?'tool':'parent'}) as TaskSubmissionInput)
    const roleIntent=freeze(captureTaskSnapshot(role) as SubagentRole),completion=Promise.withResolvers<TaskLaunchResult>()
    void completion.promise.catch(()=>{})
@@ -59,7 +67,7 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
     for(const item of [...setup].reverse())if(!item.closed)try{await item.close();item.closed=true}catch(error){errors.push(error)}
     if(errors.length)throw new AggregateError(errors,'Original task slot cleanup unresolved');removeAbort()
    })();closing=flight;void flight.finally(()=>{if(closing===flight)closing=undefined}).catch(()=>{});return flight}
-   const slot:TaskLaunchSlot={get task(){return task},caller,role:roleIntent,flight:completion.promise,get accepted(){return accepted},
+   const slot:TaskLaunchSlot={get task(){return task},caller,...history?{history}:{},role:roleIntent,flight:completion.promise,get accepted(){return accepted},
     captureSelection<T>(read:()=>T):T {if(this!==slot)throw TypeError('Foreign slot');current();if(!selection){try{const value=read();selection={value:value===undefined?undefined:freeze(captureTaskSnapshot(value))};current()}catch(cause){selection={cause};throw cause}}if('cause'in selection)throw selection.cause;return selection.value as T},
     keep(cleanup){if(this!==slot)throw TypeError('Foreign slot');const close=cleanup.close.bind(cleanup);setup.push({close,closed:false});try{current()}catch(cause){retire(cause);throw cause}},
     keepRecovery(cleanup){if(this!==slot)throw TypeError('Foreign slot');recovery.push({close:cleanup.close.bind(cleanup),closed:false});current()},

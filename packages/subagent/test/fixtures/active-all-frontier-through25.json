@@ -1,0 +1,450 @@
+[
+  {
+    "type": "agent/input/admitted",
+    "version": 1,
+    "inputId": "ba9c5cac-fb07-44c8-a31f-0fffc5683000",
+    "text": "run an ordinary child",
+    "preparationPolicy": "human-host",
+    "delivery": "queue",
+    "intent": "user",
+    "provenance": {
+      "kind": "human",
+      "authority": "request",
+      "scope": "turn",
+      "producer": "session.prompt"
+    },
+    "seq": 0
+  },
+  {
+    "type": "context/action",
+    "version": 1,
+    "op": "open",
+    "ownerSessionId": "parent",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "purpose": "main",
+    "origin": {
+      "kind": "input",
+      "seq": 0
+    },
+    "startedAt": 1793537620451,
+    "expiresAt": 1793541220451,
+    "trustedAt": 1793537620451,
+    "seq": 1
+  },
+  {
+    "type": "agent/input/preparation",
+    "version": 1,
+    "preparationId": "805a2d5e-487f-4c97-accf-4242040609eb",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "actionSeq": 1,
+    "admissionSeq": 0,
+    "inputId": "ba9c5cac-fb07-44c8-a31f-0fffc5683000",
+    "op": "started",
+    "startedAt": 1793537620499,
+    "seq": 2
+  },
+  {
+    "type": "sandbox/mode",
+    "mode": "danger-full-access",
+    "seq": 3
+  },
+  {
+    "type": "agent/input/preparation",
+    "version": 1,
+    "preparationId": "805a2d5e-487f-4c97-accf-4242040609eb",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "actionSeq": 1,
+    "admissionSeq": 0,
+    "inputId": "ba9c5cac-fb07-44c8-a31f-0fffc5683000",
+    "op": "completed",
+    "observations": [],
+    "seq": 4
+  },
+  {
+    "type": "conversation/semantics",
+    "version": 1,
+    "mode": "accepted-exchange-v1",
+    "seq": 5
+  },
+  {
+    "type": "agent/input/promoted",
+    "version": 1,
+    "inputId": "ba9c5cac-fb07-44c8-a31f-0fffc5683000",
+    "seq": 6
+  },
+  {
+    "type": "turn/start",
+    "seq": 7
+  },
+  {
+    "type": "user/message",
+    "text": "run an ordinary child",
+    "provenance": {
+      "kind": "human",
+      "authority": "request",
+      "scope": "turn",
+      "producer": "session.prompt"
+    },
+    "input": {
+      "inputId": "ba9c5cac-fb07-44c8-a31f-0fffc5683000",
+      "intent": "user",
+      "provenance": {
+        "kind": "human",
+        "authority": "request",
+        "scope": "turn",
+        "producer": "session.prompt"
+      }
+    },
+    "inputPreparation": {
+      "preparationId": "805a2d5e-487f-4c97-accf-4242040609eb",
+      "resultSeq": 4
+    },
+    "seq": 8
+  },
+  {
+    "type": "agent/input/preparation",
+    "version": 1,
+    "preparationId": "805a2d5e-487f-4c97-accf-4242040609eb",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "actionSeq": 1,
+    "admissionSeq": 0,
+    "inputId": "ba9c5cac-fb07-44c8-a31f-0fffc5683000",
+    "op": "promoted",
+    "resultSeq": 4,
+    "rawMessageSeq": 8,
+    "derivedMessageSeqs": [],
+    "seq": 9
+  },
+  {
+    "type": "step/start",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "attemptId": "1c973009-c840-4747-90ba-7eaf63c9b217",
+    "seq": 10
+  },
+  {
+    "type": "runtime/context",
+    "version": 1,
+    "sections": [],
+    "seq": 11
+  },
+  {
+    "version": 1,
+    "ownerSessionId": "parent",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "trustedAt": 1793537620975,
+    "type": "context/action",
+    "op": "bind",
+    "executionDomain": "physical",
+    "retry": {
+      "mode": "off",
+      "maxRetries": 0
+    },
+    "limits": {
+      "total": 10,
+      "main": 1,
+      "recovery": 1,
+      "summary": 8
+    },
+    "seq": 12
+  },
+  {
+    "type": "context/budget",
+    "version": 2,
+    "snapshot": {
+      "version": 2,
+      "ownerSessionId": "parent",
+      "modelId": "fixture",
+      "protocol": "openai-compatible",
+      "bindingFingerprint": "41ad908a848fb9fab4182d0fca28f3ec13dd82dcc8568e1950facc2e6410fc2c",
+      "bindingRevision": 0,
+      "projectionRevision": 0,
+      "neutralFingerprint": "23eb5c4be118c00b68775d08ea10f3d6be9e6d1cefecae968da758ab3f8928bd",
+      "identityCoverage": "partial",
+      "purpose": "main",
+      "estimate": {
+        "kind": "estimated",
+        "value": 9986,
+        "source": "projected-heuristic"
+      },
+      "disposition": "compatibility",
+      "pressure": {
+        "kind": "known",
+        "basis": "legacy-shared-assumption",
+        "input": 9986,
+        "inputBudget": 90000,
+        "trigger": 72000,
+        "target": 63000,
+        "hardFits": true,
+        "softNeeded": false,
+        "targetReady": true
+      },
+      "dimensions": [
+        {
+          "dimension": "context",
+          "state": "unchecked",
+          "actual": 19986,
+          "limit": 100000,
+          "sourceId": "captured-window-v1"
+        },
+        {
+          "dimension": "input",
+          "state": "unchecked",
+          "actual": 9986
+        },
+        {
+          "dimension": "output",
+          "state": "unchecked"
+        },
+        {
+          "dimension": "http-bytes",
+          "state": "unchecked",
+          "actual": 29893
+        },
+        {
+          "dimension": "protocol",
+          "state": "unchecked",
+          "sourceId": "chat-v1"
+        }
+      ],
+      "reason": "capacity-unknown",
+      "components": {
+        "kind": "estimated",
+        "source": "projected-heuristic",
+        "user": 28,
+        "assistant": 0,
+        "tool": 0,
+        "system": 594,
+        "schema": 9354,
+        "reasoning": 0
+      },
+      "output": {
+        "capSupport": "supported",
+        "minimumCap": 1
+      },
+      "recoveryRequired": false,
+      "fullByProvider": false,
+      "freshness": "current",
+      "requestContext": {
+        "version": 1,
+        "semanticRevision": "8747dbbf132679b3795ea62b08768c8689c788eeafcded8869088aaa77b2c894",
+        "protectionRevision": "27bd40e45fd3ff4db5d9257de3cefdc804cb715a0728e7f2a327e9c0b78f5f3c",
+        "branchId": "f11de0c1b761f2e63f11726022910b9815ee9671a1dfc1e6849f537a7ca972f6",
+        "contextEpoch": "efbd05abdb3955a972cf7d4d9a870a2eb2ed271301411560b0663f45ceae7d12",
+        "surfaceRevision": "c485ea64b690f075b51e9b098a402dddbf3dc4e9eca0c63d657ce6afbb366350"
+      },
+      "selectedSemanticId": "700f36758d52d0434e7d10bdbfa4054b3e8a1a6b66c5d6668d165bfea80ba528",
+      "selectedPayloadId": "5f9141e73b9ebb654d9ccb2f057a68a758a3acbed42eae05882c9b0d3184e1c9"
+    },
+    "seq": 13
+  },
+  {
+    "version": 1,
+    "ownerSessionId": "parent",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "trustedAt": 1793537621028,
+    "semanticId": "700f36758d52d0434e7d10bdbfa4054b3e8a1a6b66c5d6668d165bfea80ba528",
+    "payloadId": "5f9141e73b9ebb654d9ccb2f057a68a758a3acbed42eae05882c9b0d3184e1c9",
+    "payloadKind": "http-json-body",
+    "type": "context/attempt",
+    "op": "reserve",
+    "attemptId": "97870cd3-38e7-4b35-94be-6aefc559a16a",
+    "ordinal": 1,
+    "lane": "main",
+    "cause": "initial",
+    "incarnation": "206380a9-d1e7-4846-97ff-adc3a44000ec",
+    "seq": 14
+  },
+  {
+    "type": "tool/call",
+    "callId": "original-spawn-0",
+    "name": "spawn_agent",
+    "args": {
+      "task_name": "original0",
+      "agent_type": "general",
+      "message": "return original result",
+      "fork_turns": "all"
+    },
+    "seq": 15
+  },
+  {
+    "version": 1,
+    "ownerSessionId": "parent",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "trustedAt": 1793537621068,
+    "type": "context/attempt",
+    "op": "settle",
+    "attemptId": "97870cd3-38e7-4b35-94be-6aefc559a16a",
+    "disposition": "completed",
+    "sendId": "431c57c6-9528-4f9e-9a4f-033b0608f61f",
+    "seq": 16
+  },
+  {
+    "type": "assistant/message",
+    "text": "",
+    "seq": 17
+  },
+  {
+    "type": "model/exchange-accepted",
+    "version": 1,
+    "exchangeId": "73cd42be-11cf-4439-bb2a-6d6768a78754",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "attemptId": "1c973009-c840-4747-90ba-7eaf63c9b217",
+    "stepStartSeq": 10,
+    "assistantSeq": 17,
+    "callSeqs": [
+      15
+    ],
+    "seq": 18
+  },
+  {
+    "version": 1,
+    "ownerSessionId": "parent",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "trustedAt": 1793537621079,
+    "type": "context/action",
+    "op": "accepted",
+    "executionDomain": "physical",
+    "attemptId": "97870cd3-38e7-4b35-94be-6aefc559a16a",
+    "sendId": "431c57c6-9528-4f9e-9a4f-033b0608f61f",
+    "acceptedSeq": 18,
+    "seq": 19
+  },
+  {
+    "type": "context/budget",
+    "version": 2,
+    "snapshot": {
+      "version": 2,
+      "ownerSessionId": "parent",
+      "modelId": "fixture",
+      "protocol": "openai-compatible",
+      "bindingFingerprint": "41ad908a848fb9fab4182d0fca28f3ec13dd82dcc8568e1950facc2e6410fc2c",
+      "bindingRevision": 0,
+      "projectionRevision": 0,
+      "neutralFingerprint": "23eb5c4be118c00b68775d08ea10f3d6be9e6d1cefecae968da758ab3f8928bd",
+      "identityCoverage": "partial",
+      "purpose": "main",
+      "estimate": {
+        "kind": "estimated",
+        "value": 9986,
+        "source": "projected-heuristic"
+      },
+      "disposition": "compatibility",
+      "pressure": {
+        "kind": "known",
+        "basis": "legacy-shared-assumption",
+        "input": 9986,
+        "inputBudget": 90000,
+        "trigger": 72000,
+        "target": 63000,
+        "hardFits": true,
+        "softNeeded": false,
+        "targetReady": true
+      },
+      "dimensions": [
+        {
+          "dimension": "context",
+          "state": "unchecked",
+          "actual": 19986,
+          "limit": 100000,
+          "sourceId": "captured-window-v1"
+        },
+        {
+          "dimension": "input",
+          "state": "unchecked",
+          "actual": 9986
+        },
+        {
+          "dimension": "output",
+          "state": "unchecked"
+        },
+        {
+          "dimension": "http-bytes",
+          "state": "unchecked",
+          "actual": 29893
+        },
+        {
+          "dimension": "protocol",
+          "state": "unchecked",
+          "sourceId": "chat-v1"
+        }
+      ],
+      "reason": "capacity-unknown",
+      "components": {
+        "kind": "estimated",
+        "source": "projected-heuristic",
+        "user": 28,
+        "assistant": 0,
+        "tool": 0,
+        "system": 594,
+        "schema": 9354,
+        "reasoning": 0
+      },
+      "output": {
+        "capSupport": "supported",
+        "minimumCap": 1
+      },
+      "recoveryRequired": false,
+      "fullByProvider": false,
+      "freshness": "awaiting-projection",
+      "requestContext": {
+        "version": 1,
+        "semanticRevision": "8747dbbf132679b3795ea62b08768c8689c788eeafcded8869088aaa77b2c894",
+        "protectionRevision": "27bd40e45fd3ff4db5d9257de3cefdc804cb715a0728e7f2a327e9c0b78f5f3c",
+        "branchId": "f11de0c1b761f2e63f11726022910b9815ee9671a1dfc1e6849f537a7ca972f6",
+        "contextEpoch": "efbd05abdb3955a972cf7d4d9a870a2eb2ed271301411560b0663f45ceae7d12",
+        "surfaceRevision": "c485ea64b690f075b51e9b098a402dddbf3dc4e9eca0c63d657ce6afbb366350"
+      },
+      "selectedSemanticId": "700f36758d52d0434e7d10bdbfa4054b3e8a1a6b66c5d6668d165bfea80ba528",
+      "selectedPayloadId": "5f9141e73b9ebb654d9ccb2f057a68a758a3acbed42eae05882c9b0d3184e1c9",
+      "postResponseContextRevision": "fd029089be536bb30ddb73ff16c0f4b535e6f696c0979f8f013855660d20b2bd"
+    },
+    "seq": 20
+  },
+  {
+    "version": 1,
+    "ownerSessionId": "parent",
+    "actionId": "13aba45e-0b1f-43cb-88fd-530528510a5c",
+    "trustedAt": 1793537621102,
+    "type": "context/action",
+    "op": "close",
+    "disposition": "accepted",
+    "seq": 21
+  },
+  {
+    "type": "tool/dispatch",
+    "callId": "original-spawn-0",
+    "eventSeq": 15,
+    "seq": 22
+  },
+  {
+    "type": "agent/delivery-generation",
+    "version": 1,
+    "op": "open",
+    "recipientSessionId": "parent",
+    "generationId": "a534d346-1a1e-4a43-9c82-3395497ff46b",
+    "originInputSeq": 0,
+    "seq": 23
+  },
+  {
+    "type": "subagent/start",
+    "version": 1,
+    "taskId": "task-1",
+    "agentPath": "root/original0",
+    "role": "general",
+    "description": "original0",
+    "parentSessionId": "parent",
+    "seq": 24
+  },
+  {
+    "type": "agent/delivery-source",
+    "version": 1,
+    "kind": "subagent",
+    "recipientSessionId": "parent",
+    "generationId": "a534d346-1a1e-4a43-9c82-3395497ff46b",
+    "sourceNamespace": "parent",
+    "sourceId": "task-1",
+    "callSeq": 15,
+    "startSeq": 24,
+    "seq": 25
+  }
+]

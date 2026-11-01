@@ -2,6 +2,7 @@ import type { BootstrapCallerMetadata, BootstrapGuards, BootstrapProjectIntent, 
 
 /** Constructor-supplied policy of the original host, never tool arguments. */
 export interface TaskChildHostInput {
+ readonly history?:import('./task-history.ts').OriginalTaskChildHistory
  readonly coordinator: import('@i-harness/session-persistence').SessionCoordinator
  readonly parentSessionId: string
  readonly signal?: AbortSignal
