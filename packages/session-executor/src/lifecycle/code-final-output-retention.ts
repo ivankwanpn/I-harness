@@ -1,3 +1,4 @@
+import { captureOriginalCodeManifestAdapter, type OriginalCodeManifestAdapter } from '../../../context-output/src/service.ts'
 import { createCodeOutputManifest } from '@i-harness/output-retention'
 import { supportsManagedResultRefusal } from '@i-harness/context-output'
 import type { CodeFinalOutputFactory } from '../../../code-mode/src/final-output.ts'
@@ -17,7 +18,7 @@ export function createCodeFinalOutputRetention(options: {
     // Retain the original source lookup promise before any possible reentry.
     const source=sourceFor(sessionId)
     void source.catch(()=>{})
-    let scope:ResultArtifactScope|undefined
+    let scope:ResultArtifactScope|undefined, adapter:OriginalCodeManifestAdapter|undefined, originalSourceId:string|undefined
     return createCodeOutputManifest({version:1,kind:'code-output',sessionId,cellId,sourceId},{
       async supported(){assertHeld();const original=await source;assertHeld();return !!original?.sourceId},
       async open() {
@@ -25,8 +26,11 @@ export function createCodeFinalOutputRetention(options: {
         const original=await source
         assertHeld()
         scope ??= register({operationId:sourceId,sessionId,callId:cellId,...(original?{source:original}:{})},()=>{assertHeld();return true})
+        adapter ??= captureOriginalCodeManifestAdapter(service,scope)
+        originalSourceId = original?.sourceId
         return begin(scope,'code-output-manifest-v1')
       },
+      nativeAdapter() { return adapter && originalSourceId ? {adapter,sourceId:originalSourceId} : undefined },
       async confirm(ref) {assertHeld();if(!scope)throw new Error('Original Code retention scope unavailable');await confirm(scope,ref);assertHeld()},
     })
   }

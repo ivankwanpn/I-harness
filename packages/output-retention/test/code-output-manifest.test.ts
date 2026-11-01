@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto'
 import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createSession, createNondurableFactOwner, type CodeOutputMember } from '@i-harness/core-session'
+import { captureOriginalCodeManifestAdapter } from '../../context-output/src/service.ts'
 import { createContextOutputService } from '../../context-output/src/index.ts'
-import { createCodeOutputManifest, inspectCodeOutputManifest } from '../src/result/code-output-manifest.ts'
+import { createCodeOutputManifest, inspectCodeOutputManifest, inspectCodeOutputManifestReceipt } from '../src/result/code-output-manifest.ts'
 
 // Literal metadata vectors test encoding/refusal only, not native fact authority.
 const member=(seq:number):CodeOutputMember=>({seq,receipt:{owner:{sessionId:'actor',incarnation:'original'},key:{batchId:'batch-'+seq,firstSeq:seq,count:1,previousPrefixDigest:'a'.repeat(64),batchDigest:'b'.repeat(64)},lastSeq:seq,prefixDigest:'c'.repeat(64)}})
@@ -114,4 +115,18 @@ it.each(['accessor','toJSON','undefined','symbol'] as const)('rejects producer m
  await expect(stream.append({},corrupt(descriptor,'item') as typeof descriptor)).rejects.toThrow();expect(callbacks).toBe(0)
  const footer={terminal:member(2),status:'completed' as const,store:null,accepted:0,omitted:0,truncated:false}
  expect(()=>stream.seal(corrupt(footer,'terminal') as typeof footer)).toThrow();expect(callbacks).toBe(0)
+})
+
+it('rejects copied adapters and no-op confirmation without creating a receipt',async()=>{
+ const root=await mkdtemp(join(process.env.IH_CONFIG_DIR!,'native-negative-')),service=createContextOutputService({root,workspaceId:'w'})
+ try{
+  for(const copied of [true,false]){
+   const scope=service.registerResultScope({operationId:'op-'+copied,sessionId:'actor',callId:'cell',source:{sourceId:'source'}},()=>true)
+   const genuine=captureOriginalCodeManifestAdapter(service,scope)
+   const stream=createCodeOutputManifest({version:1,kind:'code-output',sessionId:'actor',cellId:'cell',sourceId:'op-'+copied},{open:()=>service.beginResult(scope,'code-output-manifest-v1'),confirm:copied ? ref=>service.confirmResultOwner(scope,ref) : async()=>{},nativeAdapter:()=>({adapter:copied ? {...genuine} : genuine,sourceId:'source'})})
+   stream.seal({terminal:member(1),status:'completed',store:null,accepted:0,omitted:0,truncated:false})
+   await expect(stream.finish()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+   expect(inspectCodeOutputManifestReceipt(stream)).toBeUndefined()
+  }
+ }finally{await service.close()}
 })
