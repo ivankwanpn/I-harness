@@ -23,7 +23,7 @@ export async function failTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecy
 
 /** Construct all original end facts once; their registered sources retain any
  * failed captures. Deferred acceptance calls this only after disposition. */
-export async function settleFailedTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, error: unknown, beforeEnd?: () => Promise<void>, flush = true): Promise<void> {
+export async function settleFailedTurn(deps: Pick<AgentDeps,'facts'|'sourceFacts'|'flush'> & {session?:AgentDeps['session']}, lifecycle: TurnLifecycle, error: unknown, beforeEnd?: () => Promise<void>, flush = true): Promise<void> {
   // Preparation hooks and context getters can refuse before the provider
   // stream opens. Close only this run's live boundaries; cold recovery and
   // tool outcomes remain owned by their existing paths.
@@ -61,7 +61,7 @@ export function reportModelUsage(deps: Pick<AgentDeps, "telemetry">, { stepUsage
   } })
 }
 
-export async function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "ownedBudget">, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, accepted?: import("@i-harness/core-session").ExchangeAcceptedEventV2, signal?: AbortSignal) {
+export async function completeModelStep(deps: Pick<AgentDeps, "telemetry">, context: Pick<AgentContext, "ownedBudget">, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, accepted?: import("@i-harness/core-session").ExchangeAcceptedEventV2, signal?: AbortSignal) {
   const { stepUsage } = step
   let reporting: unknown, reportFailed = false
   try { reportModelUsage(deps, step) }

@@ -5,7 +5,7 @@ import type { AgentDeps } from './types.ts'
 import { savingFailure } from './saving-failure.ts'
 
 /** Own completed call references until the real batch source takes them. */
-export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 'registerFactSource'>) {
+export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'registerFactSource'> & ({session:AgentDeps['session'];readOriginalCall?:never}|{session?:never;readOriginalCall(call:BatchCall):Extract<import('@i-harness/core-session').SessionEventView,{type:'tool/call'}>})) {
   if (!deps.registerFactSource) throw Object.assign(new Error('Unstarted calls require their original source'), { code: 'FACT_OWNER_UNSUPPORTED' })
   type Call = { callId: string; name: string; eventSeq: number }
   type Pending = { handle: CapturedSettlementFact<ProducerFactOutcome>; outcome?: ProducerFactOutcome }
@@ -59,7 +59,7 @@ export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 
       if (calls.length || pending || handedOff) throw new Error('Original call batch is already owned')
       const seen = new Set<number>()
       calls = batch.map(call => {
-        const seq = call.eventSeq, event = seq === undefined ? undefined : deps.session.events[seq]
+        const seq = call.eventSeq, event = deps.readOriginalCall?deps.readOriginalCall(call):seq === undefined ? undefined : deps.session.events[seq]
         if (seq === undefined || !Number.isSafeInteger(seq) || seen.has(seq) || event?.type !== 'tool/call' || event.seq !== seq || event.callId !== call.callId || event.name !== call.name) {
           return failCapture(Object.assign(new Error('Original tool call reference is unavailable'), { code: 'FACT_CAPTURE_FAILED' }))
         }

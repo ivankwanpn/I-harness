@@ -8,7 +8,8 @@ import type {PluginContext} from '@i-harness/core-plugin'
 export interface ManagedFactWitness {readonly capture:CapturedActionFact<FactOutcome>;readonly outcome:Extract<FactOutcome,{kind:'committed'}>}
 type Origin={domain:ManagedExecutionDomain;registry:ToolRegistry;driver:PreparedModelOriginDriver;consumed:boolean}
 const bindings=new WeakMap<object,Origin>()
-type MemberProof={check(expected:ManagedModelOriginExpectation):void;action?:ManagedAction<FactOutcome>;taken:boolean}
+const origins=new WeakSet<object>()
+type MemberProof={origin:Origin;check(expected:ManagedModelOriginExpectation):void;action?:ManagedAction<FactOutcome>;taken:boolean}
 const proofs=new WeakMap<object,MemberProof>()
 /** A closed constructor pair; neither a registry nor a domain alone enrolls
  * incoming model calls. Every permit below comes from this invocation's ACKs. */
@@ -17,7 +18,7 @@ export function createManagedAgentModelOriginOwner(context:PluginContext,executi
  const domain=createManagedExecutionDomain(execution.identity,execution.owner,context)
  let bound=false,state:Origin|undefined
  const verifier:ConstructorManagedModelOriginVerifier=Object.freeze({kind:'managed-model-origin',domain,take(proof:object,expected:ManagedModelOriginExpectation){
-  const member=proofs.get(proof);if(!state?.consumed||!member||member.taken)throw TypeError('Original private model member required')
+  const member=proofs.get(proof);if(!state?.consumed||!member||member.origin!==state||member.taken)throw TypeError('Original private model member required')
   member.check(expected);member.taken=true
   let issued=false
   const permit:OriginalModelMemberPermit=Object.freeze({assertCurrent(){if(this!==permit)throw TypeError('Original model permit receiver required');member.check(expected)},takeExecSourceIssuer(){
@@ -32,15 +33,15 @@ export function createManagedAgentModelOriginOwner(context:PluginContext,executi
   }})
   return permit
  }})
- return Object.freeze({domain,verifier,bind(registry:ToolRegistry,driver:PreparedModelOriginDriver){domain.assertCurrent();if(bound)throw TypeError('Original model origin already bound');assertModelOriginPair(registry,driver,verifier);bound=true;const binding=Object.freeze({});state={domain,registry,driver,consumed:false};bindings.set(binding,state);return binding}})
+ return Object.freeze({domain,verifier,bind(registry:ToolRegistry,driver:PreparedModelOriginDriver){domain.assertCurrent();if(bound)throw TypeError('Original model origin already bound');assertModelOriginPair(registry,driver,verifier);bound=true;const binding=Object.freeze({});state={domain,registry,driver,consumed:false};origins.add(state);bindings.set(binding,state);return binding}})
 }
 export function consumeManagedAgentModelOrigin(binding:object,domain:ManagedExecutionDomain,registry:ToolRegistry){
- const origin=bindings.get(binding);if(!origin||origin.consumed||origin.domain!==domain||origin.registry!==registry)throw TypeError('Original private model origin binding required');domain.assertCurrent();origin.consumed=true;return origin
+ const origin=bindings.get(binding);if(!origin||origin.consumed||origin.domain!==domain||origin.registry!==registry)throw TypeError('Original private model origin binding required');domain.assertCurrent();origin.consumed=true;return Object.freeze(origin)
 }
 /** Invocation-local captures remain with the actual action until its original
  * source cleanup ACK. A copied outcome, foreign action, or row cannot join. */
 export function createManagedModelInvocation(origin:Origin,action:ManagedAction<FactOutcome>){
- if(!origin.consumed||!origin.domain.owner.ownsAction(action))throw TypeError('Original private model action required')
+ if(!origins.has(origin)||!origin.consumed||!origin.domain.owner.ownsAction(action))throw TypeError('Original private model action required')
  let active=true,input:ManagedFactWitness|undefined
  const retainedProofs=new Set<MemberProof>()
  const expire=(member:MemberProof)=>{member.check=()=>{throw TypeError('Private model member released')};member.action=undefined;retainedProofs.delete(member)}
@@ -57,7 +58,7 @@ export function createManagedModelInvocation(origin:Origin,action:ManagedAction<
    current();const record=batches.get(batch);if(!record?.closed||record.used.has(index)||!isManagedExecutionSource(origin.domain,source))throw TypeError('Original accepted batch member required');const witness=record.calls[index];if(!witness)throw TypeError('Original accepted member index required')
    const event=read(witness)[0];if(event?.type!=='tool/call')throw TypeError('Original tool call required');record.used.add(index)
    const check=(expected:ManagedModelOriginExpectation)=>{current();read(input!);read(record.accepted);if(!record.closed||expected.registry!==origin.registry||expected.prepared!==prepared||expected.domain!==origin.domain||expected.source!==source||!isManagedExecutionSource(origin.domain,source)||read(witness)[0]!==event||event.callId!==expected.callId||event.seq!==expected.callEventSeq||event.name!==expected.name||canonicalJsonData(event.args)!==canonicalJsonData(expected.args))throw TypeError('Original private model member mismatch');source.assertHeld()}
-   const proof=Object.freeze({}),member={check,action,taken:false};proofs.set(proof,member);retainedProofs.add(member);record.proofs.add(member);origin.driver.attach(prepared,proof)
+   const proof=Object.freeze({}),member={origin,check,action,taken:false};proofs.set(proof,member);retainedProofs.add(member);record.proofs.add(member);origin.driver.attach(prepared,proof)
   },
   releaseBatch(batch:object){const record=batches.get(batch);if(record){for(const proof of record.proofs)expire(proof);record.proofs.clear();batches.delete(batch);batchTokens.delete(batch)}},
   invalidate(){active=false;input=undefined;for(const proof of retainedProofs)expire(proof);for(const token of batchTokens)batches.delete(token);batchTokens.clear()},

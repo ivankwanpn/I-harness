@@ -3,7 +3,7 @@ import type { InstructionRequestEvidence, RequestContextPin } from '../request-c
 import { savingFailure } from '../saving-failure.ts'
 
 /** The original run source waits for a finite run-done prerequisite. */
-export async function withInstructionRun<T>(deps: AgentDeps, signal: AbortSignal | undefined, operation: (retain: (evidence?: InstructionRequestEvidence) => void) => Promise<T>): Promise<T> {
+export async function withInstructionRun<T>(deps: Pick<AgentDeps,'registerFactSource'> & {requestContext?:Pick<NonNullable<AgentDeps['requestContext']>,'retain'|'reconcile'>}, signal: AbortSignal | undefined, operation: (retain: (evidence?: InstructionRequestEvidence) => void) => Promise<T>): Promise<T> {
   await deps.requestContext?.reconcile(signal)
   if (!deps.requestContext) return operation(() => {})
   if (!deps.registerFactSource) throw new Error('Instruction reduction requires original run source')

@@ -23,6 +23,7 @@ it.each(['healthy','stop','copied-call','foreign-action','mutated-call','twice',
  const admit=async(capture:CapturedActionFact<FactOutcome>)=>{const outcome=await capture.admit();if(outcome.kind!=='committed')throw Error(`Expected actual ACK: ${outcome.kind}`);return {capture,outcome}}
  const received:SessionEvent[]=[];const unsubscribe=subscribeManagedExecution(origin.domain,event=>received.push(event))
  try{
+  expect(()=>createManagedModelInvocation({...state},action)).toThrow();expect(Object.isFrozen(state)).toBe(true)
   await admit(action.captureLifecycle!({type:'conversation/semantics',version:1,mode:'accepted-exchange-v1'}))
   const input=await admit(action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'original'}},()=>true));invocation.input(input)
   const start=await admit(action.captureLifecycle!({type:'step/start',actionId:'test-action',attemptId:'test-attempt'})),startEvent=readManagedActionMembers(origin.domain,action,start.capture,start.outcome)[0]!

@@ -19,11 +19,13 @@ export type RecoveryRequirement = { kind: 'not-applicable' } | { kind: 'required
 const cost = (measurement: PreparedRequestMeasurement) => Object.values(measurement.input.components).reduce((total, c) => ({ tokens: total.tokens + c.heuristicTokens, bytes: total.bytes + c.textUtf8Bytes + c.structuredBytes + c.binaryBytes }), { tokens: 0, bytes: 0 })
 
 /** One model-attempt owner; no inbox claims, hooks, tools or reset lane. */
-export function createRecovery(deps: AgentDeps, context: AgentContext) {
+type RecoveryDeps=Pick<AgentDeps,'facts'|'registerFactSource'|'flush'> & {generationAction?:Pick<NonNullable<AgentDeps['generationAction']>,'phase'>;session?:AgentDeps['session'];recoveryObservation?:(binding:{providerId?:string;modelId:string;protocol:string})=>ContextRecoveryFacts|undefined}
+type RecoveryContext=Pick<AgentContext,'ownedBudget'|'metadata'> & {compactor?:AgentContext['compactor'];recoverOwned?:(options:Parameters<NonNullable<AgentContext['compactor']>['recover']>[1])=>ReturnType<NonNullable<AgentContext['compactor']>['recover']>}
+export function createRecovery(deps: RecoveryDeps, context: RecoveryContext) {
   const terminal = createRecoverySettlement(deps)
   const ownerSessionId = context.ownedBudget.ownerSessionId
   let lastFailure: unknown
-  const current = (measurement: PreparedRequestMeasurement) => deriveContextRecovery(deps.session, ownerSessionId, { ...measurement.input, providerId: context.metadata()?.providerId ?? measurement.input.providerId })
+  const current = (measurement: PreparedRequestMeasurement) => {const binding={...measurement.input,providerId:context.metadata()?.providerId??measurement.input.providerId};if(deps.recoveryObservation)return deps.recoveryObservation(binding);if(!deps.session)throw TypeError('Original recovery observation required');return deriveContextRecovery(deps.session,ownerSessionId,binding)}
   const flush = async (signal?: AbortSignal) => { await deps.flush?.(); signal?.throwIfAborted() }
   const draft = (previous: ContextRecoveryFacts, state: ContextRecoveryFacts["state"], extra: Partial<ContextRecoveryFacts> = {}) => {
     // Fold results may include the event envelope. Always publish only fields
@@ -86,10 +88,11 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
         state.recoveryId = previous.recoveryId; state.recoveryInputFingerprint = measurement.input.inputFingerprint
         return "authorized"
       }
-      if (state.recoveryCompacted || !context.compactor) return blocked(previous, "Protected or fixed input cannot be reduced under the rejected binding and shape", signal)
+      if (state.recoveryCompacted || !context.compactor&&!context.recoverOwned) return blocked(previous, "Protected or fixed input cannot be reduced under the rejected binding and shape", signal)
       state.recoveryCompacted = true
       const attempts = state.reductionAttempts ??= { count: 0, staleRebuilds: 0 }
-      const result = await context.compactor.recover(deps.session, { signal, reason: "recovery", maxSummaryCalls: 8, attempts })
+      const options={signal,reason:'recovery' as const,maxSummaryCalls:8,attempts}
+      const result = context.recoverOwned?await context.recoverOwned(options):await context.compactor!.recover(deps.session!,options)
       await flush(signal)
       if (result.publication === 'recovery-required') throw Object.assign(new Error('Context reduction publication requires reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' })
       if (!result.compacted) return blocked(previous, result.blockedReason ? "Bounded summary admission could not produce a recovery checkpoint" : "No balanced older material can produce a reduced recovery input", signal)

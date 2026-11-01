@@ -5,15 +5,16 @@ import { projectionFingerprint } from '@i-harness/token-meter'
 import { randomUUID } from 'node:crypto'
 import { buildContextRequest } from '../request-input.ts'
 import { sameRequestCandidate, type RequestEvidence } from '../request-snapshot.ts'
-import type { AgentConfig, AgentDeps } from '../types.ts'
+import type { AgentDeps } from '../types.ts'
 import type { createOwnedBudget } from '../budget.ts'
 import { createReductionPublication } from './publication.ts'
 import { softWorkFacts } from './automatic.ts'
 import { assertCurrentRepresentable } from '../current-representability.ts'
 
 interface Proof { source: ContextSnapshot; groups: readonly ReductionGroup[]; rewrites: readonly ReductionRewrite[]; rewriteIdentity: string; current: RequestEvidence; assessmentRevision: string; afterKey: string; targetReady: boolean }
+type BridgeDeps=Pick<AgentDeps,'signal'|'sessionId'|'captureContextReduction'|'assertFactOpen'|'registerFactSource'> & {session?:AgentDeps['session'];requestContext?:Pick<NonNullable<AgentDeps['requestContext']>,'retain'|'current'>;previewReduction?:(rewrites:readonly ReductionRewrite[],options:{candidateId:string;ownerSessionId:string;capturePayload:(value:unknown)=>unknown})=>Promise<{projection:ContextSnapshot['conversation'];assertCurrent():void}>;reductionCommitted?:Parameters<typeof createReductionPublication>[5]}
 /** Snapshots expose only immutable data. All clients, assessments and proofs stay private. */
-export function createReductionBridge(deps: AgentDeps & AgentConfig, captureCandidate: () => RequestEvidence, ownedBudget: ReturnType<typeof createOwnedBudget>, bindingCurrent: () => boolean, policy: ReductionPolicy, signal = deps.signal, refresh = () => {}, requireSurface = true, requestScope?: import('@i-harness/llm-seam').LLMRequest['requestScope'], softStart?: import('@i-harness/core-session').SoftReductionStart, publicationAbsent?: () => Promise<void>): ContextReductionPorts {
+export function createReductionBridge(deps: BridgeDeps, captureCandidate: () => RequestEvidence, ownedBudget: ReturnType<typeof createOwnedBudget>, bindingCurrent: () => boolean, policy: ReductionPolicy, signal = deps.signal, refresh = () => {}, requireSurface = true, requestScope?: import('@i-harness/llm-seam').LLMRequest['requestScope'], softStart?: import('@i-harness/core-session').SoftReductionStart, publicationAbsent?: () => Promise<void>): ContextReductionPorts {
   const evidence = new WeakMap<ContextSnapshot, RequestEvidence>(), proofs = new WeakMap<object, Proof>()
   let ports: ContextReductionPorts
   const capture = () => { refresh(); const value = captureCandidate(); evidence.set(value.snapshot, value); return value.snapshot }
@@ -31,17 +32,17 @@ export function createReductionBridge(deps: AgentDeps & AgentConfig, captureCand
     return { type: 'context/soft-reduction', version: 1, op: 'terminal', ownerSessionId: softStart.ownerSessionId, sequenceId: softStart.sequenceId,
       startSeq: { kind: 'prior', seq: softStart.seq, expectedType: 'context/soft-reduction' }, workKey: softStart.workKey, sourceKey: softStart.sourceKey,
       outcome: proof.targetReady ? 'target-ready' : 'reduced-over-target', publication: 'committed', consumedBeforeKey: softStart.workKey, consumedAfterKey: proof.afterKey }
-  }, publicationAbsent, source => evidence.get(source)?.instructions)
+  }, publicationAbsent, source => evidence.get(source)?.instructions,deps.reductionCommitted)
   async function prepare(source: ContextSnapshot, groups: readonly ReductionGroup[], rewrites: readonly ReductionRewrite[]): Promise<ReductionPreparation> {
     if (!ports.current(source, groups)) return { kind: 'stale' }
     const prior = evidence.get(source)!, now = captureCandidate(), assessmentRevision = ownedBudget.assessmentRevision()
     let conversation = now.snapshot.conversation
+    let preview:{assertCurrent():void}|undefined
     try {
-      if (rewrites.length) conversation = captureContextPayload(projectConversationCandidate(deps.session, rewrites, {
-        candidateId: randomUUID(), ownerSessionId: source.coordinates.ownerSessionId, capturePayload: value => captureContextPayload(value),
-      }).projection)
+      if (rewrites.length) {const options={candidateId:randomUUID(),ownerSessionId:source.coordinates.ownerSessionId,capturePayload:(value:unknown)=>captureContextPayload(value)};if(deps.previewReduction){const candidate=await deps.previewReduction(rewrites,options);preview=candidate;candidate.assertCurrent();conversation=captureContextPayload(candidate.projection)}else{if(!deps.session)throw TypeError('Original reduction preview required');conversation=captureContextPayload(projectConversationCandidate(deps.session,rewrites,options).projection)}}
       const request = buildContextRequest({ conversation, surface: now.snapshot.surface }, { sessionId: deps.sessionId, signal, requestScope })
       const prepared = await prepareModelRequest(prior.model, request)
+      preview?.assertCurrent()
       assertCurrentRepresentable(now, prepared)
       const assessed = ownedBudget.probe(prepared, now, rewrites.length > 0, policy.reserveRatio, policy)
       assertCurrentRepresentable(now, assessed.prepared)
