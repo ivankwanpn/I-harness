@@ -39,3 +39,60 @@ try {
 } finally {
   await sandbox.disposeAsync()
 }
+
+// Each phase owns its sandboxes through final disposal, including failed setup.
+async function withSandbox<T>(action: (sandbox: AclSandbox) => Promise<T>): Promise<T> {
+  const owner = new AclSandbox({ mode: 'read-only', writableDirs: [], manageDacls: false })
+  try { await owner.init(); return await action(owner) } finally { await owner.disposeAsync() }
+}
+async function launch(owner: AclSandbox, source: string) {
+  log('child-command', { executable: process.execPath, args: ['-e', source], cwd })
+  return owner.spawn({ command: process.execPath, args: ['-e', source], cwd })
+}
+await withSandbox(async owner => {
+  const source = `const deadline=setTimeout(()=>process.exit(99),4000);process.stdin.on('end',()=>{clearTimeout(deadline);process.stdout.write(Buffer.from([0,255,42]));process.stderr.write('雪259');process.exitCode=259});process.stdin.resume()`
+  const child = await launch(owner, source)
+  const result = await child.wait()
+  assert.equal(result.exitCode, 259)
+  assert.deepEqual(result.stdout, Buffer.from([0, 255, 42]))
+  assert.deepEqual(result.stderr, Buffer.from('雪259'))
+  owner.dispose()
+  log('phase-exit-259', { pid: child.pid, exitCode: result.exitCode, stdout: result.stdout.toString('hex'), stderr: result.stderr.toString('hex') })
+})
+await withSandbox(async owner => {
+  const api = (owner as unknown as { api: { getExitCodeProcess: (...args: any[]) => number } }).api
+  const original = api.getExitCodeProcess
+  let rootObserved: number | undefined
+  api.getExitCodeProcess = function (...args) { const result = original.apply(this, args); rootObserved = Date.now(); log('tail-root-status-read', { at: rootObserved, result }); return result }
+  try {
+    const grandchild = `const deadline=setTimeout(()=>process.exit(99),4000);setTimeout(()=>{clearTimeout(deadline);process.stdout.write('TAIL');process.stderr.write(String(Date.now()));},200)`
+    const source = `const deadline=setTimeout(()=>process.exit(99),4000);process.stdin.on('end',()=>{const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:['ignore','inherit','inherit'],windowsHide:true,detached:true});c.unref();process.stdout.write('ROOT');clearTimeout(deadline);process.exitCode=23});process.stdin.resume()`
+    const child = await launch(owner, source)
+    const result = await child.wait()
+    assert.equal(result.exitCode, 23)
+    assert.deepEqual(result.stdout, Buffer.from('ROOTTAIL'))
+    const tailAt = Number(result.stderr.toString('utf8'))
+    assert.ok(Number.isSafeInteger(tailAt) && rootObserved !== undefined && rootObserved < tailAt, 'root status must be observed before tail write')
+    owner.dispose()
+    log('phase-root-before-tail', { pid: child.pid, rootObserved, tailAt, stdout: result.stdout.toString('hex'), stderr: result.stderr.toString('hex') })
+  } finally { api.getExitCodeProcess = original }
+})
+const sharedA = new AclSandbox({ mode: 'read-only', writableDirs: [], manageDacls: false })
+const sharedB = new AclSandbox({ mode: 'read-only', writableDirs: [], manageDacls: false })
+try {
+  await Promise.all([sharedA.init(), sharedB.init()])
+  const source = (label: string, delay: number) => `const deadline=setTimeout(()=>process.exit(99),4000);process.stdin.on('end',()=>{setTimeout(()=>{clearTimeout(deadline);process.stdout.write(${JSON.stringify(label)});process.stderr.write(${JSON.stringify('雪' + label)});process.exitCode=23},${delay})});process.stdin.resume()`
+  const [a, b] = await Promise.all([launch(sharedA, source('A', 100)), launch(sharedB, source('B', 800))])
+  const order: string[] = []
+  const aWait = a.wait().then(value => { order.push('A'); return value })
+  const bWait = b.wait().then(value => { order.push('B'); return value })
+  const first = await aWait
+  assert.deepEqual(order, ['A'])
+  assert.equal(first.exitCode, 23); assert.deepEqual(first.stdout, Buffer.from('A')); assert.deepEqual(first.stderr, Buffer.from('雪A'))
+  sharedA.dispose()
+  const second = await bWait
+  assert.deepEqual(order, ['A', 'B'])
+  assert.equal(second.exitCode, 23); assert.deepEqual(second.stdout, Buffer.from('B')); assert.deepEqual(second.stderr, Buffer.from('雪B'))
+  sharedB.dispose()
+  log('phase-shared-clients', { pids: [a.pid, b.pid], order, stdout: [first.stdout.toString('hex'), second.stdout.toString('hex')], stderr: [first.stderr.toString('hex'), second.stderr.toString('hex')] })
+} finally { await Promise.all([sharedA.disposeAsync(), sharedB.disposeAsync()]) }

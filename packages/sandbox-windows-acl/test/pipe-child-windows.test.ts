@@ -20,4 +20,7 @@ it.skipIf(process.env.IH_ACL_PIPE_QUALIFICATION !== '1')('qualifies one public d
   expect(result.error, result.stderr + result.stdout).toBeUndefined()
   expect(result.status, result.stderr + result.stdout).toBe(0)
   expect(result.stdout).toContain('public-pipe-complete')
+  expect(result.stdout).toContain('phase-exit-259')
+  expect(result.stdout).toContain('phase-root-before-tail')
+  expect(result.stdout).toContain('phase-shared-clients')
 }, 25000)
