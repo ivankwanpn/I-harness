@@ -24,13 +24,26 @@ import { createProcessAwareResultService } from '../src/lifecycle/process-result
 import { ContextStore } from '../../context-output/src/store.ts'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
-import { retryOriginalResultOrdering, beginOriginalResultOrderingRegistration } from '../../session-persistence/src/result-ordering-internal.ts'
+import { retryOriginalResultOrdering, beginOriginalResultOrderingRegistration, originalResultOrderingFor } from '../../session-persistence/src/result-ordering-internal.ts'
 import { captureHeldOwnershipClaim } from '../../session-persistence/src/coordinator/ownership.ts'
 
 function serviceFor(root: string, coordinator: ReturnType<typeof createJsonlTaskTransitionCoordinator>, workspaceId: string, dynamic = false, authorize = async () => false) {
   return createProcessAwareResultService({ root, workspaceId, config: { enabled: true }, orderingCoordinators: dynamic ? [] : [coordinator], coordinatorFor: () => coordinator, sourceFor: async () => ({ sourceId: 'source' }), genericVisible: async () => false, authorize })
 }
 const capture = { sessionId: 'source', callId: 'c', label: 'c', text: 'original retained bytes', complete: true }
+
+it('detects only genuine lock-enabled ordering capability and refuses changed original methods',async()=>{
+ const root=await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!,'ordering-capability-'))
+ const coordinator=createJsonlTaskTransitionCoordinator(join(root,'locked'),{lock:{enabled:true}},taskDocumentStorageContract)
+ const unlocked=createJsonlTaskTransitionCoordinator(join(root,'unlocked'),{lock:{enabled:false}},taskDocumentStorageContract)
+ try{
+  expect(originalResultOrderingFor(unlocked)).toBeUndefined();expect(originalResultOrderingFor({...coordinator})).toBeUndefined()
+  const capability=originalResultOrderingFor(coordinator)!
+  expect(capability).toBeDefined();expect(()=>({...capability}).beginRegistration({})).toThrow(/Original/)
+  const original=coordinator.create,changed=vi.spyOn(coordinator,'create').mockImplementation(meta=>original(meta))
+  expect(()=>originalResultOrderingFor(coordinator)).toThrow(/Original/);changed.mockRestore()
+ }finally{vi.restoreAllMocks();await coordinator.close();await unlocked.close();await rm(root,{recursive:true,force:true})}
+})
 
 it.each([[false,'second'],[true,'second'],[false,'cancel'],[true,'cancel']] as const)('keeps original held parent currency after ordinary aggregate extension configured=%s action=%s', async (configured, action) => {
   const root = await mkdtemp(join(process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!, 'ordering-held-currency-'))
