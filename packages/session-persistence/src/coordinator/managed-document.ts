@@ -397,6 +397,30 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     }
     const rootAuthorization: Authorization = { action: { stopped: false }, required: false };
     const ports = createFactPorts(draft => admit(draft, rootAuthorization));
+    function revokeOriginalWork() {
+        assertTaskOutside();
+        const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' });
+        let outcome: 'settled' | 'unknown' = 'unknown';
+        try {
+            closing = true;
+            publishExecutionStatus();
+            invalidateSelected();
+            deliveryControl.retire();
+            capacity.revokeNewWork();
+            for (const source of inputSources) source.revoke();
+            for (const controller of actionControllers) controller.abort();
+            outcome = 'settled';
+        } finally { token?.end(outcome); }
+    }
+    async function drainOriginalSourceOwners() {
+        assertTaskOutside();held.assertHeld();
+        if(closed)return;
+        const drains = await Promise.allSettled([...sourceDrains.values()].map(entry => entry.closeOriginal()));
+        await pump;
+        held.assertHeld();
+        if (pending || quarantined || sourceFault || recoveryHolds.size || drains.some(result => result.status === 'rejected'))
+            throw Object.assign(new FactRecoveryRequiredError(),{cause:new AggregateError(drains.flatMap(result=>result.status==='rejected'?[result.reason]:[]),'Original document sources require cleanup')});
+    }
     const document: ManagedDocument & {
         assertObservable(): void;
     } = {
@@ -406,19 +430,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             assertAuthorized(rootAuthorization);
         },
         revokeNewWork() {
-            assertTaskOutside();
-            const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' });
-            let outcome: 'settled' | 'unknown' = 'unknown';
-            try {
-                closing = true;
-                publishExecutionStatus();
-                invalidateSelected();
-                deliveryControl.retire();
-                capacity.revokeNewWork();
-                for (const source of inputSources) source.revoke();
-                for (const controller of actionControllers) controller.abort();
-                outcome = 'settled';
-            } finally { token?.end(outcome); }
+            revokeOriginalWork();
         },
         ...ports,
         registerReceivedInputSource(drain) {
@@ -612,19 +624,13 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         },
         async drainOriginalSources() {
             if(this!==document)throw new TypeError('Invalid original document source drain');
-            assertTaskOutside();held.assertHeld();
-            if(closed)return;
-            const drains = await Promise.allSettled([...sourceDrains.values()].map(entry => entry.closeOriginal()));
-            await pump;
-            held.assertHeld();
-            if (pending || quarantined || sourceFault || recoveryHolds.size || drains.some(result => result.status === 'rejected'))
-                throw Object.assign(new FactRecoveryRequiredError(),{cause:new AggregateError(drains.flatMap(result=>result.status==='rejected'?[result.reason]:[]),'Original document sources require cleanup')});
+            await drainOriginalSourceOwners();
         },
         async close() {
             if (closed)
                 return;
-            document.revokeNewWork();
-            await document.drainOriginalSources();
+            revokeOriginalWork();
+            await drainOriginalSourceOwners();
             if(selectedBindFlight)await selectedBindFlight.catch(()=>{});
             await settleSelected();
             closed = true;

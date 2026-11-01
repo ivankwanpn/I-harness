@@ -1902,12 +1902,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // Join original physical producers before draining their retained fact sources.
     await phase('terminal', () => terminalMount.dispose())
     await phase('exec', () => assemblyExec.dispose())
-    if (!processCleanupFailures.length) {
-      // Finished tool sources still borrow their original role, instruction,
-      // runtime and result owners. A failed drain retains those dependencies.
-      await phase('document-sources', () => drainOriginalDocumentSources?.())
-      if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, 'Assembly original source cleanup incomplete')
-    }
+    // Unacknowledged producers still borrow these same role/MCP/instruction
+    // owners, even when their source barrier has not yet been entered.
+    if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, 'Assembly original producer cleanup incomplete')
+    await phase('document-sources', () => drainOriginalDocumentSources?.())
+    if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, 'Assembly original source cleanup incomplete')
     await phase('plugins', () => pluginCapabilities?.dispose())
     // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()

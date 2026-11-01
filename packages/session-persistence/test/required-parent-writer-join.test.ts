@@ -138,3 +138,24 @@ it('drains the same original sources after revoke without releasing the document
  expect(await f.document.metadata.admit({type:'plan/mode',mode:'on'})).toMatchObject({kind:'not-issued'})
  await f.document.close();await f.close()
 })
+
+it.each([Object.freeze({original:'drain-marker'}),undefined,false])('original direct close cannot replace its own source barrier (%j)',async marker=>{
+ let failing=true,drains=0,replacements=0
+ const f=await fixture(async()=>{drains++;if(failing)throw marker}),originalClose=f.document.close.bind(f.document),exposed=Object.getOwnPropertyDescriptor(f.document,'drainOriginalSources')!,ack=captureOriginalSettlementCloseAck(f.source)!,before=await readFile(join(f.root,'parent.jsonl'))
+ let acknowledged=false,primary:{cause:unknown}|undefined;void ack.then(()=>{acknowledged=true});f.action.finish()
+ if(marker===undefined)Object.defineProperty(f.document,'drainOriginalSources',{configurable:true,get(){replacements++;throw Error('Replaced public drain getter')}});else f.document.drainOriginalSources=async()=>{replacements++}
+ try{
+  let rejected=false,cause:unknown;await originalClose().catch(error=>{rejected=true;cause=error});expect(rejected).toBe(true);expect(drains).toBe(1);expect(replacements).toBe(0)
+  expect(cause).toBeInstanceOf(AggregateError);expect((cause as AggregateError).errors).toHaveLength(1)
+  const ownedFailure=(cause as AggregateError).errors[0] as Error;expect(ownedFailure).toMatchObject({code:'FACT_RECOVERY_REQUIRED'});expect(ownedFailure.cause).toBeInstanceOf(AggregateError)
+  const sourceFailures=(ownedFailure.cause as AggregateError).errors;expect(sourceFailures).toHaveLength(1);expect(sourceFailures[0]).toBeInstanceOf(AggregateError);expect(sourceFailures[0].errors).toEqual([marker])
+  expect(acknowledged).toBe(false);f.source.assertHeld();expect(()=>f.document.assertReady()).toThrow()
+  failing=false;await originalClose();await ack;expect(acknowledged).toBe(true);expect(drains).toBe(2);expect(replacements).toBe(0);expect(await readFile(join(f.root,'parent.jsonl'))).toEqual(before)
+ }catch(cause){primary={cause}}finally{failing=false;Object.defineProperty(f.document,'drainOriginalSources',exposed);const errors:unknown[]=[];try{await f.source.close()}catch(error){errors.push(error)};try{await f.close()}catch(error){errors.push(error)};if(primary||errors.length)throw new AggregateError([...(primary?[primary.cause]:[]),...errors],'Original close barrier and cleanup must both acknowledge')}
+})
+
+it('original direct close fences admission before joining its source even if public revoke is replaced',async()=>{
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),f=await fixture(async()=>{entered.resolve();await release.promise}),originalClose=f.document.close.bind(f.document),revoke=f.document.revokeNewWork
+ let replacementCalls=0;f.document.revokeNewWork=()=>{replacementCalls++};f.action.finish();const closing=originalClose();void closing.catch(()=>{})
+ try{await entered.promise;expect(()=>f.document.assertReady()).toThrow();expect(replacementCalls).toBe(0)}finally{f.document.revokeNewWork=revoke;revoke();release.resolve();await closing;await f.close()}
+})

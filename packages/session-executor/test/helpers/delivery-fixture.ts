@@ -36,7 +36,7 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { activeForeground?: boolean; holdLaterForegroundSave?:boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { activeForeground?: boolean; roleTools?:readonly string[]; holdLaterForegroundSave?:boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-service-'))
   let backend = createJsonlBackend(join(root, 'sessions'))
   let coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -234,7 +234,7 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
     prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}),
     telemetry,
     model: parent, modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access', codeMode: { mode: 'off' }, contextWindow: 100000,
-    pluginAgents: [{ name: 'probe', description: 'delivery fixture', systemPrompt: 'Return the original result', tools: [] }],
+    pluginAgents: [{ name: 'probe', description: 'delivery fixture', systemPrompt: 'Return the original result', tools: [...(options.roleTools??[])] }],
     additionalTools: [{ name: 'fixture_step', description: 'A normal parent step boundary', inputSchema: {}, isReadOnly: true, execute: async () => ({ stepped: true }) }],
     allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: 'fixture', model: 'child' }),
     resolveRoleModel: async () => ({ status: 'ready', binding: { client: child, contextWindow: 100000 } }),

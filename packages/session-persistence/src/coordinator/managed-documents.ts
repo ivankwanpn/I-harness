@@ -37,7 +37,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     bindRestored(entry,document)
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
-    document.revokeNewWork=()=>{assertTaskOutside(id);void revokeTaskOperations(id);markManagedEntryRevoked(entry);revoke()}
+    const revokeAttached=()=>{assertTaskOutside(id);void revokeTaskOperations(id);markManagedEntryRevoked(entry);revoke()}
+    document.revokeNewWork=revokeAttached
     const close=document.close
     let closeFlight:Promise<void>|undefined,closeComplete=false
     document.close=async()=>{
@@ -51,7 +52,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       let outcome:'settled'|'unknown'='unknown'
       const flight=(async()=>{
         try {
-          revokeManagedEntry(entry)
+          revokeAttached()
           await entry.flight?.catch(()=>{})
           await bootstrap.settleCapture(entry)
           if(entry.headerUnknown)throw new FactRecoveryRequiredError()
