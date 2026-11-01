@@ -339,8 +339,29 @@ export function persistentRoleRegistry(
 ): RoleRegistry {
   return {
     ...roles,
-    register(role) {
-      roles.register(role)
+    register(role, retainCleanup) {
+      roles.register(role, retainCleanup ? originalCleanup => {
+        const state: { removed: boolean; saved: boolean; flight?: Promise<void>; failure?: { cause: unknown } } = { removed: false, saved: false }
+        retainCleanup(() => {
+          if (state.flight) return state.flight
+          // The original role and original store/save owner survive retirement.
+          // A failed save retries only bookkeeping, never a second removal.
+          const attempt = Promise.withResolvers<void>()
+          state.flight = attempt.promise
+          void attempt.promise.then(() => { state.flight = undefined }, cause => { state.failure = { cause }; state.flight = undefined })
+          let removal: ReturnType<typeof originalCleanup>
+          // The original entry is fenced synchronously even if a retainer
+          // closes it reentrantly before register has published that entry.
+          try { removal = state.removed ? undefined : originalCleanup() }
+          catch (cause) { attempt.reject(cause); return attempt.promise }
+          void Promise.resolve(removal).then(async () => {
+            state.removed = true
+            if (!state.saved) { await save(); state.saved = true }
+            state.failure = undefined
+          }).then(attempt.resolve, attempt.reject)
+          return attempt.promise
+        })
+      } : undefined)
       void save()
     },
     remove(name) {

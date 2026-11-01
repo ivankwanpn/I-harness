@@ -8,7 +8,7 @@ export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkfl
 export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"
 export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { PrepareTaskChild, TaskChildHostInput, TaskChildHostPreparation } from './child/task-host.ts'
-export type { SubagentRole, RoleRegistry } from "./roles.ts"
+export type { SubagentRole, RoleRegistry, RoleCleanup } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"
 export { hasCommittedInitialInput } from './child/initial-input.ts'
@@ -248,6 +248,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
           }
           assertRuntimeWork()
           const target = mountedRuntime[kind] as T
+          if (kind === 'roles' && name === 'register' && typeof args[1] === 'function') {
+            const retain = args[1] as (cleanup: import('./roles.ts').RoleCleanup) => void
+            args[1] = (cleanup: import('./roles.ts').RoleCleanup) => { retain(cleanup); assertRuntimeWork() }
+          }
           return Reflect.apply(target[name] as (...args: unknown[]) => unknown, target, args)
         }
         Object.defineProperty(facade, name, { value: method, enumerable: true })

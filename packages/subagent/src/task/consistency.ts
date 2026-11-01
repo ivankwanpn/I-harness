@@ -1,4 +1,4 @@
-import type { SessionEventView } from '@i-harness/core-session'
+import { validDeliveryEvent, type SessionEventView } from '@i-harness/core-session'
 import type { TaskProtocolDocument } from './types.ts'
 
 /** Pure calculation over history already validated by its original journal owner.
@@ -16,11 +16,13 @@ export function calculateTaskDocumentConsistency(parent: string, events: readonl
       if (event.version !== 1 || typeof event.taskId !== 'string' || !event.taskId || !['completed', 'error', 'cancelled', 'recovery-required'].includes(event.outcome)) throw new Error('Invalid local task end')
       ids.add(event.taskId)
     } else if (event.type === 'agent/delivery-source') {
-      if (event.recipientSessionId !== parent) throw new Error('Foreign task delivery')
-      ids.add(event.sourceId)
+      if (!validDeliveryEvent(event) || event.recipientSessionId !== parent) throw new Error('Foreign or invalid task delivery')
+      // Exec reference/terminal proof stays in the original closed delivery
+      // index. Only genuine subagent facts require TaskRegistry membership.
+      if (event.kind === 'subagent') ids.add(event.sourceId)
     } else if (event.type === 'agent/delivery-received') {
-      if (event.key.recipientSessionId !== parent || event.key.kind !== 'subagent') throw new Error('Foreign task delivery')
-      ids.add(event.key.sourceId)
+      if (!validDeliveryEvent(event) || event.key.recipientSessionId !== parent) throw new Error('Foreign or invalid task delivery')
+      if (event.key.kind === 'subagent') ids.add(event.key.sourceId)
     }
   }
   const knownIds = [...ids]

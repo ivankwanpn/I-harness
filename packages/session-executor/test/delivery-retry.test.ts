@@ -1,6 +1,7 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { createDeliveryFixture } from './helpers/delivery-fixture.ts'
 import { RecipientDeliveryRecoveryError } from '../src/lifecycle/recipient-delivery.ts'
+import { createOwnedDocumentWrite } from '../../session-persistence-jsonl/src/backend/document-write.ts'
 
 it('retries original transient receiver capture for a retained failed child without another input or terminal event', async () => {
   const warnings = ['original delivery settlement', 'delivery reconciliation failed'].map(prefix => `[i-harness] ${prefix}: FactRecoveryRequiredError: Managed facts require reconciliation`)
@@ -46,11 +47,15 @@ it.each([undefined, false])('committed receiver input wakes once despite falsey 
   const warnings = ['original delivery settlement', 'delivery reconciliation failed'].map(prefix => `[i-harness] ${prefix}: ${String(failure)}`)
   const f = await createDeliveryFixture({ expectedWarnings: warnings })
   let failures = 0
-  const put = f.backend.putDocument
-  f.backend.putDocument = async (key, data) => {
-    await put(key, data)
-    if (key === 'task-parent' && !failures && (data as { notifications?: { status: string }[] }).notifications?.some(row => row.status === 'delivered')) { failures++; throw failure }
-  }
+  const create = vi.mocked(createOwnedDocumentWrite).getMockImplementation()!
+  vi.mocked(createOwnedDocumentWrite).mockImplementation(input => {
+    const original = create(input), write = original.handle, data = JSON.parse(Buffer.from(input.bytes).toString('utf8')) as { notifications?: { status: string }[] }
+    return { ...original, handle: { retry: write.retry.bind(write), reconcile: write.reconcile.bind(write), outcome: write.outcome.bind(write), async issue() {
+      const outcome = await write.issue()
+      if (input.path.startsWith(f.root) && input.path.endsWith('task-parent.doc.jsonl') && !failures && data.notifications?.some(row => row.status === 'delivered')) { failures++; throw failure }
+      return outcome
+    } } }
+  })
   try {
     await f.start(); f.releaseChild(); await f.waitForDeliveryRequest(); await f.waitForConsumed()
     const events = (await f.backend.read('parent')).events

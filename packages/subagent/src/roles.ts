@@ -13,17 +13,19 @@ export interface SubagentRole {
   model?: { provider: string; model: string }
 }
 
+/** Cleanup for one original registration; it confers no new role/work rights. */
+export type RoleCleanup = () => void | Promise<void>
 export interface RoleRegistry {
   revision(name?: string): number
   onChanged(listener: () => void): () => void
-  register(role: SubagentRole): void
+  register(role: SubagentRole, retainCleanup?: (cleanup: RoleCleanup) => void): void
   get(name: string): SubagentRole | undefined
   list(): SubagentRole[]
   remove(name: string): void
 }
 
 export function createRoleRegistry(): RoleRegistry {
-  const roles = new Map<string, SubagentRole>()
+  const roles = new Map<string, { role: SubagentRole }>()
   let revision = 0
   const roleRevisions = new Map<string, number>()
   const listeners = new Set<() => void>()
@@ -31,13 +33,24 @@ export function createRoleRegistry(): RoleRegistry {
   return {
     revision: name => name === undefined ? revision : roleRevisions.get(name) ?? 0,
     onChanged(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
-    register(role) {
-      if (roles.has(role.name)) throw new Error(`duplicate role: ${role.name}`)
-      roles.set(role.name, role)
-      changed(role.name)
+    register(role, retainCleanup) {
+      const name = role.name
+      if (roles.has(name)) throw new Error(`duplicate role: ${name}`)
+      const entry = { role }
+      let retired = false, clean = false
+      if (retainCleanup) retainCleanup(() => {
+        retired = true
+        if (clean) return
+        if (roles.get(name) === entry) { roles.delete(name); changed(name) }
+        clean = true
+      })
+      if (retired) throw new Error('Original role registration retired')
+      if (roles.has(name)) throw new Error(`duplicate role: ${name}`)
+      roles.set(name, entry)
+      changed(name)
     },
-    get(name) { return roles.get(name) },
-    list() { return [...roles.values()] },
+    get(name) { return roles.get(name)?.role },
+    list() { return [...roles.values()].map(entry => entry.role) },
     remove(name) { if (roles.delete(name)) changed(name) },
   }
 }
