@@ -543,7 +543,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                 },
             };
             Object.defineProperty(capability, 'owner', { value: owner, enumerable: true, writable: false, configurable: false });
-            Object.defineProperty(capability,'captureToolCall',{value:capability.captureToolCall,enumerable:true,writable:false,configurable:false});
+            for(const name of ['captureToolCall','captureLifecycle','captureMetadata','captureToolDispatch'] as const)Object.defineProperty(capability,name,{value:capability[name],enumerable:true,writable:false,configurable:false});
             ownedActions.add(capability);
             if(core){actionHooks=core.captureHooks(capability,held.assertHeld);actionMembers.add({source:capability,finished:()=>finished})}
             return capability;

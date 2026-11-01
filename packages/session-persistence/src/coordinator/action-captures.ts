@@ -4,7 +4,7 @@ import {types} from 'node:util'
 
 /** Optional action captures retain their original disposition after Stop.
  * Their read/reconcile handles never gain required-settlement admission. */
-export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
+export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureLifecycle' | 'captureMetadata' | 'captureToolDispatch' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
   const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => forwardSettlementCapture(retained,{
     admit: ()=>retained.admit(), reconcile: ()=>retained.reconcile(), observe: ()=>retained.observe(),
   })
@@ -18,6 +18,9 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
     catch { return false }
   }
   return {
+    captureLifecycle:event=>actionHandle(captureSettlementFact({kind:'lifecycle',event},operations,true)),
+    captureMetadata:event=>actionHandle(captureSettlementFact({kind:'metadata',event},operations,true)),
+    captureToolDispatch:(callId,eventSeq)=>actionHandle(captureSettlementFact({kind:'tool',event:{type:'tool/dispatch',callId,eventSeq}},operations,true)),
     captureToolCall(event) {
       operations.assertHeld()
       if(!event||typeof event!=='object'||types.isProxy(event)||Object.getOwnPropertyDescriptor(event,'type')?.value!=='tool/call')return invalid()

@@ -1,7 +1,7 @@
 import type { SessionEvent } from '@i-harness/core-session';
 import { agentFacts, committedFactSeqs } from './facts.ts';
 import type { AgentDeps, TurnLifecycle } from './types.ts';
-type Dependencies = Pick<AgentDeps, 'session' | 'facts' | 'sourceFacts'>;
+type Dependencies = Pick<AgentDeps, 'facts' | 'sourceFacts'> & {session?:AgentDeps['session']};
 export function openStepBoundary(lifecycle: TurnLifecycle): void {
     lifecycle.stepOpen = true;
     lifecycle.providerCompleted = false;

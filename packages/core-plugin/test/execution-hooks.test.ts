@@ -1,5 +1,16 @@
 import {expect,it} from 'vitest'
 import * as plugin from '../src/index.ts'
+it('the original service slot refuses Session-only runtime and detects late registration before the next hook',async()=>{
+ const parent=plugin.createContext(),child=parent.scope.mount();let called=0
+ parent.services.register('hooks/claude-runtime',{drainContext(){called++;return []}})
+ expect(()=>plugin.captureExecutionHookChannel(child)).toThrow('FULL_SESSION_REQUIRED');expect(called).toBe(0)
+ const ctx=plugin.createContext(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ plugin.onExecutionEvent(ctx,'agent/pre-step',async()=>{entered.resolve();await release.promise})
+ plugin.onExecutionEvent(ctx,'agent/pre-step',()=>{called++})
+ const channel=plugin.captureExecutionHookChannel(ctx),pending=channel.emit('agent/pre-step',{});void pending.catch(()=>{});await entered.promise
+ ctx.services.register('hooks/claude-runtime',{beforeStop(){called++}});release.resolve();await expect(pending).rejects.toThrow('SURFACE_CHANGED');expect(called).toBe(0)
+})
+it.each(['agent/pre-stop','agent/post-tool'] as const)('unmarked %s callbacks require explicit complete-view compatibility',event=>{const ctx=plugin.createContext();ctx.on(event,()=>{});expect(()=>plugin.captureExecutionHookChannel(ctx)).toThrow('FULL_SESSION_REQUIRED')})
 it('original owned listeners preserve plain/waterfall/ancestor order and reject legacy Session callbacks',async()=>{
  const register=(plugin as any).onExecutionEvent,waterfall=(plugin as any).waterfallExecutionEvent,capture=(plugin as any).captureExecutionHookChannel
  expect(register).toBeTypeOf('function');expect(waterfall).toBeTypeOf('function');expect(capture).toBeTypeOf('function')

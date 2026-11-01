@@ -1,16 +1,18 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import { committedFactSeqs, FactRecoveryRequiredError, type SessionView as Session } from "@i-harness/core-session"
+import { committedFactSeqs, FactRecoveryRequiredError } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import { isOriginalResultFinalization, isOriginalSyntheticResultFinalization, resultExecution } from '@i-harness/core-tools'
 import type { BatchCall, BatchSlot, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchCancellation } from "./cancel.ts"
+import {isManagedBatchSource,type BatchSource} from './managed-source.ts'
 
-export function createBatchRecords(ctx: PluginContext, session: Session, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions, cancellation: () => Pick<BatchCancellation, "observeAbort" | "aborted" | "disqualify">) {
+export function createBatchRecords(ctx: PluginContext, session: BatchSource, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions, cancellation: () => Pick<BatchCancellation, "observeAbort" | "aborted" | "disqualify">) {
   const slots: (BatchSlot | undefined)[] = batch.map(() => undefined)
   let committed = 0, startedUpTo = 0, serial = Promise.resolve(), unknownEffects = false
-  const holdOriginal = (slot: BatchSlot) => {
+  const synthetic=(index:number)=>isManagedBatchSource(session)?session.synthetic(index,opts.settlementSource! as import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').FactOutcome>):{view:session,source:opts.settlementSource!,callId:batch[index]!.callId,name:batch[index]!.name}
+  const holdOriginal = (slot: BatchSlot,index:number) => {
     if ('synthetic' in slot) {
-      if (isOriginalSyntheticResultFinalization({ view: session, source: opts.settlementSource!, callId: slot.callId, name: slot.name }, slot.finalization)) opts.holdFactRecovery?.()
+      if (isOriginalSyntheticResultFinalization(synthetic(index), slot.finalization)) opts.holdFactRecovery?.()
     } else {
       const handle = slot.finalization ?? tools.resultFinalization?.(slot.prepared)
       if (isOriginalResultFinalization(slot.prepared, handle)) { slot.finalization = handle; opts.holdFactRecovery?.() }
@@ -24,9 +26,10 @@ export function createBatchRecords(ctx: PluginContext, session: Session, tools: 
     if (!slot.fact) {
       if ('synthetic' in slot) {
         slot.projected ??= { output: await ctx.cascade('tools/project-synthetic-result', { name: slot.name, output: slot.output }, async () => slot.output) }
-        slot.finalization ??= tools.captureSyntheticResult?.({ view: session, source: opts.settlementSource!, callId: slot.callId, name: slot.name }, slot.projected.output, slot.execution ?? { outcome: 'unknown', dispatch: 'unknown' })
+        const context=synthetic(index)
+        slot.finalization ??= 'domain'in context?tools.captureManagedSyntheticResult?.(context,slot.projected.output,slot.execution??{outcome:'unknown',dispatch:'unknown'}):tools.captureSyntheticResult?.(context, slot.projected.output, slot.execution ?? { outcome: 'unknown', dispatch: 'unknown' })
         const retained = await slot.finalization?.settle()
-        if (retained && retained.kind !== 'ready') { holdOriginal(slot); throw new FactRecoveryRequiredError() }
+        if (retained && retained.kind !== 'ready') { holdOriginal(slot,index); throw new FactRecoveryRequiredError() }
         slot.fact = opts.sourceFacts!.captureResult({ type: 'tool/result', callId: slot.callId, name: slot.name, ...(retained?.kind === 'ready' ? { envelope: retained.envelope } : { output: slot.projected.output, isError: true }) })
       } else {
         if ('retained' in slot && !slot.resolved) {
@@ -56,13 +59,13 @@ export function createBatchRecords(ctx: PluginContext, session: Session, tools: 
       }
     }
     try { committedFactSeqs(await (reconcile?slot.fact.reconcile():slot.fact.admit())) }
-    catch (error) { holdOriginal(slot); throw error }
+    catch (error) { holdOriginal(slot,index); throw error }
     slot.recorded = true
     while (slots[committed]?.recorded) committed++
     if ('synthetic' in slot) return
     control.observeAbort()
     opts.telemetry?.emit({ type: 'tool/end', ts: Date.now(), data: { tool: slot.name, callId: slot.callId } })
-    if (!control.aborted) await ctx.emit('agent/post-tool', { name: call.name, args: call.args, ...(slot.finalized!.program?.kind === 'unavailable' ? { program: slot.finalized!.program } : { output: slot.finalized!.output }), session, signal: opts.signal })
+    if (!control.aborted) {const payload={name: call.name, args: call.args, ...(slot.finalized!.program?.kind === 'unavailable' ? { program: slot.finalized!.program } : { output: slot.finalized!.output }),signal:opts.signal};if(isManagedBatchSource(session))await session.postTool(payload);else await ctx.emit('agent/post-tool',{...payload,session})}
   }
   const schedule = (work: () => Promise<void>) => { const next = serial.then(work).catch(error => { cancellation().disqualify(); throw error }); serial = next.catch(() => {}); return next }
   return {

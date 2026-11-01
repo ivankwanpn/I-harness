@@ -62,6 +62,9 @@ export interface ExecutionObservation {
  budget():DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['budget']>>
  recovery(binding?:Parameters<ReturnType<typeof createContextStateIndex>['recovery']>[1]):DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['recovery']>>
  generations():DeepReadonly<readonly GenerationActionState[]>
+ semanticsStartSeq():number|undefined
+ hasToolCallId(id:string):boolean
+ softReduction():DeepReadonly<{state:import('../conversation/soft-reduction.ts').SoftReductionState;humanTurns:number;acceptedExchanges:number;sinceRewrite?:{humanTurns:number;acceptedExchanges:number}}>
 }
 /** The actual archive lease plus original action/revision publication guards. */
 export interface PreparedExecutionRequest {

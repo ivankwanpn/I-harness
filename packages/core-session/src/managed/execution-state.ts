@@ -1,6 +1,6 @@
 import { types } from 'node:util'
 import { restoreManagedConversation,installRestoredManagedConversation } from './restored-view.ts'
-import { createExecutionMemberOwner,isExecutionMemberOf,readAcknowledgedExecutionMembers } from './execution-members.ts'
+import { createExecutionMemberOwner,isExecutionMemberOf,isExecutionCaptureSource,readAcknowledgedExecutionMembers } from './execution-members.ts'
 import { captureWriterDependencies } from './writer-dependencies.ts'
 import { factPrefixDigest } from '../serialization/fact-journal.ts'
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts'
@@ -10,10 +10,17 @@ import type { ManagedExecutionIdentity,ManagedExecutionOwner,ManagedExecutionDom
 import {freezeJsonData} from './capture.ts'
 import {captureOriginalRestorationSource} from './restoration-source.ts'
 import {originalDeliveryObservation} from './delivery-control.ts'
+import {subscribers} from '../events/state.ts'
 
 const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;newWork?():void}>()
 const domains=new WeakMap<object,{identity:ManagedExecutionIdentity;owner:ManagedExecutionOwner;context:object;current():void}>()
+/** Original subscriptions use the same store as explicit compatibility views.
+ * A private execution key is never a Session or a durable admission port. */
+export function publishManagedExecutionTransient(domain:ManagedExecutionDomain,source:object,event:Extract<import('../events/types.ts').SessionEvent,{type:'assistant/chunk'|'reasoning/chunk'|'model/activity'}>){if(!isManagedExecutionSource(domain,source))throw TypeError('Original transient source required');const {seq:_seq,...live}=event;subscribers.get(domain.identity)?.forEach(listener=>listener(live))}
+export function subscribeManagedExecution(domain:ManagedExecutionDomain,listener:(event:import('../events/types.ts').SessionEvent)=>void){domain.assertCurrent();if(!isManagedExecutionDomain(domain))throw TypeError('Original execution domain required');let set=subscribers.get(domain.identity);if(!set){set=new Set();subscribers.set(domain.identity,set)}set.add(listener);return()=>{set.delete(listener)}}
 const sources=new WeakMap<object,{identity:ManagedExecutionIdentity;current():void}>()
+const actions=new WeakMap<object,{identity:ManagedExecutionIdentity;current():void}>()
+export function assertManagedActionCurrent(domain:ManagedExecutionDomain,action:object){const original=domains.get(domain),registered=actions.get(action);if(!original||registered?.identity!==original.identity)throw TypeError('Original same-domain action required');domain.assertCurrent();registered.current()}
 export function createManagedExecutionDomain(identity:ManagedExecutionIdentity,owner:ManagedExecutionOwner,context:object,sessionId?:string):ManagedExecutionDomain{
  const original=owners.get(identity);if(!original||original.owner!==owner||!original.newWork||!context||typeof context!=='object'||types.isProxy(context)||sessionId!==undefined&&sessionId!==original.sessionId)throw TypeError('Original managed execution domain required');original.newWork()
  const domain=Object.freeze({identity,owner,context,sessionId:original.sessionId,assertCurrent(){if(this!==domain)throw TypeError('Original domain receiver required');original.newWork!()}}) as ManagedExecutionDomain
@@ -22,6 +29,7 @@ export function createManagedExecutionDomain(identity:ManagedExecutionIdentity,o
 export function isManagedExecutionDomain(domain:object,context?:object){const original=domains.get(domain);if(!original||context!==undefined&&original.context!==context)return false;try{original.current();return true}catch{return false}}
 export function isManagedExecutionSource(domain:ManagedExecutionDomain,source:object){const original=domains.get(domain),registered=sources.get(source);if(!original||registered?.identity!==original.identity)return false;try{original.current();registered.current();return true}catch{return false}}
 export function readManagedAcknowledgedMembers(domain:ManagedExecutionDomain,capture:object,outcome:FactOutcome){const original=domains.get(domain);if(!original||!isExecutionMemberOf(capture,original.identity))throw TypeError('Original same-domain capture required');original.current();return readAcknowledgedExecutionMembers(capture,outcome)}
+export function readManagedActionMembers(domain:ManagedExecutionDomain,action:object,capture:object,outcome:FactOutcome){const original=domains.get(domain);if(!original||!original.owner.ownsAction(action)||!isExecutionCaptureSource(capture,action))throw TypeError('Original same-action capture required');return readManagedAcknowledgedMembers(domain,capture,outcome)}
 export function isManagedExecutionOwner(identity:ManagedExecutionIdentity,owner:object):boolean{
   const original=owners.get(identity)
   if(!original||original.owner!==owner)return false
@@ -65,6 +73,9 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       budget(){if(this!==observation)throw TypeError('Original observation receiver required');current();return freezeJsonData(original.context.budget(token.sessionId))},
       recovery(binding?:Parameters<ExecutionObservation['recovery']>[0]){if(this!==observation)throw TypeError('Original observation receiver required');current();let captured:typeof binding;if(binding!==undefined){if(!binding||typeof binding!=='object'||types.isProxy(binding))throw TypeError('Original recovery binding scalars required');const model=Object.getOwnPropertyDescriptor(binding,'modelId'),protocol=Object.getOwnPropertyDescriptor(binding,'protocol'),provider=Object.getOwnPropertyDescriptor(binding,'providerId');if(!model||!('value'in model)||typeof model.value!=='string'||!protocol||!('value'in protocol)||typeof protocol.value!=='string'||provider&&(!('value'in provider)||provider.value!==undefined&&typeof provider.value!=='string'))throw TypeError('Original recovery binding scalars required');captured={modelId:model.value,protocol:protocol.value,...provider?.value!==undefined?{providerId:provider.value}:{}}}return freezeJsonData(original.context.recovery(token.sessionId,captured))},
       generations(){if(this!==observation)throw TypeError('Original observation receiver required');current();return freezeJsonData(original.generations())},
+      semanticsStartSeq(){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.executionScalars().semanticsStartSeq},
+      hasToolCallId(id:string){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.executionScalars().hasToolCallId(id)},
+      softReduction(){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.softReduction()},
     });current();return observation
   }
   async function prepareRequest(action:import('./ports.ts').ManagedAction<FactOutcome>):Promise<PreparedExecutionRequest>{
@@ -86,7 +97,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     materialize(events:readonly import('./types.ts').SessionEventView[],owner:ManagedExecutionOwner){
       assertNewWork();if(!isManagedExecutionOwner(identity,owner))throw TypeError('Original execution owner required');if(compatibility)return compatibility
       const captured=events.map((event,index)=>{if(event.seq!==index)throw TypeError('Complete compatibility history required');return liveEvents.get(index)?.deref()??freezeJsonData(event)})
-      compatibility=original.compatibility(captured,owner);liveEvents.clear();return compatibility
+      compatibility=original.compatibility(captured,owner);const listeners=subscribers.get(identity);if(listeners)subscribers.set(compatibility.view,listeners);else{const set=new Set<(event:import('../events/types.ts').SessionEvent)=>void>();subscribers.set(identity,set);subscribers.set(compatibility.view,set)}liveEvents.clear();return compatibility
     },
     bindOwner(owner:ManagedExecutionOwner){
       assertNewWork();if(ownerBound||!owner||types.isProxy(owner))throw new TypeError('Original execution owner already bound or unavailable')
@@ -114,7 +125,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       try{await close();debt.delete(scope)}catch(cleanup){prepared?.discard();const cause=failed?new AggregateError([primary,cleanup],'Writer preparation and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};throw cause}finally{reading=false}
       if(failed)throw primary
       try{assertHeld()}catch(error){prepared?.discard();throw error}
-      const staged=prepared!,operation=Object.freeze({});let installed=false,started=false,discarded=false,absent=false,issuedBatch:EncodedFactBatch|undefined,originalBatch:EncodedFactBatch|undefined,originalReceipt:FactReceipt|undefined
+      const staged=prepared!,operation=Object.freeze({});let installed=false,started=false,discarded=false,absent=false,published=0,issuedBatch:EncodedFactBatch|undefined,originalBatch:EncodedFactBatch|undefined,originalReceipt:FactReceipt|undefined
       const assertIssuable=()=>{assertHeld();if(discarded||absent||pendingWrite||issuedBatch||started||original.prefix!==expected)throw new TypeError('Writer prefix changed or original issuance already started')}
       return {events:staged.events,members:staged.members,rejected:staged.rejected,assertIssuable,discardUnissued(){if(issuedBatch||started)throw new TypeError('Original issued write cannot be discarded');discarded=true;staged.discard()},beforeIssue(batch:EncodedFactBatch){
         assertIssuable()
@@ -130,7 +141,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
         if(receipt.owner.sessionId!==token.sessionId||receipt.owner.incarnation!==token.incarnation||receipt.key!==batch.key||receipt.lastSeq!==batch.key.firstSeq+batch.key.count-1||receipt.prefixDigest!==factPrefixDigest(batch.key.previousPrefixDigest,batch.key.batchDigest))throw new TypeError('Original verified writer receipt required')
         started=true;originalBatch=batch;originalReceipt=receipt
         staged.install(batch,receipt)
-        if(compatibility)compatibility.append(staged.events);else for(const event of staged.events)liveEvents.set(event.seq!,new WeakRef(event))
+        if(compatibility)compatibility.append(staged.events);else{for(const event of staged.events)liveEvents.set(event.seq!,new WeakRef(event));while(published<staged.events.length){const event=staged.events[published++]!;subscribers.get(identity)?.forEach(listener=>listener(event as import('../events/types.ts').SessionEvent))}}
         for(const member of staged.members)members.installed(member.group,member.events,receipt)
         installed=true;pendingWrite=undefined
       }}
@@ -139,7 +150,9 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       assertNewWork();assertCaptureCurrent()
       const bound=owners.get(identity);bound?.current();if(bound?.owner.ownsAction(source)){
         const field=Object.getOwnPropertyDescriptor(source,'assertOpen');if(!field||!('value'in field)||typeof field.value!=='function'||types.isProxy(field.value))throw TypeError('Original action currentness required');const assert=field.value.bind(source) as ()=>void;
-        requestActions.set(source,()=>{bound.current();if(!bound.owner.ownsAction(source)||Object.getOwnPropertyDescriptor(source,'assertOpen')?.value!==field.value)throw TypeError('Original request action changed');assert()})
+        const fields=Object.getOwnPropertyDescriptors(source),facts=fields.facts?.value as object|undefined,groups=facts?Object.entries(Object.getOwnPropertyDescriptors(facts)).map(([key,value])=>({key,value:value.value,fields:value.value&&typeof value.value==='object'?Object.getOwnPropertyDescriptors(value.value):undefined})):[];
+        const current=()=>{bound.current();if(!bound.owner.ownsAction(source))throw TypeError('Original request action changed');for(const key of Reflect.ownKeys(fields)){const expected=Object.getOwnPropertyDescriptor(fields,key)!.value as PropertyDescriptor,actual=Object.getOwnPropertyDescriptor(source,key);if(!actual||!('value'in actual)||actual.value!==expected.value)throw TypeError('Original request action changed')}for(const group of groups){if(Object.getOwnPropertyDescriptor(facts!,group.key)?.value!==group.value)throw TypeError('Original action fact ports changed');for(const [key,expected]of Object.entries(group.fields??{}))if(Object.getOwnPropertyDescriptor(group.value,key)?.value!==expected.value)throw TypeError('Original action fact method changed')}assert()};
+        requestActions.set(source,current);actions.set(source,{identity,current})
       }
       else if(bound){const field=Object.getOwnPropertyDescriptor(source,'assertHeld');if(field&&'value'in field&&typeof field.value==='function'&&!types.isProxy(field.value)){const assert=field.value.bind(source) as ()=>void;sources.set(source,{identity,current(){bound.current();if(Object.getOwnPropertyDescriptor(source,'assertHeld')?.value!==field.value)throw TypeError('Original source changed');assert()}})}}
       return Object.freeze({capture:<T extends import('./ports.ts').CapturedActionFact>(group:CapturedFactGroup,commands:T)=>members.capture(group,commands,source,assertCaptureCurrent),forward:members.forward})

@@ -8,7 +8,7 @@ import { preparePrunedResultProjection } from '../conversation/payload.ts';
 import type { ConversationProjection } from '../conversation/types.ts';
 import type { PreparedConversationArchive, PreparedPrunedResult, PreparedResultProjection } from '../conversation/restoration-types.ts';
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts';
-import { createConversationValidationScan, takeConversationValidationScan, readConversationDeliveries, readConversationGenerations,prepareConversationAppend } from '../conversation/validation.ts';
+import { createConversationValidationScan, takeConversationValidationScan, readConversationDeliveries, readConversationGenerations,prepareConversationAppend,hasConversationToolCall } from '../conversation/validation.ts';
 import { createManagedIntakeIndex } from './intake-index.ts';
 import { prepareSessionEventWithDependencies } from '../events/intake.ts';
 import { freezeJsonData } from './capture.ts';
@@ -123,6 +123,8 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         intake:owned.intake,
         context:owned.context,
         generations(){check();return readConversationGenerations(owned.index)??[]},
+        executionScalars(){check();return {semanticsStartSeq:owned.index.semanticsStartSeq,hasToolCallId:(id:string)=>{check();return hasConversationToolCall(owned.index,id)}}},
+        softReduction(){check();const facts=owned.index.resultFacts();const advances=(end:number)=>{const results=new Set<string>();let humanTurns=0,acceptedExchanges=0;for(let index=0;index<end;index++){const fact=facts[index]!;if(fact.type==='tool/result'&&fact.disposition!=='unknown'&&fact.callId)results.add(fact.callId);if(fact.type==='turn/end')humanTurns++}for(let index=0;index<end;index++){const fact=facts[index]!;if(fact.type==='model/exchange-accepted'&&fact.callSeqs?.every(seq=>facts[seq]?.type==='tool/call'&&results.has(facts[seq]!.callId!)))acceptedExchanges++}return {humanTurns,acceptedExchanges}};const current=advances(facts.length),last=facts.findLastIndex(fact=>['compaction/replacement','compaction/prune','compaction/end'].includes(fact.type)),prior=last<0?undefined:advances(last+1);return {state:owned.index.softReduction(owned.sessionId),...current,...prior?{sinceRewrite:{humanTurns:current.humanTurns-prior.humanTurns,acceptedExchanges:current.acceptedExchanges-prior.acceptedExchanges}}:{}}},
         get eventCount(){check();return owned.index.eventCount},
         get prefix(){check();return owned.source.prefix},
         get formatVersion(){check();return owned.source.formatVersion},

@@ -12,7 +12,7 @@ export function createScope(
   parentScope: InternalScope | null,
   parentEmit: (event: string, payload: unknown,current?:()=>void) => Promise<unknown>,
 ): PluginContext {
-  const { store, services } = createServices(parentStore)
+  const { store, services,lookup } = createServices(parentStore)
   const scopes = new Set<PluginContext>()
   // Accessors are consumed only after ctx/lifecycle initialization, retaining
   // the live mounting stack and scope references across nested calls.
@@ -57,6 +57,6 @@ export function createScope(
     unmount: lifecycle.unmount,
   }
 
-  associateExecutionHookScope(ctx,{parent:parentScope,surface(event){const plain=listeners.surface(event),chain=waterfall.surface(event);return {version:plain.version+':'+chain.version,compatible:plain.compatible&&chain.compatible}},on:(event,handler)=>listeners.register(event,handler,true),waterfall:(event,handler)=>waterfall.register(event,handler,true),emit:listeners.emit})
+  associateExecutionHookScope(ctx,{parent:parentScope,lookup,surface(event){const plain=listeners.surface(event),chain=waterfall.surface(event);return {version:plain.version+':'+chain.version,compatible:plain.compatible&&chain.compatible}},on:(event,handler)=>listeners.register(event,handler,true),waterfall:(event,handler)=>waterfall.register(event,handler,true),emit:listeners.emit})
   return ctx
 }

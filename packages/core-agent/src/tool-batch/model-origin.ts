@@ -2,6 +2,7 @@ import { isManagedFactOwner, isNondurableFactOwner, type FactOwner, type Session
 import type { ToolRegistry } from '@i-harness/core-tools'
 import type { ConstructorModelOriginVerifier, PreparedModelOriginDriver } from '@i-harness/core-tools/model-origin'
 import { takeModelMember } from './live-continuation.ts'
+export {createManagedAgentModelOriginOwner} from './managed-model-origin.ts'
 
 export type AgentModelOriginBinding = object
 export interface ModelOriginState { view: SessionView; factOwner: FactOwner; registry: ToolRegistry; driver: PreparedModelOriginDriver; consumed: boolean }

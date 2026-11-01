@@ -250,6 +250,7 @@ export interface ToolRegistry {
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
   resultFinalization?(prepared: PreparedCall): import('./registry/result-finalization.ts').ResultFinalization | undefined
   captureSyntheticResult?(context: import('./registry/result-finalization.ts').SyntheticResultContext, output: unknown, execution: import('@i-harness/core-session').ResultExecution): import('./registry/result-finalization.ts').ResultFinalization | undefined
+  captureManagedSyntheticResult?(context:import('./registry/result-finalization.ts').ManagedSyntheticResultContext,output:unknown,execution:import('@i-harness/core-session').ResultExecution):import('./registry/result-finalization.ts').ResultFinalization|undefined
   execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>
   genToolCatalog(): ToolSchema[]
   verifyToolCatalog(expected: Tool[], catalog: ToolSchema[]): void

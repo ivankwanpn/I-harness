@@ -53,6 +53,8 @@ export interface ConversationValidationIndex {
 }
 const deliveryObservations = new WeakMap<ConversationValidationIndex, DeliveryReadIndex>();
 const generationObservations = new WeakMap<ConversationValidationIndex, () => readonly GenerationActionState[]>();
+const callObservations=new WeakMap<ConversationValidationIndex,(id:string)=>boolean>();
+export function hasConversationToolCall(index:ConversationValidationIndex,id:string):boolean{const read=callObservations.get(index);if(!read)throw TypeError('Original conversation call index required');return read(id)}
 type PreparedConversationAppend=ReturnType<ConversationValidationIndex['stage']>&{discard():void};
 const appendPreparations = new WeakMap<ConversationValidationIndex,(events:readonly SessionEvent[],readEvent:(ordinal:number)=>Promise<SessionEvent>,assertCurrent:()=>void)=>Promise<PreparedConversationAppend>>();
 /** Original constructor's staged validator, using only the already-held
@@ -390,6 +392,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
             return staged.finish();
         },
     };
+    callObservations.set(index,id=>callsById.has(id));
     appendPreparations.set(index,async(suffix,readEvent,assertCurrent)=>{
         const expected=revision,available=new Map<number,SessionEvent>(),first=count;
         let discarded=false;

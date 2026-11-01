@@ -1,12 +1,12 @@
 import { attachModelMember, type LiveBatchToken } from './live-continuation.ts'
-import { type SessionView as Session } from "@i-harness/core-session"
 import { isPolicyRefusal, isInstructionReplan, instructionReplanDisposition, retainedToolOutcome, resultExecution, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry, type PreparedCall, type CapturedToolCall, type AcceptedInstructionCall, type InstructionReplanData } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchRecords } from "./record.ts"
 import type { BatchCancellation } from "./cancel.ts"
 import { prepareCall, recordPreparationFailure, markDispatch, recordCheckpointFailure } from "./prepare.ts"
+import {isManagedBatchSource,type BatchSource} from './managed-source.ts'
 
-export function createStartCall(session: Session, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions, records: BatchRecords, cancellation: BatchCancellation, dispatched: (index: number, promise: Promise<number>) => void, captured?: (index: number) => { capture: CapturedToolCall; origin?: AcceptedInstructionCall } | undefined, replan?: { value?: InstructionReplanData }, liveToken?: LiveBatchToken) {
+export function createStartCall(session: BatchSource, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions, records: BatchRecords, cancellation: BatchCancellation, dispatched: (index: number, promise: Promise<number>) => void, captured?: (index: number) => { capture: CapturedToolCall; origin?: AcceptedInstructionCall } | undefined, replan?: { value?: InstructionReplanData }, liveToken?: LiveBatchToken) {
   return async function startCall(index: number): Promise<void> {
     const call = batch[index]!
     const parkReplan = () => { if (!replan?.value) return false; records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'failed', dispatch: 'not-dispatched' }, output: replan.value }); return true }
@@ -45,7 +45,8 @@ export function createStartCall(session: Session, tools: ToolRegistry, batch: Ba
     if (parkReplan()) return
     opts.assertFactOpen?.()
     opts.telemetry?.emit({ type: "tool/start", ts: Date.now(), data: { tool: call.name, callId: call.callId } })
-    attachModelMember(liveToken, index, prepared, tools)
+    if(isManagedBatchSource(session))session.attach(index,prepared,opts.settlementSource! as import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').FactOutcome>)
+    else attachModelMember(liveToken, index, prepared, tools)
     const promise = tools
       .dispatch(prepared)
       .then((output) => {
