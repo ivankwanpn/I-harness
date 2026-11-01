@@ -3,6 +3,7 @@ import type { ManagedEntry } from './bootstrap.ts'
 import type { SelectedResultsRoute } from './selected-results-route.ts'
 import type { SelectedResultsHeaderStageV2 } from './selected-results-header.ts'
 import type { selectedResultsPreparationFacts } from './selected-results-preparation.ts'
+import type { SessionMeta } from './types.ts'
 
 /** Only the original bootstrap owner's WeakMap recognizes this token. */
 export type ColdSelectedTarget = Readonly<{ kind: 'cold-selected-target' }>
@@ -13,6 +14,7 @@ export type CheckedColdBirth = {
 export interface ColdSelectedObservation {
   readonly document: NonNullable<ManagedEntry['document']>
   readonly view: NonNullable<ManagedEntry['document']>['view']
+  readonly metadata: Readonly<SessionMeta>
   readonly birth: CheckedColdBirth
   readonly facts: CheckedColdBirth['facts']
   readonly prefix: Readonly<JournalPrefix>
@@ -22,16 +24,17 @@ export interface ColdSelectedObservation {
 
 /** Subordinate to an existing unready entry; owns neither a claim nor readiness. */
 export function createColdSelectedInspection(entry: ManagedEntry, route: SelectedResultsRoute,
-  birth: CheckedColdBirth, prefix: JournalPrefix,
+  birth: CheckedColdBirth, prefix: JournalPrefix, metadata: SessionMeta,
   lifecycle: { assertCurrent(): void; assertOutside(): void; enter<T>(work: () => Promise<T>): Promise<T>; settle(): Promise<void> }) {
   const document = entry.document!, selected = entry.selected!, receipt = selected.resultReceipt!
   const target: ColdSelectedTarget = Object.freeze({ kind: 'cold-selected-target' })
   // Preserve the genuine checked object identity; these are already checked JSON.
-  freezeJsonData(birth); freezeJsonData(prefix); freezeJsonData(receipt)
+  freezeJsonData(birth); freezeJsonData(prefix); freezeJsonData(receipt); freezeJsonData(metadata)
+  const revision=entry.metadataRevision
   const view = document.view, eventCount = view.events.length, header = view.header
   const check = () => {
     lifecycle.assertCurrent()
-    if (entry.selected !== selected || entry.document !== document || document.view !== view
+    if (entry.metadataRevision !== revision || entry.selected !== selected || entry.document !== document || document.view !== view
       || selected.resultReceipt !== receipt || entry.ready || view.events.length !== eventCount || view.header !== header
       || !selected.taskBarrier?.completed || !entry.captureIO?.settled || entry.captureIO.released || entry.captureIO.releasing) throw new FactRecoveryRequiredError()
     entry.captureIO.held.assertHeld()
@@ -45,7 +48,7 @@ export function createColdSelectedInspection(entry: ManagedEntry, route: Selecte
         check()
         let active = true, failed = false, cause: unknown, value: T | undefined
         const assertCurrent = () => { if (!active) throw new FactRecoveryRequiredError(); check() }
-        const observation = Object.freeze({ document, view, birth, facts: birth.facts, prefix, receipt, assertCurrent })
+        const observation = Object.freeze({ document, view, metadata, birth, facts: birth.facts, prefix, receipt, assertCurrent })
         try { value = await work(observation); assertCurrent() }
         catch (error) { failed = true; cause = error }
         active = false

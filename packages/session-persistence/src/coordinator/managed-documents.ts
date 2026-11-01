@@ -3,7 +3,7 @@ import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
-import { createManagedDocument, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
+import { invalidateManagedMetadataWitness, createManagedDocument, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
 import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
@@ -119,6 +119,11 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     },
     has:(id:string)=>documents.has(id),
     assertMutation(id:string){assertEntry(documents.get(id))},
+    invalidateMetadataWitness(id:string){
+      assertTaskOutside(id);bootstrap.assertOutsideCapture(id)
+      const entry=documents.get(id);assertEntry(entry)
+      if(entry){entry.metadataRevision={};if(entry.document)invalidateManagedMetadataWitness(entry.document,ownership,entry.metadataRevision)}
+    },
     revoke(id:string){assertTaskOutside(id);bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
     async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable();return entry?.document?.view},
