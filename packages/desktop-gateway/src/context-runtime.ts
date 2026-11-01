@@ -93,7 +93,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     return{sourceId,readonly:true}
   }
   const bridge=createProcessAwareResultService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,requireObservedLegacyRecipients:true,
-    coordinatorFor:()=>options.coordinator as SessionCoordinator,sourceFor,guardedRead,
+    coordinatorFor:()=>options.coordinator as SessionCoordinator,orderingCoordinators:[options.coordinator as SessionCoordinator],sourceFor,guardedRead,
     ...(options.coordinator.onDocumentDeleted?{documentDeletions:listener=>options.coordinator.onDocumentDeleted!((id,manifest)=>listener([id,...manifest.documents]))}:{}),
     genericVisible:async(sessionId,visibleRef)=>{
         const observed=observations.current(sessionId)
