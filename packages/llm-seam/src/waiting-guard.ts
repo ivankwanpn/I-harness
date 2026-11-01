@@ -79,6 +79,9 @@ function createWaitingExecution(client: ModelClient, policy: ModelWaitPolicy): M
         if (closed || terminal) return
         issued = true; startedAt = Date.now(); responseAt = undefined; lastProgressAt = undefined; quiet = false
         schedule()
+        // Preserve the original owner's issue notification at this same real
+        // post-admission handoff. Refusing controls remain confirm/validate.
+        try { request.onTransportIssue?.() } catch { /* Existing liveness isolation. */ }
       }, onTerminalResponse(hint) {
         if (closed || terminal) return
         if (!["AUTH", "QUOTA", "INVALID_ARGUMENT"].includes(hint.code) || !Number.isInteger(hint.httpStatus)

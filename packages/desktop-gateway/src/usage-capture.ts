@@ -67,23 +67,23 @@ export function createUsageCapture(options: {
               try { projectId = await options.projectFor(request.sessionId) } catch { failedAttributions++; notifyWarning() }
             }
             request.signal?.throwIfAborted()
-            return { request, measurement, projectId, startedAt: now(), id: randomUUID(), firstTokenMs: undefined as number | undefined, usage: {} as LLMUsage }
+            return { request, measurement, projectId, startedAt: now(), id: randomUUID(), firstTokenMs: undefined as number | undefined, usage: {} as LLMUsage,measurementInvalid:false }
           },
           event(state, event) {
             const usage = state.usage
             if (event.type === "usage") {
+              if(event.usage.measurementValidity==='invalid')state.measurementInvalid=true
               for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
                 const value = event.usage[key]
                 if (value !== undefined && Number.isSafeInteger(value) && value >= 0) usage[key] = value
               }
               if (event.usage.inputTokenSemantics === "includes-cache" || event.usage.inputTokenSemantics === "excludes-cache") usage.inputTokenSemantics = event.usage.inputTokenSemantics
-              if (profile.protocol === "openai-responses" && usage.inputTokens !== undefined && usage.cacheCreationTokens === undefined) usage.cacheCreationTokens = 0
             }
             if (state.firstTokenMs === undefined && ((event.type === "text/chunk" || event.type === "reasoning") && event.text.length > 0 || event.type === "tool_call")) state.firstTokenMs = Math.max(0, now() - state.startedAt)
           },
           async finish(state, status) {
             const { request, measurement, projectId, startedAt, id, firstTokenMs, usage } = state
-            const contradictory = usage.inputTokenSemantics === "includes-cache" && usage.inputTokens !== undefined
+            const contradictory = state.measurementInvalid || usage.inputTokenSemantics === "includes-cache" && usage.inputTokens !== undefined
               && (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0) > usage.inputTokens
             if (contradictory) { invalidMeasurements++; notifyWarning() }
             const record: UsageRecord = {

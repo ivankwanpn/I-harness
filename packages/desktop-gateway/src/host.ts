@@ -129,6 +129,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const codexAccounts = createCodexManagement({ directory: join(dirname(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json")), "coding-plans", "openai-codex") })
   const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"), codex: codexAccounts,
     passiveUsageWorkspace:usageObservations?options.workspace:undefined,
+    passiveUsageProjectSnapshotFor:usageObservations?id=>projects.projectSnapshotFor(id):undefined,
     buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
   const codingPlans = createCodingPlans(codexAccounts, runtime)
   await mkdir(options.sessionDir, { recursive: true })

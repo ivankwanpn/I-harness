@@ -65,9 +65,9 @@ export function associateOriginalPassivePrepared(client:ModelClient,value:Prepar
 export function inheritOriginalPassivePrepared(source:PreparedModelRequest,target:PreparedModelRequest):void{const a=prepared.get(source);if(a)prepared.set(target,a);const observer=preparedObservers.get(source);if(observer)preparedObservers.set(target,observer);const context=requestContexts.get(source);if(context)requestContexts.set(target,context)}
 function safely(observer:OriginalPassiveObserver,work:()=>void){try{work()}catch{try{observer.unavailable('passive-observer-failed')}catch{}}}
 /** One context per actual payload stream. Never await observer work or expose controls. */
-export function createOriginalPassiveExecution(source?:PreparedModelRequest,mediaAttribution?:PassiveAttribution){
+export function createOriginalPassiveExecution(source?:PreparedModelRequest,mediaAttribution?:PassiveAttribution,projectSnapshotFor?:(ownerSessionId:string)=>string|undefined){
  let original:ReturnType<typeof reservations.get>,send:Readonly<GenerationIssue>|undefined,ordinal=0,hasUsage=false,finished=false
- const attribution=source?prepared.get(source):mediaAttribution?Object.freeze({...mediaAttribution}):undefined
+ let attribution=source?prepared.get(source):mediaAttribution?Object.freeze({...mediaAttribution}):undefined
  const fallbackObserver=source?preparedObservers.get(source):undefined,invocationId=fallbackObserver?randomUUID():undefined,unmatched:Record<string,unknown>={};let unmatchedInvalid=false
  let diagnostics:PassiveDiagnostics|undefined
  try{diagnostics=source?requestContexts.get(source)?.start(source.measurement):undefined}catch{/* Passive diagnostics cannot fail execution. */}
@@ -82,6 +82,9 @@ export function createOriginalPassiveExecution(source?:PreparedModelRequest,medi
    original=reservations.get(reservation);if(!original)return
    const i=original.identity
    if(confirmation.semanticId!==i.semanticId||confirmation.payloadId!==i.payloadId||confirmation.payloadKind!==i.payloadKind){safely(original.observer,()=>original!.observer.unavailable('passive-candidate-mismatch'));original=undefined;return}
+   // Media has no prepared-client request identity. Only its original nominal
+   // reservation supplies the owner for this loaded-only metadata snapshot.
+   if(!source&&attribution&&projectSnapshotFor)try{const projectId=projectSnapshotFor(i.ownerSessionId);if(projectId!==undefined)attribution=Object.freeze({...attribution,projectId})}catch{safely(original.observer,()=>original!.observer.unavailable('original-project-attribution-unavailable'))}
    const {version,sendId,semanticId,payloadId,payloadKind}=confirmation
    send=Object.freeze({version,sendId,semanticId,payloadId,payloadKind});safely(original.observer,()=>original!.observer.capture({kind:'handoff',identity:original!.identity,confirmation:send!,observedAt:Date.now(),...(attribution?{attribution}:{})}))
   },
@@ -89,7 +92,7 @@ export function createOriginalPassiveExecution(source?:PreparedModelRequest,medi
    if(finished)return
    try{diagnostics?.event(event)}catch{/* Passive diagnostics cannot mask events. */}
    if(event.type==='usage'){
-    hasUsage=true;const usage:Record<string,unknown>={};let valid=true
+    hasUsage=true;const usage:Record<string,unknown>={};let valid=event.usage.measurementValidity!=='invalid'
     for(const key of ['inputTokens','outputTokens','cacheReadTokens','cacheCreationTokens'] as const){const value=event.usage[key];if(value!==undefined){if(Number.isSafeInteger(value)&&value>=0)usage[key]=value;else valid=false}}
     const semantics=event.usage.inputTokenSemantics;if(semantics!==undefined){if(semantics==='includes-cache'||semantics==='excludes-cache')usage.inputTokenSemantics=semantics;else valid=false}
     if(semantics==='includes-cache'&&typeof usage.inputTokens==='number'&&Number(usage.cacheReadTokens??0)+Number(usage.cacheCreationTokens??0)>usage.inputTokens){valid=false;for(const key of Object.keys(usage))delete usage[key]}
@@ -102,7 +105,7 @@ export function createOriginalPassiveExecution(source?:PreparedModelRequest,medi
   finish(coverage:'complete'|'partial'|'unknown'='unknown',outcome:'completed'|'failed'|'cancelled'='failed'){
    if(finished)return;finished=true
    try{diagnostics?.finish(outcome)}catch{/* Passive diagnostics cannot mask settlement. */}
-   if(!original&&fallbackObserver&&attribution&&invocationId){safely(fallbackObserver,()=>fallbackObserver.capture({kind:'unattributed',invocationId,observedAt:Date.now(),attribution,usage:Object.freeze({...unmatched}),validity:unmatchedInvalid?'invalid':'valid',terminalCoverage:hasUsage?coverage:'unknown'}));return}
+   if(!original&&fallbackObserver&&attribution&&invocationId){const capturedAttribution=attribution;safely(fallbackObserver,()=>fallbackObserver.capture({kind:'unattributed',invocationId,observedAt:Date.now(),attribution:capturedAttribution,usage:Object.freeze({...unmatched}),validity:unmatchedInvalid?'invalid':'valid',terminalCoverage:hasUsage?coverage:'unknown'}));return}
    if(hasUsage)emit({},'valid',coverage)
    else if(original)safely(original.observer,()=>original!.observer.unavailable('original-send-usage-unavailable'))
   },

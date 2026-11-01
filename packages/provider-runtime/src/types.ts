@@ -147,6 +147,7 @@ export interface ProviderRuntime {
 
 export interface CreateProviderRuntimeOptions {
   passiveUsageWorkspace?:string
+  passiveUsageProjectSnapshotFor?:(ownerSessionId:string)=>string|undefined
   settings: SettingsStoreSurface
   credentials: CredentialStore
   auth?: ProviderAuthResolver

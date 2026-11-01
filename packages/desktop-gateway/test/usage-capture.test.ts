@@ -57,7 +57,8 @@ describe("usage capture", () => {
       yield { type: "end" }
     } }))(profile, "model-a")
     await consume(f.capture.bind(client, "session-a"))
-    expect(f.records).toEqual([{ id: expect.any(String), workspace: "D:/workspace", sessionId: "session-a", providerId: "route-a", modelId: "model-a", billing: "api", status: "completed", startedAt: 1000, durationMs: 60, requestMetrics: expect.objectContaining({coverage: "neutral-only", systemTokens: expect.any(Number)}), firstTokenMs: 20, inputTokens: 100, outputTokens: 20, cacheReadTokens: 80, cacheCreationTokens: 0, inputTokenSemantics: "includes-cache" }])
+    expect(f.records).toEqual([{ id: expect.any(String), workspace: "D:/workspace", sessionId: "session-a", providerId: "route-a", modelId: "model-a", billing: "api", status: "completed", startedAt: 1000, durationMs: 60, requestMetrics: expect.objectContaining({coverage: "neutral-only", systemTokens: expect.any(Number)}), firstTokenMs: 20, inputTokens: 100, outputTokens: 20, cacheReadTokens: 80, inputTokenSemantics: "includes-cache" }])
+    expect(f.records[0]).not.toHaveProperty("cacheCreationTokens")
     expect(JSON.stringify(f.records)).not.toMatch(/private|secret/)
   })
 
