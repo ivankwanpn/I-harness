@@ -13,14 +13,24 @@ export function useExecutionObservation(bridge: Pick<DesktopBridge, 'request'> &
         pending.current=false;setBusy(false);writeTicket.current++
         let stopped = false, offline = false, lease: SurfaceLease | undefined, subscribing: Promise<void> | undefined, reading: Promise<void> | undefined, dirty = false, early: SurfaceNotice | undefined, latest = 0;
         let negotiated=false,limited=false,connectionTicket=0,reconnect=false,lastReset=-1,mutationBoundary=false
+        let visibilityTicket=0,visible=!document.hidden,resumeBoundary=false
+        let closingLease:{owned:SurfaceLease;flight?:Promise<void>}|undefined
         const valid = () => !stopped && generation.current === current && !offline && !document.hidden;
         const unsafe = () => setState(value => value ? { ...value, cells: value.cells.map(cell => ({ ...cell, canTerminate: false, live: false })) } : value);
         const failure = (reason: unknown) => { if (!stopped) {
             unsafe();
             setError(reason instanceof Error ? reason.message : String(reason));
         } };
-        const release = async () => { const owned = lease; lease = undefined; if (owned)
-            await bridge.request({ kind: 'desktop/surface/unsubscribe', workspaceId, subscriptionId: owned.subscriptionId }); };
+        const releaseOwned=(owned?:SurfaceLease):Promise<void>=>{
+            // Retain the original token through a failed or pending release.
+            if(owned)closingLease??={owned}
+            const closing=closingLease
+            if(!closing)return Promise.resolve()
+            if(closing.flight)return closing.flight
+            const flight=Promise.resolve().then(()=>bridge.request({kind:'desktop/surface/unsubscribe',workspaceId,subscriptionId:closing.owned.subscriptionId})).then(()=>{if(closingLease===closing)closingLease=undefined})
+            closing.flight=flight;void flight.catch(()=>{if(closing.flight===flight)closing.flight=undefined});return flight
+        }
+        const release=()=>{const owned=lease;lease=undefined;return releaseOwned(owned)}
         const notice = (value: SurfaceNotice) => {
             if (!lease) {
                 if (!early || ({ invalidate: 0, reset: 1, retired: 2 }[value.kind] >= ({ invalidate: 0, reset: 1, retired: 2 }[early.kind])))
@@ -48,14 +58,16 @@ export function useExecutionObservation(bridge: Pick<DesktopBridge, 'request'> &
         async function acquire() {
             if (lease || subscribing || (negotiated&&limited) || !valid())
                 return subscribing;
-            const connection=connectionTicket
+            const connection=connectionTicket,visibility=visibilityTicket
             subscribing = (async () => {
-                if(!negotiated){const capabilities=await bridge.request({kind:'desktop/capabilities',workspaceId}) as Record<string,unknown>;if(!valid()||connection!==connectionTicket)return;const versions=capabilities['desktop-surface-events'];limited=!Array.isArray(versions)||!versions.includes('1');negotiated=true}
+                await releaseOwned()
+                if(!valid()||connection!==connectionTicket||visibility!==visibilityTicket)return
+                if(!negotiated){const capabilities=await bridge.request({kind:'desktop/capabilities',workspaceId}) as Record<string,unknown>;if(!valid()||connection!==connectionTicket||visibility!==visibilityTicket)return;const versions=capabilities['desktop-surface-events'];limited=!Array.isArray(versions)||!versions.includes('1');negotiated=true}
                 if(limited)return
                 if(!bridge.onEvent)throw Error('Execution observation unavailable')
                 const result = await bridge.request({ kind: 'desktop/surface/subscribe', workspaceId, sessionId, surface: 'execution' }) as SurfaceLease;
-                if (!valid()||connection!==connectionTicket) {
-                    await bridge.request({ kind: 'desktop/surface/unsubscribe', workspaceId, subscriptionId: result.subscriptionId });
+                if (!valid()||connection!==connectionTicket||visibility!==visibilityTicket) {
+                    await releaseOwned(result);
                     return;
                 }
                 if (result.scope.sessionId !== sessionId || result.scope.surface !== 'execution')
@@ -81,16 +93,17 @@ export function useExecutionObservation(bridge: Pick<DesktopBridge, 'request'> &
             if(afterMutation&&reading)mutationBoundary=true
             if (reading || pending.current || !valid())
                 return reading;
-            const connection=connectionTicket
+            reconnect=false;mutationBoundary=false;resumeBoundary=false
+            const connection=connectionTicket,visibility=visibilityTicket
             reading = (async () => {
                 try {
                     await acquire();
-                    if(!valid()||connection!==connectionTicket)return
-                    if(limited){dirty=false;const value=await bridge.request({kind:'desktop/session/execution/read',workspaceId,sessionId,offset,limit:10}) as DesktopExecutionView;if(valid()&&connection===connectionTicket){setState({...value,live:false,cells:value.cells.map(cell=>({...cell,live:false,canTerminate:false}))});setError('Limited inspection; live controls require execution observation.')}return}
+                    if(!valid()||connection!==connectionTicket||visibility!==visibilityTicket)return
+                    if(limited){dirty=false;const value=await bridge.request({kind:'desktop/session/execution/read',workspaceId,sessionId,offset,limit:10}) as DesktopExecutionView;if(valid()&&connection===connectionTicket&&visibility===visibilityTicket){setState({...value,live:false,cells:value.cells.map(cell=>({...cell,live:false,canTerminate:false}))});setError('Limited inspection; live controls require execution observation.')}return}
                     for (let follow = 0; follow < 2 && dirty && valid() && lease; follow++) {
                         dirty = false;
                         const ticket = writeTicket.current, owned = lease, result = await bridge.request({ kind: 'desktop/surface/snapshot', workspaceId, subscriptionId: owned.subscriptionId, epoch: owned.stamp.epoch, offset, limit: 10 }) as ExecutionSurfaceSnapshot;
-                        if (!valid() || lease !== owned||connection!==connectionTicket)
+                        if (!valid() || lease !== owned||connection!==connectionTicket||visibility!==visibilityTicket)
                             return;
                         if (ticket !== writeTicket.current) {
                             dirty = true;
@@ -105,7 +118,8 @@ export function useExecutionObservation(bridge: Pick<DesktopBridge, 'request'> &
                         }
                         else {
                             unsafe();
-                            dirty = result.kind === 'reset';
+                            // A newer notice can follow the wire response before this continuation.
+                            dirty = dirty || result.kind === 'reset';
                             if (result.kind === 'unavailable')
                                 throw Error('Execution source unavailable');
                         }
@@ -121,7 +135,7 @@ export function useExecutionObservation(bridge: Pick<DesktopBridge, 'request'> &
             }
             finally {
                 reading = undefined;
-                if((reconnect||mutationBoundary)&&valid()&&!pending.current){reconnect=false;mutationBoundary=false;void refresh()}
+                if((reconnect||mutationBoundary||resumeBoundary)&&valid()&&!pending.current){reconnect=false;mutationBoundary=false;resumeBoundary=false;void refresh()}
             }
         }
         refreshRef.current = refresh;
@@ -143,12 +157,18 @@ export function useExecutionObservation(bridge: Pick<DesktopBridge, 'request'> &
             else if (event.kind === 'sdk/notification' && event.workspaceId === workspaceId && event.method === 'desktop/surface/changed')
                 notice(event.params as SurfaceNotice);
         });
-        const visibility = () => { if (document.hidden) {
-            unsafe();
-            void release().catch(failure);
-        }
-        else
-            void refresh(); };
+        const visibility = () => {
+            const nextVisible=!document.hidden;if(nextVisible===visible)return;visible=nextVisible
+            if (document.hidden) {
+                visibilityTicket++;resumeBoundary=false
+                unsafe();
+                void release().catch(failure);
+            } else {
+                // One finite demand survives an older hidden read; it is consumed at refresh entry.
+                resumeBoundary=true
+                void refresh();
+            }
+        };
         document.addEventListener('visibilitychange', visibility);
         setState(undefined);
         setError(undefined);

@@ -37,11 +37,18 @@ it.each(['healthy','lost-ACK'] as const)('mounts actual source/router/SDK/runtim
         const requests = vi.spyOn(client, 'request'), reads = vi.spyOn(execution, 'read'), profiles = vi.spyOn(c, 'profile'), snapshots = vi.spyOn(c as typeof c & {
             snapshot: NonNullable<typeof c.snapshot>;
         }, 'snapshot'), assemblies = vi.spyOn(service, 'assemblyFor');
-        const window = { isDestroyed: () => false, webContents: { send(_channel: string, event: unknown) { for (const listener of electron.listeners)
-                    listener({}, event); } } }, ipc = { handle(_channel: string, listener: any) { electron.invoke = (_name: string, request: unknown) => listener({ sender: window.webContents }, request); }, removeHandler() { } };
+        let holdNextSnapshot=false,heldReply:any;const responseHeld=Promise.withResolvers<any>(),noticeReached=Promise.withResolvers<void>(),resumeReply=Promise.withResolvers<void>(),order:string[]=[]
+        const window = { isDestroyed: () => false, webContents: { send(_channel: string, event: any) {
+                if(heldReply&&event.kind==='sdk/notification'&&event.method==='desktop/surface/changed'&&event.params.stamp.revision>heldReply.stamp.revision){order.push('notice after response');noticeReached.resolve()}
+                for (const listener of electron.listeners)listener({}, event);
+            } } }, ipc = { handle(_channel: string, listener: any) { electron.invoke = async(_name: string, request: any) => {
+                const result=await listener({ sender: window.webContents }, request)
+                if(holdNextSnapshot&&request.kind==='desktop/surface/snapshot'){holdNextSnapshot=false;heldReply=result;order.push('authorized response');responseHeld.resolve(result);await resumeReply.promise;heldReply=undefined;order.push('consumer continuation')}
+                return result
+            }; }, removeHandler() { } };
         const unregister = registerDesktopIpc(window as never, { catalog: { get: (id: string) => id === 'w' ? workspace : undefined } as never, runtimes }, ipc);
         await import('../src/preload/index.ts');
-        close = async () => { cleanup(); action.finish(); await source.close(); await router.close(); exited.resolve(); await unregister(); await broker.close(); await c.close(); await client.close(); await runtimes.close(); input.destroy(); output.destroy(); await rm(root, { recursive: true, force: true }); };
+        close = async () => { resumeReply.resolve();cleanup(); action.finish(); await source.close(); await router.close(); exited.resolve(); await unregister(); await broker.close(); await c.close(); await client.close(); await runtimes.close(); input.destroy(); output.destroy(); await rm(root, { recursive: true, force: true }); };
         const mounted = render(<ExecutionPane bridge={electron.bridge} workspaceId="w" sessionId="s"/>);
         if(mode==='lost-ACK'){
             await finite(ackDropped.promise)
@@ -68,6 +75,13 @@ it.each(['healthy','lost-ACK'] as const)('mounts actual source/router/SDK/runtim
         await finite((async()=>{for(let i=0;i<1000&&!mounted.container.textContent?.includes('connected nested result');i++)await act(async()=>{await new Promise(resolve=>setImmediate(resolve))})})())
         expect(mounted.container.textContent).toContain('connected nested result');expect(service.queueState('s')).toEqual(queue)
         fireEvent.click(mounted.getByRole('tab',{name:'程式'}));expect(mounted.container.textContent).toContain('second actual managed cell')
+        fireEvent.click(mounted.getByRole('tab',{name:'輸出'}))
+        const priorReads=reads.mock.calls.length;holdNextSnapshot=true;fireEvent.click(mounted.getByRole('button',{name:'重新整理'}))
+        const originalResponse=await finite(responseHeld.promise);expect(originalResponse.kind).toBe('snapshot')
+        await finite(action.facts.code.record({type:'code/output',cellId:'cell',content:'newer than held renderer response'}));await finite(noticeReached.promise)
+        await act(async()=>{resumeReply.resolve()})
+        await finite((async()=>{for(let i=0;i<1000&&!mounted.container.textContent?.includes('newer than held renderer response');i++)await act(async()=>{await new Promise(resolve=>setImmediate(resolve))})})())
+        expect(order).toEqual(['authorized response','notice after response','consumer continuation']);expect(mounted.container.textContent).toContain('newer than held renderer response');expect(reads.mock.calls.length-priorReads).toBe(2)
         expect(vi.getTimerCount()).toBe(0)
         const counts = [requests.mock.calls.length, reads.mock.calls.length, profiles.mock.calls.length, snapshots.mock.calls.length, assemblies.mock.calls.length];
         io.reads = 0;
