@@ -20,7 +20,7 @@ it("strict operations use and release the existing document lease on rejection a
   const docs = createDocuments({ putDocument, getDocument: async () => undefined }, { lockEnabled: true, acquireLease }, vi.fn())
   await expect(docs.putDocumentStrict("result", { full: "executed" })).rejects.toThrow("write rejected under lease")
   await docs.putDocumentStrict("result", { full: "later" })
-  expect(acquireLease.mock.calls).toEqual([["doc:result"], ["doc:result"]])
+  expect(acquireLease.mock.calls).toEqual([["doc:result", expect.any(Function)], ["doc:result", expect.any(Function)]])
   expect(release).toHaveBeenCalledTimes(2)
   await expect(docs.pendingWrites()).resolves.toBeUndefined()
 })
