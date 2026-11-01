@@ -8,7 +8,7 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createExecutorExecutionCache,createDurableSessionLoader } from '../src/durable-session.ts'
-import { createExecutionGenerationLifecycle } from '../src/lifecycle/generation-actions.ts'
+import { createExecutionGenerationLifecycle,assertExecutionGeneration } from '../src/lifecycle/generation-actions.ts'
 import { createExecutionInputPreparationOwner } from '../src/lifecycle/execution-input-preparation.ts'
 import type { PassiveProducerRecord } from '@i-harness/llm-seam/internal/passive-observation'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
@@ -47,6 +47,12 @@ it('private generation consumes original folds and emits original acknowledged R
  const action=owned.execution.owner.beginAction(),rows:PassiveProducerRecord[]=[],gaps:string[]=[]
  const lifecycle=createExecutionGenerationLifecycle(owned.execution,'owner',action,undefined,{async beforeDrain(){},passiveGeneration:{capture(row){rows.push(row)},unavailable(reason){gaps.push(reason)}}})
  const generation=await lifecycle.open('main',{kind:'input',seq});expect(owned.execution.observe().generations()).toHaveLength(1)
+ assertExecutionGeneration(owned.execution,generation,action)
+ let methodReads=0;Object.defineProperty(generation,'bind',{configurable:true,get(){methodReads++;throw Error('Replaced generation method')}})
+ expect(()=>assertExecutionGeneration(owned.execution,generation,action)).toThrow();expect(methodReads).toBe(0);Reflect.deleteProperty(generation,'bind')
+ assertExecutionGeneration(owned.execution,generation,action)
+ expect(()=>assertExecutionGeneration(owned.execution,{...generation},action)).toThrow()
+ const foreignAction=owned.execution.owner.beginAction();expect(()=>assertExecutionGeneration(owned.execution,generation,foreignAction)).toThrow();foreignAction.finish()
  const request=await owned.execution.prepareRequest(action)
  const prepare=createExecutionInputPreparationOwner(owned.execution,action,{cancel:id=>owned.inputs.inbox.cancel(id)})
  const prepared=await prepare.prepare('first',generation)
@@ -69,6 +75,19 @@ it('private manual adoption uses the original issued generation and identity, no
  generation.adoptManualExecution(execution.identity,new AbortController().signal)
  expect(()=>generation.adoptManualExecution(execution.identity,new AbortController().signal)).toThrow()
  await generation.close('stopped');await lifecycle.drain();action.finish();await cache.close('owner')
+})
+it.each(['getter','no-op'] as const)('original action assertion currency refuses %s replacement without callbacks',async kind=>{
+ const {cache}=await setup(),{execution,inputs}=await cache.get('owner'),seq=await inputs.inbox.admit({inputId:'guarded',text:'original',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}})
+ const action=execution.owner.beginAction(),descriptor=Object.getOwnPropertyDescriptor(action,'assertOpen')!,lifecycle=createExecutionGenerationLifecycle(execution,'owner',action),generation=await lifecycle.open('main',{kind:'input',seq})
+ let callbacks=0
+ try{
+  if(kind==='getter')Object.defineProperty(action,'assertOpen',{configurable:true,get(){callbacks++;throw Error('Replaced action getter')}})
+  else Object.defineProperty(action,'assertOpen',{...descriptor,value(){callbacks++}})
+  expect(()=>assertExecutionGeneration(execution,generation,action)).toThrow()
+  expect(()=>generation.assertOpen()).toThrow();expect(callbacks).toBe(0)
+  Object.defineProperty(action,'assertOpen',descriptor);assertExecutionGeneration(execution,generation,action)
+  action.stop();expect(()=>assertExecutionGeneration(execution,generation,action)).toThrow()
+ }finally{Object.defineProperty(action,'assertOpen',descriptor);await generation.close('stopped');await lifecycle.drain();action.finish();await cache.close('owner')}
 })
 it('unknown physically landed admission reconciles the same capture and appends once',async()=>{
  const {cache}=await setup(),owned=await cache.get('owner');probe.appends=0;probe.lose=true

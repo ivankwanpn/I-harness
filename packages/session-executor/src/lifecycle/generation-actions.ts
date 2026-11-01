@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { types as utilTypes } from 'node:util'
 import { isNondurableSession, readGenerationActions, type CapturedActionFact, type GenerationActionEvent, type GenerationEvent, type GenerationOrigin, type ManagedAction, type ProducerFactOutcome, type SessionView } from '@i-harness/core-session'
 import { generationError } from '@i-harness/llm-seam'
 import type { AgentGenerationLifecycle, AgentGenerationDependencies } from '@i-harness/core-agent'
@@ -9,6 +10,14 @@ import { retainGenerationClose } from './generation-close-settlement.ts'
 import { isManagedExecutionOwner, readAcknowledgedExecutionMembers } from '@i-harness/core-session/internal/execution'
 import type { ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts'
 import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
+const executionGenerations=new WeakMap<object,{execution:ManagedExecutionAttachment;action:ManagedAction<ProducerFactOutcome>;assert():void;methods:Map<string,unknown>}>()
+/** Original factory association, never enrollment of an incoming callback shape. */
+export function assertExecutionGeneration(execution:ManagedExecutionAttachment,generation:object,action?:ManagedAction<ProducerFactOutcome>):void {
+  const original=executionGenerations.get(generation)
+  if(!original||original.execution!==execution||action!==undefined&&original.action!==action||!isManagedExecutionOwner(execution.identity,execution.owner)||!execution.owner.ownsAction(original.action)||Object.getPrototypeOf(generation)!==OwnedGenerationAction.prototype)throw generationError('GENERATION_UNSUPPORTED')
+  for(const [name,method]of original.methods){const descriptor=Object.getOwnPropertyDescriptor(generation,name)??Object.getOwnPropertyDescriptor(OwnedGenerationAction.prototype,name);if(!descriptor||!('value'in descriptor)||descriptor.value!==method)throw generationError('GENERATION_UNSUPPORTED')}
+  original.assert()
+}
 
 const sameOrigin = (a: GenerationOrigin, b: GenerationOrigin) => a.kind === b.kind && a.seq === b.seq
   && (a.kind === 'observation-input' ? a.inputId === (b.kind === 'observation-input' ? b.inputId : undefined) : true)
@@ -29,6 +38,13 @@ export function createExecutionGenerationLifecycle(execution: ManagedExecutionAt
 export interface ExecutionGenerationLifecycle { drain():Promise<void>; open(...args:Parameters<AgentGenerationLifecycle['open']>):Promise<OwnedGenerationAction> }
 function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:never;execution:ManagedExecutionAttachment}, ownerSessionId:string,action:ManagedAction<ProducerFactOutcome>,localTest?:{enabled:boolean;selectedClient():import('@i-harness/llm-seam').ModelClient|undefined},dependencies?:AgentGenerationDependencies):ExecutionGenerationLifecycle {
   const {view,execution}=domain
+  const originalAssertion=execution?Object.getOwnPropertyDescriptor(action,'assertOpen'):undefined
+  if(execution&&(!originalAssertion||!('value'in originalAssertion)||typeof originalAssertion.value!=='function'||utilTypes.isProxy(originalAssertion.value)))throw generationError('GENERATION_UNSUPPORTED')
+  const assertAction=execution?()=>{
+    const current=Object.getOwnPropertyDescriptor(action,'assertOpen')
+    if(!current||!('value'in current)||current.value!==originalAssertion!.value||current.enumerable!==originalAssertion!.enumerable||current.writable!==originalAssertion!.writable||current.configurable!==originalAssertion!.configurable)throw generationError('GENERATION_UNSUPPORTED')
+    Reflect.apply(originalAssertion!.value,action,[])
+  }:()=>action.assertOpen()
   const descriptor = Object.getOwnPropertyDescriptor(action, 'owner'), owner = descriptor && 'value' in descriptor ? descriptor.value as import('@i-harness/core-session').OwnerToken : undefined
   if ((!view || !isNondurableSession(view)) && (!owner || !Object.isFrozen(owner) || descriptor?.writable !== false || descriptor.configurable !== false || owner.sessionId !== ownerSessionId || typeof owner.incarnation !== 'string' || !owner.incarnation)) throw generationError('GENERATION_UNSUPPORTED')
   const incarnation = owner?.incarnation ?? randomUUID(), retained = new Set<CapturedActionFact<ProducerFactOutcome>>()
@@ -80,7 +96,7 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
   }
   const commit = (events: readonly GenerationEvent[], current: () => boolean = () => true) => receipt(remember(action.captureGeneration(events, current),events))
   return { drain: () => source.close(), async open(purpose, origin, options = {}) {
-    action.assertOpen()
+    assertAction()
     if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) throw generationError('GENERATION_CLOCK_INVALID')
     if (options.maxAttempts !== undefined && (!Number.isSafeInteger(options.maxAttempts) || options.maxAttempts <= 0)) throw new TypeError('Invalid generation attempt limit')
     let persisted = read().find(value => value.opened.purpose === purpose && sameOrigin(value.opened.origin, origin))
@@ -100,8 +116,8 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
       persisted = state(persisted.opened.actionId)!
     }
     const clock = generationClock(persisted.opened.startedAt, persisted.expiresAt, persisted.trustedAt, options.signal ? AbortSignal.any([action.signal, options.signal]) : action.signal, options.start)
-    return new OwnedGenerationAction(execution?copyConversationData(persisted):persisted, clock, {
-      view, execution, ownerSessionId, incarnation, assertOpen: execution ? () => {action.assertOpen();source.assertHeld();if(!execution.owner.ownsAction(action))throw generationError('GENERATION_UNSUPPORTED')} : action.assertOpen, read: state,
+    const generation=new OwnedGenerationAction(execution?copyConversationData(persisted):persisted, clock, {
+      view, execution, ownerSessionId, incarnation, assertOpen: execution ? () => {assertAction();source.assertHeld();if(!execution.owner.ownsAction(action))throw generationError('GENERATION_UNSUPPORTED')} : action.assertOpen, read: state,
       append: async (events, current) => { await commit(events, current) },
       settle: async event => { await receipt(remember(source.generation.capture(event),[event])) },
       captureClose: event => {
@@ -112,6 +128,7 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
       },
       phase: async (recovery, phase, current) => { await receipt(remember(action.captureGenerationRecovery(recovery, phase, current),[])) },
     }, { maxAttempts: options.maxAttempts, passiveGeneration:passive, localTest: options.selectedClient ? { enabled: localTest?.enabled === true, selectedClient: options.selectedClient } : localTest })
-
+    if(execution){const assert=generation.assertOpen,methods=new Map<string,unknown>();for(const name of Object.getOwnPropertyNames(OwnedGenerationAction.prototype)){const field=Object.getOwnPropertyDescriptor(OwnedGenerationAction.prototype,name);if(name!=='constructor'&&field&&'value'in field&&typeof field.value==='function')methods.set(name,field.value)}executionGenerations.set(generation,{execution,action,methods,assert:()=>{source.assertHeld();Reflect.apply(assert,generation,[])}})}
+    return generation
   } }
 }
