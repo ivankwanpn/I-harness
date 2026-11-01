@@ -8,3 +8,5 @@ export { runRetainedRetirementSink, assertOutsideRetirementSink, joinRetainedRet
 export { observeColdExecutionWrites } from './coordinator/cold-execution-writes.ts'
 
 export { observationCleanupFor } from './coordinator/binding-observation.ts'
+
+export { managedExecutionStatus } from './coordinator/managed-document.ts'

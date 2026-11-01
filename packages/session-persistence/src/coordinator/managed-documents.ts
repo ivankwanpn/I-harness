@@ -9,12 +9,13 @@ import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
 import { captureBootstrapRoute } from './bootstrap-route.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import type { createColdExecutionWrites } from './cold-execution-writes.ts'
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
   loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
-  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>) {
+  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>, executionChanges?: ReturnType<typeof createColdExecutionWrites>) {
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
   }
@@ -24,7 +25,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id))
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id), executionChanges)
     entry.document=document
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
