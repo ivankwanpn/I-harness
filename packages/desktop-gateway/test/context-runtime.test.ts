@@ -28,6 +28,14 @@ it('does not create either native store when both are disabled',async()=>{
   expect(runtime.codeRetrieval.status().enabled).toBe(false)
   await expect(stat(storageRoot)).rejects.toThrow()
 })
+it('preserves enabled ordinary output on a profile-only coordinator without ordering authority',async()=>{
+  const{runtime,move}=await setup()
+  await runtime.contextOutput.configure({enabled:true})
+  const ref=await runtime.contextOutput.capture({sessionId:'s',callId:'generic',label:'generic',text:'ordinary captured bytes',complete:true,source:await runtime.sourceFor('s')})
+  if(!ref)throw Error('Ordinary output unavailable')
+  expect((await runtime.contextOutput.read({sessionId:'s'},{refId:ref.id})).text).toBe('ordinary captured bytes')
+  move();await expect(runtime.contextOutput.read({sessionId:'s'},{refId:ref.id})).rejects.toThrow()
+})
 it('binds output references to actual session lineage and current project scope',async()=>{
   const f=await createGatewayForkFixture(),{runtime}=f
   try{

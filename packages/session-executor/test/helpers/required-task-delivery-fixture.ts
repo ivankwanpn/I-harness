@@ -1,3 +1,4 @@
+import {createUnmanagedTaskChildHost} from '../../src/lifecycle/task-child-host.ts'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
@@ -30,6 +31,12 @@ vi.mock('../../../session-persistence-jsonl/src/backend/document-write.ts', asyn
   return { ...actual, writeLegacyDocument: vi.fn(actual.writeLegacyDocument), createOwnedDocumentWrite: vi.fn(actual.createOwnedDocumentWrite) }
 })
 
+const heldTaskCollector=vi.hoisted(()=>({enabled:false,entered:undefined as undefined|(()=>void),gate:undefined as undefined|Promise<void>}))
+vi.mock('../../../subagent/src/tools/spawn-source.ts',async load=>{const actual=await load<typeof import('../../../subagent/src/tools/spawn-source.ts')>();return {...actual,createSpawnSource(...args:Parameters<typeof actual.createSpawnSource>){const source=actual.createSpawnSource(...args);if(!heldTaskCollector.enabled)return source;const original=source.reconcileTerminal;source.reconcileTerminal=async function(this:typeof source){if(this!==source)throw new TypeError('Foreign original full collector');heldTaskCollector.entered?.();await heldTaskCollector.gate;try{return await Reflect.apply(original,source,[])}catch(error){console.info('original-full-task-recovery-failure',error);throw error}};return source}}})
+const originalMounts=vi.hoisted(()=>new WeakMap<object,ReturnType<typeof import('../../../subagent/src/index.ts')['registerSubagent']>>())
+vi.mock('../../../subagent/src/index.ts',async load=>{const original=await load<typeof import('../../../subagent/src/index.ts')>();return {...original,registerSubagent(...args:Parameters<typeof original.registerSubagent>){const mounted=original.registerSubagent(...args);originalMounts.set(args[2].parentSession,mounted);return mounted}}})
+const partialPublication=vi.hoisted(()=>({armed:false}))
+vi.mock('../../../subagent/src/agent-table.ts',async load=>{const original=await load<typeof import('../../../subagent/src/agent-table.ts')>();return {...original,createAgentTable(...args:Parameters<typeof original.createAgentTable>){const table=original.createAgentTable(...args),add=table.add;table.add=(path,entry)=>{add(path,entry);if(partialPublication.armed&&path==='root/original0'){partialPublication.armed=false;throw Error('Controlled original post-add publication failure')}};return table}}})
 const legacyProjectionCalls=vi.hoisted(()=>({retainers:0,publications:0}))
 vi.mock('../../../subagent/src/child/result.ts',async load=>{const original=await load<typeof import('../../../subagent/src/child/result.ts')>();return {...original,async retainChildResult(...args:Parameters<typeof original.retainChildResult>){legacyProjectionCalls.retainers++;return original.retainChildResult(...args)},publishChildResult(...args:Parameters<typeof original.publishChildResult>){legacyProjectionCalls.publications++;return original.publishChildResult(...args)}}})
 const warningRestorers = new Set<() => void>()
@@ -37,7 +44,9 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { failBeforePublication?:boolean;jobStatusEvents?:boolean;retiredSourceControl?:boolean;holdTaskACK?:boolean;holdTaskUnknown?:boolean; activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { holdTaskCollector?:boolean;dropTaskACKOnce?:boolean; failPartialPublication?:boolean;b2?:boolean;failBeforePublication?:boolean;jobStatusEvents?:boolean;retiredSourceControl?:boolean;holdTaskACK?:boolean;holdTaskUnknown?:boolean; activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+  const taskCollectorEntered=Promise.withResolvers<void>(),taskCollectorRelease=Promise.withResolvers<void>();heldTaskCollector.enabled=!!options.holdTaskCollector;heldTaskCollector.entered=taskCollectorEntered.resolve;heldTaskCollector.gate=taskCollectorRelease.promise
+  partialPublication.armed=!!options.failPartialPublication
   const projectionStart={...legacyProjectionCalls}
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT??tmpdir(), 'ih-d1a-service-'))
   let backend = createJsonlBackend(join(root, 'sessions'))
@@ -100,7 +109,7 @@ export async function createDeliveryFixture(options: { failBeforePublication?:bo
   const terminalReconcile = Promise.withResolvers<void>()
   const receiptReconcile = Promise.withResolvers<void>(), receiptReconcileGate = Promise.withResolvers<void>()
   const taskSaveFailed = Promise.withResolvers<void>()
-  let allowTaskUnknown=false
+  let allowTaskUnknown=false,taskACKDropped=false
   let allowTaskSave = !options.holdTaskSaveFailure
   if (!options.holdReceiptReconcile) receiptReconcileGate.resolve()
   if (!options.holdParentStep) parentGate.resolve()
@@ -152,7 +161,7 @@ export async function createDeliveryFixture(options: { failBeforePublication?:bo
       }
       const outcome = retry ? await write.retry() : await write.issue()
       if(options.holdTaskACK&&key==='task-parent'&&data.tasks?.some((task:{outcome?:string})=>task.outcome!==undefined)){taskACKReady.resolve();await taskACKGate.promise}
-      if(options.holdTaskUnknown&&!allowTaskUnknown&&key==='task-parent'&&data.tasks?.some((task:{outcome?:string})=>task.outcome!==undefined)){taskACKReady.resolve();return {kind:'unknown' as const,cause:undefined,cleanupPending:false}}
+      if((options.holdTaskUnknown&&!allowTaskUnknown||options.dropTaskACKOnce&&!taskACKDropped)&&key==='task-parent'&&data.tasks?.some((task:{outcome?:string})=>task.outcome!==undefined)){taskACKDropped=true;taskACKReady.resolve();return {kind:'unknown' as const,cause:undefined,cleanupPending:false}}
       backendTrace.push({ phase: 'document-returned', key, at: Date.now(), kind: outcome.kind })
       return outcome
     }
@@ -195,10 +204,11 @@ export async function createDeliveryFixture(options: { failBeforePublication?:bo
     return reconcile(...args)
   })
   const taskACKReady=Promise.withResolvers<void>(),taskACKGate=Promise.withResolvers<void>()
+  const childStarted=Promise.withResolvers<void>()
   const childCancelled=Promise.withResolvers<void>()
   const child = controlledModel(async function* (request) {
     if(request.signal?.aborted)childCancelled.resolve();else request.signal?.addEventListener('abort',()=>childCancelled.resolve(),{once:true})
-    const number = ++launches
+    const number = ++launches;childStarted.resolve()
     if (options.activeForeground && number === 2) { foregroundStarted.resolve(); await foregroundGate.promise }
     else await childGate.promise
     yield { type: 'text/chunk', text: 'original child result' }
@@ -209,11 +219,11 @@ export async function createDeliveryFixture(options: { failBeforePublication?:bo
     parentRequests.push(request)
     if (parentRequests.length === 1) {
       if (options.rewindFsWrite) yield { type: 'tool_call', call: { id: 'original-fs-write', name: 'write', args: { path: 'greet.txt', text: 'goodbye' } } }
-      for (let i = 0; i < (options.spawnCount ?? 1); i++) yield { type: 'tool_call', call: { id: 'original-spawn-' + i, name: 'spawn_agent', args: { task_name: 'original' + i, agent_type: 'general', message: 'return original result', fork_turns: 'none' } } }
+      for (let i = 0; i < (options.spawnCount ?? 1); i++) yield { type: 'tool_call', call: { id: 'original-spawn-' + i, name: 'spawn_agent', args: { task_name: 'original' + i, agent_type: 'general', message: 'return original result', fork_turns: options.b2?'none':'all' } } }
     }
     else {
       if (options.activeForeground && parentRequests.length === 2) {
-        yield { type: 'tool_call', call: { id: 'foreground-a', name: 'spawn_agent', args: { task_name: 'held-a', agent_type: 'general', message: 'hold original work', fork_turns: 'none', background: false } } }
+        yield { type: 'tool_call', call: { id: 'foreground-a', name: 'spawn_agent', args: { task_name: 'held-a', agent_type: 'general', message: 'hold original work', fork_turns: options.b2?'none':'all', background: false } } }
         yield { type: 'end' }; return
       }
       if (options.holdParentStep && parentRequests.length === 2) {
@@ -235,6 +245,7 @@ export async function createDeliveryFixture(options: { failBeforePublication?:bo
   const mount = () => createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
     rewindStoreRoot: options.rewindFsWrite ? join(root, 'rewind-store') : undefined,
     extensionsFor: options.extensionsFor,
+    prepareTaskChild:options.b2?createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}):undefined,
     telemetry, jobStatusEvents:options.jobStatusEvents,
     model: parent, modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access', codeMode: { mode: 'off' }, contextWindow: 100000,
 
@@ -250,8 +261,8 @@ export async function createDeliveryFixture(options: { failBeforePublication?:bo
     await writeFile(join(process.env.IH_DELIVERY_EVIDENCE_ROOT, `${label}.json`), JSON.stringify({ root, launches, heldTerminal, terminalKeys, receiptKeys, backendTrace, warnings, telemetryEvents, pending: assembly?.inbox.pending(), deliveryPending: readDeliveries(view).pending(), requests: parentRequests.map(r => r.messages), events: (await backend.read('parent')).events, failure: inspect(failure, { depth: 8 }) }, null, 2))
   }
   return {
-    root, output, legacyProjectionCalls:()=>({retainers:legacyProjectionCalls.retainers-projectionStart.retainers,publications:legacyProjectionCalls.publications-projectionStart.publications}),get service() { return service }, get backend() { return backend }, get coordinator() { return coordinator }, parentRequests,
-    launchCount: () => launches, waitForChildCancellation:()=>childCancelled.promise,
+    root, output, stopOriginalTask:()=>{const mounted=originalMounts.get(originalDocument.view),registered=spawnSources[0];if(!mounted||!registered)throw Error('Actual original Task source unavailable');return mounted.tasks.cancelTree(registered.taskId,'Original Stop won')},legacyProjectionCalls:()=>({retainers:legacyProjectionCalls.retainers-projectionStart.retainers,publications:legacyProjectionCalls.publications-projectionStart.publications}),get service() { return service }, get backend() { return backend }, get coordinator() { return coordinator }, parentRequests,
+    launchCount: () => launches, waitForChildStarted:()=>childStarted.promise,waitForChildCancellation:()=>childCancelled.promise,
     waitForForeground: () => foregroundStarted.promise,
     releaseForeground: () => foregroundGate.resolve(),
     diagnoseOriginalSources:async()=>{for(const [index,source]of allOriginalSources.entries())try{await source.close()}catch(cause){console.info('original-source-diagnostic',index,inspect(cause,{depth:18}))}},
@@ -273,6 +284,7 @@ export async function createDeliveryFixture(options: { failBeforePublication?:bo
       let timer: ReturnType<typeof setTimeout>
       return Promise.race([delivery.promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('No real parent delivery request after original child completion')), 5000) })]).finally(() => clearTimeout(timer))
     },
+    waitForTaskCollector:()=>taskCollectorEntered.promise,releaseTaskCollector:()=>taskCollectorRelease.resolve(),
     terminalTaskSnapshotCount:()=>terminalTaskSnapshots,waitForTaskACK:()=>taskACKReady.promise,releaseTaskACK:()=>taskACKGate.resolve(),releaseTaskUnknown:()=>{allowTaskUnknown=true},taskWriteSnapshots:()=>backendTrace.flatMap(e=>typeof e==='object'&&e!==null&&'phase'in e&&e.phase==='document-entered'&&'key'in e&&e.key==='task-parent'&&'data'in e?[JSON.stringify(e.data)]:[]),
     waitForHeldTerminal: () => terminal.promise,
     waitForTerminalCommitted: () => terminalCommitted.promise,
@@ -306,6 +318,7 @@ export async function createDeliveryFixture(options: { failBeforePublication?:bo
       await service.assemblyFor('parent')
     },
     async close() {
+      taskCollectorRelease.resolve();heldTaskCollector.enabled=false
       if (closed) return
       childGate.resolve(); foregroundGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
       const failures: unknown[] = []

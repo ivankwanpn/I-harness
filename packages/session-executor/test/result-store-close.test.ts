@@ -2,8 +2,8 @@ import { expect, it, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
-import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { acquireAssemblyResultStore, acquireResultReadStore } from '../src/lifecycle/result-store.ts'
 import { createSessionService } from '../src/service.ts'
 import { ContextStore } from '../../context-output/src/store.ts'
@@ -13,7 +13,7 @@ import { controlledModel } from './controlled-model.ts'
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'result-close-')), settings = join(root, 'settings.json')
   await writeFile(settings, '{}')
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 's' })
   const options = { workspace: root, coordinator, contextOutputSettingsPath: settings, sessionId: 's' }
   const lease = await acquireAssemblyResultStore(options), owner = lease.service!

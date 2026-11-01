@@ -119,8 +119,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const association=documentEntries.get(document);if(!association)throw new FactRecoveryRequiredError();const{id,entry}=association;
       if(entry.revoked||documents.get(id)!==entry||entry.document!==document||!transitions||entry.headerUnknown)throw new FactRecoveryRequiredError();
       const original=captureManagedRequiredParent(document,ownership,source);
-      const check=()=>{if(documents.get(id)!==entry||entry.document!==document||entry.headerUnknown||((entry.bootstrap||entry.selected)&&!entry.ready))throw new FactRecoveryRequiredError();original.assertCurrent()};check();
-      const result=Object.freeze({id,assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTaskV3Parent(){if(this!==result)throw new TypeError('Invalid required parent');check();original.assertTask14Ready()}});return result;
+      const checkIdentity=()=>{if(documents.get(id)!==entry||entry.document!==document||entry.headerUnknown||((entry.bootstrap||entry.selected)&&!entry.ready))throw new FactRecoveryRequiredError();original.assertOriginal()};const check=()=>{checkIdentity();original.assertCurrent()};check();
+      const result=Object.freeze({id,assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){if(this!==result)throw new TypeError('Invalid required parent');const lease=await original.acquireWriter();try{check();return lease}catch(error){lease.release();throw error}},async joinIssuedWriter(){if(this!==result)throw new TypeError('Invalid required parent');await original.joinIssuedWriter();check()},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTaskV3Parent(){if(this!==result)throw new TypeError('Invalid required parent');check();original.assertTask14Ready()}});return result;
     },
     captureParent(document: ManagedDocument) {
       const association = documentEntries.get(document)
@@ -132,7 +132,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         readiness.assertCurrent()
       }
       check()
-      const parent = Object.freeze({ id, assertCurrent() {
+      const parent = Object.freeze({ id, assertOriginal(){if(this!==parent||documents.get(id)!==entry||entry.document!==document||entry.headerUnknown)throw new FactRecoveryRequiredError();readiness.assertOriginal()}, assertCurrent() {
         if (this !== parent) throw new TypeError('Invalid parent receiver')
         check()
       }, assertTaskV3Parent() {

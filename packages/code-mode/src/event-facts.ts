@@ -90,7 +90,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
   mountAction.finish()
   const off = subscribe(owner.view, () => { if (pending.size) void refresh().catch(() => {}) })
   const seal = (cell: CellFacts) => { if (!cell.sealed) { cell.sealed = true; cell.revision++; cell.sealNow() } }
-  const required = (event: CodeSettlementFact, onCommit?: () => void, failedAdmission = false) => {
+  const required = (event: CodeSettlementFact, onCommit?: () => void, failedAdmission = false, onSettled?: () => void) => {
     if (!isStrictFactData(event)) { requireRecovery(); throw new FactRecoveryRequiredError() }
     const original = captureLegacyFact(event)
     if (original.kind !== 'captured') { requireRecovery(); throw new FactRecoveryRequiredError() }
@@ -108,6 +108,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
           if (cells.get(captured.cellId) === cell) cells.delete(captured.cellId)
           if (admissionHolds.get(captured.cellId) === admission) admissionHolds.delete(captured.cellId)
         }
+        onSettled?.()
       }),
     })
     if (cell) { cell.terminal = record; seal(cell) }
@@ -129,7 +130,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
       const record = enroll({ kind: 'reference', source, capture: () => source.retention.capture(captured.value) })
       changed(); return async () => { if (!record.settled) await refresh() }
     },
-    required(event: CodeSettlementFact, onCommit?: () => void) { return required(event, onCommit) },
+    required(event: CodeSettlementFact, onCommit?: () => void, onSettled?: () => void) { return required(event, onCommit, false, onSettled) },
     async optional(event: Extract<SessionEvent, { type: 'code/cell' }>, signal?: AbortSignal) {
       if (cells.has(event.cellId)) throw new FactRecoveryRequiredError()
       admitting++; changed()

@@ -70,6 +70,12 @@ export interface SubagentDeliveryEvidence {
   sourceSeq: number;
   terminalSeq: number;
 }
+/** Recipient lookup only. Persisted original facts, never this DTO, own authority. */
+export interface ExecDeliveryEvidence {
+  kind: 'exec';
+  sourceSeq: number;
+  terminalSeq: number;
+}
 export interface DeliveryAdmissionReceipt {
   inputId: string;
   disposition: 'pending' | 'claimed' | 'cancelled' | 'suppressed';

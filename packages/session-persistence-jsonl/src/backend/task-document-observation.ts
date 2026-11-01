@@ -4,6 +4,7 @@ import type { FileHandle } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isHeldTaskDocumentScope, type HeldTaskDocumentScope, type RawTaskObservation, type TaskDocumentWitness, type TaskDocumentAck, type Confirmation, type TaskDocumentBackendSession } from '@i-harness/session-persistence'
 import { createOwnedDocumentWrite } from './document-write.ts'
+import { constructOriginalTaskWrite } from '@i-harness/session-persistence/internal/task-document-operations'
 
 const LIMIT = 64 * 1024 * 1024
 const CHUNK = 64 * 1024
@@ -11,7 +12,7 @@ type Opener = (path: string, flags: 'r' | 'r+') => Promise<FileHandle>
 type Resource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
 
 /** Private raw observation owner. Confirmation and Documents admission are separate future owners. */
-export function createTaskDocumentObservation(root: string, path: string, scope: HeldTaskDocumentScope, opener: Opener = open, checkAvailable: () => Promise<void> = async () => {}) {
+export function createTaskDocumentObservation(root: string, path: string, scope: HeldTaskDocumentScope, opener: Opener = open, checkAvailable: () => Promise<void> = async () => {}, nativeStage?: object) {
   if (!isHeldTaskDocumentScope(scope)) throw new TypeError('Invalid task document scope')
   const assert = scope.assertActive
   Reflect.apply(assert, scope, [])
@@ -196,7 +197,8 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     stageWrite(witness: TaskDocumentWitness, bytes: Uint8Array) {
       if (this !== session || ownedWrite || confirming || resources.size || conflict || lastConfirmation?.kind === 'unknown') throw new TypeError('Invalid task write stage')
       const input = confirmationInput(witness)
-      ownedWrite = createOwnedDocumentWrite({ path: filePath, bytes, preimage: { bytes: input.bytes, identity: input.identity }, guard, async verifyRoot() { const root = await directories(); if (!sameDirectory(input.root, root)) throw new Error('Changed task document root'); await checkAvailable(); guard() } })
+      const construct = () => createOwnedDocumentWrite({ path: filePath, bytes, preimage: { bytes: input.bytes, identity: input.identity }, guard, async verifyRoot() { const root = await directories(); if (!sameDirectory(input.root, root)) throw new Error('Changed task document root'); await checkAvailable(); guard() } })
+      ownedWrite = nativeStage ? constructOriginalTaskWrite(nativeStage, scope, checkAvailable, opener, filePath, bytes, construct) : construct()
       return ownedWrite.handle
     },
     stageInitialize(bytes: Uint8Array) {

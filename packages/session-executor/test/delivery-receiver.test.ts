@@ -1,3 +1,5 @@
+// Real native B2 birth setup has a separate resource envelope; this is not a latency qualification.
+const NATIVE_B2_CASE_MS = 60_000
 import { expect, it } from 'vitest'
 import { createDeliveryFixture } from './helpers/delivery-fixture.ts'
 import { receivedInputsFor } from '../src/lifecycle/received-inputs.ts'
@@ -19,7 +21,7 @@ it('keeps an old eligible child across an ordinary followup and delivers its rec
     expect(JSON.stringify(f.parentRequests.at(-1)!.messages)).toContain('original child result')
   } catch (e) { await f.evidence('ordinary-followup-failure', e); throw e }
   finally { await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('does not admit retained child bytes before the original terminal commits', async () => {
   const f = await createDeliveryFixture({ holdTerminal: true })
@@ -33,7 +35,7 @@ it('does not admit retained child bytes before the original terminal commits', a
     expect(f.launchCount()).toBe(1)
   } catch (e) { await f.evidence('held-original-terminal-failure', e); throw e }
   finally { await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('idle Stop followed by a new human input cannot revive the older child', async () => {
   const f = await createDeliveryFixture()
@@ -54,7 +56,7 @@ it('idle Stop followed by a new human input cannot revive the older child', asyn
     expect(f.launchCount()).toBe(1)
   } catch (e) { await f.evidence('stop-new-human-failure', e); throw e }
   finally { await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('two genuine sources with equal presentation have distinct receipts and same-source rerender keeps original input', async () => {
   const f = await createDeliveryFixture({ spawnCount: 2 })
@@ -81,18 +83,19 @@ it('two genuine sources with equal presentation have distinct receipts and same-
     await f.evidence('equal-presentation-stable-key')
   } catch (e) { await f.evidence('equal-presentation-failure', e); throw e }
   finally { await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('reconciles a physically landed receipt on its original handle before one parent request', async () => {
   const f = await createDeliveryFixture({ holdReceiptUnknown: true })
-  const boundary = async <T>(name: string, work: Promise<T>) => {
+  const boundary = async <T>(name: string, work: Promise<T>, resourceMs = 3000) => {
     let timer: ReturnType<typeof setTimeout>
-    try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Original receipt boundary pending: ' + name)), 3000) })]) }
+    try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Original receipt boundary pending: ' + name)), resourceMs) })]) }
     catch (error) { await f.evidence('receipt-boundary-' + name, error); throw error }
     finally { clearTimeout(timer!) }
   }
   try {
-    await boundary('parent-start', f.start()); f.releaseChild(); await boundary('physical-unknown', f.waitForReceiptUnknown())
+    // Native B2 birth setup has its own functional envelope; receipt boundaries stay three seconds.
+    await boundary('native-child-startup', f.start(), 20_000); f.releaseChild(); await boundary('physical-unknown', f.waitForReceiptUnknown())
     expect(f.parentRequests).toHaveLength(2)
     expect(f.receiptKeys.length).toBeGreaterThan(0)
     const assembly = await f.service.assemblyFor('parent')
@@ -111,7 +114,7 @@ it('reconciles a physically landed receipt on its original handle before one par
     await f.evidence('original-receipt-unknown')
   } catch (e) { await f.evidence('original-receipt-unknown-failure', e); throw e }
   finally { f.releaseReceipt(); await boundary('original-cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it.each(['synthetic', 'unknown', 'delegated', 'b2'] as const)('a %s parent keeps accepted unbound spawn and original result read without retrospective delivery authority', async compatibilityOrigin => {
   const f = await createDeliveryFixture({ compatibilityOrigin })
@@ -130,7 +133,7 @@ it.each(['synthetic', 'unknown', 'delegated', 'b2'] as const)('a %s parent keeps
     await f.evidence(compatibilityOrigin + '-unavailable-readable')
   } catch (e) { await f.evidence(compatibilityOrigin + '-unavailable-failure', e); throw e }
   finally { await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('Stop during actual receiver preparation retires only its never-issued admission and confirms the original close', async () => {
   const f = await createDeliveryFixture({ holdReceiptBeforeIssue: true })
@@ -151,7 +154,7 @@ it('Stop during actual receiver preparation retires only its never-issued admiss
     await f.evidence('stop-before-receipt-issue')
   } catch (e) { await f.evidence('stop-before-receipt-issue-failure', e); throw e }
   finally { await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('a normal active step claims the receipt before its queued idle hint without a second delivery action', async () => {
   const f = await createDeliveryFixture({ holdParentStep: true })
@@ -178,7 +181,7 @@ it('a normal active step claims the receipt before its queued idle hint without 
     await f.evidence('active-claim-before-idle-hint')
   } catch (e) { await f.evidence('active-claim-before-idle-hint-failure', e); throw e }
   finally { f.releaseParentStep(); await running.catch(() => {}); await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('an issued-unknown trusted generation open retains its original debt and prevents child launch', async () => {
   const f = await createDeliveryFixture({ holdOpenUnknown: true })
@@ -190,14 +193,19 @@ it('an issued-unknown trusted generation open retains its original debt and prev
     const events = (await f.backend.read('parent')).events
     expect(events.filter(e => e.type === 'agent/delivery-generation' && e.op === 'open')).toHaveLength(1)
     expect(events.filter(e => e.type === 'agent/delivery-source' || e.type === 'agent/delivery-received')).toHaveLength(0)
-    f.releaseOpen()
     const assembly = await f.service.assemblyFor('parent')
+    // The same failed tool source must keep its instruction pin until its
+    // original open capture reconciles. No manager may force-release that pin.
+    await expect(assembly.dispose()).rejects.toMatchObject({message:'Assembly original source cleanup incomplete'})
+    f.releaseOpen()
     await receivedInputsFor(assembly.factOwner, 'parent').delivery.settle()
+    await assembly.dispose()
+    const trace=f.originalOpenTrace();expect(trace.filter(entry=>entry.phase==='append')).toHaveLength(1);expect(trace.some(entry=>entry.phase==='reconcile')).toBe(true);expect(new Set(trace.map(entry=>entry.batchId)).size).toBe(1)
     expect(f.launchCount()).toBe(0)
     await f.evidence('trusted-open-unknown-no-launch')
   } catch (e) { await f.evidence('trusted-open-unknown-failure', e); throw e }
-  finally { f.releaseOpen(); await running.catch(() => {}); await f.close() }
-}, 20000)
+  finally { f.releaseOpen(); await running.catch(() => {}); await f.close();expect(f.warningMessages()).toEqual([]) }
+}, NATIVE_B2_CASE_MS)
 
 it('a lost original terminal acknowledgment activates same-capture recovery without a read or source close', async () => {
   const f = await createDeliveryFixture({ holdTerminalUnknown: true })
@@ -216,7 +224,7 @@ it('a lost original terminal acknowledgment activates same-capture recovery with
     await f.evidence('original-terminal-unknown-recovery')
   } catch (e) { await f.evidence('original-terminal-unknown-failure', e); throw e }
   finally { f.releaseTerminalOutcome(); await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('original unknown terminal recovery continues after Stop while the generation forbids admission and wake', async () => {
   const f = await createDeliveryFixture({ holdTerminalUnknown: true, expectStopDiagnostics: true })
@@ -245,14 +253,20 @@ it('original unknown terminal recovery continues after Stop while the generation
     expect(f.launchCount()).toBe(1)
     await f.evidence('original-terminal-recovery-after-stop')
     const taskDocument = await f.coordinator.getDocument('task-parent') as import('@i-harness/subagent').TaskProtocolDocument
-    expect(taskDocument.formatVersion).toBe(2)
+    expect(taskDocument.formatVersion).toBe(3)
+    const originalTask=taskDocument.tasks[0]!,birth=originalTask.childBirth!,source=events.find(event=>event.type==='agent/delivery-source')!
+    expect(birth).toMatchObject({version:1,kind:'task-child-birth',request:{core:{caller:{kind:'task',taskId:originalTask.id,parentSessionId:'parent',toolCallId:'original-spawn-0',callEventSeq:source.callSeq}}}})
+    expect(originalTask.childSessionId).toBe(birth.request.invocation.targetSessionId)
+    const child=await f.backend.read(birth.request.invocation.targetSessionId)
+    expect(child.meta).toBeDefined()
+    expect(child.meta!.semanticSeed).toMatchObject({operationId:birth.request.invocation.operationId})
     expect(taskDocument.notifications[0]).toMatchObject({ status: 'suppressed' })
     expect(taskDocument.notifications[0]!.timeDelivered).toBeUndefined()
     expect(taskDocument.notifications[0]!.timeWoken).toBeUndefined()
     for (const task of taskDocument.tasks) for (const field of ['generationId', 'sourceSeq', 'terminalSeq', 'receiverClaim']) expect(task).not.toHaveProperty(field)
   } catch (e) { await f.evidence('original-terminal-recovery-after-stop-failure', e); throw e }
   finally { f.releaseTerminalOutcome(); await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('Stop source-only settlement stays independent of a held admission after original unknown-end recovery', async () => {
   const f = await createDeliveryFixture({ holdTerminalUnknown: true, holdReceiptBeforeIssue: true, expectStopDiagnostics: true })
@@ -275,7 +289,7 @@ it('Stop source-only settlement stays independent of a held admission after orig
     await f.evidence('source-only-stop-held-admission')
   } catch (e) { await f.evidence('source-only-stop-held-admission-failure', e); throw e }
   finally { f.releaseReceiptPreparation(); f.releaseTerminalOutcome(); await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('a pending original receipt is scheduled after its first pre-claim prerequisite failure settles and a real owner signal arrives', async () => {
   const f = await createDeliveryFixture()
@@ -329,7 +343,7 @@ it('a pending original receipt is scheduled after its first pre-claim prerequisi
     await f.evidence('preclaim-original-recovered-on-real-signal', { kind: 'controlled-original-source-prerequisite', originalCloseFailure, resourceCloses, resourceReleased: true })
   } catch (e) { await f.evidence('preclaim-original-recovery-failure', e); throw e }
   finally { off?.(); blocked = false; await source?.close(); await f.close() }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('a claimed delivery whose actual model request fails is never resubmitted by a later owner signal', async () => {
   const f = await createDeliveryFixture({ failDelivery: true })
@@ -356,4 +370,4 @@ it('a claimed delivery whose actual model request fails is never resubmitted by 
   } catch (e) { await f.evidence('claimed-failed-model-no-resubmit-failure', e); throw e }
   finally { off?.(); await f.close() }
   expect(f.parentRequests).toHaveLength(3)
-}, 20000)
+}, NATIVE_B2_CASE_MS)

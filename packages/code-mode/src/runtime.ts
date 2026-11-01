@@ -7,17 +7,42 @@ import { createWorkerEvents } from './runtime/worker-events.js'
 import { createAdmission } from './runtime/admission.js'
 import { instructionReplan } from '@i-harness/core-tools'
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
+import { createCellFinalizations } from './finalization.ts'
 
 /** Each admission owns a fresh WASM worker. Only JSON crosses its boundary. */
 export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeModeRuntime {
   const config = limits(options.config)
   const errorCap = Math.min(4096,config.maxResultBytes)
   const state = createCellState(options,config)
-  function event(event: Parameters<NonNullable<CodeModeRuntimeOptions['onEvent']>>[0]) { return options.onEvent?.(event) }
+  const finalizations = createCellFinalizations('runtime-retirement')
+  const endings = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>()
+  function event(event: Parameters<NonNullable<CodeModeRuntimeOptions['onEvent']>>[0]) {
+    // Runtime component proves only original executable/producer retirement.
+    // Assembly separately joins the actual terminal/store receipt owner.
+    if (event.type === 'closed') endings.get(event.cellId)?.resolve()
+    return options.onEvent?.(event)
+  }
   const retirement = createRetirement(options,errorCap,state,event,reason => runtime.cancel(reason))
   const output = createOutput(options,config,state,retirement,event)
   const workers = createWorkerEvents(options,config,errorCap,state,retirement,output)
-  const exec = createAdmission(options,config,errorCap,state,retirement,output,workers,event)
+  const exec = createAdmission(options,config,errorCap,state,retirement,output,workers,event, (id, original) => {
+    const end = Promise.withResolvers<void>()
+    endings.set(id, end)
+    const handle = finalizations.reserve(id, async () => {
+      await end.promise
+      const cell = original()
+      if (cell) {
+        if (!cell.stop) throw new FactRecoveryRequiredError()
+        await cell.stop
+        const joined = await Promise.allSettled([...cell.invocations])
+        const failures = joined.filter((value): value is PromiseRejectedResult => value.status === 'rejected')
+        if (failures.length) throw new AggregateError(failures.map(value => value.reason), 'Original Code invocations incomplete')
+      }
+      endings.delete(id)
+    })
+    void end.promise.then(() => handle.settle()).catch(() => {})
+    return () => end.resolve()
+  })
   const { observe } = output
   const { close } = retirement
   const runtime: CodeModeRuntime = {
@@ -40,7 +65,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       await Promise.allSettled([cell.stop, ...cell.producers])
     },
     cancel: retirement.cancel,
-    dispose: retirement.dispose,
+    async dispose() { await retirement.dispose(); await finalizations.drain() },
     replan(cellId, detail) { const cell = state.get(cellId); if (cell) retirement.replan(cell, instructionReplan(detail)) },
     async drainRetainedObservations() {
       for (const cell of state.values()) {
@@ -52,5 +77,6 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       }
     },
   }
+  finalizations.bind(runtime)
   return runtime
 }

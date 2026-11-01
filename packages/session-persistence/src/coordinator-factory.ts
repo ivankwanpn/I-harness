@@ -3,6 +3,7 @@ import { attachArchiveReadResources } from './archive-read-internal.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createOwnership } from './coordinator/ownership.ts'
+import { associateOriginalResultOrdering } from './result-ordering-internal.ts'
 import { createColdExecutionWrites, associateColdExecutionWrites } from './coordinator/cold-execution-writes.ts'
 import { createMutations } from './coordinator/mutations.ts'
 import { createDocuments } from './coordinator/documents.ts'
@@ -114,6 +115,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     }:{}),
     ...(managed.childSupported()?{
       inspectChildBootstrapCapture:managed.inspectChildBootstrapCapture,
+      inspectChildBootstrap:managed.inspectChildBootstrap,
       bootstrapChildTargetWithCapture(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
         if(CURRENT_FORMAT_VERSION>=14&&!transitionStorage)return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'not-issued',reason:'unsupported'})
         if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
@@ -201,6 +203,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   }
   associateRestoredContextAcquisition(coordinator,{acquire:id=>managed.acquireRestoredContext(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
+  associateOriginalResultOrdering(coordinator, ownership)
   if (ownership.lockEnabled) associateProjectBindingWrites(coordinator, documents)
   coldObservationOwners.set(coordinator, { capture: managed.captureColdObservation, binding: observations.captureColdBindingObservation })
   if (backend.deleteOwnedSession) associateDeletionPreparation(coordinator, lifecycle)

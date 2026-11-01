@@ -1,4 +1,5 @@
 import {registerOriginalSpawnRun,projectOriginalSpawnJob} from './source-run.ts'
+import {isInsideOriginalSettlementClose,captureOriginalSettlementCloseAck,managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {bindRequiredTaskSettlement,type RequiredTaskSettlement} from '../task/required-settlement.ts'
 import type {TaskTerminalizeInput} from '../task/types.ts'
 import { committedFactSeqs, FactRecoveryRequiredError, type CapturedActionFact, type CapturedSettlementFact, type FactOwner, type ProducerFactOutcome, type SessionEvent, type SubagentDeliveryLaunchDraft } from '@i-harness/core-session'
@@ -23,10 +24,18 @@ export function spawnObservation(base: SpawnIdentity, task: TaskRecord) {
 
 /** Retains the original start disposition, publication identity and real end.
  * Passive outcome reads never join a still-running child. */
-export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void) {
+export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void, retainUnused?: (cleanup: { close(): Promise<void> }) => void) {
   let requiredTask:RequiredTaskSettlement|undefined,requiredRun:{project:import('../runtime-projection.ts').TerminalProjection;entry:import('../agent-table.ts').ChildAgentEntry;run:Promise<unknown>}|undefined
   const producer=Promise.withResolvers<TaskTerminalizeInput>();let producerInput:TaskTerminalizeInput|undefined;
   const action = owner.beginAction(signal)
+  let closeAcquired: (() => Promise<void>) | undefined
+  let unused = false
+  // Retain the original acquisition before any later constructor step can
+  // throw. The same handle gains its actual source below, before beforeRead.
+  retainUnused?.(Object.freeze({ async close() {
+    if(!start&&!published)unused = true
+    try { await closeAcquired?.() } finally { action.finish() }
+  } }))
   let start: CapturedActionFact<ProducerFactOutcome> | undefined
   let terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined
   let terminalEvent: Readonly<Extract<SessionEvent, { type: 'subagent/end' }>> | undefined
@@ -36,7 +45,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   let terminalOutput: ReturnType<typeof spawnObservation> | undefined
   let taskSave: (() => Promise<void>) | undefined
   let saving: Promise<void> | undefined
-  let taskSaved = false, terminalSaved = false, unused = false, retainPublished = false
+  let taskSaved = false, terminalSaved = false, retainPublished = false
   let sourceReleased=false
   let resultPublished = false
   let terminalSignalled = false
@@ -132,12 +141,16 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   const source = action.registerSettlementSource(async () => {
     if (!unused) {if(requiredTask){prepareEnd??=requiredPrepareEnd;if(!producerInput)requiredRun?.entry.controller.abort()}await settleTerminal()}
   }, reconcileStart)
+  const originalSourceClose=source.close.bind(source)
+  const originalCloseAck=captureOriginalSettlementCloseAck(source)
+  if(originalCloseAck)void originalCloseAck.then(()=>{sourceReleased=true;completed()}).catch(cause=>{captureFailure=Object.freeze({cause})})
   let closing: Promise<void> | undefined
   const closeSource = () => {
-    const pending = closing ??= source.close().then(()=>{sourceReleased=true;completed()})
+    const pending = closing ??= originalSourceClose().then(async()=>{if(originalCloseAck)await originalCloseAck;sourceReleased=true;completed()})
     void pending.catch(() => { if (closing === pending) closing = undefined })
     return pending
   }
+  closeAcquired = closeSource
   retained?.beforeRead(async () => {
     await reconcileStart()
     if (terminal || prepareEnd) await settleTerminal()
@@ -149,8 +162,24 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       if(requiredTask){taskSave=async()=>{await requiredTask!.settle()};requiredPrepareEnd=async()=>{const settled=await requiredTask!.settle();return {event:{type:'subagent/end',version:1,taskId:task.id,outcome:settled.outcome!,...(settled.result?.kind==='retained'?{envelope:settled.result.envelope,resultRevision:settled.result.revision}:{}),...(settled.resultText!==undefined?{resultText:settled.resultText}:{}),...(settled.error!==undefined?{error:settled.error}:{})},...(base?{output:spawnObservation(base,settled as TaskRecord)}:{})}}}
     },
     hasRequiredTask(){return requiredTask!==undefined},
-    async terminalizeOriginal(input:TaskTerminalizeInput){if(!requiredTask)return undefined;if(!producerInput){producerInput=Object.freeze({...input});producer.resolve(producerInput)}prepareEnd??=requiredPrepareEnd;return requiredTask.settle()},
+    async terminalizeOriginal(input:TaskTerminalizeInput){
+      if(!requiredTask)return undefined;if(!producerInput){producerInput=Object.freeze({...input});producer.resolve(producerInput)}prepareEnd??=requiredPrepareEnd
+      try{return await requiredTask.settle()}catch(cause){const recovery=requiredTask.acknowledgmentRecovery(cause);if(recovery&&!recoverySignalled&&managedExecutionStatus(owner as import('@i-harness/session-persistence').ManagedDocument)!=='retired'){recoverySignalled=true;try{onTerminalRecovery?.()}catch{}}throw recovery??cause}
+    },
+    async reconcileCapturedJournalDebt(){
+      if(this!==result)throw new TypeError('Foreign original journal source')
+      if(!terminal||terminalSaved)return
+      if(isInsideOriginalSettlementClose(source))throw new FactRecoveryRequiredError()
+      source.assertHeld()
+      let outcome=await terminal.observe()
+      if(outcome.kind==='unknown'||outcome.kind==='recovery-required')outcome=await terminal.reconcile()
+      terminalOutcome=outcome
+      try{committedFactSeqs(outcome);terminalSaved=true}catch(cause){if(outcome.kind==='unknown'||outcome.kind==='recovery-required')throw new OriginalTerminalRecoveryError(outcome,cause);throw cause}
+    },
     async reconcileTerminal() {
+      // The original close already owns its retained cleanup driver. Joining
+      // that same close from its own drain would wait on this invocation.
+      if (isInsideOriginalSettlementClose(source)) return
       if (handoffConsumerPending) return
       if (handoff?.kind === 'parent' && !handoffAcknowledged) {
         await handoff.save.retry(); handoff.save.assertHandoff(); handoff.save.release(); handoffAcknowledged = true; handoffReleased = true
@@ -158,7 +187,15 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       if (handoff?.kind === 'parent' && handoffAcknowledged && !handoffReleased) { handoff.save.assertHandoff(); handoff.save.release(); handoffReleased = true }
       // Resume the retained preparation owned by this original invocation. Its
       // registry consumer retries the exact captured save before end capture.
-      if (terminalSaved && taskSaved) { if(requiredTask)await requiredTask.release();completed(); return }
+      if (terminalSaved && taskSaved) { if(requiredTask){await requiredTask.release();await closeSource()}completed(); return }
+      // Discovery can retry an existing terminal capture. It cannot start or
+      // join nonterminal body/Task preparation; explicit close owns that debt.
+      if (requiredTask && !terminal) {
+        let recovered:Readonly<TaskRecord>|undefined
+        try{recovered=await requiredTask.recoverCapturedAcknowledgment()}catch(cause){throw requiredTask.acknowledgmentRecovery(cause)??cause}
+        if(!recovered)return
+        await settleTerminal();terminalReady.resolve();await closeSource();return
+      }
       if (!terminal && prepareEnd) {
         if (terminalSettlement) try { await terminalSettlement } catch { /* Resume the same preparation below. */ }
         await settleTerminal(); terminalReady.resolve(); await closeSource(); return
@@ -167,7 +204,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       source.assertHeld()
       if (terminalSettlement) {
         try { await terminalSettlement } catch { /* Reconcile the same captured terminal and save below. */ }
-        if (terminalSaved && taskSaved) { if(requiredTask)await requiredTask.release();completed(); return }
+        if (terminalSaved && taskSaved) { if(requiredTask){await requiredTask.release();await closeSource()}completed(); return }
       }
       let outcome = await terminal.observe()
       if (outcome.kind === 'unknown' || outcome.kind === 'recovery-required') outcome = await terminal.reconcile()

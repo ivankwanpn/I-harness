@@ -3,16 +3,17 @@ import { types } from 'node:util'
 import type { Ownership } from './ownership.ts'
 import type { ManagedDocument } from './fact-types.ts'
 import type { OpenTaskDocumentSession, TaskDocumentWitness, TaskObservation, Confirmation } from './task-document-types.ts'
+import { originalTaskWriteLifetime, type OriginalTaskWriteLifetime } from './task-write-lifetime.ts'
 import { issueHeldTaskDocumentScope } from './task-document-scope.ts'
 import type { createBindingObservations } from './binding-observation.ts'
 import { captureTaskSnapshot } from './task-document-snapshot.ts'
 import type { TaskDocumentWrite, TaskWriteOutcome } from './task-document-types.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 
-type Parent = { id: string; assertCurrent(): void; assertTaskV3Parent?(): void }
+type Parent = { id: string; assertCurrent(): void; assertOriginal?():void; assertTaskV3Parent?(): void; joinIssuedWriter?():Promise<void>;acquireWriter?():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>> }
 export type TaskDocumentConfiguration = { captureParent(document: ManagedDocument): Parent; captureRequiredParent?(document:ManagedDocument,source:import('@i-harness/core-session').SettlementFacts):Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
 export interface TaskDocumentReadHandoff { consume(): void; abandon(): void }
-type Operation = { observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; prepareReadHandoff(witness: TaskDocumentWitness): TaskDocumentReadHandoff; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; assertHandoff(): void; close(): Promise<void>; retryClose(): Promise<void> }
+type Operation = { assertCapturedWriteRecovery():void; ordinarySaveOpen():boolean; retirementAcknowledged(ack:import('./task-document-types.ts').TaskDocumentAck):boolean; retirementDisposition(): 'unissued'|'issued'|undefined; observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; prepareReadHandoff(witness: TaskDocumentWitness): TaskDocumentReadHandoff; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; assertHandoff(): void; close(): Promise<void>; retryClose(): Promise<void> }
 type MethodContext = { record: object; owner: object; ownership: Ownership; id: string; key: string; parent?: MethodContext }
 const methodContext = new AsyncLocalStorage<MethodContext>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!
@@ -45,21 +46,21 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
       const field = Object.getOwnPropertyDescriptor(object, key); if (!field || !('value' in field) || field.value !== original) throw new TypeError('Changed task configuration')
     }
   }
-  const records = new Set<{ finite(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void> }>()
+  const records = new Set<{ readKey?:string; finite(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void> }>()
   const fail = () => { throw new Error('TASK_DOCUMENT_CONFLICT') }
   function parent(this: unknown, document: ManagedDocument) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = captureParent(document), token = Object.freeze({}); parents.set(token, captured); const field = captured && !types.isProxy(captured) && Object.getOwnPropertyDescriptor(captured, 'assertTaskV3Parent'); if (field && 'value' in field && typeof field.value === 'function' && !types.isProxy(field.value)) parentEligibility.set(token, method(captured, 'assertTaskV3Parent')!); return token }
   type Required={pin:Awaited<ReturnType<Ownership['pinOwnership']>>;ticket:ReturnType<typeof admission.registerRequiredTaskObligation>;source:import('@i-harness/core-session').SettlementFacts;cleanup():Promise<void>}
   const requiredParents=new WeakMap<object,Required>()
   async function requiredParent(this:unknown,document:ManagedDocument,source:import('@i-harness/core-session').SettlementFacts) {
-    if(this!==operations||!captureRequiredParent)throw new TypeError('Required task owner unavailable');const captured=captureRequiredParent(document,source),token=Object.freeze({});
+    if(this!==operations||!captureRequiredParent)throw new TypeError('Required task owner unavailable');const captured=captureRequiredParent(document,source),token=Object.freeze({}),originalCheck=method(captured,'assertOriginal')!;
     let pin:Required['pin']|undefined,released=false,acquiring:Promise<void>|undefined;
     const acquisitions:import('./ownership.ts').OwnershipCleanup[]=[];
     const cleanup=async()=>{await acquiring?.catch(()=>{});for(const original of acquisitions){await original.close();original.assertSettled()}released=true;ticket.finish();records.delete(record)};
     const sourceClose=method(source,'close');let sourceClosed=false;
     const drive=async()=>{if(!sourceClosed){await sourceClose();sourceClosed=true}await cleanup()};
-    const ticket=admission.registerRequiredTaskObligation(captured.id,()=>{if(released)fail();captured.assertCurrent();pin?.assertHeld()},drive);
+    const ticket=admission.registerRequiredTaskObligation(captured.id,()=>{if(released)fail();originalCheck();pin?.assertHeld()},drive);
     const record={finite:async()=>{await acquiring},close:drive,retryClose:drive};records.add(record);
-    acquiring=Promise.resolve().then(async()=>{pin=await ownership.pinOwnershipRetained(captured.id,original=>acquisitions.push(original));captured.assertCurrent();source.assertHeld()});
+    acquiring=Promise.resolve().then(async()=>{pin=await ownership.pinOwnershipRetained(captured.id,original=>acquisitions.push(original));originalCheck();source.assertHeld()});
     try{await acquiring;parents.set(token,captured);parentEligibility.set(token,()=>captured.assertTaskV3Parent!());requiredParents.set(token,{pin:pin!,ticket,source,cleanup});return token}catch(error){try{await cleanup()}catch(cleanupCause){const failure=new AggregateError([error,cleanupCause],'Required Task pin cleanup unresolved');failures.set(failure,{retry:cleanup});throw failure}throw error}
   }
   async function releaseRequiredParent(this:unknown,token:object){if(this!==operations)throw new TypeError('Invalid task operations');const required=requiredParents.get(token);if(!required)fail();await required!.cleanup();requiredParents.delete(token);parents.delete(token)}
@@ -67,6 +68,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     if (this !== operations) throw new TypeError('Invalid task operations receiver')
     const required=requiredParents.get(token)
     const captured = parents.get(token); if (!captured || !ownership.lockEnabled || types.isProxy(token)) return fail()
+    const originalParentCheck=captured.assertOriginal&&method(captured,'assertOriginal')
     const pinOwnership = method(ownership, 'pinOwnership'), acquireLease = method(ownership, 'acquireDocumentLease')
     if (options !== undefined && (!options || typeof options !== 'object' || types.isProxy(options) || ![Object.prototype, null].includes(Object.getPrototypeOf(options)) || Reflect.ownKeys(options).some(key => key !== 'signal'))) throw new TypeError('Invalid task operation options')
     const signalField = options && Object.getOwnPropertyDescriptor(options, 'signal')
@@ -75,56 +77,75 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     if (signal !== undefined && (types.isProxy(signal) || !(signal instanceof AbortSignal))) throw new TypeError('Invalid task operation signal')
     const isAborted = () => signal !== undefined && Reflect.apply(signalAborted, signal, [])
     if (isAborted()) throw new Error('TASK_DOCUMENT_CANCELLED')
-    ownership.assertOutsideSessionOperation(captured.id); assertConfiguration(); captured.assertCurrent()
+    ownership.assertOutsideSessionOperation(captured.id); assertConfiguration(); if(required){if(!originalParentCheck)fail();originalParentCheck!()}else captured.assertCurrent()
     let revoked = false, externallyRevoked = false, closed = false, acquire: Promise<void>, pin: Awaited<ReturnType<Ownership['pinOwnership']>> | undefined, lease: Awaited<ReturnType<Ownership['acquireLease']>> | undefined
     let session: ReturnType<OpenTaskDocumentSession> | undefined, observation: Promise<TaskObservation> | undefined, observedReady = false, confirmation: Promise<Confirmation> | undefined, confirmationPending = false, retrying: Promise<Confirmation> | undefined, witness: TaskDocumentWitness | undefined
     let lastConfirmation: Confirmation | undefined, staged: TaskDocumentWrite | undefined, staging = false, stageConsumed = false, writeFlight: Promise<TaskWriteOutcome> | undefined, writeResult: TaskWriteOutcome | undefined
     let writeAdmission: ReturnType<ReturnType<typeof admission.registerOwnedDocumentOperation>['beginOwnedWrite']> | undefined, processToken: ReturnType<NonNullable<typeof processLatches>['beginMutation']> | undefined
     let rawObserve: ReturnType<OpenTaskDocumentSession>['observe'] | undefined, rawConfirm: ReturnType<OpenTaskDocumentSession>['confirm'] | undefined, rawStage: ReturnType<OpenTaskDocumentSession>['stageWrite'] | undefined, settleResources: ReturnType<OpenTaskDocumentSession>['settleResources'] | undefined
     const requiredLeaseCleanup:import('./ownership.ts').OwnershipCleanup[]=[]
+    let releaseWriter:(()=>void)|undefined,resumeWriter:(()=>Promise<void>)|undefined,parkWriter:(()=>void)|undefined,activeMethods=0,cleanupFailed=false
     let releasePin: (() => Promise<void>) | undefined, releaseLease: (() => void | Promise<void>) | undefined
     let cleanup: Promise<void> | undefined, cleanupPending = false, ioDebt = false, remove = () => {}, operation: Operation, signalAttached = false, sessionDescriptors: PropertyDescriptorMap | undefined
+    let nativeLifetime:OriginalTaskWriteLifetime|undefined
     let readPhase: 'none' | 'armed' | 'consumed' | 'abandoned' = 'none'
     let readLatch: ReturnType<NonNullable<typeof processLatches>['capture']> | undefined
     const retireRecord = () => { if (signalAttached) { Reflect.apply(signalRemoveListener, signal, ['abort', abort]); signalAttached = false }; remove(); records.delete(record) }
     const abandonRead = () => { if (readPhase !== 'armed') return; readPhase = 'abandoned'; readLatch!.retire(); if (closed) retireRecord() }
-    const active = () => {
-      if (revoked || closed) fail(); assertConfiguration(); captured.assertCurrent(); pin?.assertHeld(); if (lease && !lease.held) fail()
+    const assertSessionIdentity = () => {
       if (session && sessionDescriptors) for (const key of ['observe', 'confirm', 'settleResources', 'stageWrite']) { const now = Object.getOwnPropertyDescriptor(session, key), original = sessionDescriptors[key]; if (!now && !original && key === 'stageWrite') continue; if (!now || !original || !('value' in now) || !('value' in original) || now.value !== original.value) throw new TypeError('Changed task backend session') }
     }
+    const active = () => {
+      if (revoked || closed) fail(); assertConfiguration(); captured.assertCurrent(); pin?.assertHeld(); if (lease && !lease.held) fail();assertSessionIdentity()
+    }
+    const originalCurrent=()=>{assertConfiguration();if(!originalParentCheck)fail();originalParentCheck!();pin?.assertHeld();if(!lease?.held)fail();assertSessionIdentity()}
+    const scopeActive=()=>{if(!required&&nativeLifetime?.issued())nativeLifetime.assertIssued();else active()}
+    const parkIfIdle=()=>{if(required&&!closed&&!cleanupPending&&activeMethods===0&&(ioDebt||cleanupFailed||writeResult?.kind==='unknown'||writeResult?.cleanupPending))parkWriter?.()}
+    const captureIssued=()=>{active();if(!originalParentCheck)return undefined;const originalPin=pin!,originalLease=lease!;return()=>{assertConfiguration();originalParentCheck!();originalPin.assertHeld();if(!originalLease.held)fail();assertSessionIdentity()}}
     const cleanupAttempt = () => {
       if (cleanup) return cleanup
       cleanupPending = true
+      cleanupFailed=false
       cleanup = Promise.resolve().then(async () => {
         await acquire.catch(() => {})
         await observation?.catch(() => {}); await retrying?.catch(() => {}); await confirmation?.catch(() => {}); await writeFlight?.catch(() => {})
+        if(required&&resumeWriter){await resumeWriter();originalCurrent()}
+        if(!required&&nativeLifetime){
+          if(nativeLifetime.issued()){nativeLifetime.assertIssued();writeResult=await nativeLifetime.reconcile();if(writeResult.kind==='unknown'||writeResult.cleanupPending)throw new Error('Original issued Task write requires reconciliation',{cause:writeResult})}
+          else writeResult=await nativeLifetime.retireUnissued()
+          ioDebt=false
+        }
         if (session) await settleResources!()
         if (processToken) { processToken.end(writeResult?.kind === 'committed' || writeResult?.kind === 'conflict' || writeResult?.kind === 'not-issued' ? 'settled' : 'unknown'); processToken = undefined }
         if (writeAdmission) { writeAdmission.finish(writeResult?.kind === 'committed' || writeResult?.kind === 'conflict' || writeResult?.kind === 'not-issued' ? 'settled' : 'unknown'); writeAdmission = undefined }
         if(required){for(const original of requiredLeaseCleanup){await original.close();original.assertSettled()};lease=undefined}else if (lease) { await releaseLease!(); lease = undefined }
         if (pin) { await releasePin!(); pin = undefined }
+        releaseWriter?.();releaseWriter=undefined
         if (readPhase !== 'armed') retireRecord(); closed = true
       })
-      void cleanup.then(() => { cleanupPending = false }, () => { cleanupPending = false })
+      void cleanup.then(() => { cleanupPending = false }, () => { cleanupPending = false;cleanupFailed=true;parkIfIdle() })
       return cleanup
     }
     const inSelf = () => { for (let context = methodContext.getStore(); context; context = context.parent) if (context.record === record) return true; return false }
-    const runMethod = <T>(run: () => T) => methodContext.run({ record, owner: admission.taskContextIdentity, ownership, id: captured.id, key: `task-${captured.id}`, parent: methodContext.getStore() }, run)
+    const runMethod = <T>(run: () => T):T => methodContext.run({ record, owner: admission.taskContextIdentity, ownership, id: captured.id, key: `task-${captured.id}`, parent: methodContext.getStore() },()=>{const result=run();if(types.isPromise(result)){activeMethods++;void result.then(()=>{activeMethods--;parkIfIdle()},()=>{activeMethods--;parkIfIdle()})}return result})
     const close = () => { if (inSelf()) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); revoked = true; return cleanupAttempt() }
     const abort = () => { externallyRevoked = true; revoked = true; abandonRead(); methodContext.exit(() => { void close().catch(() => {}) }) }
     const retryClose = () => { if (inSelf()) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); if (closed) return Promise.resolve(); if (cleanupPending) return cleanup!; cleanup = undefined; return close() }
-    const record = { finite: async () => { if (inSelf()) fail(); await acquire.catch(() => {}); await observation?.catch(() => {}); await retrying?.catch(() => {}); await confirmation?.catch(() => {}); await writeFlight?.catch(() => {}); if (cleanup) await cleanup; if (ioDebt || writeResult?.kind === 'unknown') throw new Error('Task document IO requires cleanup') }, close, retryClose }
+    const record = { readKey:undefined as string|undefined, finite: async () => { if (inSelf()) fail(); await acquire.catch(() => {}); await observation?.catch(() => {}); await retrying?.catch(() => {}); await confirmation?.catch(() => {}); await writeFlight?.catch(() => {}); if (cleanup) await cleanup; if (ioDebt || writeResult?.kind === 'unknown') throw new Error('Task document IO requires cleanup') }, close, retryClose }
     records.add(record)
     let registration: ReturnType<typeof admission.registerOwnedDocumentOperation>
     try { const hooks={revoke(){if(!required){externallyRevoked=true;revoked=true;abandonRead()}},async close(){if(required)await required.source.close();else {externallyRevoked=true;abandonRead()}return close()},async retryClose(){if(required)await required.source.close();else {externallyRevoked=true;abandonRead()}return retryClose()},assertOutside(){if(inSelf())fail()}};registration=required?required.ticket.activate(`task-${captured.id}`,hooks):admission.registerOwnedDocumentOperation(captured.id,`task-${captured.id}`,hooks);remove=()=>registration.unregister() }
     catch (error) { records.delete(record); throw error }
     acquire = enqueue(async () => {
       await registration.join()
-      active(); pin = required?required.pin:await pinOwnership(captured.id); releasePin = required?async()=>{}:method(pin, 'release'); active()
-      lease = required?await acquireLease(`task-${captured.id}`,original=>requiredLeaseCleanup.push(original)):await acquireLease(`task-${captured.id}`); releaseLease = method(lease, 'release'); active()
-      const scope = issueHeldTaskDocumentScope(ownership, captured.id, pin, { assertActive: active })
+      if(required){pin=required.pin;releasePin=async()=>{};pin.assertHeld()}else{active();pin=await pinOwnership(captured.id);releasePin=method(pin,'release');active()}
+      lease = required?await acquireLease(`task-${captured.id}`,original=>requiredLeaseCleanup.push(original)):await acquireLease(`task-${captured.id}`); releaseLease = method(lease, 'release')
+      if(required){if(!captured.acquireWriter)fail();const writer=await captured.acquireWriter!();releaseWriter=method(writer,'release');resumeWriter=method(writer,'resume');parkWriter=method(writer,'park')}
+      active()
+      const scope = issueHeldTaskDocumentScope(ownership, captured.id, pin, { assertActive: scopeActive, captureIssued, assertOriginal:originalCurrent })
       session = open(scope); rawObserve = method(session, 'observe'); rawConfirm = method(session, 'confirm'); settleResources = method(session, 'settleResources'); if (Object.hasOwn(session, 'stageWrite')) rawStage = method(session, 'stageWrite'); sessionDescriptors = Object.getOwnPropertyDescriptors(session); active()
     })
+    record.readKey=`task-${captured.id}`
     try {
       // Installation may throw after registering; its removal remains owned.
       if (signal) { signalAttached = true; Reflect.apply(signalAddListener, signal, ['abort', abort, { once: true }]); if (isAborted()) abort() }
@@ -137,8 +158,12 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
       failures.set(wrapper, handle); throw wrapper
     }
     operation = Object.freeze({
-      observe() { if (this !== operation) return Promise.reject(new TypeError('Invalid task operation receiver')); try { active(); if (readPhase !== 'none') fail() } catch (error) { return Promise.reject(error) }; if (!observation) { observation = runMethod(() => Promise.resolve().then(async () => { active(); const value = await rawObserve!(); active(); if (value.kind === 'present') { if (validate(value.value) !== undefined) throw new TypeError('Task validator must be synchronous'); active(); witness = value.witness }; observedReady = true; return value })); void observation.catch(() => { ioDebt = true }) }; return observation },
-      confirm(input) { if (this !== operation) return Promise.reject(new TypeError('Invalid task operation receiver')); try { active(); if (readPhase !== 'none') fail() } catch (error) { return Promise.reject(error) }; if (!witness || witness !== input) return Promise.reject(new TypeError('Invalid task witness')); if ((staging || stageConsumed) && !confirmation) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); if (!confirmation) { confirmationPending = true; confirmation = runMethod(() => Promise.resolve().then(async () => { active(); const result = await rawConfirm!(input); lastConfirmation = result; if (result.cleanupPending || result.kind === 'unknown') ioDebt = true; active(); return result })); void confirmation.then(() => { confirmationPending = false }, () => { confirmationPending = false; ioDebt = true }) }; return confirmation },
+      assertCapturedWriteRecovery(){if(this!==operation||!required||closed||revoked||activeMethods!==0||cleanupPending||!staged||!nativeLifetime?.issued()||!nativeLifetime.canReconcile())fail();originalCurrent();nativeLifetime!.assertIssued()},
+      ordinarySaveOpen(){if(this!==operation)throw new TypeError('Invalid original Task operation');return !required&&!revoked&&!closed&&!ioDebt&&lease?.held===true&&(!staged||nativeLifetime!==undefined)},
+      retirementAcknowledged(ack){if(this!==operation)throw new TypeError('Invalid Task retirement receiver');return !required&&closed&&nativeLifetime?.issued()===true&&writeResult?.kind==='committed'&&!writeResult.cleanupPending&&writeResult.ack===ack},
+      retirementDisposition(){if(this!==operation||!closed)return undefined;if(nativeLifetime)return nativeLifetime.issued()?'issued':'unissued';if(!stageConsumed&&!staged)return 'unissued';return undefined},
+      observe() { if (this !== operation) return Promise.reject(new TypeError('Invalid task operation receiver')); try { active(); if (readPhase !== 'none') fail() } catch (error) { return Promise.reject(error) }; if (!observation) { observation = runMethod(() => Promise.resolve().then(async () => { active(); const value = await rawObserve!(); active(); if (value.kind === 'present') { if (validate(value.value) !== undefined) throw new TypeError('Task validator must be synchronous'); active(); witness = value.witness }; observedReady = true; return value })); void observation.catch(() => { ioDebt = true;parkIfIdle() }) }; return observation },
+      confirm(input) { if (this !== operation) return Promise.reject(new TypeError('Invalid task operation receiver')); try { active(); if (readPhase !== 'none') fail() } catch (error) { return Promise.reject(error) }; if (!witness || witness !== input) return Promise.reject(new TypeError('Invalid task witness')); if ((staging || stageConsumed) && !confirmation) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); if (!confirmation) { confirmationPending = true; confirmation = runMethod(() => Promise.resolve().then(async () => { active(); const result = await rawConfirm!(input); lastConfirmation = result; if (result.cleanupPending || result.kind === 'unknown') ioDebt = true; active(); return result })); void confirmation.then(() => { confirmationPending = false }, () => { confirmationPending = false; ioDebt = true;parkIfIdle() }) }; return confirmation },
       retryConfirmation(input) {
         if (this !== operation || witness !== input || !confirmation || staging || stageConsumed || readPhase !== 'none') return Promise.reject(new TypeError('Invalid task witness'))
         if (retrying) return retrying
@@ -176,7 +201,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
           const detached = captureTaskSnapshot(snapshot); if (validate(detached) !== undefined) throw new TypeError('Task validator must be synchronous')
           const serialized = JSON.stringify(detached); if (serialized === undefined) throw new TypeError('Invalid task snapshot')
           const bytes = Buffer.from(serialized + '\n'); if (bytes.length > 64 * 1024 * 1024) throw new RangeError('Task document too large')
-          active(); if (!rawStage) throw new Error('TASK_DOCUMENT_WRITE_UNSUPPORTED'); stageConsumed = true; const original = rawStage(input, bytes)
+          active(); if (!rawStage) throw new Error('TASK_DOCUMENT_WRITE_UNSUPPORTED'); stageConsumed = true; const original = rawStage(input, bytes);nativeLifetime=originalTaskWriteLifetime(original)
           const issue = method(original, 'issue'), reconcile = method(original, 'reconcile'), retry = method(original, 'retry'), outcome = method(original, 'outcome')
           const writeDescriptors = Object.getOwnPropertyDescriptors(original)
           const assertWrite = () => { for (const key of ['issue', 'reconcile', 'retry', 'outcome']) { const now = Object.getOwnPropertyDescriptor(original, key), expected = writeDescriptors[key]; if (!now || !expected || !('value' in now) || !('value' in expected) || now.value !== expected.value) throw new TypeError('Changed task capability method') } }
@@ -185,13 +210,13 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
             try { assertWrite() } catch (error) { return Promise.reject(error) }
             if (writeResult && !writeResult.cleanupPending && writeResult.kind !== 'unknown') return Promise.resolve(writeResult)
             if (kind === 'reconcile' && !issued) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT'))
-            try { active(); if (!writeAdmission) { writeAdmission = registration.beginOwnedWrite(); try { processToken = processLatches?.beginMutation({ sessionIds: [], documentKeys: [`task-${captured.id}`], kind: 'other' }) } catch (error) { writeAdmission.finish('settled'); writeAdmission = undefined; throw error } } } catch (error) { return Promise.reject(error) }
-            writeFlight = runMethod(() => Promise.resolve().then(async () => { const result = await (kind === 'issue' ? issue() : kind === 'reconcile' ? reconcile() : retry()); writeResult = result; assertWrite(); ioDebt = result.cleanupPending || result.kind === 'unknown'; if (!result.cleanupPending && (result.kind === 'committed' || result.kind === 'conflict' || result.kind === 'not-issued')) { processToken?.end('settled'); processToken = undefined; writeAdmission?.finish('settled'); writeAdmission = undefined }; active(); return result }))
-            void writeFlight.then(() => { writeFlight = undefined }, () => { writeFlight = undefined; ioDebt = true })
+            try { if(required){if(revoked||closed)fail();originalCurrent()}else if(nativeLifetime?.issued())scopeActive();else active() } catch (error) { return Promise.reject(error) }
+            writeFlight = runMethod(() => Promise.resolve().then(async () => { if(required&&resumeWriter){await resumeWriter();active()}if(!writeAdmission){writeAdmission=registration.beginOwnedWrite();try{processToken=processLatches?.beginMutation({sessionIds:[],documentKeys:[`task-${captured.id}`],kind:'other'})}catch(error){writeAdmission.finish('settled');writeAdmission=undefined;throw error}}const result = await (!required&&revoked&&nativeLifetime?.issued()?nativeLifetime.reconcile():kind === 'issue' ? issue() : kind === 'reconcile' ? reconcile() : retry()); writeResult = result; assertWrite(); ioDebt = result.cleanupPending || result.kind === 'unknown'; if (!result.cleanupPending && (result.kind === 'committed' || result.kind === 'conflict' || result.kind === 'not-issued')) { processToken?.end('settled'); processToken = undefined; writeAdmission?.finish('settled'); writeAdmission = undefined }; scopeActive(); return result }))
+            void writeFlight.then(() => { writeFlight = undefined;parkIfIdle() }, () => { writeFlight = undefined; ioDebt = true;parkIfIdle() })
             return writeFlight
           }
           let issued: Promise<TaskWriteOutcome> | undefined, reconciled: Promise<TaskWriteOutcome> | undefined
-          const writer: TaskDocumentWrite = Object.freeze({ issue() { if (this !== writer) return Promise.reject(new TypeError('Invalid write receiver')); try { active(); assertWrite() } catch (error) { return Promise.reject(error) }; return issued ??= launch('issue') }, reconcile() { if (this !== writer) return Promise.reject(new TypeError('Invalid write receiver')); try { active(); assertWrite() } catch (error) { return Promise.reject(error) }; if (!issued) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); return writeFlight ?? (reconciled ??= launch('reconcile')) }, retry() { if (this !== writer) return Promise.reject(new TypeError('Invalid write receiver')); try { active(); assertWrite() } catch (error) { return Promise.reject(error) }; if (writeFlight) return writeFlight; if (!issued) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); reconciled = undefined; return launch('retry') }, outcome() { if (this !== writer) throw new TypeError('Invalid write receiver'); assertWrite(); return outcome() } })
+          const writer: TaskDocumentWrite = Object.freeze({ issue() { if (this !== writer) return Promise.reject(new TypeError('Invalid write receiver')); try { active(); assertWrite() } catch (error) { return Promise.reject(error) }; return issued ??= launch('issue') }, reconcile() { if (this !== writer) return Promise.reject(new TypeError('Invalid write receiver')); try { if(required){if(revoked||closed)fail();originalCurrent()}else if(nativeLifetime?.issued())scopeActive();else active(); assertWrite() } catch (error) { return Promise.reject(error) }; if (!issued) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); return writeFlight ?? (reconciled ??= launch('reconcile')) }, retry() { if (this !== writer) return Promise.reject(new TypeError('Invalid write receiver')); try { if(required){if(revoked||closed)fail();originalCurrent()}else if(nativeLifetime?.issued())scopeActive();else active(); assertWrite() } catch (error) { return Promise.reject(error) }; if (writeFlight) return writeFlight; if (!issued) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); reconciled = undefined; return launch('retry') }, outcome() { if (this !== writer) throw new TypeError('Invalid write receiver'); assertWrite(); return outcome() } })
           staged = writer; return writer
         })
         } finally { staging = false }
@@ -208,6 +233,11 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     })
     return operation
   }
-  const operations = Object.freeze({ parent, requiredParent, releaseRequiredParent, begin, assertParentSession(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token); if (!captured || captured.id !== id) throw new Error('TASK_DOCUMENT_CONFLICT'); captured.assertCurrent() }, assertTaskV3Parent(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token), eligible = parentEligibility.get(token); if (!captured || captured.id !== id || !eligible) throw new Error('TASK_DOCUMENT_CONFLICT'); assertConfiguration(); captured.assertCurrent(); eligible() }, cleanupFor(error: unknown) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); return typeof error === 'object' && error !== null ? failures.get(error) : undefined }, async joinTaskDocumentIO() { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const result = await Promise.allSettled([...records].map(record => record.finite())); const errors = result.flatMap(row => row.status === 'rejected' ? [row.reason] : []); if (errors.length) throw new AggregateError(errors, 'Task document cleanup unresolved') } })
+  const operations = Object.freeze({ parent, requiredParent, releaseRequiredParent, captureTaskReadBarrier(key:string){
+    if(this!==operations||typeof key!=='string'||!key.startsWith('task-'))throw new TypeError('Invalid native Task read')
+    ownership.assertOutsideSessionOperation(key.slice(5))
+    const original=[...records].filter(record=>record.readKey===key)
+    const barrier=Object.freeze({async join(){if(this!==barrier)throw new TypeError('Invalid original Task read barrier');const rows=await Promise.allSettled(original.map(record=>record.finite()));const errors=rows.flatMap(row=>row.status==='rejected'?[row.reason]:[]);if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,'Original Task IO unavailable');if(original.some(record=>records.has(record)))throw new Error('Task document read requires original operation settlement')}});return barrier
+  }, assertOriginalRequiredParent(token:object,id:string){if(this!==operations||!requiredParents.has(token))fail();const captured=parents.get(token);if(!captured||captured.id!==id||!captured.assertOriginal)fail();assertConfiguration();captured!.assertOriginal!()}, async joinRequiredWriter(token:object){if(this!==operations||!requiredParents.has(token))fail();const captured=parents.get(token);if(!captured?.joinIssuedWriter)fail();assertConfiguration();await captured!.joinIssuedWriter!();captured!.assertCurrent()}, begin, assertParentSession(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token); if (!captured || captured.id !== id) throw new Error('TASK_DOCUMENT_CONFLICT'); captured.assertCurrent() }, assertTaskV3Parent(token: object, id: string) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = parents.get(token), eligible = parentEligibility.get(token); if (!captured || captured.id !== id || !eligible) throw new Error('TASK_DOCUMENT_CONFLICT'); assertConfiguration(); captured.assertCurrent(); eligible() }, cleanupFor(error: unknown) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); return typeof error === 'object' && error !== null ? failures.get(error) : undefined }, async joinTaskDocumentIO() { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const result = await Promise.allSettled([...records].map(record => record.finite())); const errors = result.flatMap(row => row.status === 'rejected' ? [row.reason] : []); if (errors.length) throw new AggregateError(errors, 'Task document cleanup unresolved') } })
   return operations
 }

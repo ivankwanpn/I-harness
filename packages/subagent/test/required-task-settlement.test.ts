@@ -2,14 +2,14 @@ import {lockPathFor} from '../../fs-lock/src/index.ts'
 import {artifactPathsFor} from '../../session-persistence/src/coordinator/artifact-path-association.ts'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
 vi.mock('../../fs-lock/src/index.ts',async load=>{const original=await load<typeof import('../../fs-lock/src/index.ts')>();return {...original,async acquireSessionLock(options:import('../../fs-lock/src/index.ts').AcquireOptions){const lock=await original.acquireSessionLock(options);queueGate.locks.set(options.lockPath,lock);return {get held(){return lock.held},async release(){if(options.lockPath===queueGate.closePath){queueGate.closeEntered?.();await queueGate.closeGate;if(queueGate.closeArmed){queueGate.closeAttempts++;throw queueGate.closeCause}}await lock.release()}}}}})
-const queueGate=vi.hoisted(()=>({root:'',blocked:false,stages:[] as string[],closePath:'',closeArmed:false,closeCause:undefined as unknown,closeAttempts:0,closeEntered:undefined as undefined|(()=>void),closeGate:undefined as undefined|Promise<void>,locks:new Map<string,{readonly held:boolean;release():void|Promise<void>}>()}))
+const queueGate=vi.hoisted(()=>({root:'',blocked:false,ackEntered:undefined as undefined|(()=>void),ackGate:undefined as undefined|Promise<void>,stages:[] as string[],closePath:'',closeArmed:false,closeCause:undefined as unknown,closeAttempts:0,closeEntered:undefined as undefined|(()=>void),closeGate:undefined as undefined|Promise<void>,locks:new Map<string,{readonly held:boolean;release():void|Promise<void>}>()}))
 vi.mock('../../session-persistence-jsonl/src/backend/document-write.ts',async load=>{
  const original=await load<typeof import('../../session-persistence-jsonl/src/backend/document-write.ts')>()
  return {...original,createOwnedDocumentWrite(...args:Parameters<typeof original.createOwnedDocumentWrite>){
   const created=original.createOwnedDocumentWrite(...args),input=args[0],terminal=input.path.startsWith(queueGate.root)&&JSON.parse(Buffer.from(input.bytes).toString('utf8')).tasks?.some((task:{outcome?:string})=>task.outcome!==undefined)
   if(!queueGate.root||!terminal)return created
   queueGate.stages.push(Buffer.from(input.bytes).toString('utf8'))
-  const apply=async(retry:boolean)=>{const outcome=retry?await created.handle.retry():await created.handle.issue();return queueGate.blocked?{kind:'unknown' as const,cause:undefined,cleanupPending:false}:outcome}
+  const apply=async(retry:boolean)=>{const outcome=retry?await created.handle.retry():await created.handle.issue();queueGate.ackEntered?.();await queueGate.ackGate;return queueGate.blocked?{kind:'unknown' as const,cause:undefined,cleanupPending:false}:outcome}
   return {handle:{issue:()=>apply(false),retry:()=>apply(true),reconcile:created.handle.reconcile.bind(created.handle),outcome:created.handle.outcome.bind(created.handle)},settle:created.settle.bind(created)}
  }}
 })
@@ -165,4 +165,32 @@ it.each(['revision','descriptor'] as const)('refuses a cached required Stop ACK 
   task.result=change==='revision'?{...original,revision:'11111111-1111-4111-8111-111111111111'}:{...original,envelope:{...original.envelope,retention:{kind:'unavailable',reason:'quota'}}}
   await expect(tasks.retainResult(task.id)).rejects.toThrow('changed');await expect(tasks.retainResult(task.id)).rejects.toThrow('changed');expect(lastOriginalTaskSave(tasks)).toBe(save)
  }finally{if(task&&original)task.result=original;producer.resolve({taskId:task?.id??'unissued',outcome:'completed',resultText:'late result'});if(required){await required.settle();await required.release()}await source?.close();action?.finish();await tasks?.closeOwnedLoad();await c.close()}
+})
+
+it.each([false,true])('holds native Task IO and parks only its parent exclusion on same-operation UNKNOWN (%s)',async unknown=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'required-exclusion-')),c=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ let tasks:ReturnType<typeof createTaskRegistry>|undefined,required:RequiredTaskSettlement|undefined
+ try{
+  await c.create({sessionId:'parent'});const document=await c.openManagedDocument('parent');tasks=createTaskRegistry({coordinator:c,stateId:'parent',ownedTask:captureOwnedTaskContext(c,document,document.view,'parent'),reportPolicy:SHIPPING_REPORT_POLICY,results:createTaskResultRetention(undefined,undefined,'parent')});await tasks.ready
+  const task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'one',description:'one',prompt:'work',agent:'general',delivery:'tool'});await tasks.flushPersistence()
+  const action=document.beginAction(),source=action.registerSettlementSource(async()=>{await required?.settle()});required=(await bindRequiredTaskSettlement(tasks,task,source,async()=>({taskId:task.id,outcome:'cancelled'})))!
+  queueGate.root=root;queueGate.stages=[];queueGate.blocked=unknown;queueGate.ackEntered=entered.resolve;queueGate.ackGate=release.promise
+  const settling=required.settle();void settling.catch(()=>{});await entered.promise;const save=lastOriginalTaskSave(tasks),count=document.view.events.length
+  let admitted=false;const parentFact=action.facts.metadata.admit({type:'plan/mode',mode:'on'}).then(outcome=>{admitted=true;return outcome})
+  await Promise.resolve();await Promise.resolve();expect(admitted).toBe(false);expect(document.view.events).toHaveLength(count)
+  release.resolve();if(unknown){await expect(settling).rejects.toThrow();expect(await parentFact).toMatchObject({kind:'committed'});expect(()=>required!.assertProjectionCurrent()).toThrow();expect(lastOriginalTaskSave(tasks)).toBe(save);queueGate.blocked=false;await required.reconcile()}else await settling
+  expect(await parentFact).toMatchObject({kind:'committed'});expect(queueGate.stages).toHaveLength(1);expect(lastOriginalTaskSave(tasks)).toBe(save)
+  await required.release();await source.close();action.finish();await tasks.closeOwnedLoad()
+ }finally{release.resolve();queueGate.blocked=false;queueGate.root='';queueGate.ackEntered=undefined;queueGate.ackGate=undefined;await tasks?.closeOwnedLoad();await c.close()}
+})
+
+it('parks parent scheduling after native UNKNOWN and cleanup failure, then resumes that exact operation after parent facts advance',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'required-park-cleanup-')),c=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract);let tasks:ReturnType<typeof createTaskRegistry>|undefined,required:RequiredTaskSettlement|undefined
+ try{
+  await c.create({sessionId:'parent'});const document=await c.openManagedDocument('parent');tasks=createTaskRegistry({coordinator:c,stateId:'parent',ownedTask:captureOwnedTaskContext(c,document,document.view,'parent'),reportPolicy:SHIPPING_REPORT_POLICY,results:createTaskResultRetention(undefined,undefined,'parent')});await tasks.ready
+  const task=tasks.submit({identity:{parentSessionId:'parent'},agentPath:'one',description:'one',prompt:'work',agent:'general',delivery:'tool'});await tasks.flushPersistence();const action=document.beginAction(),source=action.registerSettlementSource(async()=>{await required?.settle()});required=(await bindRequiredTaskSettlement(tasks,task,source,async()=>({taskId:task.id,outcome:'cancelled'})))!
+  queueGate.root=root;queueGate.stages=[];queueGate.blocked=true;await expect(required.settle()).rejects.toThrow();const save=lastOriginalTaskSave(tasks),target=artifactPathsFor(createJsonlBackend(root))!.document('task-parent') as {key:string};queueGate.blocked=false;queueGate.closePath=lockPathFor(root,'artifact-document-lease:'+target.key);queueGate.closeCause=false;queueGate.closeArmed=true
+  let cleanupFailed=false;await required.recoverCapturedAcknowledgment().catch(cause=>{cleanupFailed=true;expect(cause).toBe(false)});expect(cleanupFailed).toBe(true);expect(()=>required!.assertProjectionCurrent()).toThrow();expect(await action.facts.metadata.admit({type:'plan/mode',mode:'on'})).toMatchObject({kind:'committed'});expect(queueGate.stages).toHaveLength(1);expect(lastOriginalTaskSave(tasks)).toBe(save)
+  queueGate.closeArmed=false;await required.reconcile();expect(lastOriginalTaskSave(tasks)).toBe(save);expect(queueGate.stages).toHaveLength(1);await required.release();await source.close();action.finish();await tasks.closeOwnedLoad()
+ }finally{queueGate.blocked=false;queueGate.root='';queueGate.closeArmed=false;queueGate.closePath='';await tasks?.closeOwnedLoad();await c.close()}
 })

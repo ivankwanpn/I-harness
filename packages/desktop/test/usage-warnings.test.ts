@@ -1,3 +1,4 @@
+import {usageConsumerSample} from './fixtures/usage-consumer-sample.ts'
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -14,10 +15,10 @@ it("carries a workspace warning into global queries and across restart without s
   warnings.observe({ kind: "sdk/notification", workspaceId: "workspace-a", method: "desktop/usage/recording-warning", params: { warnings: ["secret fixture"] } })
   await warnings.flush()
   const reopened = createUsageWarnings(path)
-  const service = createGlobalProviderSettings(async () => ({ request: vi.fn(async () => ({ warnings: [], summary: { requests: 3 } })) }), { usageWarnings: reopened.read })
+  const service = createGlobalProviderSettings(async () => ({ request: vi.fn(async () => usageConsumerSample.legacy) }), { usageWarnings: reopened.read })
   const result = await service.request({ kind: "desktop/usage/query", query: { start: 0, end: 1, timeZone: "UTC" } }) as any
-  expect(result.warnings).toHaveLength(1)
-  expect(result.warnings[0]).toContain("incomplete")
+  expect(result.kind).toBe("legacy-only"); expect(result.warnings).toHaveLength(2)
+  expect(result.warnings.some((warning:string)=>warning.includes("incomplete"))).toBe(true)
   expect(JSON.stringify(result)).not.toContain("secret")
   await service.close()
 })

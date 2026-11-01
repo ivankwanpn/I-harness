@@ -1,6 +1,7 @@
 import type { TaskOutcome, TaskRegistry } from "./task-protocol.ts"
 import type { DeliveryAdmissionReceipt, DeliveryLaunchPreparation, InputDisplay, SubagentDeliveryEvidence, ProducerFactOutcome } from "@i-harness/core-session"
 import { boundedNotification, type ReportPolicy } from "./report-policy.ts"
+import { originalTaskSaveDependency, originalTaskAcknowledgmentRecovery } from './task/persistence.ts'
 
 /**
  * R-A1 (A-plan) 輸入接納契約 —— 本計畫（R-D2）消費的單一輸入接納面。
@@ -52,7 +53,7 @@ export class DeliverySourcesError extends AggregateError {
   constructor(errors: readonly unknown[]) {
     const original = errors.flatMap(error => error instanceof DeliverySourcesError ? error.errors : [error])
     super(original, 'Original delivery sources require settlement')
-    this.retryable = original.some(error => error instanceof OriginalTerminalRecoveryError)
+    this.retryable = original.some(error => error instanceof OriginalTerminalRecoveryError||originalTaskAcknowledgmentRecovery(error)!==undefined)
   }
 }
 
@@ -172,7 +173,7 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
         // assert exactly one *.jsonl per store dir. Save only when a row moved.
         // Persist row observations before returning the original retry
         // disposition to the host. Save failure cannot hide receiver debt.
-        if (changed) try { await opts.tasks.save() } catch (error) { failures.push(error) }
+        if (changed) try { await opts.tasks.save() } catch (error) { const original=originalTaskSaveDependency(error);failures.push(original?original.cause:error) }
         if (failures.length === 1) throw failures[0]
         if (failures.length) throw new DeliverySourcesError(failures)
         return delivered

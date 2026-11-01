@@ -1,4 +1,5 @@
 import type { SeedDependencyTransferScope } from './artifact/bootstrap-transfer.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { access as fileAccess } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { checkAbort, serializedBytes } from './bytes.ts'
@@ -18,9 +19,28 @@ import type { LegacyReadObservation, LegacyReadQuery, LegacySearchQuery } from '
 import { createSelectedMetadata, createColdSelectedMetadata } from './legacy/selected-metadata.ts'
 import { captureOriginalColdObservation, type ColdSelectedObservation } from '../../session-persistence/src/selected-source-owner.ts'
 import type { SessionCoordinator } from '../../session-persistence/src/coordinator/types.ts'
+import type { OriginalLegacyOrderingParticipant, OriginalOrderingReservation, OriginalOrderingRegistration } from '../../session-persistence/src/coordinator/result-ordering-types.ts'
+import { beginOriginalResultOrderingRegistration } from '../../session-persistence/src/result-ordering-internal.ts'
 import type { createSeedDependencyTransfer } from './artifact/bootstrap-transfer.ts'
 
 type ColdManagedOwner = Pick<ReturnType<typeof createSeedDependencyTransfer>, 'acquireColdManagedQualification' | 'revokeColdTransfers'>
+const legacyOrderingOwners = new WeakMap<ContextOutputService, OriginalLegacyOrderingParticipant>()
+const orderingRequired = new WeakSet<ContextOutputService>(), orderingConfigured = new WeakSet<ContextOutputService>()
+export function requireOriginalLegacyOrdering(service: ContextOutputService) {
+  if (!legacyOrderingOwners.has(service)) throw TypeError('Original legacy ordering service required')
+  orderingRequired.add(service)
+}
+export function commitOriginalLegacyOrdering(service: ContextOutputService, registration: OriginalOrderingRegistration) {
+  const participant = legacyOrderingOwners.get(service)
+  if (!participant) throw TypeError('Original legacy ordering service required')
+  registration.commit(participant); orderingConfigured.add(service)
+}
+export function registerOriginalLegacyOrdering(service: ContextOutputService, coordinator: SessionCoordinator) {
+  const participant = legacyOrderingOwners.get(service)
+  if (!participant) throw TypeError('Original legacy ordering service required')
+  const registration = beginOriginalResultOrderingRegistration(coordinator, service)
+  try { commitOriginalLegacyOrdering(service, registration) } catch (failure) { registration.cancel(); throw failure }
+}
 const coldManagedOwners = new WeakMap<ContextOutputService, ColdManagedOwner>()
 export function acquireColdManagedQualification(service: ContextOutputService, ...args: Parameters<ColdManagedOwner['acquireColdManagedQualification']>) {
   const original = coldManagedOwners.get(service); if (!original) throw Error('Original context service required')
@@ -107,17 +127,27 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let failedOpeningCleanup: unknown
   let opening: Promise<ContextStore>|undefined
   let mutations: Promise<unknown> = Promise.resolve()
+  let quiescence: Promise<void> | undefined
   let transitions: Promise<unknown> = Promise.resolve()
   const jobs = new Map<AbortController, Promise<unknown>>()
+  const orderingReservations = new Set<OriginalOrderingReservation>()
+  const originalJobContext = new AsyncLocalStorage<{ active: boolean }>()
+  const assertOrderingOutside = () => { if (originalJobContext.getStore()?.active) throw Error('Original legacy service job reentry'); gate.assertOutside(); owner.assertOutside() }
   const selectedReaders=new Set<Pick<SelectedMetadataRecord, 'revoke' | 'close' | 'cleanupForError'>>()
   const selectedReaderIds=new WeakMap<object,string>()
+  const historicalSelectedReaders = new WeakSet<object>()
   const revokeSelectedAuthorities=(sessions?:readonly string[])=>{for(const reader of selectedReaders)if(!sessions||sessions.includes(selectedReaderIds.get(reader)!))reader.revoke();if(!sessions)legacy.selected.retire();else for(const session of sessions)legacy.selected.retire(session)}
+  const revokeResumedAuthorities = () => { for (const reader of selectedReaders) if (historicalSelectedReaders.has(reader)) reader.revoke(); legacy.selected.retireHistorical() }
   const selectedAcquisitionDebts=new Set<SelectedAcquisitionDebt>()
   let closedSelectedStore:ContextStore|undefined
   const acknowledgeSelectedAcquisitions=(original:ContextStore)=>{for(const debt of selectedAcquisitionDebts)if(debt.store===original){debt.settled=true;selectedAcquisitionDebts.delete(debt)}}
   const legacy = createLegacyForkOwner({ strict: options.requireObservedLegacyRecipients === true, workspaceId,
     quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, owned => withLegacyIndexWrite(owned, context => work(owned, context)), false, true),
-    mutate: mutateIndex,runPassive:(original,work)=>run(undefined,owned=>gate.exclusive(owned,async lease=>{gate.assertLease(lease);if(!store||store!==original)throw Error('Original legacy store unavailable');return serial(()=>owner.mutate(async turn=>{turn.assertCurrent();return work(owned,store!)}))}),false,true) })
+    mutate: mutateIndex, runPassive: (original, work) => run(undefined, owned => gate.exclusive(owned, async lease => {
+      gate.assertLease(lease); if (!store || store !== original) throw Error('Original legacy store unavailable')
+      await original.resume(lease, config.maxDiskBytes, owned)
+      return serial(() => owner.mutate(async turn => { turn.assertCurrent(); return work(owned, original) }))
+    }), false, true) })
   unsubscribeDeletions = options.documentDeletions?.(releaseDocuments)
 
   function assertOpen(): void { if (closed || closing) throw new Error('Context output is closed') }
@@ -134,15 +164,24 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     mutations = result.catch(() => {})
     return result
   }
+  function quiesceLegacy(): Promise<void> {
+    if (quiescence) return quiescence
+    const original = store ?? candidate
+    if (!original || original.lifetimeSettled()) return Promise.resolve()
+    const flight = gate.exclusive(undefined, lease => original.quiesce(lease))
+    quiescence = flight
+    void flight.finally(() => { if (quiescence === flight) quiescence = undefined }).catch(() => {})
+    return flight
+  }
   async function getStore(lease: LegacyUseLease, mode: 'query'|'cleanup' = 'query', signal?: AbortSignal): Promise<ContextStore> {
     gate.assertLease(lease, 'exclusive')
     checkAbort(signal)
-    if (store) return store
+    if (store) { await store.resume(lease, config.maxDiskBytes, signal); return store }
     if (failedOpeningCleanup) throw failedOpeningCleanup
     if (!opening) {
       // Reject impossible startup budgets without creating even a lock path.
       if (mode === 'query' && config.maxDiskBytes < 65536) throw new Error('Context disk quota cannot fit an index')
-      const next = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities))
+      const next = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities, revokeResumedAuthorities))
       opening = (async () => {
         try {
           await next.acquireLifetime(signal)
@@ -168,7 +207,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     return current
   }
   async function initialize(signal?: AbortSignal): Promise<void> {
-    if (!store) await gate.exclusive(signal, lease => getStore(lease, 'query', signal).then(() => {}))
+    await gate.exclusive(signal, lease => getStore(lease, 'query', signal).then(() => {}))
   }
   async function withLegacyOriginals<T>(signal: AbortSignal, work: (current: ContextStore) => Promise<T>): Promise<T> {
     await initialize(signal)
@@ -250,17 +289,29 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     })
   }
   function run<T>(signal: AbortSignal|undefined, operation: (signal: AbortSignal) => Promise<T>, mutation = false, hostMetadata = false): Promise<T> {
+    if (orderingRequired.has(service) && !orderingConfigured.has(service)) return Promise.reject(Error('Original result ordering registration required'))
+    if (orderingReservations.size) return Promise.reject(Error('Original fresh ownership ordering in progress'))
     if (closed || closing) return Promise.reject(new Error('Context output is closed'))
     if ((!config.enabled && !hostMetadata) || controls > 0) return Promise.reject(new Error('Context output is disabled or stopping'))
     const controller = new AbortController()
     const owned = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
-    const start = async () => { checkAbort(owned); return operation(owned) }
+    const start = async () => {
+      checkAbort(owned); const scope = { active: true }
+      try { return await originalJobContext.run(scope, () => operation(owned)) } finally { scope.active = false }
+    }
     const task = (mutation ? serial(start) : Promise.resolve().then(start))
-    const result = task.finally(() => { jobs.delete(controller) })
+    const result = (async () => {
+      const failures: unknown[] = []; let value!: T
+      try { value = await task } catch (failure) { failures.push(failure) }
+      jobs.delete(controller)
+      if (!failures.length && !jobs.size && !closing && !closed) try { await quiesceLegacy() } catch (failure) { failures.push(failure) }
+      failuresTogether(failures, 'Legacy use and original idle cleanup failed'); return value
+    })()
     jobs.set(controller, result)
     return result
   }
   function transition<T>(operation: () => Promise<T>, permanent = false): Promise<T> {
+    if (orderingReservations.size && !permanent) return Promise.reject(Error('Original fresh ownership ordering in progress'))
     controls++
     if (permanent) closing = true
     state = 'stopping'
@@ -268,7 +319,11 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     const result = transitions.then(async () => {
       await Promise.allSettled([...jobs.values()])
       await mutations
-      return operation()
+      const failures: unknown[] = []; let value!: T
+      const scope = { active: true }
+      try { value = await originalJobContext.run(scope, operation) } catch (failure) { failures.push(failure) } finally { scope.active = false }
+      if (!failures.length && !permanent) try { await quiesceLegacy() } catch (failure) { failures.push(failure) }
+      failuresTogether(failures, 'Legacy transition and original idle cleanup failed'); return value
     }).finally(() => {
       controls--
       if (controls === 0) state = error ? 'error' : config.enabled && !closed && !closing ? 'ready' : 'disabled'
@@ -370,7 +425,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       configureContext(config, patch)
       await transition(async () => {
         const next = configureContext(config, patch)
-        if (store && next.maxDiskBytes !== config.maxDiskBytes) await gate.exclusive(undefined, lease => owner.mutate(turn => store!.configureDiskBudget(turn, lease, next.maxDiskBytes)))
+        if (store && next.maxDiskBytes !== config.maxDiskBytes) await gate.exclusive(undefined, async lease => { await store!.resume(lease, config.maxDiskBytes); await owner.mutate(turn => store!.configureDiskBudget(turn, lease, next.maxDiskBytes)) })
         config = next
       })
       return status()
@@ -475,6 +530,28 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       await closeFlight
     },
   }
+  legacyOrderingOwners.set(service, Object.freeze({ assertOutside: assertOrderingOutside, reserve(retain: (cleanup: OriginalOrderingReservation) => void) {
+    assertOrderingOutside(); if (closing && !closed) throw Error('Original result service cleanup unresolved')
+    const admittedTransitions = transitions
+    let settled = false, closedReservation = false, flight: Promise<void> | undefined
+    const reservation: OriginalOrderingReservation = Object.freeze({
+      join() {
+        if (this !== reservation) throw TypeError('Original ordering reservation receiver required')
+        if (closedReservation) return Promise.reject(Error('Original ordering reservation closed'))
+        if (settled) return Promise.resolve()
+        if (!flight) { flight = (async () => {
+          await Promise.allSettled([...jobs.values()]); await admittedTransitions
+          // The queue tail preserves each caller's original outcome. Only the
+          // actual retained cleanup below can acknowledge native settlement.
+          await quiesceLegacy(); settled = true
+        })().finally(() => { flight = undefined }) }
+        return flight
+      },
+      assertSettled() { if (this !== reservation) throw TypeError('Original ordering reservation receiver required'); if (!settled) throw Error('Original ordering cleanup unresolved') },
+      async close() { if (this !== reservation) throw TypeError('Original ordering reservation receiver required'); if (closedReservation) return; await reservation.join(); reservation.assertSettled(); closedReservation = true; orderingReservations.delete(reservation) },
+    })
+    orderingReservations.add(reservation); retain(reservation); return reservation
+  } }))
   artifactSettlement.set(service,artifacts.settleSeedDependencyTransfer)
   coldManagedOwners.set(service, { acquireColdManagedQualification(...args) { assertOpen(); return artifacts.acquireColdManagedQualification(...args) }, revokeColdTransfers: artifacts.revokeColdTransfers })
   coldSelectedRevokers.set(service, revokeSelectedAuthorities)
@@ -489,16 +566,16 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       localVisible() { throw Error('Cold legacy source lookup unavailable') }, anchorVisible() { throw Error('Cold legacy source lookup unavailable') },
     })
     const withRead = <T>(work: (current: ContextStore) => Promise<T>) => run(undefined, async signal => {
-      if (!store) await gate.exclusive(signal, async lease => {
+      await gate.exclusive(signal, async lease => {
         gate.assertLease(lease, 'exclusive'); assertOpen()
-        const current = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities))
+        const current = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities, revokeResumedAuthorities))
         if (acquisitionStore && acquisitionStore !== current) throw Error('Original cold metadata store changed')
-        acquisitionStore = current; await current.acquireLifetime(signal)
+        acquisitionStore = current; await current.resume(lease, config.maxDiskBytes, signal)
       })
       return gate.shared(signal, async lease => {
         gate.assertLease(lease); assertOpen(); const current = store ?? candidate
         if (!current || acquisitionStore && acquisitionStore !== current) throw Error('Original cold metadata store changed')
-        acquisitionStore = current; return work(current)
+        acquisitionStore = current; historicalSelectedReaders.add(selected); return work(current)
       })
     })
     const settle = () => gate.exclusive(undefined, async lease => {
@@ -525,7 +602,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     if(outstanding)throw outstanding.failure
     let acquisitionStore:ContextStore|undefined
     const withRead=<T>(work:(current:ContextStore)=>Promise<T>)=>run(undefined,async signal=>{
-      if(!store)await gate.exclusive(signal,async lease=>{gate.assertLease(lease,'exclusive');assertOpen();const current=candidate??(candidate=new ContextStore(options.root,workspaceId,owner,gate.assertLease,revokeSelectedAuthorities));await current.acquireLifetime(signal)})
+      await gate.exclusive(signal,async lease=>{gate.assertLease(lease,'exclusive');assertOpen();const current=store??candidate??(candidate=new ContextStore(options.root,workspaceId,owner,gate.assertLease,revokeSelectedAuthorities,revokeResumedAuthorities));await current.resume(lease,config.maxDiskBytes,signal)})
       return gate.shared(signal,async lease=>{gate.assertLease(lease);assertOpen();const current=store??candidate;if(!current)throw Error('Original metadata store unavailable');if(acquisitionStore&&acquisitionStore!==current)throw Error('Original metadata store changed');acquisitionStore=current;return work(current)})
     })
     let selected!:SelectedMetadataRecord
@@ -539,7 +616,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     }
     let failed=false,closeError:unknown
     selected=Object.freeze({...originalReader,async close(){try{await originalReader.close();failed=false}catch(error){failed=true;closeError=error;throw error}},cleanupForError(error:unknown){return failed&&error===closeError?{retry:()=>selected.close()}:undefined}})
-    selectedReaderIds.set(selected,sessionId);selectedReaders.add(selected)
+    selectedReaderIds.set(selected,sessionId);selectedReaders.add(selected);historicalSelectedReaders.add(selected)
     try{assertOpen()}catch(error){await selected.close();throw error}
     return selected
   }})

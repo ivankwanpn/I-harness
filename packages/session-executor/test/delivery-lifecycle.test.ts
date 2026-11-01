@@ -1,4 +1,6 @@
-import { expect, it } from 'vitest'
+// Real native B2 birth setup has a separate resource envelope; this is not a latency qualification.
+const NATIVE_B2_CASE_MS = 60_000
+import { expect, it, vi } from 'vitest'
 import { decodeFactBatch, readDeliveries } from '@i-harness/core-session'
 import { createDeliveryFixture } from './helpers/delivery-fixture.ts'
 import { receivedInputsFor } from '../src/lifecycle/received-inputs.ts'
@@ -9,9 +11,9 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { RewindService } from '@i-harness/rewind'
 
-async function boundary<T>(name: string, work: Promise<T>): Promise<T> {
+async function boundary<T>(name: string, work: Promise<T>, resourceMs = 4000): Promise<T> {
   let timer: ReturnType<typeof setTimeout>
-  try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Lifecycle boundary pending: ' + name)), 4000) })]) }
+  try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Lifecycle boundary pending: ' + name)), resourceMs) })]) }
   finally { clearTimeout(timer!) }
 }
 
@@ -21,13 +23,13 @@ it('confirms the original delivery close before invoking any rewind restoration 
   let effects = 0
   try {
     await f.start()
-    const owner = await f.coordinator.openManagedDocument('parent'), append = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const owner = await f.coordinator.openManagedDocument('parent'), append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close' && e.reason === 'rewind')) {
         entered.resolve(); await release.promise
       }
       return append(...args)
-    }
+    })
     const rewinding = withRewindFacts(owner, async record => {
       effects++; effect.resolve()
       await record({ type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 0, mode: 'conversation', fileOps: [] })
@@ -46,7 +48,7 @@ it('confirms the original delivery close before invoking any rewind restoration 
     await f.evidence('rewind-close-before-effects')
   } catch (error) { await f.evidence('rewind-close-before-effects-failure', error); throw error }
   finally { release.resolve(); await boundary('rewind cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('managed filesystem rewind fences its own genuine bound child before restoration and the late original end stays quiet', async () => {
   const f = await createDeliveryFixture({ rewindFsWrite: true })
@@ -64,11 +66,11 @@ it('managed filesystem rewind fences its own genuine bound child before restorat
     expect(points[0]!.files).toContainEqual({ path: 'greet.txt', status: 'modified', preBlob: hash('hello'), isNewFile: false, afterHash: hash('goodbye') })
     expect(readDeliveries(owner.view).activeGeneration()).toBeDefined()
     expect(owner.view.events.filter(e => e.type === 'agent/delivery-source')).toHaveLength(1)
-    const append = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close' && e.reason === 'rewind')) { entered.resolve(); await release.promise }
       return append(...args)
-    }
+    })
     const rewinding = withRewindFacts(owner, appendEvent => new RewindService({ store, workspace: f.root }).execute(0, 'all', { appendEvent }))
     try {
       await boundary('same bound child close before fs rewind', entered.promise)
@@ -88,7 +90,7 @@ it('managed filesystem rewind fences its own genuine bound child before restorat
     await f.evidence('full-fs-rewind-original-bound-child')
   } catch (error) { await f.evidence('full-fs-rewind-original-bound-child-failure', error); throw error }
   finally { release.resolve(); await boundary('full fs original cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('original unclassified task save failure blocks terminal delivery until explicit same-source settlement recovers', async () => {
   const f = await createDeliveryFixture({ holdTaskSaveFailure: true })
@@ -115,18 +117,18 @@ it('original unclassified task save failure blocks terminal delivery until expli
     await f.evidence('original-task-save-same-source-recovered')
   } catch (error) { await f.evidence('original-task-save-failure', error); throw error }
   finally { f.releaseTaskSave(); await boundary('original task save cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('Stop during actual lane promotion preparation prevents first claim issuance and no later human revives it', async () => {
   const f = await createDeliveryFixture({ expectStopDiagnostics: true })
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await f.start()
-    const append = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/input/promoted' && e.inputId.startsWith('delivery-'))) { entered.resolve(); await release.promise }
       return append(...args)
-    }
+    })
     f.releaseChild(); await boundary('original lane promotion prepared', entered.promise)
     const assembly = await f.service.assemblyFor('parent')
     f.service.cancelRunning!('parent')
@@ -142,7 +144,7 @@ it('Stop during actual lane promotion preparation prevents first claim issuance 
     await f.evidence('Stop-before-original-promotion-issue')
   } catch (error) { await f.evidence('Stop-before-original-promotion-issue-failure', error); throw error }
   finally { release.resolve(); await boundary('promotion Stop cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('a committed original claim remains consumed after Stop and graceful service reopen', async () => {
   const f = await createDeliveryFixture()
@@ -165,7 +167,7 @@ it('a committed original claim remains consumed after Stop and graceful service 
     await f.evidence('committed-claim-Stop-reopen')
   } catch (error) { await f.evidence('committed-claim-Stop-reopen-failure', error); throw error }
   finally { await boundary('committed claim cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('a genuine active human steer preserves the original background generation and later child delivery', async () => {
   const f = await createDeliveryFixture({ holdParentStep: true })
@@ -184,7 +186,7 @@ it('a genuine active human steer preserves the original background generation an
     await f.evidence('active-human-steer-original-generation')
   } catch (error) { await f.evidence('active-human-steer-original-generation-failure', error); throw error }
   finally { f.releaseParentStep(); await running.catch(() => {}); await boundary('human steer cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('failed extension mount preserves its primary error and exact original cleanup debt until explicit retry', async () => {
   const primary = new Error('original extension mount refused'), cleanup = new Error('original terminal disposer refused')
@@ -219,7 +221,7 @@ it('failed extension mount preserves its primary error and exact original cleanu
     await f.evidence('failed-extension-original-cleanup')
   } catch (error) { await f.evidence('failed-extension-original-cleanup-failure', error); throw error }
   finally { await boundary('failed mount final cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it.each(['individual', 'tree'] as const)('%s cancellation settles the original child truth without a completed delivery or producer replay', async kind => {
   const f = await createDeliveryFixture()
@@ -242,7 +244,7 @@ it.each(['individual', 'tree'] as const)('%s cancellation settles the original c
     await f.evidence(kind + '-cancel-original-truth')
   } catch (error) { await f.evidence(kind + '-cancel-original-truth-failure', error); throw error }
   finally { f.releaseChild(); await boundary('cancel final cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('Stop confirms its fence during actual original artifact retention without discarding or replaying that result', async () => {
   const f = await createDeliveryFixture()
@@ -274,7 +276,7 @@ it('Stop confirms its fence during actual original artifact retention without di
     await f.evidence('Stop-during-original-native-retention')
   } catch (error) { await f.evidence('Stop-during-original-native-retention-failure', error); throw error }
   finally { release.resolve(); await boundary('original retained source cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('reconciling a failed original rewind marker never repeats its completed restoration callback', async () => {
   const f = await createDeliveryFixture()
@@ -285,19 +287,19 @@ it('reconciling a failed original rewind marker never repeats its completed rest
   try {
     await f.start()
     owner = await f.coordinator.openManagedDocument('parent')
-    const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(f.backend.reconcileOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       const outcome = await append(...args)
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'rewind/point')) {
         keys.push(args[3].key.batchId)
         return { kind: 'unknown', key: args[3].key }
       }
       return outcome
-    }
-    f.backend.reconcileOwnedBatch = async (...args) => {
+    })
+    vi.mocked(f.backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
       if (keys.includes(args[3].key.batchId)) { keys.push(args[3].key.batchId); if (!allow) return { kind: 'unknown', key: args[3].key } }
       return reconcile(...args)
-    }
+    })
     const failure = await withRewindFacts(owner, async record => {
       effects++
       try { await record({ type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 0, mode: 'conversation', fileOps: [] }) }
@@ -315,12 +317,12 @@ it('reconciling a failed original rewind marker never repeats its completed rest
     await f.evidence('rewind-marker-original-only')
   } catch (error) { await f.evidence('rewind-marker-original-only-failure', error); throw error }
   finally { allow = true; await owner?.settleFinishedActions(); await boundary('marker cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it.each(['rerender-first', 'recovery-first', 'Stop-during-rerender'] as const)('original landed receipt interleaving: %s', async order => {
   const f = await createDeliveryFixture({ holdReceiptUnknown: true, holdReceiptReconcile: true, expectStopDiagnostics: true })
   try {
-    await boundary('parent start', f.start()); f.releaseChild()
+    await boundary('native B2 startup', f.start(), 20_000); f.releaseChild()
     await boundary('unknown receipt', f.waitForReceiptUnknown())
     await boundary('original reconciliation entered', f.waitForReceiptReconcile())
     const assembly = await f.service.assemblyFor('parent'), adapter = receivedInputsFor(assembly.factOwner, 'parent').delivery
@@ -360,7 +362,7 @@ it.each(['rerender-first', 'recovery-first', 'Stop-during-rerender'] as const)('
     await f.evidence('receipt-interleaving-' + order)
   } catch (error) { await f.evidence('receipt-interleaving-' + order + '-failure', error); throw error }
   finally { f.releaseReceipt(); f.releaseReceiptReconcile(); await boundary('receipt lifecycle cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('Stop revokes synchronous pending eligibility while its original close is physically held', async () => {
   const f = await createDeliveryFixture({ holdParentStep: true })
@@ -372,11 +374,11 @@ it('Stop revokes synchronous pending eligibility while its original close is phy
     // Real source drain commits the admission while the actual parent step is held.
     await assembly.drainParentNotifications?.()
     expect(assembly.inbox.pending()).toHaveLength(1)
-    const append = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close')) { entered.resolve(); await release.promise }
       return append(...args)
-    }
+    })
     f.service.cancelRunning!('parent')
     expect(assembly.inbox.pending()).toHaveLength(0)
     const stopped = f.service.awaitDeliveryStop('parent')
@@ -390,7 +392,7 @@ it('Stop revokes synchronous pending eligibility while its original close is phy
     await f.evidence('stop-held-close-live-revocation')
   } catch (error) { await f.evidence('stop-held-close-live-revocation-failure', error); throw error }
   finally { release.resolve(); f.releaseParentStep(); await boundary('Stop cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)
 
 it('a failed rewind close has no effects and explicit reconciliation retries its exact original capture', async () => {
   const f = await createDeliveryFixture({ expectStopDiagnostics: true })
@@ -399,9 +401,9 @@ it('a failed rewind close has no effects and explicit reconciliation retries its
   try {
     await f.start()
     const owner = await f.coordinator.openManagedDocument('parent'), adapter = receivedInputsFor(owner, 'parent').delivery
-    const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+    const append = vi.mocked(f.backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(f.backend.reconcileOwnedBatch!).getMockImplementation()!
     let originalFence: string | undefined
-    f.backend.appendOwnedBatch = async (...args) => {
+    vi.mocked(f.backend.appendOwnedBatch!).mockImplementation(async (...args) => {
       const close = decodeFactBatch(args[3].bytes).events.find(e => e.type === 'agent/delivery-generation' && e.op === 'close')
       const outcome = await append(...args)
       if (close?.type === 'agent/delivery-generation' && close.op === 'close' && !allow) {
@@ -409,14 +411,14 @@ it('a failed rewind close has no effects and explicit reconciliation retries its
         return { kind: 'unknown', key: args[3].key }
       }
       return outcome
-    }
-    f.backend.reconcileOwnedBatch = async (...args) => {
+    })
+    vi.mocked(f.backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
       if (keys.includes(args[3].key.batchId)) {
         keys.push(args[3].key.batchId)
         if (!allow) return { kind: 'unknown', key: args[3].key }
       }
       return reconcile(...args)
-    }
+    })
     await expect(withRewindFacts(owner, async () => { effects++ })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     expect(effects).toBe(0)
     expect(originalFence).toBeDefined()
@@ -433,4 +435,4 @@ it('a failed rewind close has no effects and explicit reconciliation retries its
     await f.evidence('rewind-original-close-explicit-retry')
   } catch (error) { await f.evidence('rewind-original-close-explicit-retry-failure', error); throw error }
   finally { allow = true; await boundary('unknown rewind cleanup', f.close()) }
-}, 20000)
+}, NATIVE_B2_CASE_MS)

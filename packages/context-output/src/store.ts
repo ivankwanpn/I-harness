@@ -8,18 +8,20 @@ import { checkAbort, lexicalChunks } from './bytes.ts'
 import type { ContextCapture, ContextResultRef } from './types.ts'
 import { walkCandidates } from './search-index.ts'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
-import { failuresTogether, LeaseRetirement, type WorkspaceMutationOwner, type WorkspaceMutationTurn } from './workspace-mutation.ts'
+import { failuresTogether, LeaseRetirement, type WorkspaceMutationOwner, type WorkspaceMutationTurn, type WorkspaceMutationCleanup } from './workspace-mutation.ts'
+import { originalNamespaceWitness, originalFileWitness } from './legacy/original-file-witness.ts'
 import { physicalBytes } from './artifact/quota.ts'
 import { OwnerLedger, readLedger, exists } from './legacy/owner-ledger.ts'
-import { commitment, same, checkRoot, recordHash, appliedFor, canonicalRecord } from './legacy/fork-codec.ts'
+import { commitment, same, checkRoot, checkPage, recordHash, appliedFor, canonicalRecord } from './legacy/fork-codec.ts'
 import { expiredTuple, expiryBase, terminalSlots, revokedTuple, readSlots, describeSlotFunding, fundSlotsInBatch } from './legacy/fork-disposition.ts'
-import { boundedJson, ownedPath, confirmAtomicJson } from './artifact/io.ts'
+import { boundedJson, ownedPath, confirmAtomicJson, inspectImmutable } from './artifact/io.ts'
 import { walkPages } from './legacy/fork-pages.ts'
 import { rowCommitment, transferDirectory } from './legacy/observed-read.ts'
 import { LegacyFundingBatchOwner, fundingPass, describeApplicationFunding, fundApplicationInBatch, sum, type FundingBatchContext, type FundingBatchScope } from './legacy/funding-batch.ts'
 import type { LegacyCommitment, LegacyPage, LegacyRoot, LegacyRow } from './legacy/fork-types.ts'
 
 interface Artifact { ref: ContextResultRef; source?: ContextCapture['source'] }
+export interface LegacyStoreInventory { readonly identity: string; readonly targets: readonly string[]; readonly expired: readonly string[]; readonly recoveryRequired: boolean }
 export function digest(value: string|Buffer): string { return createHash('sha256').update(value).digest('hex') }
 export function referenceId(workspaceId: string, sessionId: string, callId: string, revision: string): string {
   return `ctx_${digest(JSON.stringify([workspaceId, sessionId, callId, revision]))}`
@@ -56,6 +58,12 @@ export class ContextStore {
   private retiring = false
   private quotaDisposed = false
   private closeFlight?: Promise<void>
+  private suspended = false
+  private retainedAuthority?: string
+  private currency: object = Object.freeze({})
+  private quiescing?: { cleanups: WorkspaceMutationCleanup[]; indexClosed: boolean; described: boolean; failed: boolean }
+  private quiesceFlight?: Promise<void>
+  private readonly inventories = new WeakMap<LegacyStoreInventory, { artifacts: Map<string, Artifact>; owners: Map<string, Set<string>> }>()
   private readonly fundingBatch: LegacyFundingBatchOwner
   private readonly indexLeases = new WeakMap<IndexUse, LegacyUseLease>()
   private readonly ledger: OwnerLedger
@@ -84,15 +92,16 @@ export class ContextStore {
   }
   assertLegacyFilesSettled(): void { if (this.fileDebt.size || this.fileClosing.size) throw Error('Original legacy file cleanup remains unresolved') }
 
-  constructor(root: string, readonly workspaceId: string, private readonly owner?: WorkspaceMutationOwner, private readonly assertLease: LegacyUseGate['assertLease'] = () => { throw Error('Legacy creating gate unavailable') }, private readonly beforeAuthorityChange?: (sessions?: readonly string[]) => void) {
+  constructor(root: string, readonly workspaceId: string, private readonly owner?: WorkspaceMutationOwner, private readonly assertLease: LegacyUseGate['assertLease'] = () => { throw Error('Legacy creating gate unavailable') }, private readonly beforeAuthorityChange?: (sessions?: readonly string[]) => void, private readonly beforeResumeChange = beforeAuthorityChange) {
     this.root = resolve(root)
     this.directory = resolve(root, 'context-output', digest(workspaceId))
     this.ledger = new OwnerLedger(this.directory, this.retireLegacyFile)
     this.fundingBatch = new LegacyFundingBatchOwner(this.directory, context => this.assertFundingContext(context), context => { this.assertRetirementTurn(context.turn); this.assertLease(context.lease, 'exclusive') }, () => this.diskBytes(), () => this.joinLegacyFiles())
-    this.index = new LegacyIndexLifecycle({ directory: this.directory, assertTurn: turn => this.assertRetirementTurn(turn), assertLease: this.assertLease, physicalBytes: () => this.diskBytes() })
+    this.index = new LegacyIndexLifecycle({ directory: this.directory, assertTurn: turn => this.assertRetirementTurn(turn), assertLease: this.assertLease, physicalBytes: () => this.diskBytes(), witness: (path, guard) => originalFileWitness(this, path, guard) })
   }
   async acquireLifetime(signal?: AbortSignal): Promise<void> {
     if (!this.owner || this.retiring) throw new Error('Legacy store ownership unavailable')
+    if (this.quiescing) throw Error('Original idle cleanup remains unresolved')
     checkAbort(signal)
     if (!this.acquiring) this.acquiring = (async () => {
       const lease = await acquireSessionLock({ lockPath: lockPathFor(this.root, `context-output-legacy:${this.workspaceId}`) })
@@ -100,6 +109,94 @@ export class ContextStore {
     })()
     await this.acquiring
     checkAbort(signal)
+  }
+  lifetimeSettled(): boolean {
+    if (!this.lifetime) return !this.acquiring
+    try { this.lifetime.assertSettled(); return true } catch { return false }
+  }
+  /** Read-only original authority. No open/recovery/body/index/cache effects. */
+  async passiveInventory(turn: WorkspaceMutationTurn, sessionId?: string): Promise<LegacyStoreInventory> {
+    this.assertTurn(turn)
+    const guard = () => this.assertTurn(turn), artifacts = new Map<string, Artifact>(), owners = new Map<string, Set<string>>()
+    const targets = new Set<string>(sessionId === undefined ? [] : [sessionId]), expired: string[] = []
+    let recoveryRequired = false
+    for await (const _ of this.legacyAuthorityRows(turn, true)) { /* original passive graph proof */ }
+    const directory = resolve(this.directory, 'artifacts')
+    if (await exists(directory)) for (const name of (await readdir(directory)).sort()) {
+      guard()
+      if (!/^ctx_[a-f0-9]{64}\.json$/.test(name)) throw Error('Unknown original artifact namespace')
+      const id = name.slice(0, -5), artifact = await this.readArtifact(id), path = this.path('owners', id)
+      await ownedPath(this.directory, path); guard()
+      const membership = (await readLedger(path, this.retireLegacyFile)).owners; guard()
+      recoveryRequired ||= await this.ledger.recoveryPending(path); guard()
+      if (!membership.size) recoveryRequired = true
+      artifacts.set(id, artifact); owners.set(id, membership)
+      // clear(session) also performs the original global expiry sweep.
+      if (artifact.ref.expiresAt <= Date.now()) { expired.push(id); for (const target of membership) targets.add(target) }
+      if (sessionId === undefined || membership.has(sessionId)) for (const target of membership) targets.add(target)
+    }
+    const namespace = resolve(this.directory, 'legacy-fork-v1')
+    if (await exists(namespace)) for (const name of (await readdir(namespace)).sort()) {
+      const path = resolve(namespace, name, 'plan.json')
+      if (!await exists(path)) { recoveryRequired = true; continue }
+      const root = checkRoot(await boundedJson(path, 65536, this.retireLegacyFile)); guard()
+      if (!await exists(resolve(namespace, name, 'applied.json'))) recoveryRequired = true
+      if (sessionId === undefined || root.binding.targetSessionId === sessionId) targets.add(root.binding.targetSessionId)
+    }
+    const identity = await originalNamespaceWitness(this, ['artifacts', 'owners', 'legacy-fork-v1', 'legacy-expiry-v1'], guard)
+    await this.joinLegacyFiles(); guard()
+    const inventory = Object.freeze({ identity, targets: Object.freeze([...targets].sort()), expired: Object.freeze(expired.sort()), recoveryRequired })
+    this.inventories.set(inventory, { artifacts, owners }); return inventory
+  }
+  /** Reacquire/requalify this original store; unchanged bodies are verified on use. */
+  async resume(lease: LegacyUseLease, quota: number, signal?: AbortSignal): Promise<void> {
+    this.assertLease(lease, 'exclusive')
+    await this.acquireLifetime(signal)
+    if (!this.suspended) return
+    await this.owner!.mutate(async turn => {
+      const inventory = await this.passiveInventory(turn)
+      if (this.originalsLoaded) {
+        if (inventory.recoveryRequired) { this.beforeResumeChange?.(); throw Error('Original resume requires covered recovery') }
+        if (inventory.identity !== this.retainedAuthority) {
+          this.beforeResumeChange?.()
+          this.currency = Object.freeze({})
+          const actual = this.inventories.get(inventory)!
+          this.artifacts = actual.artifacts; this.owners = actual.owners
+          this.index.invalidate(Error('Original authority changed while idle'))
+        } else await this.index.reopenRetained(turn, lease, quota)
+      }
+      this.suspended = false
+    })
+  }
+  /** Exact cleanup retry; a failed description never authorizes a fresh witness. */
+  quiesce(lease: LegacyUseLease): Promise<void> {
+    this.assertLease(lease, 'exclusive')
+    if (this.quiesceFlight) return this.quiesceFlight
+    if (this.lifetimeSettled()) return Promise.resolve()
+    const attempt = this.quiescing ??= { cleanups: [], indexClosed: false, described: false, failed: false }
+    const flight = (async () => {
+      await this.acquiring
+      await this.joinLegacyFiles()
+      for (const cleanup of attempt.cleanups) await cleanup.close()
+      if (!attempt.indexClosed || !attempt.described) await this.owner!.cleanup(async turn => {
+        if (!attempt.indexClosed) { await this.index.closeRetaining(turn, lease); attempt.indexClosed = true }
+        if (!attempt.described) {
+          // Only the first clean attempt can bind cached state to actual originals.
+          if (!attempt.failed && this.originalsLoaded && !this.retiring) {
+            this.retainedAuthority = (await this.passiveInventory(turn)).identity
+            await this.index.retainWitness(turn, lease)
+          } else this.retainedAuthority = undefined
+          attempt.described = true
+        }
+      }, cleanup => attempt.cleanups.push(cleanup))
+      await this.joinLegacyFiles()
+      for (const cleanup of attempt.cleanups) cleanup.assertSettled()
+      await this.lifetime!.close(); this.lifetime!.assertSettled()
+      this.suspended = true; this.acquiring = undefined; this.lifetime = undefined; this.quiescing = undefined
+    })().catch(failure => { attempt.failed = true; this.retainedAuthority = undefined; throw failure })
+    this.quiesceFlight = flight
+    void flight.finally(() => { if (this.quiesceFlight === flight) this.quiesceFlight = undefined }).catch(() => {})
+    return flight
   }
   private assertRetirementTurn(turn: WorkspaceMutationTurn): void {
     if (!this.owner || !this.lifetime?.lease.held) throw new Error('Legacy store lifetime unavailable')
@@ -137,7 +234,7 @@ export class ContextStore {
   }
   private async readArtifact(id: string): Promise<Artifact> {
     await ownedPath(this.directory, this.path('artifacts', id))
-    const artifact = JSON.parse(await readFile(this.path('artifacts', id), 'utf8')) as Artifact, ref = artifact.ref
+    const artifact = await boundedJson(this.path('artifacts', id), Number.MAX_SAFE_INTEGER, this.retireLegacyFile) as Artifact, ref = artifact.ref
     if (ref && !ref.source && artifact.source) ref.source = artifact.source
     if (!ref || ref.id !== id || ref.workspaceId !== this.workspaceId || referenceId(ref.workspaceId, ref.sessionId, ref.callId, ref.revision) !== id) throw Error('Invalid context artifact identity')
     return artifact
@@ -160,6 +257,12 @@ export class ContextStore {
     return this.index.ready() ? Promise.resolve('ready') : this.index.rebuild(turn, lease, quota, sink => this.feedIndex(sink))
   }
   indexUse(lease: LegacyUseLease): IndexUse { const use = this.index.use(lease); this.indexLeases.set(use, lease); return use }
+  captureIndexCurrency(lease: LegacyUseLease, use: IndexUse): object {
+    this.assertLease(lease)
+    if (!this.lifetime?.lease.held || this.indexLeases.get(use) !== lease) throw Error('Original index currency unavailable')
+    use.assertCurrent(); return this.currency
+  }
+  assertCurrency(original: object): void { if (original !== this.currency) throw Error('Original legacy currency changed') }
   private assertFundingContext(context: FundingBatchContext): void {
     this.assertTurn(context.turn); this.assertLease(context.lease, 'exclusive')
     if (this.indexLeases.get(context.use) !== context.lease) throw Error('Foreign legacy funding index use or creating lease')
@@ -380,7 +483,7 @@ export class ContextStore {
   }
   /** Root-local streaming proof. Both passes inspect original publications and
    * native slots; neither SQLite hints nor a previous turn supply authority. */
-  private async *legacyAuthorityRows(turn: WorkspaceMutationTurn): AsyncGenerator<LegacyCommitment> {
+  private async *legacyAuthorityRows(turn: WorkspaceMutationTurn, passive = false): AsyncGenerator<LegacyCommitment> {
     const guard = () => this.assertTurn(turn), namespace = resolve(this.directory, 'legacy-fork-v1')
     guard()
     if (!await exists(namespace)) return
@@ -395,21 +498,47 @@ export class ContextStore {
       const root = checkRoot(await boundedJson(resolve(directory, 'plan.json'), 65536, this.retireLegacyFile)); guard()
       if (root.binding.workspaceId !== this.workspaceId || recordHash('binding', root.binding.invocation) !== name) throw Error('Foreign legacy transfer identity')
       for (const [path, value] of [
-        ['binding.json', canonicalRecord({ version: 1, kind: 'legacy-fork-binding', binding: root.binding })],
+        ['binding.json', canonicalRecord({ version: root.version, kind: 'legacy-fork-binding', binding: root.binding })],
         ['plan.json', root], ['applied.json', appliedFor(root)],
       ] as const) {
-        if ((await confirmAtomicJson(this.directory, resolve(directory, path), value, this.retireLegacyFile)).kind !== 'confirmed') throw Error('Original legacy transfer unconfirmed')
+        if (passive) {
+          const state = await inspectImmutable(this.directory, resolve(directory, path), Buffer.from(JSON.stringify(value)), this.retireLegacyFile)
+          if (!state.final || state.pending) throw Error('Original legacy transfer incomplete')
+        } else if ((await confirmAtomicJson(this.directory, resolve(directory, path), value, this.retireLegacyFile)).kind !== 'confirmed') throw Error('Original legacy transfer unconfirmed')
         guard()
       }
       const revoked = await readSlots(this.directory, resolve(directory, 'revoke'), revokedTuple(root), this.retireLegacyFile); guard()
       if (revoked !== 'live' && revoked !== 'terminal') throw Error('Original legacy revocation unknown')
-      for await (const row of walkPages(directory, root, guard, undefined, this.retireLegacyFile)) {
+      for await (const row of passive ? this.passivePages(directory, root, guard) : walkPages(directory, root, guard, undefined, this.retireLegacyFile)) {
         const c: LegacyCommitment = { refId: row.refId, revision: row.revision, metadataDigest: row.metadataDigest, metadataEncodedBytes: row.metadataEncodedBytes, expiresAt: row.expiresAt }
         const expiry = await readSlots(this.directory, expiryBase(this.directory, c), expiredTuple(this.workspaceId, c), this.retireLegacyFile); guard()
         if (expiry !== 'live' && expiry !== 'terminal') throw Error('Original legacy expiry unknown')
         yield c
       }
     }
+  }
+  /** Same canonical page codecs and EOF rules, without immutable-final sync. */
+  private async *passivePages(directory: string, root: LegacyRoot, guard: () => void): AsyncGenerator<LegacyRow> {
+    const pages = resolve(directory, 'pages'), names = new Set(await readdir(pages)); guard()
+    let count = 0
+    const store = this
+    async function* walk(ref: NonNullable<LegacyRoot['pages']>): AsyncGenerator<LegacyRow> {
+      const name = `${ref.level}-${ref.firstRow}.json`, path = resolve(pages, name)
+      if (!names.delete(name)) throw Error('Original page inventory conflict')
+      await ownedPath(directory, path); guard()
+      const page = checkPage(await boundedJson(path, 65536, store.retireLegacyFile), root.binding, undefined, root.version); guard()
+      const state = await inspectImmutable(directory, path, Buffer.from(JSON.stringify(page)), store.retireLegacyFile); guard()
+      if (!state.final || state.pending || recordHash('page', page, root.version) !== ref.digest || ref.firstRow !== count) throw Error('Original page conflict')
+      if (page.kind === 'legacy-fork-leaf') {
+        if (ref.level !== 0 || page.firstRow !== ref.firstRow || page.rows.length !== ref.rows) throw Error('Original leaf conflict')
+        for (const row of page.rows) { count++; guard(); yield row }
+      } else {
+        if (page.level !== ref.level || ref.level > 53 || page.children[0]!.firstRow !== ref.firstRow || page.children.reduce((n, child) => n + child.rows, 0) !== ref.rows) throw Error('Original directory conflict')
+        for (const child of page.children) yield* walk(child)
+      }
+    }
+    if (root.pages) yield* walk(root.pages)
+    if (count !== root.observationCount || names.size) throw Error('Original graph EOF conflict')
   }
   /** The full read-only preflight must finish before this callback can perform
    * any expiry effect. The callback and original turn die with this operation. */
@@ -629,8 +758,9 @@ export class ContextStore {
     this.retiring = true
     if (!this.closeFlight) this.closeFlight = (async () => {
       await this.acquiring?.catch(() => {})
+      if (this.quiescing) await this.quiesce(lease)
       await this.joinLegacyFiles()
-      if ((this.lifetime) && !this.quotaDisposed) {
+      if (this.lifetime && !this.lifetimeSettled() && !this.quotaDisposed) {
         if (!this.owner) throw new Error('Legacy store ownership unavailable')
         await this.owner.cleanup(async turn => { if (this.originalsLoaded) await this.index.closeRetaining(turn, lease) })
         this.quotaDisposed = true

@@ -8,8 +8,10 @@ import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparati
 import {createResultObservationScope,createLegacyReadObservationRunner,type ResultObservationCapture,type SessionProjectContext,type ResultReadScopeResolver} from '@i-harness/session-executor'
 import {createProcessAwareResultService} from '@i-harness/session-executor/internal/process-result-service'
 import {lookupProcessReadContext} from '@i-harness/session-persistence/internal/process-read-context'
+import {originalResultOrderingFor} from '@i-harness/session-persistence/internal/result-ordering'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
+import {captureTaskChildProject,type TaskChildProjectCapture} from './bootstrap-project.ts'
 import {selectedSourceFor,createSelectedRuntimeCapture,inspectSelectedTarget} from '@i-harness/session-persistence/internal/selected-source-owner'
 import {discoverResultLineage,assertResultLineage,legacyObservationFor} from '../../session-executor/src/lifecycle/result-observation.ts'
 import type {createProjectScopeBroker} from './project-scope.ts'
@@ -28,6 +30,7 @@ interface NativeContextOptions {
   projectFor(sessionId:string):Promise<{projectId?:string;scope?:SessionProjectContext;revision?:string}>
   resultReadScopeFor?:ResultReadScopeResolver
   prepareBootstrapInheritance?(capture:BootstrapProjectCapture):BootstrapProjectPreparation
+  prepareTaskChildInheritance?(capture:TaskChildProjectCapture):BootstrapProjectPreparation
   contextConfig?:Partial<ContextOutputConfig>;codeConfig?:Partial<CodeRetrievalConfig>
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
   visibleRefsFor?(sessionId:string):Promise<readonly (ContextResultRef|ManagedArtifactRef)[]>
@@ -92,8 +95,9 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     const sourceId=contextSourceIdentity(workspaceKey,canonical,scope)
     return{sourceId,readonly:true}
   }
+  const ordering=originalResultOrderingFor(options.coordinator as SessionCoordinator)
   const bridge=createProcessAwareResultService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,requireObservedLegacyRecipients:true,
-    coordinatorFor:()=>options.coordinator as SessionCoordinator,sourceFor,guardedRead,
+    coordinatorFor:()=>options.coordinator as SessionCoordinator,...(ordering?{orderingCoordinators:[options.coordinator as SessionCoordinator]}:{}),sourceFor,guardedRead,
     ...(options.coordinator.onDocumentDeleted?{documentDeletions:listener=>options.coordinator.onDocumentDeleted!((id,manifest)=>listener([id,...manifest.documents]))}:{}),
     genericVisible:async(sessionId,visibleRef)=>{
         const observed=observations.current(sessionId)
@@ -313,6 +317,30 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     return{targetPreparation,dependencies:{confirm:(request,current)=>typeof current==='function'?invoke(request,current):Promise.resolve({kind:'blocked',reason:'conflict'}),reconcile:request=>invoke(request)},
       targetScope(){assertTargetCurrent();return preparation.targetScope()},close(){active=false;preparation.close()}}
   }
+  function prepareTaskChildTransfer(input:TaskChildProjectCapture){
+    if(closed||!options.prepareTaskChildInheritance)throw Error('Original task project preparation unavailable')
+    const captured=captureTaskChildProject(input),preparation=options.prepareTaskChildInheritance(input)
+    let active=true
+    const assertCurrent=()=>{if(closed||!active||!captured.sourceAvailable()||!captured.targetAvailable())throw Error('Original task project retired');captured.assertNewWorkCurrent()}
+    return {async run<T>(work:(guards:import('@i-harness/session-persistence').BootstrapGuards)=>Promise<T>):Promise<T>{
+      assertCurrent()
+      return work({assertCurrent,targetPreparation:preparation.targetPreparation,dependencies:{async confirm(){throw Error('Unexpected task none dependency')},async reconcile(){throw Error('Unexpected task none dependency')}}})
+    },targetScope:preparation.targetScope,close(){active=false;preparation.close()}}
+  }
+  const prepareTaskChild:import('@i-harness/subagent').PrepareTaskChild=async input=>{
+    if(input.coordinator!==options.coordinator||closed||!options.resultReadScopeFor||!options.prepareTaskChildInheritance)throw Error('Original Gateway task host unavailable')
+    input.assertCurrent()
+    const observed=await options.resultReadScopeFor(input.parentSessionId)
+    if(!observed)throw Error('Original task project scope unavailable')
+    const scope=observed();input.assertCurrent()
+    const project=scope.projectId?{kind:'project' as const,projectId:scope.projectId}:{kind:'unassigned' as const}
+    return {project,metadata:{workspaceId:workspaceKey},prepare(request){
+      input.assertCurrent()
+      const transfer=prepareTaskChildTransfer({request,sourceSessionId:input.parentSessionId,sourceAvailable:input.sourceAvailable,assertNewWorkCurrent(){input.assertCurrent();if(observed().revision!==scope.revision)throw Error('Original task project scope changed')},targetAvailable:input.sourceAvailable})
+      input.retain({async close(){transfer.close()}})
+      return transfer
+    }}
+  }
   let codeRetrieval:ReturnType<typeof createCodeRetrievalService>
   const reader=createNativeCodeSourceReader({workspace:canonical,references:()=>references,config:()=>codeRetrieval.status().config,
     authorize:async(actor,sourceId)=>{
@@ -331,7 +359,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     refreshing=work
     try{await work}catch{/* The service preserves job error/outcome for its UI. */}finally{if(refreshing===work)refreshing=undefined}
   }
-  return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,observations,withResultObservation,withLegacyReadObservation,acquireSelectedSourceObservation,createSelectedSourceHolder,
+  return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,prepareTaskChildTransfer,prepareTaskChild,observations,withResultObservation,withLegacyReadObservation,acquireSelectedSourceObservation,createSelectedSourceHolder,
     async configureReferences(next:NativeReferenceSource[]){
       if(JSON.stringify(references)===JSON.stringify(next))return
       // Visibility changes before awaiting drainage, so old snippets cannot

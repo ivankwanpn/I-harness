@@ -104,7 +104,8 @@ async function checkPrefix(handle: FileHandle, h: { meta: SessionMeta; bytes: nu
 
 /** Only the coordinator creates owner contexts. This leaf owns complete writes,
  * fsync evidence and same-issued-batch reconciliation; no write-behind retry. */
-export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
+export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, nativePrewrite?: Readonly<{ filePath: typeof filePath; assertNotDeleted: typeof assertNotDeleted; enter(id: string, owner: import('@i-harness/session-persistence').IssuingFactOwner, batch: EncodedFactBatch): () => void }>): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
+  if (nativePrewrite && (nativePrewrite.filePath !== filePath || nativePrewrite.assertNotDeleted !== assertNotDeleted)) throw new TypeError('Changed original native writer prerequisites')
   const receipt = (owner: HeldFactOwner, batch: EncodedFactBatch, prefixDigest: string): FactReceipt => ({
     owner: { ...owner.owner }, key: { ...batch.key }, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest,
   })
@@ -145,7 +146,10 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
     async appendOwnedBatch(id, owner, prefix, batch) {
       scope(id, owner)
       const decoded = checkBatch(prefix, batch)
-      await assertNotDeleted('session', id)
+      // Only the original JSONL constructor pairs these exact native-only closures.
+      // Custom callback-bearing factories never receive this observation.
+      let leavePrewrite = nativePrewrite?.enter(id, owner, batch)
+      try { await assertNotDeleted('session', id) } catch (error) { leavePrewrite?.(); throw error }
       let handle: FileHandle | undefined, issued = false, synced = false, position = 0
       let outcome: BackendFactOutcome
       try {
@@ -156,6 +160,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
         await checkPrefix(handle, h, prefix)
         // No await is permitted between the final fence and the first write.
         scope(id, owner)
+        leavePrewrite?.(); leavePrewrite = undefined
         owner.beforeIssue()
         issued = true
         let written = 0
@@ -181,6 +186,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
           } catch { /* absence needs both truncate and sync under the same lease */ }
         }
       } finally {
+        leavePrewrite?.(); leavePrewrite = undefined
         if (handle) try { await handle.close() } catch {
           // A successful fsync is already a durable commit. Cleanup cannot
           // erase that receipt or authorize rewriting the committed batch.

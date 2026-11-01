@@ -90,6 +90,7 @@ export interface TaskTerminalizeInput {
   recoveryReason?: RecoveryReason
 }
 export interface TaskRegistryOptions {
+  launchContext?: import('@i-harness/core-tools/internal/task-caller').ToolExecutionOwnerContext
   /** Internal original-parent save capability; never supplied by a tool. */
   ownedTask?: import('./persistence.ts').OwnedTaskContext
   results?: TaskResultStore
@@ -132,4 +133,3 @@ export interface TaskRegistry {
   /** Retain the existing complete task result before advertising durable retrieval. */
   retainResult(taskId: string): Promise<void>
 }
-

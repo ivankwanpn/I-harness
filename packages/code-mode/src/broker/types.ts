@@ -2,7 +2,7 @@ import type { PreparedCall, RetainedToolOutcome, Tool, ToolResult, InstructionCe
 import type { ManagedAction, SettlementFacts, CapturedSettlementFact, ProducerFactOutcome } from '@i-harness/core-session'
 import type { CodeModeInvocation } from '../types.ts'
 
-export interface Cell { tools: Map<string, Tool>; stop: AbortController; seen: Set<string>; preflights: Set<Promise<void>>; instructionOrigin?: InstructionCellOrigin; replan?: InstructionReplanData; terminalCommitted?: boolean }
+export interface Cell { tools: Map<string, Tool>; stop: AbortController; seen: Set<string>; preflights: Set<Promise<void>>; instructionOrigin?: InstructionCellOrigin; replan?: InstructionReplanData; terminalCommitted?: boolean; ending: ReturnType<typeof Promise.withResolvers<void>>; finishing?: Promise<void>; finished?: true }
 export interface Queued {
   call: CodeModeInvocation; tool: Tool; signal: AbortSignal; eventSeq?: number
   resolve(value: unknown): void; reject(error: unknown): void; unsubscribe(): void

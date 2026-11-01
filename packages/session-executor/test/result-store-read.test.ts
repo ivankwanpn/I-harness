@@ -3,15 +3,15 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
-import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { acquireAssemblyResultStore, acquireResultReadStore } from '../src/lifecycle/result-store.ts'
 import { createSessionService } from '../src/service.ts'
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'result-lease-')), settings = join(root, 'settings.json')
   await writeFile(settings, '{}')
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
   const options = { workspace: root, coordinator, contextOutputSettingsPath: settings, sessionId: 'parent' }
   return { root, settings, coordinator, options, async close() { await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
