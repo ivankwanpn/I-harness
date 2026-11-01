@@ -36,6 +36,9 @@ it('preserves enabled ordinary output on a profile-only coordinator without orde
   expect((await runtime.contextOutput.read({sessionId:'s'},{refId:ref.id})).text).toBe('ordinary captured bytes')
   move();await expect(runtime.contextOutput.read({sessionId:'s'},{refId:ref.id})).rejects.toThrow()
 })
+// This real native integration validates canonical ownership and funds legacy results.
+// The controlled completion observation took 20.48s, including 11.80s funding.
+// Use a 45s functional budget; the prior 5s failures and latency debt remain recorded.
 it('binds output references to actual session lineage and current project scope',async()=>{
   const f=await createGatewayForkFixture(),{runtime}=f
   try{
@@ -54,7 +57,7 @@ it('binds output references to actual session lineage and current project scope'
     await expect(runtime.contextOutput.read({sessionId:'source'},{refId:ref.id})).rejects.toThrow()
     await expect(runtime.withLegacyReadObservation({sessionId:'child'},observation=>runtime.contextOutput.readLegacyObserved({sessionId:'child'},{refId:ref.id},observation))).rejects.toThrow()
   }finally{await f.close()}
-})
+},45_000)
 it('authorizes managed results with actual source metadata and denies current project revocation',async()=>{
   const{runtime,move,visibleRefs}=await setup()
   const scope=runtime.contextOutput.registerResultScope({operationId:'managed-original',sessionId:'s',callId:'call',source:await runtime.sourceFor('s')},()=>true)
