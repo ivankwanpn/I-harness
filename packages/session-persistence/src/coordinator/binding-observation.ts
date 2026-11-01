@@ -15,6 +15,8 @@ import { assertOutsideTaskDocumentOperation } from './task-document-operation.ts
 import { assertOutsideTaskTransition } from './task-document-transition.ts'
 import { assertOriginalBootstrapEntry } from './bootstrap.ts'
 import { createRetainedBindings } from './retained-binding.ts'
+import { createColdFinalizationFactory as makeColdFactory } from './cold-finalization.ts'
+import type { ColdTargetAccess, OriginalColdBootstrap, OriginalColdQualifiers } from './cold-finalization-types.ts'
 import { assertRetainedCleanupOperation, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedCleanupOperation } from './retained-cleanup.ts'
 
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!
@@ -36,7 +38,7 @@ export function createBindingObservations(
   type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
   type Lock = Awaited<ReturnType<Ownership['acquireLease']>>
   type ScopeKind = { kind: 'fork'; target: BootstrapInvocation } | { kind: 'existing-read' }
-  type Scope = { ids: Set<string>; keys: Set<string>; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean; revoke?: () => void } & ScopeKind
+  type Scope = { coldOwner?:OwnedDocument;ids: Set<string>; keys: Set<string>; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean; revoke?: () => void } & ScopeKind
   type Captured = { ids: string[]; existing: string[]; signal?: AbortSignal } & ScopeKind
   const scopes = new Set<Scope>(), context = new AsyncLocalStorage<readonly Scope[]>()
   const bootstrapContext = new AsyncLocalStorage<{ id: string; invocation: BootstrapInvocation; allowed: Scope[]; active: boolean }>()
@@ -69,12 +71,20 @@ export function createBindingObservations(
   } }
   function deleted(values: Set<string>, session: boolean) { return { add: (value: string) => {ledger(values,value,session);return values.add(value)}, has(value: string) { if (!deletedSessionValues.size && !deletedDocumentValues.size) return false; const keys = physical(session ? [value] : [], session ? [] : [value]).keys; return [...deletedSessionValues].some(id => overlap(keys, ledger(deletedSessionValues, id, true))) || [...deletedDocumentValues].some(key => overlap(keys, ledger(deletedDocumentValues, key, false))) } } }
   const pendingIds = counter(pendingSessionValues, true), pendingKeys = counter(pendingDocumentValues, false), deletedIds = deleted(deletedSessionValues, true), deletedKeys = deleted(deletedDocumentValues, false)
+  // The cold ticket exempts exactly its own logical contributions. Every
+  // remaining ledger entry still matches through the canonical resource owner.
+  function pendingExcept(ids:readonly string[],keys:readonly string[],own?:{id:string;key:string}) {
+    const query=physical(ids,keys).keys
+    return [...pendingSessionValues].some(([id,count])=>count-(own?.id===id?1:0)>0&&overlap(query,ledger(pendingSessionValues,id,true)))
+      || [...pendingDocumentValues].some(([key,count])=>count-(own?.key===key?1:0)>0&&overlap(query,ledger(pendingDocumentValues,key,false)))
+  }
   const unknownDocumentValues = new Set<string>()
   const unknownDocumentKeys = { add: (key: string) => {ledger(unknownDocumentValues,key,false);return unknownDocumentValues.add(key)}, has(key: string) { if (!unknownDocumentValues.size) return false; const query = physical([], [key]).keys; return [...unknownDocumentValues].some(value => overlap(ledger(unknownDocumentValues,value,false),query)) } }
   const retiringValues = new Map<string, number>()
   const retiringIds = { get: (id: string) => retiringValues.get(id), set: (id: string, count: number) => {if(!retiringValues.has(id))ledger(retiringValues,id,true);return retiringValues.set(id,count)}, delete: (id: string) => {ledgerSnapshots.get(retiringValues)?.delete(id);return retiringValues.delete(id)}, has(id: string) { if (!retiringValues.size) return false; const query = physical([id], []).keys; return [...retiringValues.keys()].some(other => overlap(query, ledger(retiringValues,other,true))) } }
   const pendingMutations = new Set<{ keys: readonly string[]; done: Promise<'settled' | 'unknown'> }>()
   let closed = false
+  const coldTickets=new WeakMap<object,{owned:OwnedDocument;access:ColdTargetAccess;check():void}>()
   const bindingKey = (id: string) => `desktop-session-project-${createHash('sha256').update(id).digest('hex')}`
   const intersects = (scope: Scope, ids: readonly string[], keys: readonly string[]) => overlap(snapshot(scope, [...scope.ids], [...scope.keys]), physical(ids, keys).keys)
   const ownedIntersects = (scope: OwnedDocument, ids: readonly string[], keys: readonly string[]) => overlap(snapshot(scope, [scope.id], [scope.key]), physical(ids, keys).keys)
@@ -297,7 +307,7 @@ export function createBindingObservations(
     for (const key of keys) { pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1); if (deleted) deletedKeys.add(key) }
     const cleanupOperation = createRetainedCleanupOperation()
     const retainedJoins = retained.retire(ids, keys, cleanupOperation)
-    const affected = [...scopes].filter(scope => !allowed.includes(scope) && intersects(scope, ids, keys))
+    const affected = [...scopes].filter(scope => !scope.coldOwner&&!allowed.includes(scope) && intersects(scope, ids, keys))
     const owned = [...ownedDocuments].filter(scope => !allowedOwned.includes(scope) && ownedIntersects(scope, ids, keys))
     for (const scope of owned) { scope.revoke(); scope.closing = true }
     for (const scope of affected) { if(scope.revoke)scope.revoke();else scope.state = 'revoked' }
@@ -320,7 +330,7 @@ export function createBindingObservations(
     assertRetainedCleanupOperation(cleanupOperation)
     closed = true
     const retainedJoins = retained.retire([], [], cleanupOperation, true)
-    const affected = [...scopes]
+    const affected = [...scopes].filter(scope=>!scope.coldOwner)
     const owned = [...ownedDocuments].map(scope => { const retry = scope.closing; scope.revoke(); scope.closing = true; return { scope, retry } })
     for (const scope of affected) { if(scope.revoke)scope.revoke();else scope.state = 'revoked' }
     return async () => {
@@ -395,21 +405,26 @@ export function createBindingObservations(
     } catch (cause) { throw new Failure('invalid', { cause }) }
     return observe({ kind: 'fork', ids, existing, target, signal }, run)
   }
-  function createScope(captured: Captured, beforeRelease?: () => Promise<void>) {
+  function createScope(captured: Captured, beforeRelease?: () => Promise<void>, coldTicket?:object, coldMetadata?:Readonly<SessionMeta>) {
     const { ids, existing, signal } = captured
+    const cold=coldTicket&&coldTickets.get(coldTicket)
+    if(coldTicket&&!cold)throw new Failure('invalid')
     if (!ownership.lockEnabled || !ownership.pinOwnership || !ownership.withSessionOperation || !backend.profile || !backend.readDocumentObserved) throw new Failure('unsupported')
     const keys = ids.map(bindingKey).sort()
     assertOutsideTaskDocumentOperation(taskContextIdentity, ids, keys); assertOutsideTaskTransition(taskContextIdentity, ids, keys)
     refuseSelf(ids, keys)
     if (closed || isAborted(signal)) throw new Failure('revoked')
     if (ids.some(id => deletedIds.has(id)) || keys.some(key => deletedKeys.has(key))) throw new Failure('deleted')
-    if (ids.some(id => pendingIds.has(id)) || keys.some(key => pendingKeys.has(key)) || [...ownedDocuments].some(scope => ownedIntersects(scope, ids, keys))) throw new Failure('conflict')
+    if (pendingExcept(ids,keys,cold?.owned) || [...ownedDocuments].some(scope => scope!==cold?.owned&&ownedIntersects(scope, ids, keys))) throw new Failure('conflict')
+    if(cold&&(ids.length!==1||ids[0]!==cold.access.route.request.invocation.targetSessionId||existing.length!==1||existing[0]!==ids[0]))throw new Failure('invalid')
     const completion = Promise.withResolvers<void>()
     const scope: Scope = { ...(captured.kind === 'fork' ? { kind: 'fork', target: captured.target } as const : { kind: 'existing-read' } as const), ids: new Set(ids), keys: new Set(keys), state: 'acquiring', pins: [], locks: [], done: completion.promise, signal, callbackFinished: false }
     scope.done.catch(() => {})
     snapshot(scope, [...scope.ids], [...scope.keys]); scopes.add(scope)
+    scope.coldOwner=cold?.owned
     function guard(active = false) {
       snapshot(scope, [...scope.ids], [...scope.keys])
+      cold?.check()
       if (closed || isAborted(signal) || scope.state === 'revoked' || scope.state === 'releasing' || scope.state === 'done' || active && scope.state !== 'active') throw new Failure('revoked')
       for (const pin of scope.pins) try { pin.assertHeld() } catch (cause) { throw new Failure('revoked', { cause }) }
       if (scope.locks.some(lock => !lock.held)) throw new Failure('revoked')
@@ -457,6 +472,7 @@ export function createBindingObservations(
       for (const key of keys) { scope.locks.push(await (ownership.acquireDocumentLease ? ownership.acquireDocumentLease(key) : ownership.acquireLease(`doc:${key}`))); guard() }
       const metadata = new Map<string, SessionMeta>(), bindings = new Map<string, ObservedDocument>()
       for (const id of existing) {
+        if(cold){cold.check();if(!coldMetadata||coldMetadata.sessionId!==id||coldMetadata.formatVersion!==14)throw new Failure('unavailable');metadata.set(id,capture(coldMetadata));continue}
         await ownership.withSessionOperation!(id, async () => {
           guard(); const profile = await backend.profile!(id); guard()
           if (profile.meta.sessionId !== id || profile.meta.archived === true) throw new Failure('unavailable')
@@ -476,6 +492,24 @@ export function createBindingObservations(
   }
   function enterScope<T>(scope: Scope, work: () => Promise<T>): Promise<T> {
     return context.run([...(context.getStore() ?? []), scope], work)
+  }
+  function createColdFinalizationFactory(bootstrap:OriginalColdBootstrap,qualifiers?:OriginalColdQualifiers){
+    return makeColdFactory(bootstrap,{ticket(access,operations){
+      const id=access.route.request.invocation.targetSessionId,key=bindingKey(id)
+      refuseSelf([id],[key]);access.assertOutside();access.assertCurrent()
+      if(closed||deletedIds.has(id)||deletedKeys.has(key)||unknownDocumentKeys.has(key)||retiringIds.has(id)||pendingIds.has(id)||pendingKeys.has(key))throw new Failure('conflict')
+      const prior=admitMutation([id],[key],false,[])
+      let finished=false,revoked=false
+      const owned:OwnedDocument={id,key,closing:false,writing:false,...operations,revoke(){revoked=true;operations.revoke()}}
+      snapshot(owned,[id],[key]);ownedDocuments.add(owned)
+      const identity={}
+      const check=()=>{snapshot(owned,[id],[key]);if(finished||revoked||closed||deletedIds.has(id)||deletedKeys.has(key)||unknownDocumentKeys.has(key)||retiringIds.has(id)||(pendingIds.get(id)??0)!==1||(pendingKeys.get(key)??0)!==1||pendingExcept([id],[key],owned)||!ownedDocuments.has(owned))throw new Failure('revoked');access.assertCurrent()}
+      coldTickets.set(identity,{owned,access,check})
+      return {join:prior.join,assertCurrent:check,finish(){if(finished)return;finished=true;coldTickets.delete(identity);ownedDocuments.delete(owned);prior.finish('settled')},scope(metadata){
+        check();const original=createScope({kind:'existing-read',ids:[id],existing:[id]},undefined,identity,metadata)
+        return {async use(work){try{const observation=await original.acquire();await enterScope(original.scope,()=>work(observation))}finally{original.scope.callbackFinished=true;original.scope.state='releasing'}},async close(){try{await original.scope.cleanup!();original.completion.resolve()}catch(error){original.completion.reject(error);throw error}}}
+      }}
+    }},qualifiers)
   }
   function cleanupFailure(scope: Scope, captured: Captured, cleanupError: unknown, failed = false, callbackError?: unknown, result?: unknown) {
     const error = Object.assign(new AggregateError([...(failed ? [callbackError] : []), cleanupError], 'Binding observation cleanup failed'), captured.kind === 'fork' ? { invocation: captured.target, callbackResult: result, callbackError } : { sessionIds: Object.freeze([...captured.existing]), callbackResult: result, callbackError })
@@ -620,7 +654,7 @@ export function createBindingObservations(
       },
     })
   }
-  return { associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerOwnedDocumentOperation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
+  return { createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerOwnedDocumentOperation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return retained.cleanupForError(error) ?? (error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined) } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

@@ -4,6 +4,7 @@ import type { SelectedResultsRoute } from './selected-results-route.ts'
 import type { SelectedResultsHeaderStageV2 } from './selected-results-header.ts'
 import type { selectedResultsPreparationFacts } from './selected-results-preparation.ts'
 import type { SessionMeta } from './types.ts'
+import type { ColdTargetAccess, ColdFinalization, ColdAdoptedOutcome } from './cold-finalization-types.ts'
 
 /** Only the original bootstrap owner's WeakMap recognizes this token. */
 export type ColdSelectedTarget = Readonly<{ kind: 'cold-selected-target' }>
@@ -25,24 +26,25 @@ export interface ColdSelectedObservation {
 /** Subordinate to an existing unready entry; owns neither a claim nor readiness. */
 export function createColdSelectedInspection(entry: ManagedEntry, route: SelectedResultsRoute,
   birth: CheckedColdBirth, prefix: JournalPrefix, metadata: SessionMeta,
-  lifecycle: { assertCurrent(): void; assertOutside(): void; enter<T>(work: () => Promise<T>): Promise<T>; settle(): Promise<void> }) {
+  lifecycle: { assertCurrent(): void; assertOutside(): void; enter<T>(work: () => Promise<T>): Promise<T>; settle(): Promise<void>;commit?():ColdAdoptedOutcome }) {
   const document = entry.document!, selected = entry.selected!, receipt = selected.resultReceipt!
   const target: ColdSelectedTarget = Object.freeze({ kind: 'cold-selected-target' })
   // Preserve the genuine checked object identity; these are already checked JSON.
   freezeJsonData(birth); freezeJsonData(prefix); freezeJsonData(receipt); freezeJsonData(metadata)
   const revision=entry.metadataRevision
+  const io=entry.captureIO,control=entry.control,barrier=selected.taskBarrier
   const view = document.view, eventCount = view.events.length, header = view.header
   const check = () => {
     lifecycle.assertCurrent()
-    if (entry.metadataRevision !== revision || entry.selected !== selected || entry.document !== document || document.view !== view
+    if (entry.captureIO!==io||entry.control!==control||selected.taskBarrier!==barrier||entry.metadataRevision !== revision || entry.selected !== selected || entry.document !== document || document.view !== view
       || selected.resultReceipt !== receipt || entry.ready || view.events.length !== eventCount || view.header !== header
       || !selected.taskBarrier?.completed || !entry.captureIO?.settled || entry.captureIO.released || entry.captureIO.releasing) throw new FactRecoveryRequiredError()
     entry.captureIO.held.assertHeld()
   }
   check()
-  return Object.freeze({ target, route, assertCurrent: check,
-    use<T>(work: (observation: ColdSelectedObservation) => Promise<T>): Promise<T> {
+  function use<T>(work: (observation: ColdSelectedObservation) => Promise<T>,attempt?:ColdFinalization): Promise<T> {
       lifecycle.assertOutside(); check()
+      if(entry.coldFinalization&&entry.coldFinalization!==attempt)throw new FactRecoveryRequiredError()
       if (entry.flight) return Promise.reject(new FactRecoveryRequiredError())
       const flight = Promise.resolve().then(() => lifecycle.enter(async () => {
         check()
@@ -60,6 +62,15 @@ export function createColdSelectedInspection(entry: ManagedEntry, route: Selecte
       })).finally(() => { if (entry.flight === flight) entry.flight = undefined })
       entry.flight = flight
       return flight
+    }
+  return Object.freeze({ target, route, assertCurrent: check,use,
+    captureAccess():ColdTargetAccess {
+      lifecycle.assertOutside();check();let attempt:ColdFinalization|undefined
+      return Object.freeze({identity:entry,route,assertCurrent:check,assertOutside:lifecycle.assertOutside,use<T>(work:(cold:ColdSelectedObservation)=>Promise<T>){return use(work,attempt)},settle:lifecycle.settle,
+        commit(){check();if(!attempt||entry.coldFinalization!==attempt||!lifecycle.commit)throw new FactRecoveryRequiredError();return lifecycle.commit()},
+        attach(value:ColdFinalization,revoke:()=>void){check();if(entry.coldFinalization)throw new FactRecoveryRequiredError();attempt=value;entry.coldFinalization=value;entry.revokeColdFinalization=revoke},
+        detach(value:ColdFinalization){if(attempt===value&&entry.coldFinalization===value){entry.coldFinalization=undefined;entry.revokeColdFinalization=undefined}},
+      })
     },
   })
 }

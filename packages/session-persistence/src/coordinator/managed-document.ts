@@ -614,7 +614,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             } catch(error) { try{await settleSelected()}catch(cleanup){throw new AggregateError([error,cleanup],'Selected document acquisition cleanup unresolved')}throw error; }
         })();
         selectedBindFlight=flight;void flight.finally(()=>{if(selectedBindFlight===flight)selectedBindFlight=undefined}).catch(()=>{});return flight;
-    }, ready() { if(bootstrap.selected&&!selectedLane)throw new FactRecoveryRequiredError();bootstrapReady = true; publishExecutionStatus(); },
+    }, prepareReady(){if(closed||closing||quarantined||bootstrap.selected&&!selectedLane)throw new FactRecoveryRequiredError();return ()=>{bootstrapReady=true;queueMicrotask(publishExecutionStatus)}}, ready() { if(bootstrap.selected&&!selectedLane)throw new FactRecoveryRequiredError();bootstrapReady = true; publishExecutionStatus(); },
         async admit(phase, events, guards) {
             assertTaskOutside();
             const assertSource = () => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }); guards.assertCurrent(); };
