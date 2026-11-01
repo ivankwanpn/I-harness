@@ -8,7 +8,7 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createExecutorExecutionCache,createDurableSessionLoader } from '../src/durable-session.ts'
-import { createExecutionGenerationLifecycle } from '../src/lifecycle/generation-actions.ts'
+import { createExecutionGenerationLifecycle,assertExecutionGeneration } from '../src/lifecycle/generation-actions.ts'
 import { createExecutionInputPreparationOwner } from '../src/lifecycle/execution-input-preparation.ts'
 import type { PassiveProducerRecord } from '@i-harness/llm-seam/internal/passive-observation'
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
@@ -47,6 +47,12 @@ it('private generation consumes original folds and emits original acknowledged R
  const action=owned.execution.owner.beginAction(),rows:PassiveProducerRecord[]=[],gaps:string[]=[]
  const lifecycle=createExecutionGenerationLifecycle(owned.execution,'owner',action,undefined,{async beforeDrain(){},passiveGeneration:{capture(row){rows.push(row)},unavailable(reason){gaps.push(reason)}}})
  const generation=await lifecycle.open('main',{kind:'input',seq});expect(owned.execution.observe().generations()).toHaveLength(1)
+ assertExecutionGeneration(owned.execution,generation,action)
+ let methodReads=0;Object.defineProperty(generation,'bind',{configurable:true,get(){methodReads++;throw Error('Replaced generation method')}})
+ expect(()=>assertExecutionGeneration(owned.execution,generation,action)).toThrow();expect(methodReads).toBe(0);Reflect.deleteProperty(generation,'bind')
+ assertExecutionGeneration(owned.execution,generation,action)
+ expect(()=>assertExecutionGeneration(owned.execution,{...generation},action)).toThrow()
+ const foreignAction=owned.execution.owner.beginAction();expect(()=>assertExecutionGeneration(owned.execution,generation,foreignAction)).toThrow();foreignAction.finish()
  const request=await owned.execution.prepareRequest(action)
  const prepare=createExecutionInputPreparationOwner(owned.execution,action,{cancel:id=>owned.inputs.inbox.cancel(id)})
  const prepared=await prepare.prepare('first',generation)
