@@ -6,6 +6,8 @@ import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-
 import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
 import { createTaskRegistry } from '../src/task/registry.ts'
 import { captureOwnedTaskContext } from '../src/task/owned-context.ts'
+const spawnProbe=vi.hoisted(()=>({armed:false,sources:0}))
+vi.mock('../src/tools/spawn-source.ts',async original=>{const real=await original<typeof import('../src/tools/spawn-source.ts')>();return {...real,createSpawnSource(...args:Parameters<typeof real.createSpawnSource>){if(spawnProbe.armed){spawnProbe.sources++;throw Error('Unexpected cold spawn source')}return real.createSpawnSource(...args)}}})
 const faults = vi.hoisted(() => ({ target: '', readFlag: '', failed: false, cause: undefined as unknown, closeFails: false, releaseFails: false, releasePath: '', entered: undefined as undefined | (() => void), gate: undefined as undefined | Promise<void>, renames: 0 }))
 vi.mock('node:fs/promises', async original => {
  const fs = await original<typeof import('node:fs/promises')>()
@@ -81,7 +83,7 @@ it.each(['claimed','target','contradictory'])('installs an actual owned bound3 r
  const request=captureChildBootstrapCaptureRequest({version:1,kind:'child-bootstrap-capture-request',invocation:{...payload.invocation,requestDigest:intent.requestDigest},core,requestIntent:intent.intent})
  const f=await fixture({formatVersion:3,tasks:[{...row,...(claimed?{childSessionId:'child'}:{}),childBirth:{version:1,kind:'task-child-birth',request}}],notifications:[]})
  try{
-  await f.tasks.ready;const original=f.tasks.get('task-1')!;
+  await f.tasks.ready;expect(()=>f.tasks.submit({identity:{parentSessionId:'parent',toolCallId:'call'},agentPath:'a',description:'d',prompt:'p',agent:'a',delivery:'tool'})).toThrow('cold');const original=f.tasks.get('task-1')!;
   const alternatePayload={...payload,invocation:{...payload.invocation,targetSessionId:'other'}},alternateCore={...core,initial:childInitialCommitment(alternatePayload)},alternateIntent=createChildBootstrapRequestIntent(alternateCore,{kind:'unmanaged'}),alternateRequest=captureChildBootstrapCaptureRequest({version:1,kind:'child-bootstrap-capture-request',invocation:{...alternatePayload.invocation,requestDigest:alternateIntent.requestDigest},core:alternateCore,requestIntent:alternateIntent.intent}),alternateBirth={version:1 as const,kind:'task-child-birth' as const,request:alternateRequest}
   taskDocumentStorageContract.validate({formatVersion:3,tasks:[{...original,childSessionId:'other',childBirth:alternateBirth}],notifications:[]})
   expect(()=>{f.tasks.list()[0]!.childBirth=alternateBirth}).toThrow();expect(()=>{delete original.childBirth}).toThrow();expect(()=>{original.prompt='changed'}).toThrow();expect(()=>{original.childBirth!.request.core.execution.roleName='changed'}).toThrow();expect(f.tasks.get('task-1')?.childBirth).toBeDefined();expect(isColdBoundChild(f.tasks,'child')).toBe(true)
@@ -280,4 +282,34 @@ it('bootstrap header debt exposes no eligible parent until original cleanup and 
   if(result.kind!=='ready'&&result.kind!=='already-ready')throw Error('Original bootstrap did not become ready')
   const owned=captureOwnedTaskContext(f.coordinator,result.document,result.document.view,'boot')!;owned.operations.assertTaskV3Parent(owned.parent,'boot')
  }finally{faults.closeFails=false;faults.target='';await f.close()}
+})
+
+it.each([false,true])('actual mounted ordinary replay of bound3 refuses before sources with routed=%s',async routed=>{
+ const f=await fixture({formatVersion:2,tasks:[],notifications:[]})
+ let mounted:ReturnType<typeof registerSubagent>|undefined,action:ReturnType<typeof f.document.beginAction>|undefined
+ try{
+  await f.tasks.ready
+  const {receivedInputsFor}=await import('../../session-executor/src/lifecycle/received-inputs.ts'),{committedFactSeqs}=await import('@i-harness/core-session')
+  await receivedInputsFor(f.document,'parent').inbox.admit({inputId:'human',text:'original ordinary call',intent:'user',delivery:'queue',provenance:{kind:'human',authority:'request',scope:'turn',producer:'session.prompt'}})
+  action=f.document.beginAction()
+  const args={task_name:'replay',message:'p',agent_type:'a',fork_turns:'none',background:false}
+  const [callSeq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'replay',name:'spawn_agent',args}))
+  committedFactSeqs(await action.facts.tools.dispatch('replay',{kind:'prior',seq:callSeq!,expectedType:'tool/call'}))
+  const initial={inputId:'initial',text:'p',startedAt:1,expiresAt:11,parentSessionId:'parent'},lineage={origin:'subagent' as const,subagentProtocolVersion:1 as const,parentSession:'parent'},payload={invocation:{version:1 as const,operationId:'historical',targetSessionId:'historical-child',createdAt:'2026-11-01T00:00:00.000Z',requestDigest:'a'.repeat(64)},target:{kind:'new' as const},metadata:{},lineage,seed:compileSemanticSeed({kind:'none'}),initial}
+  const core={version:1 as const,kind:'child-bootstrap-core' as const,caller:{kind:'task' as const,taskId:'task-1',parentSessionId:'parent',callEventSeq:callSeq!,toolCallId:'replay'},history:{selection:{kind:'none' as const}},metadata:{},lineage,initial:childInitialCommitment(payload),execution:{roleName:'a',roleDigest:'b'.repeat(64),toolNames:[],model:{kind:'inherit-parent' as const},approval:'ordinary' as const}},intent=createChildBootstrapRequestIntent(core,{kind:'unmanaged'}),request=captureChildBootstrapCaptureRequest({version:1,kind:'child-bootstrap-capture-request',invocation:{...payload.invocation,requestDigest:intent.requestDigest},core,requestIntent:intent.intent})
+  await f.coordinator.putDocumentStrict!('task-parent',{formatVersion:3,tasks:[{...row,toolCallId:'replay',callEventSeq:callSeq!,agentPath:'root/replay',description:'replay',childBirth:{version:1,kind:'task-child-birth',request}}],notifications:[]})
+  const ctx=createContext(),registry=createToolRegistry(ctx),model=createMockClient([]),stream=vi.spyOn(model,'stream'),instruction=vi.fn(()=>{throw Error('Unexpected instruction')}),generation=vi.fn(fixtureGenerationFor),resolver=vi.fn(async()=>({status:'unconfigured' as const,reason:'unused'}))
+  mounted=registerSubagent(ctx,registry,{parentSession:f.document.view,factOwner:f.document,parentModel:model,exec:registerExec(ctx),resolveModel:resolver,generationFactoryFor:generation,createInstructionContext:instruction,reportPolicy:SHIPPING_REPORT_POLICY,persist:{coordinator:f.coordinator,stateId:'parent',parentSessionId:'parent'},restoredState:{formatVersion:1,roles:[{name:'a',description:'',systemPrompt:'a',tools:[]}],jobs:[],agentTable:[]}})
+  await mounted.ready
+  if(routed)mounted.tasks.get('task-1')!.delivery='parent'
+  const create=vi.spyOn(f.coordinator,'create'),publish=vi.spyOn(mounted.agents,'register'),retain=vi.fn(()=>undefined)
+  spawnProbe.sources=0;spawnProbe.armed=true
+  const error=await registry.get('spawn_agent')!.execute(args,{session:f.document.view,sessionId:'parent',callEventSeq:callSeq!,callId:'replay',retainOutcome:retain} as never).then(()=>undefined,error=>error)
+  expect({sources:spawnProbe.sources,retention:retain.mock.calls.length,child:create.mock.calls.length,instructions:instruction.mock.calls.length,generations:generation.mock.calls.length,resolver:resolver.mock.calls.length,agents:publish.mock.calls.length,streams:stream.mock.calls.length}).toEqual({sources:0,retention:0,child:0,instructions:0,generations:0,resolver:0,agents:0,streams:0})
+  expect(error).toMatchObject({code:'TASK_COLD_BINDING_UNAVAILABLE'})
+  expect(()=>mounted!.tasks.submit({identity:{parentSessionId:'parent',toolCallId:'replay',callEventSeq:callSeq!},agentPath:'root/replay',description:'replay',prompt:'p',agent:'a',delivery:'tool'})).toThrow('cold')
+  const freshInput={identity:{parentSessionId:'parent',toolCallId:'fresh'},agentPath:'root/fresh',description:'fresh',prompt:'p',agent:'a',delivery:'tool' as const}
+  const fresh=mounted.tasks.submit(freshInput);fresh.delivery='parent';fresh.status='running'
+  expect(mounted.tasks.submit(freshInput)).toBe(fresh);await mounted.tasks.flushPersistence()
+ }finally{spawnProbe.armed=false;action?.finish();await mounted?.dispose();await f.close()}
 })

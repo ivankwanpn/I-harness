@@ -1,5 +1,5 @@
 import { stageTaskRestore } from './restore-stage.ts'
-import { associateColdBindings } from './cold-bindings.ts'
+import { associateColdBindings, assertColdTaskAdmission } from './cold-bindings.ts'
 import { isOwnedTaskContext } from './owned-context.ts'
 import { validateTaskDocument } from "./validation.ts"
 import { unqualifyRestoredTask, qualifyTaskPublication } from './publication.ts'
@@ -245,6 +245,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     subscribe,
     submit(input) {
       assertReady()
+      if (input.identity.callEventSeq !== undefined || input.identity.toolCallId !== undefined) {
+        assertColdTaskAdmission(registry, currentState.records.getByIdentity(input.identity)?.id)
+      }
       const { record, inserted } = currentState.records.submit(input, maxConcurrency)
       if (currentState.version === 3) currentState.records.protectSubmission(record)
       if (!inserted) return record
