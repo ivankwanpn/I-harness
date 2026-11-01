@@ -1,3 +1,6 @@
+import { associateArchiveReadResources } from '@i-harness/session-persistence/internal/archive-read'
+import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
+import { readSessionArchive } from './backend/archive-reader.ts'
 import { associateArtifactPaths } from '@i-harness/session-persistence/internal/artifact-path'
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
@@ -129,6 +132,7 @@ const BLANK_PROBE_MAX_BYTES = 1024
 export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const rootPath = resolve(root)
   const captureIO = createBootstrapCaptureIO()
+  const archiveReads = createArchiveReadOwner()
   const artifactPath = (id: string, suffix: string): string => {
     const portableId = id.replace(/\\/g, "/")
     const candidate = resolve(rootPath, `${portableId}${suffix}`)
@@ -144,20 +148,20 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     return candidate
   }
   const filePath = (id: string) => artifactPath(id, ".jsonl")
-  async function assertPublicBootstrap(sessionId: string, creating = false) {
+  async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}) {
     const path = filePath(sessionId)
     const namespace=await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
     if (!namespace.length) {
       if(creating)return
       // A retained semantic header does not become an ordinary replacement
       // merely because its sole birth stage is missing.
-      const header=await readHeader(path)
+      const header=observed?.header ?? await archiveReads.run(path,async(handle,extent)=>(await readSessionArchive(handle,extent,true)).header,true)
       if(!header.semanticSeed)return
     }
     const prefix=basename(path)+'.bootstrap-'
     if(namespace.some(name=>!(/^[a-f0-9]{64}\.(stage|publish|promote)$/.test(name.slice(prefix.length)))))throw Object.assign(new Error('Unknown bootstrap artifact requires its original owner'),{code:'SESSION_BOOTSTRAP_INCOMPLETE'})
     if (creating) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
-    const raw = await readFile(path)
+    const raw = observed?.birth ?? await archiveReads.run(path,async (handle,extent)=>(await readSessionArchive(handle,extent,true)).birth,true)
     const end = raw.indexOf(10), meta = parseHeader(raw.subarray(0, end).toString('utf8'))
     if (!meta.semanticSeed) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
     // Only the immutable bootstrap prefix is needed. Do not parse a live suffix
@@ -291,14 +295,12 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
 
     async read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       await assertNotDeleted("session", sessionId)
-      await assertPublicBootstrap(sessionId)
-      const text = await readFile(filePath(sessionId), "utf-8")
-      const lines = text.split("\n")
-      if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
-      const header = parseHeader(lines[0]!)
-      const events = [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events : parseEventLines(lines.slice(1))
-      if (![6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
-      return { version: header.formatVersion, events, meta: header }
+      return archiveReads.run(filePath(sessionId),async(handle,extent)=>{
+        const candidate=await readSessionArchive(handle,extent)
+        await assertPublicBootstrap(sessionId,false,candidate)
+        await assertNotDeleted("session",sessionId)
+        return {version:candidate.header.formatVersion,events:candidate.events,meta:candidate.header}
+      })
     },
 
     async list(): Promise<string[]> {
@@ -506,6 +508,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       if (!current || !('value' in current) || current.value !== original.value) throw new Error('PROCESS_READ_UNAVAILABLE')
     }
   }
+  associateArchiveReadResources(backend,archiveReads.association)
   associateArtifactPaths(backend, Object.freeze({
     root() { assertOriginal(); return rootPath },
     async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },

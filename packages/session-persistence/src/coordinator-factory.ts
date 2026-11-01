@@ -1,3 +1,4 @@
+import { attachArchiveReadResources } from './archive-read-internal.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createOwnership } from './coordinator/ownership.ts'
@@ -51,6 +52,7 @@ export function createSelectedRuntimeCapture(coordinator:SessionCoordinator,make
 }
 export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>, transitionStorage?: TaskTransitionConfiguration): SessionCoordinator {
   const assertDurableTransition = () => { if (CURRENT_FORMAT_VERSION >= 14 && !transitionStorage) throw new Error('TASK_TRANSITION_UNSUPPORTED') }
+  const archiveReads = attachArchiveReadResources(backend)
   const report = opts?.reportBackgroundFailure
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
   const maxDelayMs = opts?.maxDelayMs ?? 200
@@ -173,6 +175,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       observations.assertOutsideOwnedOperations([], [], true)
       observations.preflightClose()
       assertOutsideRetirementSink(coordinator)
+      archiveReads?.fence()
       const join = observations.closeAdmission(operation)
       processLatches?.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()
@@ -181,9 +184,9 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       const joined=await Promise.allSettled([join(),joinCapture(),joinFork().then(() => managed.close())])
       for(const result of joined)if(result.status==='rejected')errors.push(result.reason)
       // Dependent original leases survive unresolved observation/managed work.
-      if (errors.length === 0) await lifecycle.close()
+      if (errors.length === 0) await lifecycle.close(true, archiveReads?.settle)
       else {
-        try { await lifecycle.close(false) } catch (error) { errors.push(error) }
+        try { await lifecycle.close(false, archiveReads?.settle) } catch (error) { errors.push(error) }
         throw new AggregateError(errors, 'Coordinator cleanup is unresolved')
       }
   }
