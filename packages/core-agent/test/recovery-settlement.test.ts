@@ -1,8 +1,8 @@
 import { expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createNondurableFactOwner, createSession, decodeFactBatch, deriveContextRecovery, type BatchKey, type CapturedSettlementFact, type ProducerFactOutcome, type SettlementFacts, type RecoverySettlementFact } from '@i-harness/core-session'
 import { createContext } from '@i-harness/core-plugin'
@@ -14,6 +14,20 @@ import { createAgent } from '../src/index.ts'
 import { fixtureExecutionIdentity } from './fixtures/execution.ts'
 import { createRecoverySettlement } from '../src/agent/recovery-settlement.ts'
 import { trackSettlementSource } from '../src/agent/settlement-source.ts'
+import { forwardSettlementCapture } from '../../session-persistence/src/coordinator/settlement-fact.ts'
+
+vi.mock('../../session-persistence/src/coordinator/settlement-fact.ts', async load => {
+  const original = await load<typeof import('../../session-persistence/src/coordinator/settlement-fact.ts')>()
+  return { ...original, forwardSettlementCapture: vi.fn(original.forwardSettlementCapture) }
+})
+
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts', async load => {
+  const original = await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>()
+  return { ...original, createFactJournalBackend(...args: Parameters<typeof original.createFactJournalBackend>) {
+    const journal = original.createFactJournalBackend(...args)
+    return { ...journal, appendOwnedBatch: vi.fn(journal.appendOwnedBatch), reconcileOwnedBatch: vi.fn(journal.reconcileOwnedBatch) }
+  } }
+})
 
 const cut = vi.hoisted(() => ({ install: false }))
 vi.mock('@i-harness/core-session', async original => {
@@ -31,20 +45,20 @@ vi.mock('@i-harness/core-session', async original => {
 const event = (ownerSessionId: string, state: 'resolved' | 'blocked'): RecoverySettlementFact => ({ type: 'context/recovery', version: 1, ownerSessionId, recoveryId: 'original', logicalStepSeq: 0, bindingFingerprint: 'a'.repeat(64), rejectedInputFingerprint: 'b'.repeat(64), retryConsumed: true, state })
 
 it.each(['resolved', 'blocked'] as const)('reconciles only the original uncertain %s frame before its dependent correction', async selected => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-recovery-original-')), backend = createJsonlBackend(root)
-  const store = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await store.create()
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'ih-recovery-original-')), backend = createJsonlBackend(root)
+  const store = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await store.create()
   const document = await store.openManagedDocument(id), action = document.beginAction()
   let delegated: SettlementFacts<ProducerFactOutcome> | undefined
   const parent = action.registerSettlementSource(async () => { await delegated?.close() })
   const helper = createRecoverySettlement({ registerFactSource: drain => delegated = trackSettlementSource(parent, drain, () => {}) })
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!, issues: string[] = [], reconciles: string[] = []
-  backend.appendOwnedBatch = async (...args) => {
+  const append = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(backend.reconcileOwnedBatch!).getMockImplementation()!, issues: string[] = [], reconciles: string[] = []
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     issues.push(args[3].key.batchId)
     const result = await append(...args)
     if (issues.length === (selected === 'resolved' ? 1 : 2)) return { kind: 'unknown', key: args[3].key }
     return result
-  }
-  backend.reconcileOwnedBatch = async (...args) => { reconciles.push(args[3].key.batchId); return reconcile(...args) }
+  })
+  vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(async (...args) => { reconciles.push(args[3].key.batchId); return reconcile(...args) })
   try {
     if (selected === 'resolved') await expect(helper.publish(event(id, 'resolved'))).rejects.toMatchObject({ outcome: { kind: 'unknown' } })
     else await helper.publish(event(id, 'resolved'))
@@ -63,21 +77,21 @@ it.each(['resolved', 'blocked'] as const)('reconciles only the original uncertai
 })
 
 it.each(['resolved', 'blocked'] as const)('keeps known-absent %s held until explicit original capture disposition', async selected => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-recovery-absent-')), backend = createJsonlBackend(root)
-  const store = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await store.create()
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'ih-recovery-absent-')), backend = createJsonlBackend(root)
+  const store = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await store.create()
   const document = await store.openManagedDocument(id), action = document.beginAction()
   let delegated: SettlementFacts<ProducerFactOutcome> | undefined
   const parent = action.registerSettlementSource(async () => { await delegated?.close() })
-  const capture = parent.recovery.capture, handles: CapturedSettlementFact<ProducerFactOutcome>[] = []
-  parent.recovery.capture = draft => { const handle = capture(draft); handles.push(handle); return handle }
+  vi.mocked(forwardSettlementCapture).mockClear()
+  const handles = () => vi.mocked(forwardSettlementCapture).mock.results.map(result => result.value as CapturedSettlementFact<ProducerFactOutcome>)
   const helper = createRecoverySettlement({ registerFactSource: drain => delegated = trackSettlementSource(parent, drain, () => {}) })
-  const append = backend.appendOwnedBatch!, keys: string[] = []
+  const append = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!, keys: string[] = []
   let injected = false
-  backend.appendOwnedBatch = async (...args) => {
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     keys.push(args[3].key.batchId)
     if (!injected && keys.length === (selected === 'resolved' ? 1 : 2)) { injected = true; return { kind: 'unknown', key: args[3].key } }
     return append(...args)
-  }
+  })
   try {
     if (selected === 'resolved') await expect(helper.publish(event(id, 'resolved'))).rejects.toThrow()
     else await helper.publish(event(id, 'resolved'))
@@ -87,29 +101,29 @@ it.each(['resolved', 'blocked'] as const)('keeps known-absent %s held until expl
     await expect(helper.close()).rejects.toMatchObject({ outcome: { kind: 'absent' } })
     await expect(helper.close()).rejects.toMatchObject({ outcome: { kind: 'absent' } })
     expect(keys).toHaveLength(selected === 'resolved' ? 1 : 2)
-    expect(handles).toHaveLength(selected === 'resolved' ? 1 : 2)
+    expect(handles()).toHaveLength(selected === 'resolved' ? 1 : 2)
     expect(() => document.beginAction()).toThrow()
     expect((await backend.read(id)).events.some(item => item.type === 'context/recovery' && item.state === 'blocked')).toBe(false)
     // Existing management capability: explicitly dispose this exact capture.
-    expect(await handles[selected === 'resolved' ? 0 : 1]!.retryAbsent()).toMatchObject({ kind: 'committed' })
+    expect(await handles()[selected === 'resolved' ? 0 : 1]!.retryAbsent()).toMatchObject({ kind: 'committed' })
     await helper.close(); await parent.close()
     expect(keys).toHaveLength(3)
-    expect(handles).toHaveLength(2)
+    expect(handles()).toHaveLength(2)
     expect((await backend.read(id)).events.at(-1)).toMatchObject({ type: 'context/recovery', state: 'blocked', retryConsumed: true })
   } finally { action.finish(); await store.close() }
 })
 
 it('retains an issued receipt through failed installation and installs its original frame before correction', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-recovery-install-')), backend = createJsonlBackend(root)
-  const store = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await store.create()
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'ih-recovery-install-')), backend = createJsonlBackend(root)
+  const store = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await store.create()
   const document = await store.openManagedDocument(id), action = document.beginAction()
   let delegated: SettlementFacts<ProducerFactOutcome> | undefined
   const parent = action.registerSettlementSource(async () => { await delegated?.close() })
   const helper = createRecoverySettlement({ registerFactSource: drain => delegated = trackSettlementSource(parent, drain, () => {}) })
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!, keys: string[] = []
+  const append = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(backend.reconcileOwnedBatch!).getMockImplementation()!, keys: string[] = []
   let reconciles = 0
-  backend.appendOwnedBatch = async (...args) => { keys.push(args[3].key.batchId); return append(...args) }
-  backend.reconcileOwnedBatch = async (...args) => { reconciles++; return reconcile(...args) }
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => { keys.push(args[3].key.batchId); return append(...args) })
+  vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(async (...args) => { reconciles++; return reconcile(...args) })
   try {
     cut.install = true
     const failure = await helper.publish(event(id, 'resolved')).catch(error => error)
@@ -139,23 +153,23 @@ it('retains a nondurable installation observer failure and fences new work on th
 })
 
 it.each(['unknown', 'conflict'] as const)('holds the original %s disposition across unsuccessful drains without issuing correction', async kind => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-recovery-pending-')), backend = createJsonlBackend(root)
-  const store = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await store.create()
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'ih-recovery-pending-')), backend = createJsonlBackend(root)
+  const store = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await store.create()
   const document = await store.openManagedDocument(id), action = document.beginAction()
   let delegated: SettlementFacts<ProducerFactOutcome> | undefined
   const parent = action.registerSettlementSource(async () => { await delegated?.close() })
   const helper = createRecoverySettlement({ registerFactSource: drain => delegated = trackSettlementSource(parent, drain, () => {}) })
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!, keys: string[] = [], observed: string[] = []
+  const append = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(backend.reconcileOwnedBatch!).getMockImplementation()!, keys: string[] = [], observed: string[] = []
   let ready = false
-  backend.appendOwnedBatch = async (...args) => {
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     keys.push(args[3].key.batchId)
     const result = await append(...args)
     return keys.length === 1 ? { kind, key: args[3].key } : result
-  }
-  backend.reconcileOwnedBatch = async (...args) => {
+  })
+  vi.mocked(backend.reconcileOwnedBatch!).mockImplementation(async (...args) => {
     observed.push(args[3].key.batchId)
     return ready ? reconcile(...args) : { kind, key: args[3].key }
-  }
+  })
   try {
     await expect(helper.publish(event(id, 'resolved'))).rejects.toMatchObject({ outcome: { kind } })
     action.stop(); await helper.correct(event(id, 'blocked'))
@@ -205,12 +219,12 @@ it('retains malformed terminal data as an actual nondurable source fault and hol
 })
 
 it.each(['unknown', 'absent', 'install-failed'] as const)('preserves accepted usage and original disposition for an actual %s optional observation', async selected => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-optional-observation-')), backend = createJsonlBackend(root)
-  const store = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await store.create()
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'ih-optional-observation-')), backend = createJsonlBackend(root)
+  const store = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await store.create()
   const document = await store.openManagedDocument(id), ctx = createContext(), tools = createToolRegistry(ctx)
-  const append = backend.appendOwnedBatch!
+  const append = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!
   let originalKey: BatchKey | undefined, optionalIssues = 0
-  backend.appendOwnedBatch = async (...args) => {
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     if (!originalKey && decodeFactBatch(args[3].bytes).events.some(item => item.type === 'context/budget' && item.version === 2 && item.snapshot.freshness === 'awaiting-projection')) {
       originalKey = args[3].key; optionalIssues++
       if (selected === 'absent') return { kind: 'absent', key: originalKey }
@@ -219,7 +233,7 @@ it.each(['unknown', 'absent', 'install-failed'] as const)('preserves accepted us
       return selected === 'unknown' ? { kind: 'unknown', key: originalKey } : outcome
     }
     return append(...args)
-  }
+  })
   const completion = (response: Parameters<typeof writeSplitSse>[0]) => writeSplitSse(response, [
     { type: 'message_start', message: { usage: { input_tokens: 1000 } } },
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -248,7 +262,7 @@ it.each(['unknown', 'absent', 'install-failed'] as const)('preserves accepted us
       expect(document.view.events.filter(item => item.type === 'model/exchange-accepted' && item.exchangeId === (originalAccepted as { exchangeId: string }).exchangeId)).toHaveLength(1)
       expect(document.view.events.filter(item => item.seq === originalUsage.seq)).toEqual([originalUsage])
       await store.close()
-      const coldStore = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }), cold = await coldStore.openManagedDocument(id)
+      const coldStore = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract), cold = await coldStore.openManagedDocument(id)
       try {
         expect(cold.view.events.filter(item => item.type === 'model/exchange-accepted')).toHaveLength(2)
         expect(cold.view.events.filter(item => item.type === 'context/usage' && item.version === 2 && item.op === 'sample')).toHaveLength(2)
