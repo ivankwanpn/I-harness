@@ -16,7 +16,7 @@ export type Capture = {
 
 /** Private original owner, installed in the reservation before start. */
 export interface CaptureAttempt {
-  disposition(): { execution?: SupervisedExecution; frames?: import('./frames.ts').ExecFrameCapture; timedOut: boolean; settlement?: import('@i-harness/sandbox').ExecutionSettlement }
+  disposition(): { execution?: SupervisedExecution; nativeStarted?: boolean; frames?: import('./frames.ts').ExecFrameCapture; timedOut: boolean; settlement?: import('@i-harness/sandbox').ExecutionSettlement }
   start(): Promise<Capture>
   fail(cause: unknown): Promise<void>
   retire(): Promise<void>

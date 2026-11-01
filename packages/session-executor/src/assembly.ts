@@ -15,7 +15,7 @@ import { ownedContextReadiness } from "@i-harness/session-persistence"
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
-import { createScopedExec, createScopedExecWithReservation } from "./scoped-exec.ts"
+import { createScopedExec, createScopedExecWithReservation, createScopedWorkflowExec } from "./scoped-exec.ts"
 import { createChildObservation } from "./child-observation.ts"
 import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
 import { inspectWslRuntime } from "@i-harness/sandbox-local"
@@ -1304,7 +1304,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     for (const cfg of opts.lsp ?? []) {
       lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
     }
-    workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService })
+    workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService, steps: createScopedWorkflowExec(assemblyExecPair, opts.workspace, sandboxPolicyNow) })
     // ONE resolver for every role-carrying spawn in this assembly: the subagent
     // tools, the approval guardian and team teammates all hand their role's
     // selection to the host's provider plane — the same runtime call the

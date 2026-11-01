@@ -9,6 +9,7 @@ import { createTransportLaunch } from "../transport-launch.ts"
 import { createJobObservation } from "./observation.ts"
 import { view } from "./views.ts"
 import { createJobRetention } from './retention.ts'
+import { isOriginalStepBinding, type OriginalStepBinding } from '../workflow-step.ts'
 
 /** Detach one reader without canceling original settlement or another reader. */
 function joinReader<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -31,7 +32,7 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   const captureInstances = new WeakMap<Capture, string>()
   // Only pending/captured ownership lives here. Publication transfers the token
   // to the existing job registry; terminal foreground observations release it.
-  type Reservation = { instanceId: string; state: 'reserved' | 'started' | 'released'; attempt?: CaptureAttempt; delivery?: import('../direct-delivery.ts').OriginalExecDeliveryOwner }
+  type Reservation = { instanceId: string; state: 'reserved' | 'started' | 'released'; attempt?: CaptureAttempt; step?: OriginalStepBinding; delivery?: import('../direct-delivery.ts').OriginalExecDeliveryOwner }
   const captureDeliveries = new WeakMap<Capture, import('../direct-delivery.ts').OriginalExecDeliveryOwner>()
   const pendingInstances = new Map<string, Reservation>()
   const captureAttempts = new WeakMap<Capture, CaptureAttempt>()
@@ -71,14 +72,16 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
   async function captureReserved(entry: Reservation, ...args: Parameters<MakeCapture>) {
     let captured = false
     try {
-      const attempt = factory.prepare(args[0],args[1],args[2],args[3],entry.delivery)
+      const attempt = factory.prepare(args[0],args[1],args[2],args[3],entry.delivery,entry.step)
       entry.attempt = attempt
+      entry.step?.prepared(attempt,retention.settleFrames)
       entry.delivery?.prepareAttempt(attempt,retention.settleFrames,()=>{
         if(pendingInstances.get(entry.instanceId)===entry&&entry.attempt?.isClean()&&entry.delivery?.isClean())pendingInstances.delete(entry.instanceId)
       })
       const capture = await attempt.start()
       captured = true
       captureAttempts.set(capture, attempt)
+      entry.step?.bound(capture)
       if (entry.delivery) {
         captureDeliveries.set(capture,entry.delivery)
         entry.delivery.bind(capture,attempt,retention.settleFrames)
@@ -87,6 +90,7 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
       captureInstances.set(capture, entry.instanceId)
       return retention.track(capture)
     } catch (error) {
+      entry.step?.failed(entry.attempt,error)
       entry.delivery?.failed(entry.attempt)
       let cleanup: { cause: unknown } | undefined
       if (captured && entry.attempt) try { await entry.attempt.fail(error) } catch (cause) { cleanup = { cause } }
@@ -392,10 +396,16 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     },
   }
   const port = Object.freeze({
+    attachStep(handle: object, step: OriginalStepBinding) {
+      if(this!==port)throw new Error('Invalid reservation port receiver')
+      const entry=reservations.get(handle)
+      if(!entry||entry.state!=='reserved'||entry.delivery||entry.step||disposed||!isOriginalStepBinding(step))throw new Error('Original step unavailable')
+      entry.step=step
+    },
     attachDelivery(handle: object, delivery: import('../direct-delivery.ts').OriginalExecDeliveryOwner) {
       if(this!==port)throw new Error('Invalid reservation port receiver')
       const entry=reservations.get(handle)
-      if(!entry||entry.state!=='reserved'||entry.delivery||disposed)throw new Error('Original reservation unavailable')
+      if(!entry||entry.state!=='reserved'||entry.delivery||entry.step||disposed)throw new Error('Original reservation unavailable')
       entry.delivery=delivery
     },
     async abortDelivery(handle: object) {
@@ -436,6 +446,7 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
         return await createJobObservation({ makeCapture: reservedCapture, registerJob: publishJob, releaseCapture, isDisposed: () => disposed, observe })(command, runOptions)
       } catch (cause) { failure={cause};throw cause }
       finally {
+        if(!captured&&entry.step&&failure)entry.step.failed(undefined,failure.cause)
         if(!captured&&entry.delivery){
           entry.delivery.failed(undefined)
           try{await entry.delivery.close()}
