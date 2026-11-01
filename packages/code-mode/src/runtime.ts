@@ -7,7 +7,15 @@ import { createWorkerEvents } from './runtime/worker-events.js'
 import { createAdmission } from './runtime/admission.js'
 import { instructionReplan } from '@i-harness/core-tools'
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
-import { createCellFinalizations, bindOriginalOutputLifetime } from './finalization.ts'
+import { createCellFinalizations, bindOriginalOutputLifetime, type OriginalCellFinalization } from './finalization.ts'
+
+type WorkerAcquisition = 'unknown' | 'not-acquired' | 'acquired'
+const workerAcquisitions = new WeakMap<OriginalCellFinalization, () => WorkerAcquisition>()
+export function readOriginalWorkerAcquisition(handle: OriginalCellFinalization): WorkerAcquisition {
+  const read=workerAcquisitions.get(handle)
+  if(!read)throw new Error('Original runtime worker acquisition unavailable')
+  return read()
+}
 
 /** Each admission owns a fresh WASM worker. Only JSON crosses its boundary. */
 export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeModeRuntime {
@@ -27,6 +35,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
   const workers = createWorkerEvents(options,config,errorCap,state,retirement,output)
   const exec = createAdmission(options,config,errorCap,state,retirement,output,workers,event, (id, original) => {
     const end = Promise.withResolvers<void>()
+    let acquisition: 'unknown' | 'not-acquired' | 'acquired' = 'unknown'
     endings.set(id, end)
     const handle = finalizations.reserve(id, async () => {
       await end.promise
@@ -39,10 +48,10 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
         if (failures.length) throw new AggregateError(failures.map(value => value.reason), 'Original Code invocations incomplete')
       }
       endings.delete(id)
-    })
+    }, handle=>{workerAcquisitions.set(handle,()=>acquisition)})
     bindOriginalOutputLifetime(handle, () => ({ accepted: original()?.lifetimeOutput?.accepted ?? 0, truncated: original()?.lifetimeOutput?.truncated ?? false,policyRefusal:original()?.policyRefusal,instructionReplan:original()?.instructionReplan }))
     void end.promise.then(() => handle.settle()).catch(() => {})
-    return () => end.resolve()
+    return { abandon() { acquisition = 'not-acquired'; end.resolve() }, acquired() { acquisition = 'acquired' } }
   })
   const { observe } = output
   const { close } = retirement

@@ -3,6 +3,9 @@
 export interface OriginalCellFinalization { readonly scope: 'runtime-retirement' | 'cell-finalization'; settle(): Promise<void> }
 const constructors = new WeakMap<object, ReturnType<typeof createCellFinalizations>>()
 const originals = new WeakMap<object, object | undefined>()
+// The certifying map and mutation closure belong to the actual runtime factory.
+// Re-export only its reader; this observation constructor cannot certify work.
+export { readOriginalWorkerAcquisition } from './runtime.ts'
 export function isOriginalCellFinalization(value:unknown,context?:object):value is OriginalCellFinalization {
   return !!value&&typeof value==='object'&&originals.has(value)&&(context===undefined||originals.get(value)===context)
 }
@@ -31,7 +34,7 @@ export function createCellFinalizations(scope: OriginalCellFinalization['scope']
     bind(owner: object) { if (constructors.has(owner)) throw new Error('Original Code constructor already associated'); constructors.set(owner, registry) },
     capture(id: string) { return pending.get(id) },
     observe(listener: (id: string, handle: OriginalCellFinalization) => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
-    reserve(id: string, work: () => Promise<void>): OriginalCellFinalization {
+    reserve(id: string, work: () => Promise<void>, beforePublish?: (handle:OriginalCellFinalization)=>void): OriginalCellFinalization {
       if (pending.has(id)) throw new Error('Original Code cell already owned')
       let flight: Promise<void> | undefined, acknowledged = false
       const handle = Object.freeze({ scope, settle() {
@@ -47,6 +50,7 @@ export function createCellFinalizations(scope: OriginalCellFinalization['scope']
       } })
       pending.set(id, handle)
       originals.set(handle,context)
+      beforePublish?.(handle)
       // Passive early capture only; listeners cannot supply producer authority.
       for (const listener of listeners) { try { listener(id, handle) } catch { /* Isolate passive capture consumers. */ } }
       return handle
