@@ -40,8 +40,11 @@ import { createMockClient } from '@i-harness/llm-mock'
 import { registerExec } from '@i-harness/exec'
 import { lastOriginalTaskSave } from '../src/task/save-owner.ts'
 import { SHIPPING_REPORT_POLICY } from '../src/report-policy.ts'
+import { childInitialCommitment, compileSemanticSeed, createChildBootstrapRequestIntent, captureChildBootstrapCaptureRequest } from '@i-harness/session-persistence'
+import { appendStandalone } from './standalone-fixture.ts'
+import { isColdBoundChild } from '../src/task/cold-bindings.ts'
 const row = {id:'task-1',parentSessionId:'parent',toolCallId:'call',agentPath:'a',description:'d',prompt:'p',agent:'a',delivery:'tool' as const,status:'accepted' as const,timeCreated:1}
-async function fixture(value?: unknown, arm?: (root: string) => void) {
+async function fixture(value?: unknown, arm?: (root: string) => void, withResults = false) {
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(),'owned-load-'))
  const observations: unknown[] = []
  const validator = { ...taskDocumentStorageContract, validate(value: unknown) { taskDocumentStorageContract.validate(value); if (Object.isFrozen(value)) observations.push(value) } }
@@ -49,12 +52,45 @@ async function fixture(value?: unknown, arm?: (root: string) => void) {
  await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent')
  if(value===undefined)await unlink(join(root,'task-parent.doc.jsonl'));else await writeFile(join(root,'task-parent.doc.jsonl'),JSON.stringify(value))
  arm?.(root)
- const tasks=createTaskRegistry({coordinator,stateId:'parent',ownedTask:captureOwnedTaskContext(coordinator,document,document.view,'parent')})
+ const tasks=createTaskRegistry({coordinator,stateId:'parent',ownedTask:captureOwnedTaskContext(coordinator,document,document.view,'parent'),...(withResults?{reportPolicy:SHIPPING_REPORT_POLICY,results:{capture(){throw Error('unused')},async read(){throw Error('unused')}}}:{})})
  return {tasks,coordinator,document,root,observations,async close(){await coordinator.close();await rm(root,{recursive:true,force:true})}}
 }
-it.each([1,2] as const)('owned literal %s begins unavailable and installs detached rows',async version=>{
+it.each([1,2,3] as const)('owned literal %s begins unavailable and installs detached rows',async version=>{
  const f=await fixture({formatVersion:version,tasks:[row],notifications:[]})
  try {expect(()=>f.tasks.list()).toThrow();await f.tasks.ready;expect(f.tasks.list()).toHaveLength(1);expect(f.tasks.get('task-1')).not.toBe(row);const source=f.observations.at(-1) as {tasks: typeof row[]};expect(Object.isFrozen(source.tasks[0])).toBe(true);expect(source.tasks[0]).toEqual(row)}finally{await f.close()}
+})
+it('requires the original ready physical task parent for v3 capability',async()=>{
+ const f=await fixture({formatVersion:3,tasks:[],notifications:[]})
+ try{await f.tasks.ready;const owned=captureOwnedTaskContext(f.coordinator,f.document,f.document.view,'parent')!;owned.operations.assertTaskV3Parent(owned.parent,'parent');expect(()=>owned.operations.assertTaskV3Parent({...owned.parent},'parent')).toThrow();expect(()=>owned.operations.assertTaskV3Parent.call({...owned.operations},owned.parent,'parent')).toThrow();const descriptor=Object.getOwnPropertyDescriptor(f.document,'view')!;Object.defineProperty(f.document,'view',{...descriptor,value:{...f.document.view}});expect(()=>owned.operations.assertTaskV3Parent(owned.parent,'parent')).toThrow();Object.defineProperty(f.document,'view',descriptor);owned.operations.assertTaskV3Parent(owned.parent,'parent');expect(()=>owned.operations.assertTaskV3Parent(owned.parent,'foreign')).toThrow();f.document.revokeNewWork();expect(()=>owned.operations.assertTaskV3Parent(owned.parent,'parent')).toThrow()}finally{await f.close()}
+})
+it('keeps owned literal1 bytes until a later result-aware save migrates them',async()=>{
+ const f=await fixture({formatVersion:1,tasks:[row],notifications:[]},undefined,true)
+ try{await f.tasks.ready;expect((await f.coordinator.getDocument('task-parent') as {formatVersion:number}).formatVersion).toBe(1);await f.tasks.save();expect((await f.coordinator.getDocument('task-parent') as {formatVersion:number}).formatVersion).toBe(2)}finally{await f.close()}
+})
+it('keeps owned literal3 on a later result-aware save',async()=>{
+ const f=await fixture({formatVersion:3,tasks:[row],notifications:[]},undefined,true)
+ try{await f.tasks.ready;await f.tasks.save();expect((await f.coordinator.getDocument('task-parent') as {formatVersion:number}).formatVersion).toBe(3)}finally{await f.close()}
+})
+it.each(['claimed','target','contradictory'])('installs an actual owned bound3 row with link=%s as cold after the original handoff',async link=>{
+ const claimed=link==='claimed'
+ const initial={inputId:'input',text:'p',startedAt:1,expiresAt:11,parentSessionId:'parent'}
+ const lineage={origin:'subagent' as const,subagentProtocolVersion:1 as const,parentSession:'parent'}
+ const payload={invocation:{version:1 as const,operationId:'op',targetSessionId:'child',createdAt:'2026-10-27T00:00:00.000Z',requestDigest:'a'.repeat(64)},target:{kind:'new' as const},metadata:{},lineage,seed:compileSemanticSeed({kind:'none'}),initial}
+ const core={version:1 as const,kind:'child-bootstrap-core' as const,caller:{kind:'task' as const,taskId:'task-1',parentSessionId:'parent',toolCallId:'call'},history:{selection:{kind:'none' as const}},metadata:{},lineage,initial:childInitialCommitment(payload),execution:{roleName:'a',roleDigest:'b'.repeat(64),toolNames:[],model:{kind:'inherit-parent' as const},approval:'ordinary' as const}}
+ const intent=createChildBootstrapRequestIntent(core,{kind:'unmanaged'})
+ const request=captureChildBootstrapCaptureRequest({version:1,kind:'child-bootstrap-capture-request',invocation:{...payload.invocation,requestDigest:intent.requestDigest},core,requestIntent:intent.intent})
+ const f=await fixture({formatVersion:3,tasks:[{...row,...(claimed?{childSessionId:'child'}:{}),childBirth:{version:1,kind:'task-child-birth',request}}],notifications:[]})
+ try{
+  await f.tasks.ready;const original=f.tasks.get('task-1')!;
+  const alternatePayload={...payload,invocation:{...payload.invocation,targetSessionId:'other'}},alternateCore={...core,initial:childInitialCommitment(alternatePayload)},alternateIntent=createChildBootstrapRequestIntent(alternateCore,{kind:'unmanaged'}),alternateRequest=captureChildBootstrapCaptureRequest({version:1,kind:'child-bootstrap-capture-request',invocation:{...alternatePayload.invocation,requestDigest:alternateIntent.requestDigest},core:alternateCore,requestIntent:alternateIntent.intent}),alternateBirth={version:1 as const,kind:'task-child-birth' as const,request:alternateRequest}
+  taskDocumentStorageContract.validate({formatVersion:3,tasks:[{...original,childSessionId:'other',childBirth:alternateBirth}],notifications:[]})
+  expect(()=>{f.tasks.list()[0]!.childBirth=alternateBirth}).toThrow();expect(()=>{delete original.childBirth}).toThrow();expect(()=>{original.prompt='changed'}).toThrow();expect(()=>{original.childBirth!.request.core.execution.roleName='changed'}).toThrow();expect(f.tasks.get('task-1')?.childBirth).toBeDefined();expect(isColdBoundChild(f.tasks,'child')).toBe(true)
+  const open=vi.spyOn(f.coordinator,'openManagedDocument'),{mounted,resolveModel,stream,instruction,generation}=mount(f,true)
+  const entry=mounted.table.get('root/a')!;entry.taskId='task-1';if(link==='contradictory')entry.sessionId='contradictory';if(link==='target')entry.taskId='foreign';appendStandalone(entry.session,{type:'subagent/inbox',messageId:'consumed',message:'consumed'});appendStandalone(entry.session,{type:'subagent/inbox',messageId:'pending',message:'original pending'});const register=vi.spyOn(mounted.agents,'register')
+  await mounted.ready
+  expect(open).not.toHaveBeenCalled();expect(resolveModel).not.toHaveBeenCalled();expect(stream).not.toHaveBeenCalled();expect(instruction).not.toHaveBeenCalled();expect(generation).not.toHaveBeenCalled();expect(register).not.toHaveBeenCalled();expect(mounted.agents.get('child')).toBeUndefined()
+  await mounted.dispose()
+ }finally{await f.close()}
 })
 it('bad second row and missing fresh task poison all registry operations permanently',async()=>{
  const notification={id:'notif-1',submissionId:'task-1',parentSessionId:'parent',messageId:'m',state:'completed',description:'',text:'',status:'pending',attempts:0,timeCreated:1}
@@ -104,9 +140,10 @@ it.each(['retire','parent','mutation'] as const)('original close-to-install %s c
  }finally{release.resolve();faults.releasePath='';faults.gate=undefined;faults.entered=undefined;await f.close()}
 })
 function mount(f:Awaited<ReturnType<typeof fixture>>, restored:boolean){
+ const model=createMockClient([]),stream=vi.spyOn(model,'stream'),instruction=vi.fn(()=>{throw Error('Unexpected instruction source')}),generation=vi.fn(fixtureGenerationFor)
  const ctx=createContext(),registry=createToolRegistry(ctx),resolveModel=vi.fn(async()=>({status:'unconfigured' as const,reason:'unused'}))
- const mounted=registerSubagent(ctx,registry,{generationFactoryFor:fixtureGenerationFor,parentSession:f.document.view,factOwner:f.document,parentModel:createMockClient([]),exec:registerExec(ctx),resolveModel,reportPolicy:SHIPPING_REPORT_POLICY,persist:{coordinator:f.coordinator,stateId:'parent',parentSessionId:'parent',parentSession:f.document.view},...(restored?{restoredState:{formatVersion:1 as const,roles:[],jobs:[{id:'subagent-1',owner:'root',kind:'subagent',label:'pending',status:'running' as const,output:'',terminal:false}],agentTable:[{path:'root/a',status:'waiting' as const,sessionId:'child',mailbox:['pending'],lastInboxSeq:0}]}}:{})})
- return {mounted,resolveModel,registry}
+ const mounted=registerSubagent(ctx,registry,{...(restored?{createInstructionContext:instruction}:{}),generationFactoryFor:generation,parentSession:f.document.view,factOwner:f.document,parentModel:model,exec:registerExec(ctx),resolveModel,reportPolicy:SHIPPING_REPORT_POLICY,persist:{coordinator:f.coordinator,stateId:'parent',parentSessionId:'parent',parentSession:f.document.view},...(restored?{restoredState:{formatVersion:1 as const,roles:[],jobs:[{id:'subagent-1',owner:'root',kind:'subagent',label:'pending',status:'running' as const,output:'',terminal:false}],agentTable:[{path:'root/a',status:'waiting' as const,sessionId:'child',mailbox:['pending'],lastInboxSeq:0}]}}:{})})
+ return {mounted,resolveModel,registry,stream,instruction,generation}
 }
 it.each([{restored:false,value:undefined},{restored:true,value:undefined},{restored:true,value:{formatVersion:1,tasks:[row,{...row,id:'task-2'}],notifications:[]}}])('actual startup %j has zero early producers',async ({restored,value})=>{
  const f=await fixture(value)
@@ -209,4 +246,38 @@ it.each([false,undefined])('post-install startup failure %s permanently fences t
   expect(()=>mounted.tasks.terminalize({taskId:'task-1',outcome:'completed'})).toThrow('failed')
   await expect(mounted.dispose()).rejects.toThrow();await mounted.dispose();spy.mockRestore()
  }finally{await f.close()}
+})
+
+it.each(['generic','task-only'])('logical14 %s parent cannot qualify v3 binding',async kind=>{
+ const {createJsonlSessionCoordinator}=await import('../../session-persistence-jsonl/src/backend-factory.ts'),{createJsonlTaskDocumentCoordinator}=await import('../../session-persistence-jsonl/src/task-document-factory.ts'),{TaskPersistence}=await import('../src/task/persistence.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'v3-unsupported-')),backend=createJsonlBackend(root)
+ await backend.create('parent',{sessionId:'parent',formatVersion:14,createdAt:'x'});await writeFile(join(root,'task-parent.doc.jsonl'),'{"formatVersion":2,"tasks":[],"notifications":[]}')
+ const coordinator=kind==='generic'?createJsonlSessionCoordinator(root,{lock:{enabled:true}}):createJsonlTaskDocumentCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{
+  await expect(coordinator.openManagedDocument('parent')).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED');let snapshots=0;const owned=undefined
+  const persistence=new TaskPersistence(coordinator,'parent',false,()=>{snapshots++;return {formatVersion:3,tasks:[],notifications:[]}},owned)
+  expect(()=>persistence.captureBindingSave()).toThrow();expect(snapshots).toBe(0)
+ }finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+
+it.each([1,2] as const)('actual legacy%s ignored childBirth retains mirror and pending-inbox route',async version=>{
+ const f=await fixture({formatVersion:version,tasks:[{...row,childSessionId:'child',childBirth:{ignored:true}}],notifications:[]})
+ try{
+  await f.tasks.ready;await f.coordinator.create({sessionId:'child',parentSession:'parent',origin:'subagent',seedLength:0});const child=await f.coordinator.openManagedDocument('child');await child.delivery.record({type:'subagent/inbox',messageId:'consumed',message:'consumed'});await child.delivery.record({type:'subagent/inbox',messageId:'pending',message:'legacy pending'})
+  const open=vi.spyOn(f.coordinator,'openManagedDocument'),{mounted}=mount(f,true);const lookup=vi.spyOn(mounted.agents,'get');await mounted.ready;expect(open).toHaveBeenCalledWith('child');expect(lookup).toHaveBeenCalledWith('child');expect(isColdBoundChild(mounted.tasks,'child')).toBe(false);await mounted.dispose()
+ }finally{await f.close()}
+})
+it('bootstrap header debt exposes no eligible parent until original cleanup and readiness finish',async()=>{
+ const f=await fixture({formatVersion:2,tasks:[],notifications:[]})
+ const {EMPTY_SEMANTIC_SEED_DIGEST,EMPTY_SEMANTIC_DEPENDENCY_DIGEST}=await import('@i-harness/core-session')
+ const request={invocation:{version:1 as const,operationId:'boot',targetSessionId:'boot',createdAt:'2026-11-01T00:00:00.000Z',requestDigest:'a'.repeat(64)},target:{kind:'new' as const},metadata:{},lineage:{origin:'fork' as const,parentSession:'parent'},seed:{digest:EMPTY_SEMANTIC_SEED_DIGEST,dependencyDigest:EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sourceObservation:{kind:'none' as const},records:[]}},guards={assertCurrent(){},dependencies:{async confirm(){throw Error('unused')},async reconcile(){throw Error('unused')}}}
+ try{
+  await f.tasks.ready;faults.target=join(f.root,'boot.jsonl');faults.cause=false;faults.closeFails=true
+  expect((await f.coordinator.bootstrapSemanticTarget(request,guards)).kind).toBe('blocked')
+  await expect(f.coordinator.openManagedDocument('boot')).rejects.toThrow()
+  faults.closeFails=false
+  const result=await f.coordinator.bootstrapSemanticTarget(request,guards);expect(['ready','already-ready']).toContain(result.kind)
+  if(result.kind!=='ready'&&result.kind!=='already-ready')throw Error('Original bootstrap did not become ready')
+  const owned=captureOwnedTaskContext(f.coordinator,result.document,result.document.view,'boot')!;owned.operations.assertTaskV3Parent(owned.parent,'boot')
+ }finally{faults.closeFails=false;faults.target='';await f.close()}
 })

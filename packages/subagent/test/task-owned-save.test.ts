@@ -599,7 +599,7 @@ it.each([null,undefined,0,false] as const)('repair failed snapshot retains origi
  }finally{await f.close()}
 })
 it.each(['validation','acquire','acquire-cleanup'] as const)('repair %s refusal retains original operation/cleanup without publication',async failure=>{
- const f=await repairBinding(failure==='validation'?()=>({formatVersion:3,tasks:[],notifications:[]}):undefined)
+ const f=await repairBinding(failure==='validation'?()=>({formatVersion:3,tasks:[],notifications:[],extra:true}):undefined)
  try{if(failure==='acquire')handoff.acquireFails=handoff.cleanupPath;if(failure==='acquire-cleanup'){handoff.heldFails=handoff.cleanupPath;handoff.releaseFails=handoff.cleanupPath}
  const held=f.p.captureBindingSave();const error=await held.done.then(()=>{throw Error('unexpected success')},e=>e);expect(held.outcome()).toBeUndefined();if(failure==='acquire')expect(error.cause).toBeNull();if(failure==='acquire-cleanup'){expect(error.cause).toBe(0);expect(error.cleanupCause).toBe(false)}
  await expect(held.retireConsumer()).rejects.toBeDefined();f.doc.revokeNewWork();handoff.acquireFails=handoff.heldFails=handoff.releaseFails='';await expect(held.retry()).rejects.toBe(error);await expect(f.p.flush()).rejects.toThrow();expect(held.outcome()).toBeUndefined();expect(handoff.publications).toBe(0);expect(handoff.temps).toBe(0);expect(()=>held.assertHandoff()).toThrow();await expect(held.retry.call({})).rejects.toThrow('receiver')
@@ -617,7 +617,7 @@ it.each(['unknown-revoked','conflict'] as const)('repair abandoned %s never gran
  }finally{fault.tempSynced=undefined;await f.close()}
 })
 it('repair completed head retirement remains clean when a later capture records its own debt',async()=>{
- let invalid=false;const f=await repairBinding(()=>({formatVersion:invalid?3:2,tasks:[],notifications:[]}))
+ let invalid=false;const f=await repairBinding(()=>invalid?({formatVersion:3,tasks:[],notifications:[],extra:true}):({formatVersion:2,tasks:[],notifications:[]}))
  try{const held=f.p.captureBindingSave();await held.done;invalid=true;const later=f.p.save();void later.catch(()=>{});const retry=held.retry(),retirement=held.retireConsumer();await retry;await retirement;await expect(later).rejects.toThrow();await expect(f.p.flush()).rejects.toThrow();expect(f.p.lastOwnedSave()).not.toBe(held);expect(handoff.publications).toBe(1);expect(()=>held.assertHandoff()).toThrow()
  }finally{await f.close()}
 })

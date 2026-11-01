@@ -29,13 +29,18 @@ export class TaskPersistence {
     if (!this.coordinator || !this.stateId) return Promise.resolve()
     const captured = this.#bindingAdmitted ? this.captureOwned(false) : this.captureSave()
     if (captured) return captured.done
+    if (this.owned) {
+      try { if (this.snapshot().formatVersion === 3) return this.captureOwned(false).done } catch (cause) { return Promise.reject(cause) }
+    }
     const document = this.strict ? this.snapshot() : undefined
     const next = this.#chain.then(() => {
+      const payload = this.strict ? document! : this.snapshot()
+      if (payload.formatVersion === 3) throw new Error('Task v3 persistence requires original eligible parent')
       if (this.strict) {
         if (!this.coordinator!.putDocumentStrict) throw new Error('Strict result retention is unavailable')
-        return this.coordinator!.putDocumentStrict(taskDocKey(this.stateId!), document)
+        return this.coordinator!.putDocumentStrict(taskDocKey(this.stateId!), payload)
       }
-      return this.coordinator!.putDocument(taskDocKey(this.stateId!), this.snapshot())
+      return this.coordinator!.putDocument(taskDocKey(this.stateId!), payload)
     })
     this.#chain = next.catch(() => {})
     return next
@@ -47,6 +52,7 @@ export class TaskPersistence {
   }
   captureBindingSave(): OwnedTaskSave {
     if (!this.coordinator || !this.stateId || !this.owned || !isOwnedTaskContext(this.owned)) throw new Error('Original task owner unavailable')
+    this.owned.operations.assertTaskV3Parent(this.owned.parent, this.stateId)
     this.#bindingAdmitted = true
     return this.captureOwned(true)
   }
@@ -86,6 +92,7 @@ export class TaskPersistence {
     if (!isOwnedTaskContext(owned) || owned.coordinator !== this.coordinator || owned.stateId !== this.stateId) throw new Error('Original task owner unavailable')
     const snapshot = captureTaskSnapshot(this.snapshot())
     taskDocumentStorageContract.validate(snapshot)
+    if ((snapshot as TaskProtocolDocument).formatVersion === 3) owned.operations.assertTaskV3Parent(owned.parent, this.stateId!)
     owned.operations.assertParentSession(owned.parent, this.stateId!)
     let operation: Awaited<ReturnType<Operations['begin']>> | undefined, write: ReturnType<Awaited<ReturnType<Operations['begin']>>['stageWrite']> | undefined
     let entered = false, failed = false, abandoned = false, consumed = false, consumerRetired = false, retireFlight: Promise<void> | undefined

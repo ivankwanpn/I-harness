@@ -87,6 +87,6 @@ it('fences legacy/current/future task documents and never promotes a missing ret
   const current = createTaskRegistry({ reportPolicy: SHIPPING_REPORT_POLICY })
   current.restore({ formatVersion: 2, tasks: [{ ...row, resultText: 'preview', result: { version: 1, kind: 'pending', revision: 'original' } }], notifications: [] })
   expect(current.get(row.id)?.retention).toBe('pending')
-  expect(() => createTaskRegistry().restore({ formatVersion: 3, tasks: [], notifications: [] } as any)).toThrow(/version/)
+  expect(() => createTaskRegistry().restore({ formatVersion: 4, tasks: [], notifications: [] } as any)).toThrow(/version/)
   expect(() => createTaskRegistry().restore({ formatVersion: 1, tasks: [{ ...row, result: { version: 1, kind: 'pending', revision: 'forged' } }], notifications: [] })).toThrow(/legacy/)
 })

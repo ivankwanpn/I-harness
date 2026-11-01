@@ -6,6 +6,18 @@ export class TaskRecords {
   readonly #records = new Map<string, TaskRecord>()
   readonly #byIdentity = new Map<string, TaskRecord>()
   readonly #byChild = new Map<string, TaskRecord>()
+  readonly #originalDelivery = new WeakMap<TaskRecord, TaskRecord['delivery']>()
+  protectSubmission(task: TaskRecord): void {
+    if (this.#originalDelivery.has(task)) return
+    this.#originalDelivery.set(task, task.delivery)
+    const freeze = (value: unknown): void => {
+      if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value) }
+    }
+    if (task.childBirth) freeze(task.childBirth)
+    for (const key of ['id','parentSessionId','toolCallId','callEventSeq','agentPath','description','prompt','agent','timeCreated','childBirth'] as const) {
+      Object.defineProperty(task, key, { value: task[key], enumerable: Object.hasOwn(task, key), writable: false, configurable: false })
+    }
+  }
   #taskCounter = 0
   #anonCounter = 0
   #checkedCounter = false
@@ -29,7 +41,7 @@ export class TaskRecords {
     const key = this.#identityKey(input.identity)
     const existing = this.#byIdentity.get(key)
     if (existing) {
-      if (existing.prompt === input.prompt && existing.agent === input.agent && existing.agentPath === input.agentPath && existing.delivery === input.delivery) return { record: existing, inserted: false }
+      if (existing.prompt === input.prompt && existing.agent === input.agent && existing.agentPath === input.agentPath && (this.#originalDelivery.get(existing) ?? existing.delivery) === input.delivery) return { record: existing, inserted: false }
       throw new TaskIdentityConflictError(input.identity)
     }
     if (this.#checkedCounter && this.#taskCounter >= Number.MAX_SAFE_INTEGER) throw new Error('Task counter exhausted')

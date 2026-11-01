@@ -62,6 +62,7 @@ import { subagentFactOwner } from './facts.ts'
 import { residentOwnerFor, refusedReentry } from './followup/resident-lifetime.ts'
 import type { ManagedDocument } from '@i-harness/session-persistence'
 import { captureOwnedTaskContext } from './task/owned-context.ts'
+import { isColdBoundChild } from './task/cold-bindings.ts'
 import { createTaskStartupFacade } from './task/startup-facade.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
@@ -507,6 +508,7 @@ async function restoreTasksAndSweep(
 async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable, beforeSweep?: () => void): Promise<void> {
   for (const entry of table.entries().values()) {
     if (!entry.sessionId || !deps.childSessions) continue
+    if (isColdBoundChild(deps.tasks, entry.sessionId, entry.taskId)) continue
     try {
       const document = await deps.childSessions.coordinator.openManagedDocument(entry.sessionId)
       table.update(entry.path, entry, { session: document.view, factOwner: document })

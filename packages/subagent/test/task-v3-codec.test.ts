@@ -42,12 +42,27 @@ it('rejects changed target, parent, identity, and child binding shape', () => {
   ]) { const d=fixture(); mutate(d); expect(() => codec.validate(d)).toThrow() }
 })
 
-it('keeps otherwise valid v3 bytes outside existing storage and permissive runtime restore', async () => {
- const {createTaskRegistry}=await import('../src/task/registry.ts'),d=fixture(),registry=createTaskRegistry()
- expect(()=>storage.validate(d)).toThrow()
- expect(()=>storage.consistency('parent',[],0,d)).toThrow()
- expect(()=>registry.restore(d as never)).toThrow()
- expect(registry.list()).toEqual([])
+it('decodes v3 data but refuses manual adoption and raw persistence before effects',async()=>{
+ const {createTaskRegistry}=await import('../src/task/registry.ts'),{TaskPersistence}=await import('../src/task/persistence.ts'),{stageTaskRestore}=await import('../src/task/restore-stage.ts')
+ const d=fixture();let writes=0;const coordinator={async putDocument(){writes++},async putDocumentStrict(){writes++}} as never
+ expect(()=>storage.validate(d)).not.toThrow();expect(stageTaskRestore(d as never,false,false).version).toBe(3)
+ const registry=createTaskRegistry({stateId:'parent',coordinator});expect(()=>registry.restore(d as never)).toThrow('eligible parent');expect(registry.list()).toHaveLength(0)
+ for(const strict of [false,true]){const persistence=new TaskPersistence(coordinator,'parent',strict,()=>d as never);await expect(persistence.save()).rejects.toThrow('eligible parent')}
+ expect(writes).toBe(0)
+})
+it.each([1,2])('legacy literal%s ignored childBirth does not acquire cold authority',async version=>{
+ const {createTaskRegistry}=await import('../src/task/registry.ts'),{isColdBoundChild}=await import('../src/task/cold-bindings.ts')
+ const d=fixture();d.formatVersion=version;d.notifications=[];const registry=createTaskRegistry();registry.restore(d as never)
+ expect(isColdBoundChild(registry,'child')).toBe(false)
+})
+it('migrates literal 1 only when a result-aware registry actually saves', async () => {
+ const {createTaskRegistry}=await import('../src/task/registry.ts')
+ let saved: unknown
+ const registry=createTaskRegistry({stateId:'parent',coordinator:{async putDocument(_key:string,value:unknown){saved=structuredClone(value)}} as never,results:{capture(){throw Error('unused')},async read(){throw Error('unused')}}})
+ registry.restore({formatVersion:1,tasks:[],notifications:[]})
+ expect(saved).toBeUndefined()
+ await registry.save()
+ expect((saved as {formatVersion:number}).formatVersion).toBe(2)
 })
 it('rejects inherited discriminants without invoking getters or proxy traps',()=>{
  let calls=0

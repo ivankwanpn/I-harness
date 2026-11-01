@@ -2,8 +2,8 @@ import { expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
-import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
 import { createContextOutputService } from '../../context-output/src/index.ts'
 import { createResultCapture } from '../../output-retention/src/index.ts'
 import { createTaskRegistry, classifyRestoredTasks, createNotificationDrain, SHIPPING_REPORT_POLICY, taskDocKey, type TaskProtocolDocument, type TaskResultStore } from '../src/index.ts'
@@ -12,7 +12,7 @@ import { createTaskRegistry, classifyRestoredTasks, createNotificationDrain, SHI
 // classifier, or treating a successful auxiliary save as a complete body.
 it.each(['accepted', 'running-complete', 'running-interrupted', 'running-missing', 'pending', 'running-pending'] as const)('preserves current %s across real cold restore, drain and save/reopen/save without new terminal work', async kind => {
   const root = await mkdtemp(join(tmpdir(), 'current-unfinished-'))
-  let coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  let coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
   let store = createContextOutputService({ root: join(root, 'results'), workspaceId: 'w' })
   let captures = 0, callbacks = 0, admissions = 0, wakes = 0
   const results: TaskResultStore = {
@@ -26,7 +26,7 @@ it.each(['accepted', 'running-complete', 'running-interrupted', 'running-missing
   const options = () => ({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, results, onTerminalized() { callbacks++ } })
   try {
     await coordinator.create({ sessionId: 'parent' })
-    await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', subagentProtocolVersion: 1 })
+    await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', subagentProtocolVersion: 1, seedLength: 0 })
     await coordinator.append('child', [{ type: 'turn/start' }, { type: 'assistant/message', text: 'child-only text is history' }, ...(kind === 'running-interrupted' ? [] : [{ type: 'turn/end' as const }])])
     const tasks = createTaskRegistry(options())
     const task = tasks.submit({ identity: { parentSessionId: 'parent', callEventSeq: 1 }, childSessionId: kind === 'running-missing' ? 'missing' : 'child', agentPath: 'root/a', description: 'a', prompt: 'go', agent: 'general', delivery: 'parent' })
@@ -45,12 +45,12 @@ it.each(['accepted', 'running-complete', 'running-interrupted', 'running-missing
     }
     const observed = structuredClone(original.tasks[0]!)
     await coordinator.close(); await store.close()
-    coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+    coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
     store = createContextOutputService({ root: join(root, 'results'), workspaceId: 'w' })
     for (let restart = 0; restart < 2; restart++) {
       if (restart > 0) {
         await coordinator.close(); await store.close()
-        coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+        coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
         store = createContextOutputService({ root: join(root, 'results'), workspaceId: 'w' })
       }
       const cold = createTaskRegistry(options())
@@ -77,10 +77,10 @@ it.each(['accepted', 'running-complete', 'running-interrupted', 'running-missing
 
 it('keeps literal v1 recovery after an explicit migration save, while body-kind alone cannot downgrade a v2 row', async () => {
   const root = await mkdtemp(join(tmpdir(), 'legacy-migration-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createJsonlTaskTransitionCoordinator(root, {lock:{enabled:true}}, taskDocumentStorageContract)
   const store = createContextOutputService({ root: join(root, 'results'), workspaceId: 'w' })
   try {
-    await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+    await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
     await coordinator.append('child', [{ type: 'turn/start' }, { type: 'assistant/message', text: 'historical body' }, { type: 'turn/end' }])
     const current = createTaskRegistry({ coordinator, stateId: 'parent' })
     current.submit({ identity: { parentSessionId: 'parent' }, childSessionId: 'child', agentPath: 'root/a', description: 'a', prompt: 'go', agent: 'general', delivery: 'tool' })
@@ -128,7 +128,7 @@ it('round-trips absent outcomes only for unfinished observations and keeps the t
   for (const saved of [{ status: 'completed' }, { status: 'error' }, { status: 'cancelled' }, { status: 'recovery-required' }, { status: 'running', outcome: 'invented' }, { status: 'completed', outcome: 'completed', future: true }, { status: 'running', outcome: undefined }, { status: 'running', execution: { outcome: 'unknown', dispatch: 'invented' } }]) expect(restore(saved)).toThrow(/publication/)
   expect(restore({ status: 'running' }, { legacyFormatVersion: 2 })).toThrow(/publication/)
   for (const extra of [{ legacyFormatVersion: 1 }, { legacyFormatVersion: 1, bodyKind: 'legacy-text' }, { legacyFormatVersion: 1, bodyKind: 'legacy-text', result: { version: 1, kind: 'pending', revision: 'original' } }]) expect(restore({ status: 'running' }, extra)).toThrow(/publication/)
-  expect(() => createTaskRegistry().restore({ formatVersion: 3, tasks: [], notifications: [] } as never)).toThrow(/version/)
+  expect(() => createTaskRegistry().restore({ formatVersion: 4, tasks: [], notifications: [] } as never)).toThrow(/version/)
 })
 
 it('rejects inherited migration stamps and invalid current source observations before mutating restore state', () => {

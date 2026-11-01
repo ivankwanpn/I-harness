@@ -1,3 +1,4 @@
+import { taskDocumentOperationsFor } from '@i-harness/session-persistence/internal/task-document-operations'
 import * as factOwners from '../../session-persistence/src/coordinator/fact-owner.ts'
 const prefixGate=vi.hoisted(()=>({path:'',armed:false,gate:undefined as Promise<void>|undefined,entered:undefined as (()=>void)|undefined}))
 const metadataPublication=vi.hoisted(()=>({path:'',writes:0,renames:0}))
@@ -73,7 +74,7 @@ it('retains the original cold checked target for finite inspection without makin
       expect(Object.isFrozen(observation.birth)).toBe(true)
       expect(Object.isFrozen(observation.birth.stage.seed)).toBe(true)
       observation.assertCurrent()
-      expect(() => observation.document.assertReady()).toThrow()
+      expect(() => observation.document.assertReady()).toThrow();expect(()=>taskDocumentOperationsFor(f.coordinator)!.parent(observation.document)).toThrow()
     })
     await selected.useColdSelectedTarget(f.coordinator, result.target, async observation => { expect(observation.document).toBe(original) })
     await expect(f.coordinator.openManagedDocument('target')).rejects.toThrow()

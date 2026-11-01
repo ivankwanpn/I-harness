@@ -1,5 +1,6 @@
 import type { TaskRegistry } from './types.ts'
 import { associateTaskSaveFacade } from './save-owner.ts'
+import { forwardColdBindings } from './cold-bindings.ts'
 
 /** Mount admission only. Data and cleanup stay with the one original registry;
  * restoration retains that private owner rather than temporarily unlocking it. */
@@ -26,5 +27,6 @@ export function createTaskStartupFacade(owner: TaskRegistry, assertWork: () => v
     async flushPersistence() { assertWork(); await owner.flushPersistence() },
   }
   associateTaskSaveFacade(facade, owner)
+  forwardColdBindings(facade, owner)
   return Object.freeze(facade)
 }
