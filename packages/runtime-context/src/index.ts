@@ -1,5 +1,7 @@
 import type { SessionView as Session, RuntimeContextFactSource, RuntimeContextRecordV1, CapturedActionFact, ProducerFactOutcome } from '@i-harness/core-session'
 import { committedFactSeqs, createNondurableFactOwner, isNondurableSession, projectCurrentContext, runtimeContextDigest, renderRuntimeContext, validRuntimeContextRecord } from '@i-harness/core-session'
+import { readRestoredConversation, type PreparedConversationArchive } from '@i-harness/core-session/internal/restoration'
+import {types as utilTypes} from 'node:util'
 
 export const RUNTIME_CONTEXT_SOURCE_PLUGIN = 'i-harness/runtime-context'
 export const RUNTIME_CONTEXT_CLEARED = 'Current runtime context: none. Earlier runtime-context snapshots no longer apply.'
@@ -16,6 +18,24 @@ export interface RuntimeContextService {
 /** The source retains one original capture until its real disposition is known.
  * Complete observations enter the existing owner in invocation order. */
 export function createRuntimeContext(session: Session, source?: RuntimeContextFactSource): RuntimeContextService {
+  return createRuntimeContextEngine(()=>projectCurrentContext(session),source,!source&&isNondurableSession(session)?createNondurableFactOwner(session):undefined)
+}
+export interface PreparedRuntimeContextReader {
+  readonly ownerSessionId: string
+  prepare(signal?:AbortSignal):Promise<PreparedConversationArchive>
+  assertCurrent():void
+}
+/** A real nominal archive supplies the current floor; no Session-shaped view. */
+export function createPreparedRuntimeContext(reader:PreparedRuntimeContextReader,source:RuntimeContextFactSource):RuntimeContextService {
+  if(!reader||utilTypes.isProxy(reader)||typeof source!=='function'||utilTypes.isProxy(source))throw TypeError('Original prepared runtime source required')
+  const fields=Object.getOwnPropertyDescriptors(reader),keys=Reflect.ownKeys(fields)
+  if(keys.length!==3||!['ownerSessionId','prepare','assertCurrent'].every(name=>keys.includes(name)&&fields[name]&&'value'in fields[name]!)||typeof fields.ownerSessionId!.value!=='string'||!fields.ownerSessionId!.value||typeof fields.prepare!.value!=='function'||typeof fields.assertCurrent!.value!=='function'||utilTypes.isProxy(fields.prepare!.value)||utilTypes.isProxy(fields.assertCurrent!.value))throw TypeError('Closed prepared runtime reader required')
+  const originalAssert=fields.assertCurrent!.value!,originalPrepare=fields.prepare!.value!
+  const current=()=>{const now=Object.getOwnPropertyDescriptors(reader);if(Reflect.ownKeys(now).length!==keys.length||keys.some(key=>typeof key!=='string'||!now[key]||!('value'in now[key]!)||now[key]!.value!==fields[key]!.value))throw TypeError('Prepared runtime reader changed');Reflect.apply(originalAssert,reader,[])}
+  const captured:PreparedRuntimeContextReader=Object.freeze({ownerSessionId:fields.ownerSessionId!.value,prepare(signal?:AbortSignal){current();return Reflect.apply(originalPrepare,reader,[signal])},assertCurrent:current})
+  return createRuntimeContextEngine(()=>{throw TypeError('Original prepared context required')},source,undefined,captured)
+}
+function createRuntimeContextEngine(readCurrent:()=>{readonly semanticDigest:string}|undefined,source?:RuntimeContextFactSource,memory?:ReturnType<typeof createNondurableFactOwner>,prepared?:PreparedRuntimeContextReader):RuntimeContextService {
   const sections = new Map<string, () => string>()
   let accepting = true, closed = false
   type Flight = { work: Promise<void>; records: Set<Publication> }
@@ -23,7 +43,7 @@ export function createRuntimeContext(session: Session, source?: RuntimeContextFa
     outcome?: ProducerFactOutcome; finished: boolean; finishFailure?: { error: unknown }; leaseReleased: boolean; settled: boolean; finishNeeded: boolean; cleanup?: Promise<void> }
   const originals = new Set<Publication>(), flights = new Set<Flight>()
   let adjacent: { digest: string; signal?: AbortSignal; action: ReturnType<RuntimeContextFactSource>; work: Promise<void> } | undefined
-  const memory = !source && isNondurableSession(session) ? createNondurableFactOwner(session) : undefined
+  let preparedTail:Promise<unknown>=Promise.resolve()
   const captureSections = (): RuntimeContextRecordV1 => {
     const snapshot: ContextSection[] = []
     for (const [name, getter] of sections) {
@@ -72,10 +92,10 @@ export function createRuntimeContext(session: Session, source?: RuntimeContextFa
     for (const flight of accepted) for (const original of flight.records) records.add(original)
     await reconcileRecords([...records])
   }
-  function publish(record: RuntimeContextRecordV1, flight: Flight, signal?: AbortSignal, retain?: () => RuntimeContextPublicationLease): Promise<void> {
+  function publish(record: RuntimeContextRecordV1, flight: Flight, signal?: AbortSignal, retain?: () => RuntimeContextPublicationLease, current=readCurrent, guard?:()=>void): Promise<void> {
     signal?.throwIfAborted()
-    const latest = projectCurrentContext(session)
-    if (flights.size === 1 && flights.has(flight) && latest?.semanticDigest === runtimeContextDigest(record.sections)) return Promise.resolve()
+    const latest = current()
+    if ((prepared||flights.size === 1 && flights.has(flight)) && latest?.semanticDigest === runtimeContextDigest(record.sections)) return Promise.resolve()
     const digest = runtimeContextDigest(record.sections)
     const action = source ? source(signal) : adjacent && adjacent.signal === signal ? adjacent.action : memory?.beginAction(signal)
     if (!action) throw Object.assign(new Error('Managed runtime context requires its owned source'), { code: 'FACT_OWNER_UNSUPPORTED' })
@@ -86,7 +106,7 @@ export function createRuntimeContext(session: Session, source?: RuntimeContextFa
     let work: Promise<void>
     try {
       publication.lease = retain?.()
-      publication.capture = action.captureRuntimeContext(record, () => !closed)
+      publication.capture = action.captureRuntimeContext(record, () => {if(closed)return false;try{guard?.();return true}catch{return false}})
       publication.finishNeeded = true
       work = publication.capture.admit().then(async outcome => {
         publication.outcome = outcome
@@ -102,6 +122,17 @@ export function createRuntimeContext(session: Session, source?: RuntimeContextFa
     const settled = () => { if (adjacent?.work === work) adjacent = undefined }
     void work.then(settled, settled)
     return work
+  }
+  async function publishPrepared(record:RuntimeContextRecordV1,flight:Flight,signal?:AbortSignal,retain?:()=>RuntimeContextPublicationLease):Promise<void>{
+    if(!accepting)throw Error('Runtime context closed')
+    signal?.throwIfAborted();prepared!.assertCurrent()
+    const archive=await prepared!.prepare(signal)
+    try{
+      const current=()=>{if(!accepting)throw Error('Runtime context closed');signal?.throwIfAborted();prepared!.assertCurrent();archive.assertCurrent()}
+      current()
+      const floor=readRestoredConversation(archive,{ownerSessionId:prepared!.ownerSessionId}).projection.current
+      return await publish(record,flight,signal,retain,()=>{current();return floor},current)
+    }finally{await archive.settle()}
   }
   return {
     registerSection(name, getter) {
@@ -121,11 +152,15 @@ export function createRuntimeContext(session: Session, source?: RuntimeContextFa
       // Capture/admit synchronously under the original source and signal.
       // An uncertain previous publication must first resolve its SAME capture.
       let work: Promise<void>
+      const proceed=()=>{
       const pending = [...originals].filter(original => original.settled)
-      try { work = pending.length ? reconcileRecords(pending).then(refused => {
+      const publishOriginal=()=>prepared?publishPrepared(record,flight,signal,retain):publish(record,flight,signal,retain)
+      return pending.length ? reconcileRecords(pending).then(refused => {
         if (refused.length) committedFactSeqs(refused[0]!)
-        return publish(record, flight, signal, retain)
-      }) : publish(record, flight, signal, retain) }
+        return publishOriginal()
+      }) : publishOriginal()
+      }
+      try { if(prepared){work=preparedTail.then(proceed);preparedTail=work.catch(()=>{})}else work=proceed() }
       catch (error) { work = Promise.reject(error) }
       void work.then(() => { flights.delete(flight); finished.resolve() }, error => { flights.delete(flight); finished.reject(error) })
       return work
