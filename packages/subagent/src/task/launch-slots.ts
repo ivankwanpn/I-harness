@@ -8,7 +8,7 @@ export interface TaskLaunchSlot {
  readonly accepted: Promise<void>
  captureSelection<T>(read:()=>T):T
  keep(cleanup: {close():Promise<void>}): void
- start(source: () => { close(): Promise<void> }): void
+ start(prepare: () => void): void
  bind(birth: TaskChildBirthBinding): Promise<void>
  assertBinding(): void
  consumeBinding(): void
@@ -37,21 +37,20 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
    let selection:{value:unknown}|{cause:unknown}|undefined
    let bindingIntent: TaskChildBirthBinding | undefined,removeAbort=()=>{}
    let preparation:Promise<void>|undefined
-   let task:TaskRecord,accepted:Promise<void>=Promise.resolve(),source:{close():Promise<void>}|undefined,binding:OwnedTaskSave|undefined,started=false,retired:{cause:unknown}|undefined,consumed=false,consumerClean=false,closing:Promise<void>|undefined
+   let task:TaskRecord,accepted:Promise<void>=Promise.resolve(),binding:OwnedTaskSave|undefined,started=false,retired:{cause:unknown}|undefined,consumed=false,consumerClean=false,closing:Promise<void>|undefined
    const current=()=>{if(retired)throw retired.cause;checkCaller(caller);hooks.current(task)}
    const retire=(cause:unknown)=>{if(!retired){retired={cause};removeAbort();completion.reject(cause);void Promise.resolve().then(close).catch(()=>{})}}
    const close=()=>{if(closing)return closing;const flight=(async()=>{
     const errors:unknown[]=[]
     try{if(!consumed&&!consumerClean)await binding?.retireConsumer()}catch(error){errors.push(error)}
     await preparation?.catch(()=>{})
-    try{await source?.close()}catch(error){errors.push(error)}
     for(const item of [...setup].reverse())if(!item.closed)try{await item.close();item.closed=true}catch(error){errors.push(error)}
     if(errors.length)throw new AggregateError(errors,'Original task slot cleanup unresolved');removeAbort()
    })();closing=flight;void flight.finally(()=>{if(closing===flight)closing=undefined}).catch(()=>{});return flight}
    const slot:TaskLaunchSlot={get task(){return task},caller,role:roleIntent,flight:completion.promise,get accepted(){return accepted},
     captureSelection<T>(read:()=>T):T {if(this!==slot)throw TypeError('Foreign slot');current();if(!selection){try{const value=read();selection={value:value===undefined?undefined:freeze(captureTaskSnapshot(value))};current()}catch(cause){selection={cause};throw cause}}if('cause'in selection)throw selection.cause;return selection.value as T},
     keep(cleanup){if(this!==slot)throw TypeError('Foreign slot');const close=cleanup.close.bind(cleanup);setup.push({close,closed:false});try{current()}catch(cause){retire(cause);throw cause}},
-    start(make){if(this!==slot)throw TypeError('Foreign slot');if(started)return;started=true;preparation=(async()=>{await accepted;current();source=make();current();throw Object.assign(Error('Original task launch awaits the connected B2 caller'),{code:'TASK_LAUNCH_NOT_CONNECTED'})})();void preparation.catch(async cause=>{retire(cause);try{await close()}catch{/* Retained for explicit original close. */}})},
+    start(make){if(this!==slot)throw TypeError('Foreign slot');if(started)return;started=true;preparation=(async()=>{await accepted;current();make();current();throw Object.assign(Error('Original task launch awaits the connected B2 caller'),{code:'TASK_LAUNCH_NOT_CONNECTED'})})();void preparation.catch(async cause=>{retire(cause);try{await close()}catch{/* Retained for explicit original close. */}})},
     bind(birth){if(this!==slot)return Promise.reject(TypeError('Foreign slot'));try{current();if(binding)throw Error('Original task binding already captured');bindingIntent=freeze(captureTaskSnapshot(birth) as TaskChildBirthBinding);binding=hooks.bind(task,bindingIntent);return binding.done.catch(cause=>{retire(cause);throw cause})}catch(cause){retire(cause);return Promise.reject(cause)}},
     assertBinding(){if(this!==slot)throw TypeError('Foreign slot');current();if(!binding||consumed)throw Error('Original binding unavailable');binding.assertHandoff()},
     async retryBinding(){if(this!==slot)throw TypeError('Foreign slot');if(!binding)throw Error('Original binding unavailable');if(retired){await binding.retireConsumer().catch(()=>{});await binding.retry();consumerClean=true}else await binding.retry()},

@@ -101,6 +101,9 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         ...(exec?.callId !== undefined ? { toolCallId: exec.callId } : {}),
       }
       assertInitialTaskAdmission(deps.tasks, identity)
+      // Only the already-known, callback-free refusal can precede admission.
+      // Dynamic selection/policy still belongs to the installed original slot.
+      if(!deps.roleSelectionFor&&typeof deps.allowSubagentModelSelection!=='function'&&subagentModelSelectionGated(deps,role.model))throw subagentModelSelectionDisabled(role.name)
       const admitted=deps.taskLaunchCallerFor?.(exec)
       if(admitted){
         if(admitted.kind==='new')admitted.slot.start(()=>{
@@ -108,8 +111,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           if(subagentModelSelectionGated(deps,declared))throw subagentModelSelectionDisabled(admitted.slot.role.name)
           const retained=exec.retainOutcome?.()
           admitted.slot.keep({async close(){retained?.unavailable()}})
-          const source=createSpawnSource(subagentFactOwner(deps.parentSession,deps.factOwner),exec.abortSignal,retained,args.background!==false,undefined,undefined,action=>admitted.slot.keep({async close(){action.finish()}}))
-          return {async close(){try{await source.releaseUnused()}finally{source.finish()}}}
+          createSpawnSource(subagentFactOwner(deps.parentSession,deps.factOwner),exec.abortSignal,retained,args.background!==false,undefined,undefined,cleanup=>admitted.slot.keep(cleanup))
         })
         return admitted.slot.flight
       }

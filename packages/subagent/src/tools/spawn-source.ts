@@ -20,9 +20,16 @@ export function spawnObservation(base: SpawnIdentity, task: TaskRecord) {
 
 /** Retains the original start disposition, publication identity and real end.
  * Passive outcome reads never join a still-running child. */
-export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void, retainAction?: (action: ReturnType<FactOwner['beginAction']>) => void) {
+export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void, retainUnused?: (cleanup: { close(): Promise<void> }) => void) {
   const action = owner.beginAction(signal)
-  retainAction?.(action)
+  let closeAcquired: (() => Promise<void>) | undefined
+  let unused = false
+  // Retain the original acquisition before any later constructor step can
+  // throw. The same handle gains its actual source below, before beforeRead.
+  retainUnused?.(Object.freeze({ async close() {
+    unused = true
+    try { await closeAcquired?.() } finally { action.finish() }
+  } }))
   let start: CapturedActionFact<ProducerFactOutcome> | undefined
   let terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined
   let terminalEvent: Readonly<Extract<SessionEvent, { type: 'subagent/end' }>> | undefined
@@ -32,7 +39,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   let terminalOutput: ReturnType<typeof spawnObservation> | undefined
   let taskSave: (() => Promise<void>) | undefined
   let saving: Promise<void> | undefined
-  let taskSaved = false, terminalSaved = false, unused = false, retainPublished = false
+  let taskSaved = false, terminalSaved = false, retainPublished = false
   let resultPublished = false
   let terminalSignalled = false
   let recoverySignalled = false, terminalOutcome: ProducerFactOutcome | undefined
@@ -125,6 +132,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     void pending.catch(() => { if (closing === pending) closing = undefined })
     return pending
   }
+  closeAcquired = closeSource
   retained?.beforeRead(async () => {
     await reconcileStart()
     if (terminal || prepareEnd) await settleTerminal()
