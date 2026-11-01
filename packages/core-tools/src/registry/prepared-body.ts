@@ -5,6 +5,7 @@ import type { PluginContext } from '@i-harness/core-plugin'
 import type {ExecutionHookChannel} from '@i-harness/core-plugin'
 import type { PreparedCall, Tool, ToolExec } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
+import {registerToolInvocation} from './invocation-domain.ts'
 import {isManagedExecutionDomain,isManagedExecutionSource,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
@@ -99,6 +100,7 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
   const body: Body = {prepared,tool:prepared.tool,leaf,exec:prepared.exec,call:prepared.call,context,managed,hooks,foreignContext,source:original.source,view:original.view,
     snapshots:new Map(identityFields.map(key=>[key,Object.getOwnPropertyDescriptor(prepared.exec,key)])),validations:{bindingValidation:prepared.bindingValidation,authorityValidation:prepared.authorityValidation,approvalValidation:prepared.approvalValidation},signal,claimed:false}
   records.set(prepared,body);byExec.set(body.exec,body)
+  registerToolInvocation(body.exec,body.managed?.context??body.context?.context,body.managed?.domain,body.source,()=>{check(body);if(aborted(own(body.exec,'abortSignal') as AbortSignal|undefined))throw Error('Original tool invocation aborted')},true)
   return async () => {
     body.hooks?.channel.assertCurrent(body.hooks.surface)
     if(body.managed&&!body.permit)throw new Error('Original private model member required')

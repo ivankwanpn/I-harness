@@ -1,6 +1,7 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { captureExecutionOwnerContext, preparedExecutionOwnerContext,preparedManagedExecutionDomain, type ToolExecutionOwnerContext,type ManagedToolExecutionOwnerContext } from './registry/prepared-body.ts'
 export { bindPreparedShellLeaf, assertPreparedExecutionOwnerContext } from './registry/prepared-body.ts'
+export {readToolInvocationDomain} from './registry/invocation-domain.ts'
 export type { PreparedShellBodyClaim, ToolExecutionOwnerContext,ManagedToolExecutionOwnerContext } from './registry/prepared-body.ts'
 import type { ToolRegistry, ToolCall, ToolResult } from "./types.ts"
 import { createCatalog } from "./registry/catalog.ts"
