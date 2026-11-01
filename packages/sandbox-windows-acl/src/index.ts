@@ -49,12 +49,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { SandboxUnavailableError, workspaceRoots, type ConfinedArgv, type ProcessSpec, type SandboxPolicy, type SandboxProvider } from '@i-harness/sandbox'
 import { grantWrite, revokeWrite } from './acl.ts'
 import { Win32Error } from './errors.ts'
-import { throwLastError, win32 } from './ffi.ts'
+import { win32 } from './ffi.ts'
 import type { NativePtr, Win32Bindings } from './ffi.ts'
 import { NativeInitOwner, NativeInitializationFailure, NativeCleanupFailure } from './init-owner.ts'
 import { AclWriteGrant } from './grant.ts'
 import { assertPrivateTempDisjoint, assertTempRootOutsideWorkspace } from './path-boundary.ts'
-import { buildCommandLine, spawnSandboxedInherited, waitForExit } from './spawn.ts'
+import { buildCommandLine } from './spawn.ts'
+import { createInheritedChildOwner } from './inherited-child.ts'
 import { createPipeChildOwner, type PipeChildOwner } from './pipe-child.ts'
 import { logonSidText } from './pipe-sid.ts'
 import { acquireWaitDrainBridgeClient } from './native-wait-bridge.ts'
@@ -334,10 +335,10 @@ export class AclSandbox {
    * @param options - the program, argv/cwd, and stdio shape.
    * @returns the running child.
    */
-  spawn(options: AclSandboxSpawnOptions & { stdio: 'inherit' }): AclSandboxChild
+  spawn(options: AclSandboxSpawnOptions & { stdio: 'inherit' }): Promise<AclSandboxChild>
   spawn(options: AclSandboxSpawnOptions & { stdio?: 'pipe' }): Promise<AclSandboxChild>
-  spawn(options: AclSandboxSpawnOptions): AclSandboxChild | Promise<AclSandboxChild>
-  spawn(options: AclSandboxSpawnOptions): AclSandboxChild | Promise<AclSandboxChild> {
+  spawn(options: AclSandboxSpawnOptions): Promise<AclSandboxChild>
+  spawn(options: AclSandboxSpawnOptions): Promise<AclSandboxChild> {
     const api = this.api
     const token = this.token
     if (!this.ready || this.closing || api === undefined || token === undefined) throw new Error('AclSandbox is not initialized: call init() first')
@@ -345,17 +346,10 @@ export class AclSandbox {
     const cwd = options.cwd ?? process.cwd()
 
     if (options.stdio === 'inherit') {
-      const native = spawnSandboxedInherited(api, token, { command: options.command, args, cwd, argumentEncoding: options.argumentEncoding, windowsHide: options.windowsHide })
-      let exitCodePromise: Promise<number> | undefined
-      return {
-        pid: native.pid,
-        wait: async () => {
-          exitCodePromise ??= Promise.resolve(waitForExit(api, native.process))
-          const exitCode = await exitCodePromise
-          if (api.closeHandle(native.job) === 0) throwLastError(api, 'CloseHandle', 'kill-on-close job')
-          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), exitCode }
-        },
-      }
+      buildCommandLine(options.command,args,options.argumentEncoding)
+      return this.admitChild(createInheritedChildOwner(Object.freeze({command:options.command,args:Object.freeze(args),cwd,argumentEncoding:options.argumentEncoding,windowsHide:options.windowsHide}),{
+        api,token,assertLaunchCurrent:()=>{if(this.api!==api||this.token!==token)throw new Error('AclSandbox original launch owner retired')},acquireWaitClient:()=>acquireWaitDrainBridgeClient(),
+      }))
     }
 
     if (this.logonSid === undefined) throw new Error('AclSandbox logon SID unavailable')
@@ -367,7 +361,10 @@ export class AclSandbox {
       assertLaunchCurrent: () => { if (this.api !== api || this.token !== token) throw new Error('AclSandbox original launch owner retired') },
       acquireWaitClient: () => acquireWaitDrainBridgeClient(),
     })
-    this.pipeChildren.add(record) // Original owner precedes every acquisition.
+    return this.admitChild(record)
+  }
+  private admitChild(record: PipeChildOwner): Promise<AclSandboxChild> {
+    this.pipeChildren.add(record) // Both stdio modes share original admission.
     const result = record.start()
     void result.then(child => child.wait(), () => record.joinCleanup()).finally(() => {
       if (!record.pending()) this.pipeChildren.delete(record)

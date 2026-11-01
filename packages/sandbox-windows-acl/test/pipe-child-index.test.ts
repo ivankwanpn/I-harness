@@ -7,7 +7,7 @@ vi.mock('../src/pipe-child.ts', () => ({ createPipeChildOwner: vi.fn((input, ori
   state.records.push(record);return record
 }) }))
 vi.mock('../src/native-wait-bridge.ts', () => ({acquireWaitDrainBridgeClient:state.acquire}))
-vi.mock('../src/spawn.ts', async original => ({...await original<any>(),spawnSandboxedInherited:state.inherit}))
+vi.mock('../src/inherited-child.ts', () => ({createInheritedChildOwner:state.inherit}))
 import { AclSandbox } from '../src/index.ts'
 function sandbox() {
   const box=new AclSandbox({mode:'read-only',writableDirs:[],tempDir:null})
@@ -30,7 +30,9 @@ describe('actual sandbox pipe admission',()=>{
   it('retains failed prepublication debt and reaches it through disposal',async()=>{
     const {box,internals}=sandbox();const start=box.spawn({command:'cmd'}),record=state.records[0];record.joinCleanup=vi.fn(async()=>{throw 0});record.reject(false);await expect(start).rejects.toBe(false);await expect(box.disposeAsync()).rejects.toBeInstanceOf(AggregateError);expect(internals.initOwner.cleanup).not.toHaveBeenCalled();expect(internals.pipeChildren.has(record)).toBe(true)
   })
-  it('literal inherit remains synchronous and never acquires a pipe child/client',()=>{
-    const {box}=sandbox();state.inherit.mockReturnValue({pid:9,process:2n,job:3n});const child=box.spawn({command:'cmd',stdio:'inherit'});expect(child.pid).toBe(9);expect(child).not.toBeInstanceOf(Promise);expect(state.records).toHaveLength(0);expect(state.acquire).not.toHaveBeenCalled();box.dispose()
+  it('literal inherit returns a Promise and admits the original inherited record before start',async()=>{
+    const {box,internals}=sandbox();let pending=true;const child={pid:9,wait:async()=>({stdout:Buffer.alloc(0),stderr:Buffer.alloc(0),exitCode:0})}
+    const record={start(){expect(internals.pipeChildren.has(record)).toBe(true);return Promise.resolve(child)},pending:()=>pending,async joinCleanup(){pending=false}}
+    state.inherit.mockReturnValue(record);const result=box.spawn({command:'cmd',stdio:'inherit'});expect(result).toBeInstanceOf(Promise);expect(()=>box.dispose()).toThrow('disposeAsync');expect(await result).toBe(child);await box.disposeAsync()
   })
 })

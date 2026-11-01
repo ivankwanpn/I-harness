@@ -10,7 +10,7 @@ const MAX_ATTRIBUTE_BYTES = 1024 * 1024
 /** The caller owns the three inheritable child endpoints. This scope owns only
  * the extended startup storage and native list, until CreateProcess returns.
  * Failure leaves the same scope registered on parent for acknowledged cleanup. */
-export function prepareChildStartup(parent: NativeInitOwner, handles: ChildStdioHandles) {
+export function prepareChildStartup(parent: NativeInitOwner, handles: ChildStdioHandles, windowsHide = false) {
   if (!Array.isArray(handles) || handles.length !== 3 || handles.some(handle => typeof handle !== 'bigint' || handle <= 0n || handle >= 0xffffffffffffffffn)
       || new Set(handles).size !== 3) throw new TypeError('Exactly three distinct child stdio handles are required')
   const parentCurrent = parent.captureCurrent(), owner = parent.scope(), ownerCurrent = owner.captureCurrent(), api = parent.api
@@ -35,7 +35,7 @@ export function prepareChildStartup(parent: NativeInitOwner, handles: ChildStdio
   if (updated === 0) throwLastError(api, 'UpdateProcThreadAttribute')
   current()
   if (!Number.isInteger(updated) || updated < -0x80000000 || updated > 0x7fffffff) throw new Error('UpdateProcThreadAttribute outcome unknown')
-  koffi.encode(startupInfo, STARTUPINFOEXW, { StartupInfo: { cb: STARTUPINFOEXW_SIZE, dwFlags: STARTF_USESTDHANDLES,
+  koffi.encode(startupInfo, STARTUPINFOEXW, { StartupInfo: { cb: STARTUPINFOEXW_SIZE, dwFlags: STARTF_USESTDHANDLES | (windowsHide ? 1 : 0), ...(windowsHide ? { wShowWindow: 0 } : {}),
     hStdInput: handles[0], hStdOutput: handles[1], hStdError: handles[2] }, lpAttributeList: list })
   let closing = false, closed = false
   const assertCurrent = () => { if (closing) throw new Error('Extended startup is closed'); current() }
