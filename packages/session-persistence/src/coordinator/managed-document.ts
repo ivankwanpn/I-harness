@@ -46,7 +46,7 @@ type Pending = {
     batch: ReturnType<typeof encodeFactBatch>;
     prefix: JournalPrefix;
     entries: Entry[];
-    events: ReturnType<typeof resolveFactGroup>;
+    events: Readonly<ReturnType<typeof resolveFactGroup>>;
     install(receipt: FactReceipt): void;
     receipt?: FactReceipt;
     issued: boolean;

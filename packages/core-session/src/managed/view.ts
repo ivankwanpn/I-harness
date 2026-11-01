@@ -7,6 +7,24 @@ import type { SessionView } from './types.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
 const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
 const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
+// Only managedSessionState enrolls: its initial copy and every appended row
+// are immutable. Other view factories must qualify their own invariants.
+const immutableFactories = new WeakMap<SessionView, {index:ConversationValidationIndex;assertFrontier(count:number):void}>()
+export interface ManagedHistoryCut {readonly kind:'original-managed-history-cut'}
+const historyCuts = new WeakMap<ManagedHistoryCut,{view:SessionView;owner:object;sessionId:string;factory:NonNullable<ReturnType<typeof immutableFactories.get>>;count:number}>()
+export function captureManagedHistoryCut(view:SessionView,owner:object,sessionId:string):ManagedHistoryCut {
+  const factory=immutableFactories.get(view)
+  if(!factory||managedFactOwners.get(view)!==owner||originalSourceSessions.get(view)!==sessionId||originalIndexes.get(view)!==factory.index)throw TypeError('Original immutable history source required')
+  const count=factory.index.eventCount;factory.assertFrontier(count)
+  const cut=Object.freeze({kind:'original-managed-history-cut' as const})
+  historyCuts.set(cut,{view,owner,sessionId,factory,count});return cut
+}
+/** Passive prefix identity only. Original caller admission remains separate. */
+export function assertManagedHistoryCut(cut:ManagedHistoryCut,view:SessionView,owner:object,sessionId:string):void {
+  const original=historyCuts.get(cut)
+  if(!original||original.view!==view||original.owner!==owner||original.sessionId!==sessionId||immutableFactories.get(view)!==original.factory||originalIndexes.get(view)!==original.factory.index||managedFactOwners.get(view)!==owner||originalSourceSessions.get(view)!==sessionId)throw TypeError('Original immutable history cut required')
+  original.factory.assertFrontier(original.count)
+}
 /** Exact containing document identity; a caller label cannot choose a source. */
 export function isManagedResultSource(view: SessionView, owner: object, sessionId: string): boolean {
   return managedFactOwners.get(view) === owner && originalSourceSessions.get(view) === sessionId
@@ -62,6 +80,11 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   managedSessions.add(view)
   originalIndexes.set(view, index)
   originalSourceSessions.set(view, scope?.sessionId)
+  immutableFactories.set(view,{index,assertFrontier(count){
+    // The private array has no replacement path, only frozen-row append.
+    // Index and array publication are one synchronous original installation.
+    if(events.length<count||index.eventCount!==events.length)throw TypeError('Original immutable history frontier unavailable')
+  }})
   return {
     view,
     bindOwner(owner: object) {
@@ -85,8 +108,12 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
       }
       validateDeliveryFrame(prepared, view.formatVersion)
       const staged = index.stage(prepared)
+      // Keep the validated installation array private and immutable. Exposing
+      // it allowed a caller to substitute a row after index validation.
+      Object.freeze(prepared)
+      const exposed = Object.freeze([...prepared])
       let installed = false
-      return { events: prepared, install() {
+      return Object.freeze({ events: exposed, install() {
         if (installed) return
         // stage is non-mutating. Both operations below are synchronous and use
         // only owned data; observers are explicitly outside this capability.
@@ -94,7 +121,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
         for (const event of prepared) events.push(event)
         for (const [id, pending] of changed) { if (pending) pendingInputs.add(id); else pendingInputs.delete(id) }
         installed = true
-      } }
+      } })
     },
     observe(suffix: readonly SessionEvent[], report: (error: unknown) => void) {
       const observers = subscribers.get(view)

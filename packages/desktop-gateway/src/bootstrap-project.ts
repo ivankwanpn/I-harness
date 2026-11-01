@@ -2,21 +2,27 @@ import { types } from 'node:util'
 import { captureBootstrapRequestIntent, type BootstrapInvocation, type BootstrapRequestIntent, type BootstrapTargetPreparationPort } from '@i-harness/session-persistence'
 import {captureChildBootstrapCaptureRequest,type ChildBootstrapCaptureRequest} from '@i-harness/session-persistence'
 import type { SessionProjectContext } from '@i-harness/session-executor'
+import {inspectTaskChildHistory} from '@i-harness/subagent'
+import {canonicalJsonData} from '@i-harness/core-session'
 
 export interface BootstrapProjectCapture {
   invocation: BootstrapInvocation; requestIntent: BootstrapRequestIntent; sourceSessionId?: string;
   sourceAvailable(): boolean; assertNewWorkCurrent(): void; targetAvailable(): boolean;
 }
 export interface TaskChildProjectCapture {
+ history?:import('@i-harness/subagent').TaskChildHostInput['history'];
  request:ChildBootstrapCaptureRequest;sourceSessionId:string;
  sourceAvailable():boolean;assertNewWorkCurrent():void;targetAvailable():boolean;
 }
 export function captureTaskChildProject(value:TaskChildProjectCapture){
  if(!value||typeof value!=='object'||types.isProxy(value)||![Object.prototype,null].includes(Object.getPrototypeOf(value)))throw TypeError('Invalid task child project capture')
  const keys=['request','sourceSessionId','sourceAvailable','assertNewWorkCurrent','targetAvailable'],fields=Object.getOwnPropertyDescriptors(value)
- if(Reflect.ownKeys(value).length!==keys.length||keys.some(key=>!fields[key]?.enumerable||!('value'in fields[key]!))||keys.slice(2).some(key=>typeof fields[key]!.value!=='function'||types.isProxy(fields[key]!.value)))throw TypeError('Invalid task child project fields')
+ if(Reflect.ownKeys(value).some(key=>typeof key!=='string'||!keys.includes(key)&&key!=='history')||keys.some(key=>!fields[key]?.enumerable||!('value'in fields[key]!))||fields.history&&(!('value'in fields.history)||!fields.history.enumerable)||keys.slice(2).some(key=>typeof fields[key]!.value!=='function'||types.isProxy(fields[key]!.value)))throw TypeError('Invalid task child project fields')
  const request=captureChildBootstrapCaptureRequest(value.request)
- if(request.core.caller.kind!=='task'||request.core.history.selection.kind!=='none'||request.core.caller.parentSessionId!==value.sourceSessionId||request.requestIntent.project.kind==='unmanaged')throw TypeError('Foreign task child project source')
+ if(request.core.caller.kind!=='task'||request.core.caller.parentSessionId!==value.sourceSessionId||request.requestIntent.project.kind==='unmanaged')throw TypeError('Foreign task child project source')
+ if(request.core.history.selection.kind!=='none'){
+   if(!value.history||canonicalJsonData(inspectTaskChildHistory(value.history,value.sourceSessionId).history)!==canonicalJsonData(request.core.history))throw TypeError('Original task semantic project source required')
+ }else if(value.history)throw TypeError('Unexpected task semantic project source')
  return Object.freeze({request,invocation:request.invocation,requestIntent:request.requestIntent,sourceSessionId:value.sourceSessionId,sourceAvailable:value.sourceAvailable,assertNewWorkCurrent:value.assertNewWorkCurrent,targetAvailable:value.targetAvailable})
 }
 export interface BootstrapTargetScope { projectId?: string; scope?: SessionProjectContext; revision: string }
