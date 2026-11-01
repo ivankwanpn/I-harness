@@ -54,7 +54,10 @@ export interface ExecutionObservation {
  readonly contextRevision:number
  readonly scheduleRevision:number
  readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapter-not-connected';revision:number}>
- readonly inbox:Readonly<{pending(fromSeq?:number):readonly DeepReadonly<PendingInput>[];isPending(inputId:string,fromSeq?:number):boolean;everAdmitted(inputId:string):boolean;isExecutable(inputId:string):boolean}>
+ readonly inbox:Readonly<{pending(fromSeq?:number):readonly DeepReadonly<PendingInput>[];isPending(inputId:string,fromSeq?:number):boolean;everAdmitted(inputId:string):boolean;isExecutable(inputId:string):boolean;
+ /** Data only, hydrated at the original recorded ordinal; never an admission grant. */
+ admitted(inputId:string):Promise<DeepReadonly<Extract<SessionEventView,{type:'agent/input/admitted'}>>|undefined>;
+ lastCancellationSeq(inputId:string):number|undefined}>
  assertCurrent():void
  plan():Readonly<PlanModeView>
  sandboxMode(fromSeq?:number):Extract<SessionEventView,{type:'sandbox/mode'}>['mode']|undefined

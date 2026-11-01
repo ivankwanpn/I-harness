@@ -7,6 +7,7 @@ import {freezeJsonData} from './capture.ts'
 export function createManagedIntakeIndex() {
   const admissions=new Map<string,number>(),pending=new Set<string>()
   const records=new Map<string,Readonly<{seq:number;inherited:boolean}>>()
+  const cancellations=new Map<string,number>()
   const payloads=new Map<string,import('./types.ts').DeepReadonly<import('../inbox.ts').PendingInput>>()
   let revision=0
   return {
@@ -14,11 +15,13 @@ export function createManagedIntakeIndex() {
     everAdmitted(inputId:string){return admissions.has(inputId)},
     isPending(inputId:string){return pending.has(inputId)},
     record(inputId:string){return records.get(inputId)},
+    lastCancellationSeq(inputId:string){return cancellations.get(inputId)},
     pending(fromSeq=0){return Object.freeze([...payloads.values()].filter(input=>input.admittedSeq>=fromSeq))},
     releasePayloads(){payloads.clear()},
     stage(events:readonly SessionEventView[],validate=true){
       const expected=revision,changed=new Map<string,boolean>(),nextAdmissions=new Map<string,number>(),nextRecords=new Map<string,Readonly<{seq:number;inherited:boolean}>>()
       const nextPayloads=new Map<string,import('./types.ts').DeepReadonly<import('../inbox.ts').PendingInput>|undefined>()
+      const nextCancellations=new Map<string,number>()
       for(const event of events){
         if(event.type!=='agent/input/admitted'&&event.type!=='agent/input/promoted'&&event.type!=='agent/input/cancelled')continue
         const prior=changed.get(event.inputId)??pending.has(event.inputId)
@@ -33,10 +36,11 @@ export function createManagedIntakeIndex() {
           if(validate&&!prior)throw new TypeError('Input is not pending')
           changed.set(event.inputId,false)
           nextPayloads.set(event.inputId,undefined)
+          if(event.type==='agent/input/cancelled')nextCancellations.set(event.inputId,event.seq!)
         }
       }
       let installed=false
-      return {commit(){if(installed)return;if(revision!==expected)throw new TypeError('Stale managed intake suffix');for(const [id,seq]of nextAdmissions)admissions.set(id,seq);for(const [id,record]of nextRecords)records.set(id,record);for(const [id,value]of changed){if(value)pending.add(id);else pending.delete(id)}for(const [id,value]of nextPayloads){if(value)payloads.set(id,value);else payloads.delete(id)}revision++;installed=true}}
+      return {commit(){if(installed)return;if(revision!==expected)throw new TypeError('Stale managed intake suffix');for(const [id,seq]of nextAdmissions)admissions.set(id,seq);for(const [id,record]of nextRecords)records.set(id,record);for(const [id,seq]of nextCancellations)cancellations.set(id,seq);for(const [id,value]of changed){if(value)pending.add(id);else pending.delete(id)}for(const [id,value]of nextPayloads){if(value)payloads.set(id,value);else payloads.delete(id)}revision++;installed=true}}
     }
   }
 }
