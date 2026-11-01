@@ -1,7 +1,7 @@
 import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
 import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
 import { readSessionArchive } from './backend/archive-reader.ts'
-import { associateArtifactPaths } from '@i-harness/session-persistence/internal/artifact-path'
+import { associateArtifactPaths, createArtifactCurrentGuard } from '@i-harness/session-persistence/internal/artifact-path'
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
@@ -501,12 +501,12 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     },
   }
   const originalDescriptors = Object.getOwnPropertyDescriptors(backend)
-  const assertOriginal = () => {
+  const assertOriginal = createArtifactCurrentGuard(() => {
     for (const key of Object.keys(originalDescriptors)) {
       const current = Object.getOwnPropertyDescriptor(backend, key), original = originalDescriptors[key]!
       if (!current || !('value' in current) || current.value !== original.value) throw new Error('PROCESS_READ_UNAVAILABLE')
     }
-  }
+  })
   associateArchiveReadResources(backend,archiveReads.association)
   associateArtifactPaths(backend, Object.freeze({
     root() { assertOriginal(); return rootPath },

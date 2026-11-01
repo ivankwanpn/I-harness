@@ -53,10 +53,12 @@ export function withArtifactCurrentChecks(check: () => void): void {
   flushArtifactChecks(work)
 }
 export function associateArtifactPaths(backend:PersistenceBackend,owner:OriginalArtifactPaths):void{
+  if(types.isProxy(owner))throw TypeError('Original artifact owner required')
   if(associations.has(backend))throw TypeError('Backend already associated')
   const methods=['root','session','document','taskForParent','prepareRoot','prepareDocumentParents','assertOriginal'] as const
   const captured=Object.fromEntries(methods.map(name=>{const d=Object.getOwnPropertyDescriptor(owner,name);if(!d||!('value'in d)||typeof d.value!=='function')throw TypeError('Invalid original artifact owner');return[name,d.value]})) as unknown as OriginalArtifactPaths
-  function check(){for(const name of methods){const d=Object.getOwnPropertyDescriptor(owner,name);if(!d||!('value'in d)||d.value!==captured[name])throw TypeError('Changed artifact owner')}Reflect.apply(captured.assertOriginal,owner,[])}
+  function methodsCurrent(){for(const name of methods){const d=Object.getOwnPropertyDescriptor(owner,name);if(!d||!('value'in d)||d.value!==captured[name])throw TypeError('Changed artifact owner')}}
+  function check(){methodsCurrent();const invoke=()=>{if(Reflect.apply(captured.assertOriginal,owner,[])!==undefined)throw TypeError('Artifact owner check must be synchronous');methodsCurrent()};if(isArtifactCurrentGuard(captured.assertOriginal))invoke();else withImmediateArtifactCurrentChecks(invoke)}
   check();const root=Reflect.apply(captured.root,owner,[]),platform=createArtifactPathOwner(root)
   // Capture wrapper keeps the exact native capture receiver and original methods.
   function capture(kind:'session'|'document'|'taskForParent',id:string):ArtifactCapture{check();const target=Reflect.apply(captured[kind],owner,[id]),original=platform.capture(target);const result=Object.freeze({...original,...(original.kind==='ready'?{}:{provisionalKey:'artifact-provisional:'+JSON.stringify(target)}),assertCurrent(){if(this!==result)throw TypeError('Invalid artifact capture receiver');check();assertArtifactCurrent(original)}});return result}
