@@ -8,6 +8,7 @@ import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparati
 import {createResultObservationScope,createLegacyReadObservationRunner,type ResultObservationCapture,type SessionProjectContext,type ResultReadScopeResolver} from '@i-harness/session-executor'
 import {createProcessAwareResultService} from '@i-harness/session-executor/internal/process-result-service'
 import {lookupProcessReadContext} from '@i-harness/session-persistence/internal/process-read-context'
+import {originalResultOrderingFor} from '@i-harness/session-persistence/internal/result-ordering'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
 import {captureTaskChildProject,type TaskChildProjectCapture} from './bootstrap-project.ts'
@@ -94,8 +95,9 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     const sourceId=contextSourceIdentity(workspaceKey,canonical,scope)
     return{sourceId,readonly:true}
   }
+  const ordering=originalResultOrderingFor(options.coordinator as SessionCoordinator)
   const bridge=createProcessAwareResultService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,requireObservedLegacyRecipients:true,
-    coordinatorFor:()=>options.coordinator as SessionCoordinator,sourceFor,guardedRead,
+    coordinatorFor:()=>options.coordinator as SessionCoordinator,...(ordering?{orderingCoordinators:[options.coordinator as SessionCoordinator]}:{}),sourceFor,guardedRead,
     ...(options.coordinator.onDocumentDeleted?{documentDeletions:listener=>options.coordinator.onDocumentDeleted!((id,manifest)=>listener([id,...manifest.documents]))}:{}),
     genericVisible:async(sessionId,visibleRef)=>{
         const observed=observations.current(sessionId)
