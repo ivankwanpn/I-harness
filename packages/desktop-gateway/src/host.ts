@@ -11,6 +11,7 @@ import { buildModelClient } from "@i-harness/provider"
 import { prepareModelRequest, withPreparedSignal, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
+import {createUsageHandlers} from './usage-host.ts'
 import { createUsageObservationSink } from './usage-observation-sink.ts'
 import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
 import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harness/core-session"
@@ -119,13 +120,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
     onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
-  const usageStats: NonNullable<DesktopHandlers["usageStats"]> = {
-    async query(query) {
-      const snapshot = await usageStore.query(query)
-      return { ...snapshot, warnings: [...snapshot.warnings, ...usageCapture.warnings(),...(usageObservations?.warnings()??[])] }
-    },
-    setPricing: price => usageStore.setPricing(price),
-  }
+  const usageStats:NonNullable<DesktopHandlers['usageStats']>=createUsageHandlers(usageStore,{recordingMode:usageObservations?'observations':'legacy',warnings:()=>[...usageCapture.warnings(),...(usageObservations?.warnings()??[])]})
   let mode = settings.get().sandboxMode
   let windowsSandboxBackend = settings.get().windowsSandboxBackend
   let wslExecution = { ...settings.get().wslExecution }
