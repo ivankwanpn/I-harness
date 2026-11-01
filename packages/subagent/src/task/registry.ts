@@ -109,7 +109,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     // failure changes delivery evidence only; it never reopens execution.
     if (!opts.coordinator || !opts.stateId) { task.retention = "memory"; return }
     const acknowledged=acknowledgedRetention.get(task)
-    if(acknowledged&&sameRetention(acknowledged,task))return
+    if(acknowledged){
+      if(!sameRetention(acknowledged,task))throw Error('Original saved task result changed')
+      return
+    }
     if (task.retention === "durable") return
     task.retention = "pending"
     try {
