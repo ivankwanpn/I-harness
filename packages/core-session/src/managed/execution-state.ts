@@ -7,6 +7,8 @@ import type { OriginalConversationRestorationSource } from '../conversation/rest
 import type { CapturedFactGroup } from './groups.ts'
 import type { EncodedFactBatch,FactReceipt,FactOutcome,BatchKey } from './types.ts'
 import type { ManagedExecutionIdentity,ManagedExecutionOwner,OriginalExecutionWriterBinding,OriginalWriterDependencyScope,OriginalExecutionCaptureHooks } from './execution-types.ts'
+import {freezeJsonData} from './capture.ts'
+import {captureOriginalRestorationSource} from './restoration-source.ts'
 
 const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;current():void}>()
 export function isManagedExecutionOwner(identity:ManagedExecutionIdentity,owner:object):boolean{
@@ -16,7 +18,12 @@ export function isManagedExecutionOwner(identity:ManagedExecutionIdentity,owner:
 }
 /** The original managed constructor supplies a separate held writer binding.
  * A readonly restored candidate alone cannot construct or authenticate an owner. */
-export async function restoreManagedExecutionState(source:OriginalConversationRestorationSource,binding:OriginalExecutionWriterBinding){
+export async function restoreManagedExecutionState(input:OriginalConversationRestorationSource,binding:OriginalExecutionWriterBinding){
+  const source=captureOriginalRestorationSource(input)
+  let compatibility:ReturnType<typeof import('./view.ts').createManagedIndexedView>|undefined
+  const liveEvents=new Map<number,WeakRef<import('./types.ts').SessionEventView>>()
+  const readSource=source.readEvent.bind(source)
+  const originalSource:OriginalConversationRestorationSource={get formatVersion(){return source.formatVersion},get header(){return source.header},get prefix(){return source.prefix},assertCurrent:source.assertCurrent.bind(source),consume:source.consume.bind(source),async readEvent(ordinal){const event=await readSource(ordinal);return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event},settle:source.settle.bind(source),close:source.close.bind(source),appendCommitted:source.appendCommitted.bind(source)}
   if(!binding||types.isProxy(binding))throw new TypeError('Original held writer binding required')
   const tokenField=Object.getOwnPropertyDescriptor(binding,'token'),heldField=Object.getOwnPropertyDescriptor(binding,'assertHeld'),openField=Object.getOwnPropertyDescriptor(binding,'openDependencies')
   if(!tokenField||!('value'in tokenField)||!Object.isFrozen(tokenField.value)||!heldField||!('value'in heldField)||typeof heldField.value!=='function'||!openField||!('value'in openField)||typeof openField.value!=='function')throw new TypeError('Original held writer binding required')
@@ -24,17 +31,26 @@ export async function restoreManagedExecutionState(source:OriginalConversationRe
   const assertHeld=()=>{if(Object.getOwnPropertyDescriptor(binding,'token')?.value!==token||Object.getOwnPropertyDescriptor(binding,'assertHeld')?.value!==heldField.value||Object.getOwnPropertyDescriptor(binding,'openDependencies')?.value!==openField.value)throw new TypeError('Held writer binding changed');held()}
   assertHeld()
   if(!token.sessionId||!token.incarnation)throw new TypeError('Original writer incarnation required')
-  const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(source,candidateOwner,token.sessionId)
+  const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId)
   assertHeld()
   const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld),debt=new Set<OriginalWriterDependencyScope>()
   let stopped=false,ownerBound=false,closed=false,pendingWrite:object|undefined
-  const assertNewWork=()=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})}
+  let dependencyFailure:{cause:unknown}|undefined
+  const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();debt.delete(scope)}catch(error){errors.push(error)}if(errors.length)throw new AggregateError(errors,'Exact writer dependency cleanup unresolved');dependencyFailure=undefined}
+  const assertNewWork=()=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size)throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
   return {
     identity,
     get eventCount(){return original.eventCount},
     get prefix(){return original.prefix},
     get formatVersion(){return original.formatVersion},
     get header(){return original.header},
+    delivery:original.delivery,
+    intake:original.intake,
+    materialize(events:readonly import('./types.ts').SessionEventView[],owner:ManagedExecutionOwner){
+      assertNewWork();if(!isManagedExecutionOwner(identity,owner))throw TypeError('Original execution owner required');if(compatibility)return compatibility
+      const captured=events.map((event,index)=>{if(event.seq!==index)throw TypeError('Complete compatibility history required');return liveEvents.get(index)?.deref()??freezeJsonData(event)})
+      compatibility=original.compatibility(captured,owner);liveEvents.clear();return compatibility
+    },
     bindOwner(owner:ManagedExecutionOwner){
       assertNewWork();if(ownerBound||!owner||types.isProxy(owner))throw new TypeError('Original execution owner already bound or unavailable')
       const methods=['ownsAction','beginAction','registerReceivedInputSource','drain'] as const,fields=methods.map(key=>Object.getOwnPropertyDescriptor(owner,key))
@@ -43,23 +59,25 @@ export async function restoreManagedExecutionState(source:OriginalConversationRe
       ownerBound=true;owners.set(identity,{owner,current})
     },
     assertNewWork,
+    settleDependencies,
     stopNewWork(){stopped=true},
     prepare(){assertNewWork();return original.prepare()},
-    async prepareWrite(groups:readonly CapturedFactGroup[]){
+    async prepareWrite(groups:readonly CapturedFactGroup[],rejectInvalidGroups=false){
       // Only the original writer invokes this after its real authorization;
       // already-admitted/source-required work can drain after new-work Stop.
       assertHeld();if(closed)throw new TypeError('Original writer closed');if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size)throw new TypeError('Writer dependency cleanup unresolved')
       const expected=original.prefix,scope=captureWriterDependencies(open(expected))
       debt.add(scope) // installed before the first asynchronous read/open
-      const check=scope.assertCurrent.bind(scope),read=scope.readEvent.bind(scope),close=scope.close.bind(scope)
+      const check=scope.assertCurrent.bind(scope),readOriginal=scope.readEvent.bind(scope),read=async(ordinal:number)=>{const event=await readOriginal(ordinal);return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event},close=scope.close.bind(scope)
       let reading=true,prepared:Awaited<ReturnType<typeof original.prepareWrite>>|undefined,primary:unknown,failed=false
       const current=()=>{assertHeld();if(reading){check();if(original.prefix!==expected)throw new TypeError('Writer prefix changed during preparation')}}
-      try{current();prepared=await original.prepareWrite(groups,read,current);current()}catch(error){failed=true;primary=error}
-      try{await close();debt.delete(scope)}catch(cleanup){prepared?.discard();if(failed)throw new AggregateError([primary,cleanup],'Writer preparation and exact dependency cleanup failed');throw cleanup}finally{reading=false}
+      try{current();prepared=await original.prepareWrite(groups,read,current,rejectInvalidGroups);current()}catch(error){failed=true;primary=error}
+      try{await close();debt.delete(scope)}catch(cleanup){prepared?.discard();const cause=failed?new AggregateError([primary,cleanup],'Writer preparation and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};throw cause}finally{reading=false}
       if(failed)throw primary
+      try{assertHeld()}catch(error){prepared?.discard();throw error}
       const staged=prepared!,operation=Object.freeze({});let installed=false,started=false,discarded=false,absent=false,issuedBatch:EncodedFactBatch|undefined,originalBatch:EncodedFactBatch|undefined,originalReceipt:FactReceipt|undefined
       const assertIssuable=()=>{assertHeld();if(discarded||absent||pendingWrite||issuedBatch||started||original.prefix!==expected)throw new TypeError('Writer prefix changed or original issuance already started')}
-      return {events:staged.events,members:staged.members,assertIssuable,discardUnissued(){if(issuedBatch||started)throw new TypeError('Original issued write cannot be discarded');discarded=true;staged.discard()},beforeIssue(batch:EncodedFactBatch){
+      return {events:staged.events,members:staged.members,rejected:staged.rejected,assertIssuable,discardUnissued(){if(issuedBatch||started)throw new TypeError('Original issued write cannot be discarded');discarded=true;staged.discard()},beforeIssue(batch:EncodedFactBatch){
         assertIssuable()
         if(batch.key.firstSeq!==expected.eventCount||batch.key.count!==staged.events.length||batch.key.previousPrefixDigest!==expected.prefixDigest)throw new TypeError('Original writer batch scope required')
         issuedBatch=batch;pendingWrite=operation
@@ -73,6 +91,7 @@ export async function restoreManagedExecutionState(source:OriginalConversationRe
         if(receipt.owner.sessionId!==token.sessionId||receipt.owner.incarnation!==token.incarnation||receipt.key!==batch.key||receipt.lastSeq!==batch.key.firstSeq+batch.key.count-1||receipt.prefixDigest!==factPrefixDigest(batch.key.previousPrefixDigest,batch.key.batchDigest))throw new TypeError('Original verified writer receipt required')
         started=true;originalBatch=batch;originalReceipt=receipt
         staged.install(batch,receipt)
+        if(compatibility)compatibility.append(staged.events);else for(const event of staged.events)liveEvents.set(event.seq!,new WeakRef(event))
         for(const member of staged.members)members.installed(member.group,member.events,receipt)
         installed=true;pendingWrite=undefined
       }}
@@ -86,11 +105,9 @@ export async function restoreManagedExecutionState(source:OriginalConversationRe
     async close(){
       stopped=true;if(closed)return
       if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})
-      const errors:unknown[]=[]
-      for(const scope of debt)try{await scope.close();debt.delete(scope)}catch(error){errors.push(error)}
-      if(errors.length)throw new AggregateError(errors,'Exact writer dependency cleanup unresolved')
+      await settleDependencies()
       members.assertReleased()
-      await original.close();members.close();closed=true;owners.delete(identity)
+      await original.close();members.close();liveEvents.clear();closed=true;owners.delete(identity)
     }
   }
 }

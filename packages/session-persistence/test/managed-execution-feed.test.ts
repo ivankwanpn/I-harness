@@ -1,4 +1,17 @@
-import { expect, it } from 'vitest'
+import { expect, it,vi } from 'vitest'
+import type {BackendFactOutcome} from '../src/index.ts'
+import type {BatchKey} from '@i-harness/core-session'
+const journalProbes=vi.hoisted(()=>new WeakMap<Function,{beforeAppend?():Promise<void>;afterAppend?(outcome:BackendFactOutcome,key:BatchKey):BackendFactOutcome}>())
+// Fault the original IO delegate before constructor descriptor capture. Public
+// backend method substitution correctly refuses original native admission.
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{
+ const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>()
+ return {...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){
+  const journal=original.createFactJournalBackend(...args),append=journal.appendOwnedBatch,probe:NonNullable<ReturnType<typeof journalProbes.get>>={}
+  const observed:typeof append=async(...input)=>{if(probe.beforeAppend)await probe.beforeAppend();const outcome=await append(...input);return probe.afterAppend?.(outcome,input[3].key)??outcome}
+  journalProbes.set(observed,probe);return {...journal,appendOwnedBatch:observed}
+ }}
+})
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -54,12 +67,12 @@ it('reports unresolved original write and restores only after reconcile bookkeep
  const c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
  try {
   await c.create({sessionId:'s'}); const doc = await c.openManagedDocument('s')
-  const original = backend.appendOwnedBatch!; backend.appendOwnedBatch = async (...args) => { await original(...args); return {kind:'unknown', key:args[3].key} }
+  const probe=journalProbes.get(backend.appendOwnedBatch!)!;probe.afterAppend=(_outcome,key)=>{probe.afterAppend=undefined;return {kind:'unknown',key}}
   const seen: string[] = []; const off = observeColdExecutionWrites(c, () => seen.push(managedExecutionStatus(doc)))
   const result = await doc.metadata.admit({type:'plan/mode',mode:'on'})
   expect(result.kind).toBe('unknown'); expect(seen).toEqual(['unavailable'])
   if (result.kind !== 'unknown') throw Error('unknown required')
-  backend.appendOwnedBatch = original
+  probe.afterAppend=undefined
   expect((await doc.reconcile(result.key)).kind).toBe('committed')
   expect(seen).toEqual(['unavailable','available']); expect(managedExecutionStatus(doc)).toBe('available')
   off()
@@ -71,8 +84,8 @@ it('keeps a healthy issued write distinct from a recovery fault', async () => {
  const backend = createJsonlBackend(root), c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
  try {
   await c.create({sessionId:'s'}); const doc = await c.openManagedDocument('s')
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), original = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { entered.resolve(); await release.promise; return original(...args) }
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(),probe=journalProbes.get(backend.appendOwnedBatch!)!
+  probe.beforeAppend=async()=>{probe.beforeAppend=undefined;entered.resolve();await release.promise}
   const seen: string[] = []; const off = observeColdExecutionWrites(c, () => seen.push(managedExecutionStatus(doc)))
   const work = doc.metadata.admit({type:'plan/mode',mode:'off'}); await entered.promise
   expect(managedExecutionStatus(doc)).toBe('available'); expect(seen).toEqual([])

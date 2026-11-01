@@ -41,26 +41,32 @@ export function deliveryPredicate(view: SessionView): (inputId: string) => boole
 export function createDeliveryControl(view: SessionView) {
   if (controls.has(view))
     throw new TypeError('Delivery control already bound');
+  const original=createOwnerDeliveryControl(()=>observation(view),()=>view.events.length,()=>notify(view));
+  controls.set(view, original.control);ports.set(view,original.port);return original.port;
+}
+/** Same original delivery fence, independent of optional complete public view. */
+export function createOwnerDeliveryControl(readIndex:()=>DeliveryReadIndex,eventCount:()=>number,changed:()=>void=()=>{}) {
   const control = { through: -1, retired: false, debt: new Set<object>() };
-  controls.set(view, control);
+  let publicView:SessionView|undefined;
+  const publish=()=>{changed();if(publicView)notify(publicView)};
   const port = {
     revoke() {
-      control.through = Math.max(control.through, view.events.length - 1);
+      control.through = Math.max(control.through, eventCount() - 1);
       const token = {};
       control.debt.add(token);
-      notify(view);
+      publish();
       return () => {
         control.debt.delete(token);
-        notify(view);
+        publish();
       };
     }, retire() {
       control.retired = true;
-      notify(view);
+      publish();
     }, assert(events: readonly SessionEventView[]) {
       // Unrelated groups never need a delivery read. Relevant groups use the
       // original committed index afresh at this actual issuance boundary.
       let durable: DeliveryReadIndex | undefined;
-      const read = () => durable ??= observation(view);
+      const read = () => durable ??= readIndex();
       const current = () => {
         const active = read().activeGeneration();
         if (control.retired || control.debt.size > 0 || active === undefined || active.openedSeq <= control.through)
@@ -82,8 +88,7 @@ export function createDeliveryControl(view: SessionView) {
       }
     }
   };
-  ports.set(view, port);
-  return port;
+  return {control,port,bindView(view:SessionView){if(publicView||controls.has(view))throw TypeError('Original delivery view already bound');publicView=view;controls.set(view,control);ports.set(view,port)}};
 }
 export function isBoundDeliveryInput(view: SessionView, inputId: string): boolean {
   return observation(view).isBound(inputId);

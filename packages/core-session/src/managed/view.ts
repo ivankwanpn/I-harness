@@ -97,5 +97,23 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   }
 }
 export function isManagedFactOwner(view: SessionView, owner: object): boolean { return managedFactOwners.get(view) === owner }
+/** Explicit complete compatibility array over an already-owned index. It never
+ * reconstructs validation or supplies authority to a different producer. */
+export function createManagedIndexedView(source:readonly import('./types.ts').SessionEventView[],formatVersion:number,header:SessionView['header'],index:ConversationValidationIndex,owner:object,sessionId:string){
+  if(source.length!==index.eventCount)throw TypeError('Complete original compatibility history required')
+  const events=[...source] as SessionEvent[],deny=():never=>{throw TypeError('Managed Session is readonly')}
+  const facade=new Proxy(events,{set:deny,deleteProperty:deny,defineProperty:deny,setPrototypeOf:deny,preventExtensions:deny})
+  const view:SessionView=Object.freeze({formatVersion,events:facade,...header?{header}:{}})
+  managedSessions.add(view);managedFactOwners.set(view,owner);originalIndexes.set(view,index);originalSourceSessions.set(view,sessionId)
+  return {view,append(suffix:readonly import('./types.ts').SessionEventView[]){
+    const first=suffix[0]?.seq;if(first===undefined)return
+    if(events.length>first){if(suffix.some(event=>events[event.seq!]!==event))throw TypeError('Original compatibility suffix changed');return}
+    if(events.length!==first||index.eventCount!==first+suffix.length)throw TypeError('Original compatibility suffix mismatch')
+    for(const event of suffix)events.push(event as SessionEvent)
+  },observe(suffix:readonly SessionEvent[],report:(error:unknown)=>void){
+    const failed=()=>{try{Promise.resolve(report(Object.assign(Error('Managed fact observer failed'),{code:'FACT_OBSERVER_FAILED'}))).catch(()=>{})}catch{}}
+    for(const event of suffix)for(const observer of [...(subscribers.get(view)??[])])try{Promise.resolve(observer(event)).catch(failed)}catch{failed()}
+  }}
+}
 export { restoreManagedExecutionState,isManagedExecutionOwner } from './execution-state.ts'
 export { readAcknowledgedExecutionMembers,retainAcknowledgedExecutionMembers } from './execution-members.ts'

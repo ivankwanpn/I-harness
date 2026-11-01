@@ -17,6 +17,7 @@ import { createContextStateIndex } from '../projection/context.ts';
 import { createPruneDependencyIndex, preparePruneSubstitutes, selectPruneDependencies } from '../projection/pruning.ts';
 import { historyVisibility } from '../conversation/history/visibility.ts';
 import { renderConversationItems } from '../conversation/render-items.ts';
+import {createManagedIndexedView} from './view.ts';
 function failure(code: string): never {
     throw Object.assign(new Error(code), { code });
 }
@@ -114,6 +115,9 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         }};
     }
     return {
+        compatibility(events:readonly SessionEventView[],owner:object){check();return createManagedIndexedView(events,owned.source.formatVersion,owned.source.header,owned.index,owner,owned.sessionId)},
+        delivery(){check();return readConversationDeliveries(owned.index)!},
+        intake:owned.intake,
         get eventCount(){check();return owned.index.eventCount},
         get prefix(){check();return owned.source.prefix},
         get formatVersion(){check();return owned.source.formatVersion},
@@ -156,17 +160,19 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             return appendStage(events,owned.index.stage(events,{readCurrentEvent}));
         },
         /** Only the original already-held writer constructs this reader. */
-        async prepareWrite(groups:readonly CapturedFactGroup[],readEvent:(ordinal:number)=>Promise<SessionEventView>,assertCurrent:()=>void){
-            check();const expected=revision,available=new Map<number,SessionEventView>(),events:SessionEventView[]=[],members:{group:CapturedFactGroup;events:readonly SessionEventView[]}[]=[];
+        async prepareWrite(groups:readonly CapturedFactGroup[],readEvent:(ordinal:number)=>Promise<SessionEventView>,assertCurrent:()=>void,rejectInvalidGroups=false){
+            check();const expected=revision,available=new Map<number,SessionEventView>(),events:SessionEventView[]=[],members:{group:CapturedFactGroup;events:readonly SessionEventView[]}[]=[],rejected:{group:CapturedFactGroup;cause:unknown}[]=[];
             // The same staged validator commits while its own installation
             // fence is raised. Source/revision checks remain active there.
             const current=()=>{sourceCurrent();assertCurrent();if(expected!==revision)failure('CONVERSATION_RESTORATION_STALE_SUFFIX')};
             class Missing extends Error{constructor(readonly ordinal:number){super('Writer dependency not prepared')}}
-            const read=async(ordinal:number)=>{current();let value=available.get(ordinal);if(!value){value=await readEvent(ordinal);current();if(!value||value.seq!==ordinal)failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');available.set(ordinal,value)}return value};
+            let readFailed=false;
+            const read=async(ordinal:number)=>{try{current();let value=available.get(ordinal);if(!value){value=await readEvent(ordinal);current();if(!value||value.seq!==ordinal)failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');available.set(ordinal,value)}return value}catch(error){readFailed=true;throw error}};
             try{
                 for(const group of groups){
                     let resolved:ReturnType<typeof resolveFactGroupWithDependencies>;
-                    for(;;){try{resolved=resolveFactGroupWithDependencies(group,{eventCount:owned.index.eventCount,readEvent(ordinal){const value=available.get(ordinal);if(!value)throw new Missing(ordinal);return value}},owned.index.eventCount+events.length);break}catch(error){if(!(error instanceof Missing))throw error;await read(error.ordinal)}}
+                    try{for(;;){try{resolved=resolveFactGroupWithDependencies(group,{eventCount:owned.index.eventCount,readEvent(ordinal){if(!Number.isSafeInteger(ordinal)||ordinal<0||ordinal>=owned.index.eventCount)return undefined;const value=available.get(ordinal);if(!value)throw new Missing(ordinal);return value}},owned.index.eventCount+events.length);break}catch(error){if(!(error instanceof Missing))throw error;await read(error.ordinal)}}}
+                    catch(cause){if(!rejectInvalidGroups||readFailed)throw cause;current();rejected.push({group,cause});continue}
                     const first=events.length;
                     for(const event of resolved){
                         const inputId=event.type==='user/message'?event.imageInputId:undefined;
@@ -180,7 +186,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
                 }
                 current();Object.freeze(events);validateDeliveryFrame(events,owned.source.formatVersion);
                 const validation=await prepareConversationAppend(owned.index,events,read,current);current();
-                return {...appendStage(events,validation,validation.discard),members:Object.freeze(members)};
+                return {...appendStage(events,validation,validation.discard),members:Object.freeze(members),rejected:Object.freeze(rejected)};
             }finally{available.clear()}
         },
         async close() {

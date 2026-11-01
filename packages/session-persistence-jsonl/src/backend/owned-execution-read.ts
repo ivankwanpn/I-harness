@@ -4,6 +4,7 @@ import type {OriginalWriterDependencyScope} from '@i-harness/core-session/intern
 import type {createArchiveReadOwner} from './archive-read-owner.ts'
 import {readSessionArchive} from './archive-reader.ts'
 import {types} from 'node:util'
+import {associateExecutionDependencies} from '../../../session-persistence/src/execution-internal.ts'
 
 type Opener=(id:string,held:HeldFactOwner,prefix:Readonly<JournalPrefix>)=>OriginalWriterDependencyScope
 const owners=new WeakMap<object,Opener>()
@@ -23,6 +24,7 @@ export function associateOwnedExecutionReader(backend:PersistenceBackend,ports:{
   },async close(){if(this!==scope)throw TypeError('Foreign dependency receiver');const errors:unknown[]=[];try{await original.close()}catch(error){errors.push(error)}try{await ports.settleBirth(id,held)}catch(error){errors.push(error)}if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,'Owned dependency cleanup unresolved')}})
   return scope
  })
+ associateExecutionDependencies(backend,(id,held,prefix)=>openOwnedExecutionDependencies(backend,id,held,prefix))
 }
 export function openOwnedExecutionDependencies(backend:object,id:string,held:HeldFactOwner,prefix:Readonly<JournalPrefix>):OriginalWriterDependencyScope{
  const open=owners.get(backend);if(!open)throw TypeError('Original dependency backend required');return open(id,held,prefix)

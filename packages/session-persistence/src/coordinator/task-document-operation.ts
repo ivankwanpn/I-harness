@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
 import type { Ownership } from './ownership.ts'
-import type { ManagedDocument } from './fact-types.ts'
+import type {ManagedExecutionOwner} from '@i-harness/core-session/internal/execution'
 import type { OpenTaskDocumentSession, TaskDocumentWitness, TaskObservation, Confirmation } from './task-document-types.ts'
 import { issueHeldTaskDocumentScope } from './task-document-scope.ts'
 import type { createBindingObservations } from './binding-observation.ts'
@@ -10,7 +10,7 @@ import type { TaskDocumentWrite, TaskWriteOutcome } from './task-document-types.
 import type { createProcessReadLatches } from './process-read-latches.ts'
 
 type Parent = { id: string; assertCurrent(): void; assertTaskV3Parent?(): void }
-export type TaskDocumentConfiguration = { captureParent(document: ManagedDocument): Parent; captureRequiredParent?(document:ManagedDocument,source:import('@i-harness/core-session').SettlementFacts):Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
+export type TaskDocumentConfiguration = { captureParent(document: ManagedExecutionOwner): Parent; captureRequiredParent?(document:ManagedExecutionOwner,source:import('@i-harness/core-session').SettlementFacts):Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
 export interface TaskDocumentReadHandoff { consume(): void; abandon(): void }
 type Operation = { observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; prepareReadHandoff(witness: TaskDocumentWitness): TaskDocumentReadHandoff; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; assertHandoff(): void; close(): Promise<void>; retryClose(): Promise<void> }
 type MethodContext = { record: object; owner: object; ownership: Ownership; id: string; key: string; parent?: MethodContext }
@@ -47,10 +47,10 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
   }
   const records = new Set<{ finite(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void> }>()
   const fail = () => { throw new Error('TASK_DOCUMENT_CONFLICT') }
-  function parent(this: unknown, document: ManagedDocument) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = captureParent(document), token = Object.freeze({}); parents.set(token, captured); const field = captured && !types.isProxy(captured) && Object.getOwnPropertyDescriptor(captured, 'assertTaskV3Parent'); if (field && 'value' in field && typeof field.value === 'function' && !types.isProxy(field.value)) parentEligibility.set(token, method(captured, 'assertTaskV3Parent')!); return token }
+  function parent(this: unknown, document: ManagedExecutionOwner) { if (this !== operations) throw new TypeError('Invalid task operations receiver'); const captured = captureParent(document), token = Object.freeze({}); parents.set(token, captured); const field = captured && !types.isProxy(captured) && Object.getOwnPropertyDescriptor(captured, 'assertTaskV3Parent'); if (field && 'value' in field && typeof field.value === 'function' && !types.isProxy(field.value)) parentEligibility.set(token, method(captured, 'assertTaskV3Parent')!); return token }
   type Required={pin:Awaited<ReturnType<Ownership['pinOwnership']>>;ticket:ReturnType<typeof admission.registerRequiredTaskObligation>;source:import('@i-harness/core-session').SettlementFacts;cleanup():Promise<void>}
   const requiredParents=new WeakMap<object,Required>()
-  async function requiredParent(this:unknown,document:ManagedDocument,source:import('@i-harness/core-session').SettlementFacts) {
+  async function requiredParent(this:unknown,document:ManagedExecutionOwner,source:import('@i-harness/core-session').SettlementFacts) {
     if(this!==operations||!captureRequiredParent)throw new TypeError('Required task owner unavailable');const captured=captureRequiredParent(document,source),token=Object.freeze({});
     let pin:Required['pin']|undefined,released=false,acquiring:Promise<void>|undefined;
     const acquisitions:import('./ownership.ts').OwnershipCleanup[]=[];
