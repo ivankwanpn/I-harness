@@ -141,3 +141,14 @@ export function createBootstrapReadinessScan(formatVersion: number, scope: Gener
     finish() { if (!complete) incomplete(); if (!required) validateBootstrapReadiness([], formatVersion, scope) },
   }
 }
+
+/** A private restored index has already validated its immutable complete birth.
+ * Warm appends validate only new original facts; public mutable replay does not
+ * use this construction path and continues rechecking its actual birth. */
+export function validateCommittedBootstrapSuffix(events: readonly SessionEventView[], formatVersion:number, scope:GenerationHistoryScope, from:number):void {
+  if(!scope.semanticSeed){validateBootstrapReadiness(events,formatVersion,scope);return}
+  validateSeedHeader(scope.semanticSeed)
+  const required=scope.semanticSeed.seedLength+1+(scope.semanticSeed.initialInputId===undefined?0:1)
+  if(from<required)incomplete()
+  for(const event of events){validateSeedEventShape(event,formatVersion);if(['conversation/seed-manifest','conversation/seed-results','conversation/seed-group','session/bootstrap'].includes(event.type))seedInvalid()}
+}

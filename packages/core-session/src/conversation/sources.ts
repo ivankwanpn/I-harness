@@ -4,11 +4,11 @@ import type { ConversationDiagnostic, ConversationProvenance, ConversationSource
 import type { ConversationPayloadReader } from './payload.ts'
 
 /** Source coordinates belong to the original archive, even for a prefix view. */
-export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number }; readPayload?: ConversationPayloadReader; coordinates?: ConversationSourceCoordinateView } = {}) {
+export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number }; readPayload?: ConversationPayloadReader; coordinates?: ConversationSourceCoordinateView; prunedResults?: ReadonlyMap<number, import('./restoration-types.ts').PreparedPrunedResult> } = {}) {
   const coordinates = options.coordinates === undefined ? undefined : coordinateViews.get(options.coordinates)
   if (options.coordinates && (!coordinates || !coordinates.current() || options.coordinates.eventCount !== archive.length)) throw new TypeError('Invalid or stale source coordinates')
   const assertCurrent = () => { if (coordinates && !coordinates.current()) throw new TypeError('Stale source coordinates') }
-  const seqAt = (index: number) => coordinates ? coordinates.seqs[index] : archive.get(index).seq
+  const seqAt = (index: number) => { if (!Number.isSafeInteger(index) || index < 0 || index >= archive.length) throw new RangeError('Conversation source index out of bounds'); return coordinates ? coordinates.seqs[index] : archive.get(index).seq }
   const counts = new Map<number, number>()
   const valid = (seq: unknown): seq is number => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0
   const positions = new Map<number, number>()
@@ -42,6 +42,14 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
   }
   const provenance = (eventIndex: number, part: string, admissionIndex?: number): ConversationProvenance => {
     assertCurrent()
+    const selected = options.prunedResults?.get(eventIndex)
+    if (selected) {
+      const source = ref(eventIndex, part), evidence = [source]
+      const admission = admissionIndex === undefined ? undefined : archive.get(admissionIndex)
+      if (admissionIndex !== undefined) evidence.push(ref(admissionIndex, 'admission'))
+      const inherited = isInherited(eventIndex) || admissionIndex !== undefined && isInherited(admissionIndex) && admission?.type === 'agent/input/admitted' && admission.provenance !== undefined
+      return Object.freeze({kind:inherited?'inherited' as const:'tool' as const,authority:'observation' as const,scope:'turn' as const,evidence:Object.freeze(evidence),producer:selected.name,...(inherited?{originSessionId:options.header!.parentSession}:{})})
+    }
     const event = archive.get(eventIndex)
     const source = ref(eventIndex, part)
     const evidence = [source]

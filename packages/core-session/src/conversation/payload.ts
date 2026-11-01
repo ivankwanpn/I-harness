@@ -82,6 +82,7 @@ function toolResultText(output: unknown): string {
 export function preparePrunedResultProjection(event: Extract<SessionEvent, {type:'tool/result'}>, prune: PruneRecord, pruneSource: PreparedPrunedResult['pruneSource']): PreparedPrunedResult {
   const originalMedia = event.envelope ? event.envelope.media : outcomeField(outcomeField(event, 'output'), 'images')
   const media = Array.isArray(originalMedia) ? copyConversationData(originalMedia) as ImageInput[] : []
+  const stack:object[]=[media];while(stack.length){const value=stack.pop()!;for(const child of Object.values(value))if(child&&typeof child==='object'&&(Array.isArray(child)||Object.getPrototypeOf(child)===Object.prototype||Object.getPrototypeOf(child)===null))stack.push(child);Object.freeze(value)}
   return Object.freeze({kind:'pruned-result',callId:event.callId,name:event.name,isError:event.envelope ? resultIsError(event.envelope) : event.isError===true,
     media:Object.freeze(media),prune:Object.freeze({callId:prune.callId,head:prune.head,tail:prune.tail,removedBytes:prune.removedBytes}),pruneSource:Object.freeze({...pruneSource})})
 }

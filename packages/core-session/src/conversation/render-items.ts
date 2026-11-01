@@ -19,7 +19,7 @@ import { validatePreparedInputText } from './input-preparation.ts'
 export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[]; current?: import('./history/types.ts').HistoryCurrent }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number }; sourceCoordinates?: ConversationSourceCoordinateView; pruneSubstitutes?: ReadonlyMap<string,PruneRecord>; prunedResults?: ReadonlyMap<number,PreparedPrunedResult> } = {}): ConversationProjection {
   const diagnostics: ConversationDiagnostic[] = []
   const readPayload = createConversationPayloadReader(options.capturePayload)
-  const sources = archiveConversationSources(archive, options.ownerSessionId, diagnostics, { ...options, ...(options.capturePayload ? { readPayload } : {}) })
+  const sources = archiveConversationSources(archive, options.ownerSessionId, diagnostics, { ...options, coordinates:options.sourceCoordinates, ...(options.capturePayload ? { readPayload } : {}) })
   const source = (ref: { eventIndex: number; part: string }) => sources.ref(ref.eventIndex, ref.part)
   const pruned = options.pruneSubstitutes ?? archivePruneSubstitutes(archive)
   const results = new Map<number, ReturnType<typeof projectToolResult>>()
@@ -67,6 +67,7 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
       return { role: 'user', content: payload(event, 'text', index, 'message') }
     }
     if (recipe.kind === 'result') {
+      if (selectedResult) return {role:'tool',toolCallId:selectedResult.callId,content:result(index).content,...(selectedResult.isError?{isError:true}:{})}
       if (event?.type !== 'tool/result') throw new Error('Invalid result recipe')
       return { role: 'tool', toolCallId: event.callId, content: result(index).content, ...((event.envelope ? resultIsError(event.envelope) : event.isError === true) ? { isError: true } : {}) }
     }

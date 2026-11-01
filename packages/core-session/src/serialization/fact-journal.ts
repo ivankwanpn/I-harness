@@ -107,28 +107,22 @@ function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersio
 
 /** Incremental physical decoding. The consumer is private and must not publish
  * its candidate until finish and the original whole-history validation succeed. */
-export interface DecodedJournalStreamUnit {
-  readonly kind: 'legacy' | 'batch'; readonly bodyOffset: number; readonly byteLength: number;
-  readonly firstOrdinal: number; readonly count: number; readonly bytes: Uint8Array;
-  readonly key?: BatchKey
-}
-export function createJournalStreamDecoder(metadata: JournalMetadata, formatVersion: number, consume: (events: SessionEvent[], unit: DecodedJournalStreamUnit) => void) {
+export function createJournalStreamDecoder(metadata: JournalMetadata, formatVersion: number, consume: (events: SessionEvent[]) => void) {
   if (!validJournalMetadata(metadata)) fail()
   const size = Buffer.alloc(8); size.writeBigUInt64BE(BigInt(metadata.legacyEventCount))
   const legacyHash = createHash('sha256').update('ih.fact-legacy.v1\0').update(size)
   let legacyLeft = metadata.legacyBodyBytes, separatorLeft = metadata.separatorBytes
-  let legacyChecked = false, legacyOffset = 0, eventCount = 0, bodyBytes = 0, prefixDigest = metadata.legacyPrefixDigest
+  let legacyChecked = false, eventCount = 0, bodyBytes = 0, prefixDigest = metadata.legacyPrefixDigest
   let parts: Buffer[] = [], partBytes = 0, finished = false
   function add(bytes: Uint8Array) { if (bytes.length) { parts.push(Buffer.from(bytes)); partBytes += bytes.length } }
   function take() { const result = Buffer.concat(parts, partBytes); parts = []; partBytes = 0; return result }
-  function legacyLine(bytes: Buffer, rawLength = bytes.length) {
-    const start = legacyOffset; legacyOffset += rawLength
+  function legacyLine(bytes: Buffer) {
     const line = bytes.toString('utf8')
     if (!line.trim()) return
     let event: SessionEvent
     try { event = JSON.parse(line) } catch { return fail() }
     if (isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && ['session.delivery.subagent', 'session.delivery.exec'].includes(event.provenance?.producer ?? '')) fail()
-    const firstOrdinal = eventCount++; consume([event], {kind:'legacy',bodyOffset:start,byteLength:rawLength,firstOrdinal,count:1,bytes:rawLength===bytes.length?bytes:Buffer.concat([bytes,Buffer.from([10])])})
+    eventCount++; consume([event])
   }
   function checkLegacy() {
     if (legacyChecked) return
@@ -142,11 +136,11 @@ export function createJournalStreamDecoder(metadata: JournalMetadata, formatVers
       const end = input.indexOf(10, start)
       if (end < 0) { add(input.subarray(start)); break }
       add(input.subarray(start, end + 1)); const record = take()
-      if (legacy) legacyLine(record.subarray(0, -1), record.length)
+      if (legacy) legacyLine(record.subarray(0, -1))
       else {
         const frame = decodeFactBatch(record); validateDeliveryFrame(frame.events, formatVersion)
         if (frame.key.firstSeq !== eventCount || frame.key.previousPrefixDigest !== prefixDigest) fail()
-        consume(frame.events,{kind:'batch',bodyOffset:bodyBytes,byteLength:record.length,firstOrdinal:eventCount,count:frame.events.length,bytes:record,key:frame.key}); eventCount += frame.events.length; prefixDigest = frame.prefixDigest; bodyBytes += record.length
+        consume(frame.events); eventCount += frame.events.length; prefixDigest = frame.prefixDigest; bodyBytes += record.length
       }
       start = end + 1
     }
