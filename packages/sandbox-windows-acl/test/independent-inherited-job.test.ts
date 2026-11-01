@@ -67,8 +67,10 @@ it.skipIf(process.env.IH_ACL_INDEPENDENT_JOB !== '1')('proves one inner Job desc
     try {
       assert.ok(pending.length <= 65536)
       while (pending.includes('\n')) {
-        const end = pending.indexOf('\n'), item = JSON.parse(pending.slice(0, end)); pending = pending.slice(end + 1)
+        const end = pending.indexOf('\n'), line = pending.slice(0, end), item = JSON.parse(line); pending = pending.slice(end + 1)
         assert.equal(item.nonce, nonce)
+        // Preserve exact confined records here, never by a confined file write.
+        if (item.role !== 'host') appendFileSync(trace, line + '\n')
         if (String(item.event).includes('failure')) throw new Error(JSON.stringify(item))
         if (item.event === 'root-admitted') { assert.equal(rootPid, undefined); rootPid = item.pid }
         if (item.event === 'descendant-ready') { assert.equal(ready, undefined); ready = item }

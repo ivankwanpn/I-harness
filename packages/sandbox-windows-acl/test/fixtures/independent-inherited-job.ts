@@ -16,9 +16,12 @@ async function main() {
   assert.equal(process.platform, 'win32'); assert.equal(process.arch, 'x64')
   const nonce = process.env.IH_ACL_JOB_NONCE!, cwd = process.env.IH_ACL_JOB_CWD!, trace = process.env.IH_ACL_JOB_TRACE!
   assert.match(nonce, /^[a-f0-9-]{36}$/); assert.ok(cwd && trace)
+  const role = process.argv.includes('--descendant') ? 'descendant' : process.argv.includes('--root') ? 'root' : 'host'
   const emit = (event: string, detail: object = {}) => {
-    const record = { event, nonce, ...detail }
-    appendFileSync(trace, JSON.stringify(record) + '\n')
+    const record = { event, nonce, role, ...detail }
+    // Confined roles have read-only authority. Their sole diagnostic channel
+    // is inherited stdout; only the unconfined host/outer persists records.
+    if (role === 'host') appendFileSync(trace, JSON.stringify(record) + '\n')
     process.stdout.write(JSON.stringify(record) + '\n')
   }
   function provenance() {
@@ -53,18 +56,22 @@ async function main() {
     const child = spawn(process.execPath, ['--experimental-transform-types', fixture, '--descendant'], {
       stdio: ['inherit', 'inherit', 'inherit'], windowsHide: true,
     })
-    emit('descendant-launch', { pid: child.pid, parentPid: process.pid, executable: process.execPath, argv: child.spawnargs })
     child.once('error', error => { emit('descendant-launch-failure', { error: String(error) }); process.exit(98) })
     child.unref()
+    // The original ChildProcess and its PID are retained before logging.
+    const launch = { pid: child.pid, parentPid: process.pid, executable: process.execPath, argv: child.spawnargs }
+    emit('descendant-launch', launch)
     return
   }
   const sandbox = new AclSandbox({ mode: 'read-only', writableDirs: [], manageDacls: false })
+  let admittedRootPid: number | undefined
   try {
     emit('host-provenance', provenance())
     emit('verified-default-assets', verifyWaitAssets(fileURLToPath(new URL('../../native/runtime/', import.meta.url))))
     await sandbox.init()
     emit('root-command', { executable: process.execPath, args: ['--experimental-transform-types', fixture, '--root'], cwd })
     const root = await sandbox.spawn({ command: process.execPath, args: ['--experimental-transform-types', fixture, '--root'], cwd, stdio: 'inherit' })
+    admittedRootPid = root.pid
     emit('root-admitted', { pid: root.pid })
     const result = await root.wait()
     assert.equal(result.exitCode, 23)
@@ -95,7 +102,13 @@ async function main() {
     emit('fixture-failure', { error: String(error) })
     throw error
   } finally {
-    await sandbox.disposeAsync()
+    try {
+      await sandbox.disposeAsync()
+      emit('original-owner-dispose-acknowledged', { rootPid: admittedRootPid })
+    } catch (error) {
+      emit('original-owner-dispose-failure', { rootPid: admittedRootPid, error: String(error) })
+      throw error
+    }
   }
 }
 await main()
