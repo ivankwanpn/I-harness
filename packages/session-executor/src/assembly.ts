@@ -152,6 +152,8 @@ type RoleModelSelection = {
 }
 
 export interface AssemblyOptions {
+  /** Constructor opt-in passive evidence only; no shipping activation. */
+  passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
   residentActivation?: ResidentActivationController
   /** Retain the original partial assembly's cleanup before Team construction. */
   retainConstructionCleanup?: (cleanup: () => Promise<void>) => void
@@ -1308,7 +1310,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
     const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => (action, dependencies) =>
-      createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, dependencies)
+      createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, opts.passiveGeneration?{...dependencies,beforeDrain:dependencies?.beforeDrain??(async()=>{}),passiveGeneration:opts.passiveGeneration}:dependencies)
     const subagent = registerSubagent(ctx, tools, {
       residentActivation: residentActivation.ticket,
       createInstructionContext: childInstructionHost.create,
@@ -1638,7 +1640,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       modelCallOrigin,
       requestContext: instructionManager,
       ...(managedDocument ? { inputPreparationFactory: createSteerPreparationFactory(session, inbox, opts.prepareHumanInput) } : {}),
-      ...(managedDocument ? { generationFactory: (action, dependencies) => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }, dependencies) } : {}),
+      ...(managedDocument ? { generationFactory: (action, dependencies) => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }, opts.passiveGeneration?{...dependencies,beforeDrain:dependencies?.beforeDrain??(async()=>{}),passiveGeneration:opts.passiveGeneration}:dependencies) } : {}),
       modelActionTimeoutMs: opts.modelActionTimeoutMs,
       modelActionMaxAttempts: opts.modelActionMaxAttempts,
       summaryFactory,

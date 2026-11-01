@@ -19,15 +19,29 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
   const descriptor = Object.getOwnPropertyDescriptor(action, 'owner'), owner = descriptor && 'value' in descriptor ? descriptor.value as import('@i-harness/core-session').OwnerToken : undefined
   if (!isNondurableSession(view) && (!owner || !Object.isFrozen(owner) || descriptor?.writable !== false || descriptor.configurable !== false || owner.sessionId !== ownerSessionId || typeof owner.incarnation !== 'string' || !owner.incarnation)) throw generationError('GENERATION_UNSUPPORTED')
   const incarnation = owner?.incarnation ?? randomUUID(), retained = new Set<CapturedActionFact<ProducerFactOutcome>>()
+  const expected=new WeakMap<CapturedActionFact<ProducerFactOutcome>,readonly GenerationEvent[]>()
+  const passive=dependencies?.passiveGeneration
+  const acknowledge=(capture:CapturedActionFact<ProducerFactOutcome>,outcome:Extract<ProducerFactOutcome,{kind:'committed'|'memory-committed'}>)=>{
+    if(!passive)return
+    try{
+      const originals=expected.get(capture);if(!originals)throw Error('Original generation operation absent')
+      const acknowledged=outcome.seqs.map(seq=>({seq,event:view.events[seq]}))
+      for(const original of originals){const matches=acknowledged.filter(({event})=>event?.type===original.type&&'actionId' in event&&event.actionId===original.actionId&&'op' in event&&event.op===original.op&&Object.keys(original).every(key=>JSON.stringify((event as unknown as Record<string,unknown>)[key])===JSON.stringify((original as unknown as Record<string,unknown>)[key])))
+        if(matches.length!==1)throw Error('Acknowledged generation member unavailable')
+        const {seq,event}=matches[0]!;passive.capture({kind:'fact',source:outcome.kind==='committed'?'journal-fact':'memory-committed',event:JSON.parse(JSON.stringify(event)) as GenerationEvent,factSeq:seq})
+      }
+    }catch{try{passive.unavailable('original-acknowledged-fact-unavailable')}catch{}}
+  }
+  const remember=(capture:CapturedActionFact<ProducerFactOutcome>,events:readonly GenerationEvent[])=>{if(passive)expected.set(capture,JSON.parse(JSON.stringify(events)));return capture}
   const running = new Set<Promise<unknown>>()
   const source = action.registerSettlementSource(async () => {
     await Promise.allSettled([...running])
     for (const capture of [...retained]) {
       const outcome = await capture.observe()
-      if (outcome.kind === 'committed' || outcome.kind === 'memory-committed') { retained.delete(capture); continue }
+      if (outcome.kind === 'committed' || outcome.kind === 'memory-committed') { acknowledge(capture,outcome);retained.delete(capture); continue }
       if (outcome.kind === 'unknown' || outcome.kind === 'recovery-required' || outcome.kind === 'conflict') {
         const reconciled = await capture.reconcile()
-        if (reconciled.kind === 'committed' || reconciled.kind === 'memory-committed') { retained.delete(capture); continue }
+        if (reconciled.kind === 'committed' || reconciled.kind === 'memory-committed') { acknowledge(capture,reconciled);retained.delete(capture); continue }
       }
       throw generationError('GENERATION_UNCERTAIN')
     }
@@ -43,7 +57,7 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
   const receipt = async (capture: CapturedActionFact<ProducerFactOutcome>) => {
     retained.add(capture)
     const result = await own(capture.admit())
-    if (result.kind === 'committed' || result.kind === 'memory-committed') { retained.delete(capture); return result }
+    if (result.kind === 'committed' || result.kind === 'memory-committed') { acknowledge(capture,result);retained.delete(capture); return result }
     if (result.kind === 'not-issued') {
       retained.delete(capture)
       if (result.code === 'FACT_CANCELLED' || result.code === 'FACT_CLOSED') throw generationError('GENERATION_CLOSED')
@@ -51,7 +65,7 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
     }
     throw generationError('GENERATION_UNCERTAIN')
   }
-  const commit = (events: readonly GenerationEvent[], current: () => boolean = () => true) => receipt(action.captureGeneration(events, current))
+  const commit = (events: readonly GenerationEvent[], current: () => boolean = () => true) => receipt(remember(action.captureGeneration(events, current),events))
   return { drain: () => source.close(), async open(purpose, origin, options = {}) {
     action.assertOpen()
     if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) throw generationError('GENERATION_CLOCK_INVALID')
@@ -76,15 +90,15 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
     return new OwnedGenerationAction(persisted, clock, {
       view, ownerSessionId, incarnation, assertOpen: action.assertOpen, read: state,
       append: async (events, current) => { await commit(events, current) },
-      settle: async event => { await receipt(source.generation.capture(event)) },
+      settle: async event => { await receipt(remember(source.generation.capture(event),[event])) },
       captureClose: event => {
-        const capture = source.generation.capture(event)
+        const capture = remember(source.generation.capture(event),[event])
         retained.add(capture)
-        const original = retainGenerationClose(capture, () => retained.delete(capture))
+        const original = retainGenerationClose(capture, outcome => {acknowledge(capture,outcome);retained.delete(capture)})
         return { settle: () => own(original.settle()) }
       },
-      phase: async (recovery, phase, current) => { await receipt(action.captureGenerationRecovery(recovery, phase, current)) },
-    }, { maxAttempts: options.maxAttempts, localTest: options.selectedClient ? { enabled: localTest?.enabled === true, selectedClient: options.selectedClient } : localTest })
+      phase: async (recovery, phase, current) => { await receipt(remember(action.captureGenerationRecovery(recovery, phase, current),[])) },
+    }, { maxAttempts: options.maxAttempts, passiveGeneration:passive, localTest: options.selectedClient ? { enabled: localTest?.enabled === true, selectedClient: options.selectedClient } : localTest })
 
   } }
 }

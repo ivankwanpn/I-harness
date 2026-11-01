@@ -4,6 +4,7 @@ import type { PreparedStreamControl } from './types.ts'
 import { assertPreparedValidation } from './rejection.ts'
 import type { PreparedValidation } from './validation.ts'
 import { generationCandidate, generationError, type GenerationReservation } from './generation.ts'
+import type { createOriginalPassiveExecution } from './passive-observation.ts'
 /** Random process-local continuity labels, never principal or lease evidence. */
 export interface LiveExecutionIdentity {
   version: 1; runtimeId: string; bindingLifetimeId: string; authEpoch: string
@@ -29,7 +30,7 @@ export function validExecutionIdentity(v: unknown): v is LiveExecutionIdentity {
   const i = v as LiveExecutionIdentity
   return i.version === 1 && i.coldCompatible === false && ['binding-credential', 'managed-subscription'].includes(i.scope) && [i.runtimeId, i.bindingLifetimeId, i.authEpoch].every(s => typeof s === 'string' && s.length > 0 && s.length <= 256)
 }
-export function preparedExecution(measurement: PreparedRequestMeasurement, control: PreparedStreamControl, validation?: PreparedValidation): PreparedExecutionContext {
+export function preparedExecution(measurement: PreparedRequestMeasurement, control: PreparedStreamControl, validation?: PreparedValidation, passive?:ReturnType<typeof createOriginalPassiveExecution>): PreparedExecutionContext {
   let confirmed = false
   let reservation: GenerationReservation | undefined, reserved = false, issued = false, settled = false
   const confirm = (identity?: LiveExecutionIdentity) => {
@@ -44,6 +45,7 @@ export function preparedExecution(measurement: PreparedRequestMeasurement, contr
     control.validateBeforeTransport?.()
     control.signal?.throwIfAborted()
     if (reservation && confirmation) reservation.issue(confirmation)
+    if (reservation && confirmation) { try { passive?.issue(reservation,confirmation) } catch { /* Passive evidence never changes transport. */ } }
     confirmed = true; issued = true
     try { control.onTransportIssue?.() } catch { /* Liveness observers do not change handoff. */ }
     } catch (error) {

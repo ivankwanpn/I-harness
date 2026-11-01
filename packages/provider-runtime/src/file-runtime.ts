@@ -10,6 +10,7 @@ import { providerView } from "./directory/profile.ts"
 import { describeSelection } from "./selection/metadata.ts"
 
 export interface FileProviderRuntimeOptions {
+  passiveUsageWorkspace?:string
   settingsPath: string
   credentialsPath: string
   /** Trusted dependency; configuration documents cannot supply executable code. */
@@ -43,6 +44,7 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
   const settings = new SettingsStore({ path: options.settingsPath })
   const codex = options.codex ?? createCodexManagement({ directory: join(dirname(options.credentialsPath), "coding-plans", "openai-codex") })
   const runtime = createProviderRuntime({ settings, credentials: createCredentialStore(options.credentialsPath),
+    passiveUsageWorkspace:options.passiveUsageWorkspace,
     codex,
     readModelWait: async () => {
       let raw: string

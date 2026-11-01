@@ -1,6 +1,7 @@
 import type { PreparedModelRequest } from './types.ts'
 import { generationError } from './generation.ts'
 import { assertOwnedStreamAdmission, associateOwnedStream } from './stream-lifetime.ts'
+import { inheritOriginalPassivePrepared } from './passive-observation.ts'
 
 const owned = new WeakSet<PreparedModelRequest>(), sources = new WeakMap<PreparedModelRequest, PreparedModelRequest>()
 const streamConstructors = new WeakMap<PreparedModelRequest, PreparedModelRequest['stream']>()
@@ -37,5 +38,6 @@ export function ownPreparedTerminal(base: PreparedModelRequest, composition?: { 
   owned.add(prepared)
   streamConstructors.set(prepared, prepared.stream)
   sources.set(prepared, source ?? base)
+  inheritOriginalPassivePrepared(source??base,prepared)
   return prepared
 }

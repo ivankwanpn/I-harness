@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import { reduceUsageObservations } from '../src/observation-reducer.js'
 import type { UsageObservationV1 } from '../src/observation-types.js'
+import {encodeUsageObservation,decodeUsageObservation} from '../src/observation-codec.js'
 const digest='a'.repeat(64), other='b'.repeat(64)
 const identity={ownerSessionId:'s',actionId:'a'}
 const candidate={semanticId:digest,payloadId:digest,payloadKind:'http-json-body' as const}
@@ -12,6 +13,18 @@ const reserve=fact(3,{type:'attempt-reserve',...candidate,attemptId:'t',ordinal:
 const handoff=live('h',{type:'handoff',...candidate,attemptId:'t',sendId:'send',rebind:0,incarnation:'i'})
 const snapshot=(ordinal:number,counters:object,time=30)=>live('u'+ordinal,{type:'usage-snapshot',attemptId:'t',sendId:'send',snapshotOrdinal:ordinal,providerId:'p',modelId:'m',workspace:'w',billing:'api',validity:'valid',terminalCoverage:'complete',...counters},time)
 const query={start:0,end:100}
+it('accepts closed optional original handoff attribution without fabricating usage and flags later disagreement',()=>{
+ const attribution={providerId:'media-provider',modelId:'media-model',workspace:'w',billing:'api' as const}
+ const attributed={...handoff,observation:{...handoff.observation,attribution}} as UsageObservationV1
+ expect(decodeUsageObservation(encodeUsageObservation(attributed))).toEqual(attributed)
+ expect(()=>encodeUsageObservation({...attributed,observation:{...attributed.observation,attribution:{providerId:'p'}}})).toThrow()
+ expect(()=>encodeUsageObservation({...attributed,observation:{...attributed.observation,attribution:{...attribution,extra:true}}})).toThrow()
+ const empty=reduceUsageObservations([open,bind,reserve,attributed],query)
+ expect(empty.sends[0]).toMatchObject({providerId:'media-provider',modelId:'media-model',coverage:'unavailable',totalTokens:null});expect(empty.sends[0].inputTokens).toBeUndefined()
+ expect(reduceUsageObservations([open,bind,reserve,handoff],query).sends[0].providerId).toBeUndefined()
+ const conflict=reduceUsageObservations([open,bind,reserve,attributed,snapshot(1,{inputTokens:8,outputTokens:2,inputTokenSemantics:'includes-cache'})],query)
+ expect(conflict.sends[0]).toMatchObject({providerId:'media-provider',coverage:'incomplete'});expect(conflict.warnings.join()).toMatch(/attribution/)
+})
 it('folds shuffled cumulative corrections once, keeps failed usage and separates action/handoff buckets',()=>{
  const rows=[open,bind,reserve,handoff,snapshot(1,{inputTokens:10,inputTokenSemantics:'includes-cache'}),snapshot(2,{outputTokens:3}),snapshot(3,{inputTokens:8}),fact(4,{type:'action-close',disposition:'stopped'})]
  const result=reduceUsageObservations([...rows.reverse(),handoff],query)

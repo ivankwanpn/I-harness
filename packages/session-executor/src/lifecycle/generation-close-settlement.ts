@@ -5,12 +5,12 @@ export interface OriginalGenerationCloseSettlement { settle(): Promise<void> }
 
 /** A close owns one native capture. Recovery has no authority to retry absence
  * or to replace a stale/invalid original intent. */
-export function retainGenerationClose(capture: CapturedActionFact<ProducerFactOutcome>, acknowledged: () => void): OriginalGenerationCloseSettlement {
+export function retainGenerationClose(capture: CapturedActionFact<ProducerFactOutcome>, acknowledged: (outcome:Extract<ProducerFactOutcome,{kind:'committed'|'memory-committed'}>) => void): OriginalGenerationCloseSettlement {
   const admit = capture.admit.bind(capture), observe = capture.observe.bind(capture), reconcile = capture.reconcile.bind(capture)
   let invoked = false, committed = false, outcome: ProducerFactOutcome | undefined, flight: Promise<void> | undefined
   const accept = (value: ProducerFactOutcome) => {
     outcome = value
-    if (value.kind === 'committed' || value.kind === 'memory-committed') { committed = true; acknowledged(); return }
+    if (value.kind === 'committed' || value.kind === 'memory-committed') { committed = true; acknowledged(value); return }
     if (value.kind === 'not-issued') {
       if (value.code === 'FACT_CANCELLED' || value.code === 'FACT_CLOSED') throw generationError('GENERATION_CLOSED')
       if (value.code === 'FACT_PRECONDITION_STALE') throw generationError('GENERATION_STALE')

@@ -27,7 +27,7 @@ export interface AgentGenerationLifecycle {
 }
 /** Construction dependency: a factory must forward this before releasing any
  * genuine generation source that the Agent may still need for original close. */
-export interface AgentGenerationDependencies { beforeDrain(): Promise<void> }
+export interface AgentGenerationDependencies { beforeDrain(): Promise<void>; passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver }
 export type AgentGenerationFactory = (action: ManagedAction<ProducerFactOutcome>, dependencies?: AgentGenerationDependencies) => AgentGenerationLifecycle
 export type DocumentGenerationFactory = (owner: import('@i-harness/core-session').FactOwner, sessionId: string, selectedClient: () => import('@i-harness/llm-seam').ModelClient | undefined) => AgentGenerationFactory
 export interface AgentInputPreparation {

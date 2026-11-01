@@ -7,6 +7,7 @@ import type { AgentGenerationAction } from '@i-harness/core-agent'
 import type { generationClock } from './generation-clock.ts'
 import type { GenerationIssue } from '@i-harness/llm-seam'
 import type { OriginalGenerationCloseSettlement } from './generation-close-settlement.ts'
+import { registerOriginalPassiveReservation, type OriginalPassiveObserver } from '@i-harness/llm-seam/internal/passive-observation'
 
 type Reserved = Extract<GenerationAttemptEvent, { op: 'reserve' }>
 type Settlement = Extract<GenerationAttemptEvent, { op: 'settle' }> | Extract<GenerationActionEvent, { op: 'close' | 'local-settle' }>
@@ -20,6 +21,7 @@ export interface GenerationActionDocument {
   phase(recovery: Extract<SessionEvent, { type: 'context/recovery' }>, phase: Omit<Extract<GenerationActionEvent, { op: 'phase' }>, 'seq' | 'recoverySeq'>, current: () => boolean): Promise<void>
 }
 export interface GenerationActionPolicy {
+  passiveGeneration?:OriginalPassiveObserver
   maxAttempts?: number
   localTest?: { enabled: boolean; selectedClient(): ModelClient | undefined }
 }
@@ -132,7 +134,7 @@ export class OwnedGenerationAction implements AgentGenerationAction {
       }
     } catch (error) { this.pending = false; throw error }
     let issued = false, settled = false, confirmation: GenerationIssue | undefined
-    return Object.freeze({ issue: (value: GenerationIssue) => {
+    const originalReservation=Object.freeze({ issue: (value: GenerationIssue) => {
       this.current(); checkCurrent?.()
       const record = this.state()?.attempts.find(attempt => attempt.reservation.attemptId === reservation.attemptId)
       if (issued || settled || !record || record.rebinds !== rebinds || record.candidate.semanticId !== candidate.semanticId || record.candidate.payloadId !== candidate.payloadId
@@ -145,6 +147,8 @@ export class OwnedGenerationAction implements AgentGenerationAction {
       this.pending = false
       if (!issued) this.knownUnsent = reservation
     } })
+    if(this.policy.passiveGeneration)try{registerOriginalPassiveReservation(originalReservation,{ownerSessionId:this.document.ownerSessionId,actionId:this.actionId,attemptId:reservation.attemptId,ordinal:reservation.ordinal,lane:reservation.lane,cause:reservation.cause,incarnation:reservation.incarnation,rebind:rebinds,...candidate},this.policy.passiveGeneration)}catch{try{this.policy.passiveGeneration.unavailable('original-reservation-association-failed')}catch{}}
+    return originalReservation
   }
   private async invokeLocal(identity: object, lane: GenerationLane, checkCurrent?: () => void): ReturnType<GenerationControl['invokeLocal']> {
     const current = this.current(), bound = current.bound
