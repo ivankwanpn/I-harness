@@ -344,7 +344,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       for (const t of doc.tasks) publish(t)
     },
     save,
-    flushPersistence: async () => { assertReady(); await persistence.flush() },
+    // Cleanup joins original initialization/writes even after work is retired.
+    // Failed initialization retains its original rejection; no work is admitted.
+    flushPersistence: async () => { await ready; await persistence.flush() },
   }
   associateTaskSaveOwner(registry, persistence)
   associateColdBindings(registry, () => coldBindings)
