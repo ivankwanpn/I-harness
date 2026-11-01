@@ -29,6 +29,19 @@ const bind = (tool: Tool, leaf: Tool['execute']) => {
   return (tools as any).bindPreparedShellLeaf(tool,leaf)
 }
 
+it('binds the final prepared spawn leaf for a code consumer', async () => {
+  const f=fixture(); let entry:any, claim:any
+  const leaf:Tool['execute']=async(_args,exec)=>{claim=entry.enter(exec);claim.assertCurrent();claim.consume();return 'done'}
+  const tool:Tool={name:'spawn_agent',description:'',inputSchema:{},execute:leaf}
+  try {
+    const owner=await import('../src/registry/prepared-body.ts')
+    expect((owner as any).bindPreparedTaskLaunchLeaf).toBeTypeOf('function')
+    entry=(owner as any).bindPreparedTaskLaunchLeaf(tool,leaf);f.registry.register(tool)
+    expect(await f.registry.dispatch(await f.prepare('spawn_agent','code'))).toBe('done')
+    expect(claim.context.view).toBe(f.view);expect(claim.call.name).toBe('spawn_agent');expect(Object.isFrozen(claim.call.args)).toBe(true);expect(claim.identity.parentSessionId).toBe(f.id);expect(()=>claim.assertCurrent()).toThrow()
+  } finally {await f.close()}
+})
+
 it('refuses a shaped execution owner and accessor context before invoking hooks', async () => {
   const ctx=createContext(),view=createSession(),owner=createNondurableFactOwner(view)
   let reads=0
@@ -218,4 +231,17 @@ it('invalidates a held claim on Stop and expires detached work after a throwing 
     const dispatch=f.registry.dispatch(await f.prepare('shell'));void dispatch.catch(()=>{});await reached.promise;f.action.stop();release.resolve()
     await expect(dispatch).rejects.toThrow();expect(()=>claimed.consume()).toThrow()
   } finally {release.resolve();await f.close()}
+})
+
+it('task caller permits same-view nested code preparation and refuses copied exec',async()=>{
+ const f=fixture();let entry:ReturnType<typeof import('../src/registry/prepared-body.ts').bindPreparedTaskLaunchLeaf>,claims=0
+ const {bindPreparedTaskLaunchLeaf}=await import('../src/registry/prepared-body.ts')
+ const task:Tool={name:'spawn_agent',description:'',inputSchema:{},async execute(_args,exec){expect(()=>entry.enter({...exec})).toThrow();const caller=entry.enter(exec)!;caller.consume();claims++;return 'nested'}}
+ entry=bindPreparedTaskLaunchLeaf(task,task.execute);f.registry.register(task);f.registry.register({name:'workflow',description:'',inputSchema:{},async execute(){return f.registry.dispatch(await f.prepare('spawn_agent','code'))}})
+ try{expect(await f.registry.dispatch(await f.prepare('workflow'))).toBe('nested');expect(claims).toBe(1)}finally{await f.close()}
+})
+it('task caller refuses a foreign active execution context without granting a claim',async()=>{
+ const parent=fixture(),child=fixture(parent),{bindPreparedTaskLaunchLeaf}=await import('../src/registry/prepared-body.ts');let claims=0,entry:ReturnType<typeof bindPreparedTaskLaunchLeaf>
+ const task:Tool={name:'spawn_agent',description:'',inputSchema:{},async execute(_args,exec){entry.enter(exec);claims++;return 'bad'}};entry=bindPreparedTaskLaunchLeaf(task,task.execute);child.registry.register(task)
+ try{const prepared=await child.registry.prepare({name:'spawn_agent',args:{}},parent.action.signal,{session:parent.view,sessionId:parent.id,callId:'foreign',settlementSource:parent.source});await expect(child.registry.dispatch(prepared)).rejects.toThrow('Foreign');expect(claims).toBe(0)}finally{await child.close();await parent.close()}
 })

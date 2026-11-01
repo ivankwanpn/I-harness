@@ -46,9 +46,9 @@ export class TaskPersistence {
     return next
   }
   /** Internal consumer keeps this exact save across its own await boundary. */
-  captureSave(hold = false): OwnedTaskSave | undefined {
+  captureSave(hold = false, beforeIssue?:()=>Promise<void>): OwnedTaskSave | undefined {
     if (!this.coordinator || !this.stateId || !this.strict || !this.owned) return undefined
-    return this.captureOwned(hold)
+    return this.captureOwned(hold,beforeIssue)
   }
   captureBindingSave(): OwnedTaskSave {
     if (!this.coordinator || !this.stateId || !this.owned || !isOwnedTaskContext(this.owned)) throw new Error('Original task owner unavailable')
@@ -56,8 +56,8 @@ export class TaskPersistence {
     this.#bindingAdmitted = true
     return this.captureOwned(true)
   }
-  private captureOwned(hold: boolean): OwnedTaskSave {
-    try { return this.captureOwnedSave(hold) } catch (error) {
+  private captureOwned(hold: boolean,beforeIssue?:()=>Promise<void>): OwnedTaskSave {
+    try { return this.captureOwnedSave(hold,beforeIssue) } catch (error) {
       const done = this.#chain.then(() => { if (!this.#debt) { this.#debt = handle; this.#debtCause = error }; throw error })
       const handle: OwnedTaskSave = Object.freeze({ done, assertHandoff() { if (this !== handle) throw new TypeError('Invalid task save receiver'); throw error }, release() { if (this !== handle) throw new TypeError('Invalid task save receiver'); throw error }, retireConsumer() { if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver')); return done }, retry() { if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver')); return Promise.reject(error) }, outcome() { if (this !== handle) throw new TypeError('Invalid task save receiver'); return undefined } })
       this.#pending.push(handle); this.#last = handle; this.#chain = done.catch(() => {}); return handle
@@ -87,7 +87,7 @@ export class TaskPersistence {
     if (failures.length) throw new AggregateError(failures, 'Original task consumer cleanup failed')
   }
   lastOwnedSave() { return this.#debt ?? this.#last }
-  private captureOwnedSave(hold: boolean): OwnedTaskSave {
+  private captureOwnedSave(hold: boolean,beforeIssue?:()=>Promise<void>): OwnedTaskSave {
     const owned = this.owned!
     if (!isOwnedTaskContext(owned) || owned.coordinator !== this.coordinator || owned.stateId !== this.stateId) throw new Error('Original task owner unavailable')
     const snapshot = captureTaskSnapshot(this.snapshot())
@@ -123,8 +123,10 @@ export class TaskPersistence {
     }
     const run = async () => {
       if (this.#pending[0] !== handle || this.#debt && this.#debt !== handle) throw new Error('Earlier owned task save requires resolution')
-      entered = true
       try {
+        if(beforeIssue)await beforeIssue()
+        if(this.#pending[0]!==handle||this.#debt&&this.#debt!==handle)throw new Error('Earlier owned task save requires resolution')
+        entered = true
         operation = await owned.operations.begin(owned.parent)
         const observed = await operation.observe(); if (observed.kind !== 'present') throw new Error('Task document is absent')
         write = operation.stageWrite(observed.witness, snapshot)
@@ -177,7 +179,7 @@ export class TaskPersistence {
       },
       retry() {
         if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver'))
-        if (!retryFlight) { const retirement = abandoned ? retireFlight : undefined; retryFlight = Promise.resolve().then(async () => { await done.catch(() => {}); if (retirement) await retirement.catch(() => {}); if (!entered) { await run(); return }; if (!write) { if (beginCleanup) await beginCleanup.retry(); else if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; if (result?.kind === 'conflict' || result?.kind === 'not-issued') { if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; await finish(true); if (!abandoned) assertHandoff(); if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined }; if (abandoned) retireHead(); else if (!hold && owner.#pending[0] === handle) { owner.#pending.shift(); consumerRetired = true } }); void retryFlight.then(() => { retryFlight = undefined }, () => { retryFlight = undefined }) }
+        if (!retryFlight) { const retirement = abandoned ? retireFlight : undefined; retryFlight = Promise.resolve().then(async () => { await done.catch(() => {}); if (retirement) await retirement.catch(() => {}); if (!entered) { await run(); if(owner.#debt===handle){owner.#debt=undefined;owner.#debtCause=undefined};if(abandoned)retireHead();return }; if (!write) { if (beginCleanup) await beginCleanup.retry(); else if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; if (result?.kind === 'conflict' || result?.kind === 'not-issued') { if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; await finish(true); if (!abandoned) assertHandoff(); if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined }; if (abandoned) retireHead(); else if (!hold && owner.#pending[0] === handle) { owner.#pending.shift(); consumerRetired = true } }); void retryFlight.then(() => { retryFlight = undefined }, () => { retryFlight = undefined }) }
         return retryFlight
       }, outcome() { if (this !== handle) throw new TypeError('Invalid task save receiver'); return result },
     })

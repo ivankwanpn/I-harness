@@ -204,6 +204,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     withBindingObservation:projects.withBindingObservation,
     retainSelectedProjectRead:projects.retainSelectedBindingRead.bind(projects),
     prepareBootstrapInheritance:projects.prepareBootstrapInheritance,
+    prepareTaskChildInheritance:projects.prepareTaskChildInheritance,
     prepareSelectedInheritance:projects.prepareSelectedInheritance.bind(projects),
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
@@ -251,6 +252,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const instructionEnvironment = createInstructionEnvironment({ settingsPath, watch: instructionWatch })
   const service: SessionService = createSessionService({
     passiveGeneration:usageObservations?.observer,
+    prepareTaskChild:nativeContext.prepareTaskChild,
     instructionEnvironment,
     telemetry: { close() {}, emit(event) {
       if (event.type !== "compaction/attempt" && !(event.type === "provider/context" && event.data.operation === "summary")) return

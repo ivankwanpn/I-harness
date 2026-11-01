@@ -43,6 +43,7 @@ export const CHILD_BOOTSTRAP_DOMAINS = Object.freeze({
   core: 'ih.bootstrap.child.core.v1', request: 'ih.bootstrap.child.request.v1',
   role: 'ih.bootstrap.child.role.v1', path: 'ih.bootstrap.child.path.v1',
 })
+export function childRoleDigest(role: unknown): string { return bootstrapHash(CHILD_BOOTSTRAP_DOMAINS.role, captureData(role)) }
 const invalid = (): never => { throw new TypeError('Invalid child bootstrap data') }
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 const id = (value: unknown): value is string => nonempty(value) && value.length <= 256

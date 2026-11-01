@@ -9,6 +9,7 @@ import type { SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
 import { captureBootstrapProject, captureSelectedProject as importSelectedProject, type BootstrapProjectCapture, type BootstrapProjectPreparation, type BootstrapTargetScope } from './bootstrap-project.ts'
+import {captureTaskChildProject,type TaskChildProjectCapture} from './bootstrap-project.ts'
 import { inspectSelectedTarget, captureOriginalColdObservation, captureOriginalColdBindingObservation, type ColdSelectedObservation } from '@i-harness/session-persistence/internal/selected-source-owner'
 import { requestRetainedReferenceRetirementFor, runRetainedRetirementSink, assertOutsideRetirementSink, joinRetainedRetirementSinks, assertRetainedBindingReferenceFor, preflightRetainedBindingReleaseFor, observeRetainedBindingRetirementFor, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedExistingBinding, type RetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
 import { isConversationMetadata } from './session-visibility.ts'
@@ -624,6 +625,10 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     prepareBootstrapInheritance(input: BootstrapProjectCapture): BootstrapProjectPreparation {
       const capture=captureBootstrapProject(input)
       return prepareProject(capture,async()=>{const inspection=await coordinator.inspectBootstrap(capture.invocation);return ['reserved','ready'].includes(inspection.kind)&&inspection.token&&'manifestDigest' in inspection.token?{invocation:inspection.invocation,manifestDigest:inspection.token.manifestDigest}:undefined})
+    },
+    prepareTaskChildInheritance(input:TaskChildProjectCapture):BootstrapProjectPreparation{
+      const capture=captureTaskChildProject(input)
+      return prepareProject(capture,async()=>{if(!coordinator.inspectChildBootstrap)return;const inspection=await coordinator.inspectChildBootstrap(capture.request);return ['reserved','ready'].includes(inspection.kind)&&inspection.token&&'manifestDigest'in inspection.token?{invocation:inspection.invocation,manifestDigest:inspection.token.manifestDigest}:undefined})
     },
     prepareSelectedInheritance(input: import('./bootstrap-project.ts').SelectedProjectCapture) {
       const capture=importSelectedProject(input),owner=prepareProject(capture,async()=>inspectSelectedTarget(coordinator,capture.target))

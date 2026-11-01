@@ -10,6 +10,9 @@ import type { SubagentRole } from "../roles.ts"
 import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./model-binding.ts"
 
 export interface SpawnOptions extends RoleModelHost {
+  childStart?: {kind:'legacy-admit'} | {kind:'committed-child-birth';birth:import('./task-birth.ts').CommittedTaskChildBirth}
+  retainPublication?: (phase: {kind:'agent'|'job'|'entry'|'run';value:object}) => void
+  onEntryPublished?: (entry:import('../agent-table.ts').ChildAgentEntry,info:Readonly<{path:string;jobId:string;sessionId?:string;modelLabel?:string}>) => void
   /** Parent-owned approval exception, never normal child allowance. */
   sharedGeneration?: import('@i-harness/llm-seam').ApprovalGenerationAction
   signal?: AbortSignal
