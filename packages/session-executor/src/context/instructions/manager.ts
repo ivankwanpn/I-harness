@@ -2,6 +2,10 @@ import { resolve } from 'node:path'
 import type { AuthorityState } from '@i-harness/sandbox'
 import { resolveInstructionCanonical, type InstructionTarget, type InstructionSnapshot, type OwnedInstructionWrite } from '@i-harness/instructions'
 import type { SessionRequestContext, InstructionRequestEvidence, SuccessfulInstructionHandoff } from '@i-harness/core-agent'
+import type { ManagedSuccessfulInstructionHandoff } from '@i-harness/core-agent'
+import * as coreTools from '@i-harness/core-tools'
+import { types as utilTypes } from 'node:util'
+import { isManagedExecutionDomain, isManagedExecutionSource, readManagedAcknowledgedMembers, retainAcknowledgedExecutionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
 import { captureLegacyFact, type SessionView } from '@i-harness/core-session'
 import { capturedToolRegistry, instructionReplan, isInstructionReplan, isOriginalInstructionCellRequest, type AcceptedInstructionBatch, type AcceptedInstructionCall, type CapturedToolCall, type InstructionBatchEntry, type InstructionCellLease, type NativeMutation, type NativeBoundary } from '@i-harness/core-tools'
 import type { InstructionEnvironment } from './contracts.ts'
@@ -33,7 +37,11 @@ function captureMethod<T extends (...args: any[]) => any>(owner: object, name: s
   throw new TypeError(`Invalid ${name} capability`)
 }
 
-export function createMainInstructionManager(options: { session?: SessionView; environment: InstructionEnvironment; cwd: string; authority: () => AuthorityState; available: () => boolean; publish: (signal: AbortSignal | undefined, retain: () => import('@i-harness/core-agent').RequestContextPin) => Promise<void> }) {
+export function createMainInstructionManager(options: { session?: SessionView; domain?: ManagedExecutionDomain; environment: InstructionEnvironment; cwd: string; authority: () => AuthorityState; available: () => boolean; publish: (signal: AbortSignal | undefined, retain: () => import('@i-harness/core-agent').RequestContextPin) => Promise<void> }) {
+  if(options.domain&&(options.session||!isManagedExecutionDomain(options.domain)))throw TypeError('Original managed instruction domain required')
+  type MemberPin=ReturnType<typeof retainAcknowledgedExecutionMembers>
+  type ManagedEvidence={domain:ManagedExecutionDomain;accepted:import('@i-harness/core-session').SessionEventView;calls:readonly import('@i-harness/core-session').SessionEventView[];pins:MemberPin[]}
+  const managedHandoffs=new WeakMap<object,ManagedEvidence>()
   const tokens = new WeakMap<InstructionRequestEvidence, Evidence>(), views = new Set<InstructionView>()
   const cleanupDebt = new Set<InstructionView>()
   const outstanding = new Set<{ requested: boolean; release(): Promise<void> }>()
@@ -136,17 +144,19 @@ export function createMainInstructionManager(options: { session?: SessionView; e
       return evidence.view.retain()
     },
     succeeded(handoff: SuccessfulInstructionHandoff) {
+      const managed=managedHandoffs.get(handoff)
+      if(options.domain&&!managed)throw TypeError('Original managed instruction handoff required')
       const candidateEvidence = tokens.get(handoff.evidence)
       if (!candidateEvidence || handoff.candidate.instructions !== handoff.evidence) throw new TypeError('Unknown instruction evidence')
       const evidence: Evidence = candidateEvidence
-      if (!options.session) { if (pending && evidence.selection === selection) { consumed = pending; pending = undefined }; return undefined } // Explicitly unmounted controlled contexts have no accepted-call owner.
-      const session = options.session, accepted = session.events[handoff.acceptedSeq], receipt = handoff.physicalExecutionReceipt
+      if (!options.session&&!managed) { if (pending && evidence.selection === selection) { consumed = pending; pending = undefined }; return undefined } // Explicitly unmounted controlled contexts have no accepted-call owner.
+      const session = options.session, accepted = managed?.accepted??session!.events[handoff.acceptedSeq], receipt = handoff.physicalExecutionReceipt
       if (closed || !accepted || accepted.type !== 'model/exchange-accepted' || accepted.seq !== handoff.acceptedSeq || accepted.actionId !== receipt.actionId || accepted.attemptId !== receipt.attemptId || !['committed', 'memory-committed'].includes(handoff.outcome?.kind) || !Array.isArray(handoff.outcome.seqs) || !handoff.outcome.seqs.includes(handoff.acceptedSeq) || !Array.isArray(handoff.calls) || accepted.callSeqs.length !== handoff.calls.length) throw new TypeError('Invalid accepted instruction exchange')
       const copied = captureLegacyFact(handoff.calls)
       if (copied.kind !== 'captured') throw new TypeError('Invalid accepted call data')
       const calls = copied.value
       for (let index = 0; index < calls.length; index++) {
-        const call = calls[index]!, event = call.eventSeq === undefined ? undefined : session.events[call.eventSeq]
+        const call = calls[index]!, event = managed?managed.calls[index]:call.eventSeq === undefined ? undefined : session!.events[call.eventSeq]
         if (!event || event.type !== 'tool/call' || accepted.callSeqs[index] !== call.eventSeq || event.seq !== call.eventSeq || event.callId !== call.callId || event.name !== call.call.name || JSON.stringify(event.args) !== JSON.stringify(call.call.args)) throw new TypeError('Accepted call identity mismatch')
       }
       const pin = evidence.view.retain(), bindings = new Map<number, { capture: CapturedToolCall; origin: AcceptedInstructionCall }>()
@@ -155,10 +165,15 @@ export function createMainInstructionManager(options: { session?: SessionView; e
         owner.requested = true
         if (released) return Promise.resolve()
         if (flight) return flight
-        flight = pin.release().then(() => { released = true; outstanding.delete(owner) }, error => { flight = undefined; throw error })
+        flight = pin.release().then(() => { for(const member of managed?.pins??[])member.release();if(managed)managed.pins.length=0;released = true; outstanding.delete(owner) }, error => { flight = undefined; throw error })
         return flight
       } }
       outstanding.add(owner)
+      const ownedCurrent=()=>{
+        if(closed||released||owner.requested)return false
+        if(managed)try{managed.domain.assertCurrent();for(const member of managed.pins)member.assertCurrent()}catch{return false}
+        return true
+      }
       if (pending && evidence.selection === selection) { consumed = pending; pending = undefined }
       async function preflightCore(entries: readonly InstructionBatchEntry[], currentOwner: () => boolean, owns: (entry: InstructionBatchEntry) => boolean, signal?: AbortSignal) {
           const selected = entries.map(entry => {
@@ -237,6 +252,7 @@ export function createMainInstructionManager(options: { session?: SessionView; e
           }
       }
       function retainCell(cellId: string): InstructionCellLease {
+        if(managed)throw TypeError('Managed Code instruction adoption requires its original nested-call producer')
         if (closed || released || owner.requested || typeof cellId !== 'string' || !cellId) throw new Error('Original accepted cell unavailable')
         const cellPin = evidence.view.retain(), cellBindings = new Map<string, { capture: CapturedToolCall; origin: AcceptedInstructionCall }>()
         let cellReleased = false, cellFlight: Promise<void> | undefined
@@ -253,7 +269,7 @@ export function createMainInstructionManager(options: { session?: SessionView; e
           bind(invocationId: string, capture: CapturedToolCall) {
             if (!currentCell() || typeof invocationId !== 'string' || !invocationId || cellBindings.has(invocationId)) throw new Error('Instruction invocation unavailable')
             const registry = capturedToolRegistry(capture), inspect = captureMethod<typeof registry.inspectCapture>(registry, 'inspectCapture'), inspected = inspect(capture)
-            const seq = inspected.identity.callEventSeq, event = seq === undefined ? undefined : session.events[seq]
+            const seq = inspected.identity.callEventSeq, event = seq === undefined ? undefined : session!.events[seq]
             if (inspected.identity.session !== session || inspected.identity.callId !== invocationId || !event || event.type !== 'code/call' || event.seq !== seq || event.cellId !== cellId || event.callId !== invocationId || event.name !== inspected.call.name || JSON.stringify(event.args) !== JSON.stringify(inspected.call.args)) throw new Error('Instruction invocation identity mismatch')
             const origin: AcceptedInstructionCall = Object.freeze({ kind: 'accepted-instruction-call' })
             cellBindings.set(invocationId, { capture, origin })
@@ -269,23 +285,29 @@ export function createMainInstructionManager(options: { session?: SessionView; e
       }
       const batch: AcceptedInstructionBatch = Object.freeze({
         bind(index: number, capture: CapturedToolCall) {
-          if (closed || released || owner.requested || !Number.isSafeInteger(index) || index < 0 || index >= calls.length) throw new Error('Accepted instruction batch unavailable')
+          if (!ownedCurrent() || !Number.isSafeInteger(index) || index < 0 || index >= calls.length) throw new Error('Accepted instruction batch unavailable')
           const prior = bindings.get(index)
           if (prior) { if (prior.capture !== capture) throw new Error('Accepted call already bound'); return prior.origin }
           if (preflightStarted) throw new Error('Accepted instruction batch admission closed')
           const descriptor = calls[index]!, registry = capturedToolRegistry(capture)
           const inspect = captureMethod<typeof registry.inspectCapture>(registry, 'inspectCapture'), inspected = inspect(capture)
-          if (inspected.identity.session !== session || inspected.identity.callId !== descriptor.callId || inspected.identity.callEventSeq !== descriptor.eventSeq || JSON.stringify(inspected.call) !== JSON.stringify(descriptor.call)) throw new Error('Captured call does not match accepted call')
+          if(managed){
+            const originalDomain=Reflect.get(coreTools,'capturedManagedExecutionDomain')
+            if(typeof originalDomain!=='function')throw TypeError('Managed tool capture adoption is not installed')
+            if(originalDomain(capture)!==managed.domain||inspected.identity.session!==undefined||inspected.identity.sessionId!==managed.domain.sessionId||!inspected.identity.settlementSource||!isManagedExecutionSource(managed.domain,inspected.identity.settlementSource))throw TypeError('Foreign managed instruction capture')
+            if(descriptor.call.name==='code_exec')throw TypeError('Managed Code instruction adoption requires its original nested-call producer')
+          }else if(inspected.identity.session!==session)throw new Error('Captured call does not match accepted call')
+          if (inspected.identity.callId !== descriptor.callId || inspected.identity.callEventSeq !== descriptor.eventSeq || JSON.stringify(inspected.call) !== JSON.stringify(descriptor.call)) throw new Error('Captured call does not match accepted call')
           const origin: AcceptedInstructionCall = Object.freeze({ kind: 'accepted-instruction-call' })
           bindings.set(index, { capture, origin })
-          acceptedOrigins.set(origin, { capture, current: () => !closed && !released && !owner.requested && bindings.get(index)?.origin === origin, ...(descriptor.call.name === 'code_exec' ? { retainCell } : {}) })
+          acceptedOrigins.set(origin, { capture, current: () => ownedCurrent() && bindings.get(index)?.origin === origin, ...(descriptor.call.name === 'code_exec' ? { retainCell } : {}) })
           return origin
         },
         async preflight(entries: readonly InstructionBatchEntry[], signal?: AbortSignal) {
-          if (closed || released || owner.requested || preflightStarted) throw new Error('Accepted instruction batch unavailable')
+          if (!ownedCurrent() || preflightStarted) throw new Error('Accepted instruction batch unavailable')
           preflightStarted = true
           if (entries.length !== bindings.size || new Set(entries.map(entry => entry.origin)).size !== entries.length || new Set(entries.map(entry => entry.capture)).size !== entries.length) throw new Error('Incomplete accepted call set')
-          await preflightCore(entries, () => !closed && !released && !owner.requested, entry => [...bindings.values()].some(binding => binding.capture === entry.capture && binding.origin === entry.origin), signal)
+          await preflightCore(entries, ownedCurrent, entry => [...bindings.values()].some(binding => binding.capture === entry.capture && binding.origin === entry.origin), signal)
         },
         release: owner.release,
       })
@@ -301,7 +323,34 @@ export function createMainInstructionManager(options: { session?: SessionView; e
       if (failures.length) throw new AggregateError(failures, 'Instruction manager cleanup incomplete')
     },
   }
-  return Object.assign(context, { text: () => text, diagnostics: Object.freeze({
+  return Object.assign(context, { managedSucceeded(handoff:ManagedSuccessfulInstructionHandoff) {
+    const own=<T>(value:object,key:string):T=>{if(!value||utilTypes.isProxy(value))throw TypeError('Closed instruction handoff required');const field=Object.getOwnPropertyDescriptor(value,key);if(!field||!('value'in field))throw TypeError('Instruction handoff data required');return field.value as T}
+    const domain=own<ManagedExecutionDomain>(handoff,'domain')
+    if(!options.domain||domain!==options.domain||!isManagedExecutionDomain(domain))throw TypeError('Foreign managed instruction domain')
+    const acceptedTuple=own<ManagedSuccessfulInstructionHandoff['accepted']>(handoff,'accepted'),capture=own<ManagedSuccessfulInstructionHandoff['accepted']['capture']>(acceptedTuple,'capture'),outcome=own<ManagedSuccessfulInstructionHandoff['outcome']>(acceptedTuple,'outcome')
+    if(own(handoff,'outcome')!==outcome)throw TypeError('Original accepted outcome required')
+    const acceptedMembers=readManagedAcknowledgedMembers(domain,capture,outcome),accepted=acceptedMembers.find(e=>e.type==='model/exchange-accepted')
+    if(!accepted||acceptedMembers.filter(e=>e.type==='model/exchange-accepted').length!==1)throw TypeError('Original accepted member required')
+    const raw=own<ManagedSuccessfulInstructionHandoff['calls']>(handoff,'calls')
+    if(utilTypes.isProxy(raw)||!Array.isArray(raw)||Reflect.ownKeys(raw).length!==raw.length+1)throw TypeError('Closed acknowledged calls required')
+    const pins:MemberPin[]=[],members:import('@i-harness/core-session').SessionEventView[]=[],descriptors:import('@i-harness/core-tools').AcceptedCallDescriptor[]=[]
+    try{
+      pins.push(retainAcknowledgedExecutionMembers(capture,outcome))
+      for(let index=0;index<raw.length;index++){
+        const tuple=own<ManagedSuccessfulInstructionHandoff['calls'][number]>(raw,String(index)),callCapture=own<ManagedSuccessfulInstructionHandoff['accepted']['capture']>(tuple,'capture'),callOutcome=own<ManagedSuccessfulInstructionHandoff['outcome']>(tuple,'outcome')
+        const actual=readManagedAcknowledgedMembers(domain,callCapture,callOutcome)
+        if(actual.length!==1||actual[0]?.type!=='tool/call')throw TypeError('Original call member required')
+        members.push(actual[0]);pins.push(retainAcknowledgedExecutionMembers(callCapture,callOutcome))
+        descriptors.push({callId:own(tuple,'callId'),eventSeq:own(tuple,'eventSeq'),call:own(tuple,'call')})
+      }
+      const summary:SuccessfulInstructionHandoff={evidence:own(handoff,'evidence'),candidate:own(handoff,'candidate'),acceptedSeq:own(handoff,'acceptedSeq'),physicalExecutionReceipt:own(handoff,'physicalExecutionReceipt'),outcome,calls:descriptors}
+      const generation=acceptedMembers.find(e=>e.type==='context/action'&&e.op==='accepted')
+      if(!generation||generation.type!=='context/action'||generation.op!=='accepted'||generation.executionDomain!=='physical'||generation.actionId!==summary.physicalExecutionReceipt.actionId||generation.sendId!==summary.physicalExecutionReceipt.sendId)throw TypeError('Original physical acceptance required')
+      if(accepted.version===2){const request=accepted.request,receipt=summary.physicalExecutionReceipt;if(request.candidateId!==receipt.candidateId||request.sendId!==receipt.sendId||request.semanticId!==receipt.semanticId||request.payloadId!==receipt.payloadId||request.payloadKind!==receipt.payloadKind||request.executionEpochId!==receipt.identity?.authEpoch)throw TypeError('Physical receipt mismatch')}
+      managedHandoffs.set(summary,{domain,accepted,calls:members,pins})
+      return context.succeeded(summary)
+    }catch(cause){for(const pin of pins)pin.release();throw cause}
+  }, text: () => text, diagnostics: Object.freeze({
     read: readDiagnostic,
     subscribe(listener: () => void) { if (closed) return () => {}; diagnosticListeners.add(listener); return () => { diagnosticListeners.delete(listener) } },
     invalidate: invalidateDiagnostics,
