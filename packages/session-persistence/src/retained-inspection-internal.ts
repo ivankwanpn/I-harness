@@ -10,3 +10,4 @@ export { observeColdExecutionWrites } from './coordinator/cold-execution-writes.
 export { observationCleanupFor } from './coordinator/binding-observation.ts'
 
 export { managedExecutionStatus } from './coordinator/managed-document.ts'
+export { isInsideOriginalSettlementClose, captureOriginalSettlementCloseAck } from './coordinator/settlement-source.ts'

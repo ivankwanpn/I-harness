@@ -14,6 +14,17 @@ vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async orig
  return{...actual,createFactJournalBackend(...args:Parameters<typeof actual.createFactJournalBackend>){const journal=actual.createFactJournalBackend(...args);return{...journal,appendOwnedBatch:vi.fn(journal.appendOwnedBatch),reconcileOwnedBatch:vi.fn(journal.reconcileOwnedBatch)}}}
 })
 
+it('parent close joins the original active Exec producer before draining its instruction-bearing source',async()=>{
+ const f=await createExecDeliveryFixture(backend=>{physical.backend=backend},{holdIo:true})
+ try{
+  await f.start();await f.issued;expect(f.launches()).toBe(1)
+  let timer:ReturnType<typeof setTimeout>
+  await Promise.race([f.service.close(),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Original Exec producer was not cancelled before source drain')),5000)})]).finally(()=>clearTimeout(timer!))
+  expect(f.cancels()).toBe(1);expect(f.releases()).toBe(1)
+  const events=(await f.backend.read('parent')).events;expect(events.filter(event=>event.type==='exec/end')).toHaveLength(1);expect(events.filter(event=>event.type==='agent/delivery-received')).toHaveLength(0)
+ }finally{await f.close()}
+},15000)
+
 it('original Exec terminal admits one receipt and wakes idle existing lane after complete native IO and retention',async()=>{
  const f=await createExecDeliveryFixture(backend=>{physical.backend=backend},{holdIo:true})
  try{

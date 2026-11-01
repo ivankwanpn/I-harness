@@ -41,6 +41,7 @@ export interface ContextOutputService {
   beginResult(scope: import('./artifact/types.ts').ResultArtifactScope, codec: import('@i-harness/core-session').ResultCodec): Promise<import('./artifact/types.ts').ResultArtifactSink>;
   confirmResultOwner(scope: import('./artifact/types.ts').ResultArtifactScope, ref: import('@i-harness/core-session').ManagedArtifactRef): Promise<void>;
   readResult(access: ContextAccess, query: { ref: import('@i-harness/core-session').ManagedArtifactRef; offset?: number; maxBytes?: number; viaCatalog?: import('@i-harness/core-session').ManagedArtifactRef }): Promise<import('./artifact/types.ts').ManagedArtifactPage>;
+  readCodeOutputResult?(access:ContextAccess,query:{ref:import('@i-harness/core-session').ManagedArtifactRef;cursor?:import('@i-harness/core-session').CodeOutputCursor;maxBytes?:number}):Promise<import('./artifact/code-output-reader.ts').CodeOutputPage>;
   readExecResult(access: ContextAccess, query: { ref: import('@i-harness/core-session').ManagedArtifactRef; cursor?: import('@i-harness/core-session').ExecFrameCursor; maxBytes?: number; textView?: boolean; viaCatalog?: import('@i-harness/core-session').ManagedArtifactRef }): Promise<import('./artifact/exec-reader.ts').ExecFramePage>;
   reconcileResult(operationId: string, id: string): Promise<import('./artifact/types.ts').ArtifactSettlement>;
   configure(patch: Partial<ContextOutputConfig>): Promise<ContextOutputStatus>;

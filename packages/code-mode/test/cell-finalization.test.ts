@@ -6,7 +6,7 @@ import { createSession, createNondurableFactOwner } from '@i-harness/core-sessio
 import { createCodeModeBroker } from '../src/broker.ts'
 import { createCodeModeRuntime } from '../src/runtime.ts'
 import { registerCodeMode } from '../src/register.ts'
-import { captureOriginalCellFinalization, observeOriginalCellFinalizations, type OriginalCellFinalization } from '../src/finalization.ts'
+import { captureOriginalCellFinalization, observeOriginalCellFinalizations, readOriginalWorkerAcquisition, type OriginalCellFinalization } from '../src/finalization.ts'
 
 it('retains the ordinary original broker cell until its accepted nested invocation actually drains', async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession()
@@ -32,16 +32,19 @@ it('retains the ordinary original broker cell until its accepted nested invocati
 
 it('captures the original runtime join before effects and preserves prompt ordinary completion through observer retirement', async () => {
   const body = Promise.withResolvers<unknown>(), started = Promise.withResolvers<void>()
-  let handle: OriginalCellFinalization | undefined, id = '', capturedBeforeEffect = false
+  let handle: OriginalCellFinalization | undefined, id = '', capturedBeforeEffect = false, unknownAtStart = false
   const runtime = createCodeModeRuntime({ tools: () => [{ name: 'held', description: '', inputSchema: {} }],
-    invoke: async () => { capturedBeforeEffect = !!handle; started.resolve(); return body.promise } })
+    invoke: async () => { capturedBeforeEffect = !!handle; started.resolve(); return body.promise },
+    onEvent(event) { if (event.type === 'started') unknownAtStart = readOriginalWorkerAcquisition(handle!) === 'unknown' } })
   const off = observeOriginalCellFinalizations(runtime, (cell, original) => { id = cell; handle = original })
   try {
     const out = await runtime.exec({ code: 'tools.held({}); text("done")', yield_time_ms: 60000 })
     await started.promise
     expect(out).toMatchObject({ status: 'completed', text: 'done' })
     expect(capturedBeforeEffect).toBe(true)
+    expect(unknownAtStart).toBe(true)
     expect(handle!.scope).toBe('runtime-retirement')
+    expect(readOriginalWorkerAcquisition(handle!)).toBe('acquired')
     expect(() => captureOriginalCellFinalization({ ...runtime }, id)).toThrow()
     let settled = false
     const original = handle!.settle().then(() => { settled = true })

@@ -1,3 +1,18 @@
+import { associateManagedResultRefusal } from './artifact/result-capabilities.ts'
+import { captureResultTargetIds } from '../../session-persistence/src/coordinator/result-revocation-data.ts'
+import { fields, captureTarget } from './artifact/transfer-codec.ts'
+import { createArtifactQualificationIO } from './artifact/qualification-io.ts'
+import { canonicalJsonData } from '@i-harness/core-session'
+import { originalResultRevocationFor, beginOriginalRevocationOrdering, runOriginalRevocationOrdering, joinOriginalRevocationPredecessors, completeOriginalRevocationOrdering, assertOutsideOriginalRevocationOrdering, captureOriginalRevocationDomain, acquireOriginalRevocationCoverage, assertOriginalRevocationCoverage, closeOriginalRevocationCoverage, beginOriginalRevocationEffect, type OriginalRevocationCoverage, issueOriginalResultRevocationScope, type OriginalResultRevocationTicket, type ResultRevocationAdmission } from '../../session-persistence/src/coordinator/result-revocation.ts'
+import type { WorkspaceMutationCleanup } from './workspace-mutation.ts'
+export interface OriginalResultRevocationPreparation { readonly frontier: number; assertCovered(ids: readonly string[]): void; close(): Promise<void> }
+export interface OriginalResultRevocationRequest { readonly kind: 'workspace' | 'session'; readonly sessionIds: readonly string[]; readonly documents: readonly string[] }
+const revocationPreparers = new WeakMap<ContextOutputService, (coordinator: SessionCoordinator, request: OriginalResultRevocationRequest, retain: (cleanup: OriginalResultRevocationPreparation) => void) => Promise<OriginalResultRevocationPreparation>>()
+export function prepareOriginalResultRevocation(service: ContextOutputService, coordinator: SessionCoordinator, request: OriginalResultRevocationRequest, retain: (cleanup: OriginalResultRevocationPreparation) => void) {
+  const prepare = revocationPreparers.get(service)
+  if (!prepare) throw TypeError('Original result service required')
+  return prepare(coordinator, request, retain)
+}
 import type { SeedDependencyTransferScope } from './artifact/bootstrap-transfer.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { access as fileAccess } from 'node:fs/promises'
@@ -7,6 +22,62 @@ import { configureContext, DEFAULT_CONTEXT_OUTPUT_CONFIG, identity, integer } fr
 import { ContextStore } from './store.ts'
 import type { ContextAccess, ContextOutputOptions, ContextOutputService, ContextOutputStatus, ContextResultRef } from './types.ts'
 import { createArtifactOwnership } from './artifact/ownership.ts'
+type CodeManifestQuery = ReturnType<typeof createArtifactOwnership>['captureConfirmedCodeManifest']
+const codeManifestQueries = new WeakMap<ContextOutputService, CodeManifestQuery>()
+const codeManifestScopeQueries = new WeakMap<ContextOutputService, (scope:Parameters<CodeManifestQuery>[0])=>void>()
+declare const codeManifestAdapterBrand: unique symbol, codeManifestReceiptBrand: unique symbol
+export type OriginalCodeManifestAdapter = Readonly<{[codeManifestAdapterBrand]:true}>
+export type OriginalCodeManifestReceipt = Readonly<{[codeManifestReceiptBrand]:true}>
+const codeManifestAdapters = new WeakMap<OriginalCodeManifestAdapter,{service:ContextOutputService;scope:Parameters<CodeManifestQuery>[0]}>()
+const codeManifestHistory = new WeakMap<OriginalCodeManifestReceipt,ReturnType<CodeManifestQuery>>()
+function copyCodeManifestHistory(snapshot:ReturnType<CodeManifestQuery>):ReturnType<CodeManifestQuery> {
+  // The existing source codec rejects extras and non-scalar optional fields
+  // before history can retain any arbitrary nested object from a live owner.
+  captureTarget({source:snapshot.source,revision:'confirmation-history'})
+  if(Buffer.byteLength(canonicalJsonData(snapshot))>65536)throw new Error('Original confirmation metadata exceeds limit')
+  const {source,ref}=snapshot
+  return Object.freeze({operationId:snapshot.operationId,sessionId:snapshot.sessionId,callId:snapshot.callId,
+    source:Object.freeze({sourceId:source.sourceId,...source.path!==undefined?{path:source.path}:{},...source.revision!==undefined?{revision:source.revision}:{},...source.readonly!==undefined?{readonly:source.readonly}:{}}),
+    ref:Object.freeze({version:ref.version,id:ref.id,revision:ref.revision,codec:ref.codec,encodedBytes:ref.encodedBytes,contentDigest:ref.contentDigest,completeness:ref.completeness})})
+}
+export function captureOriginalCodeManifestAdapter(service:ContextOutputService, scope:Parameters<CodeManifestQuery>[0]):OriginalCodeManifestAdapter {
+  const query=codeManifestScopeQueries.get(service)
+  if(!query)throw new Error('Original context output service required')
+  query(scope)
+  const adapter=Object.freeze({}) as OriginalCodeManifestAdapter
+  codeManifestAdapters.set(adapter,{service,scope})
+  return adapter
+}
+export function captureCodeManifestConfirmation(adapter:OriginalCodeManifestAdapter, sink:Parameters<CodeManifestQuery>[1], expected:Parameters<CodeManifestQuery>[2]):OriginalCodeManifestReceipt {
+  const original=codeManifestAdapters.get(adapter)
+  if(!original)throw new Error('Original manifest adapter required')
+  const query=codeManifestQueries.get(original.service)
+  if(!query)throw new Error('Original context output service required')
+  const snapshot=copyCodeManifestHistory(query(original.scope,sink,expected))
+  const receipt=Object.freeze({}) as OriginalCodeManifestReceipt
+  codeManifestHistory.set(receipt,snapshot)
+  return receipt
+}
+export function readCodeManifestConfirmationHistory(receipt:OriginalCodeManifestReceipt) {
+  const snapshot=codeManifestHistory.get(receipt)
+  if(!snapshot)throw new Error('Original confirmation receipt required')
+  return copyCodeManifestHistory(snapshot)
+}
+declare const confirmedCodeManifestBrand: unique symbol
+export type OriginalConfirmedCodeManifest = Readonly<{[confirmedCodeManifestBrand]:true}>
+const codeManifestProofs=new WeakMap<OriginalConfirmedCodeManifest,{service:ContextOutputService;args:Parameters<CodeManifestQuery>}>()
+export function captureConfirmedCodeManifest(service: ContextOutputService, ...args: Parameters<CodeManifestQuery>):OriginalConfirmedCodeManifest {
+  const query = codeManifestQueries.get(service)
+  if (!query) throw new Error('Original context output service required')
+  const snapshot=query(...args),proof=Object.freeze({}) as OriginalConfirmedCodeManifest
+  codeManifestProofs.set(proof,{service,args:[args[0],args[1],snapshot]})
+  return proof
+}
+export function readConfirmedCodeManifest(service:ContextOutputService,proof:OriginalConfirmedCodeManifest) {
+  const original=codeManifestProofs.get(proof),query=codeManifestQueries.get(service)
+  if(!original||original.service!==service||!query)throw new Error('Original confirmed Code manifest required')
+  return query(...original.args)
+}
 import { captureLegacy } from './legacy/capture.ts'
 import { readLegacy, searchLegacy } from './legacy/query.ts'
 import { createWorkspaceMutationOwner, failuresTogether, type WorkspaceMutationTurn } from './workspace-mutation.ts'
@@ -19,27 +90,32 @@ import type { LegacyReadObservation, LegacyReadQuery, LegacySearchQuery } from '
 import { createSelectedMetadata, createColdSelectedMetadata } from './legacy/selected-metadata.ts'
 import { captureOriginalColdObservation, type ColdSelectedObservation } from '../../session-persistence/src/selected-source-owner.ts'
 import type { SessionCoordinator } from '../../session-persistence/src/coordinator/types.ts'
-import type { OriginalLegacyOrderingParticipant, OriginalOrderingReservation, OriginalOrderingRegistration } from '../../session-persistence/src/coordinator/result-ordering-types.ts'
-import { beginOriginalResultOrderingRegistration } from '../../session-persistence/src/result-ordering-internal.ts'
+import type { OriginalLegacyOrderingParticipant, OriginalOrderingReservation, OriginalOrderingRegistration, OriginalOrderingOrigin } from '../../session-persistence/src/coordinator/result-ordering-types.ts'
+import { beginOriginalResultOrderingRegistration, captureOriginalResultOrderingRegistration } from '../../session-persistence/src/result-ordering-internal.ts'
 import type { createSeedDependencyTransfer } from './artifact/bootstrap-transfer.ts'
 
 type ColdManagedOwner = Pick<ReturnType<typeof createSeedDependencyTransfer>, 'acquireColdManagedQualification' | 'revokeColdTransfers'>
-const legacyOrderingOwners = new WeakMap<ContextOutputService, OriginalLegacyOrderingParticipant>()
+type LegacyOrderingOwner = { participant: OriginalLegacyOrderingParticipant; coordinators: Map<SessionCoordinator, ReturnType<typeof originalResultRevocationFor>>; operations: Set<object> }
+const legacyOrderingOwners = new WeakMap<ContextOutputService, LegacyOrderingOwner>()
 const orderingRequired = new WeakSet<ContextOutputService>(), orderingConfigured = new WeakSet<ContextOutputService>()
 export function requireOriginalLegacyOrdering(service: ContextOutputService) {
   if (!legacyOrderingOwners.has(service)) throw TypeError('Original legacy ordering service required')
   orderingRequired.add(service)
 }
-export function commitOriginalLegacyOrdering(service: ContextOutputService, registration: OriginalOrderingRegistration) {
-  const participant = legacyOrderingOwners.get(service)
-  if (!participant) throw TypeError('Original legacy ordering service required')
-  registration.commit(participant); orderingConfigured.add(service)
+export function commitOriginalLegacyOrdering(service: ContextOutputService, registration: OriginalOrderingRegistration, coordinator: SessionCoordinator) {
+  const original = legacyOrderingOwners.get(service)
+  if (!original) throw TypeError('Original legacy ordering service required')
+  if (original.operations.size) throw Error('Original result topology operation busy')
+  captureOriginalResultOrderingRegistration(coordinator, registration)
+  const admission = originalResultRevocationFor(coordinator)
+  registration.commit(original.participant); original.coordinators.set(coordinator, admission); orderingConfigured.add(service)
 }
 export function registerOriginalLegacyOrdering(service: ContextOutputService, coordinator: SessionCoordinator) {
-  const participant = legacyOrderingOwners.get(service)
-  if (!participant) throw TypeError('Original legacy ordering service required')
+  const original = legacyOrderingOwners.get(service)
+  if (!original) throw TypeError('Original legacy ordering service required')
+  if (original.operations.size) throw Error('Original result topology operation busy')
   const registration = beginOriginalResultOrderingRegistration(coordinator, service)
-  try { commitOriginalLegacyOrdering(service, registration) } catch (failure) { registration.cancel(); throw failure }
+  try { commitOriginalLegacyOrdering(service, registration, coordinator) } catch (failure) { registration.cancel(); throw failure }
 }
 const coldManagedOwners = new WeakMap<ContextOutputService, ColdManagedOwner>()
 export function acquireColdManagedQualification(service: ContextOutputService, ...args: Parameters<ColdManagedOwner['acquireColdManagedQualification']>) {
@@ -85,6 +161,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const gate = createLegacyUseGate()
   const owner = createWorkspaceMutationOwner(options)
   const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes, owner)
+  type RevocationRecord = { original: ContextStore; first?: { managed: Awaited<ReturnType<typeof artifacts.passiveReleaseInventory>>; legacy: Awaited<ReturnType<ContextStore['passiveInventory']>>; targets: readonly string[] }; matched?: { managed: Awaited<ReturnType<typeof artifacts.passiveReleaseInventory>>; legacy: Awaited<ReturnType<ContextStore['passiveInventory']>>; targets: readonly string[] }; coverage?: OriginalRevocationCoverage; frontier?: number; rounds: number; effect?: Awaited<ReturnType<ContextStore['prepareCoveredClear']>>; effectFlight?: Promise<unknown>; io: ReturnType<typeof createArtifactQualificationIO>; workspaces: WorkspaceMutationCleanup[] }
+  const revocationPreparations = new Map<OriginalResultRevocationPreparation, RevocationRecord>()
   let unsubscribeDeletions: (() => void) | undefined
   const releaseDocuments = async (documents: readonly string[]) => {
     artifacts.revokeColdTransfers(documents)
@@ -129,6 +207,9 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let mutations: Promise<unknown> = Promise.resolve()
   let quiescence: Promise<void> | undefined
   let transitions: Promise<unknown> = Promise.resolve()
+  type FiniteClear = { domain: ReturnType<typeof captureOriginalRevocationDomain>; origin: OriginalOrderingOrigin; sessionId: string | undefined; promise: Promise<ContextOutputStatus>; initialTickets: { port: ResultRevocationAdmission; ticket: OriginalResultRevocationTicket }[]; preparation?: OriginalResultRevocationPreparation; debt?: { cause: unknown }; released: boolean }
+  let finiteClear: FiniteClear | undefined
+  const clearContext = new AsyncLocalStorage<FiniteClear>()
   const jobs = new Map<AbortController, Promise<unknown>>()
   const orderingReservations = new Set<OriginalOrderingReservation>()
   const originalJobContext = new AsyncLocalStorage<{ active: boolean }>()
@@ -417,10 +498,12 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     async beginResult(scope, codec) { assertOpen(); return artifacts.beginResult(scope, codec) },
     confirmResultOwner: artifacts.confirmResultOwner,
     async readResult(access, query) { assertOpen(); return artifacts.readResult(access, query) },
+    async readCodeOutputResult(access,query) {assertOpen();return artifacts.readCodeOutputResult(access,query)},
     async readExecResult(access, query) { assertOpen(); return artifacts.readExecResult(access, query) },
     reconcileResult: artifacts.reconcileResult,
     status,
     async configure(patch) {
+      while (finiteClear) await joinFiniteClear()
       if (closed || closing) throw new Error('Context output is closed')
       configureContext(config, patch)
       await transition(async () => {
@@ -486,8 +569,14 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       }, 'cleanup'), false, true)
     },
     async clear(sessionId) {
+      while (finiteClear) await joinFiniteClear()
       if (closed || closing) throw new Error('Context output is closed')
       if (sessionId !== undefined) identity(sessionId, 'sessionId')
+      const topology = legacyOrderingOwners.get(service)!
+      if (topology.coordinators.size || orderingRequired.has(service)) {
+        assertOrderingOutside(); captureOriginalRevocationDomain([...topology.coordinators.values()])
+        return coveredPublicClear(sessionId, topology)
+      }
       artifacts.revokeColdTransfers(sessionId === undefined ? undefined : [sessionId])
       for(const reader of selectedReaders)if(sessionId===undefined||selectedReaderIds.get(reader)===sessionId)reader.revoke()
       legacy.retire(sessionId)
@@ -502,6 +591,13 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       return status()
     },
     async close() {
+      if (finiteClear) {
+        if (clearContext.getStore() === finiteClear) throw Error('Original clear operation reentry')
+        if (finiteClear.debt) {
+          const original = finiteClear
+          await original.preparation?.close(); for (const { ticket } of original.initialTickets) await ticket.close(); releaseClearFence(original)
+        } else { while (finiteClear) await joinFiniteClear() }
+      }
       if (closed) return
       artifacts.closeTransferAdmission()
       for(const reader of selectedReaders)reader.revoke()
@@ -510,6 +606,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       // admission fence while a later explicit call retries unfinished cleanup.
       if (!closeFlight) closeFlight = transition(async () => {
         const failures: unknown[] = []
+        for (const preparation of [...revocationPreparations.keys()]) try { await preparation.close() } catch (failure) { failures.push(failure) }
+        if (failures.length) failuresTogether(failures, 'Original revocation cleanup unresolved')
         for(const reader of [...selectedReaders])try{await reader.close()}catch(failure){failures.push(failure)}
         try { await legacy.close() } catch (failure) { failures.push(failure) }
         if (!deletionsUnsubscribed) {
@@ -530,7 +628,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       await closeFlight
     },
   }
-  legacyOrderingOwners.set(service, Object.freeze({ assertOutside: assertOrderingOutside, reserve(retain: (cleanup: OriginalOrderingReservation) => void) {
+  const participant: OriginalLegacyOrderingParticipant = Object.freeze({ assertOutside: assertOrderingOutside, reserve(retain: (cleanup: OriginalOrderingReservation) => void) {
     assertOrderingOutside(); if (closing && !closed) throw Error('Original result service cleanup unresolved')
     const admittedTransitions = transitions
     let settled = false, closedReservation = false, flight: Promise<void> | undefined
@@ -551,7 +649,167 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       async close() { if (this !== reservation) throw TypeError('Original ordering reservation receiver required'); if (closedReservation) return; await reservation.join(); reservation.assertSettled(); closedReservation = true; orderingReservations.delete(reservation) },
     })
     orderingReservations.add(reservation); retain(reservation); return reservation
-  } }))
+  } })
+  legacyOrderingOwners.set(service, { participant, coordinators: new Map(), operations: new Set() })
+  async function joinFiniteClear(): Promise<void> {
+    const original = finiteClear
+    if (!original) return
+    if (clearContext.getStore() === original) throw Error('Original clear operation reentry')
+    if (original.debt) throw original.debt.cause
+    try { await original.promise } catch { const debt = readClearDebt(original); if (finiteClear === original && debt) throw debt.cause }
+  }
+  function readClearDebt(original: FiniteClear) { return original.debt }
+  function releaseClearFence(original: FiniteClear): void {
+    if (original.released) return
+    completeOriginalRevocationOrdering(original.domain, original.origin)
+    original.released = true; legacyOrderingOwners.get(service)!.operations.delete(original)
+    if (finiteClear === original) finiteClear = undefined
+    controls--; state = config.enabled ? 'ready' : 'disabled'
+  }
+  function coveredPublicClear(sessionId: string | undefined, topology: LegacyOrderingOwner): Promise<ContextOutputStatus> {
+    const domain = captureOriginalRevocationDomain([...topology.coordinators.values()]), origin = beginOriginalRevocationOrdering(domain)
+    const completion = Promise.withResolvers<ContextOutputStatus>(), original: FiniteClear = { domain, origin, sessionId, promise: completion.promise, initialTickets: [], released: false }
+    const predecessors = { transitions, jobs: [...jobs.values()] }
+    finiteClear = original; topology.operations.add(original); controls++; state = 'stopping'
+    for (const controller of jobs.keys()) controller.abort()
+    const running = runOriginalRevocationOrdering(domain, origin, () => clearContext.run(original, async () => {
+      const request = { kind: sessionId === undefined ? 'workspace' as const : 'session' as const, sessionIds: sessionId === undefined ? [] : [sessionId] }
+      for (const [coordinator, port] of topology.coordinators) {
+        if (originalResultRevocationFor(coordinator) !== port) throw Error('Changed original clear coordinator')
+        if (original.initialTickets.some(entry => entry.port === port)) continue
+        const ticket = port.begin(issueOriginalResultRevocationScope(port, request, topology.participant)); original.initialTickets.push({ port, ticket })
+      }
+      artifacts.revokeColdTransfers(sessionId === undefined ? undefined : [sessionId])
+      for (const reader of selectedReaders) if (sessionId === undefined || selectedReaderIds.get(reader) === sessionId) reader.revoke()
+      legacy.retire(sessionId)
+      const earlier = joinOriginalRevocationPredecessors(domain, origin); if (earlier) await earlier
+      await Promise.allSettled(predecessors.jobs); await predecessors.transitions; await mutations
+      let rounds = 0
+      while (rounds < 3) {
+        const prepared = await prepareRevocation({ kind: sessionId === undefined ? 'workspace' : 'session', sessionIds: sessionId === undefined ? [] : [sessionId], documents: [] }, cleanup => { original.preparation = cleanup }, 3 - rounds, rounds === 0 ? original.initialTickets : undefined, original)
+        const record = revocationPreparations.get(prepared)
+        if (!record?.first || !record.coverage) throw TypeError('Original clear preparation required')
+        rounds += record.rounds
+        let applied = false
+        await cleanupTransition([sessionId], async settled => {
+          // Same original handle/receipt only. No caller-supplied effect callback.
+          const flight = gate.exclusive(undefined, async lease => {
+            await record.original.acquireLifetime(); assertOriginalRevocationCoverage(record.coverage!, record.first!.targets)
+            return owner.mutate(async turn => {
+              const cutoff = Date.now(), managed = await artifacts.passiveReleaseInventory(turn, [], record.io)
+              const legacy = await record.original.passiveInventory(turn, sessionId, cutoff)
+              const targets = Object.freeze([...new Set([...(sessionId === undefined ? [] : [sessionId]), ...managed.targets, ...legacy.targets])].sort())
+              if (canonicalJsonData({ managed, legacy, targets }) !== canonicalJsonData(record.first)) return false
+              record.matched = { managed, legacy, targets }; record.frontier = cutoff
+              assertOriginalRevocationCoverage(record.coverage!, targets)
+              const effect = beginOriginalRevocationEffect(record.coverage!)
+              try {
+                protectedResults = await artifacts.protectedCount()
+                if (candidate && candidate !== record.original || store && store !== record.original) throw Error('Original clear store changed')
+                let present = true
+                try { await fileAccess(record.original.directory) } catch (failure) { if ((failure as NodeJS.ErrnoException).code === 'ENOENT') present = false; else throw failure }
+                if (candidate || store || present) candidate = store = record.original
+                record.effect = await record.original.prepareCoveredClear(turn, lease, record.matched!.legacy, record.coverage!)
+                await record.original.applyCoveredClear(turn, lease, config.maxDiskBytes, record.effect)
+                return true
+              } finally { effect.close() }
+            }, cleanup => { record.workspaces.push(cleanup) })
+          })
+          record.effectFlight = flight; applied = await flight
+          if (applied) settled(sessionId)
+        }).promise
+        await prepared.close(); original.preparation = undefined
+        if (applied) return status()
+      }
+      throw Error('Original clear inventory changed repeatedly')
+    }))
+    void running.then(value => { releaseClearFence(original); completion.resolve(value) }, cause => { original.debt = { cause }; error = cause instanceof Error ? cause.message : String(cause); state = 'error'; completion.reject(cause) })
+    return completion.promise
+  }
+  revocationPreparers.set(service, async (coordinator, request, retain) => {
+    const topology = legacyOrderingOwners.get(service)!
+    if (!topology.coordinators.has(coordinator)) throw Error('Original complete service registration required')
+    return prepareRevocation(request, retain)
+  })
+  async function prepareRevocation(request: OriginalResultRevocationRequest, retain: (cleanup: OriginalResultRevocationPreparation) => void, limit = 3, initial?: readonly { port: ResultRevocationAdmission; ticket: OriginalResultRevocationTicket }[], clear?: FiniteClear): Promise<OriginalResultRevocationPreparation> {
+    assertOpen(); assertOrderingOutside()
+    fields(request, ['kind', 'sessionIds', 'documents'])
+    if (typeof retain !== 'function' || !['workspace', 'session'].includes(request.kind)) throw TypeError('Original revocation request required')
+    const ids = captureResultTargetIds(request.sessionIds), documents = captureResultTargetIds(request.documents), kind = request.kind
+    for (const id of [...ids, ...documents]) identity(id, 'revocation identity')
+    const topology = legacyOrderingOwners.get(service)!
+    if (clear && (finiteClear !== clear || clearContext.getStore() !== clear || !topology.operations.has(clear) || documents.length || (clear.sessionId === undefined ? kind !== 'workspace' || ids.length !== 0 : kind !== 'session' || ids.length !== 1 || ids[0] !== clear.sessionId))) throw TypeError('Original finite clear owner required')
+    const members = [...topology.coordinators], ports = [...new Set(members.map(([, port]) => port))], domain = captureOriginalRevocationDomain(ports), participant = topology.participant
+    if (!clear) assertOutsideOriginalRevocationOrdering(domain)
+    const check = () => { assertOpen(); if (members.length !== topology.coordinators.size) throw Error('Original result topology changed'); for (const [coordinator, port] of members) if (topology.coordinators.get(coordinator) !== port || originalResultRevocationFor(coordinator) !== port) throw TypeError('Changed original revocation association') }
+    let tickets: OriginalResultRevocationTicket[] = [], finished = false, closingFlight: Promise<void> | undefined
+    const io = createArtifactQualificationIO(), workspaces: WorkspaceMutationCleanup[] = []
+    const original = candidate ?? new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities, revokeResumedAuthorities), record: RevocationRecord = { original, rounds: 0, io, workspaces }
+    const done = Promise.withResolvers<void>(); let passFlight: Promise<unknown> | undefined
+    const dependentCleanup = Object.freeze({
+      assertSettled() { io.assertSettled(); original.assertLegacyFilesSettled(); for (const cleanup of workspaces) cleanup.assertSettled(); if (!original.lifetimeSettled()) throw Error('Original discovery lifetime cleanup unresolved'); if (record.effect) original.assertCoveredClearSettled(record.effect) },
+      async close() {
+        await passFlight?.catch(() => {}); await record.effectFlight?.catch(() => {})
+        await io.settle(); io.assertSettled(); await original.joinLegacyFiles(); original.assertLegacyFilesSettled()
+        for (const cleanup of workspaces) { await cleanup.close(); cleanup.assertSettled() }
+        await gate.exclusive(undefined, lease => original.quiesce(lease)); dependentCleanup.assertSettled()
+      },
+    })
+    const handle: OriginalResultRevocationPreparation = Object.freeze({
+      get frontier() { if (this !== handle || record.frontier === undefined || finished) throw Error('Original frontier unavailable'); return record.frontier },
+      assertCovered(requested: readonly string[]) { if (this !== handle || record.frontier === undefined || finished || !record.coverage) throw Error('Original revocation preparation unavailable'); check(); assertOriginalRevocationCoverage(record.coverage, requested) },
+      close() {
+        if (this !== handle) return Promise.reject(TypeError('Original revocation preparation required'))
+        assertOrderingOutside()
+        if (finished) return Promise.resolve()
+        if (closingFlight) return closingFlight
+        const flight = (async () => {
+          await done.promise
+          if (record.coverage) await closeOriginalRevocationCoverage(record.coverage); else await dependentCleanup.close()
+          for (const ticket of tickets) await ticket.close()
+          finished = true; revocationPreparations.delete(handle); topology.operations.delete(handle)
+        })()
+        closingFlight = flight; void flight.finally(() => { if (closingFlight === flight) closingFlight = undefined }).catch(() => {}); return flight
+      },
+    })
+    revocationPreparations.set(handle, record); topology.operations.add(handle)
+    try { retain(handle) } catch (failure) { revocationPreparations.delete(handle); topology.operations.delete(handle); done.resolve(); throw failure }
+    async function pass() {
+      check(); for (const ticket of tickets) ticket.assertCurrent()
+      return gate.exclusive(undefined, async lease => {
+        await original.acquireLifetime(); check()
+        const inventory = await owner.mutate(async turn => {
+          const cutoff = Date.now(), managed = await artifacts.passiveReleaseInventory(turn, documents, io); check()
+          const legacy = await original.passiveInventory(turn, kind === 'workspace' ? undefined : ids[0], cutoff); check()
+          if (kind === 'session' && ids.length !== 1) throw Error('One original session request required')
+          const targets = Object.freeze([...new Set([...ids, ...managed.targets, ...legacy.targets])].sort())
+          if (managed.recoveryRequired || legacy.recoveryRequired) throw Error('Original revocation inventory recovery required')
+          return { inventory: { managed, legacy, targets }, cutoff }
+        }, cleanup => { workspaces.push(cleanup) })
+        await original.quiesce(lease); check(); return inventory
+      })
+    }
+    try {
+      for (let attempt = 0; attempt < limit; attempt++) {
+        record.rounds++; tickets = []
+        if (attempt === 0 && initial) {
+          if (initial.length !== ports.length || initial.some((entry, index) => entry.port !== ports[index])) throw Error('Changed original clear topology')
+          tickets = initial.map(entry => entry.ticket)
+        } else for (const port of ports) tickets.push(port.begin(issueOriginalResultRevocationScope(port, { kind, sessionIds: ids }, participant)))
+        for (let index = 0; index < ports.length; index++) ports[index]!.retainCleanup(tickets[index]!, dependentCleanup)
+        await Promise.all(tickets.map(ticket => ticket.join()))
+        const { inventory: first } = await (passFlight = pass()); io.assertSettled(); original.assertLegacyFilesSettled()
+        for (const cleanup of workspaces) cleanup.assertSettled()
+        record.coverage = await acquireOriginalRevocationCoverage(domain, tickets, first.targets, coverage => { record.coverage = coverage }, clear?.origin); check()
+        if (clear) { record.first = first; return handle }
+        const { inventory: second, cutoff } = await (passFlight = pass())
+        for (const cleanup of workspaces) cleanup.assertSettled()
+        if (canonicalJsonData(first) === canonicalJsonData(second)) { assertOriginalRevocationCoverage(record.coverage, second.targets); record.matched = second; record.frontier = cutoff; return handle }
+        await closeOriginalRevocationCoverage(record.coverage); for (const ticket of tickets) await ticket.close(); tickets = []; record.coverage = undefined
+      }
+      throw Error('Original revocation inventory changed repeatedly')
+    } finally { done.resolve() }
+  }
   artifactSettlement.set(service,artifacts.settleSeedDependencyTransfer)
   coldManagedOwners.set(service, { acquireColdManagedQualification(...args) { assertOpen(); return artifacts.acquireColdManagedQualification(...args) }, revokeColdTransfers: artifacts.revokeColdTransfers })
   coldSelectedRevokers.set(service, revokeSelectedAuthorities)
@@ -620,5 +878,26 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     try{assertOpen()}catch(error){await selected.close();throw error}
     return selected
   }})
+  associateManagedResultRefusal(service)
+  const methodNames=['registerResultScope','beginResult','confirmResultOwner'] as const
+  const originalMethods=methodNames.map(name=>Object.getOwnPropertyDescriptor(service,name)!)
+  let querying=false
+  const assertManifestService=()=>{
+    if(closing||closed)throw new Error('Original manifest service closed')
+    for(const [i,name] of methodNames.entries()){
+      const field=Object.getOwnPropertyDescriptor(service,name),original=originalMethods[i]!
+      if(!field||!('value'in field)||field.value!==original.value||field.enumerable!==original.enumerable||field.configurable!==original.configurable||field.writable!==original.writable)throw new Error('Original service methods required')
+    }
+  }
+  codeManifestQueries.set(service, (...args) => {
+    if(querying)throw new Error('Original manifest query reentry unavailable')
+    assertManifestService();querying=true
+    try{const result=artifacts.captureConfirmedCodeManifest(...args);assertManifestService();return result}finally{querying=false}
+  })
+  codeManifestScopeQueries.set(service, scope => {
+    if(querying)throw new Error('Original manifest query reentry unavailable')
+    assertManifestService();querying=true
+    try{artifacts.assertOriginalManifestScope(scope);assertManifestService()}finally{querying=false}
+  })
   return service
 }

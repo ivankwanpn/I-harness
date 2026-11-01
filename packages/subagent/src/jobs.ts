@@ -1,3 +1,4 @@
+import {associateJobProjection} from './runtime-projection.ts'
 import { waitForObservation } from "@i-harness/core-tools"
 import type { ResultPublication } from './result-publication.ts'
 
@@ -96,17 +97,21 @@ export function createJobRegistry(): JobRegistry {
       const m = id !== undefined ? new RegExp(`^${kind}-(\\d+)$`).exec(id) : null
       if (m) counters.set(kind, Math.max(counters.get(kind) ?? 0, Number(m[1])))
       let settled=false
-      const registration={ id:resolved,...(cancel ? { finish(status:Exclude<JobStatus,"running"|"recovery-required">,output:string) {
-        const rec=records.get(resolved)
-        if(!rec)return false
-        // Only this registered producer can enrich its terminal row. A late
-        // success cannot replace a recorded kill, and publication is one-shot.
-        if(settled || rec.terminal&&rec.status!==status)return true
-        rec.status=status;rec.output=output;rec.terminal=true;rec.endedAt??=Date.now()
-        cancellation.delete(resolved);settled=true
-        publish(rec)
-        return true
-      } } : {}) }
+      const originalRecord=records.get(resolved)!
+      const finish=(status:Exclude<JobStatus,'running'|'recovery-required'>,output:string,terminal?:import('./runtime-projection.ts').OriginalTerminal)=>{
+        const rec=records.get(resolved);if(rec!==originalRecord)return false
+        if(rec.terminal&&rec.status!==status)return true
+        if(terminal){if(terminal.agentPath!==identity?.agentPath||(terminal.outcome===undefined||terminal.outcome==='recovery-required'))throw Error('Original job terminal identity changed');rec.taskId=terminal.id;if(terminal.result)rec.result=terminal.result}
+        if(!settled){rec.status=status;rec.output=output;rec.terminal=true;rec.endedAt??=Date.now();cancellation.delete(resolved);settled=true}
+        publish(rec);return true
+      }
+      const registration={id:resolved,...(cancel?{finish(status:Exclude<JobStatus,'running'|'recovery-required'>,output:string){return finish(status,output)}}:{})}
+      let projection:Promise<void>|undefined
+      associateJobProjection(registration,terminal=>projection??=(async()=>{
+        if((terminal.outcome===undefined||terminal.outcome==='recovery-required'))throw Error('Original job terminal outcome unavailable')
+        const status=terminal.outcome==='cancelled'?'killed':terminal.outcome==='error'?'error':'completed'
+        if(!finish(status,terminal.outcome==='completed'?terminal.resultText??'':terminal.error??terminal.resultText??'',terminal))throw Error('Original job registration replaced')
+      })())
       acquired?.(registration)
       publish(records.get(resolved)!)
       return registration

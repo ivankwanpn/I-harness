@@ -8,6 +8,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { canonicalJsonData, isStrictFactData } from '@i-harness/core-session'
 import { captureHeldOwnershipClaim } from './ownership.ts'
+import { hasOriginalNativeWriter } from '../native-fact-writer-internal.ts'
 
 export interface DeletionDocumentCleanup { assertCovered(keys: readonly string[]): void; assertSettled(): void; close(): Promise<void> }
 
@@ -190,7 +191,12 @@ export function createDocuments(
     async joinTaskDocumentIO() { await taskOperations?.joinTaskDocumentIO(); await taskTransitions?.joinIO() },
     putDocumentStrict,
     async putDocument(key: string, data: unknown) { observations.assertOutsideObservedDocument(key); try { await putDocumentStrict(key, data) } catch (error) { report(error) } },
-    async getDocument(key: string) { return backend.getDocument(key) },
+    async getDocument(key: string) {
+      if(!taskOperations||!lockEnabled||typeof key!=='string'||!key.startsWith('task-')||!hasOriginalNativeWriter(backend))return backend.getDocument(key)
+      observations.assertOutsideOwnedOperations([], [key])
+      const barrier=taskOperations.captureTaskReadBarrier(key)
+      const read=docChain.then(async()=>{await barrier.join();return withDocumentLeases([key],()=>backend.getDocument(key))});docChain=read.then(()=>{},()=>{});return read
+    },
     async retryDisposals() {
       const failures: unknown[] = []
       for (const record of disposalDebt) try { await dispose(record) } catch (error) { failures.push(error) }

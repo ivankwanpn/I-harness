@@ -6,7 +6,7 @@ import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
-import { invalidateManagedMetadataWitness, createManagedDocument, bindManagedRestoredStage, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
+import { invalidateManagedMetadataWitness, createManagedDocument, bindManagedRestoredStage, captureManagedParentReadiness, captureManagedRequiredParent, captureManagedProcessRead } from './managed-document.ts'
 import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
@@ -37,7 +37,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     bindRestored(entry,document)
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
-    document.revokeNewWork=()=>{assertTaskOutside(id);void revokeTaskOperations(id);markManagedEntryRevoked(entry);revoke()}
+    const revokeAttached=()=>{assertTaskOutside(id);void revokeTaskOperations(id);markManagedEntryRevoked(entry);revoke()}
+    document.revokeNewWork=revokeAttached
     const close=document.close
     let closeFlight:Promise<void>|undefined,closeComplete=false
     document.close=async()=>{
@@ -51,7 +52,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       let outcome:'settled'|'unknown'='unknown'
       const flight=(async()=>{
         try {
-          revokeManagedEntry(entry)
+          markManagedEntryRevoked(entry)
+          revokeAttached()
           await entry.flight?.catch(()=>{})
           await bootstrap.settleCapture(entry)
           if(entry.headerUnknown)throw new FactRecoveryRequiredError()
@@ -115,6 +117,13 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const check = () => { if (documents.get(id) !== entry || entry.document !== document || entry.revoked || entry.bootstrap || resolved.get(id) !== document) throw new FactRecoveryRequiredError() }
       return captureManagedProcessRead(document, ownership, documentKeys, check)
     },
+    captureRequiredParent(document:ManagedDocument,source:import('@i-harness/core-session').SettlementFacts) {
+      const association=documentEntries.get(document);if(!association)throw new FactRecoveryRequiredError();const{id,entry}=association;
+      if(entry.revoked||documents.get(id)!==entry||entry.document!==document||!transitions||entry.headerUnknown)throw new FactRecoveryRequiredError();
+      const original=captureManagedRequiredParent(document,ownership,source);
+      const checkIdentity=()=>{if(documents.get(id)!==entry||entry.document!==document||entry.headerUnknown||((entry.bootstrap||entry.selected)&&!entry.ready))throw new FactRecoveryRequiredError();original.assertOriginal()};const check=()=>{checkIdentity();original.assertCurrent()};check();
+      const result=Object.freeze({id,assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){if(this!==result)throw new TypeError('Invalid required parent');const lease=await original.acquireWriter();try{check();return lease}catch(error){lease.release();throw error}},async joinIssuedWriter(){if(this!==result)throw new TypeError('Invalid required parent');await original.joinIssuedWriter();check()},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTaskV3Parent(){if(this!==result)throw new TypeError('Invalid required parent');check();original.assertTask14Ready()}});return result;
+    },
     captureParent(document: ManagedDocument) {
       const association = documentEntries.get(document)
       if (!association) throw new FactRecoveryRequiredError()
@@ -125,7 +134,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         readiness.assertCurrent()
       }
       check()
-      const parent = Object.freeze({ id, assertCurrent() {
+      const parent = Object.freeze({ id, assertOriginal(){if(this!==parent||documents.get(id)!==entry||entry.document!==document||entry.headerUnknown)throw new FactRecoveryRequiredError();readiness.assertOriginal()}, assertCurrent() {
         if (this !== parent) throw new TypeError('Invalid parent receiver')
         check()
       }, assertTaskV3Parent() {

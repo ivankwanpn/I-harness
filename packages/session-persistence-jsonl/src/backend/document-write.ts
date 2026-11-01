@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { link, lstat, open, rename, unlink, writeFile, type FileHandle } from 'node:fs/promises'
 import type { TaskDocumentAck, TaskDocumentWrite, TaskWriteOutcome } from '@i-harness/session-persistence'
+import { captureOriginalTaskWriteProducer } from '@i-harness/session-persistence/internal/task-document-operations'
 async function publishDocument(temp: string, path: string, mode: 'replace' | 'initialize') { if (mode === 'replace') await rename(temp, path); else await link(temp, path) }
 
 /** Original generic document publication; owned operations will share this owner. */
@@ -22,6 +23,7 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
   const bytes = Buffer.from(input.bytes), before = input.preimage && { bytes: Buffer.from(input.preimage.bytes), identity: input.preimage.identity }, temp = `${input.path}.${randomUUID()}.tmp`
   const resources = new Set<Resource>()
   let tempIdentity: Identity | undefined, phase: 'staged'|'temp'|'closed'|'issued'|'published'|'acknowledged' = 'staged', result: TaskWriteOutcome | undefined, issueFlight: Promise<TaskWriteOutcome> | undefined, active: Promise<TaskWriteOutcome> | undefined, reconcileFlight: Promise<TaskWriteOutcome> | undefined, ack: TaskDocumentAck | undefined, terminal = false, tempCleanupPending = false
+  let lifetime: ReturnType<typeof captureOriginalTaskWriteProducer>
   const guard = () => input.guard()
   async function closeResource(resource: Resource) {
     if (resource.failed && resource.handle.fd < 0) throw resource.cause
@@ -107,7 +109,7 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
       await exact(temp, bytes, tempIdentity)
       if (before) { try { await exact(input.path, before.bytes, before.identity) } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') throw new Conflict(); throw error } }
       else { try { await lstat(input.path, { bigint: true }); guard(); throw new Conflict() } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw error } }
-      guard(); phase = 'issued'
+      guard(); lifetime?.beforeIssue(); phase = 'issued'
       try { await publishDocument(temp, input.path, before ? 'replace' : 'initialize'); phase = 'published' }
       catch (error) { if (!before && (error as NodeJS.ErrnoException | null | undefined)?.code === 'EEXIST') throw new Conflict(); throw error }
       const outcome = await confirmCandidate()
@@ -124,6 +126,23 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
     reconcile() { if (this !== handle) return Promise.reject(new TypeError('Invalid write receiver')); if (active) return active; if (result?.kind === 'committed' || terminal) return Promise.resolve(result!); return reconcileFlight ??= launch(false) },
     retry() { if (this !== handle) return Promise.reject(new TypeError('Invalid write receiver')); if (active) return active; if (result?.kind === 'committed') { const pending = Promise.resolve().then(async () => { await settleResources(); return result! }); active = pending; void pending.then(() => { if (active === pending) active = undefined }, () => { if (active === pending) active = undefined }); return pending }; if (terminal) return Promise.resolve(result!); reconcileFlight = undefined; return launch(true) },
     outcome() { if (this !== handle) throw new TypeError('Invalid write receiver'); return result },
+  })
+  lifetime = captureOriginalTaskWriteProducer(input.path, bytes, {
+    canReconcile(){return resources.size===0&&!tempCleanupPending},
+    async reconcile() {
+      if (active) return active
+      if (result?.kind === 'committed') { await settleResources(); return result! }
+      return launch(false)
+    },
+    async retireUnissued() {
+      if (active) await active
+      if (phase === 'issued' || phase === 'published' || phase === 'acknowledged') throw new Error('Original Task publication requires reconciliation')
+      if (phase === 'temp' && !tempIdentity) throw new Error('Original Task candidate identity unavailable')
+      if (tempIdentity) tempCleanupPending = true
+      await settleResources()
+      terminal = true
+      return result = Object.freeze({ kind: 'not-issued', reason: 'revoked', cleanupPending: false })
+    },
   })
   return { handle, async settle() { if (active) await active; await settleResources() } }
 }

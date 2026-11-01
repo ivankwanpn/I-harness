@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./internal/artifact-path": "./src/artifact-path.ts"
+    "./internal/artifact-path": "./src/artifact-path.ts",
+    "./internal/held-state": "./src/held-state-internal.ts"
   },
   "scripts": {
     "test": "vitest run",

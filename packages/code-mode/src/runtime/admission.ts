@@ -19,7 +19,7 @@ export function createAdmission(
   output: Pick<Output, 'observe'>,
   workers: ReturnType<typeof createWorkerEvents>,
   event: (event: CodeModeRuntimeEvent) => void | Promise<void>,
-  reserveFinalization: (id: string, original: () => Cell | undefined) => () => void,
+  reserveFinalization: (id: string, original: () => Cell | undefined) => { abandon(): void; acquired(): void },
 ) {
   let admissions = 0
   const { currentStore, track } = state
@@ -77,7 +77,7 @@ export function createAdmission(
     state.prune(config.maxActiveCells * 4)
     const id = randomUUID()
     let originalCell: Cell | undefined
-    const abandon = reserveFinalization(id, () => originalCell)
+    const disposition = reserveFinalization(id, () => originalCell)
     const epoch = retirement.epoch()
     let instructionOrigin: CodeModeOrigin['instructionOrigin'], installed = false
     admissions++
@@ -97,7 +97,7 @@ export function createAdmission(
       if (retirement.isDisposed() || epoch !== retirement.epoch() || origin.abortSignal?.aborted) throw new Error('Cell admission stopped by its owner')
     }
     catch (error) {
-      abandon()
+      disposition.abandon()
       if (installed) {
         try { await event({ type: 'closed', cellId: id, status: origin.abortSignal?.aborted ? 'terminated' : 'failed', error: 'Code Mode admission did not complete', origin }) }
         catch (saving) { throw new AggregateError([error, saving], 'Code Mode admission cleanup failed', { cause: error }) }
@@ -108,9 +108,9 @@ export function createAdmission(
     }
     finally { admissions-- }
     let worker: Worker
-    try { worker = new Worker(new URL(process.env.I_HARNESS_DIST === '1' ? './worker.mjs' : '../worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:initialStoreJson,config},execArgv:[]}) }
+    try { worker = new Worker(new URL(process.env.I_HARNESS_DIST === '1' ? './worker.mjs' : '../worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:initialStoreJson,config},execArgv:[]}); disposition.acquired() }
     catch (error) {
-      abandon()
+      disposition.abandon()
       if (installed) try { await event({ type: 'closed', cellId: id, status: 'failed', error: 'Code Mode worker could not start', origin }) }
       catch (saving) { throw new AggregateError([error, saving], 'Code Mode worker cleanup failed', { cause: error }) }
       throw error

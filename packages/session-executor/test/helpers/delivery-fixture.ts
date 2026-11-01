@@ -1,3 +1,4 @@
+import {createUnmanagedTaskChildHost} from '../../src/lifecycle/task-child-host.ts'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, basename } from 'node:path'
@@ -35,10 +36,11 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { activeForeground?: boolean; roleTools?:readonly string[]; holdLaterForegroundSave?:boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-service-'))
   let backend = createJsonlBackend(join(root, 'sessions'))
   let coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  if (options.compatibilityOrigin === 'delegated' || options.compatibilityOrigin === 'b2') await coordinator.create({ sessionId: 'delegator' })
   if (options.compatibilityOrigin === 'b2') {
     const now = Date.now()
     const outcome = await coordinator.bootstrapSemanticTarget({ invocation: { version: 1, operationId: 'delivery-b2-fixture', targetSessionId: 'parent', createdAt: new Date(now).toISOString(), requestDigest: 'a'.repeat(64) }, target: { kind: 'new' }, metadata: {},
@@ -87,6 +89,8 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
   const telemetry = createTelemetry([{ onEvent(event) { telemetryEvents.push(event) } }])
   const childGate = Promise.withResolvers<void>(), delivery = Promise.withResolvers<void>(), terminal = Promise.withResolvers<void>()
   const foregroundGate = Promise.withResolvers<void>(), foregroundStarted = Promise.withResolvers<void>()
+  const laterForegroundSave=Promise.withResolvers<void>(),laterForegroundSaveGate=Promise.withResolvers<void>(),foregroundHandoff=Promise.withResolvers<void>()
+  if(!options.holdLaterForegroundSave)laterForegroundSaveGate.resolve()
   const terminalGate = Promise.withResolvers<void>()
   const terminalCommitted = Promise.withResolvers<void>()
   const consumed = Promise.withResolvers<void>(), receiptUnknown = Promise.withResolvers<void>()
@@ -103,13 +107,15 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
   let consumedCount = 0
   const off = subscribe(originalDocument.view, e => {
     if (e.type === 'subagent/end') terminalCommitted.resolve()
-    if (e.type === 'agent/input/promoted' && e.inputId.startsWith('delivery-') && ++consumedCount === (options.spawnCount ?? 1)) consumed.resolve()
+    if(e.type==='tool/result'&&e.callId==='foreground-a'){backendTrace.push({phase:'foreground-handoff-fact',at:Date.now(),seq:e.seq});foregroundHandoff.resolve()}
+    if (e.type === 'agent/input/promoted' && e.inputId.startsWith('delivery-') && ++consumedCount === (options.spawnCount ?? 1)){backendTrace.push({phase:'delivery-consumed-fact',at:Date.now(),seq:e.seq});consumed.resolve()}
   })
   let launches = 0, heldTerminal = false, closed = false, resultRead = false
   if (!options.holdTerminal) terminalGate.resolve()
   const append = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(backend.reconcileOwnedBatch!).getMockImplementation()!
   let heldReceiptKey: import('@i-harness/core-session').BatchKey | undefined, allowReceipt = !options.holdReceiptUnknown
   let heldOpenKey: import('@i-harness/core-session').BatchKey | undefined, allowOpen = !options.holdOpenUnknown
+  const originalOpenTrace:{phase:'append'|'reconcile';batchId:string}[]=[]
   let heldTerminalKey: import('@i-harness/core-session').BatchKey | undefined, allowTerminal = !options.holdTerminalUnknown
   const terminalKeys: string[] = []
   const backendTrace: unknown[] = []
@@ -139,12 +145,13 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
     const key = basename(input.path).replace(/\.doc\.jsonl$/, ''), data = JSON.parse(Buffer.from(input.bytes).toString('utf8'))
     const save = async (retry: boolean) => {
       backendTrace.push({ phase: 'document-entered', key, at: Date.now(), data })
+      if(options.holdLaterForegroundSave&&key==='task-parent'&&data.tasks?.some((task:{id:string})=>task.id==='task-2')&&data.notifications?.some((row:{status:string})=>row.status==='delivered')){laterForegroundSave.resolve();await laterForegroundSaveGate.promise}
       if (!allowTaskSave && key === 'task-parent' && data.tasks?.some((task: { result?: { kind: string } }) => task.result?.kind === 'retained')) {
         taskSaveFailed.resolve()
         throw Object.assign(new Error('Controlled original task document save refused'), { code: 'EPERM' })
       }
       const outcome = retry ? await write.retry() : await write.issue()
-      backendTrace.push({ phase: 'document-returned', key, at: Date.now(), kind: outcome.kind })
+      backendTrace.push({ phase: 'document-returned', key, at: Date.now(), kind: outcome.kind, ...(outcome.kind==='unknown'?{cause:inspect(outcome.cause,{depth:14})}:{}) });if(outcome.kind==='unknown')console.info('original-native-document-unknown',key,inspect(outcome,{depth:14}))
       return outcome
     }
     return { handle: { issue: () => save(false), retry: () => save(true), reconcile: write.reconcile.bind(write), outcome: write.outcome.bind(write) }, settle: original.settle.bind(original) }
@@ -163,7 +170,7 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
       return { kind: 'unknown', key: heldTerminalKey }
     }
     if (options.holdOpenUnknown && events.some(e => e.type === 'agent/delivery-generation' && e.op === 'open')) {
-      heldOpenKey = args[3].key; openUnknown.resolve()
+      heldOpenKey = args[3].key;originalOpenTrace.push({phase:'append',batchId:heldOpenKey.batchId}); openUnknown.resolve()
       return { kind: 'unknown', key: heldOpenKey }
     }
     if (options.holdReceiptUnknown && events.some(e => e.type === 'agent/delivery-received')) {
@@ -177,7 +184,7 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
       terminalKeys.push(args[3].key.batchId)
       if (!allowTerminal) { terminalReconcile.resolve(); return { kind: 'unknown', key: heldTerminalKey } }
     }
-    if (args[3].key.batchId === heldOpenKey?.batchId && !allowOpen) return { kind: 'unknown', key: heldOpenKey }
+    if (args[3].key.batchId === heldOpenKey?.batchId) {originalOpenTrace.push({phase:'reconcile',batchId:heldOpenKey.batchId});if(!allowOpen)return { kind: 'unknown', key: heldOpenKey }}
     if (args[3].key.batchId === heldReceiptKey?.batchId) {
       receiptKeys.push(args[3].key.batchId)
       receiptReconcile.resolve(); await receiptReconcileGate.promise
@@ -185,8 +192,9 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
     }
     return reconcile(...args)
   })
+  const childStarted=Promise.withResolvers<void>()
   const child = controlledModel(async function* () {
-    const number = ++launches
+    const number = ++launches;backendTrace.push({phase:'child-model-entered',at:Date.now(),number});childStarted.resolve()
     if (options.activeForeground && number === 2) { foregroundStarted.resolve(); await foregroundGate.promise }
     else await childGate.promise
     yield { type: 'text/chunk', text: 'original child result' }
@@ -223,9 +231,10 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
   const mount = () => createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
     rewindStoreRoot: options.rewindFsWrite ? join(root, 'rewind-store') : undefined,
     extensionsFor: options.extensionsFor,
+    prepareTaskChild:createUnmanagedTaskChildHost({coordinator,policy:'unmanaged'}),
     telemetry,
     model: parent, modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access', codeMode: { mode: 'off' }, contextWindow: 100000,
-    pluginAgents: [{ name: 'probe', description: 'delivery fixture', systemPrompt: 'Return the original result', tools: [] }],
+    pluginAgents: [{ name: 'probe', description: 'delivery fixture', systemPrompt: 'Return the original result', tools: [...(options.roleTools??[])] }],
     additionalTools: [{ name: 'fixture_step', description: 'A normal parent step boundary', inputSchema: {}, isReadOnly: true, execute: async () => ({ stepped: true }) }],
     allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: 'fixture', model: 'child' }),
     resolveRoleModel: async () => ({ status: 'ready', binding: { client: child, contextWindow: 100000 } }),
@@ -240,7 +249,11 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
   return {
     root, output, get service() { return service }, get backend() { return backend }, get coordinator() { return coordinator }, parentRequests,
     launchCount: () => launches,
+    warningMessages:()=>[...warnings],
+    originalOpenTrace:()=>originalOpenTrace.map(entry=>({...entry})),
+    waitForChildStarted:()=>childStarted.promise,
     waitForForeground: () => foregroundStarted.promise,
+    waitForLaterForegroundSave:()=>laterForegroundSave.promise,releaseLaterForegroundSave:()=>laterForegroundSaveGate.resolve(),waitForForegroundHandoff:()=>foregroundHandoff.promise,
     releaseForeground: () => foregroundGate.resolve(),
     settleOriginalSpawnSources: async () => { for (const original of spawnSources) await original.source.close() },
     async start() {
@@ -254,11 +267,13 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
         await receivedInputsFor(originalDocument, 'parent').inbox.admit({ inputId: 'synthetic-parent', text: 'run an ordinary child', delivery: 'queue', intent: 'system', provenance: { kind: 'plugin', authority: 'observation', scope: 'turn', producer: 'session.schedule' }, synthetic: { description: 'synthetic trigger', scope: 'turn' } })
         await service.submit('parent', 'run an ordinary child', new AbortController().signal, { admittedInputId: 'synthetic-parent' })
       } else await service.submit('parent', 'run an ordinary child', new AbortController().signal)
+      const failure=(await backend.read('parent')).events.findLast(event=>event.type==='tool/result'&&event.name==='spawn_agent'&&event.envelope?.execution.outcome==='failed');if(failure)throw Error('Actual child fixture refused: '+JSON.stringify(failure))
+      if((options.spawnCount??1)>0)await childStarted.promise
     },
-    releaseChild: () => childGate.resolve(),
-    waitForDeliveryRequest: () => {
+    releaseChild: () => {backendTrace.push({phase:'release-child',at:Date.now()});childGate.resolve()},
+    waitForDeliveryRequest: (functionalRecoveryMs = 5000) => {
       let timer: ReturnType<typeof setTimeout>
-      return Promise.race([delivery.promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('No real parent delivery request after original child completion')), 5000) })]).finally(() => clearTimeout(timer))
+      return Promise.race([delivery.promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('No real parent delivery request after original child completion')), functionalRecoveryMs) })]).finally(() => clearTimeout(timer))
     },
     waitForHeldTerminal: () => terminal.promise,
     waitForTerminalCommitted: () => terminalCommitted.promise,
@@ -293,7 +308,7 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
     },
     async close() {
       if (closed) return
-      childGate.resolve(); foregroundGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
+      childGate.resolve(); foregroundGate.resolve();laterForegroundSaveGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
       const failures: unknown[] = []
       off()
       try {
@@ -302,7 +317,7 @@ export async function createDeliveryFixture(options: { activeForeground?: boolea
         closed = failures.length === 0
         expect(warnings.filter(message => !expectedWarnings.has(message)), 'unexpected delivery fixture warnings').toEqual([])
         if (options.holdTerminalUnknown) expect(warnings.some(message => message.includes('Original delivery sources require settlement'))).toBe(true)
-        if (failures.length) { console.info('original-delivery-cleanup-failures', inspect(failures, { depth: 8 })); throw new AggregateError(failures, 'Delivery fixture cleanup failed') }
+        if (failures.length) { console.info('original-delivery-cleanup-failures', inspect(failures, { depth: 14 })); throw new AggregateError(failures, 'Delivery fixture cleanup failed') }
       } finally { restoreWarning() }
     },
   }

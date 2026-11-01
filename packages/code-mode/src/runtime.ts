@@ -7,7 +7,22 @@ import { createWorkerEvents } from './runtime/worker-events.js'
 import { createAdmission } from './runtime/admission.js'
 import { instructionReplan } from '@i-harness/core-tools'
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
-import { createCellFinalizations } from './finalization.ts'
+import { createCellFinalizations, type OriginalCellFinalization } from './finalization.ts'
+
+type WorkerAcquisition = 'unknown' | 'not-acquired' | 'acquired'
+const workerAcquisitions = new WeakMap<OriginalCellFinalization, () => WorkerAcquisition>()
+interface OriginalOutputLifetime { accepted:number;truncated:boolean;policyRefusal?:true;instructionReplan?:true }
+const outputLifetimes = new WeakMap<OriginalCellFinalization, () => Readonly<OriginalOutputLifetime>>()
+export function readOriginalOutputLifetime(handle:OriginalCellFinalization):Readonly<OriginalOutputLifetime> {
+  const read=outputLifetimes.get(handle)
+  if(!read)throw new Error('Original runtime output lifetime unavailable')
+  return read()
+}
+export function readOriginalWorkerAcquisition(handle: OriginalCellFinalization): WorkerAcquisition {
+  const read=workerAcquisitions.get(handle)
+  if(!read)throw new Error('Original runtime worker acquisition unavailable')
+  return read()
+}
 
 /** Each admission owns a fresh WASM worker. Only JSON crosses its boundary. */
 export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeModeRuntime {
@@ -27,6 +42,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
   const workers = createWorkerEvents(options,config,errorCap,state,retirement,output)
   const exec = createAdmission(options,config,errorCap,state,retirement,output,workers,event, (id, original) => {
     const end = Promise.withResolvers<void>()
+    let acquisition: 'unknown' | 'not-acquired' | 'acquired' = 'unknown'
     endings.set(id, end)
     const handle = finalizations.reserve(id, async () => {
       await end.promise
@@ -39,9 +55,12 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
         if (failures.length) throw new AggregateError(failures.map(value => value.reason), 'Original Code invocations incomplete')
       }
       endings.delete(id)
+    }, handle=>{
+      workerAcquisitions.set(handle,()=>acquisition)
+      outputLifetimes.set(handle,()=>Object.freeze({ accepted: original()?.lifetimeOutput?.accepted ?? 0, truncated: original()?.lifetimeOutput?.truncated ?? false,policyRefusal:original()?.policyRefusal,...original()?.instructionReplan?{instructionReplan:true as const}:{} }))
     })
     void end.promise.then(() => handle.settle()).catch(() => {})
-    return () => end.resolve()
+    return { abandon() { acquisition = 'not-acquired'; end.resolve() }, acquired() { acquisition = 'acquired' } }
   })
   const { observe } = output
   const { close } = retirement

@@ -387,6 +387,7 @@ export interface SessionAssembly {
   drainParentNotifications?(ordinaryOnly?: boolean): Promise<void>
   /** Original retained source settlement only: no recipient admission/wake. */
   settleParentDeliverySources?(): Promise<void>
+  settleParentDeliveryJournalDebt?(): Promise<void>
   tools: ToolRegistry
   ctx: PluginContext // host wires approval/question answerers here (via onAssembly)
   agent: Agent // the per-session agent; tier-1 turns flow through it
@@ -534,6 +535,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     ...(opts.wslExecution ? { wslExecution: Object.freeze({ ...opts.wslExecution, ...(opts.wslExecution.runtimePath ? { runtimePath: Object.freeze([...opts.wslExecution.runtimePath]) } : {}) }) } : {}) }
   const attachment = await openExecutorDocument(opts)
   const { session, inbox, factOwner, document: managedDocument } = attachment
+  const drainOriginalDocumentSources = managedDocument?.drainOriginalSources.bind(managedDocument)
   const metadataFacts: MetadataFactSource = signal => actionMetadataFacts(factOwner, signal)
   // Resolve before mounting resources so a required-but-missing model cannot
   // leave a partially initialized assembly behind.
@@ -1752,6 +1754,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       inbox,
       drainParentNotifications: async ordinaryOnly => { await subagent.drainParentNotifications(); if (!ordinaryOnly) for (const handle of teamHandles) await handle.drainLeadMessages?.() },
       settleParentDeliverySources: () => subagent.settleParentDeliverySources(),
+      settleParentDeliveryJournalDebt: () => subagent.settleParentDeliveryJournalDebt(),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
       registerBackgroundJob: (input) => {
@@ -1896,6 +1899,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       await phase('code-mode', () => disposeRootCodeMode?.())
     }
     await phase('subagents', () => disposeSubagents?.())
+    // Join original physical producers before draining their retained fact sources.
+    await phase('terminal', () => terminalMount.dispose())
+    await phase('exec', () => assemblyExec.dispose())
+    // Unacknowledged producers still borrow these same role/MCP/instruction
+    // owners, even when their source barrier has not yet been entered.
+    if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, 'Assembly original producer cleanup incomplete')
+    await phase('document-sources', () => drainOriginalDocumentSources?.())
+    if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, 'Assembly original source cleanup incomplete')
     await phase('plugins', () => pluginCapabilities?.dispose())
     // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()
@@ -1915,9 +1926,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       if (!close) { close = handle.unmount.bind(handle); mountCloses.set(handle, close) }
       try { if (!cleanupDone.has(handle)) { await close(); cleanupDone.add(handle) } } catch { /* Preserve this optional mount's existing best-effort cleanup. */ }
     }
-    // M26-B2: terminal handle disposal (all PTYs).
-    await phase('terminal', () => terminalMount.dispose())
-    await phase('exec', () => assemblyExec.dispose())
     // Task documents have their own save chain above the coordinator queue.
     // Join that producer before the owner performs its final store close.
     await phase('persistence', () => flushSubagentPersistence?.())
