@@ -7,7 +7,7 @@ import { generationClock } from './generation-clock.ts'
 import { OwnedGenerationAction } from './generation-action.ts'
 import { readOwnedGenerationActions } from '../../../core-session/src/managed/view.ts'
 import { retainGenerationClose } from './generation-close-settlement.ts'
-import { isManagedExecutionOwner, readAcknowledgedExecutionMembers } from '@i-harness/core-session/internal/execution'
+import { isManagedExecutionOwner, readAcknowledgedExecutionMembers,readManagedSourceGenerations } from '@i-harness/core-session/internal/execution'
 import type { ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts'
 import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
 const executionGenerations=new WeakMap<object,{execution:ManagedExecutionAttachment;action:ManagedAction<ProducerFactOutcome>;assert():void;methods:Map<string,unknown>}>()
@@ -31,12 +31,16 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
   return generationLifecycle({view},ownerSessionId,action,localTest,dependencies)
 }
 /** Internal original fold/capture branch; never constructs a Session surrogate. */
-export function createExecutionGenerationLifecycle(execution: ManagedExecutionAttachment, ownerSessionId: string, action: ManagedAction<ProducerFactOutcome>, localTest?: { enabled: boolean; selectedClient(): import('@i-harness/llm-seam').ModelClient | undefined }, dependencies?: AgentGenerationDependencies): ExecutionGenerationLifecycle {
+export function createExecutionGenerationLifecycle(execution: ManagedExecutionAttachment, ownerSessionId: string, action: ManagedAction<import('@i-harness/core-session').FactOutcome>, localTest?: { enabled: boolean; selectedClient(): import('@i-harness/llm-seam').ModelClient | undefined }, dependencies?: AgentGenerationDependencies): ExecutionGenerationLifecycle {
   if(!isManagedExecutionOwner(execution.identity,execution.owner)||!execution.owner.ownsAction(action))throw generationError('GENERATION_UNSUPPORTED')
-  return generationLifecycle({execution},ownerSessionId,action,localTest,dependencies)
+  return generationLifecycle({execution},ownerSessionId,action,localTest,dependencies,(drain,beforeDrain)=>{
+    const source=action.registerSettlementSource(drain,beforeDrain)
+    return {source,read:()=>readManagedSourceGenerations(execution.identity,source)}
+  })
 }
 export interface ExecutionGenerationLifecycle { drain():Promise<void>; open(...args:Parameters<AgentGenerationLifecycle['open']>):Promise<OwnedGenerationAction> }
-function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:never;execution:ManagedExecutionAttachment}, ownerSessionId:string,action:ManagedAction<ProducerFactOutcome>,localTest?:{enabled:boolean;selectedClient():import('@i-harness/llm-seam').ModelClient|undefined},dependencies?:AgentGenerationDependencies):ExecutionGenerationLifecycle {
+type NativeSourceRead = {source:import('@i-harness/core-session').SettlementFacts<ProducerFactOutcome>;read():readonly import('@i-harness/core-session').DeepReadonly<import('@i-harness/core-session').GenerationActionState>[]}
+function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:never;execution:ManagedExecutionAttachment}, ownerSessionId:string,action:ManagedAction<ProducerFactOutcome>,localTest?:{enabled:boolean;selectedClient():import('@i-harness/llm-seam').ModelClient|undefined},dependencies?:AgentGenerationDependencies,registerNative?:(drain:()=>Promise<void>,beforeDrain?:()=>Promise<void>)=>NativeSourceRead):ExecutionGenerationLifecycle {
   const {view,execution}=domain
   const originalAssertion=execution?Object.getOwnPropertyDescriptor(action,'assertOpen'):undefined
   if(execution&&(!originalAssertion||!('value'in originalAssertion)||typeof originalAssertion.value!=='function'||utilTypes.isProxy(originalAssertion.value)))throw generationError('GENERATION_UNSUPPORTED')
@@ -63,7 +67,7 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
   }
   const remember=(capture:CapturedActionFact<ProducerFactOutcome>,events:readonly GenerationEvent[])=>{if(passive)expected.set(capture,JSON.parse(JSON.stringify(events)));return capture}
   const running = new Set<Promise<unknown>>()
-  const source = action.registerSettlementSource(async () => {
+  const drain = async () => {
     await Promise.allSettled([...running])
     for (const capture of [...retained]) {
       const outcome = await capture.observe()
@@ -74,9 +78,11 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
       }
       throw generationError('GENERATION_UNCERTAIN')
     }
-  }, dependencies?.beforeDrain)
+  }
+  const native=registerNative?.(drain,dependencies?.beforeDrain)
+  const source = native?.source??action.registerSettlementSource(drain,dependencies?.beforeDrain)
   const scope = { ...view?.header, sessionId: ownerSessionId }
-  const read = (): readonly import('@i-harness/core-session').DeepReadonly<import('@i-harness/core-session').GenerationActionState>[] => execution ? execution.observe().generations() : readOwnedGenerationActions(view!, scope) ?? readGenerationActions(view!.events, scope, view!.formatVersion)
+  const read = (): readonly import('@i-harness/core-session').DeepReadonly<import('@i-harness/core-session').GenerationActionState>[] => native ? native.read() : readOwnedGenerationActions(view!, scope) ?? readGenerationActions(view!.events, scope, view!.formatVersion)
   const state = (id: string) => {const original=read().find(value => value.opened.actionId === id);return original&&execution?copyConversationData(original):original}
   const own = <T>(operation: Promise<T>): Promise<T> => {
     running.add(operation)
