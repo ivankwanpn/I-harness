@@ -49,7 +49,7 @@ async function fixture(){
  const acceptedCapture=action.captureModelExchange({type:'assistant/message',text:''},{type:'model/exchange-accepted',version:1,exchangeId:'original-exchange',actionId:generation.actionId,attemptId:'logical',stepStartSeq:{kind:'prior',seq:stepSeq!,expectedType:'step/start'},assistantSeq:{kind:'group',position:0,expectedType:'assistant/message'},callSeqs:[{kind:'prior',seq:callEvent.seq!,expectedType:'tool/call'}]},generation.acceptance(receipt)),outcome=await acceptedCapture.admit()
  if(outcome.kind!=='committed')throw Error('Acceptance not acknowledged: '+JSON.stringify(outcome))
  const accepted=readManagedAcknowledgedMembers(domain,acceptedCapture,outcome).find(e=>e.type==='model/exchange-accepted')!
- const handoff:ManagedSuccessfulInstructionHandoff={domain,candidate,evidence,acceptedSeq:accepted.seq!,accepted:{capture:acceptedCapture,outcome},outcome,physicalExecutionReceipt:{...receipt,actionId:generation.actionId,attemptId:'logical'},calls:[{callId:callEvent.callId,eventSeq:callEvent.seq!,call:{name:callEvent.name,args:callEvent.args},capture:callCapture,outcome:callOutcome}]}
+ const handoff:ManagedSuccessfulInstructionHandoff={domain,action,candidate,evidence,acceptedSeq:accepted.seq!,accepted:{capture:acceptedCapture,outcome},outcome,physicalExecutionReceipt:{...receipt,actionId:generation.actionId,attemptId:'logical'},calls:[{callId:callEvent.callId,eventSeq:callEvent.seq!,call:{name:callEvent.name,args:callEvent.args},capture:callCapture,outcome:callOutcome}]}
  const callerPins=[retainAcknowledgedExecutionMembers(acceptedCapture,outcome),retainAcknowledgedExecutionMembers(callCapture,callOutcome)]
  defer(async()=>{for(const pin of callerPins)pin.release()})
  await request.settle();transport.close()
