@@ -1,3 +1,5 @@
+import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
+import {forwardTableProjection} from './runtime-projection.ts'
 export { taskBodyPreview as childResultPreview, readTaskResultPage } from "./task/result.ts"
 export type { TaskResultStore, RetainedTaskResult, TaskResultBody, TaskResultPage, TaskResultPageArgs } from "./task/result.ts"
 export { createJobRegistry } from "./jobs.ts"
@@ -245,6 +247,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
         }
         Object.defineProperty(facade, name, { value: method, enumerable: true })
       }
+      if(kind==='table')forwardTableProjection(facade as unknown as import('./agent-table.ts').AgentTable,()=>mountedRuntime.table)
       return facade
     }
     jobs = guarded('jobs', jobs, ['registerJob', 'updateJob', 'kill'])
@@ -318,6 +321,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // was cancelled (R-D3 opencode rule). One drain instance per mount; it is
   // activated only after the host publishes its actual receiver lane.
   const notifDrain = createNotificationDrain({
+    current:()=>!notificationsRetired&&(!opts.factOwner||managedExecutionStatus(opts.factOwner as ManagedDocument)!=='retired'),
     reconcileSources: settleParentDeliverySources,
     reportPolicy: opts.reportPolicy,
     tasks,

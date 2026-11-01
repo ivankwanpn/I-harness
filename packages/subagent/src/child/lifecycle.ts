@@ -1,3 +1,4 @@
+import {bindOriginalSpawnRun,bindOriginalSpawnJob,hasRequiredOriginalSpawn} from '../tools/source-run.ts'
 import { retainChildResult } from "./result.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { committedFactSeqs, deriveMessages, type SessionView, type FactOwner } from "@i-harness/core-session"
@@ -49,7 +50,7 @@ export async function publishChild(
   opts.validateBeforeLaunch?.()
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, undefined,
-    { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) })
+    { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) },registration=>bindOriginalSpawnJob(opts.onPublished,registration))
   let resultLifetime = true
   let initialClosed = false, initialFlight: Promise<void> | undefined
   const settleInitial = () => {
@@ -110,11 +111,9 @@ export async function publishChild(
     },
   }
   retainInitialInput(entry,inputId,initialOutcome)
-  opts.table.add(childPath, entry)
-  onEntryPublished?.(entry)
-  opts.onPublished?.({ path: childPath, jobId, sessionId, ...(modelLabel !== undefined ? { modelLabel } : {}) })
   // Defer transport until the entry and its retained lifecycle are published.
-  const initialRun = Promise.resolve().then(() => { assertSetupLive?.(); return agent.runAdmitted!(opts.message, controller.signal, undefined, inputId, initial?.generation && initial.delegatedOrigin
+  const runGate=Promise.withResolvers<void>()
+  const initialRun = runGate.promise.then(() => { controller.signal.throwIfAborted();assertSetupLive?.(); return agent.runAdmitted!(opts.message, controller.signal, undefined, inputId, initial?.generation && initial.delegatedOrigin
     ? { provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) }, generation: initial.generation, delegatedOrigin: initial.delegatedOrigin } : undefined) })
 
   const completion = initialRun.then(
@@ -123,18 +122,26 @@ export async function publishChild(
       // followup can re-drive the same agent (M9 spec §2.2). A stale error
       // from an earlier interrupted attempt is cleared on success.
       const settled = await opts.onSettled?.({ finalText: result.finalText, aborted: false })
-      await retainChildResult(opts, entry, { resultText: result.finalText }, "completed", settled)
+      if(!hasRequiredOriginalSpawn(opts.onPublished))await retainChildResult(opts, entry, { resultText: result.finalText }, "completed", settled)
     },
     async (err) => {
       const aborted = controller.signal.aborted
       // An interrupted turn leaves the child ALIVE (waiting) so followups still work.
       const settled = await opts.onSettled?.({ error: err instanceof Error ? err.message : String(err), aborted })
       const error = opts.results ? (err instanceof Error ? err.message : String(err)) : aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
-      await retainChildResult(opts, entry, { error }, aborted ? "cancelled" : "error", settled)
+      if(!hasRequiredOriginalSpawn(opts.onPublished))await retainChildResult(opts, entry, { error }, aborted ? "cancelled" : "error", settled)
     },
   )
   entry.followupChain = completion.finally(settleInitial)
   void entry.followupChain.catch(() => {})
+  try {
+    bindOriginalSpawnRun(opts.onPublished,entry,initialRun,opts.table)
+    opts.validateBeforeLaunch?.()
+    opts.table.add(childPath,entry)
+    onEntryPublished?.(entry)
+    opts.onPublished?.({path:childPath,jobId,sessionId,...(modelLabel!==undefined?{modelLabel}:{})})
+    controller.signal.throwIfAborted();assertSetupLive?.();runGate.resolve()
+  }catch(cause){runGate.reject(cause);throw cause}
 
   return { path: childPath, jobId, sessionId, ...(modelLabel !== undefined ? { modelLabel } : {}) }
 }

@@ -9,6 +9,6 @@ export function captureOwnedTaskContext(coordinator: SessionCoordinator, documen
   const parent = operations.parent(document); operations.assertParentSession(parent, stateId)
   const descriptor = Object.getOwnPropertyDescriptor(document, 'view')
   if (!descriptor || !('value' in descriptor) || descriptor.value !== view) throw new Error('Original task parent unavailable')
-  const context = Object.freeze({ operations, parent, coordinator, stateId }); issued.add(context); return context
+  const context = Object.freeze({ operations, parent, coordinator, stateId, document }); issued.add(context); return context
 }
 export function isOwnedTaskContext(value: unknown): value is NonNullable<ReturnType<typeof captureOwnedTaskContext>> { return typeof value === 'object' && value !== null && issued.has(value) }
