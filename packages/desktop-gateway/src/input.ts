@@ -146,6 +146,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         observation?.assertCurrent()
         await inbox.admit({ inputId, text: raw.text, preparationPolicy: 'human-host', delivery, intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" },
           ...(raw.context ? { supplementalContext: raw.context } : {}), ...(raw.images?.length ? { images: raw.images } : {}), ...(raw.clientToken ? { clientToken: raw.clientToken } : {}) })
+        managed?.observe().assertCurrent()
         if (closed) throw new Error("Input service closed")
         if (raw.start !== false && !blocked && delivery === "queue") {
           managed?.observe().assertCurrent()

@@ -9,8 +9,29 @@ import {createOpenAICompatibleClient} from '../../llm-openai-compatible/src/inde
 import {createLoopbackProvider} from '../../core-agent/test/helpers/provider-loopback.ts'
 import {createDesktopInput,desktopInputReceiptDocumentKey} from '../src/input.ts'
 import * as privateExecution from '../../session-persistence/src/execution-internal.ts'
+import {decodeFactBatch} from '@i-harness/core-session'
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const journal=original.createFactJournalBackend(...args);return {...journal,appendOwnedBatch:vi.fn(journal.appendOwnedBatch)}}}})
 const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'probe',function:{name:'probe',arguments:'{}'}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'private-input-'));const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'main'});return {root,coordinator}}
+
+it('Gateway refuses old start:false admission reply after original native ACK and retirement, retaining exact token receipt',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'input-ack-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const append=vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!,entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let writes=0
+ vi.mocked(backend.appendOwnedBatch!).mockImplementation(async(...args)=>{const result=await append(...args);if(decodeFactBatch(args[3].bytes).events.some(event=>event.type==='agent/input/admitted')){writes++;entered.resolve();await release.promise}return result})
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'original',tools:[]}}),input=createDesktopInput(coordinator,service)
+ const raw={text:'retained original receipt',delivery:'queue' as const,clientToken:'native-ack-retirement',start:false}
+ const admission=input.admit('main',raw),outcome=admission.then(value=>({failed:false,value}),error=>({failed:true,error}))
+ try{
+  await entered.promise
+  const closing=service.closeSession('main');release.resolve()
+  const result=await outcome;await closing
+  expect(result.failed).toBe(true);expect(writes).toBe(1)
+  const accepted=await input.admit('main',raw)
+  expect(accepted.accepted).toBe(true);expect(writes).toBe(1)
+  expect((await backend.read('main')).events.filter(event=>event.type==='agent/input/admitted')).toEqual([expect.objectContaining({inputId:accepted.inputId,text:raw.text})])
+ }finally{release.resolve();await outcome;await input.close();await service.close();await coordinator.close()}
+},30000)
 
 it('Gateway unsupported private context refuses before token persistence, private acquisition or model work',async()=>{
  const {root,coordinator}=await fixture();let models=0
