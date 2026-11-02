@@ -15,7 +15,7 @@ export interface OwnedShellOptions {
  agentShell:NonNullable<ShellToolDeps['agentShell']>
 }
 export interface OwnedShellOutput {readonly service:ContextOutputService;readonly sourceFor?:(sessionId:string)=>Promise<ContextCapture['source']>}
-export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean,acquiredExecution?:ExecExecutionHost):void{
+export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean,acquiredExecution?:ExecExecutionHost):import('@i-harness/exec').ExecService{
  original.assertCurrent()
  const execution=acquiredExecution??options.executionFor?.(original.domain.sessionId)
  if(!execution)throw TypeError('Original Shell execution unavailable')
@@ -30,4 +30,5 @@ export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:s
  original.tools.promote(['context_output_read'])
  if(!approvalInstalled)createExecutionApprovalPolicy(original.ctx,original.tools,{workspace,workspaceRoots:()=>[workspace]})
  original.assertCurrent()
+ return scoped.service
 }

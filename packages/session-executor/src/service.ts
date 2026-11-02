@@ -49,7 +49,7 @@ import { runPostSubmit } from './service/post-submit.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
-import { ParentNotificationStoppedError, type AgentTaskView } from "@i-harness/subagent"
+import { registerSubagent, ParentNotificationStoppedError, type AgentTaskView, type ParentInputAdmission, type RegisterSubagentOptions, type RegisterSubagentResult } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -139,7 +139,8 @@ export interface SessionServiceOptions extends AssemblyOptions {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
     mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
-    mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[]}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
+    ownedTask?:{options(original:import('./managed-assembly.ts').ManagedRegistryConstruction,parentModel:import('@i-harness/llm-seam').ModelClient,shared:{shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput}):Promise<Omit<RegisterSubagentOptions,'managedParent'|'parentNotify'|'parentSession'|'factOwner'>>}
+    mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[];task?:RegisterSubagentResult}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
     ownedTitle?:{enabled:boolean;titleMaxOutputTokens?:number;timeoutMs?:number}
     ownedShell?:OwnedShellOptions
     ownedCode?:{config:import('@i-harness/code-mode').CodeModeConfig;acquireOutput(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void):OwnedCodeOutput|Promise<OwnedCodeOutput>}
@@ -337,9 +338,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
+  const managedTaskOwners=new Map<string,RegisterSubagentResult>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
   const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
-  const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string}>()
+  const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>}>()
   const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
   type CreatingAssembly = { work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
   const creating = new Map<string, CreatingAssembly>()
@@ -469,7 +471,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
   function requestDeliveryStop(id: string) {
     const recipient=managedRecipients.get(id)
-    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop');managedStopReceipts.set(id,{recipient,fenceId:request.fenceId});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
+    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop');managedStopReceipts.set(id,{recipient,fenceId:request.fenceId,...managedTaskOwners.has(id)?{settleSources:managedTaskOwners.get(id)!.settleParentDeliveryJournalDebt.bind(managedTaskOwners.get(id)!)}:{}});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
     const assembly = liveAssembly(id)
     if (!assembly) return
     const delivery = receivedInputsFor(assembly.factOwner, id).delivery
@@ -480,7 +482,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   async function awaitDeliveryStop(id: string) {
     await managedCodeStops.get(id)?.flight
     const pending=managedStopReceipts.get(id)
-    if(pending)return pending.recipient.closeReceipt(pending.fenceId)
+    if(pending){await pending.settleSources?.();return pending.recipient.closeReceipt(pending.fenceId)}
     const request = deliveryStops.get(id)
     await request?.settleSources?.()
     return request?.delivery.closeReceipt(request.fenceId)
@@ -1063,7 +1065,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const title=opts.managedRuntime.ownedTitle?.enabled?createOwnedPostTurnLifetime():undefined
     if(title)mounted.add(()=>title.close())
     let retired=false,recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>|undefined,privateDrain:ReturnType<typeof createDeliveryDrain>|undefined,unsubscribe:(()=>void)|undefined,unsubscribeReadiness:(()=>void)|undefined
-    row.cleanup=async()=>{retired=true;retireManaged(sessionId);privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);removeManaged(sessionId);privateEntries.delete(sessionId)}
+    row.cleanup=async()=>{retired=true;retireManaged(sessionId);privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);managedTaskOwners.delete(sessionId);removeManaged(sessionId);privateEntries.delete(sessionId)}
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
       const context=createContext()
@@ -1072,7 +1074,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       assertWritableOpen(sessionId)
       // Reject unmarked Session callbacks/legacy runtime before resolving a model.
       captureExecutionHookChannel(context).capture()
-      const resolveModel=async()=>{
+      let resolution:Promise<{model:import('@i-harness/llm-seam').ModelClient;contextWindow?:number;reasoningEffort?:import('@i-harness/llm-seam').ReasoningEffort;maxOutputTokens?:number;budgetBinding?:import('@i-harness/llm-seam').ModelBudgetBinding;contextMetadata?:import('@i-harness/core-session').ContextBindingMetadata}>|undefined
+      const resolveModel=()=>resolution??=(async()=>{
        const binding=opts.modelBindingFor?await bindingFor(sessionId):undefined
        const meta=!binding&&opts.loadMeta?await opts.loadMeta(sessionId):undefined
        const model=binding?.status==='ready'?binding.binding.model:binding?undefined:opts.modelBuilder?await opts.modelBuilder(sessionId,meta):opts.model
@@ -1081,7 +1084,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
        assertWritableOpen(sessionId)
        if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
        return {model,contextWindow,reasoningEffort,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata}
-      }
+      })()
+      let taskMount:RegisterSubagentResult|undefined
+      let taskShell:import('@i-harness/exec').ExecService|undefined
       let codeMount:import('@i-harness/code-mode').CodeModeMount|undefined
       let shellExecution:import('@i-harness/exec').ExecExecutionHost|undefined
       if(opts.managedRuntime!.ownedShell?.acquireExecution){let acquiring=true;try{shellExecution=await opts.managedRuntime!.ownedShell.acquireExecution(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original execution retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original execution cleanup required');mounted.add(cleanup)},entry.execution)}finally{acquiring=false}assertWritableOpen(sessionId);if(shellExecution.defaultOwner?.sessionId!==sessionId)throw TypeError('Original Shell execution owner required')}
@@ -1091,25 +1096,31 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const common={...opts.managedRuntime!,context,execution:entry.execution,workspace:opts.workspace,...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})}
-      if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.mountDefaultSurface){
-       runtime=await createManagedExecutionRuntimeWithRegistry({...common,async configureRegistry(original){const registrySurface=await opts.managedRuntime!.mountRegistry?.(original);original.assertCurrent();if(opts.managedRuntime!.ownedShell){if(opts.workspace===undefined)throw Error('Original Shell workspace required');mountOwnedShell(original,opts.workspace,opts.managedRuntime!.ownedShell,shellOutput!,!!(opts.managedRuntime!.originalFilesystem||opts.managedRuntime!.originalSchedule),shellExecution)}if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},opts.managedRuntime!.ownedCode.config)}if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();return opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas()})}return registrySurface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
+      if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.mountDefaultSurface){
+       runtime=await createManagedExecutionRuntimeWithRegistry({...common,async configureRegistry(original){const registrySurface=await opts.managedRuntime!.mountRegistry?.(original);original.assertCurrent();if(opts.managedRuntime!.ownedShell){if(opts.workspace===undefined)throw Error('Original Shell workspace required');taskShell=mountOwnedShell(original,opts.workspace,opts.managedRuntime!.ownedShell,shellOutput!,!!(opts.managedRuntime!.originalFilesystem||opts.managedRuntime!.originalSchedule),shellExecution)}if(opts.managedRuntime!.ownedTask){
+        recipient=receivedExecutionInputsFor(entry.execution).taskDelivery(original.domain)
+        const originalRecipient=recipient,current=()=>{if(retired||closed||closing.has(sessionId)||!runtime||managedRuntimes.get(sessionId)!==runtime)throw new ParentNotificationStoppedError();assertWritableOpen(sessionId)}
+        const notify:ParentInputAdmission={taskEvidence(namespace,id){current();return originalRecipient.taskEvidence(namespace,id)},async prepareTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.prepareTaskLaunch(input);current();return result},async admitTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.admitTask(input.evidence,{text:input.text,description:input.description,display:input.display});current();privateDrain?.signal();return result},async admit(){throw new ParentNotificationStoppedError('Original Task delivery evidence required')},wake(id){if(id!==sessionId)return;try{current();privateDrain?.signal()}catch{/* Retired original parent cannot be woken. */}}}
+        const selected=await resolveModel();original.assertCurrent();const taskOptions=await opts.managedRuntime!.ownedTask.options(original,selected.model,{...taskShell?{shell:taskShell}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()
+        taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify});original.retain(()=>taskMount!.dispose());await taskMount.ready;original.assertCurrent()
+       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},opts.managedRuntime!.ownedCode.config)}if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();return opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),...taskMount?{task:taskMount}:{}})}return registrySurface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
       assertWritableOpen(sessionId)
-      if(opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode){
-        recipient=receivedExecutionInputsFor(entry.execution).execDelivery(runtime.domain)
+      if(opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask){
+        recipient??=receivedExecutionInputsFor(entry.execution).taskDelivery(runtime.domain)
         const published=runtime,originalRecipient=recipient
         privateDrain=createDeliveryDrain({
           current:()=>!retired&&!closed&&!closing.has(sessionId)&&!failedClose.has(sessionId)&&managedRuntimes.get(sessionId)===published,
           reconcile:async()=>{await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates()},
-          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
+          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
           schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,settled);return true},
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
         })
-        const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled'].includes(event.type))drain.signal()})
+        const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled'].includes(event.type))drain.signal()})
         unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
       }
-      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount)
+      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskMount)managedTaskOwners.set(sessionId,taskMount)
       publishManaged(sessionId,runtime)
       privateDrain?.signal()
       return runtime
