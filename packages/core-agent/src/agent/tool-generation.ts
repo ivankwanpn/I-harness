@@ -1,12 +1,21 @@
+import {closeOriginalManagedApprovalAudit} from '../../../core-session/src/managed/approval-audit.ts'
 import type { AgentDeps } from './types.ts'
 import type { ExecuteToolCallsOptions } from '../tool-batch/types.ts'
 import { generationError, type AuxiliaryGenerationAction, type ApprovalGenerationAction, type MediaGenerationAction, type ToolModelGeneration } from '@i-harness/llm-seam'
 import type { SessionView } from '@i-harness/core-session'
 import {isManagedBatchSource,type ManagedBatchSource} from '../tool-batch/managed-source.ts'
 import type {ManagedAgentHost,ManagedGenerationLifecycle} from './managed-types.ts'
-import {assertExecutionGeneration} from '../../../session-executor/src/lifecycle/generation-actions.ts'
-import {assertManagedActionCurrent} from '@i-harness/core-session/internal/execution'
+import {assertExecutionGeneration,captureExecutionApprovalAudit} from '../../../session-executor/src/lifecycle/generation-actions.ts'
+import {assertManagedActionCurrent,captureManagedReviewerContext,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
+type ManagedReviewerLease=Pick<ReturnType<typeof captureManagedReviewerContext>,'identity'|'ready'|'events'|'latestUser'|'assertCurrent'|'close'>
+const managedApprovalParents = new WeakMap<ApprovalGenerationAction,{domain:ManagedExecutionDomain;capture():ManagedReviewerLease;consumed:boolean}>()
+/** Borrow bounded context only through the original same-action approval generation. */
+export function captureManagedApprovalReviewerContext(domain:ManagedExecutionDomain,generation:ApprovalGenerationAction) {
+ const original=managedApprovalParents.get(generation)
+ if(!original||original.domain!==domain||original.consumed)throw generationError('GENERATION_UNSUPPORTED')
+ original.consumed=true;return original.capture()
+}
 const reviewerBindings = new WeakMap<object, { view: object; action: AuxiliaryGenerationAction; consumed: boolean; check: () => void }>()
 /** Same original auxiliary generation protocol, over captured native members.
  * Parent identity is observed while the real main generation is still live. */
@@ -16,7 +25,10 @@ export function managedToolGenerationFactory(host:ManagedAgentHost,source:Manage
   const index=source.indexOfCall(call)
   const event=source.readCall(index),check=()=>{signal.throwIfAborted();assertManagedActionCurrent(host.domain,source.action);source.assertCall(index,call);if(source.readCall(index)!==event)throw generationError('GENERATION_STALE')}
   const factories:ToolModelGeneration={
-   async approval(options){check();const generation=await lifecycle.open('approval',{kind:'tool',seq:event.seq!,parentActionId},{signal,timeoutMs:options.timeoutMs,selectedClient:options.selectedClient,start:{wall:Date.now(),monotonic:performance.now()}});assertExecutionGeneration(host.execution,generation,source.action);let attached=false;const capability:ApprovalGenerationAction={signal:generation.signal,control:generation.control('auxiliary',check),bind:(prepared,bindingSource)=>generation.bind(prepared,bindingSource),close:disposition=>generation.close(disposition),recoverClose:generation.recoverClose?.bind(generation),forChild(view){check();assertExecutionGeneration(host.execution,generation,source.action);const child=view as SessionView;if(this!==capability||attached||child.header?.origin!=='approval-review'||child.header.parentSession!==host.domain.sessionId||child.header.seedLength!==0)throw generationError('GENERATION_STALE');attached=true;const binding=Object.freeze({});reviewerBindings.set(binding,{view,action:capability,consumed:false,check(){check();assertExecutionGeneration(host.execution,generation,source.action)}});return binding}};return Object.freeze(capability)},
+   async approval(options){check();const generation=await lifecycle.open('approval',{kind:'tool',seq:event.seq!,parentActionId},{signal,timeoutMs:options.timeoutMs,selectedClient:options.selectedClient,start:{wall:Date.now(),monotonic:performance.now()}});assertExecutionGeneration(host.execution,generation,source.action);let attached=false;const capability:ApprovalGenerationAction={signal:generation.signal,control:generation.control('auxiliary',check),bind:(prepared,bindingSource)=>generation.bind(prepared,bindingSource),close:disposition=>generation.close(disposition),recoverClose:generation.recoverClose?.bind(generation),forChild(view){check();assertExecutionGeneration(host.execution,generation,source.action);const child=view as SessionView;if(this!==capability||attached||child.header?.origin!=='approval-review'||child.header.parentSession!==host.domain.sessionId||child.header.seedLength!==0)throw generationError('GENERATION_STALE');attached=true;const binding=Object.freeze({});reviewerBindings.set(binding,{view,action:capability,consumed:false,check(){check();assertExecutionGeneration(host.execution,generation,source.action)}});return binding}};managedApprovalParents.set(capability,{domain:host.domain,consumed:false,capture(){check();assertExecutionGeneration(host.execution,generation,source.action);const context=captureManagedReviewerContext(host.domain,source.action)
+ const ready=context.ready.then(()=>{check();assertExecutionGeneration(host.execution,generation,source.action);const audit=captureExecutionApprovalAudit(host.execution,host.domain,generation,source.action);try{context.authorizeAudit(audit)}catch(error){closeOriginalManagedApprovalAudit(audit);throw error}})
+ void ready.catch(()=>{})
+ return Object.freeze({identity:context.identity,ready,get events(){return context.events},get latestUser(){return context.latestUser},assertCurrent(){context.assertCurrent()},close(){return context.close()}})}});return Object.freeze(capability)},
    async media(timeoutMs){check();if(event.name!=='read_video')throw generationError('GENERATION_STALE');const dispatch=source.readDispatch(index),generation=await lifecycle.open('media',{kind:'tool',seq:dispatch.seq!,parentActionId},{signal,timeoutMs,start:{wall:Date.now(),monotonic:performance.now()}});assertExecutionGeneration(host.execution,generation,source.action);return Object.freeze({signal:generation.signal,control:generation.control('auxiliary',check),bindAudio:()=>generation.bindAudio(),close:(disposition:Parameters<MediaGenerationAction['close']>[0])=>generation.close(disposition)})},
   };return Object.freeze(factories)
  }

@@ -33,7 +33,8 @@ export interface GuardianReviewDeps {
     agents: AgentRegistry
   }
   parentRegistry: ToolRegistry
-  parentSession: Session
+  parentSession?: Session
+  managedParent?: {domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain}
   parentCtx: PluginContext
   /** Forwarded verbatim to `spawnChild` — see SpawnOptions.resolveModel. */
   resolveModel: SpawnOptions["resolveModel"]
@@ -86,9 +87,13 @@ export function ensureReviewerRole(roles: RoleRegistry): SubagentRole {
 
 /** Bounded recent-context transcript for the reviewer (codex transcript concept). */
 export function renderRecentContext(session: Session, opts: { maxChars?: number; maxEvents?: number } = {}): string {
+  return renderRecentEvents(session.events, opts)
+}
+/** Shared rendering for an authenticated bounded event archive. */
+export function renderRecentEvents(events: Session['events'], opts: { maxChars?: number; maxEvents?: number } = {}): string {
   const maxChars = opts.maxChars ?? 4_000
   const maxEvents = opts.maxEvents ?? 12
-  const tail = session.events.slice(-maxEvents)
+  const tail = events.slice(-maxEvents)
   const parts: string[] = []
   let used = 0
   for (const ev of tail) {
@@ -160,12 +165,12 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
   let onAbort: (() => void) | undefined
   try {
     controller.signal.throwIfAborted()
-    if (!isNondurableSession(deps.parentSession) && !request.generation) throw generationError('GENERATION_UNSUPPORTED')
+    if ((!deps.parentSession || !isNondurableSession(deps.parentSession)) && !request.generation) throw generationError('GENERATION_UNSUPPORTED')
     generation = await request.generation?.({ timeoutMs, selectedClient: () => selectedModel })
     generation?.signal.addEventListener('abort', expire, { once: true })
     if (generation?.signal.aborted) expire()
     const role = ensureReviewerRole(deps.subagents.roles)
-    const message = renderGuardianMessage(request, renderRecentContext(deps.parentSession), deps.policyText ?? BUNDLED_GUARDIAN_POLICY)
+    const message = renderGuardianMessage(request, renderRecentContext(deps.parentSession!), deps.policyText ?? BUNDLED_GUARDIAN_POLICY)
     child = await spawnReviewer(deps, role, message, controller.signal, generation, model => { selectedModel = model }, info => { observedText = info.finalText })
     const entry = deps.subagents.table.get(child.path)
     if (!entry) return { outcome: 'deny', rationale: 'guardian review failed: reviewer entry missing', cause: 'operational' }

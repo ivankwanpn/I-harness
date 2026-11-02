@@ -98,7 +98,7 @@ it("isolates reused conversations by effective model, policy, permission and use
   state.permission("workspace-two:delegate:restricted"); await review()
   state.config.policyText = "A changed policy"; await review()
   const { isNondurableSession, append } = await import('@i-harness/core-session')
-  if (!isNondurableSession(state.config.parentSession)) throw new Error('Expected standalone parent fixture')
+  if (!isNondurableSession(state.config.parentSession!)) throw new Error('Expected standalone parent fixture')
   append(state.config.parentSession, { type: "user/message", text: "A different task", seq: 0 }); await review()
   expect(lengths).toEqual([1, 3, 1, 1, 1, 1, 1, 1, 1, 1])
 })
@@ -248,4 +248,12 @@ it("reuses only final text and never private reasoning or provider continuation 
   expect(seen[1]!.messages).toHaveLength(3)
   expect(seen[1]!.messages[1]).toEqual({ role: "assistant", content: approval })
   expect(JSON.stringify(seen[1]!.messages)).not.toContain("private")
+})
+
+it('renders bounded reviewer context directly from an original event slice',async()=>{
+ const guardian=await import('../src/guardian/reviewer.ts'),{createSession,append}=await import('@i-harness/core-session'),session=createSession()
+ for(let index=0;index<15;index++)append(session,{type:'user/message',text:`message ${index}`})
+ const render=(guardian as any).renderRecentEvents;expect(render).toBeTypeOf('function')
+ expect(render(session.events)).toBe(guardian.renderRecentContext(session))
+ expect(render(session.events,{maxEvents:2})).toContain('message 14');expect(render(session.events,{maxEvents:2})).not.toContain('message 12')
 })

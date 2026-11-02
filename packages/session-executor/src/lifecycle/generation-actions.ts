@@ -1,6 +1,8 @@
+import {createOriginalManagedApprovalAudit,recordOriginalManagedApprovalAction,recordOriginalManagedApprovalSource,type OriginalManagedApprovalAudit} from '../../../core-session/src/managed/approval-audit.ts'
+import type {ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 import { randomUUID } from 'node:crypto'
 import { types as utilTypes } from 'node:util'
-import { isNondurableSession, readGenerationActions, type CapturedActionFact, type GenerationActionEvent, type GenerationEvent, type GenerationOrigin, type ManagedAction, type ProducerFactOutcome, type SessionView } from '@i-harness/core-session'
+import { isNondurableSession, readGenerationActions, type CapturedActionFact, type GenerationActionEvent, type GenerationEvent, type GenerationOrigin, type ManagedAction, type ProducerFactOutcome, type FactOutcome, type SessionView } from '@i-harness/core-session'
 import { generationError } from '@i-harness/llm-seam'
 import type { AgentGenerationLifecycle, AgentGenerationDependencies } from '@i-harness/core-agent'
 import { generationClock } from './generation-clock.ts'
@@ -11,13 +13,20 @@ import { captureGenerationBudget } from '@i-harness/core-agent'
 import { isManagedExecutionOwner, readAcknowledgedExecutionMembers,readManagedSourceGenerations } from '@i-harness/core-session/internal/execution'
 import type { ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts'
 import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
-const executionGenerations=new WeakMap<object,{execution:ManagedExecutionAttachment;action:ManagedAction<ProducerFactOutcome>;assert():void;methods:Map<string,unknown>}>()
+const executionGenerations=new WeakMap<object,{execution:ManagedExecutionAttachment;action:ManagedAction<ProducerFactOutcome>;assert():void;methods:Map<string,unknown>;approvalAudit?:(domain:ManagedExecutionDomain)=>OriginalManagedApprovalAudit}>()
 /** Original factory association, never enrollment of an incoming callback shape. */
 export function assertExecutionGeneration(execution:ManagedExecutionAttachment,generation:object,action?:ManagedAction<ProducerFactOutcome>):void {
   const original=executionGenerations.get(generation)
   if(!original||original.execution!==execution||action!==undefined&&original.action!==action||!isManagedExecutionOwner(execution.identity,execution.owner)||!execution.owner.ownsAction(original.action)||Object.getPrototypeOf(generation)!==OwnedGenerationAction.prototype)throw generationError('GENERATION_UNSUPPORTED')
   for(const [name,method]of original.methods){const descriptor=Object.getOwnPropertyDescriptor(generation,name)??Object.getOwnPropertyDescriptor(OwnedGenerationAction.prototype,name);if(!descriptor||!('value'in descriptor)||descriptor.value!==method)throw generationError('GENERATION_UNSUPPORTED')}
   original.assert()
+}
+
+/** Only the original execution generation factory can issue this witness. */
+export function captureExecutionApprovalAudit(execution:ManagedExecutionAttachment,domain:ManagedExecutionDomain,generation:object,action:ManagedAction<ProducerFactOutcome>):OriginalManagedApprovalAudit {
+ assertExecutionGeneration(execution,generation,action);const original=executionGenerations.get(generation)
+ if(!original?.approvalAudit||domain.identity!==execution.identity||domain.owner!==execution.owner)throw generationError('GENERATION_UNSUPPORTED')
+ return original.approvalAudit(domain)
 }
 
 const sameOrigin = (a: GenerationOrigin, b: GenerationOrigin) => a.kind === b.kind && a.seq === b.seq
@@ -54,6 +63,8 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
   if ((!view || !isNondurableSession(view)) && (!owner || !Object.isFrozen(owner) || descriptor?.writable !== false || descriptor.configurable !== false || owner.sessionId !== ownerSessionId || typeof owner.incarnation !== 'string' || !owner.incarnation)) throw generationError('GENERATION_UNSUPPORTED')
   const incarnation = owner?.incarnation ?? randomUUID(), retained = new Set<CapturedActionFact<ProducerFactOutcome>>()
   const expected=new WeakMap<CapturedActionFact<ProducerFactOutcome>,readonly GenerationEvent[]>()
+  const evidenceSource=new WeakMap<CapturedActionFact<ProducerFactOutcome>,object>()
+  const audits=new Map<string,OriginalManagedApprovalAudit>()
   const passive=dependencies?.passiveGeneration
   const acknowledge=(capture:CapturedActionFact<ProducerFactOutcome>,outcome:Extract<ProducerFactOutcome,{kind:'committed'|'memory-committed'}>)=>{
     if(!passive)return
@@ -66,7 +77,7 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
       }
     }catch{try{passive.unavailable('original-acknowledged-fact-unavailable')}catch{}}
   }
-  const remember=(capture:CapturedActionFact<ProducerFactOutcome>,events:readonly GenerationEvent[])=>{if(passive)expected.set(capture,JSON.parse(JSON.stringify(events)));return capture}
+  const remember=(capture:CapturedActionFact<ProducerFactOutcome>,events:readonly GenerationEvent[],sourceOwner?:object)=>{const audited=!!execution&&events.some(event=>'actionId'in event&&audits.has(event.actionId));if(passive||audited)expected.set(capture,JSON.parse(JSON.stringify(events)));if(audited&&sourceOwner)evidenceSource.set(capture,sourceOwner);return capture}
   const running = new Set<Promise<unknown>>()
   const drain = async () => {
     await Promise.allSettled([...running])
@@ -93,7 +104,13 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
   const receipt = async (capture: CapturedActionFact<ProducerFactOutcome>) => {
     retained.add(capture)
     const result = await own(capture.admit())
-    if (result.kind === 'committed' || result.kind === 'memory-committed') { acknowledge(capture,result);retained.delete(capture); return result }
+    if (result.kind === 'committed' || result.kind === 'memory-committed') {
+      acknowledge(capture,result)
+      if(execution&&result.kind==='committed'){const events=expected.get(capture),event=events?.[0],audit=event&&'actionId'in event?audits.get(event.actionId):undefined
+        if(audit&&events?.length&&events.every(item=>(item.type==='context/action'&&(item.op==='bind'||item.op==='constrain'))||(item.type==='context/attempt'&&['reserve','rebind','settle'].includes(item.op)))){const sourceOwner=evidenceSource.get(capture);if(sourceOwner)recordOriginalManagedApprovalSource(audit,sourceOwner,capture,result);else recordOriginalManagedApprovalAction(audit,capture,result)}
+      }
+      retained.delete(capture); return result
+    }
     if (result.kind === 'not-issued') {
       retained.delete(capture)
       if (result.code === 'FACT_CANCELLED' || result.code === 'FACT_CLOSED') throw generationError('GENERATION_CLOSED')
@@ -106,11 +123,12 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
     assertAction()
     if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) throw generationError('GENERATION_CLOCK_INVALID')
     if (options.maxAttempts !== undefined && (!Number.isSafeInteger(options.maxAttempts) || options.maxAttempts <= 0)) throw new TypeError('Invalid generation attempt limit')
+    let openedProof:{capture:CapturedActionFact<ProducerFactOutcome>;outcome:FactOutcome}|undefined
     let persisted = read().find(value => value.opened.purpose === purpose && sameOrigin(value.opened.origin, origin))
     if (!persisted) {
       const {startedAt,expiresAt}=captureGenerationBudget(purpose,options,options.start?.wall??Date.now())
       const event: GenerationActionEvent = { type: 'context/action', version: 1, op: 'open', ownerSessionId, actionId: randomUUID(), purpose, origin, startedAt, expiresAt, trustedAt: startedAt }
-      await commit([event])
+      const capture=remember(action.captureGeneration([event],()=>true),[event]),outcome=await receipt(capture);if(outcome.kind==='committed')openedProof={capture,outcome}
       persisted = state(event.actionId)
     }
     if (!persisted || persisted.closed) throw generationError('GENERATION_CLOSED')
@@ -125,7 +143,7 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
     const generation=new OwnedGenerationAction(execution?copyConversationData(persisted):persisted, clock, {
       view, execution, ownerSessionId, incarnation, assertOpen: execution ? () => {assertAction();source.assertHeld();if(!execution.owner.ownsAction(action))throw generationError('GENERATION_UNSUPPORTED')} : action.assertOpen, read: state,
       append: async (events, current) => { await commit(events, current) },
-      settle: async event => { await receipt(remember(source.generation.capture(event),[event])) },
+      settle: async event => { await receipt(remember(source.generation.capture(event),[event],source)) },
       captureClose: event => {
         const capture = remember(source.generation.capture(event),[event])
         retained.add(capture)
@@ -134,7 +152,7 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
       },
       phase: async (recovery, phase, current) => { await receipt(remember(action.captureGenerationRecovery(recovery, phase, current),[])) },
     }, { maxAttempts: options.maxAttempts, passiveGeneration:passive, localTest: options.selectedClient ? { enabled: localTest?.enabled === true, selectedClient: options.selectedClient } : localTest })
-    if(execution){const assert=generation.assertOpen,methods=new Map<string,unknown>();for(const name of Object.getOwnPropertyNames(OwnedGenerationAction.prototype)){const field=Object.getOwnPropertyDescriptor(OwnedGenerationAction.prototype,name);if(name!=='constructor'&&field&&'value'in field&&typeof field.value==='function')methods.set(name,field.value)}executionGenerations.set(generation,{execution,action,methods,assert:()=>{source.assertHeld();Reflect.apply(assert,generation,[])}})}
+    if(execution){const assert=generation.assertOpen,methods=new Map<string,unknown>();for(const name of Object.getOwnPropertyNames(OwnedGenerationAction.prototype)){const field=Object.getOwnPropertyDescriptor(OwnedGenerationAction.prototype,name);if(name!=='constructor'&&field&&'value'in field&&typeof field.value==='function')methods.set(name,field.value)}executionGenerations.set(generation,{execution,action,methods,assert:()=>{source.assertHeld();Reflect.apply(assert,generation,[])},...purpose==='approval'&&openedProof?{approvalAudit(domain){assertExecutionGeneration(execution,generation,action);if(audits.has(generation.actionId))throw generationError('GENERATION_UNSUPPORTED');const audit=createOriginalManagedApprovalAudit(domain,action as ManagedAction<FactOutcome>,source,openedProof!.capture,openedProof!.outcome);audits.set(generation.actionId,audit);return audit}}:{}})}
     return generation
   } }
 }

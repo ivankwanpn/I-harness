@@ -1,17 +1,18 @@
+import {captureManagedApprovalReviewerContext} from '../../../core-agent/src/agent/tool-generation.ts'
 import type { GuardianRequest } from "@i-harness/core-tools"
-import { isNondurableSession, type SessionView as Session } from "@i-harness/core-session"
+import { isNondurableSession } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
 import { prepareModelRequest, generationError, type AuxiliaryGenerationAction, type LLMMessage } from "@i-harness/llm-seam"
 import { assessPreparedCapacity } from '@i-harness/context-engine'
 import { parseGuardianAssessment, GUARDIAN_JSON_CONTRACT } from "./verdict.ts"
-import { BUNDLED_GUARDIAN_POLICY, GUARDIAN_REVIEW_TIMEOUT_MS, renderGuardianMessage, renderRecentContext, type GuardianReviewDeps, type GuardianReviewVerdict } from "./reviewer.ts"
+import { BUNDLED_GUARDIAN_POLICY, GUARDIAN_REVIEW_TIMEOUT_MS, renderGuardianMessage, renderRecentContext, renderRecentEvents, type GuardianReviewDeps, type GuardianReviewVerdict } from "./reviewer.ts"
 import { createIsolatedReviewerPool, type IsolatedReviewerPool, type ReviewerContextLease } from "./reviewer-pool.ts"
 import type { GuardianIsolatedConfig, GuardianReviewerIdentity } from "./review-record.ts"
 
 const pools = new WeakMap<GuardianIsolatedConfig, IsolatedReviewerPool>()
-const sessions = new WeakMap<Session, number>()
+const sessions = new WeakMap<object, number>()
 let nextSession = 0
-function sessionKey(session: Session): number {
+function sessionKey(session: object): number {
   let key = sessions.get(session)
   if (key === undefined) { key = ++nextSession; sessions.set(session, key) }
   return key
@@ -39,14 +40,21 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
   let generationAdopted = false, cleanupAttempted = false
   let workFlight: Promise<GuardianReviewVerdict> | undefined
   let generation: AuxiliaryGenerationAction | undefined, completed = false
+  let reviewerContext: ReturnType<typeof captureManagedApprovalReviewerContext> | undefined
   let selectedModel = deps.model ?? deps.parentModel
   const expire = () => controller.abort(generation?.signal.reason)
   try {
-    if (!isNondurableSession(deps.parentSession) && !request.generation) throw generationError('GENERATION_UNSUPPORTED')
+    if ((!deps.parentSession || !isNondurableSession(deps.parentSession)) && !request.generation) throw generationError('GENERATION_UNSUPPORTED')
     generation = await request.generation?.({ timeoutMs: deps.timeoutMs ?? GUARDIAN_REVIEW_TIMEOUT_MS, selectedClient: () => selectedModel })
     generation?.signal.addEventListener('abort', expire, { once: true })
     if (generation?.signal.aborted) expire()
+
     const work = async (): Promise<GuardianReviewVerdict> => {
+      if(deps.managedParent){
+        if(deps.parentSession || !generation)throw generationError('GENERATION_UNSUPPORTED')
+        reviewerContext=captureManagedApprovalReviewerContext(deps.managedParent.domain,generation as import('@i-harness/llm-seam').ApprovalGenerationAction)
+        await reviewerContext.ready;reviewerContext.assertCurrent()
+      }else if(!deps.parentSession)throw generationError('GENERATION_UNSUPPORTED')
       controller.signal.throwIfAborted()
       const args = typeof request.args === "string" ? request.args : JSON.stringify(request.args ?? null)
       if (args.length > 4000) throw new Error("Tool arguments exceed the reviewer request bound; require human approval")
@@ -95,12 +103,13 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       if (!instructionAvailable) { instruction?.retire(); if (instruction) await instruction.close(); throw new Error('Reviewer instruction lifetime retired') }
       controller.signal.throwIfAborted()
       const systemPrompt = `${policy}\n\n${FRESH_REVIEW_POLICY}\n\n${GUARDIAN_JSON_CONTRACT}${inherited ? `\n\n${inherited}` : ""}${instruction?.text ? `\n\n${instruction.text}` : ""}`
-      const prompt = renderGuardianMessage(request, renderRecentContext(deps.parentSession), policy)
+      reviewerContext?.assertCurrent()
+      const prompt = renderGuardianMessage(request, reviewerContext ? renderRecentEvents(reviewerContext.events) : renderRecentContext(deps.parentSession!), policy)
       const permission = deps.isolated?.permissionContext?.()
       if (deps.isolated && identity.provider && identity.model && identity.protocol && identity.configurationKey && permission) {
-        const userIntent = deps.parentSession.events.findLast((event) => event.type === "user/message")
+        const userIntent = reviewerContext ? reviewerContext.latestUser : deps.parentSession!.events.findLast((event) => event.type === "user/message")
         const key = createHash("sha256").update(JSON.stringify([identity.provider, identity.model, identity.protocol, reasoningEffort ?? identity.reasoningEffort,
-          identity.configurationKey, permission, systemPrompt, sessionKey(deps.parentSession), userIntent, instruction?.poolIdentity])).digest("hex")
+          identity.configurationKey, permission, systemPrompt, sessionKey(deps.managedParent?.domain.identity ?? deps.parentSession!), userIntent, instruction?.poolIdentity])).digest("hex")
         lease = poolFor(deps.isolated).acquire(key)
       }
       const history = lease?.messages ?? []
@@ -116,11 +125,13 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       while (assessed.decision.disposition === 'reduce' && history.length) { history.splice(0, 2); assessed = await prepare() }
       if (assessed.decision.disposition === 'reduce' || assessed.decision.disposition === 'blocked') throw new Error('Reviewer context window is too small for the approval request')
       const prepared = assessed.prepared
+      reviewerContext?.assertCurrent()
       await generation?.bind(prepared)
+      reviewerContext?.assertCurrent()
       instructionAttempt = instruction?.bind(prepared)
       const invocation = instructionAttempt?.open({ ...(generation ? { generation: generation.control } : {}), signal: controller.signal })
       for await (const event of invocation?.stream ?? prepared.stream(generation ? { generation: generation.control } : undefined)) {
-        controller.signal.throwIfAborted()
+        controller.signal.throwIfAborted(); reviewerContext?.assertCurrent()
         if (event.type === "text/chunk") {
           text += event.text
           if (text.length > 16384) throw new Error("Reviewer verdict exceeded its response bound")
@@ -138,7 +149,7 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       return verdict ? { outcome: verdict.outcome, rationale: verdict.rationale }
         : { outcome: "deny", rationale: "Reviewer produced malformed output", cause: "malformed" }
     }
-    const aborted = generation && !deps.createIsolatedInstructionContext ? undefined : new Promise<never>((_, reject) => {
+    const aborted = generation && !deps.createIsolatedInstructionContext && !deps.managedParent ? undefined : new Promise<never>((_, reject) => {
       abortListener = () => reject(controller.signal.reason ?? new Error("guardian aborted"))
       controller.signal.addEventListener("abort", abortListener, { once: true })
       if (controller.signal.aborted) abortListener()
@@ -155,6 +166,7 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       instruction = undefined
     }
     controller.signal.throwIfAborted()
+    reviewerContext?.assertCurrent()
     commitReview?.()
     return result
   } catch (error) {
@@ -165,15 +177,15 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
     instructionAttempt?.close()
     instruction?.finish(controller.signal.aborted ? 'stopped' : completed ? 'completed' : 'failed')
     instruction?.retire()
-    const lateInstruction = instruction, lateGeneration = generation
-    if (deps.createIsolatedInstructionContext && workFlight && !completed) {
+    const lateInstruction = instruction, lateGeneration = generation, lateContext=reviewerContext
+    if ((deps.createIsolatedInstructionContext || deps.managedParent) && workFlight && !completed) {
       lateGeneration?.signal.removeEventListener('abort', expire)
       generation = undefined
       void workFlight.catch(() => {}).then(async () => {
         try { if (!generationAdopted) await lateGeneration?.close(controller.signal.aborted ? 'stopped' : 'failed') }
-        finally { await lateInstruction?.close() }
+        finally { try { await lateInstruction?.close() } finally { await lateContext?.close() } }
       }).catch(() => {})
-    } else if (instruction && !cleanupAttempted) void instruction.close().catch(() => {})
+    } else { if (instruction && !cleanupAttempted) void instruction.close().catch(() => {}); await reviewerContext?.close() }
     lease?.release()
     clearTimeout(timeout)
     request.signal?.removeEventListener("abort", cancel)
