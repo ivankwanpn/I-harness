@@ -1,5 +1,5 @@
 import { types } from 'node:util'
-import {bindOriginalCurrentnessDescriptors} from './currentness-guards.ts'
+import {bindOriginalCurrentnessDescriptors,composeOriginalCurrentnessGuards,runUnassociatedCurrentnessChecks} from './currentness-guards.ts'
 import { restoreManagedConversation,installRestoredManagedConversation } from './restored-view.ts'
 import { createExecutionMemberOwner,isExecutionMemberOf,isExecutionCaptureSource,readAcknowledgedExecutionMembers } from './execution-members.ts'
 import { captureWriterDependencies } from './writer-dependencies.ts'
@@ -460,7 +460,13 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
         const current=()=>{bound.current();if(!bound.owner.ownsAction(source))throw TypeError('Original request action changed');for(const key of Reflect.ownKeys(fields)){const expected=Object.getOwnPropertyDescriptor(fields,key)!.value as PropertyDescriptor,actual=Object.getOwnPropertyDescriptor(source,key);if(!actual||!('value'in actual)||actual.value!==expected.value)throw TypeError('Original request action changed')}for(const group of groups){if(Object.getOwnPropertyDescriptor(facts!,group.key)?.value!==group.value)throw TypeError('Original action fact ports changed');for(const [key,expected]of Object.entries(group.fields??{}))if(Object.getOwnPropertyDescriptor(group.value,key)?.value!==expected.value)throw TypeError('Original action fact method changed')}assert()};
         requestActions.set(source,current);actions.set(source,{identity,current})
       }
-      else if(bound){const field=Object.getOwnPropertyDescriptor(source,'assertHeld');if(field&&'value'in field&&typeof field.value==='function'&&!types.isProxy(field.value)){const assert=field.value.bind(source) as ()=>void;sources.set(source,{identity,current(){bound.current();if(Object.getOwnPropertyDescriptor(source,'assertHeld')?.value!==field.value)throw TypeError('Original source changed');assert()}})}}
+      else if(bound){const field=Object.getOwnPropertyDescriptor(source,'assertHeld');if(field&&'value'in field&&typeof field.value==='function'&&!types.isProxy(field.value)){
+        const originalSource=bindOriginalCurrentnessDescriptors({receiver:source,method:field.value,before:[['assertHeld',field.value]],after:[],message:'Original source changed'})
+        const assert=originalSource??field.value.bind(source) as ()=>void
+        const sourceCurrent=originalSource??(()=>{if(Object.getOwnPropertyDescriptor(source,'assertHeld')?.value!==field.value)throw TypeError('Original source changed');assert()})
+        const current=composeOriginalCurrentnessGuards(bound.current,sourceCurrent)??(()=>runUnassociatedCurrentnessChecks(bound.current,sourceCurrent))
+        sources.set(source,{identity,current})
+      }}
       return Object.freeze({capture:<T extends import('./ports.ts').CapturedActionFact>(group:CapturedFactGroup,commands:T)=>members.capture(group,commands,source,assertCaptureCurrent),forward:members.forward})
     },
     acknowledge:members.acknowledge,
