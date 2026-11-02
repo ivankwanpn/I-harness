@@ -92,6 +92,8 @@ export interface PersistenceBackend {
 export interface SessionArtifactManifest { documents: string[]; files?: string[] }
 
 export interface CoordinatorOptions {
+  /** Original owner supplies this once at construction; absent means unavailable. */
+  originalExecutionFoldFactory?: import('@i-harness/core-session/internal/execution').OriginalExecutionFoldFactory
   maxPendingGroups?: number
   coalesceTargetBytes?: number
   /** Write-behind batching window. Default 200. */

@@ -19,6 +19,7 @@
  * model message, so N overdue records cost one turn, not N (spec §6.3).
  */
 
+import {readOriginalSchedules, type OriginalScheduleSource} from './observation.ts'
 import type { SessionEvent, SessionEventView } from "@i-harness/core-session"
 import { currentDiagnostics } from "@i-harness/diagnostics"
 import {
@@ -66,7 +67,9 @@ export interface ScheduleDriverOptions {
   /** Enumerate the sessions this driver owns. */
   sessions(): string[]
   /** The session's foldable events; undefined = unknown session (skipped). */
-  events(sessionId: string): readonly SessionEventView[] | undefined
+  events?(sessionId: string): readonly SessionEventView[] | undefined
+  /** Original owner observations; when supplied they are the sole source. */
+  original?(sessionId: string): OriginalScheduleSource | undefined
   /** Hand one delivery to the host, the ONLY writer of the log. A returned handoff is counted;
    *  a rejected handoff is reported. Neither outcome establishes durable publication here. */
   deliver: (delivery: ScheduleDelivery) => void | Promise<void>
@@ -157,11 +160,17 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
       record.kind === "every" ? record.everySeconds : null]))
   }
 
-  function read(id: string, result: ScheduleTickResult): readonly ScheduleRecord[] | undefined {
+  function read(id: string, result: ScheduleTickResult): {records:readonly ScheduleRecord[];assertCurrent():void} | undefined {
     if (unreadable.has(id)) return undefined
     try {
-      const events = opts.events(id)
-      return events === undefined ? undefined : foldScheduleEvents(events).active
+      if (opts.original) {
+        const source=opts.original(id)
+        if (source===undefined) return undefined
+        const observed=readOriginalSchedules(source)
+        return {records:observed.snapshot.active,assertCurrent:observed.assertCurrent}
+      }
+      const events = opts.events?.(id)
+      return events === undefined ? undefined : {records:foldScheduleEvents(events).active,assertCurrent(){}}
     } catch (error) {
       unreadable.add(id)
       report(result, id, error, `schedule state of ${id} is corrupt`)
@@ -213,13 +222,15 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
     const accepted = nowFn()
     let target: number | undefined
     for (const id of ids) {
-      const records = read(id, result)
-      if (records === undefined) continue
+      const observation = read(id, result)
+      if (observation === undefined) continue
+      const records = observation.records
       const decision = decisionFor(id, records, accepted, result)
       if (decision === undefined || decision.kind === "none") continue
       const candidate = decision.kind === "wait"
         ? (decision.target === undefined ? undefined : Date.parse(decision.target))
         : accepted
+      observation.assertCurrent()
       if (candidate !== undefined && (target === undefined || candidate < target)) target = candidate
     }
     if (target !== undefined) arm(owner, target)
@@ -234,8 +245,9 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
       for (const sessionId of ids) {
         // Also fences manual passes interrupted by stop/close; a later explicit tick is reuse.
         if (closed || generation !== owner) break
-        const records = read(sessionId, result)
-        if (records === undefined) continue
+        const observation = read(sessionId, result)
+        if (observation === undefined) continue
+        const records = observation.records
         const decision = decisionFor(sessionId, records, accepted, result)
         if (decision === undefined || decision.kind === "none" || decision.kind === "wait") continue
         const key = stateKey(records)
@@ -256,6 +268,7 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
                 due: decision.reminders.map(({ record, occurrenceAt }) => ({ sessionId, record, occurrenceAt })),
               }
           if (closed || generation !== owner) break
+          observation.assertCurrent()
           await opts.deliver(delivery)
           result.due.push(...delivery.due)
           result.delivered += delivery.due.length
@@ -268,12 +281,13 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
               new Error("delivery did not advance schedule state"), `schedule delivery in ${sessionId} failed`)
             continue
           }
+          current.assertCurrent()
           const advanced = delivery.due.every(({ record, occurrenceAt }) => {
-            const remaining = current.find((candidate) => candidate.id === record.id)
+            const remaining = current.records.find((candidate) => candidate.id === record.id)
             return remaining === undefined || Date.parse(remaining.scheduledAt) > Date.parse(occurrenceAt)
           })
           if (!advanced) {
-            failedStates.set(sessionId, stateKey(current))
+            failedStates.set(sessionId, stateKey(current.records))
             report(result, sessionId, new Error("delivery did not advance schedule state"),
               `schedule delivery in ${sessionId} failed`)
           }
@@ -427,3 +441,5 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
     },
   }
 }
+
+export type { OriginalScheduleSource } from './observation.ts'

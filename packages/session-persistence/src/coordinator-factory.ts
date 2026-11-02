@@ -63,6 +63,7 @@ export function createSelectedRuntimeCapture(coordinator:SessionCoordinator,make
  },async close(){retired=true;const results=await Promise.allSettled([...holders].map(holder=>holder.close())),errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Selected operation cleanup unresolved')}})
 }
 export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>, transitionStorage?: TaskTransitionConfiguration): SessionCoordinator {
+  opts = opts && {...opts, originalExecutionFoldFactory: opts.originalExecutionFoldFactory}
   const assertDurableTransition = () => { if (CURRENT_FORMAT_VERSION >= 14 && !transitionStorage) throw new Error('TASK_TRANSITION_UNSUPPORTED') }
   const archiveReads = attachArchiveReadResources(backend)
   const report = opts?.reportBackgroundFailure

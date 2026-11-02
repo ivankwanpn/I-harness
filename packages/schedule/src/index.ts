@@ -321,9 +321,11 @@ function dispatchedRecord(record: ScheduleRecord, change: Extract<ScheduleChange
 export function createScheduleAccumulator(): {
   apply(event: SessionEvent): void
   current(): FoldedSchedules
+  owned(): FoldedSchedules & { inactive: readonly {id:string;state:'already-fired'|'already-deleted'}[] }
 } {
   const active = new Map<string, ScheduleRecord>()
   const seen = new Set<string>()
+  const inactive = new Map<string, 'already-fired' | 'already-deleted'>()
   return {
     apply(event) {
       if (event.type !== "schedule/change") return
@@ -340,6 +342,7 @@ export function createScheduleAccumulator(): {
           if (!active.delete(change.id)) {
             throw new ScheduleLogError(`schedule delete targets inactive id ${JSON.stringify(change.id)}`)
           }
+          inactive.set(change.id, 'already-deleted')
           break
         case "dispatch": {
           const record = active.get(change.id)
@@ -347,11 +350,14 @@ export function createScheduleAccumulator(): {
             throw new ScheduleLogError(`schedule dispatch targets inactive id ${JSON.stringify(change.id)}`)
           }
           const next = dispatchedRecord(record, change)
-          if (next === undefined) active.delete(change.id)
+          if (next === undefined) { active.delete(change.id); inactive.set(change.id, 'already-fired') }
           else active.set(change.id, next)
           break
         }
       }
+    },
+    owned() {
+      return {...this.current(), inactive: Object.freeze([...inactive].map(([id,state]) => ({id,state})))}
     },
     current() {
       return {
@@ -555,9 +561,9 @@ export function createScheduleFoldSink({seedLength}: {seedLength:number}) {
     validateSnapshot(value: unknown): boolean {
       try {
         if (!isRecord(value)) return false
-        requireKeys(value, ['active', 'seenIds'], 'schedule snapshot')
-        if (!Array.isArray(value.active) || !Array.isArray(value.seenIds)) return false
-        if ([value.active, value.seenIds].some(array => Object.keys(array).length !== array.length || Array.from({length:array.length}, (_, index) => index).some(index => !Object.hasOwn(array, index)))) return false
+        requireKeys(value, ['active', 'seenIds', 'inactive'], 'schedule snapshot')
+        if (!Array.isArray(value.active) || !Array.isArray(value.seenIds) || !Array.isArray(value.inactive)) return false
+        if ([value.active, value.seenIds, value.inactive].some(array => Object.keys(array).length !== array.length || Array.from({length:array.length}, (_, index) => index).some(index => !Object.hasOwn(array, index)))) return false
         const seen = new Set(value.seenIds.map(decodeId))
         if (seen.size !== value.seenIds.length) return false
         const active = new Set<string>()
@@ -566,6 +572,15 @@ export function createScheduleFoldSink({seedLength}: {seedLength:number}) {
           if (!seen.has(record.id) || active.has(record.id)) return false
           active.add(record.id)
         }
+        const inactive = new Set<string>()
+        for (const entry of value.inactive) {
+          if (!isRecord(entry)) return false
+          requireKeys(entry, ['id', 'state'], 'schedule inactive')
+          const id = decodeId(entry.id)
+          if (!seen.has(id) || active.has(id) || inactive.has(id) || (entry.state !== 'already-fired' && entry.state !== 'already-deleted')) return false
+          inactive.add(id)
+        }
+        if (active.size + inactive.size !== seen.size) return false
         return true
       } catch { return false }
     },
@@ -586,7 +601,7 @@ export function createScheduleFoldSink({seedLength}: {seedLength:number}) {
     snapshot(prefix: Readonly<{eventCount:number;bodyBytes:number;prefixDigest:string}>) {
       check()
       if (!installed || prefix.eventCount !== installed.eventCount || prefix.bodyBytes !== installed.bodyBytes || prefix.prefixDigest !== installed.prefixDigest) throw new ScheduleLogError('schedule fold prefix mismatch')
-      return accumulator.current()
+      return accumulator.owned()
     },
   }
 }

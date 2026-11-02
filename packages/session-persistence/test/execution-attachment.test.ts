@@ -94,3 +94,17 @@ it('the same private producer issues the original LIVE required Task parent pin 
  try{execution.revokeNewWork();operations.assertTaskV3Parent(parent,'owner');const operation=await operations.begin(parent);try{expect(await operation.observe()).toMatchObject({kind:'present',value:taskDocumentStorageContract.empty()})}finally{await operation.close()}}
  finally{drained.resolve();await source.close();await operations.releaseRequiredParent(parent);action.finish()}
 },20000)
+
+it('does not feed a schedule fold until an unknown original write reconciles',async()=>{
+ const {createScheduleFoldSink,createAfterScheduleRecord}=await import('../../schedule/src/index.ts')
+ let feeds=0
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'schedule-unknown-')),backend=createJsonlBackend(root)
+ const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:info=>{const sink=createScheduleFoldSink(info);return {...sink,appendValidated(unit,ordinal){feeds++;sink.appendValidated(unit,ordinal)}}}},taskDocumentStorageContract);coordinators.push(coordinator)
+ await coordinator.create({sessionId:'owner'});const execution=await acquireManagedExecution(coordinator,'owner'),action=execution.owner.beginAction()
+ const record=createAfterScheduleRecord('schedule-1','reminder',60,Date.parse('2026-08-31T10:00:00Z'))
+ const captured=action.captureMetadata!({type:'schedule/change',version:1,operation:'create',schedule:record})
+ probe.unknown=true;expect((await captured.admit()).kind).toBe('unknown');expect(feeds).toBe(0);expect(()=>execution.observe()).toThrow()
+ probe.unknown=false;expect((await captured.reconcile()).kind).toBe('committed');expect(feeds).toBe(1)
+ expect(execution.observe().schedules).toMatchObject({kind:'available',snapshot:{active:[record]}})
+ action.finish()
+})

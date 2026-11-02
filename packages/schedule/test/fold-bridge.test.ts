@@ -9,7 +9,7 @@ it('tracks inherited and unrelated ordinals and binds snapshots to the exact pre
   sink.appendValidated(events.slice(2),2)
   const prefix = {eventCount:3,bodyBytes:5,prefixDigest:'a'}
   sink.finishRestore(prefix)
-  expect(sink.snapshot(prefix)).toEqual(foldScheduleEvents(events,1))
+  expect(sink.snapshot(prefix)).toEqual({...foldScheduleEvents(events,1), inactive:[]})
   expect(() => sink.snapshot({...prefix,prefixDigest:'b'})).toThrow()
   expect(() => sink.appendValidated(events,0)).toThrow()
 })
@@ -79,4 +79,19 @@ it('a throwing live fold stays blocked and is never replayed after an uncertain 
   expect(() => state.observe()).toThrow()
   expect(() => staged.install(batch,receipt)).toThrow(/RECOVERY_REQUIRED/)
   expect(calls).toBe(1)
+})
+
+it('retains only final inactive dispositions in the owned snapshot', () => {
+  const fired = createAfterScheduleRecord('fired', 'prompt', 60, Date.parse('2026-08-31T10:00:00Z'))
+  const deleted = createAfterScheduleRecord('deleted', 'prompt', 60, Date.parse('2026-08-31T10:00:00Z'))
+  const sink = createScheduleFoldSink({seedLength:0})
+  sink.appendValidated([
+    {type:'schedule/change',version:1,operation:'create',schedule:fired},
+    {type:'schedule/change',version:1,operation:'create',schedule:deleted},
+    {type:'schedule/change',version:1,operation:'dispatch',id:'fired'},
+    {type:'schedule/change',version:1,operation:'delete',id:'deleted'},
+  ] as any,0)
+  const prefix = {eventCount:4,bodyBytes:0,prefixDigest:'a'}
+  sink.finishRestore(prefix)
+  expect(sink.snapshot(prefix)).toEqual({active:[],seenIds:['fired','deleted'],inactive:[{id:'fired',state:'already-fired'},{id:'deleted',state:'already-deleted'}]})
 })

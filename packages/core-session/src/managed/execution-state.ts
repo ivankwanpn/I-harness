@@ -13,6 +13,8 @@ import {originalDeliveryObservation} from './delivery-control.ts'
 import {subscribers} from '../events/state.ts'
 
 const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;generations():readonly import('../conversation/generation.ts').GenerationActionState[];newWork?():void}>()
+const observations=new WeakSet<object>()
+export function isOriginalExecutionObservation(value:object):value is ExecutionObservation{return observations.has(value)}
 const domains=new WeakMap<object,{identity:ManagedExecutionIdentity;owner:ManagedExecutionOwner;context:object;current():void}>()
 /** Original subscriptions use the same store as explicit compatibility views.
  * A private execution key is never a Session or a durable admission port. */
@@ -108,7 +110,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       semanticsStartSeq(){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.executionScalars().semanticsStartSeq},
       hasToolCallId(id:string){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.executionScalars().hasToolCallId(id)},
       softReduction(){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.softReduction()},
-    });current();return observation
+    });current();observations.add(observation);return observation
   }
   async function prepareRequest(action:import('./ports.ts').ManagedAction<FactOutcome>):Promise<PreparedExecutionRequest>{
     const actionCurrent=requestActions.get(action);if(!actionCurrent)throw TypeError('Original request action required')

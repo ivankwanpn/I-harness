@@ -11,7 +11,7 @@ import type {ManagedEntry} from './bootstrap.ts'
 import type {createTaskDocumentTransitions} from './task-document-transition.ts'
 
 /** One original entry's construction/reader debt, registered before initialize. */
-export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry;backend:PersistenceBackend;ownership:Ownership;transitions:ReturnType<typeof createTaskDocumentTransitions>;loadOwned(id:string):Promise<{session:Session}>;assertEntry():void}){
+export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry;backend:PersistenceBackend;ownership:Ownership;transitions:ReturnType<typeof createTaskDocumentTransitions>;loadOwned(id:string):Promise<{session:Session}>;foldFactory?:import('@i-harness/core-session/internal/execution').OriginalExecutionFoldFactory;assertEntry():void}){
  const revision=ports.entry.metadataRevision,token=Object.freeze({sessionId:ports.id,incarnation:randomUUID()})
  let retired=false,initial:SessionView|undefined,prefix:JournalPrefix|undefined,formatVersion:number|undefined,header:SessionView['header']
  let proof:{assertCurrent():Promise<void>}|undefined,scope:ReturnType<typeof openExecutionDependencies>|undefined,state:Awaited<ReturnType<typeof restoreManagedExecutionState>>|undefined,flight:Promise<unknown>|undefined
@@ -37,7 +37,7 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
     await ports.transitions.existing(ports.id,async before=>{await before(transient!.formatVersion,transient!.events,transient!.header?.seedLength??0);transient=undefined},undefined,async history=>{
      initial=history.initial;proof=history;formatVersion=initial.formatVersion;header=initial.header;await history.assertCurrent();assertCurrent()
      const read=readArchiveHistoryPrefix(ports.backend,history);if(read.kind!=='available')throw new FactRecoveryRequiredError();prefix={...read.prefix}
-     state=await restoreManagedExecutionState(source,{token,assertHeld:held.assertHeld,openDependencies(expected){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}})
+     state=await restoreManagedExecutionState(source,{token,assertHeld:held.assertHeld,openDependencies(expected){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}},ports.foldFactory)
      await history.assertCurrent();assertCurrent()
     })
    })();flight=pending

@@ -120,7 +120,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     let retained=executions.get(original)
     if(retained?.attachment)return retained.attachment
     if(original.document||restoredEntries.has(original))throw Object.assign(new Error('Original execution attachment requires its original entry construction'),{code:'FACT_OWNER_UNSUPPORTED'})
-    if(!retained){const source=createManagedExecutionSource({id,entry:original,backend,ownership,transitions,loadOwned,assertEntry(){if(documents.get(id)!==original)throw new FactRecoveryRequiredError();assertEntry(original)}});retained={source};executions.set(original,retained)}
+    if(!retained){const source=createManagedExecutionSource({id,entry:original,backend,ownership,transitions,loadOwned,foldFactory:options?.originalExecutionFoldFactory,assertEntry(){if(documents.get(id)!==original)throw new FactRecoveryRequiredError();assertEntry(original)}});retained={source};executions.set(original,retained)}
     const record=retained;
     const flight=(async()=>{
       const state=await record.source.initialize();
