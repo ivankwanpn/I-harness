@@ -12,7 +12,7 @@ export function createCodeDeliveryIndex() {
    const key:DeliveryKey|undefined=ref&&{kind:'code',sourceNamespace:'code',recipientSessionId:binding.recipientSessionId,sourceId:binding.sourceId,resultRevision:ref.revision}
    candidates.set(binding.seq!,end&&key&&parent(binding)&&eligibleCodeTerminal(end)&&binding.generationId===context.generation()&&!context.received(key)?{source:binding,terminal:end}:undefined)
   }
-  return {parent,handoff(sourceSeq:number,seq:number){const binding=context.source(sourceSeq);if(!binding||sourceSeq>=seq||binding.generationId!==context.generation()||parent(binding))fail('invalid Code parent handoff');routed.add(sourceSeq);refresh(binding)},
+  return {parent,terminal(sourceSeq:number){return staged.get(sourceSeq)??terminals.get(sourceSeq)},handoff(sourceSeq:number,seq:number){const binding=context.source(sourceSeq);if(!binding||sourceSeq>=seq||binding.generationId!==context.generation()||parent(binding))fail('invalid Code parent handoff');routed.add(sourceSeq);refresh(binding)},
    end(event:CodeTerminalEvent){const binding=context.source(event.sourceSeq);if(!binding||event.sourceSeq>=event.seq!||binding.cellId!==event.cellId||staged.has(event.sourceSeq)||terminals.has(event.sourceSeq))fail('invalid or duplicate Code terminal')
     if('output'in event){const {header,footer}=event.output;if(header.sessionId!==binding.recipientSessionId||header.cellId!==binding.cellId||header.sourceId===binding.sourceId||footer.terminal.seq<=event.sourceSeq||!context.member(footer.terminal.seq,binding,'code/cell',footer.status)||footer.store&&(footer.store.seq<=event.sourceSeq||!context.member(footer.store.seq,binding,'code/store')))fail('foreign Code terminal member')}
     staged.set(event.sourceSeq,event);refresh(binding)},

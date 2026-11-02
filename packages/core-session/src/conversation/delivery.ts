@@ -282,7 +282,12 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
             if (event.type === 'agent/delivery-source') {
               recipient(event.recipientSessionId);
               const call = reference(event.callSeq), dispatched = dispatch(event.callSeq);
-              if (stagedActive?.generationId !== event.generationId || source(sourceKey(event.sourceNamespace, event.sourceId)) || call?.type !== 'tool/call'
+              const nested = call?.type === 'code/call' && (event.kind === 'exec' || event.kind === 'workflow')
+                && [...sources.values(), ...stagedSources.values()].some(parent => parent.kind === 'code' && parent.cellId === call.cellId
+                  && parent.generationId === event.generationId && parent.recipientSessionId === event.recipientSessionId
+                  && parent.seq! < event.callSeq && reference(parent.callSeq)?.callId === call.parentCallId
+                  && !code.terminal(parent.seq!));
+              if (stagedActive?.generationId !== event.generationId || source(sourceKey(event.sourceNamespace, event.sourceId)) || call?.type !== 'tool/call' && !nested
                   || event.callSeq < (scope.seedLength ?? 0) || !dispatched || dispatched.callId !== call.callId || dispatched.seq <= event.callSeq || dispatched.seq >= event.seq!)
                 fail('uncertified delivery source');
               if (event.kind === 'subagent') {
@@ -363,17 +368,17 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
             if (event.purpose === 'main' && stagedTurn !== undefined)
               stagedTurnAction = event.actionId;
           }
-          if (event.seq !== undefined && event.type === 'tool/dispatch' && event.eventSeq !== undefined) {
+          if (event.seq !== undefined && (event.type === 'tool/dispatch' || event.type === 'code/dispatch') && event.eventSeq !== undefined) {
             const call = reference(event.eventSeq);
             // Keep the earliest actual matching dispatch, never a permission bit
             // or a later mismatched dispatch overwriting the original proof.
             const prior = dispatch(event.eventSeq);
-            if (call?.type === 'tool/call' && call.callId === event.callId && event.eventSeq < event.seq && (!prior || event.seq < prior.seq))
+            if ((event.type === 'tool/dispatch' && call?.type === 'tool/call' || event.type === 'code/dispatch' && call?.type === 'code/call' && call.cellId === event.cellId) && call.callId === event.callId && event.eventSeq < event.seq && (!prior || event.seq < prior.seq))
               stagedDispatches.set(event.eventSeq, { callId: event.callId, seq: event.seq });
           }
           if (event.type === 'agent/input/admitted' && event.seq !== undefined)
             stagedAdmissions.set(event.inputId, Object.freeze({ admissionSeq: event.seq, kind: ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow','session.delivery.code'].includes(event.provenance?.producer ?? '') ? 'delivery' : event.provenance?.producer === 'session.notification' && event.synthetic?.display?.kind === 'task' ? 'legacy-task' : 'ordinary' }));
-          if (event.seq !== undefined && (['agent/input/admitted', 'tool/call', 'subagent/start', 'subagent/end', 'exec/end', 'workflow/end','code/end','code/cell','code/store'].includes(event.type) || event.type === 'agent/delivery-source' && event.kind !== 'subagent' || event.type === 'user/message' && event.input)) {
+          if (event.seq !== undefined && (['agent/input/admitted', 'tool/call', 'code/call', 'subagent/start', 'subagent/end', 'exec/end', 'workflow/end','code/end','code/cell','code/store'].includes(event.type) || event.type === 'agent/delivery-source' && event.kind !== 'subagent' || event.type === 'user/message' && event.input)) {
             const ref: Ref = { type: event.type };
             if (event.type === 'agent/input/admitted')
               Object.assign(ref, { inputId: event.inputId, human: event.intent === 'user' && !event.synthetic && event.provenance?.kind === 'human' && event.provenance.authority === 'request', originSessionId: event.provenance?.originSessionId });
@@ -381,6 +386,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
               ref.inputId = event.input?.inputId;
             if (event.type === 'tool/call')
               Object.assign(ref, { name: event.name, callId: event.callId });
+            if (event.type === 'code/call') Object.assign(ref, { name:event.name, callId:event.callId, cellId:event.cellId, parentCallId:event.parentCallId });
             if (event.type === 'subagent/start')
               Object.assign(ref, { taskId: event.taskId, parentSessionId: event.parentSessionId });
             if (event.type === 'subagent/end')

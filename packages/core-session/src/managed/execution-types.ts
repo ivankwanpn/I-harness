@@ -22,6 +22,7 @@ export interface ExecutionDeliveryObservation {
  workflowPending():DeepReadonly<ReturnType<DeliveryState['workflowPending']>>
  ownHuman():Promise<DeepReadonly<Extract<SessionEventView,{type:'agent/input/admitted'}>>|undefined>
  dispatchedCall(callSeq:number):Promise<Readonly<{call:DeepReadonly<Extract<SessionEventView,{type:'tool/call'}>>;dispatch:DeepReadonly<Extract<SessionEventView,{type:'tool/dispatch'}>>}>|undefined>
+ dispatchedCodeCall(callSeq:number):Promise<Readonly<{call:DeepReadonly<Extract<SessionEventView,{type:'code/call'}>>;dispatch:DeepReadonly<Extract<SessionEventView,{type:'code/dispatch'}>>}>|undefined>
 }
 
 declare const executionIdentity:unique symbol

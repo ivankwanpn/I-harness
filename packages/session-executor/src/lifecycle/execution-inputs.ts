@@ -143,7 +143,7 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         current();if(!isStrictFactData(input)||Reflect.ownKeys(input).length!==4||!['sessionId','callId','callSeq','sourceId'].every(key=>{const field=Object.getOwnPropertyDescriptor(input,key);return !!field&&'value'in field&&field.enumerable}))throw TypeError('Closed original Workflow launch input required')
         const captured=Object.freeze({...input});if(captured.sessionId!==domain.sessionId||typeof captured.callId!=='string'||!captured.callId||typeof captured.sourceId!=='string'||!captured.sourceId||!Number.isSafeInteger(captured.callSeq)||captured.callSeq<0)throw TypeError('Original Workflow launch identity required')
         if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;current()}
-        let observed=execution.observe(),member=await observed.delivery.dispatchedCall(captured.callSeq);observed.assertCurrent()
+        let observed=execution.observe(),member=await observed.delivery.dispatchedCall(captured.callSeq)??await observed.delivery.dispatchedCodeCall(captured.callSeq);observed.assertCurrent()
         if(!member||member.call.name!=='workflow_run'||member.call.callId!==captured.callId)return {kind:'unavailable',reason:'uncertified-call'}
         observed=execution.observe();if(observed.delivery.source('workflow',captured.sourceId))throw new FactRecoveryRequiredError()
         let generation=observed.delivery.activeGeneration()
@@ -161,7 +161,7 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
       async prepareExecLaunch(input:{sessionId:string;callId:string;callSeq:number;sourceId:string}):Promise<PrivateExecPreparation>{
         current();if(input.sessionId!==domain.sessionId)throw TypeError('Original recipient identity required')
         if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;current()}
-        let observed=execution.observe(),member=await observed.delivery.dispatchedCall(input.callSeq)
+        let observed=execution.observe(),member=await observed.delivery.dispatchedCall(input.callSeq)??await observed.delivery.dispatchedCodeCall(input.callSeq)
         if(!member||!['shell','bash','pwsh'].includes(member.call.name)||member.call.callId!==input.callId)return {kind:'unavailable' as const,reason:'uncertified-call' as const}
         observed=execution.observe();if(observed.delivery.source('exec',input.sourceId))throw Error('Original Exec source already exists')
         let generation=observed.delivery.activeGeneration()
