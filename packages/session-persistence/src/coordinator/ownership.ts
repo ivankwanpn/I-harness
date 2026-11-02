@@ -460,14 +460,24 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     for (const key of [...adoption.resources].reverse()) { const slot = slots.get(key); if (!slot) continue; slot.live.delete(id); try { await dispose(key, slot) } catch (e) { errors.push(e) } }
     if (errors.length) throw new AggregateError(errors, 'Live ownership cleanup failed')
   }
-  function heldLive(id: string) { const record = live.get(id); if (!record) return false; for (const c of record.captures) c.assertCurrent(); return record.resources.every(key => { const s = slots.get(key); return s?.lock?.held && !s.debt && !s.releasing }) }
-  function heldBundle(id: string) {
+  function heldLiveCheck(id: string) { const record = live.get(id); if (!record) return false; for (const c of record.captures) c.assertCurrent(); return record.resources.every(key => { const s = slots.get(key); return s?.lock?.held && !s.debt && !s.releasing }) }
+  function heldBundleCheck(id: string) {
     if (!lockEnabled) return false
     const bundle = live.get(id) ?? activeBundles.get(id)?.values().next().value
     if (!bundle || bundle.role !== 'session') return false
     for (const capture of bundle.captures) capture.assertCurrent()
     return bundle.resources.every(key => { const slot = slots.get(key); return !!slot?.lock?.held && !slot.debt && !slot.releasing })
   }
+  // Only the closed original path constructor may share synchronous proofs.
+  // Custom path/lock callbacks retain their immediate assertion boundaries.
+  function heldPredicate(check: () => boolean): boolean {
+    if (!isOriginalCanonicalExclusion(artifacts)) return check()
+    let held = false
+    withArtifactCurrentChecks(() => { held = check() })
+    return held
+  }
+  const heldLive = (id: string) => heldPredicate(() => heldLiveCheck(id))
+  const heldBundle = (id: string) => heldPredicate(() => heldBundleCheck(id))
   const owner = {
     beginResultOrderingRegistration, retryResultOrdering,
     assertHeld(id: string) { if (!lockEnabled || !heldBundle(id)) throw Object.assign(new Error('Exclusive managed ownership is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' }) },
