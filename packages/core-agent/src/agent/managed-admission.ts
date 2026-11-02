@@ -12,7 +12,7 @@ import type { CandidateExecutionState } from './execution.ts';
 import type { createStepInput } from './step-input.ts';
 import { generationRequestLease } from './generation-request-lease.ts';
 export function createManagedAdmission(host: ManagedAgentHost, context: ReturnType<typeof createManagedAgentContext>, action: ManagedAction<FactOutcome>, generation: () => ManagedGenerationAction, reduction: ReturnType<typeof createManagedReduction>, register: (drain: () => Promise<void>) => SettlementFacts<FactOutcome>, prepareRequest: ReturnType<typeof createStepInput>, scope: LLMRequest['requestScope'], onCaptured?: (candidate: import('./request-snapshot.ts').RequestEvidence) => void) {
-    const recovery = createRecovery({ facts: action.facts, registerFactSource: register, flush: host.flush, get generationAction() { return generation(); }, recoveryObservation: binding => host.execution.observe().recovery(binding) }, { ownedBudget: context.budget, metadata: context.metadata, ...context.compactConfig ? { recoverOwned: options => reduction(options, undefined, scope) } : {} });
+    const recovery = createRecovery({ facts: action.facts, registerFactSource: register, flush: host.flush, get generationAction() { return generation(); }, recoveryObservation: binding => host.execution.observe().recovery(binding) }, { ownedBudget: context.budget, metadata: context.metadata, ...context.hasCompact ? { recoverOwned: options => reduction(options, undefined, scope) } : {} });
     return { recovery, async admit(signal: AbortSignal, state: RecoveryAdmissionState & CandidateExecutionState, getSteps: () => number) {
             const attempts = state.reductionAttempts ??= { count: 0, staleRebuilds: 0 };
             const stale = () => {
