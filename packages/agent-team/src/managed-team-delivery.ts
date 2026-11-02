@@ -5,7 +5,7 @@ import {reserveOriginalTeamDelivery,reserveOriginalTeamDeliveryFromArchive,asser
 type Inbox=Extract<SessionEvent,{type:'subagent/inbox'}>
 type Lease=ReturnType<typeof reserveOriginalTeamDelivery>
 type Disposition='pending'|'claimed'|'cancelled'|'suppressed'
-type Record={event:Inbox;action?:ManagedAction<FactOutcome>;source?:SettlementFacts<FactOutcome>;capture?:CapturedSettlementFact<FactOutcome>;outcome?:FactOutcome;lease?:Lease;disposition?:Disposition;settling?:Promise<void>;driving?:Promise<Disposition>;closing?:Promise<void>}
+type Record={event:Inbox;action?:ManagedAction<FactOutcome>;source?:SettlementFacts<FactOutcome>;capture?:CapturedSettlementFact<FactOutcome>;outcome?:FactOutcome;lease?:Lease;leaseReady?:boolean;disposition?:Disposition;settling?:Promise<void>;driving?:Promise<Disposition>;closing?:Promise<void>}
 
 /** The mounted Team retains each original inbox source and evidence through the
  * recipient ACK. Replays join the same held record; archive replay uses the
@@ -36,7 +36,7 @@ export function createManagedTeamLeadDeliveries(domain:ManagedExecutionDomain,ow
  return {
   async deliver(event:Inbox,admit:(evidence:ReturnType<Lease['evidence']>)=>Promise<unknown>){
    const record=await acquire(event);if(record.driving)return record.driving
-   const flight=(async()=>{if(record.disposition){const disposition=record.disposition;await release(record);return disposition}if(!record.lease){await settle(record);record.lease=reserveOriginalTeamDelivery(owner,{teamId,messageId:event.messageId,action:record.action!,source:record.source!,capture:record.capture!,outcome:record.outcome!})}await record.lease.ready;const evidence=record.lease.evidence(),receipt=await admit(evidence);const disposition=assertOriginalTeamDeliveryReceipt(evidence,receipt as Parameters<typeof assertOriginalTeamDeliveryReceipt>[1]);record.disposition=disposition;await release(record);return disposition})()
+   const flight=(async()=>{if(record.disposition){const disposition=record.disposition;await release(record);return disposition}if(!record.lease){await settle(record);record.lease=reserveOriginalTeamDelivery(owner,{teamId,messageId:event.messageId,action:record.action!,source:record.source!,capture:record.capture!,outcome:record.outcome!})}if(!record.leaseReady){try{await record.lease.ready}catch(error){if((error as {code?:string})?.code!=='TEAM_DELIVERY_PREFIX_ADVANCED')throw error;await record.lease.retryReady()}record.leaseReady=true}const evidence=record.lease.evidence(),receipt=await admit(evidence);const disposition=assertOriginalTeamDeliveryReceipt(evidence,receipt as Parameters<typeof assertOriginalTeamDeliveryReceipt>[1]);record.disposition=disposition;await release(record);return disposition})()
    record.driving=flight;void flight.finally(()=>{if(record.driving===flight)record.driving=undefined}).catch(()=>{});return flight
   },
   async abandon(id:string){const record=records.get(id);if(record){await record.driving?.catch(()=>{});await release(record)}},
