@@ -203,12 +203,24 @@ interface SessionSubmitOptions {
   /** Trusted host preparation callback; never comes from model or wire data. */
   prepareInput?: (assembly: SessionAssembly, prompt: string) => Promise<string>
 }
+/** Original private execution publication; it never exposes a Session facade. */
+export interface ManagedRuntimePublication {
+ readonly sessionId:string
+ readonly ctx:import('@i-harness/core-plugin').PluginContext
+ readonly tools:import('@i-harness/core-tools').ToolRegistry
+ readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain
+ readonly execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment
+ observe():import('@i-harness/core-session/internal/execution').ExecutionObservation
+ subscribe(listener:(event:import('@i-harness/core-session').SessionEvent)=>void):()=>void
+}
+export type ManagedRuntimeLifecycle={sessionId:string;owner:ManagedRuntimePublication;kind:'published'|'retiring'|'removed'}
 export interface SessionService {
   /** Internal default-input adapter over the SAME private entry; no Session facade. */
   managedInputFor?(sessionId:string,requirements?:{completePreparation?:boolean;supplementalContext?:boolean}):Promise<{
     readonly inbox:Pick<AsyncInbox,'pending'|'admit'|'cancel'>
     observe():import('@i-harness/core-session/internal/execution').ExecutionObservation
   }|undefined>
+  onManagedRuntimeLifecycle?(listener:(event:ManagedRuntimeLifecycle)=>void,options?:{includeExisting?:boolean}):()=>void
   instructionState?(sessionId: string, childSessionId?: string): import('./context/instructions/diagnostics.ts').InstructionReport
   refreshInstructions?(sessionId: string, childSessionId?: string, signal?: AbortSignal): Promise<import('./context/instructions/diagnostics.ts').InstructionReport>
   onInstructionsChanged?(sessionId: string, childSessionId: string | undefined, listener: () => void): () => void
@@ -309,6 +321,20 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const lanes = new Map<string, SessionTurnLane>()
   type ManagedRuntime=ReturnType<typeof createManagedExecutionRuntime>
   const managedRuntimes=new Map<string,ManagedRuntime>()
+  const managedPublications=new Map<string,{owner:ManagedRuntimePublication;retired:boolean;subscriptions:Set<()=>void>}>()
+  const managedLifecycleListeners=new Set<(event:ManagedRuntimeLifecycle)=>void>()
+  const notifyManaged=(event:ManagedRuntimeLifecycle)=>{for(const listener of [...managedLifecycleListeners])try{listener(event)}catch{/* Observers cannot change original ownership. */}}
+  function publishManaged(sessionId:string,runtime:ManagedRuntime){
+    const subscriptions=new Set<()=>void>();let record:{owner:ManagedRuntimePublication;retired:boolean;subscriptions:Set<()=>void>}
+    const current=()=>{if(record.retired||managedPublications.get(sessionId)!==record||managedRuntimes.get(sessionId)!==runtime)throw Error('Original private runtime retired')}
+    const owner:ManagedRuntimePublication=Object.freeze({sessionId,ctx:runtime.ctx,tools:runtime.tools,domain:runtime.domain,execution:runtime.execution,
+      observe(){if(this!==owner)throw TypeError('Original private runtime receiver required');current();return runtime.execution.observe()},
+      subscribe(listener:(event:import('@i-harness/core-session').SessionEvent)=>void){if(this!==owner||typeof listener!=='function')throw TypeError('Original private runtime listener required');current();const off=subscribeManagedExecution(runtime.domain,event=>{try{listener(event)}catch{/* Observer cannot change committed execution. */}});let active=true;const close=()=>{if(!active)return;active=false;subscriptions.delete(close);off()};subscriptions.add(close);return close},
+    });record={owner,retired:false,subscriptions};managedPublications.set(sessionId,record);notifyManaged({sessionId,owner,kind:'published'})
+  }
+  function retireManaged(sessionId:string){const record=managedPublications.get(sessionId);if(!record||record.retired)return;record.retired=true;notifyManaged({sessionId,owner:record.owner,kind:'retiring'});for(const off of [...record.subscriptions])off()}
+  function removeManaged(sessionId:string){const record=managedPublications.get(sessionId);if(!record)return;retireManaged(sessionId);managedPublications.delete(sessionId);notifyManaged({sessionId,owner:record.owner,kind:'removed'})}
+
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
@@ -1037,7 +1063,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const title=opts.managedRuntime.ownedTitle?.enabled?createOwnedPostTurnLifetime():undefined
     if(title)mounted.add(()=>title.close())
     let retired=false,recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>|undefined,privateDrain:ReturnType<typeof createDeliveryDrain>|undefined,unsubscribe:(()=>void)|undefined,unsubscribeReadiness:(()=>void)|undefined
-    row.cleanup=async()=>{retired=true;privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);privateEntries.delete(sessionId)}
+    row.cleanup=async()=>{retired=true;retireManaged(sessionId);privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);removeManaged(sessionId);privateEntries.delete(sessionId)}
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
       const context=createContext()
@@ -1084,6 +1110,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
       }
       assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount)
+      publishManaged(sessionId,runtime)
       privateDrain?.signal()
       return runtime
     })().then(work.resolve,error=>{row.failed=true;failedClose.add(sessionId);work.reject(error)})
@@ -1438,6 +1465,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
   const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
+    retireManaged(sessionId)
     pendingExecutionNotifications.get(sessionId)?.();pendingExecutionNotifications.delete(sessionId)
     creating.get(sessionId)?.residentActivation.retire()
     deliveryDrains.get(sessionId)?.retire()
@@ -1473,7 +1501,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       ...notificationAdmissions.values(),
       ...[...deliveryDrains.values()].map(drain => drain.join()),
     ])
-    executionListeners.clear()
+    executionListeners.clear();managedLifecycleListeners.clear()
     for (const off of executionSubscriptions.values()) off()
     executionSubscriptions.clear()
     let failure: unknown
@@ -1670,6 +1698,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     },
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState,
+    onManagedRuntimeLifecycle:(listener,options)=>{if(closed)return()=>{};managedLifecycleListeners.add(listener);if(options?.includeExisting)for(const [sessionId,record] of managedPublications)if(!record.retired)try{listener({sessionId,owner:record.owner,kind:'published'})}catch{/* Observer isolation. */};return()=>{managedLifecycleListeners.delete(listener)}},
     onExecutionState: listener => {
       if (closed) return () => {}
       executionListeners.add(listener)

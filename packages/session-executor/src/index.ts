@@ -19,6 +19,8 @@ export {
   type SessionQueueItem,
   type SessionService,
   type SessionServiceOptions,
+  type ManagedRuntimePublication,
+  type ManagedRuntimeLifecycle,
 } from "./service.ts"
 // M49 Task 12: the task projection's summary row type (the @i-harness/subagent
 // shape re-exported — the SDK/TUI wire surfaces mirror it structurally).
