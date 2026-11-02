@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./internal/managed-native-recovery": "./src/lifecycle/managed-native-recovery.ts",
+    "./internal/managed-rewind": "./src/owned-rewind.ts",
     "./internal/process-result-service": "./src/lifecycle/process-result-service.ts"
   },
   "scripts": {
