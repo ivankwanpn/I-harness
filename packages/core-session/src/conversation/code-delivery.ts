@@ -4,7 +4,7 @@ import type { DeliveryKey } from '../events/delivery.ts'
 export interface CodeDeliveryCandidate { source:Readonly<CodeDeliverySourceEvent>;terminal:Readonly<CodeTerminalEvent> }
 export function createCodeDeliveryIndex() {
  const terminals=new Map<number,CodeTerminalEvent>(),handoffs=new Set<number>(),pending=new Map<number,CodeDeliveryCandidate>()
- return {pending:()=>[...pending.values()].map(value=>structuredClone(value)),stage(context:{source(seq:number):CodeDeliverySourceEvent|undefined;generation():string|undefined;received(key:DeliveryKey):boolean;member(seq:number,binding:CodeDeliverySourceEvent,type:'code/cell'|'code/store',status?:string):boolean}){
+ return {pending:()=>[...pending.values()].map(value=>structuredClone(value)),terminal:(sourceSeq:number)=>{const value=terminals.get(sourceSeq);return value&&structuredClone(value)},stage(context:{source(seq:number):CodeDeliverySourceEvent|undefined;generation():string|undefined;received(key:DeliveryKey):boolean;member(seq:number,binding:CodeDeliverySourceEvent,type:'code/cell'|'code/store',status?:string):boolean}){
   const staged=new Map<number,CodeTerminalEvent>(),routed=new Set<number>(),candidates=new Map<number,CodeDeliveryCandidate|undefined>()
   const parent=(binding:CodeDeliverySourceEvent)=>handoffs.has(binding.seq!)||routed.has(binding.seq!)
   const refresh=(binding:CodeDeliverySourceEvent)=>{

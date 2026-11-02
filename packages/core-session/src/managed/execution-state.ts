@@ -12,7 +12,7 @@ import {captureOriginalRestorationSource} from './restoration-source.ts'
 import {originalDeliveryObservation} from './delivery-control.ts'
 import {subscribers} from '../events/state.ts'
 
-const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;generations():readonly import('../conversation/generation.ts').GenerationActionState[];execSource(id:string):ReturnType<import('../conversation/delivery.ts').DeliveryState['source']>;assertExecIssue(event:import('../events/exec-delivery.ts').ExecDeliverySourceEvent):void;newWork?():void}>()
+const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;generations():readonly import('../conversation/generation.ts').GenerationActionState[];execSource(id:string):ReturnType<import('../conversation/delivery.ts').DeliveryState['source']>;codeSource(id:string):ReturnType<import('../conversation/delivery.ts').DeliveryState['source']>;codeEvidence(sourceSeq:number,terminalSeq:number):ReturnType<import('../conversation/delivery.ts').DeliveryReadIndex['codeEvidence']>;assertExecIssue(event:import('../events/exec-delivery.ts').ExecDeliverySourceEvent):void;assertCodeIssue(event:import('../events/code-delivery.ts').CodeDeliverySourceEvent):void;newWork?():void}>()
 const readinessOwners=new WeakMap<object,{subscribe(listener:(epoch:number)=>void,onUnavailable?:(error:unknown,terminal:boolean)=>void):()=>void}>()
 const observations=new WeakSet<object>()
 export function isOriginalExecutionObservation(value:object):value is ExecutionObservation{return observations.has(value)}
@@ -40,10 +40,30 @@ export function readManagedSourceGenerations(identity:ManagedExecutionIdentity,s
  return snapshot
 }
 /** A held settlement source may inspect only its execution's committed Exec binding after admission retires. */
-export function readManagedSourceExecDelivery(identity:ManagedExecutionIdentity,source:import('./ports.ts').SettlementFacts<import('./ports.ts').ProducerFactOutcome>,sourceId:string){
+function readHeldDelivery<T>(identity:ManagedExecutionIdentity,source:object,read:(owner:NonNullable<ReturnType<typeof owners.get>>)=>T){
  const original=owners.get(identity),registered=sources.get(source)
- if(!original||registered?.identity!==identity||typeof sourceId!=='string'||!sourceId)throw TypeError('Original same-execution held source required')
- original.current();registered.current();const result=freezeJsonData(structuredClone(original.execSource(sourceId)));registered.current();original.current();return result
+ if(!original||registered?.identity!==identity)throw TypeError('Original same-execution held source required')
+ original.current();registered.current();const result=freezeJsonData(structuredClone(read(original)));registered.current();original.current();return result
+}
+export function readManagedSourceExecDelivery(identity:ManagedExecutionIdentity,source:import('./ports.ts').SettlementFacts<import('./ports.ts').ProducerFactOutcome>,sourceId:string){
+ if(typeof sourceId!=='string'||!sourceId)throw TypeError('Original Exec source ID required')
+ return readHeldDelivery(identity,source,owner=>owner.execSource(sourceId))
+}
+/** The original Code producer can inspect its committed source after new work retires. */
+export function readManagedSourceCodeDelivery(identity:ManagedExecutionIdentity,source:import('./ports.ts').SettlementFacts<import('./ports.ts').ProducerFactOutcome>,sourceId:string){
+ if(typeof sourceId!=='string'||!sourceId)throw TypeError('Original Code source ID required')
+ const result=readHeldDelivery(identity,source,owner=>owner.codeSource(sourceId))
+ if(result&&result.kind!=='code')throw TypeError('Original Code source required')
+ return result
+}
+/** Exact committed Code evidence remains readable only through an original held source. */
+export function readManagedSourceCodeEvidence(identity:ManagedExecutionIdentity,source:import('./ports.ts').SettlementFacts<import('./ports.ts').ProducerFactOutcome>|import('./ports.ts').ReceivedInputSource<import('./ports.ts').ProducerFactOutcome>,evidence:Readonly<{sourceSeq:number;terminalSeq:number}>){
+ if(!evidence||typeof evidence!=='object'||types.isProxy(evidence))throw TypeError('Closed Code evidence required')
+ const fields=Object.getOwnPropertyDescriptors(evidence),keys=Reflect.ownKeys(fields)
+ if(keys.length!==2||!fields.sourceSeq||!('value'in fields.sourceSeq)||!fields.sourceSeq.enumerable||!fields.terminalSeq||!('value'in fields.terminalSeq)||!fields.terminalSeq.enumerable)throw TypeError('Closed Code evidence required')
+ const first:unknown=fields.sourceSeq.value,last:unknown=fields.terminalSeq.value
+ if(typeof first!=='number'||!Number.isSafeInteger(first)||first<0||typeof last!=='number'||!Number.isSafeInteger(last)||last<=first)throw TypeError('Original Code evidence ordinals required')
+ return readHeldDelivery(identity,source,owner=>owner.codeEvidence(first,last))
 }
 const actions=new WeakMap<object,{identity:ManagedExecutionIdentity;current():void}>()
 export function assertManagedActionCurrent(domain:ManagedExecutionDomain,action:object){const original=domains.get(domain),registered=actions.get(action);if(!original||registered?.identity!==original.identity)throw TypeError('Original same-domain action required');domain.assertCurrent();registered.current()}
@@ -56,6 +76,16 @@ export function assertManagedExecDeliveryCurrent(domain:ManagedExecutionDomain,b
  const recipient:unknown=fields.recipientSessionId!.value,generation:unknown=fields.generationId!.value,source:unknown=fields.sourceId!.value,call:unknown=fields.callSeq!.value,delivery:unknown=fields.delivery!.value
  if(recipient!==owner.sessionId||typeof generation!=='string'||!generation||typeof source!=='string'||!source||typeof call!=='number'||!Number.isSafeInteger(call)||call<0||delivery!=='tool'&&delivery!=='parent')throw TypeError('Closed original Exec binding required')
  domain.assertCurrent();owner.assertExecIssue({type:'agent/delivery-source',version:1,kind:'exec',sourceNamespace:'exec',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,delivery});domain.assertCurrent()
+}
+/** Original Code fence check; this observation cannot issue a source or grant a model member. */
+export function assertManagedCodeDeliveryCurrent(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;cellId:string;delivery:'tool'}>){
+ const registered=domains.get(domain),owner=registered&&owners.get(registered.identity)
+ if(!registered||!owner||owner.owner!==registered.owner||!binding||typeof binding!=='object'||types.isProxy(binding))throw TypeError('Original managed Code delivery domain required')
+ const keys=['recipientSessionId','generationId','sourceId','callSeq','cellId','delivery'] as const,fields=Object.getOwnPropertyDescriptors(binding)
+ if(Reflect.ownKeys(fields).length!==keys.length||keys.some(key=>!fields[key]||!('value'in fields[key]!)||!fields[key]!.enumerable))throw TypeError('Closed original Code binding required')
+ const recipient:unknown=fields.recipientSessionId!.value,generation:unknown=fields.generationId!.value,source:unknown=fields.sourceId!.value,call:unknown=fields.callSeq!.value,cell:unknown=fields.cellId!.value,delivery:unknown=fields.delivery!.value
+ if(recipient!==owner.sessionId||typeof generation!=='string'||!generation||typeof source!=='string'||!source||typeof call!=='number'||!Number.isSafeInteger(call)||call<0||typeof cell!=='string'||!cell||delivery!=='tool')throw TypeError('Closed original Code binding required')
+ domain.assertCurrent();owner.assertCodeIssue({type:'agent/delivery-source',version:1,kind:'code',sourceNamespace:'code',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,cellId:cell,delivery});domain.assertCurrent()
 }
 export function createManagedExecutionDomain(identity:ManagedExecutionIdentity,owner:ManagedExecutionOwner,context:object,sessionId?:string):ManagedExecutionDomain{
  const original=owners.get(identity);if(!original||original.owner!==owner||!original.newWork||!context||typeof context!=='object'||types.isProxy(context)||sessionId!==undefined&&sessionId!==original.sessionId)throw TypeError('Original managed execution domain required');original.newWork()
@@ -209,7 +239,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       if(fields.some(field=>!field||!('value'in field)||typeof field.value!=='function'))throw new TypeError('Original execution owner methods required')
       const ready=Object.getOwnPropertyDescriptor(owner,'assertReady');if(ready&&(!('value'in ready)||typeof ready.value!=='function'||types.isProxy(ready.value)))throw TypeError('Original owner readiness required')
       const current=()=>{assertHeld();for(let index=0;index<methods.length;index++)if(Object.getOwnPropertyDescriptor(owner,methods[index]!)?.value!==fields[index]!.value)throw new TypeError('Original execution owner changed');if(ready&&Object.getOwnPropertyDescriptor(owner,'assertReady')?.value!==ready.value)throw TypeError('Original owner readiness changed')}
-      ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,generations(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},execSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('exec',id)},assertExecIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},...ready?{newWork(){current();assertNewWork();Reflect.apply(ready.value,owner,[])}}:{}})
+      ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,generations(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},execSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('exec',id)},codeSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('code',id)},codeEvidence(first,last){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().codeEvidence(first,last)},assertExecIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},assertCodeIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},...ready?{newWork(){current();assertNewWork();Reflect.apply(ready.value,owner,[])}}:{}})
     },
     assertNewWork,
     readinessChanged(recoverableBlocked=false){ownerRecoveryBlocked=recoverableBlocked;if(!readinessListeners.size)return;const state=readinessState();if(state.kind==='failed')signalUnavailable(state.error,true);else if(state.kind==='busy')markBusy();else signalReady()},

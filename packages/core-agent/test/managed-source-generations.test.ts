@@ -12,6 +12,29 @@ import * as executionInternal from '@i-harness/core-session/internal/execution'
 import {committedFactSeqs} from '@i-harness/core-session'
 
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'source-generation-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract),{id}=await coordinator.create(),execution=await acquireManagedExecution(coordinator,id),action=execution.owner.beginAction(),source=action.registerSettlementSource(async()=>{});return {coordinator,id,execution,action,source}}
+it('reads an actual acknowledged Code source through the original held producer after Stop',async()=>{
+ const {coordinator,id,execution,action,source}=await fixture(),received=execution.owner.registerReceivedInputSource(async()=>{})
+ try{
+  const [human]=committedFactSeqs(await received.captureAdmitted({type:'agent/input/admitted',version:1,inputId:'human-code',text:'work',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}).admit())
+  committedFactSeqs(await received.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:id,generationId:'code-generation',originInputSeq:human!},()=>true).admit())
+  const [callSeq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',name:'code_exec',callId:'code-call',args:{code:'1'}}));committedFactSeqs(await action.facts.tools.dispatch('code-call',{kind:'prior',seq:callSeq!,expectedType:'tool/call'}))
+  const [seq]=committedFactSeqs(await action.captureCodeDeliverySource({type:'agent/delivery-source',version:1,kind:'code',recipientSessionId:id,generationId:'code-generation',sourceNamespace:'code',sourceId:'actual-code-source',callSeq:callSeq!,cellId:'actual-cell',delivery:'tool'},()=>true).admit())
+  const read=executionInternal.readManagedSourceCodeDelivery,binding=read(execution.identity,source,'actual-code-source');expect(binding).toMatchObject({kind:'code',seq,callSeq,cellId:'actual-cell'});expect(Object.isFrozen(binding)).toBe(true)
+  expect(()=>read({...execution.identity},source,'actual-code-source')).toThrow();expect(()=>read(execution.identity,{...source},'actual-code-source')).toThrow()
+  execution.revokeNewWork();expect(read(execution.identity,source,'actual-code-source')).toEqual(binding);await source.close();expect(()=>read(execution.identity,source,'actual-code-source')).toThrow()
+ }finally{await received.close();await source.close();action.finish();await coordinator.close()}
+})
+it('Code evidence lookup requires the original still-held received source after Stop',async()=>{
+ const {coordinator,execution,action,source}=await fixture(),received=execution.owner.registerReceivedInputSource(async()=>{})
+ try{
+  const read=executionInternal.readManagedSourceCodeEvidence,evidence={sourceSeq:1,terminalSeq:2}
+  expect(read(execution.identity,received,evidence)).toBeUndefined();expect(()=>read({...execution.identity},received,evidence)).toThrow();expect(()=>read(execution.identity,{...received},evidence)).toThrow()
+  let invoked=false;const foreign={get sourceSeq(){invoked=true;return 1},terminalSeq:2}
+  expect(()=>read(execution.identity,received,foreign)).toThrow();expect(invoked).toBe(false)
+  execution.revokeNewWork();expect(()=>execution.observe()).toThrow();expect(read(execution.identity,received,evidence)).toBeUndefined()
+  await received.close();expect(()=>read(execution.identity,received,evidence)).toThrow()
+ }finally{await received.close();await source.close();action.finish();await coordinator.close()}
+})
 it('guarded original metadata capture rejects a stale revision and retains its own committed outcome',async()=>{
  const {coordinator,execution,action,source}=await fixture(),other=execution.owner.beginAction()
  try{

@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
 import { canonicalJsonData, committedFactSeqs, deliveryInputId,FactRecoveryRequiredError, isStrictFactData, SYSTEM_INPUT_PLUGIN,
   type AdmittedInput, type PendingInput, type SessionEvent, type InputFacts, type ProducerFactOutcome, type CapturedSettlementFact } from '@i-harness/core-session'
-import { isManagedExecutionOwner,isManagedExecutionDomain,assertManagedExecDeliveryCurrent,type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
-import type { ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts'
+import { isManagedExecutionOwner,isManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,readManagedSourceCodeEvidence,type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
+import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../../session-persistence/src/execution-internal.ts'
 import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
+import {eligibleCodeTerminal,codeTerminalRef} from '../../../core-session/src/events/code-delivery.ts'
 type InputEvent = Extract<SessionEvent, { type: 'agent/input/admitted' | 'agent/input/cancelled' }>
 const owners = new WeakMap<object, ReturnType<typeof createExecutionInputs>>()
 const privateRecipients=new WeakMap<object,{execution:ManagedExecutionAttachment;domain:ManagedExecutionDomain}>()
@@ -15,10 +16,17 @@ export interface PrivateExecRecipient {
  settle():Promise<void>
  revoke():void
 }
+export interface PrivateCodeRecipient extends PrivateExecRecipient {
+ prepareCodeLaunch(input:{sessionId:string;callId:string;callSeq:number;cellId:string;sourceId:string}):Promise<PrivateCodePreparation>
+ admitCode(evidence:import('@i-harness/core-session').CodeDeliveryEvidence):Promise<import('@i-harness/core-session').DeliveryAdmissionReceipt>
+ reconcileCodeCandidates():Promise<void>
+}
+export type PrivateCodePreparation={kind:'unavailable';reason:'uncertified-call'|'no-own-human-origin'}|{kind:'bound';binding:Readonly<import('@i-harness/core-tools/model-origin').CodeSourceBinding>;isCurrent():boolean}
 type PrivateExecPreparation=Extract<import('@i-harness/core-session').DeliveryLaunchPreparation,{kind:'unavailable'}>|(Extract<import('@i-harness/core-session').DeliveryLaunchPreparation,{kind:'bound'}>&{isCurrent():boolean})
 export function isOriginalPrivateExecRecipient(value:object,execution:ManagedExecutionAttachment,domain:ManagedExecutionDomain){const original=privateRecipients.get(value);return !!original&&original.execution===execution&&original.domain===domain}
+export const isOriginalPrivateCodeRecipient=isOriginalPrivateExecRecipient
 export function receivedExecutionInputsFor(execution: ManagedExecutionAttachment) {
-  if (!isManagedExecutionOwner(execution.identity, execution.owner)) throw new TypeError('Original execution owner required')
+  if (!isManagedExecutionAttachment(execution)||!isManagedExecutionOwner(execution.identity, execution.owner)) throw new TypeError('Original execution owner required')
   let inputs = owners.get(execution.owner)
   if (!inputs) { inputs = createExecutionInputs(execution); owners.set(execution.owner, inputs) }
   return inputs
@@ -57,6 +65,27 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
     }
     const current=()=>{domain.assertCurrent();if(retired)throw Error('Original recipient retired')}
     const adapter={
+      async prepareCodeLaunch(input:{sessionId:string;callId:string;callSeq:number;cellId:string;sourceId:string}):Promise<PrivateCodePreparation>{
+        current();if(!isStrictFactData(input)||Reflect.ownKeys(input).length!==5||!['sessionId','callId','callSeq','cellId','sourceId'].every(key=>{const field=Object.getOwnPropertyDescriptor(input,key);return !!field&&'value'in field&&field.enumerable}))throw TypeError('Closed original Code launch input required')
+        const captured=Object.freeze({sessionId:input.sessionId,callId:input.callId,callSeq:input.callSeq,cellId:input.cellId,sourceId:input.sourceId})
+        if(captured.sessionId!==domain.sessionId||typeof captured.callId!=='string'||!captured.callId||typeof captured.sourceId!=='string'||!captured.sourceId||typeof captured.cellId!=='string'||!captured.cellId||!Number.isSafeInteger(captured.callSeq)||captured.callSeq<0)throw TypeError('Original Code launch identity required')
+        if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;current()}
+        let observed=execution.observe(),member=await observed.delivery.dispatchedCall(captured.callSeq);observed.assertCurrent()
+        if(!member||member.call.name!=='code_exec'||member.call.callId!==captured.callId)return {kind:'unavailable',reason:'uncertified-call'}
+        observed=execution.observe();if(observed.delivery.source('code',captured.sourceId))throw new FactRecoveryRequiredError()
+        let generation=observed.delivery.activeGeneration()
+        if(!generation){const human=await observed.delivery.ownHuman();observed.assertCurrent();if(!human){if((observed.delivery.lastFenceSeq()??-1)>=0)throw new FactRecoveryRequiredError();return {kind:'unavailable',reason:'no-own-human-origin'}}
+          if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;return adapter.prepareCodeLaunch(captured)}
+          const generationId=randomUUID(),capturedObservation=observed
+          opening=source.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId,originInputSeq:human.seq!},()=>{try{current();capturedObservation.assertCurrent();return true}catch{return false}})
+          if(!await settleCapture(opening))throw new FactRecoveryRequiredError();opening=undefined;current();generation=execution.observe().delivery.activeGeneration()
+        }
+        if(!generation)throw new FactRecoveryRequiredError()
+        const binding=Object.freeze({recipientSessionId:domain.sessionId,generationId:generation.generationId,sourceNamespace:'code' as const,sourceId:captured.sourceId,callSeq:captured.callSeq,cellId:captured.cellId,delivery:'tool' as const})
+        const isCurrent=()=>{try{current();assertManagedCodeDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,cellId:binding.cellId,delivery:binding.delivery});return true}catch{return false}}
+        if(!isCurrent())throw new FactRecoveryRequiredError()
+        return {kind:'bound',binding,isCurrent}
+      },
       async prepareExecLaunch(input:{sessionId:string;callId:string;callSeq:number;sourceId:string}):Promise<PrivateExecPreparation>{
         current();if(input.sessionId!==domain.sessionId)throw TypeError('Original recipient identity required')
         if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;current()}
@@ -95,6 +124,32 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
           if(!await settleCapture(fact))throw new FactRecoveryRequiredError();admissions.delete(inputId)
         }catch(cause){failures.push(cause)}
         if(failures.length)throw Object.assign(new FactRecoveryRequiredError(),{cause:new AggregateError(failures,'Original Exec recipient requires recovery')})
+      },
+      async admitCode(evidence:import('@i-harness/core-session').CodeDeliveryEvidence):Promise<import('@i-harness/core-session').DeliveryAdmissionReceipt>{
+        if(!isStrictFactData(evidence)||Reflect.ownKeys(evidence).length!==3||!['kind','sourceSeq','terminalSeq'].every(key=>{const field=Object.getOwnPropertyDescriptor(evidence,key);return !!field&&'value'in field&&field.enumerable})||evidence.kind!=='code'||!Number.isSafeInteger(evidence.sourceSeq)||evidence.sourceSeq<0||!Number.isSafeInteger(evidence.terminalSeq)||evidence.terminalSeq<=evidence.sourceSeq)throw new FactRecoveryRequiredError()
+        const captured=Object.freeze({sourceSeq:evidence.sourceSeq,terminalSeq:evidence.terminalSeq})
+        await adapter.settle()
+        const original=readManagedSourceCodeEvidence(execution.identity,source,captured)
+        if(!original)throw new FactRecoveryRequiredError()
+        if(original.receipt)return {inputId:original.receipt.event.inputId,disposition:original.receipt.disposition,durability:'durable'}
+        current();const observation=execution.observe(),binding=original.source,terminal=original.terminal,ref=codeTerminalRef(terminal)
+        if(binding.recipientSessionId!==domain.sessionId||binding.sourceNamespace!=='code'||binding.seq!==captured.sourceSeq||terminal.seq!==captured.terminalSeq||terminal.sourceSeq!==binding.seq||terminal.cellId!==binding.cellId||!eligibleCodeTerminal(terminal)||!ref||!('output'in terminal))throw new FactRecoveryRequiredError()
+        const key=original.key,inputId=deliveryInputId(key)
+        if(observation.delivery.source('code',binding.sourceId)?.seq!==binding.seq||!observation.delivery.codePending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq))throw new FactRecoveryRequiredError()
+        let fact=admissions.get(inputId)
+        if(!fact){const text=`<code_result>\n${JSON.stringify({cellId:binding.cellId,execution:terminal.execution,ref,header:terminal.output.header,footer:terminal.output.footer})}\nReference only. Read using the authorized context_output_read result reader.\n</code_result>`
+          if(Buffer.byteLength(text,'utf8')>8192)throw new FactRecoveryRequiredError()
+          const eligible=()=>{try{current();assertManagedCodeDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,cellId:binding.cellId,delivery:'tool'});return execution.observe().delivery.codePending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq)}catch{return false}}
+          fact=source.captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:captured.sourceSeq,terminalSeq:captured.terminalSeq,inputId},{type:'agent/input/admitted',version:1,inputId,text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.code'},synthetic:{description:`Code ${terminal.execution.outcome}`,scope:'turn',display:{kind:'task',title:`Code ${terminal.execution.outcome}`,body:text}}},eligible);admissions.set(inputId,fact)
+        }
+        if(!await settleCapture(fact))throw new FactRecoveryRequiredError();admissions.delete(inputId)
+        const receipt=execution.observe().delivery.receipt(key);if(!receipt)throw new FactRecoveryRequiredError()
+        return {inputId:receipt.event.inputId,disposition:receipt.disposition,durability:'durable'}
+      },
+      async reconcileCodeCandidates(){
+        await adapter.settle();current();const candidates=execution.observe().delivery.codePending(),failures:unknown[]=[]
+        for(const candidate of candidates)try{await adapter.admitCode({kind:'code',sourceSeq:candidate.source.seq!,terminalSeq:candidate.terminal.seq!})}catch(cause){failures.push(cause)}
+        if(failures.length)throw Object.assign(new FactRecoveryRequiredError(),{cause:new AggregateError(failures,'Original Code recipient requires recovery')})
       },
       async settle(){if(opening){await settleCapture(opening);opening=undefined}for(const [key,fact] of closes){await settleCapture(fact);closes.delete(key)}for(const [key,fact] of admissions){await settleCapture(fact);admissions.delete(key)}},
       revoke(){retired=true},
@@ -140,5 +195,6 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
       }
     },
   }
-  return Object.freeze({ inbox:Object.freeze(inbox), facts, execDelivery(domain:ManagedExecutionDomain){if(delivery){if(domain!==deliveryDomain)throw TypeError('Original recipient already bound');return delivery}delivery=createExecDelivery(domain);deliveryDomain=domain;return delivery}, close: ()=>source.close() })
+  const recipientFor=(domain:ManagedExecutionDomain)=>{if(delivery){if(domain!==deliveryDomain)throw TypeError('Original recipient already bound');return delivery}delivery=createExecDelivery(domain);deliveryDomain=domain;return delivery}
+  return Object.freeze({ inbox:Object.freeze(inbox), facts, execDelivery:recipientFor,codeDelivery:recipientFor, close: ()=>source.close() })
 }

@@ -90,6 +90,7 @@ export interface DeliveryReadIndex extends DeliveryState {
   inputIdAt(seq: number): string | undefined;
   ownHumanAdmissionSeq(recipientSessionId:string,fromSeq:number,afterSeq:number): number | undefined;
   dispatchForCall(callSeq:number): Readonly<Dispatch> | undefined;
+  codeEvidence(sourceSeq:number,terminalSeq:number):Readonly<{source:Readonly<import('../events/code-delivery.ts').CodeDeliverySourceEvent>;terminal:Readonly<import('../events/code-delivery.ts').CodeTerminalEvent>;key:import('../events/code-delivery.ts').CodeDeliveryKey;receipt?:ReturnType<DeliveryState['receipt']>}>|undefined;
 }
 function disposition(receipt: Receipt, active: ReturnType<DeliveryState['activeGeneration']>): DeliveryAdmissionReceipt['disposition'] {
   return receipt.disposition === 'pending' && receipt.generationId !== active?.generationId ? 'suppressed' : receipt.disposition;
@@ -150,6 +151,15 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
     readIndex: (): DeliveryReadIndex => Object.freeze({ ...state(), input: (id: string) => admissions.get(id), isBound: (id: string) => inputs.has(id), inputIdAt: (seq: number) => refs.get(seq)?.inputId,
       ownHumanAdmissionSeq(recipientSessionId:string,fromSeq:number,afterSeq:number){for(let i=humanAdmissions.length-1;i>=0;i--){const seq=humanAdmissions[i]!;if(seq<fromSeq||seq<=afterSeq)break;const ref=refs.get(seq)!;if(ref.originSessionId===undefined||ref.originSessionId===recipientSessionId)return seq}return undefined},
       dispatchForCall(callSeq:number){const found=dispatches.get(callSeq);return found&&Object.freeze({...found})},
+      codeEvidence(sourceSeq:number,terminalSeq:number){
+        const r=refs.get(sourceSeq);if(r?.type!=='agent/delivery-source'||r.sourceNamespace!=='code'||!r.sourceId)return undefined
+        const binding=sources.get(sourceKey('code',r.sourceId)),terminal=codes.terminal(sourceSeq)
+        if(!binding||binding.kind!=='code'||binding.seq!==sourceSeq||!terminal||terminal.seq!==terminalSeq||terminal.sourceSeq!==sourceSeq||terminal.cellId!==binding.cellId||owner!==undefined&&binding.recipientSessionId!==owner)return undefined
+        const ref=codeTerminalRef(terminal);if(!ref)return undefined
+        const key={kind:'code' as const,sourceNamespace:'code' as const,recipientSessionId:binding.recipientSessionId,sourceId:binding.sourceId,resultRevision:ref.revision},receipt=state().receipt(key)
+        if(receipt&&(receipt.event.sourceSeq!==sourceSeq||receipt.event.terminalSeq!==terminalSeq))return undefined
+        return {source:structuredClone(binding),terminal,key,...receipt?{receipt}:{}}
+      },
     }),
     stage() {
       const stagedRefs = new Map<number, Ref>(), stagedSources = new Map<string, DeliverySourceEvent>(), stagedInputs = new Map<string, string>(), stagedReceipts = new Map<string, Receipt>();
