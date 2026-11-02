@@ -102,6 +102,25 @@ function readStateFacts(facts: readonly StateFact[], projection: ConversationPro
     const delegationUnits = new Map<string, string>();
     const branch: ConversationState["branch"] = [], rewrites: ConversationState["rewrites"] = [];
     for (const [index, event] of facts.entries()) {
+        // A rewind hides message content beginning at its user-message anchor;
+        // its physical turn/start can precede that anchor. Pair actual turn
+        // boundaries before applying content visibility, and count an exact
+        // consumed input even when that message is subsequently rewound.
+        if (index >= seedEnd) {
+            const physicalSourceId = sources.ref(index, "event").id;
+            if (event.type === "turn/start") {
+                if (turn !== undefined)
+                    return { kind: "ambiguous", sourceIds: [sources.ref(turn, "event").id, physicalSourceId] };
+                turn = index;
+            } else if (event.type === "turn/end") {
+                if (turn === undefined)
+                    return { kind: "ambiguous", sourceIds: [physicalSourceId] };
+                turn = undefined;
+            } else if (event.type === "user/message") {
+                const id = event.input?.inputId ?? event.imageInputId;
+                if (id) consumed.add(id);
+            }
+        }
         if (!visibility.branch(event))
             continue;
         const sourceId = sources.ref(index, "event").id;
@@ -115,18 +134,7 @@ function readStateFacts(facts: readonly StateFact[], projection: ConversationPro
             physicalUnit = sources.ref(index, 'step').id;
         if (event.type === 'step/end' || event.type === 'step/failed' || event.type === 'turn/end')
             physicalUnit = undefined;
-        // Both lifecycle boundaries survive compaction content hiding.
-        if (event.type === "turn/start") {
-            if (turn !== undefined)
-                return { kind: "ambiguous", sourceIds: [sources.ref(turn, "event").id, sourceId] };
-            turn = index;
-        }
-        else if (event.type === "turn/end") {
-            if (turn === undefined)
-                return { kind: "ambiguous", sourceIds: [sourceId] };
-            turn = undefined;
-        }
-        else if (event.type === "agent/input/admitted")
+        if (event.type === "agent/input/admitted")
             pending.set(event.inputId!, { inputId: event.inputId!, state: "admitted", sourceIds: [sources.ref(index, "admission").id] });
         else if (event.type === "agent/input/promoted") {
             const previous = pending.get(event.inputId!);
@@ -134,11 +142,6 @@ function readStateFacts(facts: readonly StateFact[], projection: ConversationPro
         }
         else if (event.type === "agent/input/cancelled")
             pending.delete(event.inputId!);
-        else if (event.type === "user/message") {
-            const id = event.input?.inputId ?? event.imageInputId;
-            if (id)
-                consumed.add(id);
-        }
         else if (event.type === "subagent/start") {
             delegations.set(event.taskId!, sourceId);
             if (physicalUnit)

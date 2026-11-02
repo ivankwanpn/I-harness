@@ -75,6 +75,28 @@ it("reports ambiguous lifecycle and tracks rewind/prune lineage", () => {
   expect(before.kind === "available" && after.kind === "available" && after.coordinates.contextEpoch).not.toBe(before.kind === "available" && before.coordinates.contextEpoch)
 })
 
+it('pairs the physical turn around a rewound message before protecting the next turn',()=>{
+  const session=createSession()
+  append(session,{type:'turn/start'});append(session,{type:'user/message',text:'old'})
+  append(session,{type:'turn/end'})
+  append(session,{type:'rewind/point',version:1,targetTurn:0,anchorSeq:1,mode:'all',fileOps:[]})
+  append(session,{type:'turn/start'});append(session,{type:'user/message',text:'new'})
+  const result=captureContextSnapshot(session,{ownerSessionId:'owner',surface:{systemPrompt:'s',tools:[]}})
+  expect(result.kind).toBe('captured')
+  if(result.kind!=='captured')throw Error('capture required')
+  expect(result.snapshot.protection.itemIds).toContain('["owner",5,"message"]:input')
+  expect(JSON.stringify(result.snapshot.conversation)).not.toContain('old')
+  expect(JSON.stringify(result.snapshot.conversation)).toContain('new')
+  const inputs=createSession()
+  append(inputs,{type:'agent/input/admitted',version:1,inputId:'old',text:'old',delivery:'queue',intent:'user'})
+  append(inputs,{type:'agent/input/promoted',version:1,inputId:'old'})
+  append(inputs,{type:'agent/input/admitted',version:1,inputId:'waiting',text:'waiting',delivery:'queue',intent:'user'})
+  append(inputs,{type:'turn/start'});append(inputs,{type:'user/message',text:'old',input:{inputId:'old',intent:'user'}});append(inputs,{type:'turn/end'})
+  append(inputs,{type:'rewind/point',version:1,targetTurn:0,anchorSeq:4,mode:'all',fileOps:[]})
+  const pending=captureContextSnapshot(inputs,{ownerSessionId:'owner',surface:{systemPrompt:'s',tools:[]}})
+  expect(pending.kind==='captured'&&pending.snapshot.protection.pendingInputIds).toEqual(['waiting'])
+})
+
 it("keeps unaccepted dispatch evidence in protection without promoting its audit payload", () => {
   const session = createSession()
   append(session, { type: "step/start" }); append(session, { type: "tool/call", callId: "uncertain", name: "probe", args: {} })
