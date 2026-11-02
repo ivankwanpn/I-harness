@@ -23,7 +23,7 @@ function record(audit:OriginalManagedApprovalAudit,capture:object,outcome:FactOu
  const original=get(audit);assertOriginalManagedActionSource(original.domain,original.action,original.source)
  if(source!==undefined&&source!==original.source)throw TypeError('Original approval source required')
  const members=source===undefined?readManagedActionMembers(original.domain,original.action,capture,outcome):readManagedSourceAcknowledgedMembers(original.domain,source,capture,outcome)
- if(!members.length||members.some(event=>!((event.type==='context/action'&&(event.op==='bind'||event.op==='constrain'))||(event.type==='context/attempt'&&['reserve','rebind','settle'].includes(event.op)))||event.actionId!==original.actionId||event.ownerSessionId!==original.domain.sessionId))throw TypeError('Original approval audit member required')
+ if(!members.length||members.some(event=>!((event.type==='context/action'&&(event.op==='bind'||event.op==='constrain'||event.op==='close'&&source!==undefined&&event.disposition==='completed'))||(event.type==='context/attempt'&&['reserve','rebind','settle'].includes(event.op)))||event.actionId!==original.actionId||event.ownerSessionId!==original.domain.sessionId))throw TypeError('Original approval audit member required')
  if(original.members.some(row=>row.capture===capture))throw TypeError('Original approval audit already recorded')
  const pin=retainAcknowledgedExecutionMembers(capture,outcome);original.members.push({capture,outcome,...source?{source}:{},pin,members})
 }

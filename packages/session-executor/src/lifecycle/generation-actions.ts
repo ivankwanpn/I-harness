@@ -147,7 +147,7 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
       captureClose: event => {
         const capture = remember(source.generation.capture(event),[event])
         retained.add(capture)
-        const original = retainGenerationClose(capture, outcome => {acknowledge(capture,outcome);retained.delete(capture)})
+        const original = retainGenerationClose(capture, outcome => {acknowledge(capture,outcome);if(execution&&outcome.kind==='committed'&&event.disposition==='completed'){const audit=audits.get(event.actionId);if(audit)recordOriginalManagedApprovalSource(audit,source,capture,outcome)}retained.delete(capture)})
         return { settle: () => own(original.settle()) }
       },
       phase: async (recovery, phase, current) => { await receipt(remember(action.captureGenerationRecovery(recovery, phase, current),[])) },
