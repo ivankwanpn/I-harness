@@ -379,7 +379,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       // barriers succeed. The notifier cannot retry a failed task save or
       // treat committed terminal bytes alone as completed handoff ownership.
       if (deliverySources.has(taskId)) return
-      if(!opts.parentSession)return
+      if(!opts.parentSession)return opts.parentNotify?.taskEvidence?.(subagentDeps.notificationNamespace!,taskId)
       const source = (readOwnedDeliveryState(opts.parentSession) ?? readDeliveries(opts.parentSession)).source(subagentDeps.notificationNamespace!, taskId)
       if (source?.type !== 'agent/delivery-source') return
       const terminal = opts.parentSession.events.findLast(e => e.type === 'subagent/end' && e.taskId === taskId && !!e.resultRevision && !!e.envelope && e.envelope.retention.kind !== 'unavailable' && (e.outcome === 'completed' || e.outcome === 'error'))

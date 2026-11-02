@@ -91,6 +91,8 @@ export interface DeliveryReadIndex extends DeliveryState {
   ownHumanAdmissionSeq(recipientSessionId:string,fromSeq:number,afterSeq:number): number | undefined;
   dispatchForCall(callSeq:number): Readonly<Dispatch> | undefined;
   codeEvidence(sourceSeq:number,terminalSeq:number):Readonly<{source:Readonly<import('../events/code-delivery.ts').CodeDeliverySourceEvent>;terminal:Readonly<import('../events/code-delivery.ts').CodeTerminalEvent>;key:import('../events/code-delivery.ts').CodeDeliveryKey;receipt?:ReturnType<DeliveryState['receipt']>}>|undefined;
+  taskEvidence(sourceSeq:number,terminalSeq:number):Readonly<{source:Extract<DeliverySourceEvent,{kind:'subagent'}>;key:import('../events/delivery.ts').SubagentDeliveryKey;receipt?:ReturnType<DeliveryState['receipt']>}>|undefined;
+  taskCandidate(namespace:string,id:string):Readonly<{sourceSeq:number;terminalSeq:number}>|undefined;
 }
 function disposition(receipt: Receipt, active: ReturnType<DeliveryState['activeGeneration']>): DeliveryAdmissionReceipt['disposition'] {
   return receipt.disposition === 'pending' && receipt.generationId !== active?.generationId ? 'suppressed' : receipt.disposition;
@@ -151,6 +153,15 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
     readIndex: (): DeliveryReadIndex => Object.freeze({ ...state(), input: (id: string) => admissions.get(id), isBound: (id: string) => inputs.has(id), inputIdAt: (seq: number) => refs.get(seq)?.inputId,
       ownHumanAdmissionSeq(recipientSessionId:string,fromSeq:number,afterSeq:number){for(let i=humanAdmissions.length-1;i>=0;i--){const seq=humanAdmissions[i]!;if(seq<fromSeq||seq<=afterSeq)break;const ref=refs.get(seq)!;if(ref.originSessionId===undefined||ref.originSessionId===recipientSessionId)return seq}return undefined},
       dispatchForCall(callSeq:number){const found=dispatches.get(callSeq);return found&&Object.freeze({...found})},
+      taskCandidate(namespace:string,id:string){const binding=sources.get(sourceKey(namespace,id));if(!binding||binding.kind!=='subagent'||binding.seq===undefined)return undefined;let seq:number|undefined;for(const [ordinal,ref] of refs)if(ref.type==='subagent/end'&&ref.taskId===id&&ref.qualified&&ordinal>binding.seq&&(seq===undefined||ordinal>seq))seq=ordinal;return seq===undefined?undefined:{sourceSeq:binding.seq,terminalSeq:seq}},
+      taskEvidence(sourceSeq:number,terminalSeq:number){
+        const terminal=refs.get(terminalSeq),binding=[...sources.values()].find(value=>value.seq===sourceSeq)
+        if(!binding||terminal?.type!=='subagent/end'||terminal.taskId!==binding.sourceId||!terminal.qualified||!terminal.resultRevision||terminalSeq<=sourceSeq)return undefined
+        if(!binding||binding.kind!=='subagent'||binding.seq!==sourceSeq||owner!==undefined&&binding.recipientSessionId!==owner)return undefined
+        const key={kind:'subagent' as const,recipientSessionId:binding.recipientSessionId,sourceNamespace:binding.sourceNamespace,sourceId:binding.sourceId,resultRevision:terminal.resultRevision},receipt=state().receipt(key)
+        if(receipt&&(receipt.event.sourceSeq!==sourceSeq||receipt.event.terminalSeq!==terminalSeq))return undefined
+        return {source:structuredClone(binding),key,...receipt?{receipt}:{}}
+      },
       codeEvidence(sourceSeq:number,terminalSeq:number){
         const r=refs.get(sourceSeq);if(r?.type!=='agent/delivery-source'||r.sourceNamespace!=='code'||!r.sourceId)return undefined
         const binding=sources.get(sourceKey('code',r.sourceId)),terminal=codes.terminal(sourceSeq)
