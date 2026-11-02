@@ -4,6 +4,7 @@ import type { AgentGenerationAction } from '@i-harness/core-agent'
 import type { ModelClient } from '@i-harness/llm-seam'
 import type { SpawnOptions } from './types.ts'
 import {committedTaskInitial} from './task-birth.ts'
+import {committedTeamInitial} from './team-birth.ts'
 
 export interface InitialChildInput {
   inputId: string; outcome: ProducerFactOutcome
@@ -15,7 +16,7 @@ export interface InitialChildInput {
 /** A newly committed child-local delegation owns its clock before resolution;
  * parent seed/provenance remains observation and grants no operational spend. */
 export async function openInitialChildGeneration(opts: SpawnOptions, owner: FactOwner, sessionId: string | undefined, controller: AbortController, start: { wall: number; monotonic: number }, selected: () => ModelClient): Promise<InitialChildInput> {
-  const committed=opts.childStart?.kind==='committed-child-birth'?committedTaskInitial(opts.childStart.birth):undefined
+  const committed=opts.childStart?.kind==='committed-child-birth'?committedTaskInitial(opts.childStart.birth):opts.childStart?.kind==='committed-team-child-birth'?committedTeamInitial(opts.childStart.birth):undefined
   const inputId = committed?.inputId??randomUUID(), action = owner.beginAction(controller.signal)
   let lifecycle: import('@i-harness/core-agent').AgentGenerationLifecycle | undefined, generation: AgentGenerationAction | undefined
   try {

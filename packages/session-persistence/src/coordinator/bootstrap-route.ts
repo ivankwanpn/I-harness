@@ -13,6 +13,8 @@ export interface BootstrapRouteBackend {
  readCapture(id:string,owner:HeldFactOwner,route:BootstrapCaptureRoute):Promise<OwnedCaptureInspection>;
  reserveCapture(id:string,owner:IssuingFactOwner,route:BootstrapCaptureRoute,bytes:Uint8Array):Promise<BootstrapCaptureReserveOutcome>;
  resolveBirth(id:string):Promise<ResolvedBootstrapBirth|undefined>;
+ discoverTeamChild?(id:string,owner:HeldFactOwner):Promise<Readonly<{kind:'absent'|'unavailable'|'conflict'}>|Readonly<{kind:'reserved'|'materialized';request:ChildBootstrapCaptureRequest}>>;
+ settleTeamDiscovery?(id:string,owner:HeldFactOwner):Promise<void>;
 }
 export function captureBootstrapRoute(input:unknown):BootstrapRoute {
  bootstrapFields(input,['protocol'],['invocation','request'])

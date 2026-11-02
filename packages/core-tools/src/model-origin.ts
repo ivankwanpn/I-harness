@@ -21,7 +21,8 @@ export interface OriginalWorkflowSourceIssuer {
  captureSource(binding:Readonly<WorkflowSourceBinding>,recipientCurrent:()=>boolean):import('@i-harness/core-session').CapturedActionFact<ProducerFactOutcome>
  registerCompletion(drain:()=>Promise<void>):SettlementFacts<ProducerFactOutcome>
 }
-export interface OriginalModelMemberPermit { assertCurrent(): void; takeExecSourceIssuer?(): OriginalExecSourceIssuer; takeCodeSourceIssuer?(): OriginalCodeSourceIssuer | undefined; takeWorkflowSourceIssuer?(): OriginalWorkflowSourceIssuer | undefined }
+export interface OriginalTeamBirthPermit {readonly source:SettlementFacts<import('@i-harness/core-session').FactOutcome>;assertCurrent():void;assertHeld():void;waitResult():Promise<void>;waitCurrent():Promise<void>;close():Promise<void>}
+export interface OriginalModelMemberPermit { assertCurrent(): void; takeExecSourceIssuer?(): OriginalExecSourceIssuer; takeCodeSourceIssuer?(): OriginalCodeSourceIssuer | undefined; takeWorkflowSourceIssuer?(): OriginalWorkflowSourceIssuer | undefined;retainTeamBirth?():OriginalTeamBirthPermit }
 export interface OriginalManagedModelMemberPermit extends OriginalModelMemberPermit {getAdmissionWait(signal:AbortSignal):Promise<void>|undefined}
 export interface ConstructorModelOriginVerifier { take(proof: object, expected: ModelOriginExpectation): OriginalModelMemberPermit }
 export interface ManagedModelOriginExpectation extends Omit<ModelOriginExpectation,'view'> {readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain}

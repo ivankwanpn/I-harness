@@ -47,7 +47,7 @@ export function createBindingObservations(
   const bootstrapContext = new AsyncLocalStorage<{ id: string; invocation: BootstrapInvocation; allowed: Scope[]; active: boolean }>()
   const bootstrapTickets = new WeakMap<object, ReturnType<typeof makeBootstrapTicket>>()
   const taskContextIdentity = Object.freeze({})
-  type OwnedDocument = { required?:boolean; id: string; key: string; revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside(): void; closing: boolean; writing: boolean; bootstrapEntry?: object; observationIdle?: boolean }
+  type OwnedDocument = { required?:boolean; teamCold?:boolean; id: string; key: string; revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside(): void; closing: boolean; writing: boolean; bootstrapEntry?: object; observationIdle?: boolean }
   const ownedDocuments = new Set<OwnedDocument>()
   const cleanupErrors = new WeakMap<object, ObservationCleanupHandle>()
   const physical = (ids: readonly string[], keys: readonly string[]) => ownership.exclusionScope?.(ids, keys) ?? { keys: [...ids.map(id => 'session:' + id), ...keys.map(key => 'document:' + key)], assertCurrent() {} }
@@ -110,16 +110,18 @@ export function createBindingObservations(
     },
   })
   const requiredGrants=new WeakSet<object>(), requiredDrains=new Set<{id:string;drive():Promise<void>}>()
+  const teamColdGrants=new WeakSet<object>()
+  function registerTeamColdObservation(id:string,key:string,operations:Parameters<typeof registerOwnedDocumentOperation>[2]){const grant=Object.freeze({});teamColdGrants.add(grant);return registerOwnedDocumentOperation(id,key,operations,undefined,grant)}
   function registerRequiredTaskObligation(id:string,assertCurrent:()=>void,drive:()=>Promise<void>) {
     assertSessionAdmission(id);assertCurrent();const grant=Object.freeze({}),record={id,drive};requiredGrants.add(grant);requiredDrains.add(record);
     const ticket=Object.freeze({activate(key:string,hooks:Parameters<typeof registerOwnedDocumentOperation>[2]) {if(this!==ticket||!requiredDrains.has(record))throw new Failure('invalid');assertCurrent();return registerOwnedDocumentOperation(id,key,hooks,grant)},finish(){if(this!==ticket)throw new Failure('invalid');requiredDrains.delete(record)}});return ticket
   }
-  function registerOwnedDocumentOperation(id: string, key: string, operations: { revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside?(): void }, requiredGrant?:object) {
+  function registerOwnedDocumentOperation(id: string, key: string, operations: { revoke(): void; close(): Promise<void>; retryClose(): Promise<void>; assertOutside?(): void }, requiredGrant?:object,teamColdGrant?:object) {
     assertOutsideTaskDocumentOperation(taskContextIdentity, [id], [key]); assertOutsideTaskTransition(taskContextIdentity, [id], [key])
     retained.preflight([id], [key])
     if (closed && !requiredGrants.has(requiredGrant!) || deletedIds.has(id) || deletedKeys.has(key) || pendingIds.has(id) || pendingKeys.has(key) || retiringIds.has(id)
       || [...scopes].some(scope => intersects(scope, [id], [key])) || [...ownedDocuments].some(scope => ownedIntersects(scope, [id], [key]))) throw new Failure('conflict')
-    const entry: OwnedDocument = { required:requiredGrants.has(requiredGrant!), id, key, revoke: operations.revoke, close: operations.close, retryClose: operations.retryClose, assertOutside: operations.assertOutside ?? (() => {}), closing: false, writing: false }
+    const entry: OwnedDocument = { required:requiredGrants.has(requiredGrant!),teamCold:teamColdGrants.has(teamColdGrant!), id, key, revoke: operations.revoke, close: operations.close, retryClose: operations.retryClose, assertOutside: operations.assertOutside ?? (() => {}), closing: false, writing: false }
     snapshot(entry, [entry.id], [entry.key]); ownedDocuments.add(entry)
     const cleanupOperation = createRetainedCleanupOperation()
     const retired = retained.retire([id], [key], cleanupOperation)
@@ -127,6 +129,7 @@ export function createBindingObservations(
     void joined.catch(() => {})
     const registration = Object.freeze({
       join() { if (this !== registration) throw new TypeError('Invalid task registration receiver'); return joined },
+      allowTeamObservation(){if(this!==registration||!entry.teamCold||entry.closing||entry.writing||!ownedDocuments.has(entry))throw new Failure('revoked');entry.observationIdle=true},
       unregister() { if (this !== registration || entry.writing) throw new TypeError('Invalid task registration receiver'); ownedDocuments.delete(entry); finishRetainedCleanupOperation(cleanupOperation) },
       beginOwnedWrite() {
         if (this !== registration || !ownedDocuments.has(entry) || entry.closing || entry.writing || closed && !requiredGrants.has(requiredGrant!) || deletedIds.has(id) || deletedKeys.has(key) || retiringIds.has(id) || pendingIds.has(id) || pendingKeys.has(key)
@@ -464,7 +467,7 @@ export function createBindingObservations(
     refuseSelf(ids, keys)
     if (closed || isAborted(signal)) throw new Failure('revoked')
     if (ids.some(id => deletedIds.has(id)) || keys.some(key => deletedKeys.has(key))) throw new Failure('deleted')
-    const idle = [...ownedDocuments].filter(record => record.observationIdle && !record.closing && !record.writing && !!record.bootstrapEntry)
+    const idle = [...ownedDocuments].filter(record => record.observationIdle && !record.closing && !record.writing && (!!record.bootstrapEntry||record.teamCold))
     if (pendingExcept(ids,keys,cold?.owned,idle) || [...ownedDocuments].some(scope => scope!==cold?.owned&&!idle.includes(scope)&&ownedIntersects(scope, ids, keys))) throw new Failure('conflict')
     if(cold&&(ids.length!==1||ids[0]!==cold.access.route.request.invocation.targetSessionId||existing.length!==1||existing[0]!==ids[0]))throw new Failure('invalid')
     if (cold && (!ownership.pinOwnershipRetained || !ownership.acquireDocumentLease)) throw new Failure('unsupported')
@@ -803,7 +806,7 @@ export function createBindingObservations(
       },
     })
   }
-  return { createResultRevocationAdmission, beginProjectBindingMutation, captureColdBindingObservation(metadata: Readonly<SessionMeta>, observation: SessionBindingObservation) { const original = coldBindings.get(observation); if (!original || original.metadata !== metadata) throw new Failure('invalid'); original.assertCurrent(); return observation }, createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerRequiredTaskObligation, registerOwnedDocumentOperation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertManagedSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
+  return { createResultRevocationAdmission, beginProjectBindingMutation, captureColdBindingObservation(metadata: Readonly<SessionMeta>, observation: SessionBindingObservation) { const original = coldBindings.get(observation); if (!original || original.metadata !== metadata) throw new Failure('invalid'); original.assertCurrent(); return observation }, createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerRequiredTaskObligation, registerOwnedDocumentOperation, registerTeamColdObservation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertManagedSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return retained.cleanupForError(error) ?? (error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined) } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { generationClock } from '../src/lifecycle/generation-clock.ts'
 
 afterEach(() => vi.restoreAllMocks())
+it('still refuses an unbranded negative live start',()=>{const wall=Date.now();expect(()=>generationClock(wall,wall+1000,wall,new AbortController().signal,{wall,monotonic:-1})).toThrow(expect.objectContaining({code:'GENERATION_CLOCK_INVALID'}))})
 it.each([Number.NaN, Infinity, -1])('refuses an unavailable initial monotonic clock (%s)', monotonic => {
   const wall = Date.now()
   vi.spyOn(performance, 'now').mockReturnValue(monotonic)

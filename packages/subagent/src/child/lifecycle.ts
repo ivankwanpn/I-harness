@@ -50,7 +50,7 @@ export async function publishChild(
   opts.validateBeforeLaunch?.()
   opts.retainPublication?.({kind:'agent',value:agent})
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
-  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, opts.childStart?.kind==='committed-child-birth'?()=>controller.abort():undefined,
+  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, opts.childStart?.kind==='committed-child-birth'||opts.childStart?.kind==='committed-team-child-birth'?()=>controller.abort():undefined,
     { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) },registration=>{bindOriginalSpawnJob(opts.onPublished,registration);opts.retainPublication?.({kind:'job',value:registration})})
   let resultLifetime = true
   let initialClosed = false, initialFlight: Promise<void> | undefined
@@ -141,7 +141,7 @@ export async function publishChild(
     opts.retainPublication?.({kind:'entry',value:entry})
     bindOriginalSpawnRun(opts.onPublished,entry,initialRun,opts.table)
     opts.validateBeforeLaunch?.()
-    if(opts.childStart?.kind==='committed-child-birth'&&opts.table.get(childPath))throw Error('Original child publication path occupied')
+    if((opts.childStart?.kind==='committed-child-birth'||opts.childStart?.kind==='committed-team-child-birth')&&opts.table.get(childPath))throw Error('Original child publication path occupied')
     opts.table.add(childPath, entry)
     onEntryPublished?.(entry)
     opts.onEntryPublished?.(entry,publication)

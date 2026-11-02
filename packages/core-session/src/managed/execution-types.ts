@@ -102,6 +102,7 @@ export interface OriginalManagedTeamParent {
  readonly domain:ManagedExecutionDomain
  readonly ready:Promise<void>
  readonly ledger:readonly ManagedTeamLedgerEvent[]
+ assertInitialPrefix():void
  hasInbox(messageId:string):boolean
  assertCurrent():void
  close():Promise<void>

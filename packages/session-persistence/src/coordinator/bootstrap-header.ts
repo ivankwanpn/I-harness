@@ -73,7 +73,7 @@ export function captureBootstrapRequest(value: BootstrapRequest): BootstrapReque
   }
   return freezeJsonData(JSON.parse(canonicalJsonData(value))) as BootstrapRequest
 }
-export function initialAdmission(request: BootstrapRequest): SessionEvent | undefined {
+export function initialAdmission(request: Pick<BootstrapRequest,'initial'>): SessionEvent | undefined {
   const initial=request.initial
   if (!initial) return
   const event: SessionEvent={type:'agent/input/admitted',version:1,inputId:initial.inputId,text:initial.text,delivery:'queue',intent:'user',provenance:{kind:'inherited',authority:'observation',scope:'turn',producer:'subagent.initial',...(initial.parentSessionId ? {originSessionId:initial.parentSessionId}: {})}}

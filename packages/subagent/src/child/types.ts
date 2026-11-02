@@ -10,7 +10,7 @@ import type { SubagentRole } from "../roles.ts"
 import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./model-binding.ts"
 
 export interface SpawnOptions extends RoleModelHost {
-  childStart?: {kind:'legacy-admit'} | {kind:'committed-child-birth';birth:import('./task-birth.ts').CommittedTaskChildBirth}
+  childStart?: {kind:'legacy-admit'} | {kind:'committed-child-birth';birth:import('./task-birth.ts').CommittedTaskChildBirth} | {kind:'committed-team-child-birth';birth:import('./team-birth.ts').CommittedTeamChildBirth}
   retainPublication?: (phase: {kind:'agent'|'job'|'entry'|'run';value:object}) => void
   onEntryPublished?: (entry:import('../agent-table.ts').ChildAgentEntry,info:Readonly<{path:string;jobId:string;sessionId?:string;modelLabel?:string}>) => void
   /** Parent-owned approval exception, never normal child allowance. */
@@ -40,7 +40,7 @@ export interface SpawnOptions extends RoleModelHost {
   // M8: when present, the child session is durable — minted as child-<uuid>,
   // created through the coordinator with the lineage header, and mirrored to
   // the parent's write-behind coordinator.
-  childSessions?: { coordinator: SessionCoordinator; parentSessionId: string; origin?: "approval-review" }
+  childSessions?: { coordinator: SessionCoordinator; parentSessionId: string; origin?: "team" | "approval-review" }
   // M26-D1: settle callback — fires once when the initial run settles (the
   // task protocol's spawn record transitions on it). Additive: absent = today.
   validateBeforeLaunch?: () => void

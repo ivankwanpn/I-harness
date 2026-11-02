@@ -4,4 +4,6 @@ export { isOriginalExecutionObservation,restoreManagedExecutionState,isManagedEx
 export { readAcknowledgedExecutionMembers,retainAcknowledgedExecutionMembers } from './managed/execution-members.ts'
 export {createOriginalManagedApprovalAudit,recordOriginalManagedApprovalAction,recordOriginalManagedApprovalSource,assertOriginalManagedApprovalAudit,closeOriginalManagedApprovalAudit} from './managed/approval-audit.ts'
 export type {OriginalManagedApprovalAudit} from './managed/approval-audit.ts'
+export {createOriginalTeamProvisioningOwner,assertOriginalTeamProvisioningOwner,reserveOriginalTeamProvisioning,assertOriginalTeamProvisioningCandidateOwner,createOriginalTeamProvisioning,inspectOriginalTeamProvisioning,assertOriginalTeamProvisioningOwnerWitness,assertOriginalTeamProvisioningHeld,reserveOriginalTeamRecoveryParent,assertOriginalTeamRecoveryParent} from './managed/team-provisioning.ts'
+export type {OriginalTeamProvisioning,OriginalTeamProvisioningOwner,OriginalTeamProvisioningCandidate} from './managed/team-provisioning.ts'
 

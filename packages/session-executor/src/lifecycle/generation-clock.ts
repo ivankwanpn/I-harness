@@ -1,11 +1,13 @@
 import { generationError } from '@i-harness/llm-seam'
+import {consumeOriginalColdTeamGenerationStart} from '../../../subagent/src/child/team-birth.ts'
 
 /** Monotonic live expiry; wall facts permit conservative detectable cold checks. */
 export function generationClock(startedAt: number, expiresAt: number, trustedAt: number, signal: AbortSignal, start?: { wall: number; monotonic: number }) {
   const wall = Date.now(), anchor = performance.now()
   if (![wall, startedAt, expiresAt, trustedAt].every(Number.isSafeInteger) || wall < trustedAt || !Number.isFinite(anchor) || anchor < 0) throw generationError('GENERATION_CLOCK_INVALID')
   if (start?.wall === startedAt && (!Number.isFinite(start.monotonic) || start.monotonic < 0 || start.monotonic > anchor)) throw generationError('GENERATION_CLOCK_INVALID')
-  const liveStart = start?.wall === startedAt ? start : undefined
+  const coldStart=start!==undefined&&consumeOriginalColdTeamGenerationStart(start,startedAt,expiresAt)
+  const liveStart = !coldStart&&start?.wall === startedAt ? start : undefined
   const restoredAt = liveStart?.wall ?? Math.max(startedAt, wall, trustedAt), elapsedFrom = liveStart?.monotonic ?? anchor, cancel = new AbortController()
   let deadline = expiresAt, latest = restoredAt, invalid: Error | undefined
   let timer: ReturnType<typeof setTimeout> | undefined, stopped = false

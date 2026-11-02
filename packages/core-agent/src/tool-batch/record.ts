@@ -1,3 +1,4 @@
+import {acknowledgeTeamResult} from './team-result-barrier.ts'
 import type { PluginContext } from "@i-harness/core-plugin"
 import { committedFactSeqs, FactRecoveryRequiredError } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
@@ -64,7 +65,7 @@ export function createBatchRecords(ctx: PluginContext, session: BatchSource, too
     try { committedFactSeqs(await (reconcile?slot.fact.reconcile():slot.fact.admit())) }
     catch (error) { holdOriginal(slot,index); throw error }
     slot.recorded = true
-    if(!('synthetic'in slot))releaseFinalizedToolResult(slot.prepared)
+    if(!('synthetic'in slot)){acknowledgeTeamResult(slot.prepared);releaseFinalizedToolResult(slot.prepared)}
     while (slots[committed]?.recorded) committed++
     if ('synthetic' in slot) return
     control.observeAbort()

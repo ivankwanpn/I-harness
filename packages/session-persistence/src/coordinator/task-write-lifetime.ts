@@ -1,13 +1,15 @@
 import { open } from 'node:fs/promises'
 import type { HeldTaskDocumentScope, TaskDocumentWrite, TaskWriteOutcome } from './task-document-types.ts'
+import type {HeldTeamBirthScope} from './team-birth-scope.ts'
+type OriginalAuxScope=HeldTaskDocumentScope|HeldTeamBirthScope
 
 type ScopeOwner = { captureIssued(): (() => void) | undefined; assertOriginal(): void }
 type Producer = { canReconcile():boolean;reconcile(): Promise<TaskWriteOutcome>; retireUnissued(): Promise<TaskWriteOutcome> }
 export type OriginalTaskWriteLifetime = Readonly<{ issued(): boolean;canReconcile():boolean; assertIssued(): void; reconcile(): Promise<TaskWriteOutcome>; retireUnissued(): Promise<TaskWriteOutcome> }>
 const scopes = new WeakMap<object, ScopeOwner>()
-const stages = new WeakMap<object, { scope: HeldTaskDocumentScope; available: () => Promise<void>; check(): void }>()
+const stages = new WeakMap<object, { scope: OriginalAuxScope; available: () => Promise<void>; check(): void }>()
 const writes = new WeakMap<object, OriginalTaskWriteLifetime>()
-type Capture = { scope: HeldTaskDocumentScope; path: string; bytes: Buffer; lifetime?: OriginalTaskWriteLifetime }
+type Capture = { scope: OriginalAuxScope; path: string; bytes: Buffer; lifetime?: OriginalTaskWriteLifetime }
 let capture: Capture | undefined
 
 /** Called synchronously by the original held-scope factory before exposing it. */
@@ -15,9 +17,10 @@ export function associateTaskWriteScope(scope: HeldTaskDocumentScope, owner: Sco
   if (scopes.has(scope)) throw new TypeError('Task scope already associated')
   scopes.set(scope, owner)
 }
+export function associateTeamBirthWriteScope(scope:HeldTeamBirthScope,owner:ScopeOwner):void{if(scopes.has(scope))throw TypeError('Team binding scope already associated');scopes.set(scope,owner)}
 
 /** Only the original JSONL constructor retains this stage token. */
-export function createOriginalTaskNativeStage(scope: HeldTaskDocumentScope, available: () => Promise<void>, check: () => void): object {
+export function createOriginalTaskNativeStage(scope: OriginalAuxScope, available: () => Promise<void>, check: () => void): object {
   if (!scopes.has(scope)) throw new TypeError('Original task scope unavailable')
   check()
   const token = Object.freeze({})
@@ -25,7 +28,7 @@ export function createOriginalTaskNativeStage(scope: HeldTaskDocumentScope, avai
   return token
 }
 
-export function constructOriginalTaskWrite<T extends { handle: TaskDocumentWrite }>(token: object, scope: HeldTaskDocumentScope, available: () => Promise<void>, opener: unknown, path: string, bytes: Uint8Array, construct: () => T): T {
+export function constructOriginalTaskWrite<T extends { handle: TaskDocumentWrite }>(token: object, scope: OriginalAuxScope, available: () => Promise<void>, opener: unknown, path: string, bytes: Uint8Array, construct: () => T): T {
   const original = stages.get(token)
   if (!original || original.scope !== scope || original.available !== available || opener !== open) throw new TypeError('Foreign native Task write stage')
   original.check()

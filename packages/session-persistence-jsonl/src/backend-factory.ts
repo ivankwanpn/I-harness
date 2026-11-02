@@ -1,4 +1,5 @@
 import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
+import {associateOriginalTeamTargetBackend,associateOriginalTeamBindingBackend} from '../../session-persistence/src/team-child-recovery-internal.ts'
 import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
 import { readSessionArchive } from './backend/archive-reader.ts'
 import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-harness/session-persistence/internal/artifact-path'
@@ -501,6 +502,13 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     },
   })
   const assertOriginal = artifactOwner.assertOriginal
+  const teamRoutes=bootstrapBackend.bootstrapRoutes!,teamDiscover=teamRoutes.discoverTeamChild!,teamSettle=teamRoutes.settleTeamDiscovery!,teamCurrent=()=>{assertOriginal();for(const [name,original] of [['discoverTeamChild',teamDiscover],['settleTeamDiscovery',teamSettle]] as const){const field=Object.getOwnPropertyDescriptor(teamRoutes,name);if(!field||!('value'in field)||field.value!==original)throw TypeError('Original Team target backend changed')}}
+  associateOriginalTeamTargetBackend(backend,Object.freeze({async discover(id,owner){teamCurrent();const result=await teamDiscover.call(teamRoutes,id,owner);teamCurrent();return result},async settle(id,owner){teamCurrent();await teamSettle.call(teamRoutes,id,owner);teamCurrent()}}))
+  associateOriginalTeamBindingBackend(backend,Object.freeze({open(scope){
+    assertOriginal();async function available(){for(const path of [tombPath('session',scope.parentSessionId),tombPath('document',scope.key)]){try{await lstat(path);throw Object.assign(Error('Team binding deleted'),{code:'SESSION_DELETED'})}catch(error){if((error as NodeJS.ErrnoException|null|undefined)?.code!=='ENOENT')throw error}}}
+    const original=createTaskDocumentObservation(rootPath,docPath(scope.key),scope,undefined,available,createOriginalTaskNativeStage(scope,available,assertOriginal))
+    const session=Object.freeze({async observe(){if(this!==session)throw TypeError('Original Team binding receiver required');assertOriginal();await available();const result=await original.observe();await available();assertOriginal();return result},async confirm(witness:Parameters<typeof original.confirm>[0]){if(this!==session)throw TypeError('Original Team binding receiver required');assertOriginal();await available();const result=await original.confirm(witness);await available();assertOriginal();return result},stageInitialize(bytes:Uint8Array){if(this!==session)throw TypeError('Original Team binding receiver required');assertOriginal();return original.stageInitialize(bytes)},settleResources(){if(this!==session)return Promise.reject(TypeError('Original Team binding receiver required'));return original.settleResources()}});return session
+  }}))
   associateArchiveReadResources(backend,archiveReads.association)
   nativePrewrite.associate(backend, assertOriginal)
   associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,

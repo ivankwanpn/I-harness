@@ -2,7 +2,13 @@ import { createArtifactCurrentGuard } from './artifact-path-association.ts'
 import { captureChildBootstrapCaptureRequest, type ChildBootstrapCaptureRequest, type ChildBootstrapCaptureInspection, type OwnedCaptureReservation, type OwnedCaptureInspection } from './child-bootstrap-intent.ts'
 import { captureBootstrapRoute, captureBootstrapCaptureRoute, encodeOwnedCaptureReservation, routeForReservation, routeInvocation, validateOwnedCaptureStage, type BootstrapRoute, type BootstrapCaptureRoute } from './bootstrap-route.ts'
 import { randomUUID } from 'node:crypto'
-import { semanticSeedFromRecords } from '@i-harness/core-session/internal/bootstrap'
+import { semanticSeedFromRecords,bootstrapInitialInputDigest } from '@i-harness/core-session/internal/bootstrap'
+import {inspectOriginalTeamProvisioning} from '@i-harness/core-session/internal/execution'
+import {assertOriginalManagedTeamBirth} from '../../../core-tools/src/team-caller.ts'
+import {captureBootstrapProjectIntent} from './bootstrap-intent.ts'
+import {originalTeamTargetBackend,inspectOriginalTeamColdTarget,type OriginalTeamTargetDiscovery,type OriginalTeamColdBinding,type TeamTargetExpectation} from '../team-child-recovery-internal.ts'
+import {inspectOriginalTeamColdBinding} from './team-cold-binding.ts'
+import {assertTeamBirthPayload} from './team-birth-binding.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types as utilTypes } from 'node:util'
 import { SessionLockConflictError } from '@i-harness/fs-lock'
@@ -113,6 +119,7 @@ export function assertOriginalBootstrapEntry(entry: object, id: string): void {
   if (!record || record.id !== id || record.documents.get(id) !== entry) throw new TypeError('Invalid original bootstrap entry')
 }
 export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>,transitions?:ReturnType<typeof createTaskDocumentTransitions>,activateSelected?:(id:string,entry:ManagedEntry)=>void,prepareActivateSelected?:(id:string,entry:ManagedEntry)=>()=>void) {
+  const coldTeamReservations=new WeakMap<ManagedEntry,{binding:OriginalTeamColdBinding;target:OriginalTeamTargetDiscovery;payload:BootstrapRequest}>()
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
   const captureSupported=()=>supported()&&(process.platform==='win32'||process.platform==='linux')&&!!backend.checkBootstrapCaptureRoot&&!!backend.readBootstrapCapture&&!!backend.prepareBootstrapCapture&&!!backend.settleBootstrapCaptureIO
   const childSupported=()=>captureSupported()&&!!backend.bootstrapRoutes&&['readState','readCapture','reserveCapture','resolveBirth'].every(key=>typeof (backend.bootstrapRoutes as any)[key]==='function')
@@ -193,12 +200,45 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     })
     return item.done
   }
+  const teamDiscoveries=new Set<OriginalTeamTargetDiscovery>()
+  function captureColdTeamTarget(binding:OriginalTeamColdBinding):OriginalTeamTargetDiscovery{
+    const expected=inspectOriginalTeamColdBinding(backend,binding),requestBytes=canonicalJsonData(expected.request),id=expected.request.invocation.targetSessionId,backendPort=originalTeamTargetBackend(backend)
+    if(!backendPort)throw TypeError('Original Team cold target unavailable')
+    let claim:Awaited<ReturnType<Ownership['pinOwnership']>>|undefined,held:HeldFactOwner|undefined,ioStarted=false,ioSettled=false,released=false,closed=false,closing:Promise<void>|undefined,result:OriginalTeamTargetDiscovery['result']|undefined
+    const current=()=>{if(captureClosed||closed)throw Error('Original Team cold target retired');claim?.assertHeld();if(canonicalJsonData(inspectOriginalTeamColdBinding(backend,binding).request)!==requestBytes)throw TypeError('Original Team cold request changed')}
+    const cleanup=()=>{if(closing)return closing;const pending=(async()=>{if(held&&ioStarted&&!ioSettled){await backendPort.settle(id,held);ioSettled=true}if(claim&&!released){await claim.release();released=true}closed=true;teamDiscoveries.delete(handle)})();closing=pending;void pending.finally(()=>{if(closing===pending)closing=undefined}).catch(()=>{});return pending}
+    const ready=(async()=>{current();claim=await ownership.pinOwnership(id);current();held=heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>claim!.assertHeld()));ioStarted=true;const found=await ownership.withSessionOperation(id,()=>backendPort.discover(id,held!));current();if((found.kind==='reserved'||found.kind==='materialized')&&canonicalJsonData(found.request)!==requestBytes)throw TypeError('Original Team cold target request mismatch');result=found})();void ready.catch(()=>{})
+    const handle:OriginalTeamTargetDiscovery=Object.freeze({ready,get result(){if(this!==handle||!result)throw TypeError('Original Team cold target result unavailable');current();return result},async close(){if(this!==handle)throw TypeError('Original Team cold target receiver required');if(closed)return;await ready.catch(()=>{});await cleanup()}});teamDiscoveries.add(handle);return handle
+  }
+  function captureTeamTarget(input:TeamTargetExpectation):OriginalTeamTargetDiscovery{
+    if(!input||typeof input!=='object'||utilTypes.isProxy(input))throw TypeError('Closed Team target request required')
+    const fields=Object.getOwnPropertyDescriptors(input),required=['caller','provisioning','project','metadata','roleName','roleDigest','toolNames','model','delegationDepth','timeoutMs'],keys=Reflect.ownKeys(fields);if(keys.some(key=>typeof key!=='string'||![...required,'maxAttempts'].includes(key))||required.some(key=>!fields[key]||!('value'in fields[key]!)||!fields[key]!.enumerable)||fields.maxAttempts&&(!('value'in fields.maxAttempts)||!fields.maxAttempts.enumerable))throw TypeError('Closed Team target request required')
+    const caller=fields.caller!.value as TeamTargetExpectation['caller'],provisioning=fields.provisioning!.value as TeamTargetExpectation['provisioning'];assertOriginalManagedTeamBirth(caller,provisioning);if(!isStrictFactData(caller.call))throw TypeError('Closed original Team call required');const domain=caller.context.domain,original=inspectOriginalTeamProvisioning(domain,provisioning),event=original.event,args=caller.call.args as {name?:unknown;description?:unknown;prompt?:unknown;context?:unknown;fork_turns?:unknown}
+    if(event.member.id!==event.member.sessionId||event.member.name!==args.name||event.member.description!==args.description||event.member.context!==(args.context??'fresh')||typeof args.prompt!=='string')throw TypeError('Original Team provisioning intent mismatch')
+    const project=captureBootstrapProjectIntent(fields.project!.value as TeamTargetExpectation['project']),expectedRole={metadata:fields.metadata!.value,name:fields.roleName!.value,digest:fields.roleDigest!.value,tools:fields.toolNames!.value,model:fields.model!.value,depth:fields.delegationDepth!.value,timeoutMs:fields.timeoutMs!.value,...fields.maxAttempts?{maxAttempts:fields.maxAttempts.value}:{}}
+    if(!isStrictFactData(expectedRole))throw TypeError('Closed Team role intent required')
+    const role=JSON.parse(canonicalJsonData(expectedRole)) as typeof expectedRole,callData=canonicalJsonData(caller.call),id=event.member.id
+    const current=()=>{if(captureClosed)throw Error('Original Team discovery closed');claim?.assertHeld();assertOriginalManagedTeamBirth(caller,provisioning);const now=inspectOriginalTeamProvisioning(domain,provisioning);if(now.event!==event||canonicalJsonData(caller.call)!==callData)throw TypeError('Original Team discovery changed')}
+    const backendPort=originalTeamTargetBackend(backend);if(!backendPort)throw TypeError('Original Team target discovery unavailable')
+    let claim:Awaited<ReturnType<Ownership['pinOwnership']>>|undefined,held:HeldFactOwner|undefined,ioStarted=false,ioSettled=false,released=false,closed=false,closing:Promise<void>|undefined,result:OriginalTeamTargetDiscovery['result']|undefined
+    const cleanup=()=>{if(closing)return closing;const pending=(async()=>{if(held&&ioStarted&&!ioSettled){await backendPort.settle(id,held);ioSettled=true}if(claim&&!released){await claim.release();released=true}closed=true;teamDiscoveries.delete(handle)})();closing=pending;void pending.finally(()=>{if(closing===pending)closing=undefined}).catch(()=>{});return pending}
+    const ready=(async()=>{current();claim=await ownership.pinOwnership(id);current();held=heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,createArtifactCurrentGuard(()=>claim!.assertHeld()));ioStarted=true
+      const found=await ownership.withSessionOperation(id,()=>backendPort.discover(id,held!));current()
+      if(found.kind==='reserved'||found.kind==='materialized'){
+        const request=found.request,core=request.core,initial=core.initial,eventInput={type:'agent/input/admitted' as const,version:1 as const,inputId:initial.inputId,text:args.prompt as string,delivery:'queue' as const,intent:'user' as const,provenance:{kind:'inherited' as const,authority:'observation' as const,scope:'turn' as const,producer:'subagent.initial',originSessionId:domain.sessionId}}
+        const expectedHistory=event.member.context==='fresh'?{kind:'none'}:args.fork_turns===undefined||args.fork_turns==='all'?{kind:'all'}:{kind:'last-turns',count:Number(args.fork_turns)}
+        if(core.caller.kind!=='team'||core.caller.teamId!==event.teamId||core.caller.memberId!==id||core.lineage.origin!=='team'||core.lineage.parentSession!==domain.sessionId||core.lineage.delegationDepth!==role.depth||request.invocation.targetSessionId!==id||!sameBootstrapData(request.requestIntent.project,project)||!sameBootstrapData(core.metadata,role.metadata)||core.execution.roleName!==role.name||core.execution.roleDigest!==role.digest||!sameBootstrapData(core.execution.toolNames,role.tools)||!sameBootstrapData(core.execution.model,role.model)||core.execution.timeoutMs!==role.timeoutMs||core.execution.maxAttempts!==role.maxAttempts||!sameBootstrapData(core.history.selection,expectedHistory)||initial.parentSessionId!==domain.sessionId||bootstrapInitialInputDigest(eventInput,initial.startedAt,initial.expiresAt)!==initial.digest)throw TypeError('Original Team target reservation mismatch')
+      }
+      result=found
+    })();void ready.catch(()=>{})
+    const handle:OriginalTeamTargetDiscovery=Object.freeze({ready,get result(){if(this!==handle||closed||!result)throw TypeError('Original Team target result unavailable');current();return result},async close(){if(this!==handle)throw TypeError('Original Team target receiver required');if(closed)return;await ready.catch(()=>{});await cleanup()}});teamDiscoveries.add(handle);return handle
+  }
   function closeCaptureAdmission() {
     assertOutsideCapture();captureClosed=true
     for(const entry of documents.values()){if(entry.captureIO)entry.captureIO.activeIssue=undefined;if(entry.bootstrap?.capture||entry.selected)revokeManagedEntry(entry)}
     const original=[...inspections]
     return async()=>{
-      const results=await Promise.allSettled(original.map(async item=>{await item.done.catch(()=>{});if(inspections.has(item))await cleanupInspection(item)}))
+      const results=await Promise.allSettled(original.map(async item=>{await item.done.catch(()=>{});if(inspections.has(item))await cleanupInspection(item)}).concat([...teamDiscoveries].map(item=>item.close())))
       const errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[])
       if(errors.length)throw new AggregateError(errors,'Capture inspection cleanup unresolved')
     }
@@ -397,7 +437,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       }
       let state=b.taskBarrier ? await b.taskBarrier.readState() : await read(b.invocation,entry.route)
       if(state.foreign)return {kind:'refused',reason:'conflict'}
-      if(entry.route?.protocol==='child-v1'&&(state.kind==='unavailable'||state.kind==='absent'))return blocked(entry)
+      if(entry.route?.protocol==='child-v1'&&(state.kind==='unavailable'||state.kind==='absent'&&!(coldTeamReservations.has(entry)&&state.captureReservation)))return blocked(entry)
       if(state.stagePresent||state.promotionPresent){b.issued=true;if(!state.captureReservation&&!state.stageBytes)entry.headerUnknown=true}
       if(state.captureReservation) {
         if(!sameBootstrapData(routeForReservation(state.captureReservation),entry.route))return {kind:'refused',reason:'conflict'}
@@ -405,6 +445,8 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(!sameBootstrapData(state.captureReservation.request.invocation,b.invocation))return {kind:'refused',reason:'conflict'}
         if(!b.capture)b.capture={request:state.captureReservation.request,reservation:state.captureReservation,phase:'spent',entered:true}
         if(!sameBootstrapData(b.capture.reservation,state.captureReservation))return {kind:'refused',reason:'conflict'}
+        const cold=coldTeamReservations.get(entry)
+        if(cold&&!b.capture.ownedRequest){const original=inspectOriginalTeamColdTarget(cold.binding,cold.target),saved=inspectOriginalTeamColdBinding(backend,cold.binding);if(original.target.kind!=='reserved'||!sameBootstrapData(original.target.request,saved.request)||!sameBootstrapData(state.captureReservation.request,saved.request)||!b.request||!sameBootstrapData(b.request,cold.payload))throw TypeError('Original Team cold reservation changed');assertTeamBirthPayload(saved,b.request);b.capture.ownedRequest=b.request}
         if(!b.capture.ownedRequest) {
           if(b.request&&state.captureReservation.kind==='semantic-bootstrap-capture'&&(!sameBootstrapData(b.request.metadata,state.captureReservation.request.core.metadata)||b.request.lineage.origin!=='fork'||b.request.lineage.parentSession!==state.captureReservation.request.core.sourceSessionId))return {kind:'refused',reason:'conflict'}
           b.request=undefined;entry.headerUnknown=false;return blocked(entry,'payload-required')
@@ -524,12 +566,12 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       return b.issued || b.taskBarrier?.taskIssued ? blocked(entry) : {kind:'refused',reason:'manifest-invalid'}
     } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)}; if (b.taskBarrier && b.issued && entry.headerUnknown) await b.taskBarrier.allowObservation(); if (b.taskBarrier && !b.taskBarrier.completed && !b.taskBarrier.taskIssued && !b.issued) { await b.taskBarrier.close(); b.taskBarrier = undefined } }
   }
-  function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation}):Promise<BootstrapOutcome> {
+  function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation},cold?:{binding:OriginalTeamColdBinding;target:OriginalTeamTargetDiscovery;payload:BootstrapRequest}):Promise<BootstrapOutcome> {
     let captured: BootstrapInvocation
     try { captured = captureBootstrapInvocation(invocation) } catch { return Promise.resolve({ kind: 'refused', reason: 'manifest-invalid' }) }
-    return trackBootstrap(captured, () => startInner(invocation, guards, request, route))
+    return trackBootstrap(captured, () => startInner(invocation, guards, request, route, cold))
   }
-  function startInner(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation}):Promise<BootstrapOutcome> {
+  function startInner(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation},cold?:{binding:OriginalTeamColdBinding;target:OriginalTeamTargetDiscovery;payload:BootstrapRequest}):Promise<BootstrapOutcome> {
     if(!supported())return Promise.resolve({kind:'not-issued',reason:'unsupported'})
     let captured:BootstrapInvocation,r:BootstrapRequest|undefined
     try{captured=captureBootstrapInvocation(invocation);route=captureBootstrapRoute(route);r=request?captureBootstrapRequest(request):undefined;if(!sameBootstrapData(routeInvocation(route),captured)||r&&!sameBootstrapData(r.invocation,captured))throw new Error('invocation mismatch');
@@ -557,11 +599,12 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         const compared=r.target.kind==='resume'?{...r,target:previous.target}:r
         if(!sameBootstrapData(compared,previous)||r.target.kind==='resume'&&entry.bootstrap!.stage&&r.target.manifestDigest!==manifest(entry.bootstrap!.stage))return Promise.resolve({kind:'refused',reason:'conflict'})
       }
-      if(r&&entry.bootstrap!.capture&&!entry.bootstrap!.capture.ownedRequest&&!entry.bootstrap!.stage)return Promise.resolve(entry.bootstrap!.capture.phase==='capturing'||entry.bootstrap!.capture.phase==='reserving'?{kind:'refused',reason:'conflict'}:blocked(entry,'payload-required'))
+      if(r&&entry.bootstrap!.capture&&!entry.bootstrap!.capture.ownedRequest&&!entry.bootstrap!.stage&&!cold)return Promise.resolve(entry.bootstrap!.capture.phase==='capturing'||entry.bootstrap!.capture.phase==='reserving'?{kind:'refused',reason:'conflict'}:blocked(entry,'payload-required'))
       if(entry.flight)return entry.flight as Promise<BootstrapOutcome>
       entry.bootstrap!.request??=r
     }else{entry={route,bootstrap:{invocation:captured,request:r,phase:'header',issued:false}};documents.set(id,entry)}
     const owned=entry
+    if(cold){const existing=coldTeamReservations.get(owned);if(existing&&(existing.binding!==cold.binding||existing.target!==cold.target||!sameBootstrapData(existing.payload,cold.payload)))return Promise.resolve({kind:'refused',reason:'conflict'});coldTeamReservations.set(owned,cold)}
     const flight=run(owned,guards).finally(()=>{if(owned.flight===flight)owned.flight=undefined;if(!owned.bootstrap!.issued&&!owned.bootstrap!.taskBarrier&&!owned.document&&documents.get(id)===owned)documents.delete(id)})
     owned.flight=flight;return flight
   }
@@ -915,6 +958,8 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     originalColdBootstrap,
     assertColdInspectionAdmission,prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,coldSelectedRoute,useColdSelected,publishSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
+    captureTeamTarget,captureColdTeamTarget,
+    resumeColdTeamTarget(binding:OriginalTeamColdBinding,target:OriginalTeamTargetDiscovery,guards:BootstrapGuards,payload:BootstrapRequest){const original=inspectOriginalTeamColdTarget(binding,target),saved=inspectOriginalTeamColdBinding(backend,binding),captured=captureBootstrapRequest(payload);if(original.target.kind!=='reserved'||saved.request.core.history.selection.kind!=='none'||!sameBootstrapData(original.target.request,saved.request))throw TypeError('Original Team cold reservation required');assertTeamBirthPayload(saved,captured);const guarded={...guards,assertCurrent(){const now=inspectOriginalTeamColdTarget(binding,target);if(now.target.kind!=='reserved'||!sameBootstrapData(now.target.request,saved.request))throw TypeError('Original Team cold reservation changed');guards.assertCurrent()}};return start(saved.request.invocation,guarded,captured,{protocol:'child-v1',request:saved.request},{binding,target,payload:captured})},
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,
     bootstrapSemanticTargetWithCapture:(input:BootstrapCaptureRequest,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>)=>captureTarget({protocol:'public',request:input},guards,capture),

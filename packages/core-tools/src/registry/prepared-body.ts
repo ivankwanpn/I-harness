@@ -1,12 +1,13 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
-import { canonicalJsonData, isManagedFactOwner, isNondurableFactOwner, isOwnedSettlementSource, type FactOwner, type SessionView, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
+import { canonicalJsonData,freezeJsonData, isManagedFactOwner, isNondurableFactOwner, isOwnedSettlementSource, type FactOwner, type SessionView, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
 import type { PluginContext } from '@i-harness/core-plugin'
 import type {ExecutionHookChannel} from '@i-harness/core-plugin'
 import type { PreparedCall, Tool, ToolExec, ToolRegistry } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
 import {registerToolInvocation} from './invocation-domain.ts'
 import {isManagedExecutionDomain,isManagedExecutionSource,readManagedAcknowledgedMembers,readManagedActionSourceMembers,readManagedSourceCodeDelivery,getManagedExecutionAdmissionWait,assertManagedWorkflowDeliveryCurrent,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {assertOriginalTeamProvisioningOwner,assertOriginalTeamProvisioningCandidateOwner,assertOriginalTeamProvisioningOwnerWitness,assertOriginalTeamProvisioningHeld,type OriginalTeamProvisioningOwner,type OriginalTeamProvisioningCandidate,type OriginalTeamProvisioning} from '@i-harness/core-session/internal/execution'
 
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
 export interface ManagedToolExecutionOwnerContext {readonly kind:'managed-execution';readonly domain:ManagedExecutionDomain;readonly context:PluginContext;readonly sessionId:string}
@@ -91,7 +92,7 @@ export function attachPreparedModelOrigin(prepared: PreparedCall, registry: impo
     if(body.managed&&(!field||!('value'in field)||!field.enumerable||typeof field.value!=='function'||types.isProxy(field.value)||types.isAsyncFunction(field.value)))throw Error('Original private admission scheduler required')
     const getAdmissionWait=field&&'value'in field?field.value as (signal:AbortSignal)=>Promise<void>|undefined:undefined
     assertCurrent()
-    body.permit = Object.freeze({assertCurrent,...getAdmissionWait?{getAdmissionWait(signal:AbortSignal){if(Object.getOwnPropertyDescriptor(permit,'getAdmissionWait')?.value!==getAdmissionWait)throw Error('Original private admission scheduler changed');const wait=Reflect.apply(getAdmissionWait,permit,[signal]);if(wait!==undefined&&!types.isPromise(wait))throw Error('Original private admission wait required');return wait}}:{},...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{},...permit.takeWorkflowSourceIssuer?{takeWorkflowSourceIssuer:permit.takeWorkflowSourceIssuer.bind(permit)}:{}})
+    body.permit = Object.freeze({assertCurrent,...getAdmissionWait?{getAdmissionWait(signal:AbortSignal){if(Object.getOwnPropertyDescriptor(permit,'getAdmissionWait')?.value!==getAdmissionWait)throw Error('Original private admission scheduler changed');const wait=Reflect.apply(getAdmissionWait,permit,[signal]);if(wait!==undefined&&!types.isPromise(wait))throw Error('Original private admission wait required');return wait}}:{},...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{},...permit.takeWorkflowSourceIssuer?{takeWorkflowSourceIssuer:permit.takeWorkflowSourceIssuer.bind(permit)}:{},...permit.retainTeamBirth?{retainTeamBirth:permit.retainTeamBirth.bind(permit)}:{}})
   } finally { body.attaching = false }
 }
 export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerConfiguration | undefined, signal: AbortSignal | undefined, registry: ToolRegistry,hooks?:PreparedExecutionHooks): () => Promise<unknown> {
@@ -301,17 +302,36 @@ export interface OriginalManagedTeamCaller extends Omit<PreparedBodyClaim,'conte
  readonly call:Readonly<PreparedCall['call']>
  readonly identity:Readonly<{parentSessionId:string;callEventSeq:number;toolCallId:string}>
 }
-const teamCallers=new WeakSet<object>()
+const teamCallers=new WeakMap<object,OriginalTeamProvisioningOwner>()
+const teamCandidates=new WeakMap<object,OriginalManagedTeamCaller>()
+type TeamBirthRecord={caller:OriginalManagedTeamCaller;witness:OriginalTeamProvisioning;owner:OriginalTeamProvisioningOwner;permit:import('../model-origin.ts').OriginalTeamBirthPermit;closed:boolean;bound?:string}
+const teamBirths=new WeakMap<object,TeamBirthRecord>()
+export interface OriginalManagedTeamBirthAuthority {readonly context:ManagedToolExecutionOwnerContext;readonly call:Readonly<PreparedCall['call']>;readonly identity:OriginalManagedTeamCaller['identity'];readonly source:SettlementFacts<import('@i-harness/core-session').FactOutcome>;readonly signal?:AbortSignal;assertCurrent():void;assertHeld():void;waitResult():Promise<void>;waitCurrent():Promise<void>;close():Promise<void>}
 export function assertOriginalManagedTeamCaller(caller:OriginalManagedTeamCaller):void{if(!teamCallers.has(caller))throw TypeError('Original managed Team caller required');caller.assertCurrent()}
+export function bindOriginalTeamProvisioningCandidate(caller:OriginalManagedTeamCaller,candidate:OriginalTeamProvisioningCandidate):void{assertOriginalManagedTeamCaller(caller);if(teamCandidates.has(candidate))throw TypeError('Original Team candidate already bound');assertOriginalTeamProvisioningCandidateOwner(teamCallers.get(caller)!,candidate);teamCandidates.set(candidate,caller)}
+export function assertOriginalTeamCallerProvisioning(caller:OriginalManagedTeamCaller,witness:OriginalTeamProvisioning):void{assertOriginalManagedTeamCaller(caller);const owner=teamCallers.get(caller)!,candidate=assertOriginalTeamProvisioningOwnerWitness(owner,witness);if(teamCandidates.get(candidate)!==caller)throw TypeError('Foreign Team caller provisioning')}
+export function assertOriginalManagedTeamBirth(authority:OriginalManagedTeamBirthAuthority,witness:OriginalTeamProvisioning):void{const original=teamBirths.get(authority);if(!original||original.closed||original.witness!==witness)throw TypeError('Original Team birth authority required');authority.assertCurrent()}
+export function assertOriginalManagedTeamBirthHeld(authority:OriginalManagedTeamBirthAuthority,witness:OriginalTeamProvisioning):void{const original=teamBirths.get(authority);if(!original||original.closed||original.witness!==witness)throw TypeError('Original held Team birth required');authority.assertHeld()}
+/** One retained birth can bind exactly one captured request and payload. */
+export function bindOriginalTeamBirthCapture(authority:OriginalManagedTeamBirthAuthority,witness:OriginalTeamProvisioning,request:unknown,payload:unknown):void{assertOriginalManagedTeamBirth(authority,witness);const original=teamBirths.get(authority)!;if(original.bound!==undefined)throw TypeError('Original Team birth capture already bound');original.bound=canonicalJsonData({request,payload})}
+export function assertOriginalTeamBirthCapture(authority:OriginalManagedTeamBirthAuthority,witness:OriginalTeamProvisioning,request:unknown,payload:unknown):void{assertOriginalManagedTeamBirth(authority,witness);const original=teamBirths.get(authority)!;if(original.bound===undefined||original.bound!==canonicalJsonData({request,payload}))throw TypeError('Original Team birth capture changed')}
+/** One original model member delegates only this Team birth before frame exit. */
+export function retainOriginalManagedTeamBirth(caller:OriginalManagedTeamCaller,witness:OriginalTeamProvisioning):OriginalManagedTeamBirthAuthority{
+ assertOriginalTeamCallerProvisioning(caller,witness);const body=byExec.get(caller.exec),frame=active.getStore();if(!body||!frame?.active||frame.body!==body||body.managed!==caller.context||!body.permit||body.codeInvocation)throw TypeError('Original Team model birth member required')
+ const permit=body.permit as import('../model-origin.ts').OriginalModelMemberPermit;if(!permit.retainTeamBirth)throw TypeError('Original Team birth issuer unavailable')
+ const owner=teamCallers.get(caller)!,call=freezeJsonData(JSON.parse(canonicalJsonData(caller.call))) as Readonly<PreparedCall['call']>;caller.consume();const retained=permit.retainTeamBirth();let closed=false,closing:Promise<void>|undefined
+ const authority:OriginalManagedTeamBirthAuthority=Object.freeze({context:caller.context,call,identity:caller.identity,source:retained.source,...caller.exec.abortSignal?{signal:caller.exec.abortSignal}:{},assertCurrent(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');retained.assertCurrent();const candidate=assertOriginalTeamProvisioningOwnerWitness(owner,witness);if(teamCandidates.get(candidate)!==caller)throw TypeError('Original Team birth candidate changed')},assertHeld(){if(this!==authority||closed)throw TypeError('Original held Team birth unavailable');retained.assertHeld();const candidate=assertOriginalTeamProvisioningHeld(owner,witness);if(teamCandidates.get(candidate)!==caller)throw TypeError('Original Team birth candidate changed')},async waitResult(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');try{caller.assertCurrent();authority.assertHeld();return}catch{}await retained.waitResult();authority.assertHeld()},async waitCurrent(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');await retained.waitCurrent();authority.assertCurrent()},async close(){if(this!==authority)throw TypeError('Original Team birth authority required');if(closed)return;if(closing)return closing;const pending=retained.close().then(()=>{closed=true;const record=teamBirths.get(authority);if(record)record.closed=true});closing=pending;void pending.finally(()=>{if(closing===pending)closing=undefined}).catch(()=>{});return pending}})
+ teamBirths.set(authority,{caller,witness,owner,permit:retained,closed:false});return authority
+}
 /** The original registered Team leaf alone may capture its active private body. */
-export function bindPreparedTeamLaunchLeaf(tool:Tool,leaf:Tool['execute']){
+export function bindPreparedTeamLaunchLeaf(tool:Tool,leaf:Tool['execute'],owner:OriginalTeamProvisioningOwner){
  const entry=Object.freeze({enter(exec:ToolExec):OriginalManagedTeamCaller|undefined{
   if(this!==entry)throw TypeError('Foreign Team leaf receiver')
   const body=byExec.get(exec),frame=active.getStore()
   if(!body){if(frame?.active)throw Error('Foreign prepared exec');return}
   if(!frame?.active||frame.body!==body||body.tool!==tool||body.leaf!==leaf||body.call.name!=='spawn_teammate')throw Error('Not the original prepared Team body')
   check(body,frame);if(body.foreignContext||body.claimed)throw Error('Original Team body unavailable')
-  const context=body.managed;if(!context||!body.source||frame.domain!==context.domain.owner)return
+  const context=body.managed;if(!context||!body.source||frame.domain!==context.domain.owner)return;assertOriginalTeamProvisioningOwner(context.domain,owner)
   if(!body.permit&&!body.codeInvocation||body.permit&&body.codeInvocation)throw Error('Original private Team invocation required')
   const id=own(exec,'sessionId'),seq=own(exec,'callEventSeq'),callId=own(exec,'callId')
   if(id!==context.sessionId||!Number.isSafeInteger(seq)||(seq as number)<0||typeof callId!=='string'||!callId)throw Error('Original Team call identity unavailable')
@@ -319,7 +339,7 @@ export function bindPreparedTeamLaunchLeaf(tool:Tool,leaf:Tool['execute']){
   const claim:OriginalManagedTeamCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
    assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign Team caller');check(body,frame)},
    consume(){if(this!==claim)throw TypeError('Foreign Team caller');check(body,frame);if(consumed)throw Error('Team caller consumed');consumed=true},
-  });teamCallers.add(claim);return claim
+  });teamCallers.set(claim,owner);return claim
  }});return entry
 }
 

@@ -11,6 +11,7 @@ export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkfl
 export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"
 export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { PrepareTaskChild, TaskChildHostInput, TaskChildHostPreparation } from './child/task-host.ts'
+export {assertOriginalTeamChildHostRequest,assertOriginalColdTeamChildHostRequest,isOriginalColdTeamChildHostInput} from './child/task-host.ts'
 export {inspectTaskChildHistory,inspectTaskChildSource,inspectManagedTaskChildHistory,inspectManagedTaskChildSource,isManagedTaskChildHistory} from './child/task-history.ts'
 export type { SubagentRole, RoleRegistry, RoleCleanup } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
@@ -71,6 +72,8 @@ import type { ManagedDocument } from '@i-harness/session-persistence'
 import { captureOwnedTaskContext } from './task/owned-context.ts'
 import { isColdBoundChild } from './task/cold-bindings.ts'
 import { createTaskStartupFacade } from './task/startup-facade.ts'
+import {createManagedTeamBirthFactory,createManagedColdTeamBirthFactory} from './child/team-birth.ts'
+export type {CommittedTeamChildBirth,TeamChildBirthAttempt} from './child/team-birth.ts'
 import {isManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 import {isManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
@@ -123,6 +126,8 @@ export interface RegisterSubagentOptions extends RoleModelHost {
 }
 
 export interface RegisterSubagentResult {
+  reserveManagedTeamChild?(caller:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller,provisioning:import('@i-harness/core-session/internal/execution').OriginalTeamProvisioning):import('./child/team-birth.ts').TeamChildBirthAttempt
+  reserveManagedColdTeamChild?(owner:import('@i-harness/core-session/internal/execution').OriginalTeamProvisioningOwner,parent:import('@i-harness/core-session/internal/execution').OriginalManagedTeamParent,binding:import('../../session-persistence/src/team-child-recovery-internal.ts').OriginalTeamColdBinding,target:import('../../session-persistence/src/team-child-recovery-internal.ts').OriginalTeamTargetDiscovery):import('./child/team-birth.ts').TeamChildBirthAttempt
   /** Restored roles and original persistence are ready for catalog mounting. */
   catalogReady: Promise<void>
   /** Release the original restored-work barrier after the real model is bound. */
@@ -298,6 +303,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     table = guarded('table', table, ['add', 'update', 'remove'])
     roles = guarded('roles', roles, ['register', 'remove'])
   }
+  const teamBirthOptions=managed&&opts.persist&&opts.prepareTaskChild?{domain:managed.domain,execution:managed.execution,coordinator:opts.persist.coordinator,prepare:opts.prepareTaskChild,roles,model:opts,parentRegistry,parentModel:()=>{const value=modelAccessor?modelAccessor():parentModel;if(!value)throw TypeError('Original parent model unavailable');return value},assertOwnerCurrent:assertRuntimeWork,timeoutMs:opts.modelActionTimeoutMs,maxAttempts:opts.modelActionMaxAttempts}:undefined
+  const reserveManagedTeamChild=teamBirthOptions&&createManagedTeamBirthFactory(teamBirthOptions),reserveManagedColdTeamChild=teamBirthOptions&&createManagedColdTeamBirthFactory(teamBirthOptions)
   // M23 (Minor 4): the deps object is kept in a named variable so the
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
@@ -507,6 +514,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     return attempt.promise
   }
   return {
+    reserveManagedTeamChild,
+    reserveManagedColdTeamChild,
     catalogReady,activateRestoredWork,
     async retainResults() {
       await ready

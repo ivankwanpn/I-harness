@@ -1,11 +1,12 @@
 import { receivedExecutionInputsFor } from '../../../session-executor/src/lifecycle/execution-inputs.ts';
 import { isStrictFactData } from '@i-harness/core-session';
-import { createManagedExecutionDomain, isManagedExecutionSource, assertManagedActionCurrent, getManagedExecutionAdmissionWait, readManagedActionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
+import { createManagedExecutionDomain, isManagedExecutionSource, assertManagedActionCurrent, getManagedExecutionAdmissionWait, readManagedActionMembers,retainAcknowledgedExecutionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
 import { canonicalJsonData, type FactOutcome, type CapturedActionFact, type ManagedAction, type SettlementFacts } from '@i-harness/core-session';
 import { assertModelOriginPair, type ConstructorManagedModelOriginVerifier, type ManagedModelOriginExpectation, type PreparedModelOriginDriver } from '@i-harness/core-tools/model-origin';
 import type { ToolRegistry, PreparedCall } from '@i-harness/core-tools';
 import { isManagedExecutionAttachment, type ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts';
 import type { PluginContext } from '@i-harness/core-plugin';
+import {reserveTeamResultBarrier} from './team-result-barrier.ts';
 export interface ManagedFactWitness {
     readonly capture: CapturedActionFact<FactOutcome>;
     readonly outcome: Extract<FactOutcome, {
@@ -24,6 +25,7 @@ type MemberProof = {
     origin: Origin;
     check(expected: ManagedModelOriginExpectation): void;
     schedule(expected: ManagedModelOriginExpectation):void;
+    retainTeam(expected:ManagedModelOriginExpectation):import('@i-harness/core-tools/model-origin').OriginalTeamBirthPermit;
     action?: ManagedAction<FactOutcome>;
     taken: boolean;
 };
@@ -41,7 +43,7 @@ export function createManagedAgentModelOriginOwner(context: PluginContext, execu
                 throw TypeError('Original private model member required');
             member.check(expected);
             member.taken = true;
-            let issued = false, codeIssued = false, workflowIssued = false;
+            let issued = false, codeIssued = false, workflowIssued = false,teamIssued=false;
             const permit: import('@i-harness/core-tools/model-origin').OriginalManagedModelMemberPermit = Object.freeze({ getAdmissionWait(signal:AbortSignal){if(this!==permit)throw TypeError('Original model permit receiver required');member.schedule(expected);return getManagedExecutionAdmissionWait(domain,member.action!,signal)}, assertCurrent() {
                     if (this !== permit)
                         throw TypeError('Original model permit receiver required');
@@ -80,6 +82,7 @@ export function createManagedAgentModelOriginOwner(context: PluginContext, execu
                             });
                         } });
                     return issuer;
+                }, retainTeamBirth(){if(this!==permit||teamIssued||expected.name!=='spawn_teammate')throw TypeError('Original Team birth issuer required');member.check(expected);teamIssued=true;return member.retainTeam(expected)
                 }, takeWorkflowSourceIssuer() {
                     if(this!==permit||workflowIssued)throw TypeError('Original Workflow source issuer required');member.check(expected);if(expected.name!=='workflow_run')throw TypeError('Original Workflow member required');workflowIssued=true
                     const recipient=receivedExecutionInputsFor(execution).workflowDelivery(domain);let registered=false,captured=false,preparing=false,preparedBinding:string|undefined
@@ -206,7 +209,20 @@ export function createManagedModelInvocation(origin: Origin, action: ManagedActi
                 source.assertHeld();
             };
             const check=(expected:ManagedModelOriginExpectation)=>{current();schedule(expected)};
-            const proof = Object.freeze({}), member = { origin, check, schedule, action, taken: false };
+            const retainedInput=input!,retainedAccepted=record.accepted,retainedCall=witness
+            const retainTeam=(expected:ManagedModelOriginExpectation):import('@i-harness/core-tools/model-origin').OriginalTeamBirthPermit=>{
+                check(expected);const inputEvents=read(retainedInput),acceptedEvents=read(retainedAccepted),callEvents=read(retainedCall),names=['bindingValidation','authorityValidation','approvalValidation'] as const,fields=names.map(name=>Object.getOwnPropertyDescriptor(expected.prepared,name)),callBytes=canonicalJsonData(expected.args),pins:ReturnType<typeof retainAcknowledgedExecutionMembers>[]=[]
+                if(fields.some(field=>field&&!('value'in field))||!fields[0]||typeof fields[0].value!=='function')throw TypeError('Original Team validations unavailable')
+                try{for(const witness of [retainedInput,retainedAccepted,retainedCall])pins.push(retainAcknowledgedExecutionMembers(witness.capture,witness.outcome))}catch(error){for(const pin of pins)pin.release();throw error}
+                const done=Promise.withResolvers<void>();let completion:SettlementFacts<FactOutcome>
+                try{completion=action.registerSettlementSource(()=>done.promise)}catch(error){for(const pin of pins)pin.release();throw error}
+                let retired=false,closed=false,closing:Promise<void>|undefined
+                const resultBarrier=reserveTeamResultBarrier(expected.prepared)
+                const assertHeld=()=>{if(closed)throw TypeError('Original Team birth permit closed');completion.assertHeld();for(const pin of pins)pin.assertCurrent();const same=(a:readonly unknown[],b:readonly unknown[])=>a.length===b.length&&a.every((value,index)=>value===b[index]);if(!same(readManagedActionMembers(origin.domain,action,retainedInput.capture,retainedInput.outcome),inputEvents)||!same(readManagedActionMembers(origin.domain,action,retainedAccepted.capture,retainedAccepted.outcome),acceptedEvents)||!same(readManagedActionMembers(origin.domain,action,retainedCall.capture,retainedCall.outcome),callEvents))throw TypeError('Original Team birth member changed');for(let index=0;index<names.length;index++){const field=Object.getOwnPropertyDescriptor(expected.prepared,names[index]!),original=fields[index];if(!!field!==!!original||field&&(!('value'in field)||!original||!('value'in original)||field.value!==original.value||field.enumerable!==original.enumerable))throw TypeError('Original Team validation changed')}if(canonicalJsonData(expected.args)!==callBytes)throw TypeError('Original Team call changed')}
+                const assertCurrent=()=>{if(retired||closed)throw TypeError('Original Team birth permit retired');origin.domain.assertCurrent();action.signal.throwIfAborted();assertHeld();for(let index=0;index<fields.length;index++){const field=fields[index];if(field&&'value'in field&&field.value!==undefined){if(typeof field.value!=='function')throw TypeError('Original Team validation unavailable');const valid=Reflect.apply(field.value,expected.prepared,[]);if(index===0?!valid:valid===false)throw TypeError('Original Team validation unavailable')}}}
+                const original:import('@i-harness/core-tools/model-origin').OriginalTeamBirthPermit=Object.freeze({source:completion,assertCurrent(){if(this!==original)throw TypeError('Original Team birth permit required');assertCurrent()},assertHeld(){if(this!==original)throw TypeError('Original Team birth permit required');assertHeld()},async waitResult(){if(this!==original||retired||closed)throw TypeError('Original Team birth permit required');await resultBarrier;assertHeld()},async waitCurrent(){if(this!==original||retired||closed)throw TypeError('Original Team birth permit required');const wait=getManagedExecutionAdmissionWait(origin.domain,action,action.signal);if(wait)await wait;assertCurrent()},async close(){if(this!==original)throw TypeError('Original Team birth permit required');if(closed)return;if(closing)return closing;retired=true;done.resolve();const pending=(async()=>{await completion.close();for(const pin of pins)pin.release();closed=true})();closing=pending;void pending.finally(()=>{if(closing===pending)closing=undefined}).catch(()=>{});return pending}});return original
+            }
+            const proof = Object.freeze({}), member = { origin, check, schedule, retainTeam, action, taken: false };
             proofs.set(proof, member);
             retainedProofs.add(member);
             record.proofs.add(member);

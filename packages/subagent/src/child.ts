@@ -10,6 +10,7 @@ import { openInitialChildGeneration, type InitialChildInput } from './child/gene
 import { captureChildInstructionContext } from './child/instruction-context.ts'
 import { invokeOriginal } from './followup/resident-lifetime.ts'
 import {claimTaskChildBirth,markTaskChildAdopted} from './child/task-birth.ts'
+import {claimTeamChildBirth,markTeamChildAdopted} from './child/team-birth.ts'
 
 export { SUBAGENT_PROMPT_CONTRACT, composeSubagentPrompt, estimateChildOverhead } from "./child/prompt.ts"
 export { resolveRoleTools } from "./child/role-tools.ts"
@@ -32,7 +33,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const failedSettlement = originalFactory && dataMethod<NonNullable<import('./child/instruction-context.ts').ChildInstructionContextFactory['settleFailed']>>(originalFactory, 'settleFailed')?.bind(originalFactory)
   const retainInitial = dataMethod<NonNullable<SpawnOptions['retainInitialSetup']>>(opts, 'retainInitialSetup')?.bind(opts)
   // Pure role gates precede any child document or executable model resolution.
-  const committed=opts.childStart?.kind==='committed-child-birth'?claimTaskChildBirth(opts.childStart.birth):undefined
+  const committed=opts.childStart?.kind==='committed-child-birth'?claimTaskChildBirth(opts.childStart.birth):opts.childStart?.kind==='committed-team-child-birth'?claimTeamChildBirth(opts.childStart.birth,opts):undefined
   const declared = committed?committed.declared:declaredRoleModel(opts.role, opts)
   if (subagentModelSelectionGated(opts, declared)) throw subagentModelSelectionDisabled(opts.role.name)
   if (opts.childSessions && !opts.childSessions.coordinator.openManagedDocument) throw Object.assign(new Error('Durable child requires the owned fact capability'), { code: 'FACT_OWNER_UNSUPPORTED' })
@@ -126,6 +127,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   document = opened.document
   if (document) { const close = dataMethod<() => Promise<void>>(document, 'close'), revoke = dataMethod<() => void>(document, 'revokeNewWork'); if (!close || !revoke) throw new TypeError('Original child document cleanup unavailable'); closeDocument = close.bind(document); revokeDocument = revoke.bind(document) }
   if(committed&&opts.childStart?.kind==='committed-child-birth')markTaskChildAdopted(opts.childStart.birth)
+  if(committed&&opts.childStart?.kind==='committed-team-child-birth')markTeamChildAdopted(opts.childStart.birth)
   controller.signal.throwIfAborted()
   if (createInstruction) {
     const input = { session: childSession, factOwner, lifetime: { available: () => instructionAvailable } }
