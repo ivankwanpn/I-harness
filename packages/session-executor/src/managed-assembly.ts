@@ -70,26 +70,36 @@ export interface ManagedExecutionModelBinding {
  budgetBinding?:import('@i-harness/llm-seam').ModelBudgetBinding
  contextMetadata?:import('@i-harness/core-session').ContextBindingMetadata
 }
-export function createManagedExecutionRuntime(options:ManagedExecutionRuntimeOptions){
+export interface ManagedRegistryConstruction {
+ readonly ctx:PluginContext
+ readonly tools:ReturnType<typeof createToolRegistryWithModelOrigin>['registry']
+ readonly domain:ReturnType<typeof createManagedAgentModelOriginOwner>['domain']
+ readonly execution:ManagedExecutionAttachment
+ readonly instructions?:Readonly<{manager:ReturnType<typeof createMainInstructionManager>;runtime:ReturnType<typeof createExecutionRuntimeContext>}>
+ assertCurrent():void
+ retain(cleanup:()=>void|Promise<void>):void
+}
+export type ManagedRegistryFactory=(original:ManagedRegistryConstruction)=>void|Promise<void>
+type ResolvedManagedModel=Pick<ManagedExecutionRuntimeOptions,'model'|'contextWindow'|'maxOutputTokens'|'reasoningEffort'|'budgetBinding'|'contextMetadata'>
+function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManagedModel>){
  const {execution}=options
  if(!isManagedExecutionAttachment(execution))throw TypeError('Original execution attachment required')
  const ctx=options.context??createContext(),origin=createManagedAgentModelOriginOwner(ctx,execution)
- let model=options.model,reasoningEffort=options.reasoningEffort
  let requestContext=options.requestContext
  let manager:ReturnType<typeof createMainInstructionManager>|undefined
+ let instructionRuntime:ReturnType<typeof createExecutionRuntimeContext>|undefined
  if(options.workspace!==undefined&&requestContext===undefined){
   if(!options.retainConstructionCleanup)throw TypeError('Original instruction cleanup retention required')
   const environment=createProjectInstructionEnvironment()
-  let runtime:ReturnType<typeof createExecutionRuntimeContext>|undefined
 
   let retired=false
-  const cleanup=async()=>{retired=true;await manager?.close();await runtime?.close();await environment.close()}
+  const cleanup=async()=>{retired=true;await manager?.close();await instructionRuntime?.close();await environment.close()}
   options.retainConstructionCleanup(cleanup)
-  runtime=createExecutionRuntimeContext(execution,origin.domain)
+  instructionRuntime=createExecutionRuntimeContext(execution,origin.domain)
   manager=createMainInstructionManager({domain:origin.domain,environment,cwd:options.workspace,
    authority:()=>({kind:'unbound',revision:'configured-workspace',workspaceRoot:options.workspace!}),available:()=>!retired,
-   publish:(signal,retain)=>runtime!.render(signal,retain)})
-  runtime.registerSection('instructions',()=>manager!.text())
+   publish:(signal,retain)=>instructionRuntime!.render(signal,retain)})
+  instructionRuntime.registerSection('instructions',()=>manager!.text())
   requestContext=manager
  }
  const pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:origin.domain.sessionId}},origin.verifier)
@@ -98,6 +108,15 @@ export function createManagedExecutionRuntime(options:ManagedExecutionRuntimeOpt
  if(options.originalSchedule){if(!options.retainConstructionCleanup||!options.scheduleWake)throw TypeError('Original schedule retention and wake required');startSchedule=mountOwnedSchedule({execution,domain:origin.domain,ctx,tools:pair.registry,wake:options.scheduleWake,retain:options.retainConstructionCleanup})}
  for(const tool of options.tools)pair.registry.register(tool)
  if(options.originalFilesystem||options.originalSchedule){if(options.workspace===undefined)throw TypeError('Original policy workspace required');createExecutionApprovalPolicy(ctx,pair.registry,{workspace:options.workspace,workspaceRoots:()=>[options.workspace!]})}
+ return {execution,ctx,origin,pair,requestContext,manager,instructionRuntime,startSchedule}
+}
+function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeof prepare>,registerClose?:(close:()=>Promise<void>)=>void,onClose?:()=>void){
+ const {execution,ctx,origin,pair,requestContext,startSchedule}=prepared
+ let model=options.model,reasoningEffort=options.reasoningEffort
+ let lane:ReturnType<typeof createManagedSessionExecutor>|undefined
+ let closeFlight:Promise<void>|undefined,closed=false
+ const close=()=>{onClose?.();if(closed)return Promise.resolve();if(closeFlight)return closeFlight;lane?.dispose();const flight=Promise.allSettled(lane?[lane.drain()]:[]).then(()=>{closed=true});closeFlight=flight;return flight}
+ registerClose?.(close)
  const overhead=options.contextWindow===undefined?undefined:approxTokens(typeof options.systemPrompt==='function'?options.systemPrompt():options.systemPrompt)+approxTokens(JSON.stringify(pair.registry.schemas()))
  const compact=composeCompactConfig(options.compact,options.contextWindow,overhead,diagnosticsFor('mount'))
  const inputs=receivedExecutionInputsFor(execution)
@@ -110,13 +129,13 @@ export function createManagedExecutionRuntime(options:ManagedExecutionRuntimeOpt
    return createExecutionGenerationLifecycle(execution,origin.domain.sessionId,action,undefined,dependencies&&options.passiveGeneration?{...dependencies,passiveGeneration:options.passiveGeneration}:dependencies)
   },
   inputPreparationFactory:createExecutionSteerPreparationFactory(execution,inputs.inbox,options.prepareInput)})
- const lane=createManagedSessionExecutor({execution,agent})
- let closeFlight:Promise<void>|undefined,closed=false
- const runtime=Object.freeze({startSchedule,execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane,inbox:inputs.inbox,
+ lane=createManagedSessionExecutor({execution,agent})
+ const originalLane=lane
+ const runtime=Object.freeze({startSchedule,execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane:originalLane,inbox:inputs.inbox,
   setModelBinding(binding:ManagedExecutionModelBinding,compactRequest?:CompactionRequest){
    if(this!==runtime||closed||closeFlight)throw TypeError('Original open managed runtime required')
    origin.domain.assertCurrent()
-   if(lane.isRunning())throw Error('session is busy')
+   if(originalLane.isRunning())throw Error('session is busy')
    if(!binding||types.isProxy(binding)||Object.getPrototypeOf(binding)!==Object.prototype&&Object.getPrototypeOf(binding)!==null)throw TypeError('Original model binding data required')
    const fields=Object.getOwnPropertyDescriptors(binding)
    if(!fields.model||Reflect.ownKeys(fields).some(name=>!('value' in fields[name as keyof typeof fields]!)))throw TypeError('Accessor model binding data unsupported')
@@ -128,11 +147,34 @@ export function createManagedExecutionRuntime(options:ManagedExecutionRuntimeOpt
    const overhead=approxTokens(typeof options.systemPrompt==='function'?options.systemPrompt():options.systemPrompt)+approxTokens(JSON.stringify(pair.registry.schemas()))
    const update={budgetBinding,contextMetadata,...(window===undefined?{}:{budget:{contextWindow:window,overheadTokens:overhead},...(compactData===undefined?{}:{compact:{...compactData,contextWindow:window,overheadTokens:compactData.overheadTokens??overhead}})}),...(output===undefined?{}:{maxOutputTokens:output})}
    if(closed||closeFlight)throw TypeError('Original open managed runtime required')
-   if(lane.isRunning())throw Error('session is busy')
+   if(originalLane.isRunning())throw Error('session is busy')
    origin.domain.assertCurrent()
    agent.updateContext!(update)
    model=nextModel;reasoningEffort=nextEffort
   },
-  close(){if(this!==runtime)return Promise.reject(TypeError('Original managed runtime required'));if(closed)return Promise.resolve();if(closeFlight)return closeFlight;lane.dispose();const flight=Promise.allSettled([lane.drain()]).then(()=>{closed=true});closeFlight=flight;return flight}})
+  close(){if(this!==runtime)return Promise.reject(TypeError('Original managed runtime required'));return close()}})
  return runtime
+}
+
+export function createManagedExecutionRuntime(options:ManagedExecutionRuntimeOptions){return finish(options,prepare(options))}
+export async function createManagedExecutionRuntimeWithRegistry(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManagedModel>&{
+ configureRegistry:ManagedRegistryFactory
+ resolveModel():ResolvedManagedModel|Promise<ResolvedManagedModel>
+ assertConstructionCurrent():void
+ retainConstructionCleanup(cleanup:()=>Promise<void>):void
+}):Promise<ReturnType<typeof createManagedExecutionRuntime>>{
+ let retired=false,retaining=true
+ options.assertConstructionCurrent()
+ const prepared=prepare(options)
+ const assertCurrent=()=>{if(retired)throw Error('Original construction retired');options.assertConstructionCurrent();prepared.origin.domain.assertCurrent()}
+ options.retainConstructionCleanup(async()=>{retired=true})
+ const original:ManagedRegistryConstruction={ctx:prepared.ctx,tools:prepared.pair.registry,domain:prepared.origin.domain,execution:prepared.execution,
+  ...(prepared.manager&&prepared.instructionRuntime?{instructions:{manager:prepared.manager,runtime:prepared.instructionRuntime}}:{}),assertCurrent,
+  retain(cleanup){if(!retaining)throw Error('Original construction retention expired');assertCurrent();if(typeof cleanup!=='function')throw TypeError('Original mount cleanup required');options.retainConstructionCleanup(async()=>{await cleanup()})}}
+ assertCurrent()
+ try{await options.configureRegistry(original)}finally{retaining=false}
+ assertCurrent();captureExecutionHookChannel(prepared.ctx).capture()
+ const resolved=await options.resolveModel()
+ assertCurrent();captureExecutionHookChannel(prepared.ctx).capture()
+ return finish({...options,...resolved},prepared,options.retainConstructionCleanup,()=>{retired=true})
 }
