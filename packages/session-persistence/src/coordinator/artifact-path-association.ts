@@ -20,6 +20,11 @@ export function createArtifactCurrentGuard(check: () => void): () => void {
   return guard
 }
 export function isArtifactCurrentGuard(guard: Function): boolean { return pureGuards.has(guard) }
+/** Composition accepts exact constructor-enrolled guards, never an unclassified callback. */
+export function composeOriginalArtifactGuards(...guards: readonly (() => void)[]): () => void {
+  if (guards.some(guard => !pureGuards.has(guard))) throw TypeError('Original artifact guard required')
+  return createArtifactCurrentGuard(() => { for (const guard of guards) guard() })
+}
 export function assertHeldWithArtifactGuard(held: () => void, guard: Function, receiver: object): void {
   const run = () => { held(); Reflect.apply(guard, receiver, []) }
   if (pureGuards.has(guard)) withArtifactCurrentChecks(run)

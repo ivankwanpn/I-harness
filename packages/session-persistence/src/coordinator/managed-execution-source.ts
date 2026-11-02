@@ -1,4 +1,7 @@
 import {randomUUID} from 'node:crypto'
+import {types} from 'node:util'
+import {createArtifactCurrentGuard,composeOriginalArtifactGuards,isArtifactCurrentGuard} from './artifact-path-association.ts'
+import {originalOwnershipArtifactGuard} from './ownership.ts'
 import {FactRecoveryRequiredError,type JournalPrefix,type Session,type SessionView} from '@i-harness/core-session'
 import {restoreManagedExecutionState} from '@i-harness/core-session/internal/execution'
 import type {OriginalConversationRestorationSource} from '@i-harness/core-session/internal/restoration'
@@ -17,7 +20,19 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
  let proof:{assertCurrent():Promise<void>}|undefined,scope:ReturnType<typeof openExecutionDependencies>|undefined,state:Awaited<ReturnType<typeof restoreManagedExecutionState>>|undefined,flight:Promise<unknown>|undefined
  let initialFailure:{cause:unknown}|undefined
  // Original native resource lifetime survives metadata-read invalidation only.
- const assertOriginal=()=>{ports.assertEntry();if(retired||ports.entry.headerUnknown)throw new FactRecoveryRequiredError();ports.ownership.assertHeld(ports.id)}
+ const fields=types.isProxy(ports)?undefined:Object.getOwnPropertyDescriptors(ports)
+ const data=fields&&Object.values(fields).every(field=>'value'in field),entryMethod=data?fields.assertEntry:undefined
+ const entry=data?fields.entry?.value:undefined,ownership=data?fields.ownership?.value:undefined,id=data?fields.id?.value:undefined
+ const entryCheck=entryMethod?.value
+ const eligible=typeof entryCheck==='function'&&isArtifactCurrentGuard(entryCheck)&&entry&&typeof entry==='object'&&!types.isProxy(entry)&&Object.getPrototypeOf(entry)===Object.prototype
+ const ownershipGuard=eligible&&ownership&&typeof id==='string'?originalOwnershipArtifactGuard(ownership,id):undefined
+ const local=eligible?createArtifactCurrentGuard(()=>{
+  if(Object.values(Object.getOwnPropertyDescriptors(ports)).some(field=>!('value'in field)))throw TypeError('Original execution source inputs changed')
+  if(Object.getOwnPropertyDescriptor(ports,'assertEntry')?.value!==entryCheck||ports.entry!==entry||ports.ownership!==ownership||ports.id!==id)throw TypeError('Original execution source inputs changed')
+  if(Object.values(Object.getOwnPropertyDescriptors(entry)).some(field=>!('value'in field)))throw TypeError('Original execution entry changed')
+  entryCheck!();if(retired||entry.headerUnknown)throw new FactRecoveryRequiredError()
+ }):undefined
+ const assertOriginal=local&&ownershipGuard?composeOriginalArtifactGuards(local,ownershipGuard):()=>{ports.assertEntry();if(retired||ports.entry.headerUnknown)throw new FactRecoveryRequiredError();ports.ownership.assertHeld(ports.id)}
  const assertCurrent=()=>{assertOriginal();if(ports.entry.metadataRevision!==revision)throw new FactRecoveryRequiredError()}
  const held=heldFactOwner(token,ports.ownership,assertOriginal)
  const source:OriginalConversationRestorationSource={

@@ -3,7 +3,7 @@ import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs
 import { originalHeldStateFor } from '@i-harness/fs-lock/internal/held-state'
 import { createArtifactPathOwner } from '@i-harness/fs-lock/internal/artifact-path'
 import { basename, dirname, resolve } from 'node:path'
-import { assertArtifactCurrent, artifactPathsFor, artifactScope, isOriginalCanonicalExclusion, withArtifactCurrentChecks, withImmediateArtifactCurrentChecks, type ArtifactCapture, type OriginalArtifactExclusion } from './artifact-path-association.ts'
+import { assertArtifactCurrent, artifactPathsFor, artifactScope, createArtifactCurrentGuard, isOriginalCanonicalExclusion, withArtifactCurrentChecks, withImmediateArtifactCurrentChecks, type ArtifactCapture, type OriginalArtifactExclusion } from './artifact-path-association.ts'
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types as utilTypes } from 'node:util'
@@ -569,7 +569,18 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   orderedPins.set(owner, (id, retain, origin) => borrowBundle(id, false, retain, [id], () => {}, origin))
   ownerClaims.set(owner, claims)
   originalQueries.set(owner,{method:owner.exclusionScope,binding:artifacts})
+  if (isOriginalCanonicalExclusion(artifacts)) originalAssertions.set(owner, owner.assertHeld)
   return owner
+}
+const originalAssertions = new WeakMap<object, (id: string) => void>()
+/** Exact original ownership method; custom raw locks keep their existing immediate barriers. */
+export function originalOwnershipArtifactGuard(owner: Ownership, id: string): (() => void) | undefined {
+  const method = originalAssertions.get(owner)
+  if (!method || Object.getOwnPropertyDescriptor(owner, 'assertHeld')?.value !== method) return
+  return createArtifactCurrentGuard(() => {
+    if (Object.getOwnPropertyDescriptor(owner, 'assertHeld')?.value !== method) throw TypeError('Original ownership assertion changed')
+    Reflect.apply(method, owner, [id])
+  })
 }
 const originalQueries=new WeakMap<object,{method:(ids:readonly string[],keys:readonly string[])=>ReturnType<typeof artifactScope>;binding:OriginalArtifactExclusion|undefined}>()
 function plainStrings(value:readonly string[]):boolean{

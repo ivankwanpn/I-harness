@@ -183,3 +183,26 @@ it.each(['identity','case-policy','reparse'] as const)('rechecks held predicates
  })).rejects.toThrow('Original query control and cleanup failed')
  expect(refused).toBe(true)
 })
+it('coalesces genuine original ownership constituents without skipping logical checks',async()=>{
+ const {originalOwnershipArtifactGuard}=await import('../src/coordinator/ownership.ts'),{composeOriginalArtifactGuards}=await import('../src/coordinator/artifact-path-association.ts'),{heldFactOwner}=await import('../src/coordinator/fact-owner.ts')
+ await methodContexts(({owner,measure})=>{
+  const original=originalOwnershipArtifactGuard(owner,'left-a')!;expect(original).toBeTypeOf('function')
+  const fallback=heldFactOwner({sessionId:'left-a',incarnation:'fallback'},owner,()=>owner.assertHeld('left-a'))
+  expect(measure(()=>fallback.assertHeld())).toEqual({captures:0,opens:16})
+  const held=heldFactOwner({sessionId:'left-a',incarnation:'fixture'},owner,composeOriginalArtifactGuards(original))
+  expect(measure(()=>held.assertHeld())).toEqual({captures:0,opens:8})
+  const method=owner.assertHeld;let replacementCalls=0
+  owner.assertHeld=()=>{replacementCalls++}
+  try{expect(()=>held.assertHeld()).toThrow('Original ownership assertion changed');expect(replacementCalls).toBe(0)}finally{owner.assertHeld=method}
+ })
+})
+it('flushes original ownership before an unknown liveness callback retargets a native path',async()=>{
+ const {originalOwnershipArtifactGuard}=await import('../src/coordinator/ownership.ts'),{withArtifactCurrentChecks}=await import('../src/coordinator/artifact-path-association.ts'),{heldFactOwner}=await import('../src/coordinator/fact-owner.ts')
+ let refused=false
+ await expect(methodContexts(({owner,root})=>{
+  const guard=originalOwnershipArtifactGuard(owner,'left-a')!,node=probe.nodes.get(root)!,before={...node};let effects=0,callbackChecks=0
+  const held=heldFactOwner({sessionId:'left-a',incarnation:'fixture'},owner,()=>{callbackChecks++;node.id+=1000})
+  try{expect(()=>withArtifactCurrentChecks(()=>{guard();held.assertHeld();effects++})).toThrow();expect(callbackChecks).toBe(1);expect(effects).toBe(0);refused=true}finally{Object.assign(node,before)}
+ })).rejects.toThrow('Original query control and cleanup failed')
+ expect(refused).toBe(true)
+})
