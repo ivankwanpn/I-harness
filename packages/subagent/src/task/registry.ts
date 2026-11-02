@@ -6,7 +6,7 @@ import { stageTaskRestore } from './restore-stage.ts'
 import { associateColdBindings, assertColdTaskAdmission } from './cold-bindings.ts'
 import { isOwnedTaskContext } from './owned-context.ts'
 import { validateTaskDocument } from "./validation.ts"
-import { unqualifyRestoredTask, qualifyTaskPublication } from './publication.ts'
+import { unqualifyRestoredTask, qualifyTaskPublication,qualifyManagedTaskPublication } from './publication.ts'
 import { settleTaskRecord } from "./settlement.ts"
 import { waitForObservation } from "@i-harness/core-tools"
 import { TaskResultOwner } from "./result.ts"
@@ -291,6 +291,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     },
     async qualifyRestoredResults() {
       assertReady()
+      if(opts.launchContext&&'kind'in opts.launchContext){for(const task of currentState.records.values())if(task.publication==='unqualified'&&await qualifyManagedTaskPublication(task,opts.launchContext.domain))publish(task);return}
       if (!opts.coordinator?.snapshot) return
       const sessions = new Map<string, Awaited<ReturnType<NonNullable<typeof opts.coordinator.snapshot>>>>()
       for (const task of currentState.records.values()) {
@@ -476,6 +477,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         const pending=acknowledge();flight=pending;void pending.catch(()=>{if(flight===pending)flight=undefined});return pending
       },
       acknowledgmentRecovery(cause:unknown){if(this!==result)throw Error('Invalid required Task receiver');return save&&capturedTaskAcknowledgmentFailure(save,cause)},
+      async waitProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');await joinWriter();result.assertProjectionCurrent()},
       assertProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');check();if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original Task projection changed')},
       async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task)}}
     })

@@ -5,18 +5,21 @@ import type { InstructionTarget } from '@i-harness/instructions'
 import type { ToolExec } from '@i-harness/core-tools'
 import type { InstructionReadScope } from '@i-harness/fs'
 import type { ChildInstructionContextFactory } from '@i-harness/subagent'
-import type { createMainInstructionManager } from './manager.ts'
+import {isOriginalManagedInstructionManager,type createMainInstructionManager} from './manager.ts'
 import type { InstructionEnvironment } from './contracts.ts'
 import { InstructionSlot, type CleanupFlight, type SlotOwner } from './child-host/slot.ts'
 import { observedRejection, reentrantClose, trackOperation, unavailable, type Operation } from './child-host/operations.ts'
+import {isManagedExecutionDomain,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {readToolInvocationDomain} from '../../../../core-tools/src/registry/invocation-domain.ts'
 
 export function createChildInstructionHost(options: {
   environment: InstructionEnvironment; cwd: string; authority: () => AuthorityState; available: () => boolean
-  root: { session: SessionView; factOwner: FactOwner; manager: ReturnType<typeof createMainInstructionManager> }
+  root: { session: SessionView; factOwner: FactOwner; manager: ReturnType<typeof createMainInstructionManager> } | {domain:ManagedExecutionDomain;manager:ReturnType<typeof createMainInstructionManager>}
 }) {
   const { environment, cwd, authority, available: hostAvailable } = options
-  const { session: rootSession, factOwner: rootOwner, manager: rootManager } = options.root
-  if (rootOwner.view !== rootSession) throw new TypeError('Root instruction owner/view mismatch')
+  const root=options.root,rootSession='session'in root?root.session:undefined,rootOwner='session'in root?root.factOwner:undefined,rootManager=root.manager
+  const rootDomain='domain'in root?root.domain:undefined
+  if (rootDomain ? !isManagedExecutionDomain(rootDomain)||!isOriginalManagedInstructionManager(rootManager,rootDomain) : rootOwner?.view !== rootSession) throw new TypeError('Root instruction owner/view mismatch')
   const managerOptions = { environment, cwd, authority }
   const slots = new WeakMap<SessionView, InstructionSlot>(), owned = new Set<InstructionSlot>()
   const roots = new Set<Operation>(), flights = new Set<CleanupFlight>()
@@ -105,7 +108,11 @@ export function createChildInstructionHost(options: {
   }, observe(target: InstructionTarget, exec: ToolExec): Promise<InstructionReadScope> {
     if (!available()) return Promise.resolve({ status: 'unavailable', reason: 'mapping-unavailable' })
     const session = exec.session
-    if (!session) return Promise.resolve({ status: 'reference-only', reason: 'outside-root' })
+    if (!session) {
+      if(!rootDomain)return Promise.resolve({ status: 'reference-only', reason: 'outside-root' })
+      try{if(readToolInvocationDomain(exec)!==rootDomain)return Promise.resolve({status:'reference-only',reason:'outside-root'});rootDomain.assertCurrent()}catch{return Promise.resolve({status:'unavailable',reason:'mapping-unavailable'})}
+      return trackOperation(roots, () => invoke(() => rootManager.observe(target))).work.then(result => {try{rootDomain.assertCurrent();return available()?result:{status:'unavailable',reason:'mapping-unavailable'}}catch{return {status:'unavailable',reason:'mapping-unavailable'}}})
+    }
     if (session === rootSession) {
       return trackOperation(roots, () => invoke(() => rootManager.observe(target))).work.then(result =>
         available() ? result : { status: 'unavailable', reason: 'mapping-unavailable' })

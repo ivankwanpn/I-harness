@@ -200,6 +200,12 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         }};
     }
     return {
+        /** Structural selection only; payload remains in the held writer. */
+        taskResultOrdinal(taskId:string) {
+            check();const facts=owned.index.resultFacts(),visibility=historyVisibility(facts)
+            for(let i=facts.length-1;i>=0;i--){const fact=facts[i]!;if(fact.type==='subagent/end'&&fact.taskId===taskId&&visibility.branch(fact))return fact.index}
+            return undefined
+        },
         /** Capture structural facts synchronously under the original held writer. */
         reserveTaskHistory(read: (index: number) => Promise<SessionEventView>, assertCurrent: () => void) {
             check(); assertCurrent();

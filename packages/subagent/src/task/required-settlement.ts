@@ -1,6 +1,6 @@
 import type { SettlementFacts } from '@i-harness/core-session'
 import type { TaskRegistry,TaskRecord,TaskTerminalizeInput } from './types.ts'
-export interface RequiredTaskSettlement {settle():Promise<Readonly<TaskRecord>>;reconcile():Promise<Readonly<TaskRecord>>;recoverCapturedAcknowledgment():Promise<Readonly<TaskRecord>|undefined>;acknowledgmentRecovery(cause:unknown):Error|undefined;assertProjectionCurrent():void;release():Promise<void>}
+export interface RequiredTaskSettlement {settle():Promise<Readonly<TaskRecord>>;reconcile():Promise<Readonly<TaskRecord>>;recoverCapturedAcknowledgment():Promise<Readonly<TaskRecord>|undefined>;acknowledgmentRecovery(cause:unknown):Error|undefined;waitProjectionCurrent():Promise<void>;assertProjectionCurrent():void;release():Promise<void>}
 type Bind=(task:TaskRecord,source:SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>,producer:()=>Promise<TaskTerminalizeInput>)=>Promise<RequiredTaskSettlement|undefined>
 const registries=new WeakMap<TaskRegistry,Bind>()
 export function associateRequiredTaskRegistry(registry:TaskRegistry,bind:Bind){if(registries.has(registry))throw Error('Duplicate required Task owner');registries.set(registry,bind)}
