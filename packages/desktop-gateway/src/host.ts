@@ -352,6 +352,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const codeSettings = createCodeModeSettings(settingsPath, service)
   const rawInput = createDesktopInput(coordinator, service, {
+    managedPreparation: true,
     prepare: async (id, text) => expandPluginPrompt(await service.assemblyFor(id), text),
     onStatus: (sessionId, running, error, modelFailure) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) })),
   })

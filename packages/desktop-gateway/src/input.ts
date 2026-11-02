@@ -17,6 +17,8 @@ type ManagedInputObservation=ReturnType<ManagedInputOwner['observe']>
 /** Durable admission owns acceptance; each execution is scheduled separately. */
 export function createDesktopInput(coordinator: SessionCoordinator, service: SessionService, options: {
   prepare?: (sessionId: string, text: string) => Promise<string>
+  /** Original managed runtime supplies its own retained preparation surface. */
+  managedPreparation?: boolean
   onStatus?: (sessionId: string, running: boolean, error?: string, modelFailure?: ModelFailureFacts) => void
 } = {}) {
   const load = createDurableSessionLoader(coordinator)
@@ -36,7 +38,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     void job.finally(() => { if (gates.get(id) === job) gates.delete(id) }).catch(() => undefined)
     return job
   }
-  function start(id: string, inputId: string, text: string) {
+  function start(id: string, inputId: string, text: string, managed = false) {
     const key = keyFor(id, inputId)
     if (scheduled.has(key)) return
     scheduled.add(key)
@@ -44,7 +46,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     const controller = new AbortController()
     controllers.add(controller)
     const job = service.submit(id, text, controller.signal, { admittedInputId: inputId,
-      ...(options.prepare ? { prepareInput: (_assembly, raw) => options.prepare!(id, raw) } : {}),
+      ...(!managed && options.prepare ? { prepareInput: (_assembly, raw) => options.prepare!(id, raw) } : {}),
     })
       .then(() => { options.onStatus?.(id, service.queueState(id).running) }, (error) => {
         const message = error instanceof Error ? error.message : String(error)
@@ -55,10 +57,10 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
       .finally(() => { scheduled.delete(key); jobs.delete(job); controllers.delete(controller) })
     jobs.add(job)
   }
-  function schedulePending(id: string, inbox: Pick<AsyncInbox, 'pending'>) {
+  function schedulePending(id: string, inbox: Pick<AsyncInbox, 'pending'>, managed = false) {
     const running = service.queueState(id).running
     for (const pending of inbox.pending()) {
-      if (pending.delivery === "queue" || !running) start(id, pending.inputId, pending.text)
+      if (pending.delivery === "queue" || !running) start(id, pending.inputId, pending.text, managed)
     }
   }
   async function acknowledgeExisting(id: string, existing: Extract<SessionEventView, { type: "agent/input/admitted" }>, shouldStart: boolean, managed?:ManagedInputOwner, observation?:ManagedInputObservation) {
@@ -66,7 +68,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     if(managed){
       if(!observation)throw Error('Original admission observation required')
       observation.assertCurrent()
-      if(shouldStart&&existing.delivery==='queue')schedulePending(id,managed.inbox)
+      if(shouldStart&&existing.delivery==='queue')schedulePending(id,managed.inbox,true)
       return {accepted:true as const,inputId:existing.inputId,delivery:existing.delivery}
     }
     const document = await coordinator.openManagedDocument(id)
@@ -92,7 +94,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         if (raw.context !== undefined && (typeof raw.context !== "string" || raw.context.length > 131072)) throw new Error("Invalid prompt context")
         if (raw.clientToken !== undefined && (typeof raw.clientToken !== "string" || raw.clientToken.length < 8 || raw.clientToken.length > 128)) throw new Error("Invalid prompt client token")
         if (raw.images) validateImages(raw.images, "desktop input")
-        const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined,supplementalContext:raw.context!==undefined})
+        const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined&&!options.managedPreparation,supplementalContext:raw.context!==undefined})
         await coordinator.profile(id)
         managed?.observe().assertCurrent()
         let receipt: TokenReceipt | undefined
@@ -150,7 +152,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         if (closed) throw new Error("Input service closed")
         if (raw.start !== false && !blocked && delivery === "queue") {
           managed?.observe().assertCurrent()
-          schedulePending(id, inbox)
+          schedulePending(id, inbox, !!managed)
         }
         return { accepted: true as const, inputId, delivery }
       })
@@ -178,8 +180,8 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     resume(id: string) {
       return serial(id, async () => {
         if (closed) throw new Error("Input service closed")
-        const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined})
-        if(managed){const observation=managed.observe();const pending=managed.inbox.pending();observation.assertCurrent();for(const input of pending)start(id,input.inputId,input.text)}
+        const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined&&!options.managedPreparation})
+        if(managed){const observation=managed.observe();const pending=managed.inbox.pending();observation.assertCurrent();for(const input of pending)start(id,input.inputId,input.text,true)}
         else {await ownSession(id);(await coordinator.openManagedDocument(id)).assertReady();for (const input of (await service.receivedInputFor(id)).pending()) start(id, input.inputId, input.text)}
         return { resumed: true }
       })
