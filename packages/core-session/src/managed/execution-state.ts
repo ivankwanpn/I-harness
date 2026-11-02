@@ -194,7 +194,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   if(!token.sessionId||!token.incarnation)throw new TypeError('Original writer incarnation required')
   const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId,foldFactory)
   assertHeld()
-  const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>(),activeDependencyScopes=new Set<OriginalWriterDependencyScope>(),taskHistoryScopes=new Set<OriginalWriterDependencyScope>()
+  const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>(),activeDependencyScopes=new Set<OriginalWriterDependencyScope>(),taskHistoryScopes=new Set<OriginalWriterDependencyScope>(),admissionReads=new Map<OriginalWriterDependencyScope,Promise<void>>()
   let stopped=false,ownerBound=false,closed=false,pendingWrite:object|undefined
   let pendingWriteActive=false
   let readinessWasReady=false,readinessEpoch=0,readinessQueued=false,ownerRecoveryBlocked=false
@@ -248,7 +248,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       async admitted(inputId:string){
         if(this!==inbox)throw TypeError('Original inbox receiver required');current()
         const ordinal=original.intake.admission(inputId);if(ordinal===undefined)return undefined
-        const scope=captureWriterDependencies(open(expected));debt.add(scope);activeDependencyScopes.add(scope);markBusy()
+        const scope=captureWriterDependencies(open(expected)),finished=Promise.withResolvers<void>();void finished.promise.catch(()=>{});debt.add(scope);activeDependencyScopes.add(scope);admissionReads.set(scope,finished.promise);markBusy()
         // Only this synchronous invocation's original registered reader is
         // exempt from its own debt check. Every public admission remains fenced.
         let record:Extract<import('./types.ts').SessionEventView,{type:'agent/input/admitted'}>|undefined,failed=false,primary:unknown
@@ -257,7 +257,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
           if(event.type!=='agent/input/admitted'||event.seq!==ordinal||event.inputId!==inputId)throw TypeError('Original indexed admission record required')
           record=freezeJsonData(event)
         }catch(error){failed=true;primary=error}
-        try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);const cause=failed?new AggregateError([primary,cleanup],'Admission read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
+        try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope);admissionReads.delete(scope);finished.resolve()}catch(cleanup){activeDependencyScopes.delete(scope);admissionReads.delete(scope);const cause=failed?new AggregateError([primary,cleanup],'Admission read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};finished.reject(cause);signalUnavailable(cause,!sameHeldOwner());throw cause}
         if(failed){signalReady();throw primary}
         try{current()}catch(error){signalUnavailable(error,!sameHeldOwner());throw error};signalReady();return record
       }
@@ -361,7 +361,10 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     async prepareWrite(groups:readonly CapturedFactGroup[],rejectInvalidGroups=false){
       // Only the original writer invokes this after its real authorization;
       // already-admitted/source-required work can drain after new-work Stop.
-      assertHeld();if(closed)throw new TypeError('Original writer closed');if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size)throw new TypeError('Writer dependency cleanup unresolved')
+      assertHeld();if(closed)throw new TypeError('Original writer closed');if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})
+      // Join only already active, original admission readers. Failed or other
+      // dependency obligations remain recovery debt and never become a retry.
+      while(debt.size){const reads=[...debt].map(scope=>admissionReads.get(scope));if(reads.some(read=>!read))throw new TypeError('Writer dependency cleanup unresolved');await Promise.all(reads);assertHeld();if(closed)throw new TypeError('Original writer closed');if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'})}
       const expected=original.prefix,scope=captureWriterDependencies(open(expected))
       debt.add(scope);activeDependencyScopes.add(scope);markBusy() // installed before the first asynchronous read/open
       const check=scope.assertCurrent.bind(scope),readOriginal=scope.readEvent.bind(scope),read=async(ordinal:number)=>{const event=await readOriginal(ordinal);return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event},close=scope.close.bind(scope)
