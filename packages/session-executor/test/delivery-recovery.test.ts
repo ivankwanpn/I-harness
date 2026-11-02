@@ -9,6 +9,12 @@ import { createGenerationLifecycle } from '../src/lifecycle/generation-actions.t
 import { createSession, createNondurableFactOwner } from '@i-harness/core-session'
 import { readOwnedGenerationActions } from '../../core-session/src/managed/view.ts'
 import { createDeliveryDrain, isRetryableDeliveryError } from '../src/service/delivery-drain.ts'
+
+it('preserves an original readiness signal arriving before a blocked observation rejects',async()=>{
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),scheduled=Promise.withResolvers<void>();let reads=0
+ const drain=createDeliveryDrain({current:()=>true,async reconcile(){if(reads===0){entered.resolve();await release.promise}},pending(){if(reads++===0)throw Error('original observation busy');return ['original-input']},schedule(id,settled){expect(id).toBe('original-input');scheduled.resolve();settled();return true},report(){}})
+ try{drain.signal();await entered.promise;drain.signal();release.resolve();await scheduled.promise;expect(reads).toBe(2)}finally{drain.retire();await drain.join().catch(()=>{})}
+})
 import { receivedInputsFor } from '../src/lifecycle/received-inputs.ts'
 import { createSessionService } from '../src/service.ts'
 import { RecipientDeliveryRecoveryError } from '../src/lifecycle/recipient-delivery.ts'

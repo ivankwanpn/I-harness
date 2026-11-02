@@ -56,7 +56,7 @@ export function createDeliveryDrain(options: {
       }
     })()
     running = pending
-    void pending.then(() => { running = undefined; if (dirty && !retired && options.current()) void run() }, () => { running = undefined })
+    void pending.then(() => { running = undefined; if (dirty && !retired && options.current()) void run() }, () => { running = undefined; if (dirty && !retired && options.current()) void run() })
     return pending
   }
   return {
