@@ -1194,7 +1194,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
         })
         const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','workflow/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled'].includes(event.type))drain.signal()})
-        unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
+        unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();if(!retired)d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
       }
       assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);published=true;managedPrepubSettlers.delete(sessionId);if(rewindMount)managedRewinds.set(sessionId,{handle:rewindMount,runtime});if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
       publishManaged(sessionId,runtime)
