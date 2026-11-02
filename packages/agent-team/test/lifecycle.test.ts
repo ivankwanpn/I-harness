@@ -722,7 +722,7 @@ describe("mountAgentTeams lifecycle", () => {
     const release = Promise.withResolvers<void>(), disposing = Promise.withResolvers<void>(), order: string[] = []
     const previous = { name: "wait_agent", description: "original", inputSchema: { type: "object" }, execute: async () => "original" }
     tools.register(previous)
-    if(!isNondurableSession(deps.parentSession))throw new Error('Standalone fixture expected')
+    if(!deps.parentSession||!isNondurableSession(deps.parentSession))throw new Error('Standalone fixture expected')
     deps.parentSession.events.push(
       { type: "team/member", version: 1, teamId: "lead-unmount-order", member: { id: "helper", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } },
       { type: "team/member", version: 1, teamId: "lead-unmount-order", member: { id: "helper", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active", sessionId: "child" } },

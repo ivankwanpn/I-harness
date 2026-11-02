@@ -25,14 +25,22 @@ export function createTeammateSpawner(
   teamJobs: JobRegistry,
   getTeamRoleTools: () => string[],
   activity: Pick<ReturnType<typeof createActivity>, "notify">,
+  retainBirth:(birth:import('@i-harness/subagent').TeamChildBirthAttempt)=>void = ()=>{throw Error('Original Team birth retention unavailable')},
+  releaseBirth:(birth:import('@i-harness/subagent').TeamChildBirthAttempt)=>void = ()=>{},
+  releaseProvisioning:(witness:import('../../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning)=>Promise<void> = async()=>{throw Error('Original Team provisioning cleanup unavailable')},
 ) {
-  const realSpawnChild = async (name: string, prompt: string, context: "fresh" | "fork", opts?: { forkTurns?: "none" | "all" | number }): Promise<{ path: string; jobId: string; sessionId?: string }> => {
+  const birthField=Object.getOwnPropertyDescriptor(sub,'reserveManagedTeamChild')
+  const reserveBirth=birthField&&'value'in birthField?birthField.value:undefined
+  const assertBirthIssuer=()=>{const current=Object.getOwnPropertyDescriptor(sub,'reserveManagedTeamChild');if(typeof reserveBirth!=='function'||!current||!('value'in current)||current.value!==reserveBirth||current.enumerable!==birthField!.enumerable||current.configurable!==birthField!.configurable||current.writable!==birthField!.writable)throw TypeError('Original Team birth issuer changed')}
+  const realSpawnChild = async (name: string, prompt: string, context: "fresh" | "fork", opts?: { coldBirth?:import('@i-harness/subagent').CommittedTeamChildBirth; forkTurns?: "none" | "all" | number; managed?:{caller:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller;provisioning:import('../../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning} }): Promise<{ path: string; jobId: string; sessionId?: string }> => {
     const role = sub.roles.get(TEAMMATE_ROLE_NAME) ?? teammateRole(getTeamRoleTools())
     let forkTurns: "none" | "all" | number
     if (context === "fresh") forkTurns = "none"
     else if (opts?.forkTurns === undefined || opts.forkTurns === "all") forkTurns = "all"
     else forkTurns = opts.forkTurns
-    return spawnChild({
+    let attempt:import('@i-harness/subagent').TeamChildBirthAttempt|undefined,birth:import('@i-harness/subagent').CommittedTeamChildBirth|undefined=opts?.coldBirth
+    if(opts?.managed){assertBirthIssuer();attempt=Reflect.apply(reserveBirth,sub,[opts.managed.caller,opts.managed.provisioning]);retainBirth(attempt!);birth=await attempt!.run();assertBirthIssuer()}
+    const out=await spawnChild({
       generationFactoryFor: sub.generationFactoryFor, modelActionTimeoutMs: sub.modelActionTimeoutMs, modelActionMaxAttempts: sub.modelActionMaxAttempts,
       codeMode: sub.codeMode, codeModeFactory: sub.codeModeFactory,
       createInstructionContext: sub.createInstructionContext, retainInitialSetup: sub.retainInitialSetup,
@@ -40,7 +48,7 @@ export function createTeammateSpawner(
       message: prompt,
       parentPath: "lead",
       parentRegistry: deps.parentRegistry,
-      parentSession: deps.parentSession,
+      ...birth?{childStart:{kind:'committed-team-child-birth' as const,birth}}:{parentSession:deps.parentSession},
       parentCtx: ctx,
       role,
       parentModel: deps.parentModel,
@@ -64,8 +72,10 @@ export function createTeammateSpawner(
       table: sub.table,
       agents: sub.agents,
       forkTurns,
-      childSessions: sub.childSessions,
-    }).then((out) => {
+      childSessions: birth&&sub.childSessions?{...sub.childSessions,origin:'team' as const}:sub.childSessions,
+    })
+    if(attempt&&opts?.managed){await releaseProvisioning(opts.managed.provisioning);await attempt.close();releaseBirth(attempt)}
+    {
       // M19 Ruling 26 (status edge): the child's INITIAL turn completing after
       // spawn flips its status running→waiting (see child.ts) WITHOUT
       // appending any team event — the roster's spawn call had already
@@ -75,7 +85,7 @@ export function createTeammateSpawner(
       const spawnedEntry = sub.table.get(out.path)
       if (spawnedEntry?.followupChain) void spawnedEntry.followupChain.then(() => activity.notify()).catch(() => {})
       return out
-    })
+    }
   }
   return realSpawnChild
 }

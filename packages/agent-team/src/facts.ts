@@ -1,3 +1,6 @@
+import {bindOriginalTeamProvisioningCandidate,type OriginalManagedTeamCaller} from '@i-harness/core-tools/internal/team-caller'
+import {createOriginalTeamProvisioning,reserveOriginalTeamProvisioning,type OriginalTeamProvisioning,type OriginalTeamProvisioningOwner,type OriginalTeamProvisioningCandidate} from '../../core-session/src/managed/team-provisioning.ts'
+import {isManagedExecutionDomain,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { committedFactSeqs, createNondurableFactOwner, isManagedFactOwner, isNondurableSession, type CapturedActionFact, type CapturedSettlementFact, type FactOwner, type ManagedAction, type ProducerFactOutcome, type SessionEvent, type SessionView } from '@i-harness/core-session';
 import type { TeamEvent } from './types.ts';
@@ -9,18 +12,27 @@ export function teamFactOwner(view: SessionView, supplied?: FactOwner): FactOwne
         throw Object.assign(new Error('Team requires its actual document owner'), { code: 'FACT_OWNER_UNSUPPORTED' });
     return owner;
 }
+/** Only the original execution domain can supply a view-free team owner. */
+export function managedTeamFactOwner(domain: ManagedExecutionDomain, assertParent:()=>void = ()=>{}): Pick<FactOwner,'beginAction'> {
+    if(!isManagedExecutionDomain(domain))throw Object.assign(new Error('Original managed Team domain required'),{code:'FACT_OWNER_UNSUPPORTED'});
+    domain.assertCurrent();assertParent();const owner=domain.owner;
+    return Object.freeze({beginAction(signal?:AbortSignal){domain.assertCurrent();assertParent();return owner.beginAction(signal)}});
+}
 /** Tool cancellation context is scheduling data, never a write capability. */
-export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promise<void>, committed: () => void, retainFactsCleanup?: (close: () => Promise<void>) => void) {
+export function createTeamFacts(owner: Pick<FactOwner,'beginAction'>, drainTransactions: () => Promise<void>, committed: () => void, retainFactsCleanup?: (close: () => Promise<void>) => void, provisioningOwner?:OriginalTeamProvisioningOwner) {
     const signals = new AsyncLocalStorage<Run>();
     type Transaction = {
         kind: 'transaction';
         action: ManagedAction<ProducerFactOutcome>;
         fact: CapturedActionFact<ProducerFactOutcome>;
         attempted: boolean;
+        retainProvisioning:boolean;
+        provisioningCandidate?:OriginalTeamProvisioningCandidate;
     };
     type Message = MessageObligation & { kind: 'message'; failed(error: unknown): void };
     type Run = { kind: 'run'; action: ManagedAction<ProducerFactOutcome>; active: boolean; done: Promise<void> };
     const transactions = new Map<readonly TeamEvent[], Transaction | Message | Run>();
+    const provisioned=new WeakMap<readonly TeamEvent[],OriginalTeamProvisioning>(),heldProvisioning=new Set<OriginalTeamProvisioning>(),orphanCandidates=new Set<()=>void>();
     let retired = false;
     const action = owner.beginAction();
     let source: ReturnType<typeof action.registerSettlementSource> | undefined;
@@ -31,6 +43,8 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
         const failures: unknown[] = [];
         try { finishAction(); } catch (error) { failures.push(error); }
         try { if (source && !sourceClosed) { await source.close(); sourceClosed = true; } } catch (error) { failures.push(error); }
+        for(const witness of heldProvisioning)try{await witness.close();heldProvisioning.delete(witness)}catch(error){failures.push(error)}
+        for(const cleanup of orphanCandidates)try{cleanup()}catch(error){failures.push(error)}
         if (failures.length === 1) throw failures[0];
         if (failures.length) throw new AggregateError(failures, 'Team facts cleanup incomplete');
     };
@@ -59,17 +73,21 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
     const beginCandidate = () => {
         assertOpen();
         const candidate = owner.beginAction(currentRunSignal());
-        let adopted = false, finished = false;
-        const abandon = () => { if (!adopted && !finished) { finished = true; candidate.finish(); } };
-        try { candidate.assertOpen(); } catch (error) { abandon(); throw error; }
+        let adopted=false,finished=false,tokenDone=false,actionDone=false,provisioningCandidate:OriginalTeamProvisioningCandidate|undefined
+        const cleanup=()=>{const failures:unknown[]=[];if(!tokenDone)try{provisioningCandidate?.abandon();tokenDone=true}catch(error){failures.push(error)}if(!actionDone)try{candidate.finish();actionDone=true}catch(error){failures.push(error)}if(failures.length)throw new AggregateError(failures,'Team candidate cleanup unresolved');finished=true;orphanCandidates.delete(cleanup)}
+        const abandon=()=>{if(!adopted&&!finished)try{cleanup()}catch(error){orphanCandidates.add(cleanup);throw error}}
+        try { candidate.assertOpen(); } catch (error) { try{abandon()}catch(cleanup){throw new AggregateError([error,cleanup],'Team candidate admission and cleanup failed')} throw error; }
         return {
-            capture(events: readonly TeamEvent[]) {
+            capture(events: readonly TeamEvent[],caller?:OriginalManagedTeamCaller) {
+                const retainProvisioning=caller!==undefined;
+                if(retainProvisioning && !provisioningOwner)throw TypeError('Original Team provisioning owner required');
                 if (adopted || finished) throw new Error('Team candidate already transferred or abandoned');
                 try {
+                    if(retainProvisioning){provisioningCandidate=reserveOriginalTeamProvisioning(provisioningOwner!,candidate as ManagedAction<import('@i-harness/core-session').FactOutcome>);bindOriginalTeamProvisioningCandidate(caller!,provisioningCandidate)}
                     const fact = candidate.captureTeamTransaction(events);
-                    transactions.set(events, { kind: 'transaction', action: candidate, fact, attempted: false });
+                    transactions.set(events, { kind: 'transaction', action: candidate, fact, attempted: false, retainProvisioning, ...provisioningCandidate?{provisioningCandidate}:{} });
                     adopted = true;
-                } catch (error) { abandon(); throw error; }
+                } catch (error) { try{abandon()}catch(cleanup){throw new AggregateError([error,cleanup],'Team candidate capture and cleanup failed')} throw error; }
             },
             abandon,
         };
@@ -126,9 +144,11 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
                 throw Object.assign(new Error('Team transaction cancelled before commitment'), { code: 'FACT_CANCELLED' });
             }
             committedFactSeqs(outcome);
-            pending.action.finish();
+            if(pending.retainProvisioning){if(!provisioningOwner||!pending.provisioningCandidate||outcome.kind!=='committed')throw TypeError('Original managed provisioning ACK required');const witness=createOriginalTeamProvisioning(provisioningOwner,pending.provisioningCandidate,pending.fact,outcome);provisioned.set(events,witness);heldProvisioning.add(witness)}else pending.action.finish();
             transactions.delete(events);
         },
+        takeProvisioning(events:readonly TeamEvent[]){const witness=provisioned.get(events);if(!witness)throw TypeError('Original Team provisioning unavailable');provisioned.delete(events);return witness},
+        async releaseProvisioning(witness:OriginalTeamProvisioning){if(!heldProvisioning.has(witness))throw TypeError('Original held Team provisioning required');await witness.close();heldProvisioning.delete(witness)},
         findMessage,
         reserveMessage(queued: Queued, mode: 'enqueue' | 'existing', installAck: InstallAck): MessageObligation {
             const existing = findMessage(queued);
@@ -265,8 +285,8 @@ export function createTeamDeliveryFacts() {
         settle(): Promise<void>;
         close(): Promise<void>;
     };
-    const owners = new WeakMap<FactOwner, Map<string, Pending>>();
-    return async (owner: FactOwner, event: Extract<SessionEvent, {
+    const owners = new WeakMap<Pick<FactOwner,'beginAction'>, Map<string, Pending>>();
+    return async (owner: Pick<FactOwner,'beginAction'>, event: Extract<SessionEvent, {
         type: 'subagent/inbox';
     }>) => {
         let pending = owners.get(owner);

@@ -9,6 +9,13 @@ import type { createRoster } from "../roster.ts"
 const liveTeams = new Set<string>()
 
 export function admitTeam(deps: Pick<TeamDeps, "allowConcurrentTeams" | "parentSession">, config?: Partial<TeamConfig>) {
+  return admitTeamWithLedger(deps.allowConcurrentTeams,()=>teamLedger(deps.parentSession!),config)
+}
+/** Pure fold admission; caller must authenticate any managed ledger first. */
+export function admitTeamFromLedger(allowConcurrentTeams: boolean | undefined, ledger: ReturnType<typeof teamLedger>, config?: Partial<TeamConfig>) {
+  return admitTeamWithLedger(allowConcurrentTeams,()=>ledger,config)
+}
+function admitTeamWithLedger(allowConcurrentTeams:boolean|undefined, readLedger:()=>ReturnType<typeof teamLedger>, config?:Partial<TeamConfig>) {
   const cfg: Required<TeamConfig> = {
     maxMembers: 8,
     maxTasks: 256,
@@ -22,7 +29,7 @@ export function admitTeam(deps: Pick<TeamDeps, "allowConcurrentTeams" | "parentS
   }
   validateTeamConfig(cfg)
 
-  if (liveTeams.size > 0 && !deps.allowConcurrentTeams) {
+  if (liveTeams.size > 0 && !allowConcurrentTeams) {
     throw new Error("agent-team: only one team per run is supported (M19)")
   }
 
@@ -34,7 +41,7 @@ export function admitTeam(deps: Pick<TeamDeps, "allowConcurrentTeams" | "parentS
   // teamId is derived from the log: on restore the first team/* event's
   // teamId is authoritative (member ids and old-lead-targeted queued message
   // keys are stable; only a freshly minted lead id would strand them).
-  const ledger = teamLedger(deps.parentSession)
+  const ledger = readLedger()
   const state = foldTeam(ledger).state
   let canonicalTeamId: string | undefined
   for (const e of ledger) {

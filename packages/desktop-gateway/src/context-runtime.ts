@@ -1,4 +1,4 @@
-import {inspectTaskChildSource,inspectManagedTaskChildSource,isManagedTaskChildHistory} from '@i-harness/subagent'
+import {inspectTaskChildSource,inspectManagedTaskChildSource,isManagedTaskChildHistory,assertOriginalTeamChildHostRequest,assertOriginalColdTeamChildHostRequest,isOriginalColdTeamChildHostInput} from '@i-harness/subagent'
 import {join} from 'node:path'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {types} from 'node:util'
@@ -416,7 +416,8 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     const project=scope.projectId?{kind:'project' as const,projectId:scope.projectId}:{kind:'unassigned' as const}
     return {project,metadata:{workspaceId:workspaceKey},prepare(request){
       input.assertCurrent()
-      const transfer=prepareTaskChildTransfer({request,sourceSessionId:input.parentSessionId,...input.history?{history:input.history}:{},sourceAvailable:input.sourceAvailable,assertNewWorkCurrent(){input.assertCurrent();if(observed().revision!==scope.revision)throw Error('Original task project scope changed')},targetAvailable:()=>true},source)
+      if(request.core.caller.kind==='team')(isOriginalColdTeamChildHostInput(input)?assertOriginalColdTeamChildHostRequest:assertOriginalTeamChildHostRequest)(input,request)
+      const transfer=prepareTaskChildTransfer({request,sourceSessionId:input.parentSessionId,...request.core.caller.kind==='team'?{teamHost:input}:{},...input.history?{history:input.history}:{},sourceAvailable:input.sourceAvailable,assertNewWorkCurrent(){input.assertCurrent();if(observed().revision!==scope.revision)throw Error('Original task project scope changed')},targetAvailable:()=>true},source)
       input.retain({async close(){transfer.close()}})
       return transfer
     }}

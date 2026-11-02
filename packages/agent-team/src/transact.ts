@@ -18,7 +18,9 @@ export interface MessageObligation {
     settle(): Promise<void>;
 }
 export interface TeamLead {
-    beginCandidate?(): { capture(events: readonly TeamEvent[]): void; abandon(): void };
+    beginCandidate?(): { capture(events: readonly TeamEvent[],caller?:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller): void; abandon(): void };
+    takeProvisioning?(events:readonly TeamEvent[]): import('../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning;
+    releaseProvisioning?(witness:import('../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning):Promise<void>;
     commit(events: readonly TeamEvent[]): Promise<void>;
     onCommit?(): void;
     reserveMessage?(queued: Queued, mode: 'enqueue' | 'existing', installAck: InstallAck): MessageObligation;
@@ -28,6 +30,8 @@ export interface TeamLead {
 }
 export interface TeamTransaction {
     deliverMessage(request: DeliveryRequest): Promise<MailboxResult>;
+    releaseProvisioning?(witness:import('../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning):Promise<void>;
+    transactProvisioning?<T>(fn:(state:TeamFoldState)=>{events?:TeamEvent[];result:T},caller:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller):Promise<{result:T;witness:import('../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning}>;
     transact<T>(fn: (state: TeamFoldState) => {
         events?: TeamEvent[];
         result: T;
@@ -101,6 +105,15 @@ export function createTeamTransact(lead: TeamLead, state?: TeamFoldState): TeamT
         pending = undefined;
         lead.onCommit?.();
     };
+    const runTransaction=<T>(fn:(state:TeamFoldState)=>{events?:TeamEvent[];result:T},caller?:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller)=>serial(async()=>{
+        const retainProvisioning=caller!==undefined
+        await settle();if(retainProvisioning&&(!lead.beginCandidate||!lead.takeProvisioning))throw TypeError('Original Team provisioning owner required');const candidate=lead.beginCandidate?.()
+        let primary:unknown,failed=false
+        try{if(!shared)shared=createFoldState();const snapshot=cloneState(shared),out=fn(snapshot)
+            if(out.events&&out.events.length){if(retainProvisioning&&(out.events.length!==1||out.events[0]?.type!=='team/member'||out.events[0].member.phase!=='provisioning'))throw TypeError('Original Team provisioning event required');for(const event of out.events)applyTeamEvent(snapshot,event);candidate?.capture(out.events,caller);pending=out.events;await settle();return {result:out.result,...retainProvisioning?{witness:lead.takeProvisioning?.(out.events)}:{}}}
+            if(retainProvisioning)throw TypeError('Original Team provisioning event required');return {result:out.result}
+        }catch(error){primary=error;failed=true;throw error}finally{try{candidate?.abandon()}catch(cleanup){if(failed)throw new AggregateError([primary,cleanup],'Team transaction and candidate cleanup failed');throw cleanup}}
+    })
     return {
         async drain() {
             try {
@@ -149,33 +162,8 @@ export function createTeamTransact(lead: TeamLead, state?: TeamFoldState): TeamT
             }).catch(error => { if (reserved) lead.messageFailed?.(reserved, error); throw error; });
             return record ? record.start(request.deliver) : { messageId: request.queued.message.id, status: 'accepted' };
         },
-        transact<T>(fn: (state: TeamFoldState) => {
-            events?: TeamEvent[];
-            result: T;
-        }): Promise<T> {
-            return serial(async () => {
-                await settle();
-                const candidate = lead.beginCandidate?.();
-                try {
-                    if (!shared)
-                        shared = createFoldState();
-                    // No await separates admission from the pure callback,
-                    // validation, original capture and pending installation.
-                    const snapshot = cloneState(shared);
-                    const out = fn(snapshot);
-                    if (out.events && out.events.length > 0) {
-                        // Validate all candidates against the throwaway clone.
-                        for (const e of out.events)
-                            applyTeamEvent(snapshot, e);
-                        // Keep the exact captured candidate through unknown;
-                        // the next operation/drain settles it without replay.
-                        candidate?.capture(out.events);
-                        pending = out.events;
-                        await settle();
-                    }
-                    return out.result;
-                } finally { candidate?.abandon(); }
-            });
-        },
+        async releaseProvisioning(witness:import('../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning){if(!lead.releaseProvisioning)throw TypeError('Original Team provisioning owner required');await lead.releaseProvisioning(witness)},
+        transact<T>(fn:(state:TeamFoldState)=>{events?:TeamEvent[];result:T}):Promise<T> {return runTransaction(fn).then(value=>value.result)},
+        transactProvisioning<T>(fn:(state:TeamFoldState)=>{events?:TeamEvent[];result:T},caller:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller) {if(!caller)return Promise.reject(TypeError('Original Team caller required'));return runTransaction(fn,caller).then(value=>{if(!value.witness)throw TypeError('Original Team provisioning unavailable');return {result:value.result,witness:value.witness}})},
     };
 }
