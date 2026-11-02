@@ -3,7 +3,8 @@ import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/task-document-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { applyGoalMutation, foldGoal } from "@i-harness/goal"
 import { append, createSession, metadataFactsFor, committedFactSeqs } from '@i-harness/core-session'
@@ -34,7 +35,7 @@ it('complete Session goal tools retain their original read and completion behavi
 
 it("persists Goal/Plan controls and job history, rejecting stale Goal edits", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-workflow-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const workflow = createDesktopWorkflow(coordinator, service)
@@ -60,7 +61,7 @@ it("persists Goal/Plan controls and job history, rejecting stale Goal edits", as
 })
 it.each(["refused", "empty"] as const)("pauses an autonomous Goal after a provider %s result", async (kind) => {
   const root = await mkdtemp(join(tmpdir(), "ih-goal-terminal-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s" })
   let calls = 0
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator),
@@ -75,7 +76,7 @@ it.each(["refused", "empty"] as const)("pauses an autonomous Goal after a provid
 })
 it("contains background recovery persistence failures and reports them to the UI", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-goal-disk-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s" })
   const put = coordinator.putDocument.bind(coordinator)
   vi.spyOn(coordinator, "putDocument").mockImplementation(async (key, value) => { if (key.startsWith("desktop-goal-")) throw new Error("disk unavailable"); await put(key, value) })
@@ -91,7 +92,7 @@ it("contains background recovery persistence failures and reports them to the UI
 })
 it("forks a team conversation into an independent team while the source stays mounted", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-team-fork-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "source" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true })
   const workflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true })
@@ -113,7 +114,7 @@ it("forks a team conversation into an independent team while the source stays mo
 })
 it("restarts a paused Goal while the old aborted provider request is still settling", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-goal-resume-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s" })
   let release!: () => void
   const old = new Promise<void>((done) => { release = done })
