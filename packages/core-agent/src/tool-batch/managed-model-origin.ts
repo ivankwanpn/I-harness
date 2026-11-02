@@ -1,6 +1,5 @@
 import { receivedExecutionInputsFor } from '../../../session-executor/src/lifecycle/execution-inputs.ts';
 import { isStrictFactData } from '@i-harness/core-session';
-import { registryRequiresInstructionOrigin } from '@i-harness/core-tools';
 import { createManagedExecutionDomain, isManagedExecutionSource, assertManagedActionCurrent, getManagedExecutionAdmissionWait, readManagedActionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
 import { canonicalJsonData, type FactOutcome, type CapturedActionFact, type ManagedAction, type SettlementFacts } from '@i-harness/core-session';
 import { assertModelOriginPair, type ConstructorManagedModelOriginVerifier, type ManagedModelOriginExpectation, type PreparedModelOriginDriver } from '@i-harness/core-tools/model-origin';
