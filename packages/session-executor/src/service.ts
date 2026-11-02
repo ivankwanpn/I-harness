@@ -140,7 +140,7 @@ export interface SessionServiceOptions extends AssemblyOptions {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
     mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
-    ownedTask?:{options(original:import('./managed-assembly.ts').ManagedRegistryConstruction,parentModel:import('@i-harness/llm-seam').ModelClient,shared:{shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput}):Promise<Omit<RegisterSubagentOptions,'managedParent'|'parentNotify'|'parentSession'|'factOwner'>>}
+    ownedTask?:{options(original:import('./managed-assembly.ts').ManagedRegistryConstruction,shared:{shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput}):Promise<Omit<RegisterSubagentOptions,'managedParent'|'parentNotify'|'parentSession'|'factOwner'|'getParentModel'|'deferRestoredWork'>>}
     mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[];task?:RegisterSubagentResult}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
     acquireInstructions?(sessionId:string,execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<import('./managed-assembly.ts').OwnedInstructionBinding>
     ownedTitle?:{enabled:boolean;titleMaxOutputTokens?:number;timeoutMs?:number}
@@ -340,7 +340,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
-  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>}
+  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>}
   const managedTaskOwners=new Map<string,TaskLifecycle>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
   const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
@@ -1091,7 +1091,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       })()
       let instructionBinding:import('./managed-assembly.ts').OwnedInstructionBinding|undefined
       if(opts.managedRuntime!.acquireInstructions){let acquiring=true;try{instructionBinding=await opts.managedRuntime!.acquireInstructions(sessionId,entry.execution,cleanup=>{if(!acquiring||retired)throw Error('Original instruction retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original instruction cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
-      let taskMount:RegisterSubagentResult|undefined,taskLifecycle:TaskLifecycle|undefined
+      let taskMount:RegisterSubagentResult|undefined,taskLifecycle:TaskLifecycle|undefined,initialTaskModel:import('@i-harness/llm-seam').ModelClient|undefined
       let taskShell:import('@i-harness/exec').ExecService|undefined
       let codeMount:import('@i-harness/code-mode').CodeModeMount|undefined
       let shellExecution:import('@i-harness/exec').ExecExecutionHost|undefined
@@ -1107,12 +1107,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         recipient=receivedExecutionInputsFor(entry.execution).taskDelivery(original.domain)
         const originalRecipient=recipient,current=()=>{if(retired||closed||closing.has(sessionId)||!runtime||managedRuntimes.get(sessionId)!==runtime)throw new ParentNotificationStoppedError();assertWritableOpen(sessionId)}
         const notify:ParentInputAdmission={taskEvidence(namespace,id){current();return originalRecipient.taskEvidence(namespace,id)},async prepareTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.prepareTaskLaunch(input);current();return result},async admitTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.admitTask(input.evidence,{text:input.text,description:input.description,display:input.display});current();privateDrain?.signal();return result},async admit(){throw new ParentNotificationStoppedError('Original Task delivery evidence required')},wake(id){if(id!==sessionId)return;try{current();privateDrain?.signal()}catch{/* Retired original parent cannot be woken. */}}}
-        const selected=await resolveModel();original.assertCurrent();const taskOptions=await opts.managedRuntime!.ownedTask.options(original,selected.model,{...taskShell?{shell:taskShell}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()
-        taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify})
-        const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt
-        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[])})
-        original.retain(taskLifecycle.dispose);await mounted.ready;original.assertCurrent()
-       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},opts.managedRuntime!.ownedCode.config)}if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();return opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),...taskMount?{task:taskMount}:{}})}return registrySurface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
+        const taskOptions=await opts.managedRuntime!.ownedTask.options(original,{...taskShell?{shell:taskShell}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()
+        taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify,deferRestoredWork:true,getParentModel:()=>{const model=taskOptions.parentModel??(runtime?runtime.selectedModelBinding().model:initialTaskModel);if(!model)throw Error('Original parent model not bound');return model}})
+        const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt,activate=mounted.activateRestoredWork,catalogReady=mounted.catalogReady,ready=mounted.ready
+        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready})
+        original.retain(taskLifecycle.dispose);await catalogReady;original.assertCurrent()
+       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},opts.managedRuntime!.ownedCode.config)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),...taskMount?{task:taskMount}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
       assertWritableOpen(sessionId)
