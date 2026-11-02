@@ -22,7 +22,8 @@ it("captures real host turns, titles and compaction with provenance, surviving a
   await writeFile(credentialsPath, JSON.stringify({ refs: { IH_USAGE_FIXTURE: "fake-key" } }))
   const frames: RpcMessage[] = []
   let modelCalls = 0
-  const options = { workspace, sessionDir: join(root, "sessions"), settingsPath, credentialsPath, onWrite: (frame: RpcMessage) => frames.push(frame),
+  // This fixture intentionally qualifies the V1 legacy record/statistics path.
+  const options = { experimentalUsageObservations:false, workspace, sessionDir: join(root, "sessions"), settingsPath, credentialsPath, onWrite: (frame: RpcMessage) => frames.push(frame),
     buildProviderClient: (profile: import("@i-harness/provider").ProviderProfile, model?: string) => (controlledModel(request => ({ async *stream(request:LLMRequest) {
       modelCalls++
       yield { type: "usage" as const, usage: { inputTokens: 100, outputTokens: 5, cacheReadTokens: 80, cacheCreationTokens: 0, inputTokenSemantics: "includes-cache" as const } }

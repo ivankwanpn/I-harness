@@ -95,7 +95,7 @@ export interface DesktopHostOptions {
   workspaceRuntime?: ReturnType<typeof import("@i-harness/workspace-runtime").createWorkspaceRuntime>
   /** Trusted host dependency only; never read from saved settings or RPC data. */
   buildProviderClient?: FileProviderRuntimeOptions["buildClient"]
-  /** Inactive constructor-only producer bridge. No wire capability2 activation. */
+  /** Fixed for this host lifetime; false explicitly retains legacy recording. */
   experimentalUsageObservations?:boolean
   onWrite: (frame: RpcMessage) => void
 }
@@ -111,12 +111,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   if (!isAbsolute(options.workspace) || !isAbsolute(options.sessionDir)) {
     throw new Error("workspace and sessionDir must be absolute paths")
   }
+  const recordObservations=options.experimentalUsageObservations!==false
   const settingsPath = resolveSettingsPath(options.settingsPath === undefined ? {} : { path: options.settingsPath })
   const settings = new SettingsStore({ path: settingsPath })
   // A fresh missing profile selects this store's native first-run defaults.
   await settings.loadObserved({ validate: validateDesktopSettingsDocument })
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
-  const usageObservations=options.experimentalUsageObservations?createUsageObservationSink({record:value=>usageStore.recordObservation(value)}):undefined
+  const usageObservations=recordObservations?createUsageObservationSink({record:value=>usageStore.recordObservation(value)}):undefined
   const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),projectSnapshotFor:id=>projects.projectSnapshotFor(id),
     onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })

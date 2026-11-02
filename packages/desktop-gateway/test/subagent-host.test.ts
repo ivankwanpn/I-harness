@@ -39,7 +39,8 @@ it("uses the changed role model for a new child in the same Desktop session", as
   let approvalId = 1000
   let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
   try {
-  host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(`http://127.0.0.1:${address.port}`, trace), onWrite: (frame) => {
+  // Keep the existing V1 record/session identity assertions on explicit legacy.
+  host = await trace.run('host/create', () => createDesktopHost({ experimentalUsageObservations:false, workspace, settingsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(`http://127.0.0.1:${address.port}`, trace), onWrite: (frame) => {
     trace.observe(frame)
     frames.push(frame)
     if ("method" in frame && frame.method === "desktop/session/subagents/changed") push(frame.params)
@@ -59,8 +60,10 @@ it("uses the changed role model for a new child in the same Desktop session", as
     await call("initialize")
     await call("desktop/provider/mutate", { action: "key/set", id: "fixture", value: "test-only-key" })
     const { sessionId } = await call("session/create") as { sessionId: string }
+    await call('desktop/session/project/bind', { sessionId })
     await call("desktop/subagents/mutate", { action: "role/set", role: "explore", selection: { provider: "fixture", model: "small-one" } })
     await call("session/prompt", { sessionId, prompt: "spawn an explorer" })
+    await writeFile(join(process.env.IH_STRUCTURE_EVIDENCE_ROOT!, 'subagent-host-first-turn.json'), JSON.stringify({ models, history: await call('session/history', { sessionId, afterSeq: 0, limit: 200 }) }, null, 2))
     expect(models).toContain("small-one")
     expect(await childChanged).toEqual({ sessionId })
     await call("desktop/subagents/mutate", { action: "role/set", role: "explore", selection: { provider: "fixture", model: "small-two" } })
