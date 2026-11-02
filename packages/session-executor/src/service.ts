@@ -536,6 +536,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     void request.settled.catch(error => d.warn(`[i-harness] delivery Stop requires reconciliation: ${String(error)}`))
   }
   async function awaitDeliveryStop(id: string) {
+    const team=creating.get(id)?.teamRecovery;if(team?.stopped&&!team.stop)stopTeamRecovery(id)
     await creating.get(id)?.teamRecovery?.stop
     await managedCodeStops.get(id)?.flight
     const pending=managedStopReceipts.get(id)
