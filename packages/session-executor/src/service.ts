@@ -1501,7 +1501,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       ...notificationAdmissions.values(),
       ...[...deliveryDrains.values()].map(drain => drain.join()),
     ])
-    executionListeners.clear();managedLifecycleListeners.clear()
+    executionListeners.clear()
     for (const off of executionSubscriptions.values()) off()
     executionSubscriptions.clear()
     let failure: unknown
@@ -1542,7 +1542,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       throw new AggregateError(failures, "Session service process cleanup incomplete")
     }
     if (failure !== undefined) throw failure
-    completeSelections.clear()
+    managedLifecycleListeners.clear();completeSelections.clear()
   }
 
   function closeSession(sessionId: string): Promise<void> {
