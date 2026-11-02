@@ -282,6 +282,33 @@ export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
  }});return entry
 }
 
+export interface OriginalManagedTeamCaller extends Omit<PreparedBodyClaim,'context'> {
+ readonly context:ManagedToolExecutionOwnerContext
+ readonly call:Readonly<PreparedCall['call']>
+ readonly identity:Readonly<{parentSessionId:string;callEventSeq:number;toolCallId:string}>
+}
+const teamCallers=new WeakSet<object>()
+export function assertOriginalManagedTeamCaller(caller:OriginalManagedTeamCaller):void{if(!teamCallers.has(caller))throw TypeError('Original managed Team caller required');caller.assertCurrent()}
+/** The original registered Team leaf alone may capture its active private body. */
+export function bindPreparedTeamLaunchLeaf(tool:Tool,leaf:Tool['execute']){
+ const entry=Object.freeze({enter(exec:ToolExec):OriginalManagedTeamCaller|undefined{
+  if(this!==entry)throw TypeError('Foreign Team leaf receiver')
+  const body=byExec.get(exec),frame=active.getStore()
+  if(!body){if(frame?.active)throw Error('Foreign prepared exec');return}
+  if(!frame?.active||frame.body!==body||body.tool!==tool||body.leaf!==leaf||body.call.name!=='spawn_teammate')throw Error('Not the original prepared Team body')
+  check(body,frame);if(body.foreignContext||body.claimed)throw Error('Original Team body unavailable')
+  const context=body.managed;if(!context||!body.source||frame.domain!==context.domain.owner)return
+  if(!body.permit&&!body.codeInvocation||body.permit&&body.codeInvocation)throw Error('Original private Team invocation required')
+  const id=own(exec,'sessionId'),seq=own(exec,'callEventSeq'),callId=own(exec,'callId')
+  if(id!==context.sessionId||!Number.isSafeInteger(seq)||(seq as number)<0||typeof callId!=='string'||!callId)throw Error('Original Team call identity unavailable')
+  const identity=Object.freeze({parentSessionId:context.sessionId,callEventSeq:seq as number,toolCallId:callId});body.claimed=true;let consumed=false
+  const claim:OriginalManagedTeamCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
+   assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign Team caller');check(body,frame)},
+   consume(){if(this!==claim)throw TypeError('Foreign Team caller');check(body,frame);if(consumed)throw Error('Team caller consumed');consumed=true},
+  });teamCallers.add(claim);return claim
+ }});return entry
+}
+
 
 
 
