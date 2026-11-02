@@ -23,6 +23,7 @@ it('retains the original Team ledger and live inbox membership without a parent 
    expect(()=>assertOriginalManagedTeamParent(domain,{...parent})).toThrow()
   }finally{await parent.close()}
   expect(()=>parent.hasInbox('msg')).toThrow();expect(Object.hasOwn(execution.owner,'view')).toBe(false)
+  const stale=captureManagedTeamParent(domain);await stale.ready;committedFactSeqs(await action.facts.metadata.admit({type:'sandbox/mode',mode:'read-only'}));expect(()=>stale.ledger).toThrow('prefix changed');await stale.close()
   fault.close=true;const failed=captureManagedTeamParent(domain);await expect(failed.ready).rejects.toThrow('controlled Team scope close');expect(()=>domain.assertCurrent()).toThrow();fault.close=false;await failed.close();domain.assertCurrent()
  }finally{fault.close=false;await source.close();action.finish();await coordinator.close()}
 },20000)
