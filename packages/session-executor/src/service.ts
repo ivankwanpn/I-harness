@@ -27,7 +27,7 @@ import { createResidentActivation, type ResidentActivationController } from './l
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { subscribe, validateImages, contextStateFromBudget, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
+import { subscribe, validateImages, contextStateFromBudget, isBoundDeliveryInput, isDeliveryExecutable, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import { receivedInputsFor } from './lifecycle/received-inputs.ts'
 import { createDeliveryDrain, isRetryableDeliveryError } from './service/delivery-drain.ts'
@@ -428,7 +428,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (!assembly) return
     const delivery = receivedInputsFor(assembly.factOwner, id).delivery
     const request = delivery.requestClose('user-stop')
-    deliveryStops.set(id, { delivery, fenceId: request.fenceId, settleSources: assembly.settleParentDeliverySources?.bind(assembly) })
+    deliveryStops.set(id, { delivery, fenceId: request.fenceId, settleSources: assembly.settleParentDeliveryJournalDebt?.bind(assembly) })
     void request.settled.catch(error => d.warn(`[i-harness] delivery Stop requires reconciliation: ${String(error)}`))
   }
   async function awaitDeliveryStop(id: string) {
@@ -908,6 +908,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             const failures: unknown[] = []
             try { await published.drainParentNotifications?.(true) } catch (error) { failures.push(error) }
             try { await delivery.settle() } catch (error) { failures.push(error) }
+            try { await delivery.reconcileExecCandidates() } catch (error) { failures.push(error) }
             if (failures.length) {
               for (const error of failures) d.warn(`[i-harness] original delivery settlement: ${String(error)}`)
               // Select a nominal actual-owner classification directly, never
@@ -915,7 +916,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
               throw failures.find(isRetryableDeliveryError) ?? failures[0]
             }
           },
-          pending: () => published.inbox.pending().filter(input => input.provenance?.producer === 'session.delivery.subagent').map(input => input.inputId),
+          pending: () => published.inbox.pending().filter(input => ['session.delivery.subagent', 'session.delivery.exec'].includes(input.provenance?.producer ?? '')
+            && isBoundDeliveryInput(published.session, input.inputId) && isDeliveryExecutable(published.session, input.inputId)).map(input => input.inputId),
           schedule(inputId, settled) {
             if (assemblies.get(sessionId) !== published || closed || closing.has(sessionId) || !published.inbox.isPending(inputId)) return false
             try { published.managedDocument?.assertReady() } catch { return false }
@@ -935,7 +937,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (event.type === "agent/input/admitted" || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") {
             notifyExecutionState(sessionId)
           }
-          if (event.type === 'agent/delivery-received' || event.type === 'agent/delivery-generation' || event.type === 'agent/delivery-source' || event.type === 'subagent/end' || event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') deliveryDrain.signal()
+          if (event.type === 'agent/delivery-received' || event.type === 'agent/delivery-generation' || event.type === 'agent/delivery-source' || event.type === 'subagent/end' || event.type === 'exec/end' || event.type === 'agent/delivery-handoff' || event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') deliveryDrain.signal()
         }))
         // Hooks fire ONCE per assembly, after registration, inside the shared
         // pending — concurrent racers never double-attach (ApprovalMuxBridge
@@ -1131,6 +1133,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (state.isBound(id) && !state.isEligible(id)) return
         }
         const assembly = opts.coordinator ? await prepareInputExecution({
+          passiveGeneration:opts.passiveGeneration,
           ownerSessionId: sessionId,
           acquire: async () => openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) }),
           assemble: () => getOrCreate(sessionId),
@@ -1166,6 +1169,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           record.postTurn = true
           try {
             await runPostSubmit({
+              passiveGeneration:opts.passiveGeneration,
               sessionId, assembly, signal: controller.signal, localTestEnabled: opts.modelPolicy === 'test-mock',
               binding: () => bindingFor(sessionId), callback: (...args) => opts.afterSuccessfulSubmit!(...args),
               warn: error => d.warn('[i-harness] post-turn host callback failed for ' + sessionId + ': ' + (error instanceof Error ? error.message : String(error))),
@@ -1500,6 +1504,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if (state.running || state.queued > 0) throw new Error('session is busy')
         if (!opts.coordinator) return (await getOrCreate(sessionId)).compactNow(instructions)
         return runManualGeneration({ ownerSessionId: sessionId, signal, instructions, timeoutMs: opts.modelActionTimeoutMs,
+          passiveGeneration:opts.passiveGeneration,
           localTestEnabled: opts.modelPolicy === 'test-mock',
           acquire: async () => {
             await opts.coordinator!.profile(sessionId)

@@ -5,7 +5,7 @@ import {types} from 'node:util'
  * Forward covers the original shared service or explicit-tools private builder.
  * This exhaustive table intentionally makes a newly added option a type error. */
 export const executionOptionMode = Object.freeze({
- prepareExecDelivery:'complete',passiveGeneration:'forward',residentActivation:'complete',retainConstructionCleanup:'complete',
+ prepareTaskChild:'complete',prepareExecDelivery:'complete',passiveGeneration:'forward',residentActivation:'complete',retainConstructionCleanup:'complete',
  instructionEnvironment:'complete',instructionSettingsPath:'complete',prepareHumanInput:'complete',
  modelActionTimeoutMs:'forward',modelActionMaxAttempts:'forward',videoAudioAnalyzer:'complete',codeMode:'complete',codeModeFactory:'complete',
  sessionId:'forward',workspace:'forward',projectContext:'complete',executionAuthority:'complete',executionCallerAvailable:'complete',

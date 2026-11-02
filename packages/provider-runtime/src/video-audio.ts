@@ -15,7 +15,7 @@ export interface VideoAudioInput {
 export type VideoAudioResult = { status: "analyzed"; analysis: string; provider: string; model: string }
   | { status: "unconfigured" | "unsupported" | "failed"; reason: string }
 
-export async function requestVideoAudio(input: VideoAudioInput, route: { provider: string; model: string; baseURL: string; apiKey: string; headers?: Record<string, string>; budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding;passiveUsageWorkspace?:string }): Promise<VideoAudioResult> {
+export async function requestVideoAudio(input: VideoAudioInput, route: { provider: string; model: string; baseURL: string; apiKey: string; headers?: Record<string, string>; budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding;passiveUsageWorkspace?:string;passiveUsageProjectSnapshotFor?:(ownerSessionId:string)=>string|undefined }): Promise<VideoAudioResult> {
   input.signal?.throwIfAborted()
   if (input.wav.byteLength < 44 || input.wav.byteLength > 24 * 1024 * 1024 || !Number.isFinite(input.startSeconds) || input.startSeconds < 0 || !Number.isFinite(input.durationSeconds) || input.durationSeconds <= 0 || input.durationSeconds > 60) {
     return { status: "failed", reason: "Invalid or oversized audio segment." }
@@ -25,7 +25,7 @@ export async function requestVideoAudio(input: VideoAudioInput, route: { provide
   if (!["https:", "http:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) return { status: "failed", reason: "Invalid audio provider endpoint." }
   const signal = AbortSignal.any([...(input.signal ? [input.signal] : []), ...(input.generation ? [input.generation.signal] : []), AbortSignal.timeout(90_000)])
   let reservation: GenerationReservation | undefined, issued = false, disposition: 'unknown' | 'completed' | 'failed' = 'unknown'
-  const passive=createOriginalPassiveExecution(undefined,route.passiveUsageWorkspace?{providerId:route.provider,modelId:route.model,workspace:route.passiveUsageWorkspace,billing:'api'}:undefined)
+  const passive=createOriginalPassiveExecution(undefined,route.passiveUsageWorkspace?{providerId:route.provider,modelId:route.model,workspace:route.passiveUsageWorkspace,billing:'api'}:undefined,route.passiveUsageProjectSnapshotFor)
   try {
     const headers = new Headers(route.headers)
     headers.set("Content-Type", "application/json")

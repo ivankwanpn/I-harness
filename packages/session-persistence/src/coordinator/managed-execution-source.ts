@@ -11,13 +11,15 @@ import type {ManagedEntry} from './bootstrap.ts'
 import type {createTaskDocumentTransitions} from './task-document-transition.ts'
 
 /** One original entry's construction/reader debt, registered before initialize. */
-export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry;backend:PersistenceBackend;ownership:Ownership;transitions:ReturnType<typeof createTaskDocumentTransitions>;loadOwned(id:string):Promise<{session:Session}>;assertEntry():void}){
+export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry;backend:PersistenceBackend;ownership:Ownership;transitions:ReturnType<typeof createTaskDocumentTransitions>;loadOwned(id:string):Promise<{session:Session}>;foldFactory?:import('@i-harness/core-session/internal/execution').OriginalExecutionFoldFactory;assertEntry():void}){
  const revision=ports.entry.metadataRevision,token=Object.freeze({sessionId:ports.id,incarnation:randomUUID()})
  let retired=false,initial:SessionView|undefined,prefix:JournalPrefix|undefined,formatVersion:number|undefined,header:SessionView['header']
  let proof:{assertCurrent():Promise<void>}|undefined,scope:ReturnType<typeof openExecutionDependencies>|undefined,state:Awaited<ReturnType<typeof restoreManagedExecutionState>>|undefined,flight:Promise<unknown>|undefined
  let initialFailure:{cause:unknown}|undefined
- const assertCurrent=()=>{ports.assertEntry();if(retired||ports.entry.metadataRevision!==revision||ports.entry.headerUnknown)throw new FactRecoveryRequiredError();ports.ownership.assertHeld(ports.id)}
- const held=heldFactOwner(token,ports.ownership,assertCurrent)
+ // Original native resource lifetime survives metadata-read invalidation only.
+ const assertOriginal=()=>{ports.assertEntry();if(retired||ports.entry.headerUnknown)throw new FactRecoveryRequiredError();ports.ownership.assertHeld(ports.id)}
+ const assertCurrent=()=>{assertOriginal();if(ports.entry.metadataRevision!==revision)throw new FactRecoveryRequiredError()}
+ const held=heldFactOwner(token,ports.ownership,assertOriginal)
  const source:OriginalConversationRestorationSource={
   get formatVersion(){if(formatVersion===undefined)throw new FactRecoveryRequiredError();return formatVersion},get header(){return header},get prefix(){if(!prefix)throw new FactRecoveryRequiredError();return prefix},assertCurrent,
   async consume(accept){assertCurrent();if(!initial)throw new FactRecoveryRequiredError();for(const event of initial.events){await accept([event]);assertCurrent()}},
@@ -35,7 +37,7 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
     await ports.transitions.existing(ports.id,async before=>{await before(transient!.formatVersion,transient!.events,transient!.header?.seedLength??0);transient=undefined},undefined,async history=>{
      initial=history.initial;proof=history;formatVersion=initial.formatVersion;header=initial.header;await history.assertCurrent();assertCurrent()
      const read=readArchiveHistoryPrefix(ports.backend,history);if(read.kind!=='available')throw new FactRecoveryRequiredError();prefix={...read.prefix}
-     state=await restoreManagedExecutionState(source,{token,assertHeld:held.assertHeld,openDependencies(expected){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}})
+     state=await restoreManagedExecutionState(source,{token,assertHeld:held.assertHeld,openDependencies(expected){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}},ports.foldFactory)
      await history.assertCurrent();assertCurrent()
     })
    })();flight=pending

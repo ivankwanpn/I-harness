@@ -26,7 +26,7 @@ def windows(path):
 
 
 class Session:
-    def __init__(self, evidence, start_reader=True):
+    def __init__(self, evidence, start_reader=True, on_acquired=None, on_line=None, on_reader_end=None):
         self.nonce = 'worker-test-' + os.urandom(12).hex()
         self.frames = []
         self.messages = queue.Queue()
@@ -36,17 +36,29 @@ class Session:
         self.process = subprocess.Popen(['/usr/bin/python3', '-I', '-B', '-u', '-c', BOOTSTRAP],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         env={'PATH': '/usr/bin:/bin', 'LANG': 'C'})
+        # Test-only guard can retain identity/control before bootstrap writes.
+        if on_acquired is not None:
+            on_acquired(self.process)
         self.process.stdin.write((json.dumps({'v': 1, 'nonce': self.nonce, 'source': base64.b64encode(source).decode(),
                                               'sha256': self.digest}) + '\n').encode())
         self.process.stdin.flush()
         def reader():
-            for line in self.process.stdout:
-                try:
-                    frame = json.loads(line)
-                    self.frames.append(frame)
-                    self.messages.put(frame)
-                except Exception:
-                    self.messages.put({'type': 'invalid', 'line': repr(line)})
+            error = None
+            try:
+                for line in self.process.stdout:
+                    if on_line is not None:
+                        on_line(line)
+                    try:
+                        frame = json.loads(line)
+                        self.frames.append(frame)
+                        self.messages.put(frame)
+                    except Exception:
+                        self.messages.put({'type': 'invalid', 'line': repr(line)})
+            except BaseException as failure:
+                error = failure
+            finally:
+                if on_reader_end is not None:
+                    on_reader_end(error)
             self.messages.put({'type': 'EOF'})
         self.reader = threading.Thread(target=reader, daemon=True)
         if start_reader:

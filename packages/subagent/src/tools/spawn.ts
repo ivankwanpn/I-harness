@@ -8,6 +8,7 @@ import { backgroundEventForTool, userSteerForTool, waitForObservation } from "@i
 import { declaredRoleModel, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated } from "../child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord } from "../task-protocol.ts"
 import { residentOwnerFor } from '../followup/resident-lifetime.ts'
+import {bootstrapTaskChild,prepareOriginalTaskChildHost} from '../child/task-birth.ts'
 
 export function createSpawnTool(deps: SubagentToolDeps): Tool {
   const spawnDescription = "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call waits for the task's summary; new user input can yield the wait while the same task continues. A deadline returns timed_out: true while the task is still running."
@@ -94,23 +95,37 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       // nothing durable: below this line the call submits a task record and
       // appends `subagent/start`, and a refusal that had already done that would
       // leave an accepted task with no child behind it.
-      const declared = declaredRoleModel(role, deps)
-      if (subagentModelSelectionGated(deps, declared)) throw subagentModelSelectionDisabled(role.name)
       const turns = parseForkTurns(args.fork_turns)
-      const delivery = args.background === false ? "tool" : "parent"
-      // M26-D1 三元 identity（exact-semantics 表）：callEventSeq 唯一；toolCallId 隨身。
       const identity: TaskIdentity = {
         parentSessionId: exec?.sessionId ?? deps.childSessions?.parentSessionId ?? "",
         ...(exec?.callEventSeq !== undefined ? { callEventSeq: exec.callEventSeq } : {}),
         ...(exec?.callId !== undefined ? { toolCallId: exec.callId } : {}),
       }
       assertInitialTaskAdmission(deps.tasks, identity)
+      // Only the already-known, callback-free refusal can precede admission.
+      // Dynamic selection/policy still belongs to the installed original slot.
+      if(!deps.roleSelectionFor&&typeof deps.allowSubagentModelSelection!=='function'&&subagentModelSelectionGated(deps,role.model))throw subagentModelSelectionDisabled(role.name)
+      const admitted=deps.taskLaunchCallerFor?.(exec)
+      if(admitted?.kind==='same')return admitted.slot.flight
+      const originalSlot=admitted?.slot
+      const run=async()=>{
+      const role=originalSlot?.role??deps.roles.get(args.agent_type??'general')!
+      const declared=originalSlot?originalSlot.captureSelection(()=>declaredRoleModel(role,deps)):declaredRoleModel(role,deps)
+      if(subagentModelSelectionGated(deps,declared))throw subagentModelSelectionDisabled(role.name)
+      const host=originalSlot?await prepareOriginalTaskChildHost(originalSlot,deps):undefined
+      const delivery = args.background === false ? "tool" : "parent"
+      // M26-D1 三元 identity（exact-semantics 表）：callEventSeq 唯一；toolCallId 隨身。
       let unregisterDelivery: (() => void) | undefined
-      const source = createSpawnSource(subagentFactOwner(deps.parentSession, deps.factOwner), exec.abortSignal, exec.retainOutcome?.(), args.background !== false,
-        () => { unregisterDelivery?.(); deps.onTaskTerminalCommitted?.() }, deps.onTaskTerminalRecovery)
+      const retained=exec.retainOutcome?.()
+      let cleanupSource:ReturnType<typeof createSpawnSource>|undefined,retainedClosed=false
+      const closeRetained=()=>{if(!retainedClosed){if(!cleanupSource?.hasPublished())retained?.unavailable();retainedClosed=true}}
+      originalSlot?.keep({async close(){closeRetained()}})
+      const source = createSpawnSource(subagentFactOwner(deps.parentSession, deps.factOwner), exec.abortSignal, retained, args.background !== false,
+        () => { unregisterDelivery?.(); deps.onTaskTerminalCommitted?.() }, deps.onTaskTerminalRecovery,originalSlot?cleanup=>originalSlot.keep(cleanup):undefined)
+      cleanupSource=source
       let task: TaskRecord
       try {
-        task = deps.tasks.submit({
+        task = originalSlot?deps.tasks.get(originalSlot.task.id)!:deps.tasks.submit({
           identity,
           agentPath: `root/${args.task_name}`,
           description: args.task_name,
@@ -124,7 +139,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         if (err instanceof TaskIdentityConflictError) throw new Error(`task identity conflict for this call: ${err.message}`)
         throw err
       }
-      source.bindTask(task.id, () => deps.tasks.retainResult(task.id))
+      const retainTaskResult=()=>originalSlot?originalSlot.retainResult():deps.tasks.retainResult(task.id)
+      source.bindTask(task.id, retainTaskResult)
       let observationAborted = false
       try {
         await source.bindRequiredTask(deps.tasks,task)
@@ -136,7 +152,9 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         if (preparation?.kind === 'bound') unregisterDelivery = deps.registerDeliverySource?.(task.id, source)
         await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) }, preparation?.kind === 'bound' ? preparation.binding : undefined)
         if (preparation?.kind === 'bound' && delivery === 'tool') source.bindHandoff(deps.tasks.bindForegroundHandoff(task.id))
+        const birth=originalSlot?await bootstrapTaskChild(originalSlot,deps,declared,host!):undefined
         const executed = await spawnChild({
+          ...(birth?{childStart:{kind:'committed-child-birth' as const,birth}}:{}),
           signal: exec.abortSignal,
           generationFactoryFor: deps.generationFactoryFor, modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,
           taskName: args.task_name,
@@ -149,7 +167,14 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           parentModel: deps.parentModel,
           codeMode: deps.codeMode, codeModeFactory: deps.codeModeFactory,
           createInstructionContext: deps.createInstructionContext,
-          retainInitialSetup: setup => residentOwnerFor(deps).retainInitial(setup),
+          retainInitialSetup: setup => {originalSlot?.keep({close:setup.close.bind(setup)});return residentOwnerFor(deps).retainInitial(setup)},
+          retainPublication: originalSlot?phase=>{
+            originalSlot.retainPublication(phase)
+            if(phase.kind==='entry'){const entry=phase.value as import('../agent-table.ts').ChildAgentEntry,close=entry.dispose!.bind(entry);originalSlot.keep({close})}
+            if(phase.kind==='job'){const job=phase.value as import('../jobs.ts').JobRegistration;originalSlot.keep({async close(){job.finish?.('error','Original child launch retired')}})}
+            if(phase.kind==='agent'){const agent=phase.value as import('@i-harness/core-agent').Agent,id=originalSlot.task.childBirth!.request.invocation.targetSessionId;originalSlot.keep({async close(){if(deps.agents.get(id)===agent)deps.agents.remove(id)}})}
+          }:undefined,
+          onEntryPublished: originalSlot?(_entry,info)=>{originalSlot.published();deps.tasks.claim(task.id,info.sessionId,info.modelLabel,info.jobId)}:undefined,
           resolveModel: deps.resolveModel,
           // Forwarded with the resolver so spawnChild decides the role's model for
           // EVERY spawn site (this tool's precondition above only exists to refuse
@@ -204,7 +229,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
             // 若已被 stop_task/close_agent 先行終態化（cancelTree 寫入 cancelled），
             // 本次 terminalize 為 no-op（CAS），但仍據 record 現值 append。
             await source.prepareEnd(async () => {
-              if(!await source.terminalizeOriginal({taskId:task.id,outcome}))await deps.tasks.retainResult(task.id)
+              if(!await source.terminalizeOriginal({taskId:task.id,outcome}))await retainTaskResult()
               const settled = originalTerminal??deps.tasks.get(task.id)!
               if (!originalTerminal && observedEntry && settled.result) publishChildResult(deps, observedEntry, settled, settled.outcome ?? outcome, task.id)
               return { event: {
@@ -220,7 +245,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         })
         // WHY: child.ts:340 spells the resolved label; task-protocol.ts:150 keeps
         // it in the task snapshot, so closing a live entry cannot erase the evidence.
-        deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel, executed.jobId)
+        if(!originalSlot)deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel, executed.jobId)
         const base = source.identity()
         if (args.background === false) {
           const reason = await waitForObservation({
@@ -239,7 +264,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           let settled = deps.tasks.get(task.id)
           if (settled?.outcome === undefined) {
             if (preparation?.kind === 'bound') {
-              await deps.tasks.flushPersistence()
+              // Reserve this source's handoff now. Its original save joins all
+              // earlier FIFO work without waiting for unrelated future saves.
               const route = await source.handoffToParent()
               if (exec.abortSignal?.aborted) { source.abandonHandoff(); observationAborted = true; exec.abortSignal.throwIfAborted() }
               if (route === 'ready') return await source.foreground()
@@ -255,6 +281,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         }
         return base
       } catch (error) {
+        originalSlot?.retire(error)
         if (source.hasPublished()) {
           if (observationAborted) throw error
           throw source.recoverPublished(error)
@@ -278,7 +305,10 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         if (failures.length > 1) throw Object.assign(new AggregateError(failures, 'Spawn refusal needs recovery'), { code: 'FACT_RECOVERY_REQUIRED', cause: error })
         throw error
       }
-      finally { source.finish() }
+      finally { try{if(originalSlot)closeRetained()}finally{source.finish()} }
+      }
+      if(originalSlot){originalSlot.start(run);return originalSlot.flight}
+      return run()
     },
   }
   return spawnTool

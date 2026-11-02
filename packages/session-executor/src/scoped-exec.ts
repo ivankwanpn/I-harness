@@ -1,4 +1,7 @@
-import { assertOriginalExecPair } from '@i-harness/exec/direct-reservation'
+import { assertOriginalExecPair, createWorkflowStepFactory } from '@i-harness/exec/direct-reservation'
+export function createScopedWorkflowExec(pair: Parameters<typeof createWorkflowStepFactory>[0], cwd: string, policy: () => SandboxExecutionPolicy | undefined) {
+  return createWorkflowStepFactory(pair, command => ({ ...command, cwd: command.cwd ?? cwd, sandbox: command.sandbox ?? policy() }))
+}
 import { bindPreparedShellLeaf } from '@i-harness/core-tools'
 import { createExecDeliveryOwner } from './lifecycle/exec-delivery-owner.ts'
 import type { ExecCommand, ExecResult, ExecService, ExecStreamRunOptions, PromotedRun } from "@i-harness/exec"

@@ -1,6 +1,23 @@
 import { validSettlementEvent, validGenerationEvent, validInputPreparationEvent, validSoftTerminalDraft, type SettlementEventKind, type BatchKey, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type SettlementFacts, type SettlementCheckpointOwner } from '@i-harness/core-session'
 import { retainSettlementCapture } from './settlement-fact.ts'
 import { createSourceFacts } from './source-facts.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+type CloseContext = { source: object; active: boolean; parent?: CloseContext }
+const closeContext = new AsyncLocalStorage<CloseContext>()
+const originalSources = new WeakSet<object>()
+const closeAcknowledgments = new WeakMap<object, { assertLive(): void; acknowledgment: Promise<void> }>()
+export function captureOriginalSettlementCloseAck(source: object): Promise<void> | undefined {
+  const original = closeAcknowledgments.get(source)
+  if (!original) return undefined
+  original.assertLive()
+  return original.acknowledgment
+}
+export function isInsideOriginalSettlementClose(source: object): boolean {
+  if (!originalSources.has(source)) return false
+  for (let context = closeContext.getStore(); context; context = context.parent) if (context.active && context.source === source) return true
+  return false
+}
 
 /** An already-registered real source retains its drain and capture handles
  * through failure. Successful release removes completed outcome retention. */
@@ -15,7 +32,8 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
   onCloseRequested(): void
   captureMembers?(source:SettlementFacts):import('@i-harness/core-session/internal/execution').OriginalExecutionCaptureHooks
 }, released: () => void, reconcilePending?: () => Promise<void>, checkpointOwner?: SettlementCheckpointOwner): SettlementFacts {
-  let active = true, closing: Promise<void> | undefined
+  let active = true, closeRequested = false, closing: Promise<void> | undefined
+  const closeAck = Promise.withResolvers<void>()
   let holdEpoch = 0, heldRecovery = false, failed = false
   const stickyErrors: unknown[] = []
   let checkpointing: ReturnType<SettlementFacts['checkpoint']> | undefined
@@ -99,8 +117,12 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
   }
   const close = () => {
     if (!active) return Promise.resolve()
+    if (isInsideOriginalSettlementClose(source)) return Promise.reject(recoveryError([new Error('Original settlement close reentry')]))
     if (closing) return closing
+    closeRequested = true
     const pending = Promise.resolve().then(async () => {
+      const context: CloseContext = { source, active: true, parent: closeContext.getStore() }
+      try { return await closeContext.run(context, async () => {
       operations.onCloseRequested()
       if (owner) {
         await stage(verify)
@@ -120,12 +142,13 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
       if (errors.length) throw Object.assign(new AggregateError(errors, 'Required source drain needs recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
       active = false
       released()
+      }) } finally { context.active = false }
     })
     closing = pending
-    void pending.catch(() => { if (closing === pending) closing = undefined })
+    void pending.then(() => { closeAck.resolve() }, () => { if (closing === pending) closing = undefined })
     return pending
   }
-  const result:SettlementFacts = {
+  const source:SettlementFacts = {
     recovery: { capture: event => capture('recovery', event, { kind: 'metadata', event }) },
     softReduction: { capture(event) {
       assertHeld()
@@ -168,7 +191,9 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
       auditAssistant: event => capture('assistant-audit', event, { kind: 'assistant-audit', assistant: event }).admit(),
       lifecycle: event => capture('lifecycle', event, { kind: 'lifecycle', event }).admit(),
     },
-  }
-  retained.captureMembers=operations.captureMembers?.(result)
-  return result
+  } satisfies SettlementFacts
+  originalSources.add(source)
+  closeAcknowledgments.set(source, { assertLive() { if(closeRequested)throw Object.assign(new Error('Original settlement close observation retired'),{code:'FACT_CLOSED'});assertHeld() }, acknowledgment: closeAck.promise })
+  retained.captureMembers=operations.captureMembers?.(source)
+  return source
 }

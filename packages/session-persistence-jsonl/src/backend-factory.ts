@@ -1,8 +1,10 @@
 import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
 import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
 import { readSessionArchive } from './backend/archive-reader.ts'
+import { associateArtifactPaths, createArtifactCurrentGuard } from '@i-harness/session-persistence/internal/artifact-path'
+import { createOriginalNativePrewriteOwner } from '@i-harness/session-persistence/internal/native-fact-writer'
+import { createOriginalTaskNativeStage } from '@i-harness/session-persistence/internal/task-document-operations'
 import {associateOwnedExecutionReader} from './backend/owned-execution-read.ts'
-import { associateArtifactPaths } from '@i-harness/session-persistence/internal/artifact-path'
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
@@ -131,6 +133,7 @@ export function createJsonlTaskTransitionCoordinator(root: string, options: Coor
 const BLANK_PROBE_MAX_BYTES = 1024
 
 export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
+  const nativePrewrite = createOriginalNativePrewriteOwner()
   const rootPath = resolve(root)
   const captureIO = createBootstrapCaptureIO()
   const archiveReads = createArchiveReadOwner()
@@ -224,7 +227,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
   }
   const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO)
   const backend: PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>; selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } = {
-    ...createFactJournalBackend(filePath, assertNotDeleted),
+    ...createFactJournalBackend(filePath, assertNotDeleted, Object.freeze({ filePath, assertNotDeleted, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) })),
     ...bootstrapBackend,
     // Original private selected lane shares capture IO with bootstrap.
     selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO),
@@ -502,13 +505,14 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     },
   }
   const originalDescriptors = Object.getOwnPropertyDescriptors(backend)
-  const assertOriginal = () => {
+  const assertOriginal = createArtifactCurrentGuard(() => {
     for (const key of Object.keys(originalDescriptors)) {
       const current = Object.getOwnPropertyDescriptor(backend, key), original = originalDescriptors[key]!
       if (!current || !('value' in current) || current.value !== original.value) throw new Error('PROCESS_READ_UNAVAILABLE')
     }
-  }
+  })
   associateArchiveReadResources(backend,archiveReads.association)
+  nativePrewrite.associate(backend, assertOriginal)
   associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
     register(id,held){trackHeaderOwner(id,held);if(hasTrackedHeaderDebt(id,held))throw Error('Owned dependency birth cleanup unresolved')},
     qualify:(id,held,prefix)=>assertPublicBootstrap(id,false,prefix,trackedStageIO(id,held)),
@@ -530,7 +534,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
   associateArchiveHistoryPrefixReader(backend,proof=>{assertOriginal();return capability.qualifiedHistoryPrefix(proof)})
   function openOwnedTask(scope: HeldTaskDocumentScope, initialize: boolean): TaskDocumentBackendSession {
-    assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope, undefined, available)
+    assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope, undefined, available, createOriginalTaskNativeStage(scope, available, assertOriginal))
     async function available() {
       for (const path of [tombPath('session', scope.parentSessionId), tombPath('document', scope.key)]) {
         try { await lstat(path); throw Object.assign(new Error('Task document is deleted'), { code: 'SESSION_DELETED' }) }

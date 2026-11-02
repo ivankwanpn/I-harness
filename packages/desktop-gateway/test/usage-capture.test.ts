@@ -57,7 +57,8 @@ describe("usage capture", () => {
       yield { type: "end" }
     } }))(profile, "model-a")
     await consume(f.capture.bind(client, "session-a"))
-    expect(f.records).toEqual([{ id: expect.any(String), workspace: "D:/workspace", sessionId: "session-a", providerId: "route-a", modelId: "model-a", billing: "api", status: "completed", startedAt: 1000, durationMs: 60, requestMetrics: expect.objectContaining({coverage: "neutral-only", systemTokens: expect.any(Number)}), firstTokenMs: 20, inputTokens: 100, outputTokens: 20, cacheReadTokens: 80, cacheCreationTokens: 0, inputTokenSemantics: "includes-cache" }])
+    expect(f.records).toEqual([{ id: expect.any(String), workspace: "D:/workspace", sessionId: "session-a", providerId: "route-a", modelId: "model-a", billing: "api", status: "completed", startedAt: 1000, durationMs: 60, requestMetrics: expect.objectContaining({coverage: "neutral-only", systemTokens: expect.any(Number)}), firstTokenMs: 20, inputTokens: 100, outputTokens: 20, cacheReadTokens: 80, inputTokenSemantics: "includes-cache" }])
+    expect(f.records[0]).not.toHaveProperty("cacheCreationTokens")
     expect(JSON.stringify(f.records)).not.toMatch(/private|secret/)
   })
 
@@ -169,16 +170,16 @@ describe("usage capture", () => {
   })
 })
 
-it("guard timeout records one failed attempt inside recovery, discards its usage and retains cancellation status", async () => {
+it("guard timeout preserves failed usage before recovery and retains cancellation status", async () => {
  const { createWaitingGuard } = await import("@i-harness/llm-seam")
  const f = fixture(); let attempts = 0
  const base: ModelClient = { async *stream() { attempts++; yield { type: "usage", usage: { inputTokens: attempts } }; if (attempts === 1) { await new Promise(() => {}) } else { yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } } }
  const client = f.capture.buildClient(() => createWaitingGuard(base, { firstResponseMs: 5, progressMs: 5 }))({ ...profile, retryPolicy: { mode: "normal", maxRetries: 1, backoff: { initialDelayMs: 1 } } })
  const visible: unknown[] = []
- for await (const e of client.stream(request)) if (e.type === "usage") visible.push(e.usage)
+ for await (const e of client.stream(request)) { if (e.type === "usage") visible.push(e.usage); if(e.type==='retry'&&e.retry.phase==='waiting')visible.push('waiting') }
  expect(attempts).toBe(2)
  expect(f.records.map(r => [r.status, r.inputTokens])).toEqual([["failed", 1], ["completed", 2]])
- expect(visible).toEqual([{ inputTokens: 2 }])
+ expect(visible).toEqual([{ inputTokens: 1 },'waiting',{ inputTokens: 2 }])
  const controller = new AbortController()
  const cancelled = f.capture.buildClient(() => createWaitingGuard({ async *stream() { controller.abort(); await new Promise(() => {}) } }, { firstResponseMs: 0, progressMs: 0 }))(profile)
  await expect(consume(cancelled, { ...request, signal: controller.signal })).rejects.toThrow()

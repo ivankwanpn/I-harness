@@ -142,13 +142,14 @@ export function createMutations(
       assertWritable(sessionId)
       await appendUnlocked(sessionId, events, check, markIssue)
     },
-    async updateMetaTransitionUnlocked(sessionId: string, patch: Partial<SessionMeta>, markIssue: () => void) {
+    async updateMetaTransitionUnlocked(sessionId: string, patch: Partial<SessionMeta>, markIssue: () => void, metadata?:{before(meta:unknown):void;after(meta:unknown):void}) {
       assertWritable(sessionId)
       if (Object.hasOwn(patch, 'formatVersion') && patch.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('cannot downgrade session format')
       const previous = await ensureWritableFormatUnlocked(backend, sessionId)
       if (Object.hasOwn(patch, 'subagentProtocolVersion') && patch.subagentProtocolVersion !== previous.meta?.subagentProtocolVersion) throw new Error('Subagent protocol is immutable creation metadata')
       validateSubagentHeader({ ...previous.meta, ...patch })
-      markIssue(); return backend.updateMeta(sessionId, patch)
+      metadata?.before(previous.meta)
+      markIssue(); const updated=await backend.updateMeta(sessionId, patch);metadata?.after(updated);return updated
     },
     async append(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)

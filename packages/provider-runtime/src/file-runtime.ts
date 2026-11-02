@@ -11,6 +11,7 @@ import { describeSelection } from "./selection/metadata.ts"
 
 export interface FileProviderRuntimeOptions {
   passiveUsageWorkspace?:string
+  passiveUsageProjectSnapshotFor?:(ownerSessionId:string)=>string|undefined
   settingsPath: string
   credentialsPath: string
   /** Trusted dependency; configuration documents cannot supply executable code. */
@@ -45,6 +46,7 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
   const codex = options.codex ?? createCodexManagement({ directory: join(dirname(options.credentialsPath), "coding-plans", "openai-codex") })
   const runtime = createProviderRuntime({ settings, credentials: createCredentialStore(options.credentialsPath),
     passiveUsageWorkspace:options.passiveUsageWorkspace,
+    passiveUsageProjectSnapshotFor:options.passiveUsageProjectSnapshotFor,
     codex,
     readModelWait: async () => {
       let raw: string

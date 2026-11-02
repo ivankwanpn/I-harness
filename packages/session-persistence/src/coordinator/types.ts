@@ -92,6 +92,8 @@ export interface PersistenceBackend {
 export interface SessionArtifactManifest { documents: string[]; files?: string[] }
 
 export interface CoordinatorOptions {
+  /** Original owner supplies this once at construction; absent means unavailable. */
+  originalExecutionFoldFactory?: import('@i-harness/core-session/internal/execution').OriginalExecutionFoldFactory
   maxPendingGroups?: number
   coalesceTargetBytes?: number
   /** Write-behind batching window. Default 200. */
@@ -120,6 +122,7 @@ export interface SessionCoordinator {
   resumeSemanticTarget(invocation: import('./bootstrap-types.ts').BootstrapInvocation, guards: import('./bootstrap-types.ts').BootstrapGuards, originalPayload?: import('./bootstrap-types.ts').BootstrapRequest): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   inspectBootstrap(invocation: import('./bootstrap-types.ts').BootstrapInvocation): Promise<import('./bootstrap-types.ts').BootstrapInspection>
   inspectChildBootstrapCapture?(request: import('./child-bootstrap-intent.ts').ChildBootstrapCaptureRequest): Promise<import('./child-bootstrap-intent.ts').ChildBootstrapCaptureInspection>
+  inspectChildBootstrap?(request: import('./child-bootstrap-intent.ts').ChildBootstrapCaptureRequest): Promise<import('./bootstrap-types.ts').BootstrapInspection>
   bootstrapChildTargetWithCapture?(request: import('./child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('./bootstrap-types.ts').BootstrapGuards, capture: () => Promise<import('./bootstrap-types.ts').BootstrapRequest>): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   resumeChildTarget?(request: import('./child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('./bootstrap-types.ts').BootstrapGuards, originalPayload?: import('./bootstrap-types.ts').BootstrapRequest): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   inspectBootstrapCapture?(request: import('./bootstrap-types.ts').BootstrapCaptureRequest): Promise<import('./bootstrap-types.ts').BootstrapCaptureInspection>

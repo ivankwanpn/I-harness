@@ -3,6 +3,10 @@ import { conversationId, conversationSeq } from './conversation.ts';
 import { isStrictFactData } from '../managed/capture.ts';
 import { canonicalJsonData } from '../serialization/json-data.ts';
 import { validExecDeliveryEvent, type ExecDeliveryEvent, type ExecDeliverySourceEvent } from './exec-delivery.ts';
+import { validWorkflowDeliveryEvent, type WorkflowDeliveryEvent, type WorkflowDeliverySourceEvent, type WorkflowDeliveryKey } from './workflow-delivery.ts';
+import { validCodeDeliveryEvent, type CodeDeliveryEvent, type CodeDeliverySourceEvent, type CodeDeliveryKey } from './code-delivery.ts';
+export type { CodeDeliverySourceEvent, CodeDeliveryHandoffEvent, CodeTerminalEvent, CodeDeliveryKey } from './code-delivery.ts';
+export type { WorkflowDeliverySourceEvent, WorkflowDeliveryHandoffEvent, WorkflowTerminalEvent, WorkflowDeliveryKey } from './workflow-delivery.ts';
 export type { ExecDeliverySourceEvent, ExecDeliveryHandoffEvent, ExecTerminalEvent } from './exec-delivery.ts';
 export interface SubagentDeliveryKey {
   recipientSessionId: string;
@@ -12,8 +16,8 @@ export interface SubagentDeliveryKey {
   kind: 'subagent';
 }
 export type ExecDeliveryKey = Omit<SubagentDeliveryKey, 'kind' | 'sourceNamespace'> & { kind: 'exec'; sourceNamespace: 'exec' };
-export type DeliveryKey = SubagentDeliveryKey | ExecDeliveryKey;
-export type DeliverySourceEvent = SubagentDeliverySourceEvent | ExecDeliverySourceEvent;
+export type DeliveryKey = SubagentDeliveryKey | ExecDeliveryKey | WorkflowDeliveryKey | CodeDeliveryKey;
+export type DeliverySourceEvent = SubagentDeliverySourceEvent | ExecDeliverySourceEvent | WorkflowDeliverySourceEvent | CodeDeliverySourceEvent;
 export type DeliveryGenerationEvent = {
   type: 'agent/delivery-generation';
   version: 1;
@@ -70,6 +74,12 @@ export interface SubagentDeliveryEvidence {
   sourceSeq: number;
   terminalSeq: number;
 }
+/** Recipient lookup only. Persisted original facts, never this DTO, own authority. */
+export interface ExecDeliveryEvidence {
+  kind: 'exec';
+  sourceSeq: number;
+  terminalSeq: number;
+}
 export interface DeliveryAdmissionReceipt {
   inputId: string;
   disposition: 'pending' | 'claimed' | 'cancelled' | 'suppressed';
@@ -80,11 +90,11 @@ export interface DeliveryCloseReceipt {
   closeSeq: number;
   durability: 'durable' | 'nondurable';
 }
-export type DeliveryEvent = DeliveryGenerationEvent | DeliverySourceEvent | DeliveryReceivedEvent | ExecDeliveryEvent;
-export const isDeliveryEventType = (type: unknown): boolean => ['agent/delivery-generation', 'agent/delivery-source', 'agent/delivery-received', 'agent/delivery-handoff', 'exec/end'].includes(type as string);
+export type DeliveryEvent = DeliveryGenerationEvent | DeliverySourceEvent | DeliveryReceivedEvent | ExecDeliveryEvent | WorkflowDeliveryEvent | CodeDeliveryEvent;
+export const isDeliveryEventType = (type: unknown): boolean => ['agent/delivery-generation', 'agent/delivery-source', 'agent/delivery-received', 'agent/delivery-handoff', 'exec/end', 'workflow/end', 'code/end'].includes(type as string);
 export function deliveryMinimumFormat(event: DeliveryEvent): 13 | 14 {
-  return event.type === 'exec/end' || event.type === 'agent/delivery-handoff' || event.type === 'agent/delivery-source' && event.kind === 'exec'
-    || event.type === 'agent/delivery-received' && event.key.kind === 'exec' ? 14 : 13;
+  return event.type === 'workflow/end' || event.type === 'exec/end' || event.type === 'code/end' || event.type === 'agent/delivery-handoff' || event.type === 'agent/delivery-source' && event.kind !== 'subagent'
+    || event.type === 'agent/delivery-received' && event.key.kind !== 'subagent' ? 14 : 13;
 }
 function closed(value: object, keys: string[]): boolean {
   return Reflect.ownKeys(value).every(key => typeof key === 'string' && keys.includes(key) && Object.getOwnPropertyDescriptor(value, key)?.enumerable && Object.getOwnPropertyDescriptor(value, key)?.value !== undefined);
@@ -93,7 +103,7 @@ export function validDeliveryKey(value: unknown): value is DeliveryKey {
   if (!value || typeof value !== 'object' || !isStrictFactData(value))
     return false;
   const k = value as DeliveryKey;
-  return closed(k, ['recipientSessionId', 'sourceNamespace', 'sourceId', 'resultRevision', 'kind']) && (k.kind === 'subagent' || k.kind === 'exec' && k.sourceNamespace === 'exec')
+  return closed(k, ['recipientSessionId', 'sourceNamespace', 'sourceId', 'resultRevision', 'kind']) && (k.kind === 'subagent' || k.kind === 'exec' && k.sourceNamespace === 'exec' || k.kind === 'workflow' && k.sourceNamespace === 'workflow' || k.kind === 'code' && k.sourceNamespace === 'code')
     && [k.recipientSessionId, k.sourceNamespace, k.sourceId, k.resultRevision].every(conversationId);
 }
 export function deliveryInputId(key: Readonly<DeliveryKey>): string {
@@ -105,6 +115,8 @@ export function validDeliveryEvent(value: unknown): value is DeliveryEvent {
   const e = value as DeliveryEvent;
   if (e.version !== 1 || e.seq !== undefined && !conversationSeq(e.seq))
     return false;
+  if (e.type === 'code/end' || (e.type === 'agent/delivery-source' || e.type === 'agent/delivery-handoff') && e.kind === 'code') return validCodeDeliveryEvent(e);
+  if (e.type === 'workflow/end' || (e.type === 'agent/delivery-source' || e.type === 'agent/delivery-handoff') && e.kind === 'workflow') return validWorkflowDeliveryEvent(e);
   if (e.type === 'exec/end' || e.type === 'agent/delivery-handoff' || e.type === 'agent/delivery-source' && e.kind === 'exec') return validExecDeliveryEvent(e);
   if (e.type === 'agent/delivery-received')
     return closed(e, ['type', 'version', 'seq', 'key', 'sourceSeq', 'terminalSeq', 'inputId']) && validDeliveryKey(e.key)

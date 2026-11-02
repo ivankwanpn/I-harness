@@ -1,9 +1,11 @@
+import { associateOriginalResultRevocation } from './coordinator/result-revocation.ts'
 import { associateRestoredContextAcquisition } from './restored-context-internal.ts'
 import {associateManagedExecution} from './execution-internal.ts'
 import { attachArchiveReadResources } from './archive-read-internal.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createOwnership } from './coordinator/ownership.ts'
+import { associateOriginalResultOrdering } from './result-ordering-internal.ts'
 import { createColdExecutionWrites, associateColdExecutionWrites } from './coordinator/cold-execution-writes.ts'
 import { createMutations } from './coordinator/mutations.ts'
 import { createDocuments } from './coordinator/documents.ts'
@@ -61,6 +63,7 @@ export function createSelectedRuntimeCapture(coordinator:SessionCoordinator,make
  },async close(){retired=true;const results=await Promise.allSettled([...holders].map(holder=>holder.close())),errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Selected operation cleanup unresolved')}})
 }
 export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>, transitionStorage?: TaskTransitionConfiguration): SessionCoordinator {
+  opts = opts && {...opts, originalExecutionFoldFactory: opts.originalExecutionFoldFactory}
   const assertDurableTransition = () => { if (CURRENT_FORMAT_VERSION >= 14 && !transitionStorage) throw new Error('TASK_TRANSITION_UNSUPPORTED') }
   const archiveReads = attachArchiveReadResources(backend)
   const report = opts?.reportBackgroundFailure
@@ -115,6 +118,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     }:{}),
     ...(managed.childSupported()?{
       inspectChildBootstrapCapture:managed.inspectChildBootstrapCapture,
+      inspectChildBootstrap:managed.inspectChildBootstrap,
       bootstrapChildTargetWithCapture(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
         if(CURRENT_FORMAT_VERSION>=14&&!transitionStorage)return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'not-issued',reason:'unsupported'})
         if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
@@ -160,11 +164,14 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       assertDurableTransition()
       managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertOutsideOwnedOperations([id]);observations.assertSessionAdmission(id);managed.assertMutation(id)
       if(typeof id!=='string'||!patch||typeof patch!=='object'||utilTypes.isProxy(patch))throw TypeError('Invalid metadata update')
-      managed.invalidateMetadataWitness(id)
-      if(!transitionStorage)return mutations.updateMeta(id,patch)
-      let updated: Awaited<ReturnType<typeof mutations.updateMetaTransitionUnlocked>> | undefined
-      await loads.transitionLoad(id, async (_check, markIssue) => { updated = await mutations.updateMetaTransitionUnlocked(id, patch, markIssue) })
-      return updated!
+      const taskMetadata=managed.beginTaskMetadataUpdate(id);let succeeded=false
+      try {
+        managed.invalidateMetadataWitness(id)
+        if(!transitionStorage)return await mutations.updateMeta(id,patch)
+        let updated: Awaited<ReturnType<typeof mutations.updateMetaTransitionUnlocked>> | undefined
+        await loads.transitionLoad(id, async (_check, markIssue) => { updated = await mutations.updateMetaTransitionUnlocked(id, patch, markIssue,taskMetadata) })
+        succeeded=true;return updated!
+      } finally { taskMetadata?.finish(succeeded) }
     },
     async flush(id) { observations.assertOutsideOwnedOperations([id]); await mutations.flush(id); await documents.joinTaskDocumentIO() },
     async close() {
@@ -203,6 +210,8 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   associateRestoredContextAcquisition(coordinator,{acquire:id=>managed.acquireRestoredContext(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
   associateManagedExecution(coordinator,{acquire:id=>managed.acquireExecution(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
+  associateOriginalResultOrdering(coordinator, ownership)
+  if (ownership.lockEnabled) associateOriginalResultRevocation(coordinator, observations.createResultRevocationAdmission(ownership), ownership)
   if (ownership.lockEnabled) associateProjectBindingWrites(coordinator, documents)
   coldObservationOwners.set(coordinator, { capture: managed.captureColdObservation, binding: observations.captureColdBindingObservation })
   if (backend.deleteOwnedSession) associateDeletionPreparation(coordinator, lifecycle)

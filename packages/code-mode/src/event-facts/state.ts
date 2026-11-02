@@ -1,4 +1,4 @@
-import type { CapturedActionFact, CodeSettlementFact, ManagedAction, ProducerFactOutcome, SettlementFacts, SettlementOwnerCut } from '@i-harness/core-session'
+import type { CapturedActionFact, CodeSettlementFact, ManagedAction, OwnerToken, ProducerFactOutcome, SettlementFacts, SettlementOwnerCut } from '@i-harness/core-session'
 
 export interface Callback {
   invoke?: () => void
@@ -12,6 +12,12 @@ export interface Pending {
   prepare?: () => Promise<CodeSettlementFact>
   capture?: () => CapturedActionFact<ProducerFactOutcome>
   source?: SettlementFacts<ProducerFactOutcome>
+  expectedMember?: Readonly<{ type: CodeSettlementFact['type'] | 'code/store'; cellId: string }>
+  expectedOwner?: Readonly<OwnerToken>
+  nativeOutcome?: ProducerFactOutcome
+  descriptor?: () => Promise<void>
+  descriptorDone?: true
+  descriptorFlight?: Promise<void>
   cell?: CellFacts
   actionCell?: CellFacts
   action?: ManagedAction<ProducerFactOutcome>

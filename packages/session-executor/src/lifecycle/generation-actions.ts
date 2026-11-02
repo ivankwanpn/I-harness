@@ -7,6 +7,7 @@ import { generationClock } from './generation-clock.ts'
 import { OwnedGenerationAction } from './generation-action.ts'
 import { readOwnedGenerationActions } from '../../../core-session/src/managed/view.ts'
 import { retainGenerationClose } from './generation-close-settlement.ts'
+import { captureGenerationBudget } from '@i-harness/core-agent'
 import { isManagedExecutionOwner, readAcknowledgedExecutionMembers,readManagedSourceGenerations } from '@i-harness/core-session/internal/execution'
 import type { ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts'
 import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
@@ -27,7 +28,7 @@ const sameOrigin = (a: GenerationOrigin, b: GenerationOrigin) => a.kind === b.ki
 
 /** One lifecycle per real F1 action. Durable facts alone determine allowance;
  * the only private spend information is live proof that a handoff was unsent. */
-export function createGenerationLifecycle(view: SessionView, ownerSessionId: string, action: ManagedAction<ProducerFactOutcome>, localTest?: { enabled: boolean; selectedClient(): import('@i-harness/llm-seam').ModelClient | undefined }, dependencies?: AgentGenerationDependencies): AgentGenerationLifecycle {
+export function createGenerationLifecycle(view: SessionView, ownerSessionId: string, action: ManagedAction<ProducerFactOutcome>, localTest?: { enabled: boolean; selectedClient(): import('@i-harness/llm-seam').ModelClient | undefined }, dependencies?: Partial<AgentGenerationDependencies>): AgentGenerationLifecycle {
   return generationLifecycle({view},ownerSessionId,action,localTest,dependencies)
 }
 /** Internal original fold/capture branch; never constructs a Session surrogate. */
@@ -40,7 +41,7 @@ export function createExecutionGenerationLifecycle(execution: ManagedExecutionAt
 }
 export interface ExecutionGenerationLifecycle { drain():Promise<void>; open(...args:Parameters<AgentGenerationLifecycle['open']>):Promise<OwnedGenerationAction> }
 type NativeSourceRead = {source:import('@i-harness/core-session').SettlementFacts<ProducerFactOutcome>;read():readonly import('@i-harness/core-session').DeepReadonly<import('@i-harness/core-session').GenerationActionState>[]}
-function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:never;execution:ManagedExecutionAttachment}, ownerSessionId:string,action:ManagedAction<ProducerFactOutcome>,localTest?:{enabled:boolean;selectedClient():import('@i-harness/llm-seam').ModelClient|undefined},dependencies?:AgentGenerationDependencies,registerNative?:(drain:()=>Promise<void>,beforeDrain?:()=>Promise<void>)=>NativeSourceRead):ExecutionGenerationLifecycle {
+function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:never;execution:ManagedExecutionAttachment}, ownerSessionId:string,action:ManagedAction<ProducerFactOutcome>,localTest?:{enabled:boolean;selectedClient():import('@i-harness/llm-seam').ModelClient|undefined},dependencies?:Partial<AgentGenerationDependencies>,registerNative?:(drain:()=>Promise<void>,beforeDrain?:()=>Promise<void>)=>NativeSourceRead):ExecutionGenerationLifecycle {
   const {view,execution}=domain
   const originalAssertion=execution?Object.getOwnPropertyDescriptor(action,'assertOpen'):undefined
   if(execution&&(!originalAssertion||!('value'in originalAssertion)||typeof originalAssertion.value!=='function'||utilTypes.isProxy(originalAssertion.value)))throw generationError('GENERATION_UNSUPPORTED')
@@ -107,9 +108,8 @@ function generationLifecycle(domain:{view:SessionView;execution?:never}|{view?:n
     if (options.maxAttempts !== undefined && (!Number.isSafeInteger(options.maxAttempts) || options.maxAttempts <= 0)) throw new TypeError('Invalid generation attempt limit')
     let persisted = read().find(value => value.opened.purpose === purpose && sameOrigin(value.opened.origin, origin))
     if (!persisted) {
-      const startedAt = options.start?.wall ?? Date.now(), timeout = options.timeoutMs ?? (purpose === 'main' || purpose === 'manual' ? 3_600_000 : purpose === 'title' ? 30_000 : 90_000)
-      if (!Number.isSafeInteger(timeout) || timeout <= 0 || !Number.isSafeInteger(startedAt + timeout)) throw generationError('GENERATION_CLOCK_INVALID')
-      const event: GenerationActionEvent = { type: 'context/action', version: 1, op: 'open', ownerSessionId, actionId: randomUUID(), purpose, origin, startedAt, expiresAt: startedAt + timeout, trustedAt: startedAt }
+      const {startedAt,expiresAt}=captureGenerationBudget(purpose,options,options.start?.wall??Date.now())
+      const event: GenerationActionEvent = { type: 'context/action', version: 1, op: 'open', ownerSessionId, actionId: randomUUID(), purpose, origin, startedAt, expiresAt, trustedAt: startedAt }
       await commit([event])
       persisted = state(event.actionId)
     }

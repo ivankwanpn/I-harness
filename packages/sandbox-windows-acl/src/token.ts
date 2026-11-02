@@ -90,17 +90,17 @@ export function makeWellKnownSid(api: Win32Bindings, type: number, owner?: Nativ
 }
 
 /**
- * Merge one full-access allow ACE for `sidPtr` into the token's DEFAULT DACL
- * — the DACL every NEW object the token holder creates (without an explicit
- * security descriptor) takes. The restricted token inherits the user's
- * default DACL verbatim, which names no restricting SID: a new anonymous pipe
- * (child stdio) therefore fails the write pass-2 check at creation
- * (ERROR_ACCESS_DENIED; Node surfaces it as spawn EPERM), breaking every
- * piped-stdio grandchild spawn. The merged ACE names a RESTRICTING SID (the
- * write SID under workspace-write, Everyone under read-only), so each new
- * object's own DACL passes pass-2 while object creation itself stays gated by
- * the parent container's DACL (files outside the granted trees remain
- * uncreatable). Fails closed: any Win32 failure throws before the spawn.
+ * Merge one full-access allow ACE for `sidPtr` into the token's DEFAULT DACL.
+ * This affects objects whose creation actually uses that default; it does
+ * not replace object-specific or inherited security descriptors. The grant
+ * therefore does not establish compatibility for a descendant's internally
+ * created stdio pipes. In the observed restricted Node piped-child case, the
+ * pipe descriptor did not contain this grant and client opening still failed.
+ * IH's own output pipe has a separate explicitly owned descriptor. Keep that
+ * path and inherited-stdio child qualification separate from piped-grandchild
+ * support; an arbitrary spawn EPERM alone does not identify this cause.
+ * This function changes neither the restricting-SID set nor existing object
+ * DACLs. Any Win32 failure throws before the spawn.
  * @param api - the binding table.
  * @param token - the restricted token to adjust (requires TOKEN_ADJUST_DEFAULT).
  * @param sidPtr - the restricting SID whose full-access ACE joins the default DACL.

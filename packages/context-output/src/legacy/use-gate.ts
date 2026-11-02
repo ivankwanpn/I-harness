@@ -5,6 +5,7 @@ export interface LegacyUseLease {
   assertExclusive(): void;
 }
 export interface LegacyUseGate {
+  assertOutside(): void;
   shared<T>(signal: AbortSignal | undefined, work: (lease: LegacyUseLease) => Promise<T>): Promise<T>;
   exclusive<T>(signal: AbortSignal | undefined, work: (lease: LegacyUseLease) => Promise<T>): Promise<T>;
   assertLease(lease: LegacyUseLease, requirement?: 'exclusive'): void;
@@ -85,6 +86,7 @@ export function createLegacyUseGate(): LegacyUseGate {
     }
   }
   return {
+    assertOutside() { if (scope.getStore()?.active) throw new Error('Legacy use gate reentry') },
     shared: (signal, work) => run('shared', signal, work),
     exclusive: (signal, work) => run('exclusive', signal, work),
     assertLease,

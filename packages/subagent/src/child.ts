@@ -9,6 +9,7 @@ import { openChildDocument } from './child/document.ts'
 import { openInitialChildGeneration, type InitialChildInput } from './child/generation.ts'
 import { captureChildInstructionContext } from './child/instruction-context.ts'
 import { invokeOriginal } from './followup/resident-lifetime.ts'
+import {claimTaskChildBirth,markTaskChildAdopted} from './child/task-birth.ts'
 
 export { SUBAGENT_PROMPT_CONTRACT, composeSubagentPrompt, estimateChildOverhead } from "./child/prompt.ts"
 export { resolveRoleTools } from "./child/role-tools.ts"
@@ -31,7 +32,8 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const failedSettlement = originalFactory && dataMethod<NonNullable<import('./child/instruction-context.ts').ChildInstructionContextFactory['settleFailed']>>(originalFactory, 'settleFailed')?.bind(originalFactory)
   const retainInitial = dataMethod<NonNullable<SpawnOptions['retainInitialSetup']>>(opts, 'retainInitialSetup')?.bind(opts)
   // Pure role gates precede any child document or executable model resolution.
-  const declared = declaredRoleModel(opts.role, opts)
+  const committed=opts.childStart?.kind==='committed-child-birth'?claimTaskChildBirth(opts.childStart.birth):undefined
+  const declared = committed?committed.declared:declaredRoleModel(opts.role, opts)
   if (subagentModelSelectionGated(opts, declared)) throw subagentModelSelectionDisabled(opts.role.name)
   if (opts.childSessions && !opts.childSessions.coordinator.openManagedDocument) throw Object.assign(new Error('Durable child requires the owned fact capability'), { code: 'FACT_OWNER_UNSUPPORTED' })
 
@@ -39,15 +41,14 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const childCtx = opts.parentCtx.scope.mount()
   const unmountContext = dataMethod<() => void>(childCtx.scope, 'unmount')?.bind(childCtx.scope)
   if (!unmountContext) throw new TypeError('Original child context cleanup unavailable')
-  childCtx.services.register("hooks/agent-type", opts.role.name)
 
   // Allocate inherited seed and read depth before resolving the model.
   const turns = opts.forkTurns ?? "none"
-  const seedEvents = turns === "none" ? [] : forkTurns(opts.parentSession.events, turns === "all" ? Infinity : turns, opts.parentSession.formatVersion, opts.parentSession.header)
+  const seedEvents = committed || turns === "none" ? [] : forkTurns(opts.parentSession.events, turns === "all" ? Infinity : turns, opts.parentSession.formatVersion, opts.parentSession.header)
 
   let sessionId: string | undefined
   const childDepth = (opts.parentSession.header?.delegationDepth ?? 0) + 1
-  const start = { wall: Date.now(), monotonic: performance.now() }
+  const start = committed?.start??{ wall: Date.now(), monotonic: performance.now() }
   const controller = new AbortController()
   const abort = () => controller.abort(opts.signal?.reason)
   opts.signal?.addEventListener('abort', abort, { once: true })
@@ -103,24 +104,27 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   }
   return invokeOriginal(setup, async () => { try {
   if (retainInitial) releaseSetup = retainInitial(setup)
+  childCtx.services.register("hooks/agent-type", opts.role.name)
   controller.signal.throwIfAborted()
   if (opts.results?.forSource) opts = { ...opts, results: await opts.results.forSource() }
   controller.signal.throwIfAborted()
   const ordinary = (opts.childSessions?.origin ?? "subagent") === "subagent"
   const protocol = ordinary ? { subagentProtocolVersion: 1 as const } : {}
-  if (opts.childSessions) {
+  if (committed) sessionId=committed.request.invocation.targetSessionId
+  else if (opts.childSessions) {
     sessionId = `child-${randomUUID()}`
     await opts.childSessions.coordinator.create({ sessionId,
       parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length,
       origin: opts.childSessions.origin ?? "subagent", delegationDepth: childDepth, ...protocol })
   }
   controller.signal.throwIfAborted()
-  const opened = await openChildDocument(seedEvents,
+  const opened = committed?{session:committed.document.view,factOwner:committed.document,document:committed.document}:await openChildDocument(seedEvents,
     { ...(opts.childSessions ? { parentSession: opts.childSessions.parentSessionId } : {}), seedLength: seedEvents.length, origin: opts.childSessions?.origin ?? 'subagent', delegationDepth: childDepth, ...protocol },
     opts.childSessions && sessionId ? { coordinator: opts.childSessions.coordinator, sessionId } : undefined)
   const { session: childSession, factOwner } = opened
   document = opened.document
   if (document) { const close = dataMethod<() => Promise<void>>(document, 'close'), revoke = dataMethod<() => void>(document, 'revokeNewWork'); if (!close || !revoke) throw new TypeError('Original child document cleanup unavailable'); closeDocument = close.bind(document); revokeDocument = revoke.bind(document) }
+  if(committed&&opts.childStart?.kind==='committed-child-birth')markTaskChildAdopted(opts.childStart.birth)
   controller.signal.throwIfAborted()
   if (createInstruction) {
     const input = { session: childSession, factOwner, lifetime: { available: () => instructionAvailable } }

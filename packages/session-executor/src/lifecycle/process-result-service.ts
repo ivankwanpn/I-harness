@@ -5,10 +5,13 @@ import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { inspectSelectedTarget } from '@i-harness/session-persistence/internal/selected-source-owner'
 import { canonicalJsonData } from '@i-harness/core-session'
 import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
+import { beginOriginalResultOrderingRegistration } from '../../../session-persistence/src/result-ordering-internal.ts'
+import { registerOriginalLegacyOrdering, commitOriginalLegacyOrdering, requireOriginalLegacyOrdering } from '../../../context-output/src/service.ts'
 import { acquireSelectedMetadata as acquireCoreSelectedMetadata, selectedMetadataCleanupFor,selectedLegacyTransferFor, acquireColdManagedQualification as acquireCoreColdManagedQualification, revokeColdManagedQualifications, acquireColdSelectedQualification as acquireCoreColdSelectedQualification, revokeColdSelectedQualifications } from '../../../context-output/src/service.ts'
 
 type ServiceOptions = Parameters<typeof createContextOutputService>[0]
 type Policy = Omit<ServiceOptions, 'authorizeResult'> & {
+  orderingCoordinators?: readonly SessionCoordinator[]
   coordinatorFor(sessionId: string): SessionCoordinator | undefined
   sourceFor(sessionId: string): Promise<NonNullable<ContextCapture['source']>>
   genericVisible(sessionId: string, ref: ManagedArtifactRef): Promise<boolean>
@@ -22,16 +25,22 @@ export function lookupProcessResultService(service: ContextOutputService) { retu
 
 /** Creates the original service and its result authorization together. */
 export function createProcessAwareResultService(policy: Policy) {
+  const orderingIdentity = {}, registrations: { coordinator: SessionCoordinator; registration: ReturnType<typeof beginOriginalResultOrderingRegistration> }[] = []
+  try { for (const coordinator of new Set(policy.orderingCoordinators)) registrations.push({ coordinator, registration: beginOriginalResultOrderingRegistration(coordinator, orderingIdentity) }) }
+  catch (failure) { for (const { registration } of registrations) registration.cancel(); throw failure }
+  const ordered = new Set(policy.orderingCoordinators)
   let retired = false
   const failScope = (id: string) => { try { lookupProcessReadContext(undefined!, id) } catch { /* Original context latches its denial. */ } }
   const context = (id: string) => {
     const page = pages.getStore(), coordinator = page?.coordinator ?? policy.coordinatorFor(id)
+    if (policy.orderingCoordinators && coordinator && !ordered.has(coordinator)) throw Error('Original result coordinator registration required')
     const process = lookupProcessReadContext(coordinator!, id)
     process?.assertPageAdmission()
     if (process && (!page || page.id !== id || !page.available())) { failScope(id); throw new Error('PROCESS_READ_UNAVAILABLE') }
     return process
   }
-  const service = createContextOutputService({ ...policy,
+  let service: ContextOutputService
+  try { service = createContextOutputService({ ...policy,
     authorizeResult: async (access, metadata) => {
       try {
         const process = context(access.sessionId); process?.assertCurrent()
@@ -48,7 +57,8 @@ export function createProcessAwareResultService(policy: Policy) {
     authorize: policy.authorize && (async (access, ref) => {
       try { if (context(access.sessionId)) { failScope(access.sessionId); throw new Error('PROCESS_READ_UNAVAILABLE') }; return await policy.authorize!(access, ref) } catch { return false }
     }),
-  })
+  }); if (policy.orderingCoordinators) requireOriginalLegacyOrdering(service); for (const { coordinator, registration } of registrations) commitOriginalLegacyOrdering(service, registration, coordinator) }
+  catch (failure) { for (const { registration } of registrations) registration.cancel(); throw failure }
   {
     const read = service.readResult.bind(service), exec = service.readExecResult.bind(service)
     const admitted = <T>(id: string, run: () => Promise<T>) => {
@@ -58,9 +68,9 @@ export function createProcessAwareResultService(policy: Policy) {
     service.readResult = (access, query) => admitted(access.sessionId, () => read(access, query))
     service.readExecResult = (access, query) => admitted(access.sessionId, () => exec(access, query))
   }
-  const readResult = Object.getOwnPropertyDescriptor(service, 'readResult'), readExecResult = Object.getOwnPropertyDescriptor(service, 'readExecResult')
+  const readResult = Object.getOwnPropertyDescriptor(service, 'readResult'), readExecResult = Object.getOwnPropertyDescriptor(service, 'readExecResult'), readCodeOutputResult = Object.getOwnPropertyDescriptor(service, 'readCodeOutputResult')
   const assertMethods = () => {
-    for (const [key, expected] of [['readResult', readResult], ['readExecResult', readExecResult]] as const) {
+    for (const [key, expected] of [['readResult', readResult], ['readExecResult', readExecResult], ['readCodeOutputResult',readCodeOutputResult]] as const) {
       const current = Object.getOwnPropertyDescriptor(service, key)
       if (!current || !expected || !('value' in current) || !('value' in expected) || current.value !== expected.value) throw new Error('PROCESS_READ_UNAVAILABLE')
     }
@@ -99,5 +109,5 @@ export function createProcessAwareResultService(policy: Policy) {
     if (retired) throw Error('Original result service retired')
     assertMethods(); return acquireCoreColdSelectedQualification(service, ...args)
   }
-  return { service, acquireColdManagedQualification, acquireColdSelectedQualification, acquireSelectedLegacyTransfer, withPage: bridge.withPage.bind(bridge), acquireSelectedMetadata, selectedMetadataCleanupFor:(error:unknown)=>selectedMetadataCleanupFor(service,error), retireBridge() { retired = true; revokeColdManagedQualifications(service); revokeColdSelectedQualifications(service) } }
+  return { service, registerCoordinator(coordinator: SessionCoordinator) { if (retired) throw Error('Original result service retired'); if (!ordered.has(coordinator)) { registerOriginalLegacyOrdering(service, coordinator); ordered.add(coordinator) } }, acquireColdManagedQualification, acquireColdSelectedQualification, acquireSelectedLegacyTransfer, withPage: bridge.withPage.bind(bridge), acquireSelectedMetadata, selectedMetadataCleanupFor:(error:unknown)=>selectedMetadataCleanupFor(service,error), retireBridge() { retired = true; revokeColdManagedQualifications(service); revokeColdSelectedQualifications(service) } }
 }

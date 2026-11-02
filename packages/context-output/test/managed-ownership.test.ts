@@ -2,7 +2,8 @@ import { expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, rm, readdir, readFile, open } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createContextOutputService } from '../src/index.ts'
 
@@ -10,7 +11,7 @@ it('releases only confirmed deleted document pins and preserves a separately gra
   const base = resolve(import.meta.dirname, '../../../build/r4a-ownership-tests')
   await mkdir(base, { recursive: true })
   const root = await mkdtemp(resolve(base, 'documents-')), backend = createJsonlBackend(resolve(root, 'sessions'))
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } },taskDocumentStorageContract)
   const a = (await coordinator.create()).id, b = (await coordinator.create()).id
   type DeletionSource = { onDocumentDeleted?(listener: (sessionId: string, manifest: { documents: string[] }) => Promise<void>): () => void }
   const owner = coordinator as typeof coordinator & DeletionSource
@@ -38,7 +39,7 @@ it('does not publish or resurrect a document pin deleted after its body write', 
   const base = resolve(import.meta.dirname, '../../../build/r4a-ownership-tests')
   await mkdir(base, { recursive: true })
   const root = await mkdtemp(resolve(base, 'delete-capturing-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } },taskDocumentStorageContract)
   const a = (await coordinator.create()).id, document = (await coordinator.create()).id
   const service = createContextOutputService({ root: resolve(root, 'context'), workspaceId: 'w',
     documentDeletions: listener => coordinator.onDocumentDeleted!((id, manifest) => listener([id, ...manifest.documents])) })
@@ -96,7 +97,7 @@ it('resolves the original uncertain pin write before canceling a confirmed delet
   const base = resolve(import.meta.dirname, '../../../build/r4a-ownership-tests')
   await mkdir(base, { recursive: true })
   const root = await mkdtemp(resolve(base, 'delete-pin-unknown-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } },taskDocumentStorageContract)
   const a = (await coordinator.create()).id, document = (await coordinator.create()).id
   const service = createContextOutputService({ root: resolve(root, 'context'), workspaceId: 'w',
     documentDeletions: listener => coordinator.onDocumentDeleted!((id, manifest) => listener([id, ...manifest.documents])) })

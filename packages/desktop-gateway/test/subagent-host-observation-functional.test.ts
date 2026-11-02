@@ -1,0 +1,95 @@
+import { expect, it } from "vitest"
+import { createServer } from "node:http"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+import type {UsageSnapshotV2} from '../../usage-stats/src/observation-snapshot-types.ts'
+import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
+import { createDesktopHost } from "../src/host.ts"
+import { createHostFixtureTrace } from "./host-fixture-trace.ts"
+import { createHostFixtureModel } from "./host-fixture-model.ts"
+
+it("functional60s: omitted recording option measures two original child model routes", async () => {
+  const trace = createHostFixtureTrace('subagent-observation-default')
+  const models: string[] = []
+  let spawn = true
+  let childNumber = 0
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of request) chunks.push(Buffer.from(chunk))
+    const body = JSON.parse(Buffer.concat(chunks).toString())
+    expect(body).not.toHaveProperty("sessionId")
+    models.push(body.model)
+    let delta: unknown = { content: "done" }
+    if (body.model === "parent" && spawn) {
+      spawn = false
+      delta = { tool_calls: [{ index: 0, id: `spawn-${++childNumber}`, function: { name: "spawn_agent", arguments: JSON.stringify({ task_name: `child${childNumber}`, agent_type: "explore", message: "say done", background: false }) } }] }
+    }
+    response.writeHead(200, { "content-type": "text/event-stream" })
+    response.end(`data: ${JSON.stringify({ choices: [{ delta }], usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 } })}\n\ndata: [DONE]\n\n`)
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address() as { port: number }
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, "ih-observation-role-host-"))
+  const workspace = join(root, "workspace"); await mkdir(workspace)
+  const settingsPath = join(root, "settings.json")
+  await writeFile(settingsPath, JSON.stringify({ plugins: { subagentModel: true }, sandboxMode: "read-only", llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `http://127.0.0.1:${address.port}/v1`, models: [{ id: "parent", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
+  const frames: RpcMessage[] = []
+  let push!: (params: unknown) => void
+  const childChanged = new Promise<unknown>(resolve => { push = resolve })
+  let approvalId = 1000
+  let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
+  try {
+  // Omitted option selects the original lifetime observation lane.
+  host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(`http://127.0.0.1:${address.port}`, trace), onWrite: (frame) => {
+    trace.observe(frame)
+    frames.push(frame)
+    if ("method" in frame && frame.method === "desktop/session/subagents/changed") push(frame.params)
+    if ("method" in frame && frame.method === "desktop/interaction/request") {
+      const pending = frame.params as { requestId: string; sessionId: string; payload: { name?: string } }
+      queueMicrotask(() => { void host!.handleLine(encodeFrame(makeRequest(++approvalId, "desktop/interaction/reply", { requestId: pending.requestId, sessionId: pending.sessionId, decision: { kind: "approval", approved: pending.payload.name === "spawn_agent" } }))) })
+    }
+  } }))
+  let id = 0
+  async function call(method: string, params = {}) {
+    const requestId = ++id
+    await trace.run(method, () => host!.handleLine(encodeFrame(makeRequest(requestId, method, params))))
+    const reply = frames.find((frame) => "id" in frame && frame.id === requestId)
+    if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
+    return reply.result
+  }
+    await call("initialize")
+    await call("desktop/provider/mutate", { action: "key/set", id: "fixture", value: "test-only-key" })
+    const { sessionId } = await call("session/create") as { sessionId: string }
+    await call('desktop/session/project/bind', { sessionId })
+    await call("desktop/subagents/mutate", { action: "role/set", role: "explore", selection: { provider: "fixture", model: "small-one" } })
+    await call("session/prompt", { sessionId, prompt: "spawn an explorer" })
+    await writeFile(join(process.env.IH_STRUCTURE_EVIDENCE_ROOT!, 'subagent-host-first-turn.json'), JSON.stringify({ models, history: await call('session/history', { sessionId, afterSeq: 0, limit: 200 }) }, null, 2))
+    expect(models).toContain("small-one")
+    expect(await childChanged).toEqual({ sessionId })
+    await call("desktop/subagents/mutate", { action: "role/set", role: "explore", selection: { provider: "fixture", model: "small-two" } })
+    spawn = true
+    await call("session/prompt", { sessionId, prompt: "spawn another explorer" })
+    expect(models).toContain("small-two")
+    const beforeQueries=[...models],query={start:Date.now()-60000,end:Date.now()+1000,timeZone:'UTC',pageSize:100}
+    const usage=await call('desktop/usage/query-v2',{query}) as UsageSnapshotV2
+    await writeFile(join(process.env.IH_STRUCTURE_EVIDENCE_ROOT!,'r5-default-twochild.json'),JSON.stringify({models,sessionId,usage},null,2))
+    expect(usage.coverage.recordingMode).toBe('observations');expect(usage.legacy.totalRecords).toBe(0)
+    const sends=usage.rows.filter(row=>row.kind==='send').map(row=>row.value)
+    const first=sends.filter(send=>send.modelId==='small-one'),second=sends.filter(send=>send.modelId==='small-two')
+    expect(first).toHaveLength(1);expect(second).toHaveLength(1)
+    expect(first[0]!.ownerSessionId).not.toBe(sessionId);expect(second[0]!.ownerSessionId).not.toBe(sessionId)
+    expect(second[0]!.ownerSessionId).not.toBe(first[0]!.ownerSessionId)
+    for(const send of [...first,...second])expect(send).toMatchObject({providerId:'fixture',inputTokens:8,outputTokens:3,totalTokens:11,durable:true})
+    expect(usage.summary.transportHandoffs).toBe(sends.length);expect(usage.summary.measuredSends).toBe(sends.length)
+    expect(usage.summary.measuredTokenSubtotal).toBe(sends.length*11)
+    const requestId=++id;await host.handleLine(encodeFrame(makeRequest(requestId,'desktop/usage/query',{query})))
+    expect(frames.find(frame=>'id'in frame&&frame.id===requestId)).toMatchObject({error:{data:{code:'USAGE_UPGRADE_REQUIRED'}}})
+    expect(models).toEqual(beforeQueries)
+  } finally {
+    try { await trace.run('host/close', async () => { await host?.close() }) }
+    finally {
+      server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+    await rm(root, { recursive: true, force: true })
+  }
+}, 60000)

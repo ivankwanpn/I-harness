@@ -42,7 +42,7 @@ it.each(['pending', 'claimed'] as const)('semantic export and target bootstrap i
     // fixture. It is not predecessor/old-format qualification.
     const compiled = literalSession(exported.seed), target = createSession()
     bootstrapMemorySession(target, compiled.header!, compiled.events, () => true)
-    expect(target.formatVersion).toBe(13)
+    expect(target.formatVersion).toBe(14)
     expect(target.events.some(e => e.type.startsWith('agent/delivery-'))).toBe(false)
     expect(readDeliveries(target).activeGeneration()).toBeUndefined()
     expect(readDeliveries(target).pending()).toEqual([])

@@ -5,7 +5,7 @@ export interface JsonArray extends ReadonlyArray<JsonValue> {}
 export type JsonValue = null | boolean | number | string | JsonArray | JsonObject
 export type ResultOutcome = 'succeeded' | 'failed' | 'canceled' | 'unknown'
 export interface ResultExecution { outcome: ResultOutcome; dispatch: 'not-dispatched' | 'dispatched' | 'unknown' }
-export type ResultCodec = 'json-utf8-v1' | 'text-utf8-v1' | 'exec-frames-v1'
+export type ResultCodec = 'json-utf8-v1' | 'text-utf8-v1' | 'exec-frames-v1' | 'code-output-manifest-v1'
 export type ResultCompleteness = 'complete' | 'source-limited' | 'capture-canceled' | 'producer-incomplete'
 export interface ManagedArtifactRef {
   version: 1; id: string; revision: string; codec: ResultCodec; encodedBytes: number

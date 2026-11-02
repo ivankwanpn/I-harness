@@ -224,3 +224,4 @@ export function spillNotice(omittedBytes: number, path: string): string {
 
 export { createResultCapture } from './result/capture.ts'
 export { createExecFrameCapture } from './result/exec-frames.ts'
+export { createCodeOutputManifest } from './result/code-output-manifest.ts'

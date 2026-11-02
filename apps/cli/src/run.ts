@@ -25,6 +25,7 @@ import { maybeAutoTitle } from "@i-harness/session-title"
 import { createMetricsSink, createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
 import {
   createSessionAssembly,
+  createUnmanagedTaskChildHost,
   createInstructionEnvironment, type InstructionEnvironment,
   openExecutorDocument, actionMetadataFacts, createTitleGenerationContext,
   type AssemblyOptions,
@@ -670,6 +671,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
     runSignal.throwIfAborted()
     assembly = await createSessionAssembly({
+      ...(opts.coordinator?{prepareTaskChild:createUnmanagedTaskChildHost({coordinator:opts.coordinator,policy:'unmanaged'})}:{}),
       instructionEnvironment: opts.instructionEnvironment ?? (ownedInstructions ??= createInstructionEnvironment({ settingsPath })),
       modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
       videoAudioAnalyzer: async input => (await runtimeNow()).analyzeVideoAudio?.(input) ?? { status: "unconfigured", reason: "Video audio analysis is unavailable in this provider runtime." },

@@ -191,6 +191,8 @@ export class OwnerLedger {
   }
   private read(path: string) { return readLedger(path, this.retire) }
   async tracked(path: string) { const p = names(path); return await exists(p.rewrite) || await exists(p.journal) || await exists(p.previous) }
+  /** Passive only: an issued rewrite may not be silently recovered by a read. */
+  async recoveryPending(path: string): Promise<boolean> { return !!await readIntent(names(path).journal, this.retire) || await exists(names(path).previous) }
   /** Prospective capture description only; never recovers or funds a prefix. */
   async describeFunding(path: string, next: ReadonlySet<string>, operation: string, current: () => void): Promise<{ additionalBytes: number }> {
     await ownedPath(this.root, path); current()

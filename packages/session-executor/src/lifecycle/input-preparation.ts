@@ -15,6 +15,7 @@ interface InputExecutionOptions {
   modelActionTimeoutMs?: number
   modelActionMaxAttempts?: number
   localTestEnabled?: boolean
+  passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
   prepare?: (assembly: SessionAssembly, prompt: string) => Promise<string>
 }
 
@@ -45,7 +46,7 @@ export async function prepareInputExecution(options: InputExecutionOptions) {
     if (errors.length) throw new AggregateError(errors, 'Input preparation settlement requires recovery')
   }
   try {
-    generations = createGenerationLifecycle(owner.view, options.ownerSessionId, action, { enabled: options.localTestEnabled === true, selectedClient: () => assembled?.selectedModel() }, { beforeDrain: () => closeDecided.promise })
+    generations = createGenerationLifecycle(owner.view, options.ownerSessionId, action, { enabled: options.localTestEnabled === true, selectedClient: () => assembled?.selectedModel() }, { beforeDrain: () => closeDecided.promise,passiveGeneration:options.passiveGeneration })
     preparations = createInputPreparationOwner(owner.view, action, {
       ready: async () => { assembled = await options.assemble() },
       transform: options.prepare ? text => options.prepare!(assembled!, text) : undefined,

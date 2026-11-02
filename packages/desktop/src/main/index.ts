@@ -62,7 +62,7 @@ app.whenReady().then(() => {
     reveal: async directory => { const failure = await shell.openPath(directory); if (failure) throw new Error("Diagnostic folder could not be opened") },
   })
   const stopDiagnostics = manager.onEvent(diagnostics.observe)
-  const globalProviders = createGlobalProviderSettings(async () => (await manager.get({ id: "desktop-configuration", path: app.getPath("userData"), label: "本機設定" })).client, { openExternal: url => shell.openExternal(url), usageWarnings: usageWarnings.read })
+  const globalProviders = createGlobalProviderSettings(async () => {const runtime=await manager.get({ id: "desktop-configuration", path: app.getPath("userData"), label: "本機設定" });return {request:runtime.client.request.bind(runtime.client),capabilities:runtime.info.capabilities}}, { openExternal: url => shell.openExternal(url), usageWarnings: usageWarnings.read })
   const notifications = createNotificationHistory(join(app.getPath("userData"), "notifications-v1.json"))
   const drafts = new AttachmentDraftStore(join(app.getPath("userData"), "unsent-drafts-v1"))
   drainNativeSettings = async () => {

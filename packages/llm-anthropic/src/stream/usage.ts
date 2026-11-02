@@ -15,7 +15,7 @@ export function mapUsage(raw: unknown): LLMUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined
   const src = raw as Record<string, unknown>
   const out: LLMUsage = {}
-  const take = (from: string, to: Exclude<keyof LLMUsage, "inputTokenSemantics">): void => {
+  const take = (from: string, to: Exclude<keyof LLMUsage, "inputTokenSemantics" | "measurementValidity">): void => {
     const v = src[from]
     if (typeof v === "number" && Number.isFinite(v)) out[to] = v
   }

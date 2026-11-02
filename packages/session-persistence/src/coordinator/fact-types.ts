@@ -28,5 +28,7 @@ export interface ManagedDocument extends FactPorts {
   reconcile(key: BatchKey): Promise<import('@i-harness/core-session').FactOutcome>
   drain(): Promise<void>
   settleFinishedActions(): Promise<void>
+  /** Original captured-source cleanup only; retains the native document owner. */
+  drainOriginalSources(): Promise<void>
   close(): Promise<void>
 }

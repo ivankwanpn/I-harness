@@ -32,9 +32,12 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
         if (cell.status !== 'running')
             return;
         const item = JSON.parse(encoded) as CodeModeItem;
+        cell.lifetimeOutput ??= { accepted: 0, truncated: false };
+        if (!Number.isSafeInteger(++cell.lifetimeOutput.accepted)) throw new Error('Code output count overflow');
         const bytes = Buffer.byteLength(encoded);
         if (cell.items.length + cell.pendingItems + cell.retainedOutputItems >= ITEM_CAP || cell.bytes + cell.pendingBytes + cell.retainedOutputBytes + bytes > config.maxResultBytes) {
             cell.truncated = true;
+            cell.lifetimeOutput.truncated = true;
             cell.textIncomplete ||= item.type === 'text';
             return;
         }

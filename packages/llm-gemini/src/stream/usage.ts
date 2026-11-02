@@ -8,7 +8,7 @@ export function mapUsage(raw: unknown): LLMUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined
   const r = raw as Record<string, unknown>
   const out: LLMUsage = {}
-  const take = (from: unknown, to: Exclude<keyof LLMUsage, "inputTokenSemantics">): void => {
+  const take = (from: unknown, to: Exclude<keyof LLMUsage, "inputTokenSemantics" | "measurementValidity">): void => {
     if (typeof from === "number" && Number.isFinite(from)) out[to] = from
   }
   take(r.promptTokenCount, "inputTokens")

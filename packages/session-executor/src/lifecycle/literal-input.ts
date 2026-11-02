@@ -12,6 +12,7 @@ export async function openLiteralInputExecution(options: {
   input: PendingInput; signal: AbortSignal; start: { wall: number; monotonic: number }
   selectedClient(): ModelClient | undefined; localTestEnabled: boolean
   timeoutMs?: number; maxAttempts?: number
+  passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
 }) {
   const { attachment, input, signal } = options, owner = attachment.factOwner
   if (isNondurableSession(owner.view)) return { generation: undefined, preparation: undefined, delegatedOrigin: undefined, close: async () => {} }
@@ -37,7 +38,7 @@ export async function openLiteralInputExecution(options: {
     if (failed) throw failure
   })()
   try {
-    lifecycle = createGenerationLifecycle(owner.view, options.ownerSessionId, action, { enabled: options.localTestEnabled, selectedClient: options.selectedClient }, { beforeDrain: () => closeDecided.promise })
+    lifecycle = createGenerationLifecycle(owner.view, options.ownerSessionId, action, { enabled: options.localTestEnabled, selectedClient: options.selectedClient }, { beforeDrain: () => closeDecided.promise,passiveGeneration:options.passiveGeneration })
     preparations = createInputPreparationOwner(owner.view, action, { cancel: id => attachment.inbox.cancel(id, 'literal input did not reach promotion') })
     const admission = owner.view.events.findLast(event => event.type === 'agent/input/admitted' && event.inputId === input.inputId)
     if (admission?.type !== 'agent/input/admitted' || admission.text !== input.text || !attachment.inbox.isPending(input.inputId)) throw generationError('GENERATION_STALE')

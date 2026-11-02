@@ -48,9 +48,10 @@ export async function publishChild(
     committedFactSeqs(initialOutcome)
   } finally { admission?.finish() }
   opts.validateBeforeLaunch?.()
+  opts.retainPublication?.({kind:'agent',value:agent})
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
-  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, undefined,
-    { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) },registration=>bindOriginalSpawnJob(opts.onPublished,registration))
+  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, opts.childStart?.kind==='committed-child-birth'?()=>controller.abort():undefined,
+    { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) },registration=>{bindOriginalSpawnJob(opts.onPublished,registration);opts.retainPublication?.({kind:'job',value:registration})})
   let resultLifetime = true
   let initialClosed = false, initialFlight: Promise<void> | undefined
   const settleInitial = () => {
@@ -111,8 +112,9 @@ export async function publishChild(
     },
   }
   retainInitialInput(entry,inputId,initialOutcome)
-  // Defer transport until the entry and its retained lifecycle are published.
+  const publication=Object.freeze({path:childPath,jobId,sessionId,...(modelLabel!==undefined?{modelLabel}:{})})
   const runGate=Promise.withResolvers<void>()
+  // Defer transport until the entry and its retained lifecycle are published.
   const initialRun = runGate.promise.then(() => { controller.signal.throwIfAborted();assertSetupLive?.(); return agent.runAdmitted!(opts.message, controller.signal, undefined, inputId, initial?.generation && initial.delegatedOrigin
     ? { provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) }, generation: initial.generation, delegatedOrigin: initial.delegatedOrigin } : undefined) })
 
@@ -135,11 +137,15 @@ export async function publishChild(
   entry.followupChain = completion.finally(settleInitial)
   void entry.followupChain.catch(() => {})
   try {
+    opts.retainPublication?.({kind:'run',value:entry.followupChain})
+    opts.retainPublication?.({kind:'entry',value:entry})
     bindOriginalSpawnRun(opts.onPublished,entry,initialRun,opts.table)
     opts.validateBeforeLaunch?.()
-    opts.table.add(childPath,entry)
+    if(opts.childStart?.kind==='committed-child-birth'&&opts.table.get(childPath))throw Error('Original child publication path occupied')
+    opts.table.add(childPath, entry)
     onEntryPublished?.(entry)
-    opts.onPublished?.({path:childPath,jobId,sessionId,...(modelLabel!==undefined?{modelLabel}:{})})
+    opts.onEntryPublished?.(entry,publication)
+    opts.onPublished?.(publication)
     controller.signal.throwIfAborted();assertSetupLive?.();runGate.resolve()
   }catch(cause){runGate.reject(cause);throw cause}
 

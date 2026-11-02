@@ -1,4 +1,7 @@
 import {associateRequiredTaskRegistry,installRequiredTaskData,isInstalledRequiredTaskData,type RequiredTaskSettlement} from './required-settlement.ts'
+import { observeColdExecutionWrites } from '../../../session-persistence/src/coordinator/cold-execution-writes.ts'
+import { managedExecutionStatus } from '../../../session-persistence/src/coordinator/managed-document.ts'
+import { createTaskLaunchPort, type TaskLaunchPort } from './launch-slots.ts'
 import { stageTaskRestore } from './restore-stage.ts'
 import { associateColdBindings, assertColdTaskAdmission } from './cold-bindings.ts'
 import { isOwnedTaskContext } from './owned-context.ts'
@@ -8,13 +11,22 @@ import { settleTaskRecord } from "./settlement.ts"
 import { waitForObservation } from "@i-harness/core-tools"
 import { TaskResultOwner } from "./result.ts"
 import { TaskNotifications } from "./notifications.ts"
-import { TaskPersistence } from "./persistence.ts"
+import { TaskPersistence, originalCapturedTaskAcknowledgment, capturedTaskAcknowledgmentFailure } from "./persistence.ts"
 import { associateTaskSaveOwner } from './save-owner.ts'
 import {captureTaskSnapshot} from '@i-harness/session-persistence/internal/task-document-operations'
 import { TaskRecords } from "./records.ts"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
+  let stopObserving: (()=>void)|undefined
+  let launchPort: TaskLaunchPort | undefined
   const ownedTask = opts.ownedTask
+  if(opts.launchContext){
+    if(!ownedTask||!isOwnedTaskContext(ownedTask))throw Error('Original task launch parent required')
+    const document=opts.launchContext.factOwner as import('@i-harness/session-persistence').ManagedDocument
+    ownedTask.operations.assertParentSession(ownedTask.operations.parent(document),ownedTask.stateId)
+    const view=Object.getOwnPropertyDescriptor(document,'view')
+    if(!view||!('value'in view)||view.value!==opts.launchContext.view||opts.launchContext.sessionId!==ownedTask.stateId)throw Error('Foreign task launch parent')
+  }
   type State = { records: TaskRecords; notifications: TaskNotifications; version: 1 | 2 | 3; phase: 'pending' | 'ready' | 'poisoned' | 'retired'; failure?: { cause: unknown } }
   let currentState: State = { records: new TaskRecords(), notifications: new TaskNotifications(), version: opts.results ? 2 : 1, phase: ownedTask ? 'pending' : 'ready' }
   const installedData=Object.freeze({})
@@ -42,6 +54,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const maxConcurrency = opts.maxConcurrency ?? Infinity
   const requiredSaveAuthorities=new WeakMap<object,{parent:object;capture:()=>TaskProtocolDocument;beforeIssue:()=>Promise<void>}>()
   const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask,authority=>{const original=requiredSaveAuthorities.get(authority);if(!original)throw Error('Original required Task capture unavailable');return original})
+  const requiredClaimRoutes=new WeakMap<TaskRecord,()=>void>()
   const requiredTerminalRoutes=new WeakMap<TaskRecord,()=>Promise<void>>()
   const retentionSaves = new WeakMap<TaskRecord, import('./persistence.ts').OwnedTaskSave>()
   type RetentionIdentity={revision:string|undefined;fingerprint:string}
@@ -58,6 +71,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
 
   function snapshot():TaskProtocolDocument {assertReady();return snapshotData()}
   function snapshotData(): TaskProtocolDocument {
+    launchPort?.assertSnapshot()
     // A loaded literal 1 remains literal until a subsequent result-aware save.
     if (currentState.version === 1 && opts.results) currentState.version = 2
     return {
@@ -114,10 +128,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       const previous = retentionSaves.get(task)
       const captured=previous?capturedRetention.get(task)!:retentionIdentity(task)
       const originalSave = previous ?? persistence.captureSave(true,retentionPrerequisites.get(task))
-      if (originalSave) { retentionSaves.set(task, originalSave);capturedRetention.set(task,captured); if (previous) await originalSave.retry(); else await originalSave.done; originalSave.assertHandoff() }
+      if (originalSave) { retentionSaves.set(task, originalSave);capturedRetention.set(task,captured); await completeOriginalRetention(task,originalSave,Boolean(previous));return }
       else await save()
-      originalSave?.release()
-      acknowledgedRetention.set(task,captured);retentionSaves.delete(task);capturedRetention.delete(task)
       if(!sameRetention(captured,task))throw Error('Original saved task result changed')
       if (task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'unavailable') {
         task.retention = 'failed'
@@ -126,7 +138,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         task.retention = "durable"
         delete task.retentionError
       }
-
+      acknowledgedRetention.set(task,captured)
     } catch (error) {
       task.retention = "failed"
       task.retentionError = error instanceof Error ? error.message : String(error)
@@ -134,6 +146,28 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       throw error
     }
     publish(task)
+  }
+
+  async function completeOriginalRetention(task:TaskRecord,save:import('./persistence.ts').OwnedTaskSave,retry:boolean):Promise<void>{
+    if(currentState.records.get(task.id)!==task)throw Error('Original terminal task replaced')
+    const captured=capturedRetention.get(task);if(!captured)throw Error('Original terminal result identity unavailable')
+    if(retry)await save.retry();else await save.done
+    save.assertHandoff()
+    save.release();acknowledgedRetention.set(task,captured);retentionSaves.delete(task);capturedRetention.delete(task)
+    if(!sameRetention(captured,task))throw Error('Original saved task result changed')
+    if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else task.retention='durable'
+    publish(task)
+  }
+  function resumeOriginalRetention(task:TaskRecord):Promise<void>{
+    if(currentState.records.get(task.id)!==task)return Promise.reject(Error('Original terminal task replaced'))
+    const required=requiredTerminalRoutes.get(task);if(required&&task.outcome!==undefined)return required()
+    const active=retentionFlights.get(task);if(active)return active
+    const acknowledged=acknowledgedRetention.get(task);if(acknowledged&&sameRetention(acknowledged,task))return Promise.resolve()
+    const save=retentionSaves.get(task)
+    if(!save)return retainResult(task.id)
+    const flight=completeOriginalRetention(task,save,true);retentionFlights.set(task,flight)
+    void flight.finally(()=>{if(retentionFlights.get(task)===flight)retentionFlights.delete(task)}).catch(()=>{})
+    return flight
   }
 
   function announceTerminal(t: TaskRecord, notify = true): void {
@@ -154,6 +188,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
 
   function terminalize(input: TaskTerminalizeInput): boolean {
     assertReady()
+    launchPort?.retireTask(input.taskId, new Error('Task terminalized'))
     const task = currentState.records.get(input.taskId)
     if (!settleTaskRecord(task, input, resultOwner)) return false
     announceTerminal(task)
@@ -217,6 +252,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const ready = ownedTask ? loadOwned() : Promise.resolve()
   void ready.catch(() => {})
   function retireOwnedLoad(): void {
+    launchPort?.retireAll(new Error('Task launch owner retired'))
     if (!ownedTask) return
     if (currentState.phase !== 'poisoned') currentState = { ...currentState, phase: 'retired' }
     controller.abort(); handoff?.abandon()
@@ -226,7 +262,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     ready,
     assertReady,
     retireOwnedLoad,
-    async closeOwnedLoad() { await ready.catch(() => {}); await cleanupLoad(); await persistence.retireConsumers(); await persistence.flush() },
+    async closeOwnedLoad() { launchPort?.retireAll(new Error('Original slot owner closed'));stopObserving?.();stopObserving=undefined;await ready.catch(() => {}); await cleanupLoad(); await launchPort?.close(); await persistence.retireConsumers(); await persistence.flush() },
     bindForegroundHandoff(taskId) {
       assertReady()
       const task = currentState.records.get(taskId)
@@ -275,7 +311,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     submit(input) {
       assertReady()
       if (input.identity.callEventSeq !== undefined || input.identity.toolCallId !== undefined) {
-        assertColdTaskAdmission(registry, currentState.records.getByIdentity(input.identity)?.id)
+        const existing=currentState.records.getByIdentity(input.identity)
+        assertColdTaskAdmission(registry, existing?.id)
+        if(existing&&launchPort?.inspect(existing.id))throw Error('Original warm task slot admission required')
       }
       const { record, inserted } = currentState.records.submit(input, maxConcurrency)
       if (currentState.version === 3) currentState.records.protectSubmission(record)
@@ -300,7 +338,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       assertReady()
       const t = currentState.records.claim(taskId, childSessionId, modelLabel, jobId)
       if (!t) return false
-      void save().catch(() => {})
+      const required=requiredClaimRoutes.get(t);if(required)required();else void save().catch(() => {})
       publish(t)
       return true
     },
@@ -314,6 +352,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       let cancelled = 0
       for (const t of tree) {
         if (t.outcome !== undefined) continue
+        launchPort?.retireTask(t.id, new Error(error))
         settleTaskRecord(t, { taskId: t.id, outcome: 'cancelled', error }, resultOwner)
         taskIds.push(t.id)
         cancelled += 1
@@ -375,15 +414,29 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     let parent:object|undefined
     const readyParent=ownedTask.operations.requiredParent(ownedTask.document,source as import('@i-harness/core-session').SettlementFacts).then(original=>{parent=original;return original})
     const checkData=()=>{if(!isInstalledRequiredTaskData(ownedTask.operations,opts.stateId!,installedData)||currentState.records!==records||currentState.notifications!==notifications||currentState.phase==='poisoned'||records.get(task.id)!==task)throw Error('Original required Task incarnation replaced');source.assertHeld()}
+    const joinWriter=async()=>{const original=await readyParent;checkData();await ownedTask.operations.joinRequiredWriter(original);checkData()};
+    const checkOriginal=()=>{checkData();if(!parent)throw Error('Original required parent pending');ownedTask.operations.assertOriginalRequiredParent(parent,opts.stateId!)};
     const check=()=>{checkData();if(!parent)throw Error('Original required parent pending');ownedTask.operations.assertTaskV3Parent(parent,opts.stateId!)}
     let save:import('./persistence.ts').OwnedTaskSave|undefined,flight:Promise<Readonly<TaskRecord>>|undefined,ackFlight:Promise<Readonly<TaskRecord>>|undefined,revision:string|undefined,consumed=false,released=false,saveAttempted=false
     let originalInput:TaskTerminalizeInput|undefined,saveIdentity:RetentionIdentity|undefined,sealedTerminal:Readonly<TaskRecord>|undefined,projection:Readonly<TaskRecord>|undefined
+    let prelude:import('./persistence.ts').OwnedTaskSave|undefined,preludeFlight:Promise<void>|undefined,preludeAttempted=false,preludeAcknowledged=false
+    const settlePrelude=():Promise<void>=>{
+      if(!prelude||preludeAcknowledged)return Promise.resolve();if(preludeFlight)return preludeFlight
+      const pending=(async()=>{if(preludeAttempted)await prelude!.retry();else{preludeAttempted=true;await prelude!.done};await joinWriter();check();prelude!.assertHandoff();prelude!.release();preludeAcknowledged=true})()
+      preludeFlight=pending;void pending.catch(()=>{if(preludeFlight===pending)preludeFlight=undefined});return pending
+    }
+    requiredClaimRoutes.set(task,()=>{
+      checkData();if(prelude)throw Error('Original claim snapshot already reserved')
+      const snapshot=captureTaskSnapshot(snapshotData()) as TaskProtocolDocument,authority=Object.freeze({})
+      requiredSaveAuthorities.set(authority,{parent:readyParent,capture:()=>snapshot,beforeIssue:async()=>{checkOriginal()}})
+      prelude=persistence.captureRequiredSave(authority);void settlePrelude().catch(()=>{})
+    })
     const reserve=()=>{
       if(save)return
       checkData();if(task.outcome===undefined)throw Error('Original terminal disposition unavailable')
       revision=task.result?.revision
       const prerequisite=retentionPrerequisites.get(task),authority=Object.freeze({})
-      requiredSaveAuthorities.set(authority,{parent:readyParent,capture:()=>{check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed');saveIdentity=retentionIdentity(task);sealedTerminal=captureTerminal(task);capturedRetention.set(task,saveIdentity);return snapshotData()},beforeIssue:async()=>{if(prerequisite)await prerequisite();check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed');if(resultOwner)await resultOwner.settle(task);check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed')}})
+      requiredSaveAuthorities.set(authority,{parent:readyParent,capture:()=>{check();if(task.result?.revision!==revision)throw Error('Original required Task revision changed');saveIdentity=retentionIdentity(task);sealedTerminal=captureTerminal(task);capturedRetention.set(task,saveIdentity);return snapshotData()},beforeIssue:async()=>{if(prerequisite)await prerequisite();checkOriginal();if(task.result?.revision!==revision)throw Error('Original required Task revision changed');if(resultOwner)await resultOwner.settle(task);checkOriginal();if(task.result?.revision!==revision)throw Error('Original required Task revision changed')}})
       save=persistence.captureRequiredSave(authority);retentionSaves.set(task,save)
     }
     const acknowledge=():Promise<Readonly<TaskRecord>>=>{
@@ -392,8 +445,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       // Reserve synchronously at the terminal CAS, including a live Stop winner.
       reserve()
       const pending=(async()=>{
-        if(saveAttempted)await save!.retry();else{saveAttempted=true;await save!.done}
-        check();save!.assertHandoff();if(!consumed){save!.release();consumed=true}
+        await settlePrelude()
+        if(saveAttempted)await save!.retry();else{saveAttempted=true;try{await save!.done}catch(error){if(preludeAcknowledged&&save!.outcome()===undefined)await save!.retry();else throw error}}
+        await joinWriter();check();save!.assertHandoff();if(!consumed){save!.release();consumed=true}
         if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original required Task terminal changed after capture')
         if(task.result?.kind==='retained'&&task.result.envelope.retention.kind==='unavailable'){task.retention='failed';task.retentionError=task.result.envelope.retention.reason}else if(task.result?.kind==='pending')throw Error('Original required Task result pending');else{task.retention='durable';delete task.retentionError}
         acknowledgedRetention.set(task,saveIdentity!);retentionSaves.delete(task);capturedRetention.delete(task)
@@ -405,17 +459,47 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     const stopRoute=()=>{if(stopFlight)return stopFlight;const pending=acknowledge().then(()=>{});stopFlight=pending;retentionFlights.set(task,pending);void pending.finally(()=>{if(stopFlight===pending)stopFlight=undefined;if(retentionFlights.get(task)===pending)retentionFlights.delete(task)}).catch(()=>{});return pending}
     requiredTerminalRoutes.set(task,stopRoute)
     const drive=async()=>{
-      const input=originalInput??=Object.freeze({...await producer()});check();if(input.taskId!==task.id)throw Error('Original required Task producer changed')
+      const input=originalInput??=Object.freeze({...await producer()});checkOriginal();if(input.taskId!==task.id)throw Error('Original required Task producer changed')
       if(task.outcome===undefined){settleTaskRecord(task,input,resultOwner);if(task.result)delete task.legacyFormatVersion;notifications.enqueue(task)}
       return acknowledge()
     }
     const result:RequiredTaskSettlement=Object.freeze({
       settle(){if(this!==result)throw Error('Invalid required Task receiver');const pending=flight??=drive();void pending.catch(()=>{if(flight===pending)flight=undefined});return pending},
       reconcile(){if(this!==result)throw Error('Invalid required Task receiver');return result.settle()},
+      async recoverCapturedAcknowledgment(){
+        if(this!==result)throw Error('Invalid required Task receiver')
+        if(!save||!originalCapturedTaskAcknowledgment(save))return undefined
+        checkOriginal()
+        if(ackFlight)await ackFlight.catch(()=>{})
+        if(!originalCapturedTaskAcknowledgment(save))return undefined
+        const pending=acknowledge();flight=pending;void pending.catch(()=>{if(flight===pending)flight=undefined});return pending
+      },
+      acknowledgmentRecovery(cause:unknown){if(this!==result)throw Error('Invalid required Task receiver');return save&&capturedTaskAcknowledgmentFailure(save,cause)},
       assertProjectionCurrent(){if(this!==result||!consumed||released)throw Error('Original Task projection unavailable');check();if(saveIdentity&&!sameRetention(saveIdentity,task)||sealedTerminal&&terminalFingerprint(sealedTerminal)!==terminalFingerprint(task))throw Error('Original Task projection changed')},
-      async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task)}}
+      async release(){if(this!==result)throw Error('Invalid required Task receiver');if(!consumed)throw Error('Original required Task acknowledgment unavailable');if(!released){await ownedTask.operations.releaseRequiredParent(parent!);released=true;requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task)}}
     })
-    try{await readyParent;check();return result}catch(error){requiredTerminalRoutes.delete(task);throw error}
+    try{await readyParent;check();return result}catch(error){requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);throw error}
+  })
+  if (ownedTask && opts.launchContext) launchPort = createTaskLaunchPort(registry, opts.launchContext, {
+    beforeResultIssue(record,before){assertReady();if(currentState.records.get(record.id)!==record)throw Error('Original task replaced');retentionPrerequisites.set(record,before)},
+    retainResult:resumeOriginalRetention,
+    current(record) { assertReady();if(record&&currentState.records.get(record.id)!==record)throw Error('Original slot task replaced'); ownedTask.operations.assertTaskV3Parent(ownedTask.parent, opts.stateId!) },
+    insert: input => {const result=currentState.records.submit(input,maxConcurrency);if(result.inserted)liveAccepted.add(result.record);return result},
+    protect: record => currentState.records.protectSubmission(record, true),
+    accept(record) { const saving=save();publish(record);return saving },
+    bind(record,birth) {
+      assertReady();ownedTask.operations.assertTaskV3Parent(ownedTask.parent,opts.stateId!)
+      if(currentState.records.get(record.id)!==record||Object.hasOwn(record,'childBirth')||!Object.isExtensible(record))throw Error('Original warm task birth unavailable')
+      const captured=birth
+      const document=snapshot();document.formatVersion=3;document.tasks=document.tasks.map(task=>task.id===record.id?{...task,childBirth:captured}:task)
+      validateTaskDocument(document)
+      const freeze=(value:unknown):void=>{if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value)}};freeze(captured)
+      Object.defineProperty(record,'childBirth',{value:captured,enumerable:true,writable:false,configurable:false});currentState.version=3
+      return persistence.captureBindingSave()
+    },
+  })
+  if(ownedTask&&opts.launchContext)stopObserving=observeColdExecutionWrites(ownedTask.coordinator,id=>{
+    if(id===ownedTask.stateId&&managedExecutionStatus(opts.launchContext!.factOwner as import('@i-harness/session-persistence').ManagedDocument)==='retired')launchPort?.retireAll(new Error('Original task parent retired'))
   })
   associateTaskSaveOwner(registry, persistence)
   associateColdBindings(registry, () => coldBindings)

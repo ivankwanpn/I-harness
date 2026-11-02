@@ -1,5 +1,8 @@
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {forwardTableProjection} from './runtime-projection.ts'
+import { bindPreparedTaskLaunchLeaf, type OriginalTaskCaller } from '@i-harness/core-tools/internal/task-caller'
+import { parseTaskHistorySelection } from './child/task-history.ts'
+import { taskLaunchPortFor } from './task/launch-slots.ts'
 export { taskBodyPreview as childResultPreview, readTaskResultPage } from "./task/result.ts"
 export type { TaskResultStore, RetainedTaskResult, TaskResultBody, TaskResultPage, TaskResultPageArgs } from "./task/result.ts"
 export { createJobRegistry } from "./jobs.ts"
@@ -7,7 +10,9 @@ export type { JobRegistry, JobSnapshot, JobStatus } from "./jobs.ts"
 export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkflowRows } from "./projection.ts"
 export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"
 export { createRoleRegistry, builtinRoles } from "./roles.ts"
-export type { SubagentRole, RoleRegistry } from "./roles.ts"
+export type { PrepareTaskChild, TaskChildHostInput, TaskChildHostPreparation } from './child/task-host.ts'
+export {inspectTaskChildHistory} from './child/task-history.ts'
+export type { SubagentRole, RoleRegistry, RoleCleanup } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"
 export { hasCommittedInitialInput } from './child/initial-input.ts'
@@ -68,6 +73,7 @@ import { isColdBoundChild } from './task/cold-bindings.ts'
 import { createTaskStartupFacade } from './task/startup-facade.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
+  prepareTaskChild?: import('./child/task-host.ts').PrepareTaskChild
   residentActivation?: import('./followup/activation.ts').ResidentInboxActivation
   results?: import("./task/result.ts").TaskResultStore
   reportPolicy?: ReportPolicy
@@ -141,6 +147,7 @@ export interface RegisterSubagentResult {
   flushPersistence(): Promise<void>
   drainParentNotifications(): Promise<void>
   settleParentDeliverySources(): Promise<void>
+  settleParentDeliveryJournalDebt(): Promise<void>
   dispose(): Promise<void>
   // M26-D1: the durable task protocol registry (records + notification
   // outbox) behind this mount. With persistence the ready chain already
@@ -194,7 +201,13 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // dirties the existing drain after host activation. Original terminal/task
   // commitment still supplies the decisive handoff signal.
   let notifDrainHook: (() => void) | undefined
-  const deliverySources = new Map<string, { reconcileTerminal(): Promise<void> }>()
+  const deliverySources = new Map<string, { reconcileTerminal(): Promise<void>;reconcileCapturedJournalDebt?():Promise<void> }>()
+  const journalSources=new WeakMap<object,{method:()=>Promise<void>}>()
+  let settlingDeliveryJournalDebt:Promise<void>|undefined
+  function settleParentDeliveryJournalDebt():Promise<void>{
+    if(settlingDeliveryJournalDebt)return settlingDeliveryJournalDebt
+    const pending=(async()=>{const rows=await Promise.allSettled([...deliverySources].map(async([id,source])=>{const original=journalSources.get(source);if(deliverySources.get(id)!==source||!original)return;const field=Object.getOwnPropertyDescriptor(source,'reconcileCapturedJournalDebt');if(!field||!('value'in field)||field.value!==original.method)throw new TypeError('Changed original journal source');await Reflect.apply(original.method,source,[])}));const errors=rows.flatMap(row=>row.status==='rejected'?[row.reason]:[]);if(errors.length)throw new DeliverySourcesError(errors)})();settlingDeliveryJournalDebt=pending;void pending.then(()=>{if(settlingDeliveryJournalDebt===pending)settlingDeliveryJournalDebt=undefined},()=>{if(settlingDeliveryJournalDebt===pending)settlingDeliveryJournalDebt=undefined});return pending
+  }
   let settlingDeliverySources: Promise<void> | undefined
   function settleParentDeliverySources(): Promise<void> {
     if (settlingDeliverySources) return settlingDeliverySources
@@ -209,7 +222,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     void pending.then(() => { settlingDeliverySources = undefined }, () => { settlingDeliverySources = undefined })
     return pending
   }
+  let launchEntry: ReturnType<typeof bindPreparedTaskLaunchLeaf> | undefined
+  let launchTool: import('@i-harness/core-tools').Tool | undefined
   const taskOwner = createTaskRegistry({
+    ...(ownedTask ? { launchContext: { view: opts.parentSession, factOwner, context: ctx, sessionId: ownedTask.stateId } } : {}),
     results: opts.results,
     reportPolicy: opts.reportPolicy,
     ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
@@ -243,6 +259,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
           }
           assertRuntimeWork()
           const target = mountedRuntime[kind] as T
+          if (kind === 'roles' && name === 'register' && typeof args[1] === 'function') {
+            const retain = args[1] as (cleanup: import('./roles.ts').RoleCleanup) => void
+            args[1] = (cleanup: import('./roles.ts').RoleCleanup) => { retain(cleanup); assertRuntimeWork() }
+          }
           return Reflect.apply(target[name] as (...args: unknown[]) => unknown, target, args)
         }
         Object.defineProperty(facade, name, { value: method, enumerable: true })
@@ -258,7 +278,23 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
+    ...(ownedTask ? { taskLaunchCallerFor(exec: import('@i-harness/core-tools').ToolExec) {
+      assertRuntimeWork()
+      if(opts.persist?.parentSessionId!==ownedTask.stateId)throw Error('Original task lineage parent mismatch')
+      if(!launchEntry||parentRegistry.get('spawn_agent')!==launchTool)throw Error('Original mounted task leaf unavailable')
+      const caller:OriginalTaskCaller|undefined=launchEntry.enter(exec)
+      if(!caller)throw Error('Original prepared task caller unavailable')
+      const args=caller.call.args as {fork_turns?:unknown;agent_type?:string}
+      parseTaskHistorySelection(args.fork_turns)
+      if(args.agent_type==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)return
+      if(!opts.prepareTaskChild||!opts.persist?.coordinator.bootstrapChildTargetWithCapture||!opts.persist.coordinator.resumeChildTarget)throw Error('Original task child host unavailable')
+      if(caller.context.view!==opts.parentSession||caller.context.factOwner!==factOwner||caller.context.context!==ctx||caller.identity.parentSessionId!==ownedTask.stateId)throw Error('Foreign original task caller')
+      ownedTask.operations.assertTaskV3Parent(ownedTask.parent,ownedTask.stateId)
+      const role=roles.get(args.agent_type??'general');if(!role)throw Error('Original role unavailable')
+      return taskLaunchPortFor(taskOwner).admit(caller,role)
+    }} : {}),
     residentActivation: opts.residentActivation,
+    prepareTaskChild: opts.prepareTaskChild,
     createInstructionContext: opts.createInstructionContext,
     generationFactoryFor: opts.generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
     summaryFactory: opts.summaryFactory,
@@ -293,6 +329,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     onTaskTerminalCommitted: () => { notifDrainHook?.() },
     onTaskTerminalRecovery: () => { opts.parentNotify?.wake(opts.persist?.parentSessionId ?? '') },
     registerDeliverySource(taskId, source) {
+      const journal=Object.getOwnPropertyDescriptor(source,'reconcileCapturedJournalDebt');if(journal){if(!('value'in journal)||typeof journal.value!=='function')throw new TypeError('Invalid original journal source');journalSources.set(source,{method:journal.value})}
       const original = deliverySources.get(taskId)
       if (original && original !== source) throw new Error('Original delivery source cannot be replaced')
       deliverySources.set(taskId, source)
@@ -313,7 +350,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // already has — makes registerSubagent idempotent for repeat mounts.
   for (const originalTool of tools) {
     const tool = ownedTask ? { ...originalTool, async execute(...args: Parameters<typeof originalTool.execute>) { await ready; tasks.assertReady(); return originalTool.execute(...args) } } : originalTool
-    if (!parentRegistry.get(tool.name)) parentRegistry.register(tool)
+    if (!parentRegistry.get(tool.name)) {
+      if(ownedTask&&tool.name==='spawn_agent'){launchTool=tool;launchEntry=bindPreparedTaskLaunchLeaf(tool,tool.execute)}
+      parentRegistry.register(tool)
+    }
   }
   // M26-D2: the notification drain. admit = the host-injected A-plan admission
   // (ParentInputAdmission — run.ts backs it with the real SessionExecutor's
@@ -449,6 +489,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     followupGeneration: followupDepsWithRebuild(subagentDeps).openGeneration,
     ready, tasks,
     settleParentDeliverySources,
+    settleParentDeliveryJournalDebt,
     async drainParentNotifications() {
       if (notificationsRetired) return
       await ready

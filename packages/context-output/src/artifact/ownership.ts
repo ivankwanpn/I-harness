@@ -1,9 +1,13 @@
+import { passiveManagedReleaseInventory, prepareOriginalManagedRelease, applyOriginalManagedRelease, assertOriginalManagedReleaseSettled, type ManagedReleaseInventory, type OriginalManagedRelease } from './release-inventory.ts'
+import type { OriginalRevocationCoverage } from '../../../session-persistence/src/coordinator/result-revocation.ts'
 import { mkdir, readdir, rm, lstat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { validManagedArtifactRef, type ManagedArtifactRef, type ResultCodec, type ResultDependency } from '@i-harness/core-session'
 import { identity } from '../config.ts'
 import type { ContextAccess, ContextOutputOptions } from '../types.ts'
 import type { ArtifactOperation, ArtifactOwner, ManagedArtifactPage, ResultArtifactScope, ResultArtifactSink } from './types.ts'
+import { readCodeOutputPage } from './code-output-reader.ts'
+import { isStrictFactData } from '@i-harness/core-session'
 import { sha } from './manifest.ts'
 import { atomicJson, boundedJson, ownedPath } from './io.ts'
 import { createArtifactWriter, type OwnedArtifactSink } from './writer.ts'
@@ -25,6 +29,9 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
   let closed = false
   let closing = false
   const sinks = new WeakMap<ResultArtifactScope, ResultArtifactSink>()
+  const sinkMethods = new WeakMap<ResultArtifactSink, readonly PropertyDescriptor[]>()
+  const confirmed = new WeakMap<ResultArtifactScope, ManagedArtifactRef>()
+  const confirming = new WeakMap<ResultArtifactScope, number>()
   const writers = new Set<OwnedArtifactSink>()
   const directory = (id: string) => { if (!/^ctxv1_[a-f0-9]{64}$/.test(id)) throw new Error('Artifact reference unavailable'); return resolve(managed, id) }
   const membership = createDependencyMembership(root, options.workspaceId, directory, quota)
@@ -52,7 +59,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
   }
   async function beginResult(scope: ResultArtifactScope, codec: ResultCodec): Promise<ResultArtifactSink> {
     const registered = scopes.get(scope)
-    if (!registered || closing || closed || deletedDocuments.has(registered.owner.sessionId) || deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) || !registered.current() || !['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1'].includes(codec)) throw new Error('Artifact source unavailable')
+    if (!registered || closing || closed || deletedDocuments.has(registered.owner.sessionId) || deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) || !registered.current() || !['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1', 'code-output-manifest-v1'].includes(codec)) throw new Error('Artifact source unavailable')
     if (registered.codec !== undefined && registered.codec !== codec) throw new Error('Artifact codec is immutable')
     registered.codec = codec
     const existing = sinks.get(scope)
@@ -85,6 +92,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
         cancelPublication: async () => { await releaseDocumentPin(root, target, registered.owner.documentId ?? registered.owner.sessionId) },
         closed: () => { writers.delete(sink) } }, true)
       sinks.set(scope, sink)
+      sinkMethods.set(sink, ['write','reconcileWrite','finish','refuse'].map(name=>Object.getOwnPropertyDescriptor(sink,name)!))
       writers.add(sink)
       return sink
     })
@@ -110,6 +118,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     return operation
   }
   async function readResult(access: ContextAccess, query: { ref: ManagedArtifactRef; offset?: number; maxBytes?: number; viaCatalog?: ManagedArtifactRef }): Promise<ManagedArtifactPage> {
+    if(query.ref.codec==='code-output-manifest-v1')throw new Error('Code manifest requires authorized logical reader')
     return mutate(async () => {
       const ref = structuredClone(query.ref), viaCatalog = query.viaCatalog === undefined ? undefined : structuredClone(query.viaCatalog)
       await authorized(access, ref, viaCatalog)
@@ -121,6 +130,22 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
   async function protectedCount(): Promise<number> {
     try { return (await readdir(managed)).filter(id => /^ctxv1_[a-f0-9]{64}$/.test(id)).length }
     catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw cause }
+  }
+  async function readCodeOutputResult(access:ContextAccess,query:{ref:ManagedArtifactRef;cursor?:import('@i-harness/core-session').CodeOutputCursor;maxBytes?:number}) {
+    if(!isStrictFactData(query)||Reflect.ownKeys(query).some(key=>!['ref','cursor','maxBytes'].includes(key as string)||!Object.getOwnPropertyDescriptor(query,key)?.enumerable))throw new Error('Invalid Code output read query')
+    return mutate(async()=>{
+      const captured=structuredClone(query),ref=captured.ref
+      const original=await authorized(access,ref)
+      const page=await readCodeOutputPage(ref,captured,async(offset,length)=>{
+        await authorized(access,ref)
+        const bytes=await readVerifiedArtifactBytes(root,directory(ref.id),ref,offset,length)
+        await authorized(access,ref)
+        return bytes
+      })
+      if(page.header.sessionId!==original.owner.sessionId||page.header.cellId!==original.owner.callId||page.header.sourceId!==original.owner.operationId)throw new Error('Foreign Code manifest owner binding')
+      await authorized(access,ref)
+      return page
+    })
   }
   async function readExecResult(access: ContextAccess, query: { ref: ManagedArtifactRef; cursor?: import('@i-harness/core-session').ExecFrameCursor; maxBytes?: number; textView?: boolean; viaCatalog?: ManagedArtifactRef }) {
     return mutate(async () => {
@@ -175,10 +200,44 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     if (ref.id !== expectedId || registered.confirmation && registered.confirmation.ref.revision !== ref.revision) throw new Error('Original artifact reference identity conflict')
     registered.confirmation ??= { ref: structuredClone(ref), admitted: false }
     const current = () => !closed && !deletedDocuments.has(registered.owner.sessionId) && !deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) && registered.current()
-    await mutate(() => confirmArtifactOwner(root, directory(expectedId), registered.owner, registered.confirmation!, quota(), current))
+    confirming.set(scope,(confirming.get(scope)??0)+1);confirmed.delete(scope)
+    try{
+      await mutate(() => confirmArtifactOwner(root, directory(expectedId), registered.owner, registered.confirmation!, quota(), current))
+      if (!current()) throw new Error('Original artifact source unavailable after confirmation')
+      if(confirming.get(scope)===1)confirmed.set(scope, structuredClone(originalRef))
+    }finally{confirming.set(scope,(confirming.get(scope)??1)-1)}
+  }
+  function assertOriginalManifestScope(scope: ResultArtifactScope) {
+    const registered=scopes.get(scope)
+    const check=()=>{if(!registered||scopes.get(scope)!==registered||closing||closed||deletedDocuments.has(registered.owner.sessionId)||deletedDocuments.has(registered.owner.documentId??registered.owner.sessionId))throw new Error('Original manifest scope unavailable')}
+    check(); const current=registered!.current(); check(); if(current!==true)throw new Error('Original manifest scope unavailable')
+  }
+  function captureConfirmedCodeManifest(scope: ResultArtifactScope, sink: ResultArtifactSink, expected: {operationId:string;sessionId:string;callId:string;source:{sourceId:string};ref:ManagedArtifactRef}) {
+    const registered = scopes.get(scope)
+    if (!registered || sinks.get(scope) !== sink) throw new Error('Original scope and sink required')
+    const methods = sinkMethods.get(sink)
+    const assertOriginal=()=>{
+      if(scopes.get(scope)!==registered||sinks.get(scope)!==sink||!methods)throw new Error('Original scope and sink required')
+      for(const [i,name] of ['write','reconcileWrite','finish','refuse'].entries()){
+        const field=Object.getOwnPropertyDescriptor(sink,name),original=methods[i]!
+        if(!field||!('value'in field)||field.value!==original.value||field.enumerable!==original.enumerable||field.configurable!==original.configurable||field.writable!==original.writable)throw new Error('Original sink methods required')
+      }
+      if(closing||closed||deletedDocuments.has(registered.owner.sessionId)||deletedDocuments.has(registered.owner.documentId??registered.owner.sessionId))throw new Error('Original manifest lifetime unavailable')
+    }
+    const assertCurrent=()=>{assertOriginal();const held=registered.current();assertOriginal();if(held!==true)throw new Error('Original manifest lifetime unavailable')}
+    assertCurrent()
+    const ref = confirmed.get(scope), operation = registered.initialization?.operation
+    if (!ref || confirming.get(scope) || registered.codec !== 'code-output-manifest-v1' || operation?.phase !== 'committed' || !operation.ref) throw new Error('Original confirmed manifest unavailable')
+    if (!isStrictFactData(expected) || !validManagedArtifactRef(expected.ref) || !sameArtifactRef(ref,expected.ref) || !sameArtifactRef(ref,operation.ref) || expected.operationId!==registered.owner.operationId || expected.sessionId!==registered.owner.sessionId || expected.callId!==registered.owner.callId || expected.source?.sourceId!==registered.owner.source?.sourceId || !registered.owner.source) throw new Error('Original manifest identity mismatch')
+    assertCurrent()
+    return Object.freeze({operationId:registered.owner.operationId,sessionId:registered.owner.sessionId,callId:registered.owner.callId,source:Object.freeze({...registered.owner.source}),ref:Object.freeze({...ref})})
   }
   const transfers = createSeedDependencyTransfer({ root, options, directory, quota, mutate, membership, authorized, available: document => !closed && !deletedDocuments.has(document) })
-  return { ...transfers, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
+  return { ...transfers, assertOriginalManifestScope, captureConfirmedCodeManifest,
+    prepareCoveredRelease(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, inventory: ManagedReleaseInventory, coverage: OriginalRevocationCoverage) { mutations.assertTurn(turn); return prepareOriginalManagedRelease(root, inventory, coverage) },
+    async applyCoveredRelease(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, operation: OriginalManagedRelease) { mutations.assertTurn(turn); const documents = await applyOriginalManagedRelease(root, operation, () => mutations.assertTurn(turn)); for (const document of documents) deletedDocuments.add(document) },
+    assertCoveredReleaseSettled: assertOriginalManagedReleaseSettled,
+    passiveReleaseInventory(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, documents: readonly string[], io: import('./qualification-io.ts').ArtifactQualificationIO) { mutations.assertTurn(turn); return passiveManagedReleaseInventory(root, options.workspaceId, documents, io, () => mutations.assertTurn(turn)) }, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, readCodeOutputResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
     checkQuota: () => mutate(() => requireSpace(root, quota(), 0)),
     reconcileResult: (operationId: string, id: string) => mutate(async () => {
       if (closed) throw new Error('Artifact owner closed')

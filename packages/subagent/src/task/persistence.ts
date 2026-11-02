@@ -8,6 +8,28 @@ import { isOwnedTaskContext, type captureOwnedTaskContext } from './owned-contex
 type Operations = NonNullable<ReturnType<typeof taskDocumentOperationsFor>>
 export type OwnedTaskContext = NonNullable<ReturnType<typeof captureOwnedTaskContext>>
 export interface OwnedTaskSave { readonly done: Promise<void>; assertHandoff(): void; release(): void; retireConsumer(): Promise<void>; retry(): Promise<void>; outcome(): TaskWriteOutcome | undefined }
+const dependencyFailures=new WeakMap<object,Readonly<{cause:unknown;occurrence:object}>>()
+const saveOccurrences=new WeakMap<OwnedTaskSave,object>()
+function earlierSaveFailure(save:OwnedTaskSave,cause:unknown):Error {
+  let occurrence=saveOccurrences.get(save);if(!occurrence){occurrence=Object.freeze({});saveOccurrences.set(save,occurrence)}
+  const error=new Error('Earlier owned task save requires resolution',{cause})
+  dependencyFailures.set(error,Object.freeze({cause,occurrence}));return error
+}
+export function originalTaskSaveDependency(error:unknown):Readonly<{cause:unknown;occurrence:object}>|undefined {
+  return typeof error==='object'&&error!==null?dependencyFailures.get(error):undefined
+}
+const capturedAckCandidates=new WeakMap<OwnedTaskSave,()=>Extract<TaskWriteOutcome,{kind:'unknown'}>|undefined>()
+const capturedAckFailures=new WeakMap<object,Readonly<{outcome:Extract<TaskWriteOutcome,{kind:'unknown'}>}>>()
+export function originalCapturedTaskAcknowledgment(save:OwnedTaskSave):Extract<TaskWriteOutcome,{kind:'unknown'}>|undefined {
+  try{return capturedAckCandidates.get(save)?.()}catch{return undefined}
+}
+export function capturedTaskAcknowledgmentFailure(save:OwnedTaskSave,cause:unknown):Error|undefined {
+  const outcome=originalCapturedTaskAcknowledgment(save);if(!outcome)return undefined
+  const error=new Error('Original Task acknowledgment requires reconciliation',{cause});capturedAckFailures.set(error,Object.freeze({outcome}));return error
+}
+export function originalTaskAcknowledgmentRecovery(error:unknown):Readonly<{outcome:Extract<TaskWriteOutcome,{kind:'unknown'}>}>|undefined {
+  return typeof error==='object'&&error!==null?capturedAckFailures.get(error):undefined
+}
 
 export function taskDocKey(stateId: string): string {
   // A colon creates an NTFS alternate data stream in the JSONL backend.
@@ -16,7 +38,10 @@ export function taskDocKey(stateId: string): string {
 
 /** Sole ordered writer for this registry's existing auxiliary document. */
 type RequiredSaveCapture={parent:object;capture:()=>TaskProtocolDocument;beforeIssue:()=>Promise<void>}
+type OrdinaryCapture={owned:OwnedTaskContext;snapshot:TaskProtocolDocument;bytes:string}
 export class TaskPersistence {
+  #ordinaryFlight:{save:OwnedTaskSave;owned:OwnedTaskContext;bytes:string;active():boolean}|undefined
+  #requiredOwned=new WeakSet<OwnedTaskSave>()
   #requiredCapture:((authority:object)=>RequiredSaveCapture)|undefined
   #chain: Promise<void> = Promise.resolve()
   #debt: OwnedTaskSave | undefined
@@ -29,7 +54,7 @@ export class TaskPersistence {
   constructor(readonly coordinator: SessionCoordinator | undefined, readonly stateId: string | undefined, readonly strict: boolean, readonly snapshot: () => TaskProtocolDocument, readonly owned?: OwnedTaskContext, requiredCapture?:(authority:object)=>RequiredSaveCapture) {this.#requiredCapture=requiredCapture}
   save(): Promise<void> {
     if (!this.coordinator || !this.stateId) return Promise.resolve()
-    const captured = this.#bindingAdmitted ? this.captureOwned(false) : this.captureSave()
+    const captured = this.#bindingAdmitted || this.strict&&this.owned ? this.captureOwned(false,undefined,true) : this.captureSave()
     if (captured) return captured.done
     if (this.owned) {
       try { if (this.snapshot().formatVersion === 3) return this.captureOwned(false).done } catch (cause) { return Promise.reject(cause) }
@@ -55,7 +80,7 @@ export class TaskPersistence {
   captureRequiredSave(authority:object):OwnedTaskSave {
     if(!this.#requiredCapture)throw Error('Original required capture owner unavailable')
     const{parent,capture,beforeIssue}=this.#requiredCapture(authority)
-    return this.captureOwnedSave(true,beforeIssue,{parent,capture})
+    const original=this.captureOwnedSave(true,beforeIssue,{parent,capture});this.#requiredOwned.add(original);return original
   }
   captureBindingSave(): OwnedTaskSave {
     if (!this.coordinator || !this.stateId || !this.owned || !isOwnedTaskContext(this.owned)) throw new Error('Original task owner unavailable')
@@ -63,10 +88,22 @@ export class TaskPersistence {
     this.#bindingAdmitted = true
     return this.captureOwned(true)
   }
-  private captureOwned(hold: boolean,beforeIssue?:()=>Promise<void>): OwnedTaskSave {
-    try { return this.captureOwnedSave(hold,beforeIssue) } catch (error) {
+  private captureOwned(hold: boolean,beforeIssue?:()=>Promise<void>,joinOrdinary=false): OwnedTaskSave {
+    try {
+      const original=this.#ordinaryFlight
+      if(joinOrdinary&&!hold&&!beforeIssue&&original&&original.save===this.#last&&original.active()){
+        const prepared=this.prepareOrdinaryCapture()
+        if(original.owned===prepared.owned&&original.bytes===prepared.bytes&&original.active())return original.save
+        return this.captureOwnedSave(hold,beforeIssue,undefined,prepared)
+      }
+      return this.captureOwnedSave(hold,beforeIssue)
+    } catch (error) {
       const done = this.#chain.then(() => { if (!this.#debt) { this.#debt = handle; this.#debtCause = error }; throw error })
-      const handle: OwnedTaskSave = Object.freeze({ done, assertHandoff() { if (this !== handle) throw new TypeError('Invalid task save receiver'); throw error }, release() { if (this !== handle) throw new TypeError('Invalid task save receiver'); throw error }, retireConsumer() { if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver')); return done }, retry() { if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver')); return Promise.reject(error) }, outcome() { if (this !== handle) throw new TypeError('Invalid task save receiver'); return undefined } })
+      let retired=false,retirement:Promise<void>|undefined;const owner=this
+      const handle: OwnedTaskSave = Object.freeze({ done, assertHandoff() { if (this !== handle) throw new TypeError('Invalid task save receiver'); throw error }, release() { if (this !== handle) throw new TypeError('Invalid task save receiver'); throw error }, retireConsumer() {
+        if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver'))
+        if(retirement)return retirement;const pending=(async()=>{await done.catch(()=>{});if(retired)return;if(owner.#pending[0]!==handle||owner.#debt&&owner.#debt!==handle)throw new Error('Earlier owned task save requires resolution');if(owner.#debt===handle){owner.#debt=undefined;owner.#debtCause=undefined};owner.#pending.shift();retired=true})();retirement=pending;void pending.catch(()=>{if(retirement===pending)retirement=undefined});return pending
+      }, retry() { if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver')); return Promise.reject(error) }, outcome() { if (this !== handle) throw new TypeError('Invalid task save receiver'); return undefined } })
       this.#pending.push(handle); this.#last = handle; this.#chain = done.catch(() => {}); return handle
     }
   }
@@ -90,19 +127,28 @@ export class TaskPersistence {
   }
   async retireConsumers(): Promise<void> {
     const failures: unknown[] = []
-    for (const save of [...this.#pending]) try { await save.retireConsumer() } catch (error) { failures.push(error) }
+    for (const save of [...this.#pending]) try { if(!this.#requiredOwned.has(save))await save.retireConsumer() } catch (error) { failures.push(error) }
     if (failures.length) throw new AggregateError(failures, 'Original task consumer cleanup failed')
   }
   lastOwnedSave() { return this.#debt ?? this.#last }
-  private captureOwnedSave(hold: boolean,beforeIssue?:()=>Promise<void>,required?:{parent:object;capture:()=>TaskProtocolDocument}): OwnedTaskSave {
+  private prepareOrdinaryCapture():OrdinaryCapture {
+    const owned=this.owned!
+    if(!isOwnedTaskContext(owned)||owned.coordinator!==this.coordinator||owned.stateId!==this.stateId)throw new Error('Original task owner unavailable')
+    const snapshot=captureTaskSnapshot(this.snapshot()) as TaskProtocolDocument
+    taskDocumentStorageContract.validate(snapshot)
+    if(snapshot.formatVersion===3)owned.operations.assertTaskV3Parent(owned.parent,this.stateId!)
+    owned.operations.assertParentSession(owned.parent,this.stateId!)
+    return {owned,snapshot,bytes:JSON.stringify(snapshot)+'\n'}
+  }
+  private captureOwnedSave(hold: boolean,beforeIssue?:()=>Promise<void>,required?:{parent:object;capture:()=>TaskProtocolDocument},prepared?:OrdinaryCapture): OwnedTaskSave {
     const owned = this.owned!
     if (!isOwnedTaskContext(owned) || owned.coordinator !== this.coordinator || owned.stateId !== this.stateId) throw new Error('Original task owner unavailable')
     let parent:object|undefined=required?undefined:owned.parent
-    let snapshot=required?undefined:captureTaskSnapshot(this.snapshot())
-    if(snapshot){taskDocumentStorageContract.validate(snapshot);if((snapshot as TaskProtocolDocument).formatVersion===3)owned.operations.assertTaskV3Parent(parent!,this.stateId!)}
-    if(!required)owned.operations.assertParentSession(parent!,this.stateId!)
+    const ordinary=required?undefined:prepared??this.prepareOrdinaryCapture()
+    if(ordinary&&ordinary.owned!==owned)throw new Error('Original task owner changed')
+    let snapshot=ordinary?.snapshot
     let operation: Awaited<ReturnType<Operations['begin']>> | undefined, write: ReturnType<Awaited<ReturnType<Operations['begin']>>['stageWrite']> | undefined
-    let entered = false, failed = false, abandoned = false, consumed = false, consumerRetired = false, retireFlight: Promise<void> | undefined
+    let entered = false, failed = false, settled=false, abandoned = false, consumed = false, consumerRetired = false, retireFlight: Promise<void> | undefined
     let result: TaskWriteOutcome | undefined, closed = false, closeAttempted = false, retryFlight: Promise<void> | undefined, primaryFailure: unknown, beginCleanup: ReturnType<Operations['cleanupFor']>
     let handoffFailure: { cause: unknown } | undefined
     const assertHandoff = () => {
@@ -125,21 +171,27 @@ export class TaskPersistence {
         throw failure
       }
       if (!closed) { if (closeAttempted) await operation.retryClose(); else { closeAttempted = true; await operation.close() }; closed = true; result = write.outcome() ?? result }
+      if(required)await owned.operations.joinRequiredWriter(parent!)
       if (!abandoned) assertHandoff()
       else if (handoffFailure) throw handoffFailure.cause
     }
     const run = async () => {
-      if (this.#pending[0] !== handle || this.#debt && this.#debt !== handle) throw new Error('Earlier owned task save requires resolution')
+      if (this.#pending[0] !== handle || this.#debt && this.#debt !== handle) throw this.#debt&&this.#debt!==handle?earlierSaveFailure(this.#debt,this.#debtCause):new Error('Earlier owned task save requires resolution')
       try {
+        if(required&&beginCleanup){await beginCleanup.retry();beginCleanup=undefined}
         if(required)parent=await required.parent
         if(beforeIssue)await beforeIssue()
-        if(this.#pending[0]!==handle||this.#debt&&this.#debt!==handle)throw new Error('Earlier owned task save requires resolution')
-        if(!snapshot){snapshot=captureTaskSnapshot(required!.capture());taskDocumentStorageContract.validate(snapshot);owned.operations.assertTaskV3Parent(parent!,this.stateId!)}
-        entered = true
+        if(this.#pending[0]!==handle||this.#debt&&this.#debt!==handle)throw this.#debt&&this.#debt!==handle?earlierSaveFailure(this.#debt,this.#debtCause):new Error('Earlier owned task save requires resolution')
+        if(!required)entered = true
         operation = await owned.operations.begin(parent!)
+        entered = true
+        if(!snapshot){snapshot=captureTaskSnapshot(required!.capture()) as TaskProtocolDocument;taskDocumentStorageContract.validate(snapshot);owned.operations.assertTaskV3Parent(parent!,this.stateId!)}
+        if(required)await owned.operations.joinRequiredWriter(parent!)
         const observed = await operation.observe(); if (observed.kind !== 'present') throw new Error('Task document is absent')
+        if(required)await owned.operations.joinRequiredWriter(parent!)
         write = operation.stageWrite(observed.witness, snapshot)
         await finish(false)
+        if(required)await owned.operations.joinRequiredWriter(parent!)
         assertHandoff()
         if (!hold) { this.#pending.shift(); consumerRetired = true }
       } catch (error) {
@@ -152,6 +204,7 @@ export class TaskPersistence {
     const gate = Promise.withResolvers<void>()
     if (!hold) gate.resolve()
     const done = this.#chain.then(run); this.#chain = done.then(() => gate.promise, () => {})
+    void done.then(()=>{settled=true},()=>{settled=true})
     const owner = this
     // Retry and retirement share the exact head/gate transition. A waiter
     // recognizes a completed retirement instead of removing the head twice.
@@ -162,7 +215,7 @@ export class TaskPersistence {
       owner.#pending.shift(); consumerRetired = true; gate.resolve()
     }
     const handle: OwnedTaskSave = Object.freeze({ done,
-      assertHandoff() { if (this !== handle) throw new TypeError('Invalid task save receiver'); if (abandoned) throw new Error('Task save consumer abandoned'); assertHandoff() },
+      assertHandoff() { if (this !== handle) throw new TypeError('Invalid task save receiver'); if(handoffFailure)throw handoffFailure.cause;if (abandoned) throw new Error('Task save consumer abandoned'); assertHandoff() },
       // Consumption is explicit. Assertions and flush never advance a held
       // consumer or let a queued snapshot replace its still-live authority.
       release() { if (this !== handle) throw new TypeError('Invalid task save receiver'); if (abandoned || consumed || owner.#pending[0] !== handle) throw new Error('Task save consumer unavailable'); assertHandoff(); consumed = true; owner.#pending.shift(); gate.resolve() },
@@ -177,9 +230,10 @@ export class TaskPersistence {
           if (priorRetry) await priorRetry.catch(() => {})
           try {
             if (consumerRetired) return
-            if (!closed && operation && closeAttempted) { await operation.retryClose(); closed = true; if (write) result = write.outcome() ?? result }
+            if (!closed && operation && (closeAttempted || !required)) { if(closeAttempted)await operation.retryClose();else{closeAttempted=true;await operation.close()}; closed = true; if (write) result = write.outcome() ?? result }
             if (!operation && beginCleanup) await beginCleanup.retry()
-            if (closed && result?.kind === 'committed' && !result.cleanupPending && !handoffFailure && (!owner.#debt || owner.#debt === handle) && owner.#pending[0] === handle) { retireHead(); return }
+            if (!required && (!operation || closed && operation.retirementDisposition() === 'unissued') && (!owner.#debt || owner.#debt === handle) && owner.#pending[0] === handle) { retireHead(); return }
+            if (closed && result?.kind === 'committed' && !result.cleanupPending && (!handoffFailure||!required&&operation?.retirementAcknowledged(result.ack)===true) && (!owner.#debt || owner.#debt === handle) && owner.#pending[0] === handle) { retireHead(); return }
             if (!owner.#debt) { owner.#debt = handle; owner.#debtCause = failed ? primaryFailure : new Error('Task save consumer unresolved') }
             gate.resolve(); throw new Error('Owned task save requires resolution', { cause: owner.#debtCause })
           } catch (error) { if (!owner.#debt) { owner.#debt = handle; owner.#debtCause = error }; gate.resolve(); throw error }
@@ -192,6 +246,9 @@ export class TaskPersistence {
         return retryFlight
       }, outcome() { if (this !== handle) throw new TypeError('Invalid task save receiver'); return result },
     })
-    this.#pending.push(handle); this.#last = handle; return handle
+    this.#pending.push(handle); this.#last = handle
+    if(required)capturedAckCandidates.set(handle,()=>{if(!entered||!snapshot||!write||!operation||closed||handoffFailure||result?.kind!=='unknown'||result.cleanupPending)return undefined;operation.assertCapturedWriteRecovery();return result})
+    if(ordinary&&!hold)this.#ordinaryFlight={save:handle,owned,bytes:ordinary.bytes,active:()=>!settled&&!failed&&!abandoned&&!closed&&(!operation||operation.ordinarySaveOpen())}
+    return handle
   }
 }

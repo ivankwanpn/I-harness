@@ -35,11 +35,14 @@ export function snapshotModelData<T>(value: T, exclude: readonly string[] = []):
   return result as T
 }
 const composedCallbacks = new WeakMap<Function, readonly Function[]>()
-function compose<T extends unknown[]>(a: ((...args: T) => void) | undefined, b: ((...args: T) => void) | undefined): ((...args: T) => void) | undefined {
+function compose<T extends unknown[]>(a: ((...args: T) => void) | undefined, b: ((...args: T) => void) | undefined, isolateMembers=false): ((...args: T) => void) | undefined {
   if (!a || a === b) return b ?? a
   if (!b) return a
   const callbacks = [...new Set([...(composedCallbacks.get(a) ?? [a]), ...(composedCallbacks.get(b) ?? [b])])] as ((...args: T) => void)[]
-  const result = (...args: T) => { for (const callback of callbacks) callback(...args) }
+  const result = (...args: T) => { for (const callback of callbacks) {
+    if(isolateMembers)try{callback(...args)}catch{/* Non-refusing liveness members cannot suppress each other. */}
+    else callback(...args)
+  } }
   composedCallbacks.set(result, callbacks)
   return result
 }
@@ -50,7 +53,7 @@ export function preparedControls(request: PreparedStreamControl, control?: Prepa
   const signals = [...new Set([request.signal, control?.signal, generation?.signal].filter((signal): signal is AbortSignal => !!signal))]
   return {
     ...(generation ? { generation } : {}),
-    onTransportIssue: compose(request.onTransportIssue, control?.onTransportIssue),
+    onTransportIssue: compose(request.onTransportIssue, control?.onTransportIssue,true),
     validateBeforeTransport: compose(request.validateBeforeTransport, control?.validateBeforeTransport),
     confirmExecution: compose(request.confirmExecution, control?.confirmExecution),
     signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],

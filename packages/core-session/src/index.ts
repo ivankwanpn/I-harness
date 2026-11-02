@@ -120,6 +120,10 @@ export { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from './
 export { semanticSeedResultRefs, iterateSelectedResultRefs, sameManagedArtifactRef } from './results/seed-refs.ts'
 
 export * from './events/delivery.ts'
+export { validWorkflowDeliveryEvent, validWorkflowRunResult, eligibleWorkflowTerminal } from './events/workflow-delivery.ts'
+export { validCodeDeliveryEvent, eligibleCodeTerminal } from './events/code-delivery.ts'
+export * from './results/code-output.ts'
+export type { WorkflowRunResult } from './events/workflow-delivery.ts'
 export { readDeliveries, validateDeliveryFrame } from './conversation/delivery.ts'
 export { isBoundDeliveryInput, isDeliveryExecutable, subscribeDeliveryControl } from './managed/delivery-control.ts'
 export type { DeliveryState, DeliveryActionOrigin, DeliveryOriginLookup } from './conversation/delivery.ts'

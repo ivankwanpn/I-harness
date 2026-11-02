@@ -11,6 +11,7 @@ import { buildModelClient } from "@i-harness/provider"
 import { prepareModelRequest, withPreparedSignal, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
+import {createUsageHandlers} from './usage-host.ts'
 import { createUsageObservationSink } from './usage-observation-sink.ts'
 import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
 import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harness/core-session"
@@ -94,7 +95,7 @@ export interface DesktopHostOptions {
   workspaceRuntime?: ReturnType<typeof import("@i-harness/workspace-runtime").createWorkspaceRuntime>
   /** Trusted host dependency only; never read from saved settings or RPC data. */
   buildProviderClient?: FileProviderRuntimeOptions["buildClient"]
-  /** Inactive constructor-only producer bridge. No wire capability2 activation. */
+  /** Fixed for this host lifetime; false explicitly retains legacy recording. */
   experimentalUsageObservations?:boolean
   onWrite: (frame: RpcMessage) => void
 }
@@ -110,22 +111,17 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   if (!isAbsolute(options.workspace) || !isAbsolute(options.sessionDir)) {
     throw new Error("workspace and sessionDir must be absolute paths")
   }
+  const recordObservations=options.experimentalUsageObservations!==false
   const settingsPath = resolveSettingsPath(options.settingsPath === undefined ? {} : { path: options.settingsPath })
   const settings = new SettingsStore({ path: settingsPath })
   // A fresh missing profile selects this store's native first-run defaults.
   await settings.loadObserved({ validate: validateDesktopSettingsDocument })
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
-  const usageObservations=options.experimentalUsageObservations?createUsageObservationSink({record:value=>usageStore.recordObservation(value)}):undefined
-  const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
+  const usageObservations=recordObservations?createUsageObservationSink({record:value=>usageStore.recordObservation(value)}):undefined
+  const usageCapture = createUsageCapture({ observationMode:!!usageObservations,passiveObserver:usageObservations?.observer,workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),projectSnapshotFor:id=>projects.projectSnapshotFor(id),
     onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
-  const usageStats: NonNullable<DesktopHandlers["usageStats"]> = {
-    async query(query) {
-      const snapshot = await usageStore.query(query)
-      return { ...snapshot, warnings: [...snapshot.warnings, ...usageCapture.warnings(),...(usageObservations?.warnings()??[])] }
-    },
-    setPricing: price => usageStore.setPricing(price),
-  }
+  const usageStats:NonNullable<DesktopHandlers['usageStats']>=createUsageHandlers(usageStore,{recordingMode:usageObservations?'observations':'legacy',warnings:()=>[...usageCapture.warnings(),...(usageObservations?.warnings()??[])]})
   let mode = settings.get().sandboxMode
   let windowsSandboxBackend = settings.get().windowsSandboxBackend
   let wslExecution = { ...settings.get().wslExecution }
@@ -134,6 +130,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const codexAccounts = createCodexManagement({ directory: join(dirname(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json")), "coding-plans", "openai-codex") })
   const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"), codex: codexAccounts,
     passiveUsageWorkspace:usageObservations?options.workspace:undefined,
+    passiveUsageProjectSnapshotFor:usageObservations?id=>projects.projectSnapshotFor(id):undefined,
     buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
   const codingPlans = createCodingPlans(codexAccounts, runtime)
   await mkdir(options.sessionDir, { recursive: true })
@@ -209,6 +206,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     withBindingObservation:projects.withBindingObservation,
     retainSelectedProjectRead:projects.retainSelectedBindingRead.bind(projects),
     prepareBootstrapInheritance:projects.prepareBootstrapInheritance,
+    prepareTaskChildInheritance:projects.prepareTaskChildInheritance,
     prepareSelectedInheritance:projects.prepareSelectedInheritance.bind(projects),
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
@@ -256,6 +254,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const instructionEnvironment = createInstructionEnvironment({ settingsPath, watch: instructionWatch })
   const service: SessionService = createSessionService({
     passiveGeneration:usageObservations?.observer,
+    prepareTaskChild:nativeContext.prepareTaskChild,
     instructionEnvironment,
     telemetry: { close() {}, emit(event) {
       if (event.type !== "compaction/attempt" && !(event.type === "provider/context" && event.data.operation === "summary")) return

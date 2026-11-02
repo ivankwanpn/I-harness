@@ -6,6 +6,7 @@ import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createResultObservationScope, createLegacyReadObservationRunner, type ResultObservationScope } from './result-observation.ts'
 import { createProcessAwareResultService, lookupProcessResultService } from './process-result-service.ts'
 import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
+import { hasOriginalDeletionService } from '../../../context-output/src/service.ts'
 
 export interface ResultReadScope { projectId?: string; scope?: { id: string; roots: string[] }; revision: string }
 export type ResultReadScopeResolver = (sessionId: string) => Promise<(() => ResultReadScope) | undefined>
@@ -125,7 +126,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
         return { sourceId: contextSourceIdentity(location.workspaceKey, location.canonical, scope), readonly: true }
       }
       const bridge = createProcessAwareResultService({ root: location.serviceRoot, workspaceId: location.workspaceKey, config, requireObservedLegacyRecipients: true,
-        coordinatorFor: () => [...registrations].at(-1)?.coordinator, sourceFor,
+        coordinatorFor: () => [...registrations].at(-1)?.coordinator, orderingCoordinators: [], sourceFor,
         documentDeletions: listener => { deletionListeners.add(listener); return () => { deletionListeners.delete(listener) } },
         genericVisible: async (sessionId, expected) => {
             const observed = observations.current(sessionId)
@@ -145,6 +146,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
       const service = bridge.service
       const entry: StoreEntry = { service, bridge, registrations, users: 0, sourceFor, observations,
         observeDeletion(coordinator) {
+          if (hasOriginalDeletionService(service, coordinator)) { deletionSources.get(coordinator)?.(); deletionSources.delete(coordinator); return }
           if (deletionSources.has(coordinator) || !coordinator.onDocumentDeleted) return
           deletionSources.set(coordinator, coordinator.onDocumentDeleted(async (id, manifest) => { for (const listener of deletionListeners) await listener([id, ...manifest.documents]) }))
         },
@@ -167,6 +169,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
   }
   const registration: Registration = { mode, sessionId: options.sessionId, coordinator: options.coordinator,
     ...(mode === 'producer' ? { projectContext: options.projectContext } : { readScope }), available: options.executionCallerAvailable }
+  entry.bridge.registerCoordinator(options.coordinator)
   entry.registrations.add(registration); entry.users++
   // Read the existing owner's current source resolver, which consults all
   // actual registrations rather than capturing the first assembly's scope.
