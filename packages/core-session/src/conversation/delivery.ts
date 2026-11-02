@@ -347,7 +347,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
           }
           if (event.type === 'agent/input/admitted' && (receiptFor(event.inputId)&&receiptFor(event.inputId)!.admissionSeq!==event.seq||teamFor(event.inputId))) fail('delivery input identity cannot be reused');
           if(event.type==='agent/input/admitted'&&event.provenance?.producer==='session.delivery.team'){
-            if(!stagedActive||event.seq===undefined||event.seq<(scope.seedLength??0)||event.delivery!=='steer'||event.intent!=='system'||event.provenance.kind!=='child-report'||event.provenance.authority!=='observation'||event.provenance.scope!=='turn'||event.provenance.originSessionId!==undefined||!/^team-delivery-[0-9a-f]{64}$/.test(event.inputId)||!event.synthetic||event.synthetic.scope!=='turn'||!event.synthetic.description||event.synthetic.display?.kind!=='team-message')fail('invalid Team delivery admission')
+            if(!stagedActive||event.seq===undefined||event.seq<(scope.seedLength??0)||event.delivery!=='steer'||event.intent!=='system'||event.provenance.kind!=='child-report'||event.provenance.authority!=='observation'||event.provenance.scope!=='turn'||event.provenance.originSessionId!==undefined||!/^team-delivery-[0-9a-f]{64}$/.test(event.inputId)||!event.synthetic||event.synthetic.scope!=='turn'||!event.synthetic.description||!['team-message','team-result'].includes(event.synthetic.display?.kind??''))fail('invalid Team delivery admission')
             stagedTeamAdmissions.set(event.inputId,{admissionSeq:event.seq,generationId:stagedActive.generationId,disposition:'pending'})
           }
           if (event.type === 'rewind/point') {
