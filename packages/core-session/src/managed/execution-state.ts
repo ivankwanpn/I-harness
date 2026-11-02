@@ -120,6 +120,8 @@ const actionCaptureSources=new WeakMap<object,object>()
 const actionSources=new WeakMap<object,{identity:ManagedExecutionIdentity;action:object}>()
 const actions=new WeakMap<object,{identity:ManagedExecutionIdentity;current():void}>()
 export function assertManagedActionCurrent(domain:ManagedExecutionDomain,action:object){const original=domains.get(domain),registered=actions.get(action);if(!original||registered?.identity!==original.identity)throw TypeError('Original same-domain action required');domain.assertCurrent();registered.current()}
+/** Original action/source relationship; it grants no new capture or write. */
+export function assertOriginalManagedActionSource(domain:ManagedExecutionDomain,action:object,source:object){const original=domains.get(domain),registered=sources.get(source),relation=actionSources.get(source),owner=original&&owners.get(original.identity);if(!original||!owner||owner.owner!==original.owner||registered?.identity!==original.identity||relation?.identity!==original.identity||relation.action!==action||!owner.owner.ownsAction(action))throw TypeError('Original same-action source required');assertManagedActionCurrent(domain,action);registered.current()}
 /** Consult the original live fence; this check issues no fact or model permission. */
 export function assertManagedExecDeliveryCurrent(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;delivery:'tool'|'parent'}>){
  const registered=domains.get(domain),owner=registered&&owners.get(registered.identity)
