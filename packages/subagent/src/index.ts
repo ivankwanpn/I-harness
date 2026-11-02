@@ -11,7 +11,7 @@ export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkfl
 export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"
 export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { PrepareTaskChild, TaskChildHostInput, TaskChildHostPreparation } from './child/task-host.ts'
-export {inspectTaskChildHistory,inspectTaskChildSource} from './child/task-history.ts'
+export {inspectTaskChildHistory,inspectTaskChildSource,inspectManagedTaskChildHistory,inspectManagedTaskChildSource,isManagedTaskChildHistory} from './child/task-history.ts'
 export type { SubagentRole, RoleRegistry, RoleCleanup } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"

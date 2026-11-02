@@ -10,7 +10,7 @@ import {assertOriginalTaskLaunchSlot,type TaskLaunchSlot} from '../task/launch-s
 import type {SubagentToolDeps} from '../tools/types.ts'
 import type {RoleModelSelection} from './model-binding.ts'
 import type {TaskChildHostPreparation} from './task-host.ts'
-import {inspectTaskChildHistory} from './task-history.ts'
+import {inspectTaskChildHistory,prepareTaskChildHistory} from './task-history.ts'
 
 export interface CommittedTaskChildBirth {readonly kind:'original-task-child-birth'}
 type Birth={document:ManagedDocument;request:ChildBootstrapCaptureRequest;payload:BootstrapRequest;receipt:BootstrapReceipt;start:{wall:number;monotonic:number};declared:RoleModelSelection|undefined;slot:TaskLaunchSlot;adopted:boolean;claimed:boolean;assertDependencyReceipt?:(receipt:BootstrapReceipt,seed:ReturnType<typeof compileSemanticSeed>)=>void}
@@ -23,6 +23,7 @@ export async function prepareOriginalTaskChildHost(slot:TaskLaunchSlot,deps:Suba
  const coordinator=deps.childSessions?.coordinator,prepare=deps.prepareTaskChild
  if(!coordinator?.bootstrapChildTargetWithCapture||!coordinator.resumeChildTarget||!prepare)throw Error('Original task child host unavailable')
  const assertCurrent=()=>{slot.assertCurrent();slot.caller.exec.abortSignal?.throwIfAborted()}
+ if(slot.history){await prepareTaskChildHistory(slot.history);assertCurrent()}
  const host=await prepare({coordinator,parentSessionId:slot.caller.identity.parentSessionId,...slot.history?{history:slot.history}:{},signal:slot.caller.exec.abortSignal,assertSourceCut(){slot.assertSourceCut()},assertCurrent(){assertCurrent();if(slot.history)inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId)},sourceAvailable(){try{assertCurrent();if(slot.history)inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId);return true}catch{return false}},retire:slot.retire.bind(slot),retain:slot.keepRecovery.bind(slot)})
  assertCurrent()
  if(host.beforeResultIssue)slot.beforeResultIssue(host.beforeResultIssue.bind(host))
