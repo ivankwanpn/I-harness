@@ -13,6 +13,9 @@ import { installedPluginHookRoot } from "./plugin-hook-root.ts"
 import { fingerprintHookArtifacts } from "./plugin-hook-authority.ts"
 import { expandPluginPromptOnContext } from "./plugin-mount.ts"
 
+const originalMounts=new WeakSet<object>()
+export function isOriginalOwnedPluginMount(value:object):boolean{return originalMounts.has(value)}
+
 export interface OwnedPluginMountOptions {
   ctx: PluginContext
   sessionId: string
@@ -38,8 +41,8 @@ export function createOwnedPluginMount(options: OwnedPluginMountOptions) {
   let initial = true
   let active: Promise<void> | undefined
   let closeFlight: Promise<void> | undefined
-  return {
-    update(inputs: RuntimeInputs): Promise<void> {
+  const mount = {
+    update(inputs: RuntimeInputs, directMcp: readonly McpServerConfig[] = options.directMcp ?? []): Promise<void> {
       if (closed) throw new Error("owned plugin mount is closed")
       if (active) throw new Error("owned plugin update already in progress")
       const work = (async () => {
@@ -50,7 +53,7 @@ export function createOwnedPluginMount(options: OwnedPluginMountOptions) {
         try { await mounted.registry.dispose(); hooks.delete(path) }
         catch (cleanup) { failures.push(mounted.failedStartup.primary, cleanup); messages.push(`Hook cleanup ${path}: ${String(cleanup)}`); diagnosticsChanged = true }
       }
-      if (!options.catalog && (inputs.skillDirs.length || inputs.agentDescriptors.length || Object.keys(inputs.mcpServerConfigs).length || options.directMcp?.length)) failures.push(new Error("owned plugin catalog owners are unavailable"))
+      if (!options.catalog && (inputs.skillDirs.length || inputs.agentDescriptors.length || Object.keys(inputs.mcpServerConfigs).length || directMcp.length)) failures.push(new Error("owned plugin catalog owners are unavailable"))
       const signatures = new Map<string, string>()
       for (const path of inputs.hookConfigs) {
         if (installedPluginHookRoot(options.configDir, path)) { failures.push(new Error("plugin physical transcript hooks require complete compatibility")); continue }
@@ -86,7 +89,7 @@ export function createOwnedPluginMount(options: OwnedPluginMountOptions) {
       const mcp = toMcpServerConfigs(inputs.mcpServerConfigs)
       const agents = toSubagentRoles(inputs.agentDescriptors, { allowedTools: ["read", "glob", "grep", "list_dir"] })
       messages.push(...mcp.skipped.map(row => `MCP ${row.serverName}: ${row.reason}`), ...agents.unresolved.map(row => `Agent ${row.role}: ${row.tool} (${row.reason})`))
-      await options.catalog?.capabilities.update({ skills: { extraDirs: inputs.skillDirs }, pluginMcp: [...mcp.configs, ...(options.directMcp ?? [])], pluginAgents: agents.roles, pluginAgentsEphemeral: true }, !initial)
+      await options.catalog?.capabilities.update({ skills: { extraDirs: inputs.skillDirs }, pluginMcp: [...mcp.configs, ...directMcp], pluginAgents: agents.roles, pluginAgentsEphemeral: true }, !initial)
       initial = false
       for (const [path, signature] of signatures) {
         if (hooks.has(path)) continue
@@ -141,6 +144,10 @@ export function createOwnedPluginMount(options: OwnedPluginMountOptions) {
       active = work
       return work.finally(() => { if (active === work) active = undefined })
     },
+    hookContext():string {
+      if(closed)throw Error('owned plugin mount is closed')
+      return [...hooks.values()].filter(entry=>!entry.ended&&!entry.failedStartup).map(entry=>entry.registry.context()).filter(Boolean).join('\n\n')
+    },
     hookAuthority(paths: readonly string[]): unknown[] | undefined {
       try {
         if (closed) return undefined
@@ -183,4 +190,6 @@ export function createOwnedPluginMount(options: OwnedPluginMountOptions) {
       return flight
     },
   }
+  originalMounts.add(mount)
+  return mount
 }

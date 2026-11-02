@@ -17,6 +17,8 @@ const english = {
   "無法確認會話專案；草稿仍保留。": "Could not verify the conversation project. Your draft is retained.",
   "無法準備新會話；草稿仍保留。": "Could not prepare the new conversation. Your draft is retained.",
   "無法套用所選模型；草稿仍保留。": "Could not apply the selected model. Your draft is retained.",
+  "工作需要恢復，請重試以繼續。": "The task needs recovery. Retry to continue.",
+  "重試失敗，請稍後再試。": "Retry failed. Please try again.",
   "診斷記錄": "Diagnostic Log", "檢視安全的模型重試、錯誤與連線記錄。": "Review safe records of model retries, errors and connections.",
   "連線與錯誤通知": "Connection and error notifications", "請求未完成": "Request did not complete", "詳細資料": "Details", "關閉錯誤通知": "Dismiss error notification",
   "{seconds} 秒後重試": "Retrying in {seconds}s", "所選模型暫時已達容量，將重試同一模型。": "The selected model is temporarily at capacity. Retrying the same model.",

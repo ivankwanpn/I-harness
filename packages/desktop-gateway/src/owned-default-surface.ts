@@ -12,6 +12,8 @@ export interface OwnedDefaultSurface {
  modelOverheadTokens(): number
  prepareInput(text:string): Promise<string>
  reconcileAuthority(): Promise<void>
+ prepareModelSurface?(signal:AbortSignal):Promise<void>
+ activateAfterTaskReady?():Promise<void>
 }
 /** Compose only after all configured native, child, plugin and Code owners are
  * mounted on original.tools. Required callbacks remain live owner reads. */
@@ -19,9 +21,8 @@ export async function createOwnedDefaultSurface(original:ManagedRegistryConstruc
  initialPlanMode?:boolean
  preset?: Parameters<typeof parsePreset>[0]
  policyPrompt():string; shellPrompt():string; projectPrompt():string; hookPrompt():string; recoveryPrompt():string
- skillsPrompt():string; rolesPrompt():string
  schemas():ToolSchema[]
- prepareInput(text:string):Promise<string>; reconcileAuthority():Promise<void>
+ prepareInput(text:string):Promise<string>; reconcileAuthority():Promise<void>; prepareModelSurface?(signal:AbortSignal):Promise<void>; activateAfterTaskReady?():Promise<void>
  goalChanged():void
  overheadTokens?:number
 }):Promise<OwnedDefaultSurface> {
@@ -34,7 +35,8 @@ export async function createOwnedDefaultSurface(original:ManagedRegistryConstruc
  const plan=await mountOwnedPlan(original,options.initialPlanMode)
  original.assertCurrent()
  const base=options.preset===undefined?DEFAULT_AGENT_PRESET.systemPrompt:parsePreset(options.preset).systemPrompt
- const systemPrompt=()=>{original.assertCurrent();const parts=[base,options.policyPrompt(),plan.prompt(),options.shellPrompt()];let text=parts.filter(Boolean).join('\n\n');text=metadata.prompt(text);const rest=[options.projectPrompt(),options.hookPrompt(),options.recoveryPrompt(),options.skillsPrompt(),options.rolesPrompt()].filter(Boolean);if(rest.length)text+='\n\n'+rest.join('\n\n');original.assertCurrent();return text}
+ const systemPrompt=()=>{original.assertCurrent();const parts=[base,options.policyPrompt(),plan.prompt(),options.shellPrompt()];let text=parts.filter(Boolean).join('\n\n');text=metadata.prompt(text);const rest=[options.projectPrompt(),options.hookPrompt(),options.recoveryPrompt()].filter(Boolean);if(rest.length)text+='\n\n'+rest.join('\n\n');original.assertCurrent();return text}
  const modelToolSchemas=()=>{original.assertCurrent();return options.schemas()}
- return Object.freeze({systemPrompt,modelToolSchemas,modelOverheadTokens:()=>options.overheadTokens??approxTokens(systemPrompt())+approxTokens(JSON.stringify(modelToolSchemas())),async prepareInput(text:string){original.assertCurrent();const result=await options.prepareInput(text);original.assertCurrent();return result},async reconcileAuthority(){original.assertCurrent();await options.reconcileAuthority();original.assertCurrent()}})
+ const prepareSurface=options.prepareModelSurface,activateTask=options.activateAfterTaskReady
+ return Object.freeze({systemPrompt,modelToolSchemas,modelOverheadTokens:()=>options.overheadTokens??approxTokens(systemPrompt())+approxTokens(JSON.stringify(modelToolSchemas())),async prepareInput(text:string){original.assertCurrent();const result=await options.prepareInput(text);original.assertCurrent();return result},async reconcileAuthority(){original.assertCurrent();await options.reconcileAuthority();original.assertCurrent()},...prepareSurface?{async prepareModelSurface(signal:AbortSignal){original.assertCurrent();if(options.prepareModelSurface!==prepareSurface)throw Error('Original model surface preparation changed');await prepareSurface(signal);original.assertCurrent();if(options.prepareModelSurface!==prepareSurface)throw Error('Original model surface preparation changed')}}:{},...activateTask?{async activateAfterTaskReady(){original.assertCurrent();if(options.activateAfterTaskReady!==activateTask)throw Error('Original staged Team activation changed');await activateTask();original.assertCurrent();if(options.activateAfterTaskReady!==activateTask)throw Error('Original staged Team activation changed')}}:{}})
 }

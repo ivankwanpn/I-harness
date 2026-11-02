@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks'
 import { resolve } from "node:path"
 import { FsWatchError, type FsWatchService } from "@i-harness/fs-watch"
 import { createManagedPluginRegistry } from "@i-harness/plugin-registry/managed"
@@ -26,14 +27,15 @@ export function createDesktopPlugins(root: string, options: { watch: FsWatchServ
   let refresh: (() => Promise<void>) | undefined
   let refreshError: string | undefined
   let refreshTail: Promise<void> = Promise.resolve()
-  const refreshLive = () => {
-    const job = refreshTail.catch(() => undefined).then(async () => { await refresh?.(); refreshError = undefined })
+  const refreshScope=new AsyncLocalStorage<{token?:object;active:boolean}>(),mutationTokens=new Set<object>()
+  const refreshLive = (token?:object) => {
+    const job = refreshTail.catch(() => undefined).then(async () => { const scope={token,active:true};try{await refreshScope.run(scope,async()=>{await refresh?.()});refreshError=undefined}finally{scope.active=false} })
     refreshTail = job.catch((error: unknown) => { refreshError = String(error) })
     return job
   }
   let mutationAdmissionClosed = false
   const mutations = new Set<Promise<{ ok: boolean }>>()
-  const mutate = async (value: unknown) => {
+  const mutate = async (value: unknown, token:object) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid plugin command")
     const command = value as Record<string, unknown>
     await managed.run(async (registry) => {
@@ -49,26 +51,35 @@ export function createDesktopPlugins(root: string, options: { watch: FsWatchServ
       }
       return { ok: true }
     })
-    try { await refreshLive() }
+    try { await refreshLive(token) }
     catch { throw new Error("Plugin settings were saved, but live update failed; retry the operation") }
     return { ok: true }
   }
   return {
-    refresh: refreshLive,
+    refresh: () => refreshLive(),
     state: () => managed.run(async (registry) => ({ sources: await registry.listSources({ fetchMissing: false }), ...(await registry.catalog({ fetchMissing: false })), diagnostics: Object.fromEntries(diagnostics), ...((watchError ?? refreshError) !== undefined ? { refreshError: watchError ?? refreshError } : {}) })),
-    bindRefresh(callback: () => Promise<void>) { refresh = callback; return managed.observe(refreshLive, (error) => { refreshError = String(error) }) },
+    bindRefresh(callback: () => Promise<void>) { refresh = callback; return managed.observe(() => refreshLive(), (error) => { refreshError = String(error) }) },
     commands: () => managed.run((registry) => registry.runtimeInputs().commandDescriptors.map(({ name, description, argumentHints }) => ({ name, description, argumentHints }))),
     report(sessionId: string, messages: string[]) {
       diagnostics.delete(sessionId); diagnostics.set(sessionId, messages.slice(-100))
       while (diagnostics.size > 100) diagnostics.delete(diagnostics.keys().next().value!)
     },
     inputs: () => managed.run((registry) => registry.runtimeInputs()),
+    /** A synchronous original-registry witness for pre-acquisition selection.
+     * It carries no mount or execution authority. */
+    inputsWitness: () => managed.run((registry) => {
+      if(mutationAdmissionClosed||[...mutationTokens].some(token=>!refreshScope.getStore()?.active||refreshScope.getStore()?.token!==token))throw new Error('Plugin mutation pending during selection')
+      const method=registry.runtimeInputs,inputs=structuredClone(method.call(registry)),snapshot=JSON.stringify(inputs)
+      return Object.freeze({inputs,assertCurrent(){
+        if(mutationAdmissionClosed||[...mutationTokens].some(token=>!refreshScope.getStore()?.active||refreshScope.getStore()?.token!==token)||registry.runtimeInputs!==method||JSON.stringify(inputs)!==snapshot||JSON.stringify(method.call(registry))!==snapshot)throw new Error('Plugin inputs changed after selection')
+      }})
+    }),
     mutate(value: unknown) {
       if (mutationAdmissionClosed) return Promise.reject(new Error("Plugin registry is closed"))
       // Own the operation through its post-lock refresh, not just managed.run.
-      const job = mutate(value)
-      mutations.add(job)
-      void job.then(() => mutations.delete(job), () => mutations.delete(job))
+      const token={},job = mutate(value,token)
+      mutationTokens.add(token);mutations.add(job)
+      void job.then(() => {mutationTokens.delete(token);mutations.delete(job)}, () => {mutationTokens.delete(token);mutations.delete(job)})
       return job
     },
     close: async () => {

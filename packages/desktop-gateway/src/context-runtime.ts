@@ -36,6 +36,7 @@ interface NativeContextOptions {
   contextConfig?:Partial<ContextOutputConfig>;codeConfig?:Partial<CodeRetrievalConfig>
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
   visibleRefsFor?(sessionId:string):Promise<readonly (ContextResultRef|ManagedArtifactRef)[]>
+  hasVisibleResultRef?(sessionId:string,ref:ContextResultRef|ManagedArtifactRef):Promise<boolean|undefined>
   registerJob?:CodeRetrievalOptions['registerJob']
   prepareSelectedInheritance?:ReturnType<typeof createProjectScopeBroker>['prepareSelectedInheritance']
   retainSelectedProjectRead?:ReturnType<typeof createProjectScopeBroker>['retainSelectedBindingRead']
@@ -109,6 +110,8 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
           return semanticSeedResultRefs(view).some(ref=>sameManagedArtifactRef(ref,visibleRef))
             ||view.events.some(event=>!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)&&managedResultRefs(event).some(ref=>sameManagedArtifactRef(ref,visibleRef)))
         }
+        const owned=await options.hasVisibleResultRef?.(sessionId,visibleRef)
+        if(owned!==undefined)return owned
         return Boolean((await options.visibleRefsFor?.(sessionId))?.some(visible=>'version' in visible&&sameManagedArtifactRef(visible,visibleRef)))
     },
     authorize:async(access,ref)=>{
@@ -116,7 +119,9 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
         if(ref.workspaceId!==workspaceKey||!ref.source||(await sourceFor(access.sessionId)).sourceId!==ref.source.sourceId)return false
         const observed=observations.current(access.sessionId)
         if(observed){observed.assertCurrent();return true}
-        return access.sessionId===ref.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>!('version' in visible)&&visible.id===ref.id))
+        if(access.sessionId===ref.sessionId)return true
+        const owned=await options.hasVisibleResultRef?.(access.sessionId,ref)
+        return owned!==undefined?owned:Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>!('version' in visible)&&visible.id===ref.id))
       }catch{return false}
     }})
   const contextOutput=bridge.service
