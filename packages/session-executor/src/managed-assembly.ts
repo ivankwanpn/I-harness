@@ -9,7 +9,7 @@ import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 import {createExecutionGenerationLifecycle} from './lifecycle/generation-actions.ts'
 import {createExecutionSteerPreparationFactory} from './lifecycle/steer-preparation.ts'
 import {createExecutionRuntimeContext} from './lifecycle/execution-runtime-context.ts'
-import {createMainInstructionManager} from './context/instructions/manager.ts'
+import {createMainInstructionManager,isOriginalAcceptedInstructionOrigin,retainOriginalInstructionCell} from './context/instructions/manager.ts'
 import {createProjectInstructionEnvironment} from './context/instructions/index.ts'
 import {mountOwnedFilesystem} from './owned-filesystem.ts'
 import {mountOwnedSchedule} from './owned-schedule.ts'
@@ -103,7 +103,7 @@ function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManag
   instructionRuntime.registerSection('instructions',()=>manager!.text())
   requestContext=manager
  }
- const pair=createToolRegistryWithModelOrigin(ctx,{resultRetention:options.resultRetention,executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:origin.domain.sessionId}},origin.verifier)
+ const pair=createToolRegistryWithModelOrigin(ctx,{resultRetention:options.resultRetention,executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:origin.domain.sessionId},...(manager?{instructionsRequired:true,instructionOriginVerifier:isOriginalAcceptedInstructionOrigin,instructionCellRetainer:retainOriginalInstructionCell}:{})},origin.verifier)
  if(options.originalFilesystem){if(options.workspace===undefined||!manager)throw TypeError('Original filesystem instruction manager and workspace required');mountOwnedFilesystem({ctx,tools:pair.registry,workspace:options.workspace,domain:origin.domain,manager})}
  let startSchedule:(()=>Promise<void>)|undefined
  if(options.originalSchedule){if(!options.retainConstructionCleanup||!options.scheduleWake)throw TypeError('Original schedule retention and wake required');startSchedule=mountOwnedSchedule({execution,domain:origin.domain,ctx,tools:pair.registry,wake:options.scheduleWake,retain:options.retainConstructionCleanup})}

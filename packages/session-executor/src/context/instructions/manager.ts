@@ -6,6 +6,7 @@ import type { ManagedSuccessfulInstructionHandoff } from '@i-harness/core-agent'
 import { types as utilTypes } from 'node:util'
 import { isManagedExecutionDomain, isManagedExecutionSource, readManagedActionMembers, assertManagedActionCurrent, retainAcknowledgedExecutionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
 import { capturedManagedExecutionDomain } from '@i-harness/core-tools'
+import {assertPrivateInstructionCodeCall} from '@i-harness/core-tools/internal/code-origin'
 import { captureLegacyFact, type SessionView } from '@i-harness/core-session'
 import { capturedToolRegistry, instructionReplan, isInstructionReplan, isOriginalInstructionCellRequest, type AcceptedInstructionBatch, type AcceptedInstructionCall, type CapturedToolCall, type InstructionBatchEntry, type InstructionCellLease, type NativeMutation, type NativeBoundary } from '@i-harness/core-tools'
 import type { InstructionEnvironment } from './contracts.ts'
@@ -36,6 +37,9 @@ function captureMethod<T extends (...args: any[]) => any>(owner: object, name: s
   }
   throw new TypeError(`Invalid ${name} capability`)
 }
+
+const managedInstructionManagers=new WeakMap<object,{domain:ManagedExecutionDomain;current():boolean}>()
+export function isOriginalManagedInstructionManager(manager:object,domain:ManagedExecutionDomain):boolean{const owner=managedInstructionManagers.get(manager);return !!owner&&owner.domain===domain&&owner.current()&&isManagedExecutionDomain(domain)}
 
 export function createMainInstructionManager(options: { session?: SessionView; domain?: ManagedExecutionDomain; environment: InstructionEnvironment; cwd: string; authority: () => AuthorityState; available: () => boolean; publish: (signal: AbortSignal | undefined, retain: () => import('@i-harness/core-agent').RequestContextPin) => Promise<void> }) {
   if(options.domain&&(options.session||!isManagedExecutionDomain(options.domain)))throw TypeError('Original managed instruction domain required')
@@ -160,12 +164,13 @@ export function createMainInstructionManager(options: { session?: SessionView; d
         if (!event || event.type !== 'tool/call' || accepted.callSeqs[index] !== call.eventSeq || event.seq !== call.eventSeq || event.callId !== call.callId || event.name !== call.call.name || JSON.stringify(event.args) !== JSON.stringify(call.call.args)) throw new TypeError('Accepted call identity mismatch')
       }
       const pin = evidence.view.retain(), bindings = new Map<number, { capture: CapturedToolCall; origin: AcceptedInstructionCall }>()
-      let released = false, preflightStarted = false, flight: Promise<void> | undefined
+      let released = false, preflightStarted = false, flight: Promise<void> | undefined, managedPinUsers=1
+      const releaseManagedPins=()=>{if(managed&&!--managedPinUsers){for(const member of managed.pins)member.release();managed.pins.length=0}}
       const owner = { requested: false, release() {
         owner.requested = true
         if (released) return Promise.resolve()
         if (flight) return flight
-        flight = pin.release().then(() => { for(const member of managed?.pins??[])member.release();if(managed)managed.pins.length=0;released = true; outstanding.delete(owner) }, error => { flight = undefined; throw error })
+        flight = pin.release().then(() => { releaseManagedPins();released = true; outstanding.delete(owner) }, error => { flight = undefined; throw error })
         return flight
       } }
       outstanding.add(owner)
@@ -252,15 +257,15 @@ export function createMainInstructionManager(options: { session?: SessionView; d
           }
       }
       function retainCell(cellId: string): InstructionCellLease {
-        if(managed)throw TypeError('Managed Code instruction adoption requires its original nested-call producer')
         if (closed || released || owner.requested || typeof cellId !== 'string' || !cellId) throw new Error('Original accepted cell unavailable')
         const cellPin = evidence.view.retain(), cellBindings = new Map<string, { capture: CapturedToolCall; origin: AcceptedInstructionCall }>()
+        if(managed)managedPinUsers++
         let cellReleased = false, cellFlight: Promise<void> | undefined
         const cellOwner = { requested: false, release() {
           cellOwner.requested = true
           if (cellReleased) return Promise.resolve()
           if (cellFlight) return cellFlight
-          cellFlight = cellPin.release().then(() => { cellReleased = true; outstanding.delete(cellOwner) }, error => { cellFlight = undefined; throw error })
+          cellFlight = cellPin.release().then(() => { cellReleased = true; releaseManagedPins(); outstanding.delete(cellOwner) }, error => { cellFlight = undefined; throw error })
           return cellFlight
         } }
         outstanding.add(cellOwner)
@@ -269,11 +274,10 @@ export function createMainInstructionManager(options: { session?: SessionView; d
           bind(invocationId: string, capture: CapturedToolCall) {
             if (!currentCell() || typeof invocationId !== 'string' || !invocationId || cellBindings.has(invocationId)) throw new Error('Instruction invocation unavailable')
             const registry = capturedToolRegistry(capture), inspect = captureMethod<typeof registry.inspectCapture>(registry, 'inspectCapture'), inspected = inspect(capture)
-            const seq = inspected.identity.callEventSeq, event = seq === undefined ? undefined : session!.events[seq]
-            if (inspected.identity.session !== session || inspected.identity.callId !== invocationId || !event || event.type !== 'code/call' || event.seq !== seq || event.cellId !== cellId || event.callId !== invocationId || event.name !== inspected.call.name || JSON.stringify(event.args) !== JSON.stringify(inspected.call.args)) throw new Error('Instruction invocation identity mismatch')
+            if(managed){if(capturedManagedExecutionDomain(capture)!==managed.domain)throw Error('Foreign managed instruction capture');assertPrivateInstructionCodeCall(capture,managed.domain,registry,cellId,invocationId)}else{const seq=inspected.identity.callEventSeq,event=seq===undefined?undefined:session!.events[seq];if(inspected.identity.session!==session||inspected.identity.callId!==invocationId||!event||event.type!=='code/call'||event.seq!==seq||event.cellId!==cellId||event.callId!==invocationId||event.name!==inspected.call.name||JSON.stringify(event.args)!==JSON.stringify(inspected.call.args))throw Error('Instruction invocation identity mismatch')}
             const origin: AcceptedInstructionCall = Object.freeze({ kind: 'accepted-instruction-call' })
             cellBindings.set(invocationId, { capture, origin })
-            acceptedOrigins.set(origin, { capture, current: () => currentCell() && cellBindings.get(invocationId)?.origin === origin })
+            acceptedOrigins.set(origin, { capture, current: () => {if(!currentCell()||cellBindings.get(invocationId)?.origin!==origin)return false;if(managed)try{assertPrivateInstructionCodeCall(capture,managed.domain,registry,cellId,invocationId)}catch{return false};return true} })
             return origin
           },
           async preflight(entries: readonly InstructionBatchEntry[], signal?: AbortSignal) {
@@ -293,7 +297,6 @@ export function createMainInstructionManager(options: { session?: SessionView; d
           const inspect = captureMethod<typeof registry.inspectCapture>(registry, 'inspectCapture'), inspected = inspect(capture)
           if(managed){
             if(capturedManagedExecutionDomain(capture)!==managed.domain||inspected.identity.session!==undefined||inspected.identity.sessionId!==managed.domain.sessionId||!inspected.identity.settlementSource||!isManagedExecutionSource(managed.domain,inspected.identity.settlementSource))throw TypeError('Foreign managed instruction capture')
-            if(descriptor.call.name==='code_exec')throw TypeError('Managed Code instruction adoption requires its original nested-call producer')
           }else if(inspected.identity.session!==session)throw new Error('Captured call does not match accepted call')
           if (inspected.identity.callId !== descriptor.callId || inspected.identity.callEventSeq !== descriptor.eventSeq || JSON.stringify(inspected.call) !== JSON.stringify(descriptor.call)) throw new Error('Captured call does not match accepted call')
           const origin: AcceptedInstructionCall = Object.freeze({ kind: 'accepted-instruction-call' })
@@ -321,6 +324,7 @@ export function createMainInstructionManager(options: { session?: SessionView; d
       if (failures.length) throw new AggregateError(failures, 'Instruction manager cleanup incomplete')
     },
   }
+  if(options.domain)managedInstructionManagers.set(context,{domain:options.domain,current:()=>!closed})
   return Object.assign(context, { managedSucceeded(handoff:ManagedSuccessfulInstructionHandoff) {
     const own=<T>(value:object,key:string):T=>{if(!value||utilTypes.isProxy(value))throw TypeError('Closed instruction handoff required');const field=Object.getOwnPropertyDescriptor(value,key);if(!field||!('value'in field))throw TypeError('Instruction handoff data required');return field.value as T}
     const domain=own<ManagedExecutionDomain>(handoff,'domain')
