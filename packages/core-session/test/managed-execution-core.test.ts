@@ -286,3 +286,25 @@ it('restored private Code store honors the original rewind window',async()=>{
   createOwnerDeliveryControl(f.state.delivery,()=>f.state.eventCount)
   expect(f.state.observe().codeState().store).toEqual({kind:'value',entries:[['x',1]]})
 })
+
+it('reserves Task archive synchronously, rejects fabricated authority, and settles before later work',async()=>{
+ const core=await import('../src/managed/execution-state.ts')
+ const f=await fixture([{type:'turn/start',seq:0},{type:'user/message',text:'task',seq:1},{type:'assistant/message',text:'answer',seq:2},{type:'turn/end',seq:3}])
+ let live=true;const action={assertOpen(){if(!live)throw Error('action retired')}}, source={assertHeld(){if(!live)throw Error('source retired')}}
+ const owner={ownsAction(value:object){return value===action&&live},beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+ f.state.bindOwner(owner);f.state.captureHooks(action,()=>action.assertOpen());f.state.captureHooks(source,()=>source.assertHeld());f.state.associateActionSource(action,source)
+ const domain=core.createManagedExecutionDomain(f.state.identity,owner,{},'owned')
+ expect(()=>core.reserveManagedTaskHistory(domain,{})).toThrow()
+ const cut=core.reserveManagedTaskHistory(domain,source);expect(f.opened).toBe(1)
+ const seed=await cut.export({kind:'all'});expect(seed.kind).toBe('seed');expect(f.closed).toBe(1)
+ expect(()=>cut.assertSourceCut({parentSessionId:'owned',taskId:'t',agentPath:'root/t',role:'general',sourceNamespace:'task',callSeq:1,start:{action,capture:{},outcome:{kind:'not-issued',code:'FACT_CANCELLED'}}})).toThrow()
+ const startGroup=group({kind:'delivery',event:{type:'subagent/start',version:1,taskId:'t',agentPath:'root/t',role:'general',description:'T',parentSessionId:'owned'}})
+ const capture=memberCapture(f,startGroup,action), staged=await f.state.prepareWrite([startGroup]), batch=encodeFactBatch('task-start',f.source.prefix.prefixDigest,staged.events),receipt=f.receipt(batch)
+ staged.beforeIssue(batch);staged.install(batch,receipt);const outcome=Object.freeze({kind:'committed',receipt,seqs:Object.freeze([4])}) as FactOutcome;f.state.acknowledge(startGroup,outcome)
+ const witness={parentSessionId:'owned',taskId:'t',agentPath:'root/t',role:'general',sourceNamespace:'task',callSeq:1,start:{action,capture,outcome}}
+ expect(()=>cut.assertSourceCut(witness)).not.toThrow()
+ expect(()=>cut.assertSourceCut({...witness,start:{...witness.start,outcome:{...outcome}}})).toThrow()
+ const unrelated=group({kind:'metadata',event:{type:'plan/mode',mode:'on'}}),extra=await f.state.prepareWrite([unrelated]),extraBatch=encodeFactBatch('unrelated',f.source.prefix.prefixDigest,extra.events),extraReceipt=f.receipt(extraBatch);extra.beforeIssue(extraBatch);extra.install(extraBatch,extraReceipt)
+ expect(()=>cut.assertSourceCut(witness)).toThrow()
+ live=false;expect(()=>cut.assertCurrent()).toThrow();await cut.close()
+})
