@@ -1,13 +1,16 @@
+import {assertManagedExecutionSession} from '@i-harness/core-session/internal/execution'
+import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 import { AsyncLocalStorage } from "node:async_hooks"
 import { tmpdir } from "node:os"
 import { relative, isAbsolute, sep } from "node:path"
 import { createExecutionSupervisor, currentExecCaller, withExecCallerScope, type ExecExecutionHost, type ExecutionReconciliationContext, type ExecutionReconciler } from "@i-harness/exec"
 import { createLocalExecutionBackends, readWindowsQualification, type LocalExecutionBackends, type LocalExecutionOptions } from "@i-harness/sandbox-local"
-import { assertExecutionAuthority, compileExecutionPolicy } from "@i-harness/sandbox-policy"
-import { snapshotProcessSpec, type AuthorityState, type CompiledSandboxPolicy, type ExecutionOwner, type SandboxMode, type SandboxExecutionPolicy } from "@i-harness/sandbox"
+import { assertExecutionAuthority, compileExecutionPolicy, checkWrite } from "@i-harness/sandbox-policy"
+import { denialFor, snapshotProcessSpec, type AuthorityState, type CompiledSandboxPolicy, type ExecutionOwner, type SandboxMode, type SandboxExecutionPolicy } from "@i-harness/sandbox"
 
 export interface ExecutionRuntimeOptions {
   owner: ExecutionOwner
+  managedExecution?:ManagedExecutionAttachment
   ownerAvailable?(): boolean
   authority(): AuthorityState
   standing(): { mode: SandboxMode; generation: string }
@@ -15,6 +18,13 @@ export interface ExecutionRuntimeOptions {
   wslExecution?: LocalExecutionOptions["wslExecution"]
   legacyPrivateTempRoot?: string
 }
+export interface OriginalFilesystemPolicy {
+ sandboxPolicy():SandboxExecutionPolicy
+ writeGuard(abs:string,modeOverride?:SandboxMode,authoritySnapshot?:object):{ok:true}|{ok:false;denial:import('@i-harness/sandbox').SandboxDenial}
+}
+const filesystemPolicies=new WeakMap<ExecExecutionHost,{policy:OriginalFilesystemPolicy;execution?:ManagedExecutionAttachment}>()
+/** Exact runtime-created host only; a copied execution object has no policy. */
+export function originalFilesystemPolicyFor(host:ExecExecutionHost,execution:ManagedExecutionAttachment):OriginalFilesystemPolicy|undefined{const row=filesystemPolicies.get(host);return row?.execution===execution?row.policy:undefined}
 const rank = { "read-only": 0, "workspace-write": 1, "danger-full-access": 2 }
 function contains(root: string, path: string): boolean {
   const tail = relative(root, path)
@@ -23,6 +33,7 @@ function contains(root: string, path: string): boolean {
 
 /** Assembly-owned authority and backend composition. No process operation lives here. */
 export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions) {
+  if(options.managedExecution){if(!isManagedExecutionAttachment(options.managedExecution))throw TypeError('Original execution attachment required');assertManagedExecutionSession(options.managedExecution.identity,options.managedExecution.owner,options.owner.sessionId)}
   const configured = options.windowsSandboxBackend ?? process.env.IH_WINDOWS_SANDBOX ?? "legacy"
   if (configured !== "legacy" && configured !== "psec" && configured !== "wsl") throw new Error("IH_WINDOWS_SANDBOX requires legacy, psec or wsl")
   const selected: "legacy" | "psec" | "wsl" = configured
@@ -101,7 +112,7 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
       await backends.dispose()
     },
   }
-  return {
+  const runtime = {
     windowsSandboxBackend: selected,
     wslExecution,
     execution,
@@ -182,4 +193,26 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
           : "Qualification is historical evidence from one host; matching OS/artifacts do not establish current security or promote an experimental backend." }
     },
   }
+  const policy:OriginalFilesystemPolicy=Object.freeze({
+   sandboxPolicy(){
+    if(disposed||options.ownerAvailable?.()===false)throw Error('Execution caller authority unavailable or revoked')
+    const authority=options.authority();if(authority.kind==='revoked'||authority.kind==='unavailable')throw Error('Execution authority '+authority.kind+': '+authority.reason)
+    const standing=options.standing(),mode=standing.mode,workspaceRoot=authority.kind==='bound'?authority.primaryRoot:authority.workspaceRoot,workspaceRoots=authority.kind==='bound'?[...authority.roots]:[authority.workspaceRoot],before=JSON.stringify(authority)
+    const bound=runtime.bindPolicy({mode,workspaceRoot,workspaceRoots}),after=options.authority(),next=options.standing()
+    if(JSON.stringify(after)!==before||next.mode!==standing.mode||next.generation!==standing.generation)throw Error('Execution authority changed during policy capture')
+    return bound
+   },
+   writeGuard(abs:string,modeOverride?:SandboxMode,authoritySnapshot?:object){
+    if(modeOverride&&!authoritySnapshot)throw Error('Original filesystem authority snapshot required')
+    if(authoritySnapshot&&modeOverride)runtime.validateGrant(authoritySnapshot,modeOverride)
+    const authority=options.authority();if(authority.kind==='revoked'||authority.kind==='unavailable')throw Error('Execution authority '+authority.kind+': '+authority.reason)
+    for(const reference of authority.references??[])if(checkWrite({mode:'workspace-write',workspaceRoot:reference},abs).ok)throw Error('Readonly reference authority forbids this write')
+    const before=JSON.stringify(authority),base=policy.sandboxPolicy()
+    if(JSON.stringify(options.authority())!==before)throw Error('Execution authority changed during write check')
+    const effective=modeOverride===undefined?base:{...base,mode:modeOverride},decision=checkWrite(effective,abs)
+    return decision.ok?{ok:true as const}:{ok:false as const,denial:denialFor('fs',effective.mode,decision.reason,decision.sufficientMode)}
+   },
+  })
+  filesystemPolicies.set(execution,{policy,execution:options.managedExecution})
+  return runtime
 }

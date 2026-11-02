@@ -3,15 +3,29 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import { acquireManagedExecution, type ManagedExecutionAttachment } from '../../session-persistence/src/execution-internal.ts'
 import { receivedExecutionInputsFor } from './lifecycle/execution-inputs.ts'
+import { assertManagedExecutionSession } from '@i-harness/core-session/internal/execution'
 
 /** Private entry/cache; public Session loaders below remain explicit compatibility. */
 export function createExecutorExecutionCache(options: { coordinator: SessionCoordinator; assertOpen?(id: string): void }) {
   type Entry = { execution: ManagedExecutionAttachment; inputs: ReturnType<typeof receivedExecutionInputsFor>; policyFloor: number }
-  type Row = { loading?: Promise<Entry>; publication?: Promise<Entry>; execution?:ManagedExecutionAttachment; entry?: Entry; closing: boolean; closed?: boolean; close?: Promise<void> }
+  type Row = { loading?: Promise<Entry>; publication?: Promise<Entry>; execution?:ManagedExecutionAttachment; entry?: Entry; closing: boolean; closed?: boolean; close?: Promise<void>; retained?:Set<()=>Promise<void>> }
   const rows = new Map<string, Row>()
   let closed = false
   const assert = (id: string) => { if(closed)throw Error('Execution cache closed');options.assertOpen?.(id) }
   const cache = {
+    current(id:string):ManagedExecutionAttachment|undefined {
+      if(this!==cache)throw new TypeError('Original execution cache required')
+      assert(id);const row=rows.get(id)
+      if(!row)return undefined
+      if(row.closing||!row.entry)throw Error('Original execution entry unavailable')
+      const execution=row.entry.execution;assertManagedExecutionSession(execution.identity,execution.owner,id);return execution
+    },
+    retain(id:string,execution:ManagedExecutionAttachment,cleanup:()=>Promise<void>):void {
+      if(this!==cache)throw new TypeError('Original execution cache required')
+      assert(id);const row=rows.get(id)
+      if(!row||row.closing||row.entry?.execution!==execution||typeof cleanup!=='function')throw TypeError('Current original execution cleanup required')
+      assertManagedExecutionSession(execution.identity,execution.owner,id);(row.retained??=new Set()).add(cleanup)
+    },
     get(id: string): Promise<Entry> {
       if(this!==cache)return Promise.reject(new TypeError('Original execution cache required'))
       try { assert(id) } catch(cause) { return Promise.reject(cause) }
@@ -38,6 +52,8 @@ export function createExecutorExecutionCache(options: { coordinator: SessionCoor
         try{await row.loading}catch(cause){if(!row.execution)throw cause}
         const execution=row.execution!;execution.revokeNewWork()
         const failures:unknown[]=[]
+        for(const cleanup of [...row.retained??[]].reverse())try{await cleanup();row.retained!.delete(cleanup)}catch(cause){failures.push(cause)}
+        if(failures.length)throw new AggregateError(failures,'Private execution retained cleanup incomplete')
         try{await row.entry?.inputs.close()}catch(cause){failures.push(cause)}
         try{await execution.close()}catch(cause){failures.push(cause)}
         if(failures.length)throw new AggregateError(failures,'Private execution cleanup incomplete')
@@ -55,6 +71,9 @@ export function createExecutorExecutionCache(options: { coordinator: SessionCoor
 // Different adapters in one host share an in-flight owned load. Retaining only
 // the promise avoids stale completed caches across an explicit close/reopen.
 const pendingLoads = new WeakMap<SessionCoordinator, Map<string, Promise<Session>>>()
+const originalLoaders = new WeakMap<object,SessionCoordinator>()
+/** Exact original loader and coordinator association; no Session is acquired. */
+export function isOriginalDurableSessionLoader(value:unknown,coordinator:SessionCoordinator|undefined):boolean{return typeof value==='function'&&coordinator!==undefined&&originalLoaders.get(value)===coordinator}
 
 /** Build the SessionService.sessionFor adapter for an already-created and
  * already-owned durable session. Restored events are copied without running
@@ -62,7 +81,7 @@ const pendingLoads = new WeakMap<SessionCoordinator, Map<string, Promise<Session
 export function createDurableSessionLoader(
   coordinator: SessionCoordinator,
 ): (sessionId: string) => Promise<Session> {
-  return (sessionId: string): Promise<Session> => {
+  const loader = (sessionId: string): Promise<Session> => {
     let loads = pendingLoads.get(coordinator)
     if (!loads) { loads = new Map(); pendingLoads.set(coordinator, loads) }
     const existing = loads.get(sessionId)
@@ -74,4 +93,6 @@ export function createDurableSessionLoader(
     entries.set(sessionId, pending)
     return pending
   }
+  originalLoaders.set(loader,coordinator)
+  return loader
 }

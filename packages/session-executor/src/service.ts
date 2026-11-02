@@ -1,3 +1,12 @@
+import {TeamMountRecoveryRequired,isOriginalTeamRecoveryPort,type TeamMountHandle,type createOriginalTeamRecoveryPort} from '@i-harness/agent-team'
+import {associateOriginalTeamRetry} from './host-team-recovery.ts'
+import {mountOwnedRewind,withManagedRewindFacts,type OwnedRewindHandle} from './owned-rewind.ts'
+import {associateOriginalManagedRewind} from './host-managed-rewind.ts'
+import {originalFilesystemPolicyFor} from './execution-runtime.ts'
+import {types} from 'node:util'
+import {AsyncLocalStorage} from 'node:async_hooks'
+import {firstPartySelectionFor} from './first-party-selection.ts'
+import {associateOriginalManagedExecution} from './host-managed-execution.ts'
 import {mountOwnedWorkflow} from './owned-workflow.ts'
 import {associateOriginalHostAssemblyObserver} from './host-assembly-observer.ts'
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
@@ -9,7 +18,7 @@ import {mountOwnedCode,type OwnedCodeOutput} from './owned-code.ts'
 import {createContextOutputTools} from '@i-harness/context-output'
 import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 import {createToolResultRetention} from './lifecycle/result-retention.ts'
-import {subscribeManagedExecution,subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
+import {subscribeManagedExecution,subscribeManagedExecutionReadiness,assertOriginalTeamDeliveryReceipt} from '@i-harness/core-session/internal/execution'
 import {supportsManagedServiceOptions} from './service/execution-mode.ts'
 import {createContext,captureExecutionHookChannel,type PluginContext} from '@i-harness/core-plugin'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
@@ -98,6 +107,13 @@ export type SessionModelBindingResult =
       }
     }
 
+function captureCodeModeConfig(value:import('@i-harness/code-mode').CodeModeConfig):import('@i-harness/code-mode').CodeModeConfig {
+ if(!value||typeof value!=='object'||types.isProxy(value)||![null,Object.prototype].includes(Object.getPrototypeOf(value)))throw TypeError('Original Code configuration required')
+ const fields=Object.getOwnPropertyDescriptors(value),out:Record<string,unknown>={},allowed=new Set(['mode','memoryLimitMb','cpuTimeMs','maxActiveCells','maxPendingCalls','maxSourceBytes','maxResultBytes','maxStoreBytes','defaultYieldTimeMs','defaultOutputTokens'])
+ for(const key of Reflect.ownKeys(fields)){if(typeof key!=='string'||!allowed.has(key)||!('value'in fields[key]!))throw TypeError('Original Code configuration data required');const item=fields[key]!.value;if(item!==undefined&&typeof item!=='string'&&typeof item!=='number')throw TypeError('Original Code configuration scalar required');if(fields[key]!.enumerable)out[key]=item}
+ return Object.freeze(out)
+}
+
 /** Task 4: the installable half of a resolved binding — a `ready` result with
  * the status discriminator stripped. What `rebindModel` takes from the host,
  * which resolved it (only the host owns the runtime and the wire's optional
@@ -137,17 +153,19 @@ type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'asser
 
 export interface SessionServiceOptions extends AssemblyOptions {
   /** Internal explicit-tool managed composition; not the default feature builder. */
-  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'|'originalFilesystem'|'originalSchedule'|'compact'|'autoCompactionEnabled'> & {
+  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'|'originalFilesystem'|'requireFilesystemPolicy'|'originalSchedule'|'originalApproval'|'approvalMode'|'compact'|'autoCompactionEnabled'> & {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
     mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
     ownedWorkflow?:boolean
-    ownedTask?:{options(original:import('./managed-assembly.ts').ManagedRegistryConstruction,shared:{shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput}):Promise<Omit<RegisterSubagentOptions,'managedParent'|'parentNotify'|'parentSession'|'factOwner'|'getParentModel'|'deferRestoredWork'>>}
-    mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[];task?:RegisterSubagentResult}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
+    ownedRewind?:{root:string;workspace:string}
+    onTeamRecoveryRequired?(sessionId:string):void
+    ownedTask?:{options(original:import('./managed-assembly.ts').ManagedRegistryConstruction,shared:{shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput;codeConfig?:import('@i-harness/code-mode').CodeModeConfig}):Promise<Omit<RegisterSubagentOptions,'managedParent'|'parentNotify'|'parentSession'|'factOwner'|'getParentModel'|'deferRestoredWork'>>}
+    mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[];modelBinding():import('./managed-assembly.ts').ManagedExecutionModelBinding;task?:RegisterSubagentResult;parentNotify?:ParentInputAdmission;shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput;retainTeamRecovery(handle:TeamMountHandle,port:ReturnType<typeof createOriginalTeamRecoveryPort>):void}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
     acquireInstructions?(sessionId:string,execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<import('./managed-assembly.ts').OwnedInstructionBinding>
     ownedTitle?:{enabled:boolean;titleMaxOutputTokens?:number;timeoutMs?:number}
     ownedShell?:OwnedShellOptions
-    ownedCode?:{config:import('@i-harness/code-mode').CodeModeConfig;acquireOutput(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void):OwnedCodeOutput|Promise<OwnedCodeOutput>}
+    ownedCode?:{config?:import('@i-harness/code-mode').CodeModeConfig;configFor?(sessionId:string):import('@i-harness/code-mode').CodeModeConfig;acquireOutput(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void):OwnedCodeOutput|Promise<OwnedCodeOutput>}
   }
   /** Read-only host authority; never invokes execution project setup. */
   resultReadScopeFor?: import('./lifecycle/result-store.ts').ResultReadScopeResolver
@@ -342,6 +360,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
+  const managedPrepubSettlers=new Map<string,()=>Promise<void>>()
   type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>;projectTasks():AgentTaskView[];cancelTask(id:string):'cancellation-requested'|'already-finished'}
   const managedTaskOwners=new Map<string,TaskLifecycle>()
   const managedWorkflowOwners=new Map<string,{list():import('@i-harness/exec').BackgroundJobView[];kill(id:string):'cancellation-requested'|'already-finished';journal():Promise<void>}>()
@@ -349,7 +368,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
   const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>}>()
   const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
-  type CreatingAssembly = { work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
+  type TeamRecovery={domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;handle:TeamMountHandle;port:ReturnType<typeof createOriginalTeamRecoveryPort>;resume:()=>Promise<void>;close:()=>Promise<void>;gate:PromiseWithResolvers<void>;pending:boolean;stopped:boolean;retry?:Promise<void>;stop?:Promise<void>}
+  type CreatingAssembly = { teamRecovery?:TeamRecovery; work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
   const creating = new Map<string, CreatingAssembly>()
   const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
   const extensionRefreshes = new Map<string, Promise<void>>()
@@ -357,10 +377,26 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const hooks = new Set<(assembly: SessionAssembly) => void>()
   const hostAssemblyHooks = new Set<(assembly: SessionAssembly) => void>()
   const completeSelections=new Set<string>()
-  const managedCompatible=(id:string)=>!completeSelections.has(id)&&supportsManagedServiceOptions(opts)&&hooks.size===0
+  const firstParty=firstPartySelectionFor(opts), firstPartySelections=new Map<string,Awaited<ReturnType<NonNullable<typeof firstParty>['prepare']>>>(), firstPartyFlights=new Map<string,Promise<void>>(), firstPartyEpochs=new Map<string,number>(), firstPartyRetained=new Set<string>()
+  const managedCompatible=(id:string)=>!completeSelections.has(id)&&hooks.size===0&&(firstParty?firstPartySelections.get(id)?.kind==='managed':supportsManagedServiceOptions(opts))
+  const validatingFirstParty=new Set<string>()
+  const validateFirstParty=(id:string)=>{const selected=firstPartySelections.get(id);if(selected?.kind!=='managed')return;if(validatingFirstParty.has(id))throw Error('First-party currentness cannot reenter service');validatingFirstParty.add(id);try{selected.assertCurrent()}finally{validatingFirstParty.delete(id)}}
+  const releaseFirstParty=async(id:string)=>{if(!firstPartyRetained.has(id))return;await firstParty?.release?.(id);firstPartyRetained.delete(id)}
+  const firstPartyContext=new AsyncLocalStorage<{active:boolean}>()
+  async function prepareFirstParty(id:string){
+    if(firstPartyContext.getStore()?.active)throw Error('First-party selection cannot reenter service')
+    if(!firstParty||firstPartySelections.has(id)||completeSelections.has(id)||privateEntries.has(id))return
+    const existing=firstPartyFlights.get(id);if(existing)return existing
+    const epoch=firstPartyEpochs.get(id)??0
+    firstPartyRetained.add(id)
+    const context={active:true};let releasing=false
+    const flight=Promise.resolve().then(()=>firstPartyContext.run(context,async()=>{try{const selected=await firstParty.prepare(id);assertWritableOpen(id);if((firstPartyEpochs.get(id)??0)!==epoch)throw Error('First-party selection retired');selected.assertCurrent();if(completeSelections.has(id)||privateEntries.has(id)){releasing=true;await releaseFirstParty(id);return}if(selected.kind==='complete'||hooks.size){releasing=true;await releaseFirstParty(id);selectComplete(id);return}firstPartySelections.set(id,selected)}catch(error){if(!releasing)try{await releaseFirstParty(id)}catch(cleanup){throw new AggregateError([error,cleanup],'First-party selection cleanup failed',{cause:error})}throw error}finally{context.active=false}}))
+    firstPartyFlights.set(id,flight);try{await flight}finally{if(firstPartyFlights.get(id)===flight){firstPartyFlights.delete(id);firstPartyEpochs.delete(id)}}
+  }
   const selectComplete=(id:string)=>{if(privateEntries.has(id))throw Error('Private entry requires explicit complete compatibility adapter');completeSelections.add(id)}
   const privateCache=opts.coordinator?createExecutorExecutionCache({coordinator:opts.coordinator,assertOpen:assertWritableOpen}):undefined
   const privateEntries=new Set<string>()
+  const managedRewinds=new Map<string,{handle:OwnedRewindHandle;runtime:ManagedRuntime}>()
   const managedIngress=new Map<string,Set<()=>Promise<void>>>()
   async function drainManagedIngress(id:string){const entries=managedIngress.get(id);if(!entries)return;for(const close of [...entries]){await close();entries.delete(close)}if(!entries.size)managedIngress.delete(id)}
   type SurfaceLifecycle = { sessionId: string; assembly: SessionAssembly; kind: "published" | "retiring" | "removed" }
@@ -476,9 +512,22 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
   const deliveryDrains = new Map<string, ReturnType<typeof createDeliveryDrain>>()
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
+  function stopTeamRecovery(id:string){
+    const state=creating.get(id)?.teamRecovery;if(!state||!state.pending||state.stopped)return false
+    state.stopped=true;state.pending=false;state.gate.reject(new Error('agent aborted'))
+    const flight=Promise.resolve().then(()=>Reflect.apply(state.close,state.port,[]));state.stop=flight;void flight.catch(error=>d.warn('[i-harness] Team recovery close requires cleanup: '+String(error)));return true
+  }
+  async function retryTeamRecovery(id:string):Promise<boolean>{
+    const row=creating.get(id),state=row?.teamRecovery;if(!row||!state?.pending)return false
+    if(state.stopped||closed||closing.has(id))throw Error('Original Team recovery retired')
+    if(state.retry){await state.retry;return true}
+    if(!isOriginalTeamRecoveryPort(state.port,state.domain,state.handle)||Object.getOwnPropertyDescriptor(state.port,'resume')?.value!==state.resume)throw TypeError('Original Team recovery changed')
+    const flight=(async()=>{state.domain.assertCurrent();await Reflect.apply(state.resume,state.port,[]);state.domain.assertCurrent();if(state.stopped||creating.get(id)!==row||row.teamRecovery!==state)throw Error('Original Team recovery retired');state.pending=false;state.gate.resolve()})()
+    state.retry=flight;try{await flight}finally{if(state.retry===flight)state.retry=undefined}return true
+  }
   function requestDeliveryStop(id: string) {
     const recipient=managedRecipients.get(id)
-    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop'),workflow=managedWorkflowOwners.get(id),task=managedTaskOwners.get(id);managedStopReceipts.set(id,{recipient,fenceId:request.fenceId,...workflow||task?{settleSources:async()=>{await workflow?.journal();await task?.journal()}}:{}});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
+    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop'),workflow=managedWorkflowOwners.get(id),task=managedTaskOwners.get(id),prepub=managedPrepubSettlers.get(id);managedStopReceipts.set(id,{recipient,fenceId:request.fenceId,...workflow||task||prepub?{settleSources:async()=>{if(prepub)await prepub();else{await workflow?.journal();await task?.journal()}}}:{}});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
     const assembly = liveAssembly(id)
     if (!assembly) return
     const delivery = receivedInputsFor(assembly.factOwner, id).delivery
@@ -487,6 +536,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     void request.settled.catch(error => d.warn(`[i-harness] delivery Stop requires reconciliation: ${String(error)}`))
   }
   async function awaitDeliveryStop(id: string) {
+    await creating.get(id)?.teamRecovery?.stop
     await managedCodeStops.get(id)?.flight
     const pending=managedStopReceipts.get(id)
     if(pending){await pending.settleSources?.();return pending.recipient.closeReceipt(pending.fenceId)}
@@ -791,12 +841,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   async function managedInputFor(sessionId:string,requirements?:{completePreparation?:boolean;supplementalContext?:boolean}){
     assertWritableOpen(sessionId)
+    if(!requirements?.completePreparation)await prepareFirstParty(sessionId)
     if(requirements?.completePreparation){selectComplete(sessionId);return undefined}
     if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))throw Error('Private entry cannot switch to Session-shaped compatibility')
     if(!managedCompatible(sessionId)){selectComplete(sessionId);return undefined}
     if(!privateCache)throw Error('Managed runtime requires original coordinator')
-    privateEntries.add(sessionId)
-    const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
+    validateFirstParty(sessionId);privateEntries.add(sessionId)
+    const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId);validateFirstParty(sessionId)
     return Object.freeze({inbox:entry.inputs.inbox,observe(){assertWritableOpen(sessionId);return entry.execution.observe()}})
   }
 
@@ -1064,6 +1115,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const prior=creating.get(sessionId)
     if(prior){if(prior.failed)return Promise.reject(Error('Session process cleanup incomplete'));if(!prior.managedWork)return Promise.reject(Error('Complete compatibility construction already selected'));return prior.managedWork}
     if(!managedCompatible(sessionId)||!privateCache||!opts.managedRuntime)return Promise.reject(Error('Managed runtime configuration unavailable'))
+    try{validateFirstParty(sessionId)}catch(error){return Promise.reject(error)}
     const work=Promise.withResolvers<ManagedRuntime>()
     const row:CreatingAssembly={work:work.promise,managedWork:work.promise,failed:false,residentActivation:createResidentActivation(()=>false)}
     creating.set(sessionId,row);privateEntries.add(sessionId)
@@ -1072,7 +1124,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const title=opts.managedRuntime.ownedTitle?.enabled?createOwnedPostTurnLifetime():undefined
     if(title)mounted.add(()=>title.close())
     let retired=false,recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>|undefined,privateDrain:ReturnType<typeof createDeliveryDrain>|undefined,unsubscribe:(()=>void)|undefined,unsubscribeReadiness:(()=>void)|undefined
-    row.cleanup=async()=>{retired=true;retireManaged(sessionId);privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);managedTaskOwners.delete(sessionId);managedWorkflowOwners.delete(sessionId);removeManaged(sessionId);privateEntries.delete(sessionId)}
+    row.cleanup=async()=>{retired=true;retireManaged(sessionId);privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedPrepubSettlers.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);managedTaskOwners.delete(sessionId);managedWorkflowOwners.delete(sessionId);managedRewinds.delete(sessionId);removeManaged(sessionId);privateEntries.delete(sessionId)}
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
       const context=createContext()
@@ -1094,8 +1146,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       })()
       let instructionBinding:import('./managed-assembly.ts').OwnedInstructionBinding|undefined
       if(opts.managedRuntime!.acquireInstructions){let acquiring=true;try{instructionBinding=await opts.managedRuntime!.acquireInstructions(sessionId,entry.execution,cleanup=>{if(!acquiring||retired)throw Error('Original instruction retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original instruction cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
+      const rawCodeConfig=opts.managedRuntime!.ownedCode?(opts.managedRuntime!.ownedCode.configFor?.(sessionId)??opts.managedRuntime!.ownedCode.config):undefined
+      const codeConfig=rawCodeConfig===undefined?undefined:captureCodeModeConfig(rawCodeConfig)
+      if(opts.managedRuntime!.ownedCode&&!codeConfig)throw Error('Original Code configuration required')
+      let rewindMount:OwnedRewindHandle|undefined
+      let published=false
       let workflowMount:ReturnType<typeof mountOwnedWorkflow>|undefined
-      let taskMount:RegisterSubagentResult|undefined,taskLifecycle:TaskLifecycle|undefined,initialTaskModel:import('@i-harness/llm-seam').ModelClient|undefined
+      let taskNotify:ParentInputAdmission|undefined
+      let taskMount:RegisterSubagentResult|undefined,taskLifecycle:TaskLifecycle|undefined,initialTaskModel:import('@i-harness/llm-seam').ModelClient|undefined,initialBinding:import('./managed-assembly.ts').ManagedExecutionModelBinding|undefined
       let shellMount:import('./owned-shell.ts').OwnedShellMount|undefined
       let codeMount:import('@i-harness/code-mode').CodeModeMount|undefined
       let shellExecution:import('@i-harness/exec').ExecExecutionHost|undefined
@@ -1103,20 +1161,24 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       let shellOutput:import('./owned-shell.ts').OwnedShellOutput|undefined
       if(opts.managedRuntime!.ownedShell){let acquiring=true;try{shellOutput=await opts.managedRuntime!.ownedShell.acquireOutput(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original output retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original output cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
       if(opts.managedRuntime!.ownedCode&&!shellOutput){let acquiring=true;try{shellOutput=await opts.managedRuntime!.ownedCode.acquireOutput(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original output retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original output cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
-      const common={...opts.managedRuntime!,context,execution:entry.execution,workspace:opts.workspace,...instructionBinding?{instructionBinding}:{},...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
+      const filesystemPolicy=shellExecution?originalFilesystemPolicyFor(shellExecution,entry.execution):undefined
+      if(opts.managedRuntime!.requireFilesystemPolicy&&!filesystemPolicy)throw TypeError('Original filesystem policy required')
+      const common={...opts.managedRuntime!,...filesystemPolicy?{filesystemPolicy}:{},context,execution:entry.execution,workspace:opts.workspace,...instructionBinding?{instructionBinding}:{},...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})}
-      if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.ownedWorkflow||opts.managedRuntime!.mountDefaultSurface){
-       runtime=await createManagedExecutionRuntimeWithRegistry({...common,async configureRegistry(original){const registrySurface=await opts.managedRuntime!.mountRegistry?.(original);original.assertCurrent();if(opts.managedRuntime!.ownedShell){if(opts.workspace===undefined)throw Error('Original Shell workspace required');shellMount=mountOwnedShell(original,opts.workspace,opts.managedRuntime!.ownedShell,shellOutput!,!!(opts.managedRuntime!.originalFilesystem||opts.managedRuntime!.originalSchedule),shellExecution)}if(opts.managedRuntime!.ownedWorkflow){if(!shellMount||!shellOutput||opts.workspace===undefined)throw Error('Original Workflow Shell and output owners required');workflowMount=mountOwnedWorkflow(original,opts.workspace,shellMount,shellOutput)}if(opts.managedRuntime!.ownedTask){
+      if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.ownedWorkflow||opts.managedRuntime!.ownedRewind||opts.managedRuntime!.mountDefaultSurface){
+       runtime=await createManagedExecutionRuntimeWithRegistry({...common,...opts.managedRuntime!.ownedRewind?{async prepareFilesystem(original:import('./managed-assembly.ts').ManagedRegistryConstruction){const config=opts.managedRuntime!.ownedRewind!;rewindMount=await mountOwnedRewind({domain:original.domain,root:config.root,workspace:config.workspace,assertCurrent:original.assertCurrent,retain:original.retain});original.assertCurrent();if(!rewindMount)return undefined;const recorder=rewindMount.recorder,take=recorder.take;return {take(path:string,before:Uint8Array|null){if(recorder.take!==take)throw Error('Original Rewind recorder changed');const result=Reflect.apply(take,recorder,[path,before]);if(recorder.take!==take)throw Error('Original Rewind recorder changed');return result}}}}:{},async configureRegistry(original){const registrySurface=await opts.managedRuntime!.mountRegistry?.(original);original.assertCurrent();if(opts.managedRuntime!.ownedShell){if(opts.workspace===undefined)throw Error('Original Shell workspace required');shellMount=mountOwnedShell(original,opts.workspace,opts.managedRuntime!.ownedShell,shellOutput!,!!(opts.managedRuntime!.originalFilesystem||opts.managedRuntime!.originalSchedule||opts.managedRuntime!.originalApproval),shellExecution)}if(opts.managedRuntime!.ownedWorkflow){if(!shellMount||!shellOutput||opts.workspace===undefined)throw Error('Original Workflow Shell and output owners required');workflowMount=mountOwnedWorkflow(original,opts.workspace,shellMount,shellOutput)}if(opts.managedRuntime!.ownedTask){
         recipient=receivedExecutionInputsFor(entry.execution).taskDelivery(original.domain)
-        const originalRecipient=recipient,current=()=>{if(retired||closed||closing.has(sessionId)||!runtime||managedRuntimes.get(sessionId)!==runtime)throw new ParentNotificationStoppedError();assertWritableOpen(sessionId)}
-        const notify:ParentInputAdmission={taskEvidence(namespace,id){current();return originalRecipient.taskEvidence(namespace,id)},async prepareTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.prepareTaskLaunch(input);current();return result},async admitTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.admitTask(input.evidence,{text:input.text,description:input.description,display:input.display});current();privateDrain?.signal();return result},async admit(){throw new ParentNotificationStoppedError('Original Task delivery evidence required')},wake(id){if(id!==sessionId)return;try{current();privateDrain?.signal()}catch{/* Retired original parent cannot be woken. */}}}
-        const taskOptions=await opts.managedRuntime!.ownedTask.options(original,{...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()
+        const originalRecipient=recipient,current=()=>{if(retired||closed||closing.has(sessionId)||(published?(!runtime||managedRuntimes.get(sessionId)!==runtime):creating.get(sessionId)!==row))throw new ParentNotificationStoppedError();original.domain.assertCurrent();assertWritableOpen(sessionId)}
+        managedRecipients.set(sessionId,recipient);managedPrepubSettlers.set(sessionId,async()=>{await workflowMount?.reconcileCapturedHandoffs();await taskLifecycle?.journal()})
+        const notify:ParentInputAdmission={taskEvidence(namespace,id){current();return originalRecipient.taskEvidence(namespace,id)},async prepareTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.prepareTaskLaunch(input);current();return result},async admitTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.admitTask(input.evidence,{text:input.text,description:input.description,display:input.display});current();privateDrain?.signal();return result},async admitTeamDelivery(evidence){current();const result=await originalRecipient.admitTeam(evidence);current();if(assertOriginalTeamDeliveryReceipt(evidence,result)==='pending'&&published)privateDrain?.signal();return result},async admit(){throw new ParentNotificationStoppedError('Original Task delivery evidence required')},wake(id){if(id!==sessionId||!published)return;try{current();privateDrain?.signal()}catch{/* Retired original parent cannot be woken. */}}}
+        taskNotify=notify
+        const taskOptions=await opts.managedRuntime!.ownedTask.options(original,{...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{},...codeConfig?{codeConfig}:{}});original.assertCurrent()
         taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,...workflowMount?{workflow:workflowMount.executor}:{},managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify,deferRestoredWork:true,getParentModel:()=>{const model=taskOptions.parentModel??(runtime?runtime.selectedModelBinding().model:initialTaskModel);if(!model)throw Error('Original parent model not bound');return model}})
         const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt,activate=mounted.activateRestoredWork,catalogReady=mounted.catalogReady,ready=mounted.ready,project=mounted.projectTasks.bind(mounted),table=mounted.table,jobs=mounted.jobs,tasks=mounted.tasks,entriesMethod=table.entries,getMethod=table.get,listJobsMethod=jobs.listAll,listTasksMethod=tasks.list,tableGet=getMethod.bind(table),kill=jobs.kill.bind(jobs)
         taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready,projectTasks(){const check=()=>{if(table.entries!==entriesMethod||table.get!==getMethod||jobs.listAll!==listJobsMethod||tasks.list!==listTasksMethod)throw Error('Original Task projection changed')};check();const rows=project();check();return rows},cancelTask(id:string){const entry=tableGet(id);if(entry!==undefined){if(entry.status!=='running')return 'already-finished';entry.controller.abort();return entry.jobId!==undefined?kill(entry.jobId):'cancellation-requested'}return kill(id)}})
         original.retain(taskLifecycle.dispose);await catalogReady;original.assertCurrent()
-       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},opts.managedRuntime!.ownedCode.config)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),...taskMount?{task:taskMount}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
+       }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},codeConfig!)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),modelBinding:()=>{original.assertCurrent();const selected=runtime?runtime.selectedModelBinding():initialBinding;if(!selected)throw Error('Original parent model not bound');return selected},retainTeamRecovery(handle,port){original.assertCurrent();if(row.teamRecovery||!isOriginalTeamRecoveryPort(port,original.domain,handle))throw TypeError('Original Team recovery port required');const resume=Object.getOwnPropertyDescriptor(port,'resume')?.value,close=Object.getOwnPropertyDescriptor(port,'close')?.value;if(typeof resume!=='function'||typeof close!=='function')throw TypeError('Original Team recovery methods required');const gate=Promise.withResolvers<void>();void gate.promise.catch(()=>{});row.teamRecovery={domain:original.domain,handle,port,resume,close,gate,pending:false,stopped:false};original.retain(()=>Reflect.apply(close,port,[]))},...taskMount?{task:taskMount}:{},...taskNotify?{parentNotify:taskNotify}:{},...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialBinding=selected;initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}if(surface&&types.isProxy(surface))throw TypeError('Original default surface required');const activate=surface&&Object.getOwnPropertyDescriptor(surface,'activateAfterTaskReady');if(activate){if(!taskMount||!('value'in activate)||typeof activate.value!=='function'||types.isProxy(activate.value))throw TypeError('Original staged Team activation required');try{await Reflect.apply(activate.value,surface,[])}catch(error){const state=row.teamRecovery;if(!(error instanceof TeamMountRecoveryRequired)||!state||state.handle!==error.handle||!isOriginalTeamRecoveryPort(state.port,original.domain,state.handle))throw error;state.pending=true;const notify=opts.managedRuntime!.onTeamRecoveryRequired;if(!notify){state.pending=false;throw new AggregateError([error,Error('Team recovery notification unavailable')],'Team recovery cannot await retry',{cause:error})}try{notify(sessionId)}catch(notification){state.pending=false;throw new AggregateError([error,notification],'Team recovery notification failed',{cause:error})}await state.gate.promise}original.assertCurrent();if(Object.getOwnPropertyDescriptor(surface!,'activateAfterTaskReady')?.value!==activate.value)throw Error('Original staged Team activation changed')}return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
       assertWritableOpen(sessionId)
@@ -1126,14 +1188,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         privateDrain=createDeliveryDrain({
           current:()=>!retired&&!closed&&!closing.has(sessionId)&&!failedClose.has(sessionId)&&managedRuntimes.get(sessionId)===published,
           reconcile:async()=>{await taskLifecycle?.drain();await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates();await originalRecipient.reconcileWorkflowCandidates()},
-          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent','session.delivery.workflow'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
+          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent','session.delivery.workflow','session.delivery.team'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
           schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,settled);return true},
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
         })
         const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','workflow/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled'].includes(event.type))drain.signal()})
         unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
       }
-      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
+      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);published=true;managedPrepubSettlers.delete(sessionId);if(rewindMount)managedRewinds.set(sessionId,{handle:rewindMount,runtime});if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
       publishManaged(sessionId,runtime)
       privateDrain?.signal()
       return runtime
@@ -1155,7 +1217,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     })
   }
   function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
-    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)) : submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)
+    const run=async()=>{if(!options?.prepareInput&&!deliveryOwner)await prepareFirstParty(sessionId);validateFirstParty(sessionId);return submitUnfenced(sessionId,prompt,signal,options,deliveryOwner)}
+    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, run) : run()
   }
   function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
     if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))return Promise.reject(Error('Private entry cannot switch to Session-shaped compatibility'))
@@ -1460,6 +1523,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   function cancelRunning(sessionId: string): { cancelled: boolean } {
+    const teamStopped=stopTeamRecovery(sessionId)
     requestDeliveryStop(sessionId)
     const code=managedCodeMounts.get(sessionId)
     const priorCodeStop=managedCodeStops.get(sessionId)
@@ -1477,7 +1541,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const record = postTurn ?? (current === undefined
       ? [...(records?.values() ?? [])].filter(r => r.state === "wait").sort((a, b) => a.order - b.order)[0]
       : records?.get(current.inputId))
-    if (record === undefined || record.controller.signal.aborted) return { cancelled: false }
+    if (record === undefined || record.controller.signal.aborted) return { cancelled: teamStopped }
     record.controller.abort()
     stopNotifications(sessionId)
     if (current === undefined) record.state = "cancelled"
@@ -1489,6 +1553,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
   const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
+    stopTeamRecovery(sessionId)
     retireManaged(sessionId)
     pendingExecutionNotifications.get(sessionId)?.();pendingExecutionNotifications.delete(sessionId)
     creating.get(sessionId)?.residentActivation.retire()
@@ -1508,7 +1573,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
   async function closeAll(): Promise<void> {
-    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && privateEntries.size===0 && writableSessions.size === 0 && loadingWriters.size === 0 && notificationStops.size === 0 && !resultReader.size && !defaultInstructions) return
+    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && privateEntries.size===0 && writableSessions.size === 0 && loadingWriters.size === 0 && notificationStops.size === 0 && firstPartyFlights.size===0 && firstPartyRetained.size===0 && !resultReader.size && !defaultInstructions) return
     closed = true
     const stopAttempts = startNotificationStops()
     defaultInstructions?.dispose()
@@ -1518,6 +1583,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const [readerJoined] = await Promise.allSettled([
       resultReader.join(),
       ...active,
+      ...firstPartyFlights.values(),
       ...[...creating.values()].map(row => row.work),
       ...loadingWriters.values(),
       ...modelBindings.values(),
@@ -1555,6 +1621,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if(creating.has(id))continue
       try{await drainManagedIngress(id);await privateCache!.close(id);privateCache!.releaseClosed(id);privateEntries.delete(id)}catch(error){failedClose.add(id);failures.push(error)}
     }
+    for(const id of [...firstPartyRetained])try{await releaseFirstParty(id)}catch(error){failures.push(error)}
     // Retained assembly publications still own pins in this shared source.
     // Reader-only cleanup debt is independent and must not prevent its close.
     if (defaultInstructions && ownedAssemblies().size === 0 && creating.size === 0) {
@@ -1566,10 +1633,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       throw new AggregateError(failures, "Session service process cleanup incomplete")
     }
     if (failure !== undefined) throw failure
-    managedLifecycleListeners.clear();completeSelections.clear()
+    managedLifecycleListeners.clear();completeSelections.clear();firstPartySelections.clear()
   }
 
   function closeSession(sessionId: string): Promise<void> {
+    if(firstPartyFlights.has(sessionId))firstPartyEpochs.set(sessionId,(firstPartyEpochs.get(sessionId)??0)+1)
     revokeSession(sessionId)
     const existing = closing.get(sessionId)
     if (existing !== undefined) return existing
@@ -1578,6 +1646,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     stopNotifications(sessionId, stopAttempts)
     let pending!: Promise<void>
     pending = (async () => {
+      const preflight=firstPartyFlights.get(sessionId);if(preflight)await Promise.allSettled([preflight])
       let readerFailure: unknown
       try { await resultReader.join(sessionId) } catch (error) { readerFailure = error }
       const turn = chains.get(sessionId)
@@ -1598,6 +1667,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         else if(privateEntries.has(sessionId)){await drainManagedIngress(sessionId);await privateCache!.close(sessionId);privateCache!.releaseClosed(sessionId);privateEntries.delete(sessionId)}
         else if (!retainedStopOwner || writableSessions.has(sessionId)) await opts.coordinator?.closeManagedDocument(sessionId)
         if (build && creating.get(sessionId) === build) creating.delete(sessionId)
+        await releaseFirstParty(sessionId)
       }
       catch (error) {
         failedClose.add(sessionId)
@@ -1627,7 +1697,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       executionSubscriptions.delete(sessionId)
       notifyExecutionState(sessionId)
       if (stopFailure !== undefined) throw stopFailure
-      completeSelections.delete(sessionId)
+      completeSelections.delete(sessionId);firstPartySelections.delete(sessionId)
     })().finally(() => {
       if (closing.get(sessionId) === pending) closing.delete(sessionId)
     })
@@ -1637,9 +1707,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const service:SessionService = {
     async refreshExtensions() {
-      if (closed || !opts.extensionsFor) return
+      if (closed) return
       await Promise.allSettled([...creating.values()].map(row => row.work))
-      const jobs = [...assemblies].map(([id, assembly]) => {
+      const jobs = (opts.extensionsFor ? [...assemblies] : []).map(([id, assembly]) => {
         const job = (extensionRefreshes.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
           if (closed || assemblies.get(id) !== assembly) return
           const next = await opts.extensionsFor!(id)
@@ -1660,6 +1730,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         void job.finally(() => { if (extensionRefreshes.get(id) === job) extensionRefreshes.delete(id) }).catch(() => undefined)
         return job
       })
+      if(firstParty?.refresh)for(const [id,runtime] of managedRuntimes){
+        const job=(extensionRefreshes.get(id)??Promise.resolve()).catch(()=>undefined).then(async()=>{
+          if(closed||managedRuntimes.get(id)!==runtime)return
+          await firstParty.refresh!(id)
+          if(closed||managedRuntimes.get(id)!==runtime)throw Error('Original managed runtime retired during plugin refresh')
+        })
+        extensionRefreshes.set(id,job);void job.finally(()=>{if(extensionRefreshes.get(id)===job)extensionRefreshes.delete(id)}).catch(()=>{});jobs.push(job)
+      }
       const results = await Promise.allSettled(jobs)
       const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected")
       if (errors.length) throw new AggregateError(errors.map((result) => result.reason), "Some live plugin updates failed")
@@ -1779,6 +1857,17 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     closeSession,
     close,
   }
+  associateOriginalTeamRetry(service,retryTeamRecovery)
+  const readOriginalRuntime=(id:string)=>{if(!privateEntries.has(id))return undefined;const runtime=managedRuntimes.get(id);if(!runtime||closed||closing.has(id))throw Error('Original managed runtime unavailable');const check=()=>{if(closed||closing.has(id)||managedRuntimes.get(id)!==runtime)throw Error('Original managed runtime retired');runtime.domain.assertCurrent()};check();return Object.freeze({execution:runtime.execution,domain:runtime.domain,tools:runtime.tools,assertCurrent:check})}
+  associateOriginalManagedExecution(service,{read(id){if(!privateEntries.has(id))return undefined;if(closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');const execution=privateCache.current(id);if(!execution)throw Error('Original managed execution unavailable');return execution},runtime:readOriginalRuntime,async prepareRuntime(id){await prepareFirstParty(id);if(!managedCompatible(id)){if(privateEntries.has(id))throw Error('Private entry cannot switch to Session-shaped compatibility');return undefined}validateFirstParty(id);await getManagedRuntime(id);validateFirstParty(id);return readOriginalRuntime(id)},retain(id,execution,cleanup){if(!privateEntries.has(id)||closed||closing.has(id)||!privateCache)throw Error('Original managed execution unavailable');privateCache.retain(id,execution,cleanup)}})
+  associateOriginalManagedRewind(service,id=>{
+    if(!privateEntries.has(id))return undefined
+    const runtime=managedRuntimes.get(id),row=managedRewinds.get(id)
+    if(!runtime||closed||closing.has(id))throw Error('Original managed Rewind unavailable')
+    if(!row||row.runtime!==runtime)return {kind:'unavailable'}
+    const check=()=>{if(closed||closing.has(id)||managedRuntimes.get(id)!==runtime||managedRewinds.get(id)!==row)throw Error('Original managed Rewind retired');runtime.domain.assertCurrent()}
+    return {kind:'ready',store:row.handle.store,assertCurrent:check,async drain(){check();await row.handle.drain();check()},async execute(work){check();const value=await withManagedRewindFacts(runtime.execution,runtime.domain,work);check();return value}}
+  })
   associateOriginalHostAssemblyObserver(service,(listener,options)=>{if(closed)return()=>{};hostAssemblyHooks.add(listener);try{if(options?.includeExisting)for(const [id,assembly] of [...assemblies])if(assemblies.get(id)===assembly)listener(assembly)}catch(error){hostAssemblyHooks.delete(listener);throw error}return()=>{hostAssemblyHooks.delete(listener)}})
   return service
 }
