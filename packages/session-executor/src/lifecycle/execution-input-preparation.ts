@@ -4,6 +4,7 @@ import { isManagedExecutionOwner, readAcknowledgedExecutionMembers, retainAcknow
 import type { ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts'
 import type { AgentGenerationAction } from '@i-harness/core-agent'
 import { generationError } from '@i-harness/llm-seam'
+import { createExecutionGenerationLifecycle } from './generation-actions.ts'
 type Pin = ReturnType<typeof retainAcknowledgedExecutionMembers>
 const proofs = new WeakMap<object, { execution: ManagedExecutionAttachment; inputId: string; actionId: string; pin: Pin }>()
 export function assertExecutionPreparation(execution: ManagedExecutionAttachment, result: PreparedInputResult, actionId: string, inputId: string) {
@@ -52,4 +53,33 @@ export function createExecutionInputPreparationOwner(execution: ManagedExecution
     async cancelUnpromoted(result:PreparedInputResult){const proof=proofs.get(result);if(!proof)throw generationError('GENERATION_STALE');assertExecutionPreparation(execution,result,proof.actionId,proof.inputId);if(result.claim!=='steer')throw generationError('GENERATION_STALE');if(execution.observe().inbox.isPending(result.inputId))await options.cancel(result.inputId)},
     async close(){await source.close();for(const pin of pins)pin.release();pins.clear();states.clear()},
   }
+}
+
+/** The initial queued input keeps its original action and source alive until
+ * the lane and its model producers have settled. */
+export async function prepareExecutionInput(options:{execution:ManagedExecutionAttachment;sessionId:string;inputId:string;signal:AbortSignal;start:{wall:number;monotonic:number};ready():Promise<void>;retain(close:()=>Promise<void>):void;cancel(id:string):Promise<unknown>;transform?(text:string):Promise<string>;timeoutMs?:number;maxAttempts?:number;passiveGeneration?:import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver}) {
+  const action=options.execution.owner.beginAction(options.signal), decision=Promise.withResolvers<void>()
+  let generation:Awaited<ReturnType<ReturnType<typeof createExecutionGenerationLifecycle>['open']>>|undefined
+  let generations:ReturnType<typeof createExecutionGenerationLifecycle>|undefined
+  let preparations:ReturnType<typeof createExecutionInputPreparationOwner>|undefined
+  let generationClosed=false,finished=false,drained=false,preparationClosed=false
+  const close=async()=>{
+    if(!generationClosed){let closing:Promise<void>|undefined;try{closing=generation?.close(options.signal.aborted?'stopped':'failed')}finally{decision.resolve()}await closing;generationClosed=true}
+    if(!finished){action.finish();finished=true}
+    if(!drained){await generations?.drain();drained=true}
+    if(!preparationClosed){await preparations?.close();preparationClosed=true}
+  }
+  options.retain(close)
+  try{
+    generations=createExecutionGenerationLifecycle(options.execution,options.sessionId,action,undefined,{beforeDrain:()=>decision.promise,...(options.passiveGeneration?{passiveGeneration:options.passiveGeneration}:{})})
+    preparations=createExecutionInputPreparationOwner(options.execution,action,{transform:options.transform,cancel:options.cancel})
+    const input=options.execution.observe().inbox.pending().find(value=>value.inputId===options.inputId)
+    if(!input)throw generationError('GENERATION_STALE')
+    await options.ready()
+    options.signal.throwIfAborted();action.assertOpen()
+    const origin=input.intent==='system'?{kind:'observation-input' as const,seq:input.admittedSeq,inputId:input.inputId}:{kind:'input' as const,seq:input.admittedSeq}
+    generation=await generations.open('main',origin,{signal:options.signal,start:options.start,timeoutMs:options.timeoutMs,maxAttempts:options.maxAttempts})
+    const preparation=await preparations.prepare(input.inputId,generation)
+    return {generation,preparation,close}
+  }catch(error){try{await close()}catch(saving){throw new AggregateError([error,saving],'Private input preparation requires recovery',{cause:error})}throw error}
 }

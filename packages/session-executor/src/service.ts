@@ -34,6 +34,7 @@ import { createDeliveryDrain, isRetryableDeliveryError } from './service/deliver
 import { readOwnedDeliveryState } from '../../core-session/src/managed/view.ts'
 import { readDeliveryIndex } from '../../core-session/src/conversation/delivery.ts'
 import { prepareInputExecution } from './lifecycle/input-preparation.ts'
+import { prepareExecutionInput } from './lifecycle/execution-input-preparation.ts'
 import { runManualGeneration } from './lifecycle/manual-generation.ts'
 import { completeSubmission } from './service/submission-completion.ts'
 import { runPostSubmit } from './service/post-submit.ts'
@@ -126,7 +127,7 @@ type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'asser
 
 export interface SessionServiceOptions extends AssemblyOptions {
   /** Internal explicit-tool managed composition; not the default feature builder. */
-  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'> & {
+  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'> & {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
   }
@@ -307,6 +308,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const selectComplete=(id:string)=>{if(privateEntries.has(id))throw Error('Private entry requires explicit complete compatibility adapter');completeSelections.add(id)}
   const privateCache=opts.coordinator?createExecutorExecutionCache({coordinator:opts.coordinator,assertOpen:assertWritableOpen}):undefined
   const privateEntries=new Set<string>()
+  const managedIngress=new Map<string,Set<()=>Promise<void>>>()
+  async function drainManagedIngress(id:string){const entries=managedIngress.get(id);if(!entries)return;for(const close of [...entries]){await close();entries.delete(close)}if(!entries.size)managedIngress.delete(id)}
   type SurfaceLifecycle = { sessionId: string; assembly: SessionAssembly; kind: "published" | "retiring" | "removed" }
   const surfaceListeners = new Set<(event: SurfaceLifecycle) => void>()
   const retiredSurfaces = new WeakSet<SessionAssembly>()
@@ -705,7 +708,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if(requirements?.completePreparation){selectComplete(sessionId);return undefined}
     if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))throw Error('Private entry cannot switch to Session-shaped compatibility')
     if(!managedCompatible(sessionId)){selectComplete(sessionId);return undefined}
-    if(requirements?.supplementalContext)throw Error('Private supplemental context requires original owned preparation')
     if(!privateCache)throw Error('Managed runtime requires original coordinator')
     privateEntries.add(sessionId)
     const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
@@ -978,7 +980,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     creating.set(sessionId,row);privateEntries.add(sessionId)
     let runtime:ManagedRuntime|undefined
     const mounted=new Set<()=>void|Promise<void>>()
-    row.cleanup=async()=>{await runtime?.close();for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);privateEntries.delete(sessionId)}
+    row.cleanup=async()=>{await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);privateEntries.delete(sessionId)}
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
       const context=createContext()
@@ -994,7 +996,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const reasoningEffort=binding?.status==='ready'?binding.binding.reasoningEffort:opts.reasoningEffortFor===undefined?opts.reasoningEffort:opts.reasoningEffortFor(sessionId,meta)
       assertWritableOpen(sessionId)
       if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
-      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,context,execution:entry.execution,model,contextWindow,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
+      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,context,execution:entry.execution,model,contextWindow,workspace:opts.workspace,retainConstructionCleanup:cleanup=>mounted.add(cleanup),maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         reasoningEffort,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})})
@@ -1010,7 +1012,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
     if(privateEntries.has(sessionId)&&!managedCompatible(sessionId))return Promise.reject(Error('Private entry cannot switch to Session-shaped compatibility'))
     if(managedCompatible(sessionId)&&(options?.prepareInput||deliveryOwner))return Promise.reject(Error('Session-shaped input preparation requires complete compatibility before private acquisition'))
-    if(managedCompatible(sessionId)&&options?.context!==undefined)return Promise.reject(Error('Private supplemental context requires original owned preparation'))
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     const clientToken = options?.clientToken
@@ -1089,19 +1090,27 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         return
       }
       let preparedInput: Awaited<ReturnType<typeof prepareInputExecution>> | undefined
+      let preparedManaged: Awaited<ReturnType<typeof prepareExecutionInput>> | undefined
+      let closeManaged:(()=>Promise<void>)|undefined
+      const managedStart = { wall: Date.now(), monotonic: performance.now() }
       void completeSubmission(async () => {
         const input: AdmittedInput = { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
           ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }
         if(managedCompatible(sessionId)){
           if(options?.prepareInput||deliveryOwner)throw Error('Session-shaped input preparation requires complete compatibility before private acquisition')
           const inbox=await receivedInputFor(sessionId)
-          if(options?.admittedInputId){const original=inbox.pending().find(p=>p.inputId===id);if(!original)return;if(original.text!==prompt)throw Error('Admitted input does not match submitted text');if(original.supplementalContext!==undefined)throw Error('Private supplemental context requires original owned preparation')}
+          if(options?.admittedInputId){const original=inbox.pending().find(p=>p.inputId===id);if(!original)return;if(original.text!==prompt)throw Error('Admitted input does not match submitted text')}
           else await inbox.admit(input,controller.signal)
           controller.signal.throwIfAborted();assertWritableOpen(sessionId)
-          const runtime=await getManagedRuntime(sessionId)
-          controller.signal.throwIfAborted();assertWritableOpen(sessionId)
-          record.state='queued'
-          await runtime.lane.runAdmitted(id,controller.signal)
+          const entry=await privateCache!.get(sessionId)
+          let runtime:ManagedRuntime | undefined
+          let preparationReady=false
+          preparedManaged=await prepareExecutionInput({execution:entry.execution,sessionId,inputId:id,signal:controller.signal,start:managedStart,
+            ready:async()=>{runtime=await getManagedRuntime(sessionId);controller.signal.throwIfAborted();assertWritableOpen(sessionId);preparationReady=true},
+            retain:close=>{let entries=managedIngress.get(sessionId);if(!entries){entries=new Set();managedIngress.set(sessionId,entries)}entries.add(close);closeManaged=async()=>{try{await close()}catch(error){failedClose.add(sessionId);throw error}entries!.delete(close);if(!entries!.size)managedIngress.delete(sessionId)}},
+            cancel:inputId=>preparationReady&&!closed&&!closing.has(sessionId)?inbox.cancel(inputId,'input preparation did not reach promotion'):Promise.resolve(false),transform:opts.managedRuntime?.prepareInput,timeoutMs:opts.modelActionTimeoutMs,maxAttempts:opts.modelActionMaxAttempts,passiveGeneration:opts.passiveGeneration})
+          try{controller.signal.throwIfAborted();assertWritableOpen(sessionId);record.state='queued';await runtime!.lane.runAdmitted(id,controller.signal,{generation:preparedManaged.generation,preparation:preparedManaged.preparation})}
+          catch(error){if(!closed&&!closing.has(sessionId))try{await inbox.cancel(id,'generation ended before promotion')}catch(saving){throw new AggregateError([error,saving],'Private input cancellation requires recovery',{cause:error})}throw error}
           return
         }
         const priorAssembly = liveAssembly(sessionId), priorDocument = priorAssembly?.managedDocument
@@ -1167,7 +1176,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             })
           } finally { delete record.postTurn }
         }
-      }, () => preparedInput?.close(), {
+      }, () => closeManaged?.() ?? preparedInput?.close(), {
         resolve: settle, reject: settleError,
         report(error) {
           if (!signal.aborted && !closed) telemetry?.emit({ type: 'session/error', ts: Date.now(), data: { sessionId, ...failureDiagnostics(error) } })
@@ -1375,7 +1384,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     }
     for(const id of [...privateEntries]){
       if(creating.has(id))continue
-      try{await privateCache!.close(id);privateCache!.releaseClosed(id);privateEntries.delete(id)}catch(error){failedClose.add(id);failures.push(error)}
+      try{await drainManagedIngress(id);await privateCache!.close(id);privateCache!.releaseClosed(id);privateEntries.delete(id)}catch(error){failedClose.add(id);failures.push(error)}
     }
     // Retained assembly publications still own pins in this shared source.
     // Reader-only cleanup debt is independent and must not prevent its close.
@@ -1417,7 +1426,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       try {
         if (handle) await disposeOwnedAssembly(handle)
         else if (build?.cleanup) await build.cleanup()
-        else if(privateEntries.has(sessionId)){await privateCache!.close(sessionId);privateCache!.releaseClosed(sessionId);privateEntries.delete(sessionId)}
+        else if(privateEntries.has(sessionId)){await drainManagedIngress(sessionId);await privateCache!.close(sessionId);privateCache!.releaseClosed(sessionId);privateEntries.delete(sessionId)}
         else if (!retainedStopOwner || writableSessions.has(sessionId)) await opts.coordinator?.closeManagedDocument(sessionId)
         if (build && creating.get(sessionId) === build) creating.delete(sessionId)
       }
