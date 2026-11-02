@@ -1,3 +1,5 @@
+import { isManagedExecutionSource, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
+import type { CodeModeFactOwner } from './facts.ts'
 import { randomUUID, createHash } from 'node:crypto'
 import { CODE_OUTPUT_DIGEST_DOMAIN, encodeCodeOutputRecord, canonicalJsonData, isNondurableSession, isOwnedSettlementSource, type CodeOutputDescriptor, type CodeOutputFooter, type FactOwner, type CodeOutputMember, type ManagedArtifactRef } from '@i-harness/core-session'
 import { inspectCodeOutputManifest, inspectCodeOutputManifestReceipt } from '../../output-retention/src/result/code-output-manifest.ts'
@@ -27,7 +29,7 @@ export function observeOriginalCodeFinalOutputs(mount:object, listener:(id:strin
   return registry.observe(listener)
 }
 /** Existing mount owns the actual independent sources and pending frontiers. */
-export function createFinalCodeOutputs(owner: FactOwner, factory: CodeFinalOutputFactory | undefined, drive:()=>Promise<void>, onAcknowledged?:(id:string)=>void) {
+export function createFinalCodeOutputs(owner: CodeModeFactOwner, factory: CodeFinalOutputFactory | undefined, drive:()=>Promise<void>, onAcknowledged?:(id:string)=>void, domain?:ManagedExecutionDomain, formatVersion?:number) {
   type Slot = { lifetime?:ReturnType<typeof createFinalOutputLifetime<FinalCodeOutputPortResult,CodeFinalOutputPort>>; port?:CodeFinalOutputPort; runtime:OriginalCellFinalization; count:number; unavailable:number; digest:ReturnType<typeof createHash>; full:ReturnType<typeof createHash>; bytes:number; header:ReturnType<typeof headerFor>; footer?:CodeOutputFooter; evidence?:CompletionEvidence; last?:WeakRef<object>; store:CodeOutputMember|null; failed?:true; cause?:unknown; sealed:boolean;sealedGate:ReturnType<typeof Promise.withResolvers<void>>;handle:{settle():Promise<FinalCodeOutputDisposition>} }
   type FinalCodeOutputPortResult = FinalCodeOutputDisposition
   const slots = new Map<string,Slot>()
@@ -39,7 +41,7 @@ export function createFinalCodeOutputs(owner: FactOwner, factory: CodeFinalOutpu
     captureCompletion(id:string) { const slot=slots.get(id);return slot && {settle:slot.handle.settle,evidence:()=>slot.evidence} },
     retains(id:string) { return slots.has(id) },
     reserve(cellId:string, sessionId:string|undefined, original:OriginalCellFinalization, runtime:OriginalCellFinalization, instruction:boolean) {
-      if (!factory || !sessionId || instruction || isNondurableSession(owner.view) || owner.view.formatVersion!==14) return
+      if (!factory || !sessionId || instruction || (domain ? formatVersion!==14 : isNondurableSession((owner as FactOwner).view) || (owner as FactOwner).view.formatVersion!==14)) return
       if(slots.has(cellId))throw new Error('Original Code output cell still owned')
       const sourceId = randomUUID()
       const header=headerFor(sessionId,cellId,sourceId),head=encodeCodeOutputRecord(header)
@@ -71,7 +73,7 @@ export function createFinalCodeOutputs(owner: FactOwner, factory: CodeFinalOutpu
       if (!('cellId' in event)) return
       const slot = slots.get(event.cellId)
       if (!slot) return
-      if(!isOwnedSettlementSource(owner.view,proof.source))throw new Error('Foreign Code queue source')
+      if(domain?!isManagedExecutionSource(domain,proof.source):!isOwnedSettlementSource((owner as FactOwner).view,proof.source))throw new Error('Foreign Code queue source')
       if(slot.failed) {if(event.type==='code/cell'){slot.sealed=true;slot.sealedGate.resolve();return}throw slot.cause}
       proof.source.assertHeld()
       if (proof.outcome.kind !== 'committed' || proof.outcome.seqs.length !== 1) throw new Error('Original durable Code member required')

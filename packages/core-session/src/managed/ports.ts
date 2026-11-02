@@ -117,6 +117,7 @@ export interface ManagedAction<Outcome = FactOutcome> {
   readonly signal: AbortSignal
   readonly facts: FactPorts<Outcome>
   captureContextReduction?(draft: import('./groups.ts').ContextReductionDraft, checkCurrent: () => boolean): CapturedActionFact<Outcome>
+  captureCodeCall?(event: Event<'code/call'>, source:SettlementFacts<Outcome>): CapturedActionFact<Outcome>
   captureCodeStore(event: Event<'code/store'>): CapturedActionFact<Outcome>
   captureTeamTransaction(events: readonly TeamFact[]): CapturedActionFact<Outcome>
   captureSubagentStart(event: Event<'subagent/start'>, binding?:import('../events/delivery.ts').SubagentDeliveryLaunchDraft): CapturedActionFact<Outcome>

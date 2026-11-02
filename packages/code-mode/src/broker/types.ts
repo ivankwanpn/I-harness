@@ -2,7 +2,7 @@ import type { PreparedCall, RetainedToolOutcome, Tool, ToolResult, InstructionCe
 import type { ManagedAction, SettlementFacts, CapturedSettlementFact, ProducerFactOutcome } from '@i-harness/core-session'
 import type { CodeModeInvocation } from '../types.ts'
 
-export interface Cell { tools: Map<string, Tool>; stop: AbortController; seen: Set<string>; preflights: Set<Promise<void>>; instructionOrigin?: InstructionCellOrigin; replan?: InstructionReplanData; terminalCommitted?: boolean; ending: ReturnType<typeof Promise.withResolvers<void>>; finishing?: Promise<void>; finished?: true }
+export interface Cell { admissionAction?:ManagedAction<import('@i-harness/core-session').FactOutcome>; delegation?:import('@i-harness/core-tools/internal/code-origin').PrivateCodeCellDelegation; tools: Map<string, Tool>; stop: AbortController; seen: Set<string>; preflights: Set<Promise<void>>; instructionOrigin?: InstructionCellOrigin; replan?: InstructionReplanData; terminalCommitted?: boolean; ending: ReturnType<typeof Promise.withResolvers<void>>; finishing?: Promise<void>; finished?: true }
 export interface Queued {
   call: CodeModeInvocation; tool: Tool; signal: AbortSignal; eventSeq?: number
   resolve(value: unknown): void; reject(error: unknown): void; unsubscribe(): void
@@ -14,5 +14,9 @@ export interface Queued {
   prepared?: PreparedCall; retained?: RetainedToolOutcome; recoveryCause?: unknown; completion?: Promise<unknown>
   capture?: CapturedToolCall; instructionOrigin?: AcceptedInstructionCall; captureFailure?: unknown
   generation?: import('@i-harness/core-tools').CodeGenerationScope
+  callPin?:ReturnType<typeof import('@i-harness/core-session/internal/execution').retainAcknowledgedExecutionMembers>
+  callCapture?:import('@i-harness/core-session').CapturedActionFact<ProducerFactOutcome>; callOutcome?:Extract<ProducerFactOutcome,{kind:'committed'}>
   result?: CapturedSettlementFact<ProducerFactOutcome>
 }
+
+

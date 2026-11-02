@@ -4,7 +4,7 @@ import {types} from 'node:util'
 
 /** Optional action captures retain their original disposition after Stop.
  * Their read/reconcile handles never gain required-settlement admission. */
-export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureLifecycle' | 'captureMetadata' | 'captureToolDispatch' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureCodeDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
+export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureLifecycle' | 'captureMetadata' | 'captureToolDispatch' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeCall' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureCodeDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
   const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => forwardSettlementCapture(retained,{
     admit: ()=>retained.admit(), reconcile: ()=>retained.reconcile(), observe: ()=>retained.observe(),
   })
@@ -57,6 +57,10 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
     },
     captureContextReduction(draft, checkCurrent) {
       return validContextReductionDraft(draft) ? actionHandle(captureSettlementFact(draft, guarded(checkCurrent), true)) : invalidReduction()
+    },
+    captureCodeCall(event) {
+      operations.assertHeld()
+      return strictType(event, 'code/call') ? actionHandle(captureSettlementFact({kind:'code',event},operations,true)) : invalid()
     },
     captureCodeStore(event) {
       operations.assertHeld()

@@ -462,3 +462,16 @@ it('resolves V3 page ordinals separately from global row ordinals',async()=>{
  const wire=codecWire(codecSeed('public-completed',[codecPage([rows[0]]),codecPage([rows[1]],1)])),visible=createLegacyReadVisibility(wire);if(visible.kind!=='visible')throw Error('Source unavailable')
  const second={kind:'seed-result' as const,manifestSeq:0 as const,pageOrdinal:1,rowOrdinal:1};expect(visible.resultRow(second,rows[1].extent)).toEqual(rows[1]);expect(visible.resultRow({...second,pageOrdinal:0},rows[1].extent)).toBeUndefined()
 })
+
+it('private Code fold matches V3 inherited page aliases and refuses unavailable cuts',async()=>{
+ const {createExecutionCodeState}=await import('../src/projection/execution-code-state.ts')
+ const exported=addCodecGroups(codecSeed('public-completed',[codecPage([codecRow()])])),wire=codecWire(exported)
+ const fold=createExecutionCodeState(wire.header,'child');fold.append(wire.events,0)
+ expect(fold.snapshot().store).toEqual(replaySessionCodeStore(wire,'child'))
+ const point={type:'rewind/point' as const,version:1 as const,targetTurn:1,anchorSeq:1,mode:'conversation' as const,fileOps:[],seq:wire.events.length}
+ fold.append([point],point.seq);wire.events.push(point)
+ expect(fold.snapshot().store).toEqual(replaySessionCodeStore(wire,'child'))
+ const unavailable=codecWire(codecSeed('public-completed',[codecPage([codecRow()])])),bad=createExecutionCodeState(unavailable.header,'child')
+ bad.append(unavailable.events,0);bad.append([{...point,seq:unavailable.events.length}],unavailable.events.length)
+ expect(()=>bad.snapshot()).toThrow('Unavailable inherited result cut')
+})

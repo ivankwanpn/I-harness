@@ -1,3 +1,4 @@
+import { getManagedExecutionAdmissionWait } from '@i-harness/core-session/internal/execution';
 import { captureRestoredContextSnapshot, readRestoredContextCoordinates } from '../../../context-engine/src/snapshot/build.ts';
 import { projectionFingerprint } from '@i-harness/token-meter';
 import { renderConversation, type ContextBindingMetadata, type ExchangeAcceptedEventV2, type ManagedAction, type FactOutcome, type FactPorts, type ProducerFactOutcome, type SettlementFacts } from '@i-harness/core-session';
@@ -78,7 +79,13 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
         },
         bindAction(originalFacts: FactPorts<FactOutcome>, originalSource: SettlementFacts<FactOutcome>) { facts = originalFacts; source = originalSource; },
         acknowledge(event: ExchangeAcceptedEventV2) { accepted.add(event); },
-        async capture(action: ManagedAction<FactOutcome>) {
+        async capture(action: ManagedAction<FactOutcome>, signal: AbortSignal = action.signal) {
+            for (;;) {
+                signal.throwIfAborted();
+                const wait = getManagedExecutionAdmissionWait(host.domain, action, signal);
+                if (!wait) break;
+                await wait;
+            }
             host.domain.assertCurrent();
             const hooks = host.hooks.capture(), lease = await host.execution.prepareRequest(action);
             leases.add(lease);
@@ -113,12 +120,12 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 throw primary;
             }
         },
-        async refresh(action: ManagedAction<FactOutcome>, expected: RequestEvidence) {
+        async refresh(action: ManagedAction<FactOutcome>, expected: RequestEvidence, signal: AbortSignal = action.signal) {
             if (!capturedEvidence.has(expected))
                 throw TypeError('Original request evidence required');
             if (host.requestContext && !host.requestContext.current(expected.instructions))
                 return undefined;
-            const next = await this.capture(action);
+            const next = await this.capture(action, signal);
             if (!sameRequestCandidate(expected, next) || expected.neutralFingerprint !== next.neutralFingerprint || host.requestContext && !host.requestContext.current(expected.instructions))
                 return undefined;
             const retained = { ...next, instructions: expected.instructions };

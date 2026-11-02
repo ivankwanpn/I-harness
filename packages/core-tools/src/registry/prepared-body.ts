@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
-import { isManagedFactOwner, isNondurableFactOwner, isOwnedSettlementSource, type FactOwner, type SessionView, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
+import { canonicalJsonData, isManagedFactOwner, isNondurableFactOwner, isOwnedSettlementSource, type FactOwner, type SessionView, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
 import type { PluginContext } from '@i-harness/core-plugin'
 import type {ExecutionHookChannel} from '@i-harness/core-plugin'
 import type { PreparedCall, Tool, ToolExec, ToolRegistry } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
 import {registerToolInvocation} from './invocation-domain.ts'
-import {isManagedExecutionDomain,isManagedExecutionSource,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {isManagedExecutionDomain,isManagedExecutionSource,readManagedAcknowledgedMembers,readManagedActionSourceMembers,readManagedSourceCodeDelivery,getManagedExecutionAdmissionWait,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
 export interface ManagedToolExecutionOwnerContext {readonly kind:'managed-execution';readonly domain:ManagedExecutionDomain;readonly context:PluginContext;readonly sessionId:string}
@@ -43,7 +43,7 @@ export function captureExecutionOwnerContext(ctx: PluginContext, value: unknown)
   return Object.freeze({ view,factOwner,context:ctx,...sessionId !== undefined ? {sessionId:sessionId as string} : {} })
 }
 const identityFields = ['session','sessionId','callId','callEventSeq','resultConsumer','modelGeneration'] as const
-type Body = { registry: ToolRegistry; prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; managed?:ManagedToolExecutionOwnerContext;hooks?:PreparedExecutionHooks;foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; claimed: boolean; permit?: { assertCurrent(): void }; attaching?: boolean; entered?: boolean }
+type Body = { registry: ToolRegistry; prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; managed?:ManagedToolExecutionOwnerContext;hooks?:PreparedExecutionHooks;foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; admissionSignal?:AbortSignal; claimed: boolean; permit?: { assertCurrent(): void; getAdmissionWait?(signal:AbortSignal):Promise<void>|undefined }; codeInvocation?: { assertCurrent():void;getAdmissionWait(signal:AbortSignal):Promise<void>|undefined }; attaching?: boolean; entered?: boolean }
 type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal; domain?: object }
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
@@ -67,23 +67,31 @@ function check(body: Body, frame?: Frame) {
   body.hooks?.channel.assertCurrent(body.hooks.surface)
   body.managed?.domain.assertCurrent()
   body.permit?.assertCurrent()
+  body.codeInvocation?.assertCurrent()
   for(const key of ['bindingValidation','authorityValidation','approvalValidation'] as const)if(own(body.prepared,key)!==body.validations[key])throw new Error('Prepared validation changed')
   if (!body.validations.bindingValidation() || body.validations.authorityValidation?.() === false || body.validations.approvalValidation?.() === false) throw new Error('Prepared binding is no longer current')
   if (aborted(body.signal) || frame && (own(body.exec,'abortSignal') !== frame.signal || aborted(frame.signal))) throw new Error('Prepared body aborted')
 }
 export function attachPreparedModelOrigin(prepared: PreparedCall, registry: import('../types.ts').ToolRegistry, proof: object, take: import('../model-origin.ts').ModelOriginTake): void {
   const body = records.get(prepared)
-  if (!body || body.permit || body.attaching || body.entered) throw new Error('Prepared model origin unavailable')
+  if (!body || body.permit || body.codeInvocation || body.attaching || body.entered) throw new Error('Prepared model origin unavailable')
   checkIdentity(body)
   const callId = own(body.exec, 'callId'), callEventSeq = own(body.exec, 'callEventSeq')
   if ((!body.context&&!body.managed) || !body.source || typeof callId !== 'string' || typeof callEventSeq !== 'number') throw new Error('Original model call identity required')
   body.attaching = true
   try {
     const permit = body.managed?take.managed?.(proof,Object.freeze({registry,prepared,domain:body.managed.domain,source:body.source,callId,callEventSeq,name:body.call.name,args:body.call.args})):take.public?.(proof, Object.freeze({registry,prepared,view:body.view!,source:body.source,callId,callEventSeq,name:body.call.name,args:body.call.args}))
-    if (!permit || typeof permit.assertCurrent !== 'function') throw new Error('Invalid model origin permit')
-    const assertCurrent = permit.assertCurrent.bind(permit)
+    if(!permit||body.managed&&types.isProxy(permit))throw new Error('Invalid model origin permit')
+    const assertField=body.managed?Object.getOwnPropertyDescriptor(permit,'assertCurrent'):undefined
+    if(body.managed&&(!assertField||!('value'in assertField)||!assertField.enumerable||typeof assertField.value!=='function'||types.isProxy(assertField.value)||types.isAsyncFunction(assertField.value)))throw Error('Original private permit assertion required')
+    if(!body.managed&&typeof permit.assertCurrent!=='function')throw new Error('Invalid model origin permit')
+    const originalAssert=body.managed?assertField!.value as ()=>void:permit.assertCurrent
+    const assertCurrent=()=>{if(body.managed&&Object.getOwnPropertyDescriptor(permit,'assertCurrent')?.value!==originalAssert)throw Error('Original private permit assertion changed');const result=Reflect.apply(originalAssert,permit,[]);if(body.managed&&result!==undefined)throw Error('Synchronous private permit assertion required')}
+    const field=body.managed?Object.getOwnPropertyDescriptor(permit,'getAdmissionWait'):undefined
+    if(body.managed&&(!field||!('value'in field)||!field.enumerable||typeof field.value!=='function'||types.isProxy(field.value)||types.isAsyncFunction(field.value)))throw Error('Original private admission scheduler required')
+    const getAdmissionWait=field&&'value'in field?field.value as (signal:AbortSignal)=>Promise<void>|undefined:undefined
     assertCurrent()
-    body.permit = Object.freeze({assertCurrent,...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{}})
+    body.permit = Object.freeze({assertCurrent,...getAdmissionWait?{getAdmissionWait(signal:AbortSignal){if(Object.getOwnPropertyDescriptor(permit,'getAdmissionWait')?.value!==getAdmissionWait)throw Error('Original private admission scheduler changed');const wait=Reflect.apply(getAdmissionWait,permit,[signal]);if(wait!==undefined&&!types.isPromise(wait))throw Error('Original private admission wait required');return wait}}:{},...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{}})
   } finally { body.attaching = false }
 }
 export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerConfiguration | undefined, signal: AbortSignal | undefined, registry: ToolRegistry,hooks?:PreparedExecutionHooks): () => Promise<unknown> {
@@ -101,15 +109,15 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
     if (!foreignContext && original.source && (configured.sessionId === undefined || configured.sessionId === prepared.exec.sessionId)) context = configured
   }
   const body: Body = {registry,prepared,tool:prepared.tool,leaf,exec:prepared.exec,call:prepared.call,context,managed,hooks,foreignContext,source:original.source,view:original.view,
-    snapshots:new Map(identityFields.map(key=>[key,Object.getOwnPropertyDescriptor(prepared.exec,key)])),validations:{bindingValidation:prepared.bindingValidation,authorityValidation:prepared.authorityValidation,approvalValidation:prepared.approvalValidation},signal,claimed:false}
+    snapshots:new Map(identityFields.map(key=>[key,Object.getOwnPropertyDescriptor(prepared.exec,key)])),validations:{bindingValidation:prepared.bindingValidation,authorityValidation:prepared.authorityValidation,approvalValidation:prepared.approvalValidation},signal,admissionSignal:managed?(signal??new AbortController().signal):undefined,claimed:false}
   records.set(prepared,body);byExec.set(body.exec,body)
   registerToolInvocation(body.exec,body.managed?.context??body.context?.context,body.managed?.domain,body.source,()=>{check(body);if(aborted(own(body.exec,'abortSignal') as AbortSignal|undefined))throw Error('Original tool invocation aborted')},true)
   return async () => {
     body.hooks?.channel.assertCurrent(body.hooks.surface)
-    if(body.managed&&!body.permit)throw new Error('Original private model member required')
-    if (body.permit) { checkIdentity(body); if (body.entered) throw new Error('Model body already entered'); body.permit.assertCurrent() }
+    if(body.managed&&!body.permit&&!body.codeInvocation)throw new Error('Original private invocation required')
+    if (body.permit||body.codeInvocation) { checkIdentity(body); if (body.entered) throw new Error('Original body already entered'); (body.permit??body.codeInvocation)!.assertCurrent() }
     body.entered = true
-    const frame:Frame={body,parent:body.permit ? undefined : active.getStore(),active:true,signal:own(body.exec,'abortSignal') as AbortSignal | undefined,
+    const frame:Frame={body,parent:body.permit||body.codeInvocation ? undefined : active.getStore(),active:true,signal:own(body.exec,'abortSignal') as AbortSignal | undefined,
       domain:body.managed?.domain.owner??(body.view && body.source && isOwnedSettlementSource(body.view,body.source)?body.view:undefined)}
     return active.run(frame,async()=>{try{return await leaf.call(body.tool,body.call.args as never,body.exec)}finally{frame.active=false}})
   }
@@ -124,6 +132,8 @@ export function preparedManagedExecutionDomain(prepared:PreparedCall){const body
  * expired. Fresh callback/body entry still asserts the captured surface. */
 export function preparedExecutionHooks(prepared:PreparedCall){const body=records.get(prepared);if(body?.hooks)checkIdentity(body);return body?.hooks}
 export function assertPreparedModelOriginCurrent(prepared:PreparedCall){const body=records.get(prepared);if(!body?.managed)return;checkIdentity(body);body.hooks?.channel.assertCurrent(body.hooks.surface);if(!body.permit)throw Error('Original private model member required');body.permit.assertCurrent()}
+export function assertPreparedInvocationCurrent(prepared:PreparedCall){const body=records.get(prepared);if(!body?.managed)return;checkIdentity(body);body.hooks?.channel.assertCurrent(body.hooks.surface);if(body.permit)body.permit.assertCurrent();else if(body.codeInvocation)body.codeInvocation.assertCurrent();else throw Error('Original private invocation required')}
+export function getPreparedInvocationAdmissionWait(prepared:PreparedCall):Promise<void>|undefined{const body=records.get(prepared);if(!body)throw Error('Foreign prepared execution');if(!body.managed)return;checkIdentity(body);body.hooks?.channel.assertCurrent(body.hooks.surface);if(!body.permit&&!body.codeInvocation)throw Error('Original private model member required');if(body.entered||body.permit&&body.codeInvocation)throw Error('Original unentered private invocation required');const wait=body.permit?.getAdmissionWait??body.codeInvocation?.getAdmissionWait;if(!wait)throw Error('Original private admission scheduler required');return wait.call(body.permit??body.codeInvocation,body.admissionSignal!)}
 export function assertPreparedExecutionOwnerContext(prepared: PreparedCall, context: ToolExecutionOwnerContext | undefined): void {
   if (preparedExecutionOwnerContext(prepared) !== context) throw new Error('Original prepared execution context required')
 }
@@ -166,10 +176,13 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
   return entry
 }
 
-export interface PreparedCodeBodyClaim extends PreparedBodyClaim {
+export interface PreparedCodeBodyClaim<T extends ToolExecutionOwnerConfiguration=ToolExecutionOwnerContext> extends Omit<PreparedBodyClaim,'context'> {
+  readonly context:T
+  retainPrivateCell?():PrivateCodeCellDelegation
   takeCodeSourceIssuer(): import('../model-origin.ts').OriginalCodeSourceIssuer | undefined
   hasCodeSourceIssuer(): boolean
 }
+export interface PrivateCodeCellDelegation { assertOpen():void; bind(cellId:string,source:SettlementFacts<ProducerFactOutcome>,capture:object,outcome:Extract<import('@i-harness/core-session').FactOutcome,{kind:'committed'}>):void; attach(prepared:PreparedCall,action:import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>,source:SettlementFacts<ProducerFactOutcome>,capture:object,outcome:Extract<import('@i-harness/core-session').FactOutcome,{kind:'committed'}>):void; revoke():void }
 type CodeRegistration = {registry:ToolRegistry;tool:Tool;leaf:Tool['execute'];current():boolean}
 const codeCatalogs=new WeakMap<ToolRegistry,(tool:Tool)=>{tool:Tool;executeBinding:Tool['execute'];bindingGeneration:number;bindingValidation():boolean}>()
 const codeRegistrations=new WeakMap<object,CodeRegistration>()
@@ -188,32 +201,45 @@ export function captureCodeRegistration(registry:ToolRegistry,tool:Tool,leaf:Too
  codeRegistrations.set(witness,{registry,tool,leaf,current:binding.bindingValidation});return witness
 }
 /** Trusted constructor primitive. Code mount provenance stays private in code-mode. */
-export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness,exec:ToolExec,owner:Readonly<{context:PluginContext;view:SessionView;factOwner:FactOwner;sessionId:string}>):PreparedCodeBodyClaim|undefined{
+export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness,exec:ToolExec,owner:ManagedToolExecutionOwnerContext):PreparedCodeBodyClaim<ManagedToolExecutionOwnerContext>|undefined
+export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness,exec:ToolExec,owner:Readonly<{context:PluginContext;view:SessionView;factOwner:FactOwner;sessionId:string}>):PreparedCodeBodyClaim|undefined
+export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness,exec:ToolExec,owner:Readonly<{context:PluginContext;view:SessionView;factOwner:FactOwner;sessionId:string}>|ManagedToolExecutionOwnerContext):PreparedCodeBodyClaim<ToolExecutionOwnerConfiguration>|undefined{
  if(!registration||types.isProxy(registration)||types.isProxy(exec)||!owner||types.isProxy(owner))throw TypeError('Original Code invocation required')
  const original=codeRegistrations.get(registration);if(!original||!original.current())throw Error('Original Code registration expired')
  const fields=Object.getOwnPropertyDescriptors(owner)
- if(Reflect.ownKeys(fields).length!==4||!['context','view','factOwner','sessionId'].every(key=>fields[key]&&'value'in fields[key]!&&fields[key]!.enumerable))throw TypeError('Closed original Code owner required')
+ const managed=fields.kind&&'value'in fields.kind&&fields.kind.value==='managed-execution'
+ const keys=managed?['kind','context','domain','sessionId']:['context','view','factOwner','sessionId']
+ if(Reflect.ownKeys(fields).length!==4||!keys.every(key=>fields[key]&&'value'in fields[key]!&&fields[key]!.enumerable))throw TypeError('Closed original Code owner required')
  const body=byExec.get(exec),frame=active.getStore()
  if(!body){if(frame?.active)throw Error('Foreign prepared exec');return}
  if(!frame?.active||frame.body!==body||body.registry!==original.registry||body.tool!==original.tool||body.leaf!==original.leaf||body.call.name!=='code_exec')throw Error('Not the original registered Code body')
- const current=()=>{if(!original.current())throw Error('Original Code registration expired');check(body,frame);if(body.foreignContext||body.context?.context!==owner.context||body.context?.view!==owner.view||body.context?.factOwner!==owner.factOwner||body.context?.sessionId!==owner.sessionId||body.exec.session!==owner.view||body.exec.sessionId!==owner.sessionId)throw Error('Foreign original Code owner')}
+ const current=()=>{if(!original.current())throw Error('Original Code registration expired');check(body,frame);if(body.foreignContext||body.exec.sessionId!==owner.sessionId)throw Error('Foreign original Code owner');if(managed){const privateOwner=owner as ManagedToolExecutionOwnerContext;if(body.managed?.domain!==privateOwner.domain||body.managed.context!==privateOwner.context||body.managed.sessionId!==privateOwner.sessionId||body.exec.session!==undefined||!isManagedExecutionDomain(privateOwner.domain,privateOwner.context))throw Error('Foreign original Code owner')}else{const publicOwner=owner as ToolExecutionOwnerContext;if(body.context?.context!==publicOwner.context||body.context?.view!==publicOwner.view||body.context?.factOwner!==publicOwner.factOwner||body.context?.sessionId!==publicOwner.sessionId||body.exec.session!==publicOwner.view)throw Error('Foreign original Code owner')}}
  check(body,frame)
  if(body.foreignContext)throw Error('Foreign prepared Code owner')
- if(!body.source||!body.context||!frame.domain||!body.permit||body.exec.resultConsumer==='code')return
+ if(!body.source||!(managed?body.managed:body.context)||!frame.domain||!body.permit||body.exec.resultConsumer==='code')return
  current()
  if(body.claimed)throw Error('Prepared Code body already claimed')
  for(let parent=frame.parent;parent;parent=parent.parent)if(parent.domain===frame.domain)return
- body.claimed=true;let consumed=false,taken=false
- const claim:PreparedCodeBodyClaim=Object.freeze({context:body.context,source:body.source,exec,
+ body.claimed=true;let consumed=false,taken=false,delegated=false,completionSource:SettlementFacts<ProducerFactOutcome>|undefined,deliveryCapture:object|undefined
+ const claim:PreparedCodeBodyClaim<ToolExecutionOwnerConfiguration>=Object.freeze({context:(managed?body.managed:body.context)!,source:body.source,exec,
   assertCurrent(){if(this!==claim)throw Error('Foreign Code claim');current()},
   consume(){if(this!==claim||consumed)throw Error('Original Code claim already consumed');current();consumed=true},
-  hasCodeSourceIssuer(){if(this!==claim)throw Error('Foreign Code claim');current();return !!(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer},
+  retainPrivateCell(){
+   if(this!==claim||!consumed||delegated||!body.managed)throw Error('Original private Code claim required');current();delegated=true
+   const domain=body.managed.domain,registry=body.registry,parentSeq=body.exec.callEventSeq,parentCallId=body.exec.callId;let cellId:string|undefined,revoked=false,boundSource:SettlementFacts<ProducerFactOutcome>|undefined
+   const delegation:PrivateCodeCellDelegation=Object.freeze({
+    assertOpen(){if(this!==delegation||revoked||!cellId||!boundSource||!original.current())throw Error('Original Code cell unavailable');boundSource.assertHeld()},
+    bind(...[id,source,capture,outcome]:Parameters<PrivateCodeCellDelegation['bind']>){if(this!==delegation||revoked||cellId||!id||source!==completionSource||capture!==deliveryCapture||!isManagedExecutionSource(domain,source))throw Error('Original Code completion source required');current();source.assertHeld();const members=readManagedAcknowledgedMembers(domain,capture,outcome),event=members[0];if(members.length!==1||event?.type!=='agent/delivery-source'||event.kind!=='code'||event.recipientSessionId!==domain.sessionId||event.cellId!==id||event.callSeq!==parentSeq)throw Error('Original Code source ACK required');const indexed=readManagedSourceCodeDelivery(domain.identity,source,event.sourceId);if(!indexed||indexed.kind!=='code'||indexed.seq!==event.seq||indexed.cellId!==id)throw Error('Original Code source index required');cellId=id;boundSource=source},
+    attach(...[prepared,action,source,capture,outcome]:Parameters<PrivateCodeCellDelegation['attach']>){if(this!==delegation||revoked||!cellId||!boundSource)throw Error('Original Code cell unavailable');domain.assertCurrent();boundSource.assertHeld();const nested=records.get(prepared);if(!nested||nested.permit||nested.codeInvocation||nested.entered||nested.registry!==registry||nested.managed?.domain!==domain||nested.source!==source||nested.exec.resultConsumer!=='code')throw Error('Original nested Code body required');check(nested);const members=readManagedActionSourceMembers(domain,action,source,capture,outcome),event=members[0];if(members.length!==1||event?.type!=='code/call'||event.cellId!==cellId||event.parentCallId!==parentCallId||event.callId!==nested.exec.callId||event.seq!==nested.exec.callEventSeq||event.name!==nested.call.name||canonicalJsonData(event.args)!==canonicalJsonData(nested.call.args))throw Error('Original nested Code call required');const currentNested=()=>{if(revoked||!original.current())throw Error('Original Code cell retired');domain.assertCurrent();boundSource!.assertHeld();action.assertOpen();source.assertHeld();const actual=readManagedActionSourceMembers(domain,action,source,capture,outcome);if(actual.length!==1||actual[0]!==event)throw Error('Original nested Code call changed')};const getAdmissionWait=(signal:AbortSignal)=>{if(revoked||!original.current())throw Error('Original Code cell retired');boundSource!.assertHeld();action.assertOpen();source.assertHeld();const actual=readManagedActionSourceMembers(domain,action,source,capture,outcome);if(actual.length!==1||actual[0]!==event)throw Error('Original nested Code call changed');return getManagedExecutionAdmissionWait(domain,action as import('@i-harness/core-session').ManagedAction<import('@i-harness/core-session').FactOutcome>,signal)};currentNested();nested.codeInvocation=Object.freeze({assertCurrent:currentNested,getAdmissionWait})},
+    revoke(){if(this!==delegation)throw Error('Original Code delegation receiver required');revoked=true},
+   });return delegation
+  },  hasCodeSourceIssuer(){if(this!==claim)throw Error('Foreign Code claim');current();return !!(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer},
   takeCodeSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Code claim required');current();taken=true;const issuer=(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer?.();if(!issuer)return
    const wrapped:import('../model-origin.ts').OriginalCodeSourceIssuer=Object.freeze({
     assertAdmissionCurrent(){if(this!==wrapped)throw Error('Foreign Code issuer');current();issuer.assertAdmissionCurrent()},
     async prepareLaunch(cellId:string,sourceId:string){if(this!==wrapped)throw Error('Foreign Code issuer');current();const prepared=await issuer.prepareLaunch(cellId,sourceId);current();return prepared},
-    registerCompletion(drain:()=>Promise<void>){if(this!==wrapped)throw Error('Foreign Code issuer');current();return issuer.registerCompletion(drain)},
-    captureSource(binding:Readonly<import('../model-origin.ts').CodeSourceBinding>,recipientCurrent:()=>boolean){if(this!==wrapped)throw Error('Foreign Code issuer');current();return issuer.captureSource(binding,()=>{try{current();return recipientCurrent()}catch{return false}})},
+    registerCompletion(drain:()=>Promise<void>){if(this!==wrapped)throw Error('Foreign Code issuer');current();const source=issuer.registerCompletion(drain);completionSource=source;return source},
+    captureSource(binding:Readonly<import('../model-origin.ts').CodeSourceBinding>,recipientCurrent:()=>boolean){if(this!==wrapped)throw Error('Foreign Code issuer');current();const captured=issuer.captureSource(binding,()=>{try{current();return recipientCurrent()}catch{return false}});deliveryCapture=captured;return captured},
    });return wrapped
   },
  });return claim
@@ -249,3 +275,9 @@ export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
   });taskCallers.add(claim);return claim
  }});return entry
 }
+
+
+
+
+
+

@@ -1,6 +1,8 @@
+import { retainAcknowledgedExecutionMembers, getManagedExecutionAdmissionWait } from '@i-harness/core-session/internal/execution'
 import type { PluginContext } from "@i-harness/core-plugin"
 import { captureLegacyFact, committedFactSeqs, FactRecoveryRequiredError, stringifyJsonData } from "@i-harness/core-session"
 import { isOriginalResultFinalization, isPolicyRefusal, isNativePlanValidationError, isInstructionReplan, instructionReplan, instructionReplanDisposition, registryRequiresInstructionOrigin, bindInstructionInvocation, preflightInstructionInvocations, releaseInstructionCell, retainedToolOutcome, resultExecution, ToolArgsError, type ToolRegistry, type InstructionCellOrigin, type InstructionReplanData } from "@i-harness/core-tools"
+import type { ManagedAction } from '@i-harness/core-session'
 import type { CodeModeInvocation, CodeModeMountOptions } from "./types.ts"
 import { captureCodeModeTools, codeModeDefinitions } from "./catalog.ts"
 import type { Cell, Queued } from './broker/types.ts'
@@ -10,7 +12,7 @@ import { codeModeFactOwner } from './facts.ts'
 /** The broker owns admission/dispatch; real results retain their original slot
  * through a failed join. Only the document's exact receipt marks them recorded. */
 export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions, onInstructionReplan?: (cellId: string, detail: InstructionReplanData) => void) {
-  const owner = codeModeFactOwner(options), records = createCodeModeRecords(complete, (item, output, execution) => tools.captureSyntheticResult?.({ view: options.session, source: item.source, callId: item.call.invocationId, name: item.call.name }, output, execution), options.session)
+  const owner = codeModeFactOwner(options,ctx), records = createCodeModeRecords(complete, (item, output, execution) => {if(options.kind==='managed-execution'){if(!item.callCapture||!item.callOutcome)throw Error('Original Code call capture required');return tools.captureManagedSyntheticResult?.({kind:'code',domain:options.domain,source:item.source,action:item.action,cellId:item.call.cellId,callId:item.call.invocationId,name:item.call.name,capture:item.callCapture,outcome:item.callOutcome},output,execution)}return tools.captureSyntheticResult?.({ view: options.session, source: item.source, callId: item.call.invocationId, name: item.call.name }, output, execution)}, options.session, options.kind==='managed-execution'?item=>{if(!item.callCapture||!item.callOutcome)throw Error('Original Code call capture required');return {kind:'code',domain:options.domain,source:item.source,action:item.action,cellId:item.call.cellId,callId:item.call.invocationId,name:item.call.name,capture:item.callCapture,outcome:item.callOutcome}}:undefined)
   const cells = new Map<string, Cell>(), queue: Queued[] = [], active = new Set<Queued>(), jobs = new Set<Promise<void>>(), unsettled = new Set<Queued>()
   const retiredCells = new Map<string, Cell>()
   const stop = new AbortController(), parallel = Math.min(16, Math.max(1, options.maxParallel ?? 4))
@@ -20,7 +22,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
   function replanCell(id: string, detail: InstructionReplanData) {
     const cell = cells.get(id)
     if (!cell || cell.replan) return
-    cell.replan = detail
+    if(cell.delegation){cell.delegation.revoke();cell.stop.abort()}cell.replan = detail
     onInstructionReplan?.(id, detail)
   }
   function complete(item: Queued): Promise<unknown> {
@@ -64,6 +66,8 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
     for (const item of [...unsettled].filter(value => value.call.cellId === id)) {
       await item.done.promise
       await item.source.close()
+      item.callPin?.release(); item.callPin=undefined
+      if(options.kind==='managed-execution')item.action.finish()
       unsettled.delete(item)
     }
   }
@@ -90,6 +94,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
   function retireCell(id: string) {
     const cell = cells.get(id)
     if (!cell) return
+    cell.delegation?.revoke()
     cells.delete(id)
     retiredCells.set(id, cell)
     cell.ending.resolve()
@@ -108,8 +113,8 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
   async function release(item: Queued) {
     try { await item.generation?.close() }
     catch (error) { item.source.requireRecovery(); item.recoveryCause = error }
-    item.done.resolve(); item.action.finish()
-    try { await item.source.close(); unsettled.delete(item) }
+    item.done.resolve(); if(options.kind==='managed-execution')item.action.stop();else item.action.finish()
+    try { await item.source.close(); item.callPin?.release(); item.callPin=undefined; if(options.kind==='managed-execution')item.action.finish(); unsettled.delete(item) }
     catch (cause) { if (!item.finished) records.settle(item, { error: recovery(cause) }) }
   }
   async function run(item: Queued) {
@@ -119,7 +124,8 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       if (tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed")
       let prepared, preparing = false
       try {
-        item.generation ??= item.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: item.call.cellId, action: item.action, eventSeq: item.eventSeq!, callId: item.call.invocationId, name: item.call.name, signal: item.signal,
+        if(options.kind==='managed-execution'&&item.call.origin.generationLineage)throw Error('Private Code generation lineage unsupported')
+        item.generation ??= options.kind==='managed-execution'?undefined:item.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: item.call.cellId, action: item.action, eventSeq: item.eventSeq!, callId: item.call.invocationId, name: item.call.name, signal: item.signal,
           current: () => !disposed && !item.signal.aborted && cells.has(item.call.cellId) && active.has(item) && tools.get(item.call.name) === item.tool })
         preparing = true
         prepared = item.capture ? await tools.prepareCaptured(item.capture, item.signal, item.instructionOrigin) : await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session: options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code", settlementSource: item.source, modelGeneration: item.generation?.factories })
@@ -143,6 +149,13 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
       if (cells.get(item.call.cellId)?.replan) throw instructionReplan(cells.get(item.call.cellId)!.replan!)
       if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during checkpoint")
+      if(options.kind==='managed-execution'){
+        const cell=cells.get(item.call.cellId),delegation=cell?.delegation
+        if(!cell?.admissionAction||!delegation||!item.callCapture||!item.callOutcome||!item.callPin)throw Error('Original Code invocation authority required')
+        const current=()=>{item.signal.throwIfAborted();item.action.assertOpen();item.source.assertHeld();item.callPin!.assertCurrent();delegation.assertOpen();if(disposed||cells.get(item.call.cellId)!==cell||tools.get(item.call.name)!==item.tool)throw Error('Original Code cell retired or tool changed')}
+        for(;;){current();const wait=getManagedExecutionAdmissionWait(options.domain,cell.admissionAction,item.signal);if(!wait)break;await wait}
+        current();delegation.attach(prepared,item.action,item.source,item.callCapture,item.callOutcome)
+      }
       item.admitted()
       item.prepared = prepared
       try { item.bodyOutput = await tools.dispatch(prepared); item.hasOutput = true }
@@ -207,7 +220,8 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
           let failure: unknown, failed = false, missingOriginMutation = false
           for (const pending of group) {
             try {
-              pending.generation = pending.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: pending.call.cellId, action: pending.action, eventSeq: pending.eventSeq!, callId: pending.call.invocationId, name: pending.call.name, signal: pending.signal,
+              if(options.kind==='managed-execution'&&pending.call.origin.generationLineage)throw Error('Private Code generation lineage unsupported')
+              pending.generation = options.kind==='managed-execution'?undefined:pending.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: pending.call.cellId, action: pending.action, eventSeq: pending.eventSeq!, callId: pending.call.invocationId, name: pending.call.name, signal: pending.signal,
                 current: () => !disposed && !pending.signal.aborted && cells.has(pending.call.cellId) && active.has(pending) && tools.get(pending.call.name) === pending.tool })
               const capture = tools.capture({ name: pending.call.name, args: pending.call.args }, { sessionId: options.sessionId ?? pending.call.origin.sessionId, session: options.session, callId: pending.call.invocationId, callEventSeq: pending.eventSeq, resultConsumer: 'code', settlementSource: pending.source, modelGeneration: pending.generation?.factories })
               const origin = cell.instructionOrigin ? bindInstructionInvocation(cell.instructionOrigin, pending.call.invocationId, capture) : undefined
@@ -254,12 +268,13 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
   }
   return {
     definitions() { return codeModeDefinitions(captureCodeModeTools(tools)) },
-    startCell(id: string, instructionOrigin?: InstructionCellOrigin) {
+    startCell(id: string, instructionOrigin?: InstructionCellOrigin, delegation?:import('@i-harness/core-tools/internal/code-origin').PrivateCodeCellDelegation, admissionAction?:ManagedAction<import('@i-harness/core-session').FactOutcome>) {
       if (disposed || cells.has(id) || retiredCells.has(id)) throw new Error("Code Mode cell unavailable")
-      const cell: Cell = { tools: captureCodeModeTools(tools), stop: new AbortController(), seen: new Set(), preflights: new Set(), instructionOrigin, ending: Promise.withResolvers<void>() }
+      const cell: Cell = { delegation, admissionAction, tools: captureCodeModeTools(tools), stop: new AbortController(), seen: new Set(), preflights: new Set(), instructionOrigin, ending: Promise.withResolvers<void>() }
       cells.set(id, cell)
       return Object.freeze({ settle: () => finishOriginalCell(id, cell) })
     },
+    revokeCells(){for(const cell of cells.values())if(cell.delegation){cell.delegation.revoke();cell.stop.abort()}},
     retireCell,
     replanCell,
     drainCell,
@@ -277,14 +292,21 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       const captured = captureLegacyFact(original.args)
       if (captured.kind !== 'captured') throw Object.assign(new Error('Code Mode arguments cannot be captured'), { code: captured.code })
       if (Buffer.byteLength(stringifyJsonData(captured.value) ?? 'null') > (options.config?.maxResultBytes ?? 4 * 1024 * 1024)) throw new Error("Code Mode tool arguments exceed transfer limit")
-      const call = { ...original, args: captured.value }, signal = AbortSignal.any([call.signal, stop.signal, cell.stop.signal]), action = owner.beginAction(signal)
+      const call = { ...original, args: captured.value }, signal = AbortSignal.any([call.signal, stop.signal, cell.stop.signal])
+      if(options.kind==='managed-execution') {
+        if(!cell.admissionAction||!cell.delegation)throw Error('Original private Code cell action required')
+        for(;;){signal.throwIfAborted();if(disposed||cells.get(call.cellId)!==cell||tools.get(call.name)!==tool)throw Error('Original Code cell retired or tool changed');cell.delegation.assertOpen();const wait=getManagedExecutionAdmissionWait(options.domain,cell.admissionAction,signal);if(!wait)break;await wait}
+        signal.throwIfAborted();if(disposed||cells.get(call.cellId)!==cell||tools.get(call.name)!==tool)throw Error('Original Code cell retired or tool changed');cell.delegation.assertOpen()
+      }
+      const action = owner.beginAction(signal)
       let item!: Queued
       const source = action.registerSettlementSource(async () => { await item.done.promise; await records.drain(item) })
       const waiting = Promise.withResolvers<unknown>()
       item = { call, tool, signal, action, source, done: Promise.withResolvers<void>(), hasOutput: false, ...waiting, unsubscribe: () => {}, admitted: () => {}, finished: false, recorded: false }
       unsettled.add(item)
       try {
-        item.eventSeq = committedFactSeqs(await action.facts.code.record({ type: 'code/call', cellId: call.cellId, ...(call.origin.callId ? { parentCallId: call.origin.callId } : {}), callId: call.invocationId, name: call.name, args: call.args }))[0]!
+        const event={ type: 'code/call' as const, cellId: call.cellId, ...(call.origin.callId ? { parentCallId: call.origin.callId } : {}), callId: call.invocationId, name: call.name, args: call.args }
+        if(options.kind==='managed-execution'){if(!action.captureCodeCall)throw Error('Original Code call capture unavailable');item.callCapture=action.captureCodeCall(event,item.source);const outcome=await item.callCapture.admit();item.eventSeq=committedFactSeqs(outcome)[0]!;if(outcome.kind!=='committed')throw new FactRecoveryRequiredError();item.callOutcome=outcome;item.callPin=retainAcknowledgedExecutionMembers(item.callCapture,outcome)}else item.eventSeq=committedFactSeqs(await action.facts.code.record(event))[0]!
         const abort = () => {
           if (active.has(item) || item.finished) return
           track((async () => {
@@ -307,7 +329,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
         await Promise.allSettled([...jobs])
         await Promise.allSettled([...cells.values(), ...retiredCells.values()].flatMap(cell => [...cell.preflights]))
         const errors: unknown[] = []
-        for (const item of unsettled) try { await item.source.close(); unsettled.delete(item) } catch (error) { errors.push(error) }
+        for (const item of unsettled) try { await item.source.close(); item.callPin?.release(); item.callPin=undefined; if(options.kind==='managed-execution')item.action.finish(); unsettled.delete(item) } catch (error) { errors.push(error) }
         for (const [id, cell] of retiredCells) {
           if (cell.instructionOrigin && !cell.terminalCommitted) { errors.push(new FactRecoveryRequiredError()); continue }
           if (![...unsettled].some(item => item.call.cellId === id)) try { await finishCell(id) } catch (error) { errors.push(error) }
@@ -324,3 +346,8 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
     },
   }
 }
+
+
+
+
+

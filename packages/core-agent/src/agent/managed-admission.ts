@@ -1,5 +1,5 @@
 import { prepareModelRequest, type LLMRequest } from '@i-harness/llm-seam';
-import { assertManagedActionCurrent } from '@i-harness/core-session/internal/execution';
+import { assertManagedActionCurrent, getManagedExecutionAdmissionWait } from '@i-harness/core-session/internal/execution';
 import type { ManagedAction, FactOutcome, SettlementFacts } from '@i-harness/core-session';
 import { assertExecutionGeneration } from '../../../session-executor/src/lifecycle/generation-actions.ts';
 import type { ManagedAgentHost, ManagedGenerationAction } from './managed-types.ts';
@@ -21,9 +21,14 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
             };
             for (;;) {
                 signal.throwIfAborted();
+                for (;;) {
+                    const wait = getManagedExecutionAdmissionWait(host.domain, action, signal);
+                    if (!wait) break;
+                    await wait;
+                }
                 assertManagedActionCurrent(host.domain, action);
                 await host.requestContext?.reconcile(signal);
-                let captured = await context.capture(action);
+                let captured = await context.capture(action, signal);
                 if (host.requestContext && !host.requestContext.current(captured.instructions)) {
                     stale();
                     continue;
@@ -43,7 +48,7 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                 const owner = generation();
                 assertExecutionGeneration(host.execution, owner);
                 await owner.bind(assessed.prepared);
-                let refreshed = await context.refresh(action, captured);
+                let refreshed = await context.refresh(action, captured, signal);
                 if (!refreshed) {
                     stale();
                     continue;
@@ -52,7 +57,7 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                 const admission = await recovery.admit(assessed.prepared.measurement, state, signal);
                 if (admission === 'rebuild')
                     continue;
-                refreshed = await context.refresh(action, captured);
+                refreshed = await context.refresh(action, captured, signal);
                 if (!refreshed) {
                     stale();
                     continue;
@@ -69,7 +74,7 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                 await context.budget.checkpoint();
                 await host.flush?.();
                 signal.throwIfAborted();
-                refreshed = await context.refresh(action, captured);
+                refreshed = await context.refresh(action, captured, signal);
                 if (!refreshed) {
                     stale();
                     continue;
@@ -81,7 +86,7 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                         throw Object.assign(Error('Context reduction requires reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' });
                     if (result.compacted)
                         continue;
-                    refreshed = await context.refresh(action, captured);
+                    refreshed = await context.refresh(action, captured, signal);
                     if (!refreshed) {
                         stale();
                         continue;
@@ -102,7 +107,7 @@ export function createManagedAdmission(host: ManagedAgentHost, context: ReturnTy
                 validateBeforeTransport();
                 const execution = context.execution.candidate(prepared, captured, state, assessed.calibrated, current, () => context.budget.retire('execution-identity-changed'));
                 const control = generationRequestLease(owner.control(state.recoveryId ? 'recovery' : 'main', validateBeforeTransport), async () => {
-                    const next = await context.refresh(action, captured);
+                    const next = await context.refresh(action, captured, signal);
                     if (!next)
                         return false;
                     captured = next;

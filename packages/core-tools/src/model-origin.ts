@@ -15,10 +15,12 @@ export interface OriginalCodeSourceIssuer {
   registerCompletion(drain: () => Promise<void>): SettlementFacts<ProducerFactOutcome>
 }
 export interface OriginalModelMemberPermit { assertCurrent(): void; takeExecSourceIssuer?(): OriginalExecSourceIssuer; takeCodeSourceIssuer?(): OriginalCodeSourceIssuer | undefined }
+export interface OriginalManagedModelMemberPermit extends OriginalModelMemberPermit {getAdmissionWait(signal:AbortSignal):Promise<void>|undefined}
 export interface ConstructorModelOriginVerifier { take(proof: object, expected: ModelOriginExpectation): OriginalModelMemberPermit }
 export interface ManagedModelOriginExpectation extends Omit<ModelOriginExpectation,'view'> {readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain}
-export interface ConstructorManagedModelOriginVerifier {readonly kind:'managed-model-origin';readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;take(proof:object,expected:ManagedModelOriginExpectation):OriginalModelMemberPermit}
+export interface ConstructorManagedModelOriginVerifier {readonly kind:'managed-model-origin';readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;take(proof:object,expected:ManagedModelOriginExpectation):OriginalManagedModelMemberPermit}
 export type ModelOriginTake={public?:ConstructorModelOriginVerifier['take'];managed?:ConstructorManagedModelOriginVerifier['take']}
 export interface PreparedModelOriginDriver { attach(prepared: PreparedCall, proof: object): void }
 export { createToolRegistryWithModelOrigin } from './index.ts'
 export {assertModelOriginPair} from './index.ts'
+

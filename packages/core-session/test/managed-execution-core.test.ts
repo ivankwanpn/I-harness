@@ -240,3 +240,49 @@ it('a private replacement hydrates the original nonresident coverage and matches
   const batch=encodeFactBatch('replacement',f.source.prefix.prefixDigest,staged.events)
   staged.beforeIssue(batch);staged.install(batch,f.receipt(batch));expect(f.state.eventCount).toBe(4)
 })
+
+it('observes restored private Code store and unfinished cells from the original validated stream',async()=>{
+  const f=await fixture([
+    {type:'code/cell',cellId:'done',sessionId:'owned',state:'started',seq:0},
+    {type:'code/store',version:1,cellId:'done',sessionId:'owned',writes:[['x',7]],seq:1},
+    {type:'code/cell',cellId:'done',sessionId:'owned',state:'completed',seq:2},
+    {type:'code/cell',cellId:'open',sessionId:'owned',parentCallId:'call',state:'started',seq:3},
+  ])
+  const owner={ownsAction:()=>false,beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+  f.state.bindOwner(owner)
+  const {createOwnerDeliveryControl}=await import('../src/managed/delivery-control.ts')
+  createOwnerDeliveryControl(f.state.delivery,()=>f.state.eventCount)
+  expect(f.state.observe().codeState()).toEqual({store:{kind:'value',entries:[['x',7]]},unfinished:[{cellId:'open',parentCallId:'call'}]})
+})
+
+
+it('updates private Code state only when the original live append is installed',async()=>{
+  const f=await fixture([])
+  const owner={ownsAction:()=>false,beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+  f.state.bindOwner(owner)
+  const {createOwnerDeliveryControl}=await import('../src/managed/delivery-control.ts')
+  createOwnerDeliveryControl(f.state.delivery,()=>f.state.eventCount)
+  const captured=group({kind:'code',event:{type:'code/cell',cellId:'live',sessionId:'owned',state:'started'}})
+  const prepared=await f.state.prepareWrite([captured])
+  expect(f.state.observe().codeState().unfinished).toEqual([])
+  const batch=encodeFactBatch('code-start',f.source.prefix.prefixDigest,prepared.events), receipt=f.receipt(batch)
+  prepared.beforeIssue(batch);prepared.install(batch,receipt)
+  expect(f.state.observe().codeState().unfinished).toEqual([{cellId:'live'}])
+})
+
+it('restored private Code store honors the original rewind window',async()=>{
+  const events:any[]=[
+    {type:'code/cell',cellId:'a',sessionId:'owned',state:'started',seq:0},
+    {type:'code/store',version:1,cellId:'a',sessionId:'owned',writes:[['x',1]],seq:1},
+    {type:'code/cell',cellId:'a',sessionId:'owned',state:'completed',seq:2},
+    {type:'code/cell',cellId:'b',sessionId:'owned',state:'started',seq:3},
+    {type:'code/store',version:1,cellId:'b',sessionId:'owned',writes:[['x',2]],seq:4},
+    {type:'code/cell',cellId:'b',sessionId:'owned',state:'completed',seq:5},
+    {type:'rewind/point',version:1,targetTurn:1,anchorSeq:3,mode:'conversation',fileOps:[],seq:6},
+  ]
+  const f=await fixture(events), owner={ownsAction:()=>false,beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+  f.state.bindOwner(owner)
+  const {createOwnerDeliveryControl}=await import('../src/managed/delivery-control.ts')
+  createOwnerDeliveryControl(f.state.delivery,()=>f.state.eventCount)
+  expect(f.state.observe().codeState().store).toEqual({kind:'value',entries:[['x',1]]})
+})

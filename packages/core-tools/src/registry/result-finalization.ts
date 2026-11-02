@@ -1,14 +1,14 @@
 import { FactRecoveryRequiredError,captureLegacyFact, isManagedSettlementSource, isNondurableSession, isOwnedSettlementSource, type ProducerFactOutcome, type ResultEnvelope, type ResultExecution, type SessionView, type SettlementFacts } from '@i-harness/core-session'
 import type { PreparedCall, ToolExec,ToolResult } from '../types.ts'
 import { registerResultProducer } from './result-dependencies.ts'
-import {isManagedExecutionSource,readManagedAcknowledgedMembers,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {isManagedExecutionSource,readManagedAcknowledgedMembers,readManagedActionSourceMembers,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface ResultFinalization {
   settle(): Promise<{ kind: 'ready'; envelope: ResultEnvelope; program: ResultProgram } | { kind: 'recovery-required' }>
 }
 export type ResultProgram = { kind: 'value'; value: unknown } | { kind: 'unavailable'; reason: 'encoding' }
 export interface SyntheticResultContext { view: SessionView; source: SettlementFacts<ProducerFactOutcome>; callId: string; name: string }
-export interface ManagedSyntheticResultContext {domain:ManagedExecutionDomain;source:SettlementFacts<ProducerFactOutcome>;callId:string;name:string;capture:object;outcome:Extract<import('@i-harness/core-session').FactOutcome,{kind:'committed'}>}
+export type ManagedSyntheticResultContext = {domain:ManagedExecutionDomain;source:SettlementFacts<ProducerFactOutcome>;callId:string;name:string;capture:object;outcome:Extract<import('@i-harness/core-session').FactOutcome,{kind:'committed'}>} & ({kind?:'tool'}|{kind:'code';cellId:string;action:import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>})
 export interface ToolResultRetention {
   prepareManaged?(prepared:PreparedCall,domain:ManagedExecutionDomain):Promise<void>
   prepare?(prepared: PreparedCall, executionOwner?: import('./prepared-body.ts').ToolExecutionOwnerContext): Promise<void>
@@ -23,7 +23,7 @@ const syntheticFinalizations = new WeakMap<ResultFinalization, Readonly<Syntheti
 export function bindSyntheticFinalization(context: SyntheticResultContext|ManagedSyntheticResultContext, handle: ResultFinalization): ResultFinalization { syntheticFinalizations.set(handle, Object.freeze({ ...context })); return handle }
 export function isOriginalSyntheticResultFinalization(context: SyntheticResultContext|ManagedSyntheticResultContext, handle: ResultFinalization | undefined): handle is ResultFinalization {
   const original = handle && syntheticFinalizations.get(handle)
-  return !!original && ('domain'in original?'domain'in context&&original.domain===context.domain&&original.capture===context.capture&&original.outcome===context.outcome:'view'in context&&original.view===context.view) && original.source === context.source && original.callId === context.callId && original.name === context.name
+  return !!original && ('domain'in original?'domain'in context&&original.domain===context.domain&&original.capture===context.capture&&original.outcome===context.outcome&&original.kind===context.kind&&(original.kind!=='code'||context.kind==='code'&&original.action===context.action&&original.cellId===context.cellId):'view'in context&&original.view===context.view) && original.source === context.source && original.callId === context.callId && original.name === context.name
 }
 export function bindResultFinalization(call: PreparedCall, handle: ResultFinalization): void { assertResultPrepared(call); finalizations.set(call, handle) }
 /** A JSON shape or custom registry method cannot impersonate a retained
@@ -52,7 +52,7 @@ export function assertSyntheticResult(context: SyntheticResultContext): void {
   const calls = context.view.events.filter(event => (event.type === 'tool/call' || event.type === 'code/call') && event.callId === context.callId && event.name === context.name)
   if (calls.length !== 1) throw new FactRecoveryRequiredError()
 }
-export function assertManagedSyntheticResult(context:ManagedSyntheticResultContext){if(!isManagedExecutionSource(context.domain,context.source))throw new FactRecoveryRequiredError();context.source.assertHeld();const members=readManagedAcknowledgedMembers(context.domain,context.capture,context.outcome);if(members.length!==1||members[0]?.type!=='tool/call'||members[0].callId!==context.callId||members[0].name!==context.name)throw new FactRecoveryRequiredError()}
+export function assertManagedSyntheticResult(context:ManagedSyntheticResultContext){if(!isManagedExecutionSource(context.domain,context.source))throw new FactRecoveryRequiredError();context.source.assertHeld();const members=context.kind==='code'?readManagedActionSourceMembers(context.domain,context.action,context.source,context.capture,context.outcome):readManagedAcknowledgedMembers(context.domain,context.capture,context.outcome);const event=members[0];if(members.length!==1||!event||(event.type!=='tool/call'&&event.type!=='code/call')||event.callId!==context.callId||event.name!==context.name||(context.kind==='code'?event.type!=='code/call'||event.cellId!==context.cellId:event.type!=='tool/call'))throw new FactRecoveryRequiredError()}
 /** Only the original dispatcher or its branded retained-body take calls this.
  * Data/seq/ToolExec labels cannot register a completed private result. */
 export function recordDispatchedToolResult(call:PreparedCall,output:unknown){const owned=prepared.get(call);if(!owned?.domain)return;assertResultPrepared(call);if(owned.hasDispatch&&!Object.is(owned.dispatched,output))throw new FactRecoveryRequiredError();owned.hasDispatch=true;owned.dispatched=output}

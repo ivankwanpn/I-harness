@@ -170,7 +170,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         try { held.assertHeld(); return 'available'; } catch { return 'unavailable'; }
     };
     let publishedStatus = executionStatus();
-    const publishExecutionStatus = () => { const next = executionStatus(); if (next !== publishedStatus) { publishedStatus = next; executionChanges?.invalidated(id); } core?.readinessChanged(!sourceFault && (quarantined || recoveryHolds.size > 0)); };
+    const publishExecutionStatus = () => { const next = executionStatus(); if (next !== publishedStatus) { publishedStatus = next; executionChanges?.invalidated(id); } if(sourceFault)core?.readinessUnavailable(new FactRecoveryRequiredError());else core?.readinessChanged(quarantined || recoveryHolds.size > 0); };
     type SelectedScope=Readonly<{kind:'selected-lane'}>
     const selectedJournal=(backend as PersistenceBackend & {selectedJournal?:{
       resolveCheckedBirth(id:string,owner:typeof held):Promise<unknown>;bindCheckedBirthLane(id:string,owner:typeof held,birth:unknown):SelectedScope;
@@ -295,6 +295,11 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                     const entry = queue.shift()!;
                     try {
                         assertAuthorized(entry.authorization);
+                        // Check the original delivery fence before staging a Code
+                        // handoff. A closed generation otherwise looks like an
+                        // invalid transition before the stale fence is consulted.
+                        if (entry.group?.kind === 'delivery' && entry.group.event.type === 'agent/delivery-handoff' && entry.group.event.kind === 'code')
+                            deliveryControl.assert([entry.group.event]);
                         const suffix = core ? [] : entry.bootstrap ? [...entry.bootstrap.events] : resolveFactGroup(entry.group!, state!.view, prefix.eventCount + events.length);
                         if (entry.bootstrap && suffix.some((event, position) => event.seq !== prefix.eventCount + events.length + position)) throw new TypeError('Invalid bootstrap phase sequence');
                         entry.seqs = Object.freeze(suffix.map(event => event.seq!));
@@ -305,7 +310,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                     catch (error) {
                         entry.ticket.release();
                         entry.resolve({ kind: 'not-issued', code: (error as {
-                                code?: 'FACT_CLOSED' | 'FACT_CANCELLED' | 'FACT_RECOVERY_REQUIRED';
+                                code?: 'FACT_CLOSED' | 'FACT_CANCELLED' | 'FACT_RECOVERY_REQUIRED' | 'FACT_PRECONDITION_STALE';
                             }|null)?.code ?? 'FACT_INVALID_GROUP' });
                     }
                 }
@@ -568,14 +573,17 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                         releaseRecovery() { assertTaskOutside(); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() },
                     }, () => { sourceDrains.delete(source);core?.releaseSource(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() }, reconcilePending, checkpointOwner);
                     required.source = source;
+                    core?.associateActionSource(capability,source);
                     const publicView=Object.getOwnPropertyDescriptor(document,'view')?.value as SessionView|undefined;
                     if(publicView)bindFactSettlementSource(publicView, document, source, id);
                     sourceDrains.set(source, { closeOriginal:source.close.bind(source), action, finished: () => finished, closeRequested: false, sourceMethods:Object.getOwnPropertyDescriptors(source),deliveryMethods:Object.getOwnPropertyDescriptors(source.delivery) });
                     return source;
                 },
             };
+            const captureCodeCall=capability.captureCodeCall!;
+            capability.captureCodeCall=(event,source)=>{assertAuthorized(authorization);if(sourceDrains.get(source)?.action!==action)throw TypeError('Original action source required');const capture=captureCodeCall(event,source);core?.associateActionCaptureSource(capability,source,capture);return capture};
             Object.defineProperty(capability, 'owner', { value: owner, enumerable: true, writable: false, configurable: false });
-            for(const name of ['captureToolCall','captureLifecycle','captureMetadata','captureToolDispatch'] as const)Object.defineProperty(capability,name,{value:capability[name],enumerable:true,writable:false,configurable:false});
+            for(const name of ['captureToolCall','captureLifecycle','captureMetadata','captureToolDispatch','captureCodeCall'] as const)Object.defineProperty(capability,name,{value:capability[name],enumerable:true,writable:false,configurable:false});
             ownedActions.add(capability);
             if(core){actionHooks=core.captureHooks(capability,held.assertHeld);actionMembers.add({source:capability,finished:()=>finished})}
             return capability;

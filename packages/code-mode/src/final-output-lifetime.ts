@@ -1,4 +1,4 @@
-import type { FactOwner } from '@i-harness/core-session'
+import type { CodeModeFactOwner } from './facts.ts'
 import { isOriginalCellFinalization, type OriginalCellFinalization } from './finalization.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 
@@ -20,7 +20,7 @@ function joinOriginal<T>(caller:Lifetime|undefined,target:Lifetime,flight:Promis
 
 /** Independent original source, enrolled at admission. Its lifecycle may await
  * cell finalization; the cell/queue must never await this source's close. */
-export function createFinalOutputLifetime<T, Operation extends { finish(): Promise<T> } = { finish(): Promise<T> }>(owner: FactOwner, finalization: OriginalCellFinalization,
+export function createFinalOutputLifetime<T, Operation extends { finish(): Promise<T> } = { finish(): Promise<T> }>(owner: CodeModeFactOwner, finalization: OriginalCellFinalization,
   construct: (assertHeld: () => void) => Operation, expectedSessionId?:string, afterFinish?: (operation:Operation,result:T)=>void) {
   if (!isOriginalCellFinalization(finalization,owner) || finalization.scope !== 'cell-finalization') throw new Error('Original matching mount cell finalization required')
   const action = owner.beginAction()

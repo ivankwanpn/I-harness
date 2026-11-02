@@ -1,3 +1,4 @@
+import { getManagedExecutionAdmissionWait } from '@i-harness/core-session/internal/execution'
 import { attachModelMember, type LiveBatchToken } from './live-continuation.ts'
 import { isPolicyRefusal, isInstructionReplan, instructionReplanDisposition, retainedToolOutcome, resultExecution, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry, type PreparedCall, type CapturedToolCall, type AcceptedInstructionCall, type InstructionReplanData } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
@@ -11,6 +12,7 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
     const call = batch[index]!
     const parkReplan = () => { if (!replan?.value) return false; records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'failed', dispatch: 'not-dispatched' }, output: replan.value }); return true }
     if (parkReplan()) return
+    if(isManagedBatchSource(session))for(;;){const wait=getManagedExecutionAdmissionWait(session.domain,session.action,cancellation.batchSignal);if(!wait)break;await wait}
     let prepared: PreparedCall
     try {
       const selected = captured?.(index)
@@ -28,6 +30,7 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
     records.prepared(index,prepared)
     if (cancellation.batchSignal.aborted) return
     if (parkReplan()) return
+    if(isManagedBatchSource(session))for(;;){const wait=getManagedExecutionAdmissionWait(session.domain,session.action,cancellation.batchSignal);if(!wait)break;await wait}
     try { await markDispatch(session, index, call, records, opts) }
     catch (error) { cancellation.recordCheckpoint({ site: 'raw-checkpoint', index, error }); recordCheckpointFailure(index, call, error, records, cancellation); return }
     if (parkReplan()) return
@@ -44,6 +47,7 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
       return
     }
     if (parkReplan()) return
+    if(isManagedBatchSource(session))for(;;){const wait=getManagedExecutionAdmissionWait(session.domain,session.action,cancellation.batchSignal);if(!wait)break;await wait}
     opts.assertFactOpen?.()
     opts.telemetry?.emit({ type: "tool/start", ts: Date.now(), data: { tool: call.name, callId: call.callId } })
     if(isManagedBatchSource(session))session.attach(index,prepared,opts.settlementSource! as import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').FactOutcome>)
@@ -102,3 +106,4 @@ export function createStartCall(session: BatchSource, tools: ToolRegistry, batch
     dispatched(index, promise)
   }
 }
+

@@ -4,7 +4,7 @@ import { beginRetainedDispatch } from './retained-outcome.ts'
 import { dispatchResultStarted, dispatchResultReturned, declareToolResultOutcome,recordDispatchedToolResult } from './result-finalization.ts'
 import { withToolResultProducer } from './result-dependencies.ts'
 import { assertNativeInstructions, isInstructionReplan, runInstructionBody } from '../instructions.ts'
-import {preparedExecutionHooks,assertPreparedModelOriginCurrent} from './prepared-body.ts'
+import {preparedExecutionHooks,assertPreparedInvocationCurrent,getPreparedInvocationAdmissionWait} from './prepared-body.ts'
 
 export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry, invokePrepared: (prepared: PreparedCall) => Promise<unknown>): ToolRegistry["dispatch"] {
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
@@ -30,7 +30,8 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
   async function dispatch(prepared: PreparedCall): Promise<unknown> {
     const hooks=preparedExecutionHooks(prepared)
     hooks?.channel.assertCurrent(hooks.surface)
-    assertPreparedModelOriginCurrent(prepared)
+    for(;;){const wait=getPreparedInvocationAdmissionWait(prepared);if(!wait)break;await wait}
+    assertPreparedInvocationCurrent(prepared)
     validatePrepared(prepared)
     hooks?.channel.assertCurrent(hooks.surface)
     const retained = beginRetainedDispatch(prepared)
@@ -45,7 +46,8 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
       async () => {
         // Hooks may await before next(). No await is allowed between this final
         // authority check and invoking the body whose binding was validated.
-        assertPreparedModelOriginCurrent(prepared)
+        for(;;){const wait=getPreparedInvocationAdmissionWait(prepared);if(!wait)break;await wait}
+        assertPreparedInvocationCurrent(prepared)
         validatePrepared(prepared)
         hooks?.channel.assertCurrent(hooks.surface)
         try { assertNativeInstructions(prepared.exec) }
@@ -73,3 +75,5 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
 
   return dispatch
 }
+
+

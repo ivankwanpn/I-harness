@@ -94,5 +94,6 @@ export interface CodeModeMount {
   cancel(reason?: string): Promise<void>
   dispose(): Promise<void>
 }
-export interface CodeModeMountOptions { session: Session; factOwner?: FactOwner; sessionId?: string; config?: CodeModeConfig; retainText?: CodeModeRuntimeOptions['retainText']; finalOutput?: import('./final-output.ts').CodeFinalOutputFactory; flush?(): Promise<void>; maxParallel?: number }
+type CommonCodeModeMountOptions = { config?: CodeModeConfig; retainText?: CodeModeRuntimeOptions['retainText']; finalOutput?: import('./final-output.ts').CodeFinalOutputFactory; flush?(): Promise<void>; maxParallel?: number }
+export type CodeModeMountOptions = CommonCodeModeMountOptions & ({ kind?: 'session'; session: Session; factOwner?: FactOwner; sessionId?: string } | { kind: 'managed-execution'; execution: import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment; domain: import('@i-harness/core-session/internal/execution').ManagedExecutionDomain; sessionId: string; session?: never; factOwner?: never })
 export type CodeModeFactory = (ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) => CodeModeMount

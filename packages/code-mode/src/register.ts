@@ -1,11 +1,13 @@
+import { types } from 'node:util'
+import { readManagedSourceCodeState } from '@i-harness/core-session/internal/execution'
 import { randomUUID } from "node:crypto"
 import {AsyncLocalStorage} from "node:async_hooks"
 import {captureCodeRegistration,claimPreparedCodeInvocation,type CodeRegistrationWitness,type PreparedCodeBodyClaim} from "@i-harness/core-tools/internal/code-origin"
 import {createCodeDeliveryProducer} from "./delivery-source.ts"
 import type {OriginalCodeSourceIssuer,CodeSourceBinding} from "@i-harness/core-tools/model-origin"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { FactRecoveryRequiredError, isNondurableSession } from "@i-harness/core-session"
-import { declareToolResultOutcome, declareInstructionReplan, retainInstructionCell, backgroundEventForTool, userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
+import { FactRecoveryRequiredError, captureLegacyFact, isNondurableSession } from "@i-harness/core-session"
+import { declareToolResultOutcome, declareInstructionReplan, retainInstructionCell, registryRequiresInstructionOrigin, backgroundEventForTool, userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeExecInput, CodeModeMount, CodeModeMountOptions, CodeModeWaitInput } from "./types.ts"
 import { createCodeModeRuntime } from "./runtime.ts"
 import { createCodeModeBroker } from "./broker.ts"
@@ -16,23 +18,26 @@ import { createCodeModeEventFacts } from './event-facts.ts'
 import { createCodeOutputPublisher } from './output-facts.ts'
 import { observationOutput } from './observation-output.ts'
 import { originalObservationReplan } from './runtime/replan-observation.ts'
-import { captureOriginalCellFinalization, createCellFinalizations, readOriginalWorkerAcquisition, type OriginalCellFinalization } from './finalization.ts'
+import { captureOriginalCellFinalization, createCellFinalizations, isOriginalCellFinalization, readOriginalWorkerAcquisition, type OriginalCellFinalization } from './finalization.ts'
 import { createFinalCodeOutputs, type CompletionEvidence } from './final-output.ts'
 
 export type CompletionObservation = Readonly<{disposition?:import('./final-output.ts').FinalCodeOutputDisposition;kind:'unqualified'|'qualified';cellId:string;worker:'unknown'|'not-acquired'|'acquired';eligible:boolean;evidence?:CompletionEvidence}>
 export type CompletionHandle = Readonly<{settle():Promise<CompletionObservation>}>
-type CodeMountRecord={tools:ToolRegistry;ctx:PluginContext;view:CodeModeMountOptions['session'];factOwner:ReturnType<typeof codeModeFactOwner>;sessionId:string|undefined;tool:Tool;leaf:Tool['execute'];registration?:CodeRegistrationWitness;retired:boolean}
+type CodeMountRecord={tools:ToolRegistry;ctx:PluginContext;options:CodeModeMountOptions;sessionId:string|undefined;tool:Tool;leaf:Tool['execute'];registration?:CodeRegistrationWitness;retired:boolean}
 const codeMounts=new WeakMap<CodeModeMount,CodeMountRecord>()
-function enterOriginalCode(mount:CodeModeMount,exec:ToolExec):PreparedCodeBodyClaim|undefined{
+function enterOriginalCode(mount:CodeModeMount,exec:ToolExec):PreparedCodeBodyClaim<import('@i-harness/core-tools/internal/code-origin').ToolExecutionOwnerConfiguration>|undefined{
  const original=codeMounts.get(mount)
  const currentMount=()=>{if(!original||codeMounts.get(mount)!==original||original.retired)throw Error('Original Code mount unavailable')}
  currentMount();if(!original!.registration||!original!.sessionId)return
- const claim=claimPreparedCodeInvocation(original!.registration,exec,Object.freeze({context:original!.ctx,view:original!.view,factOwner:original!.factOwner,sessionId:original!.sessionId}))
+ const options=original!.options
+ if(options.kind==='managed-execution'&&registryRequiresInstructionOrigin(original!.tools))throw Error('Private instruction-backed Code unsupported')
+ const claim=options.kind==='managed-execution'?claimPreparedCodeInvocation(original!.registration,exec,Object.freeze({kind:'managed-execution' as const,context:original!.ctx,domain:options.domain,sessionId:options.sessionId})):claimPreparedCodeInvocation(original!.registration,exec,Object.freeze({context:original!.ctx,view:options.session,factOwner:codeModeFactOwner(options,original!.ctx) as import('@i-harness/core-session').FactOwner,sessionId:original!.sessionId}))
  if(!claim)return
- const current=()=>{currentMount();claim.assertCurrent()}
- const wrapped:PreparedCodeBodyClaim=Object.freeze({context:claim.context,source:claim.source,exec:claim.exec,
+ const current=()=>{currentMount();if(options.kind==='managed-execution'&&registryRequiresInstructionOrigin(original!.tools))throw Error('Private instruction-backed Code unsupported');claim.assertCurrent()}
+ const wrapped:PreparedCodeBodyClaim<import('@i-harness/core-tools/internal/code-origin').ToolExecutionOwnerConfiguration>=Object.freeze({context:claim.context,source:claim.source,exec:claim.exec,
   assertCurrent(){if(this!==wrapped)throw Error('Foreign Code claim');current()},
   consume(){if(this!==wrapped)throw Error('Foreign Code claim');current();claim.consume()},
+  retainPrivateCell(){if(this!==wrapped)throw Error('Foreign Code claim');current();if(!claim.retainPrivateCell)throw Error('Original private Code claim required');return claim.retainPrivateCell()},
   hasCodeSourceIssuer(){if(this!==wrapped)throw Error('Foreign Code claim');current();return claim.hasCodeSourceIssuer()},
   takeCodeSourceIssuer(){if(this!==wrapped)throw Error('Foreign Code claim');current();const issuer=claim.takeCodeSourceIssuer();if(!issuer)return
    const checked:OriginalCodeSourceIssuer=Object.freeze({
@@ -64,17 +69,24 @@ function declareObservationReplan(exec: ToolExec, out: import('./types.ts').Code
   if (error) { declareInstructionReplan(exec, error); declareToolResultOutcome(exec, 'failed') }
 }
 
-function retainedObservation(exec: ToolExec, refresh: () => Promise<void>): import('./types.ts').CodeModeObserveOptions['retained'] {
+function retainedObservation(exec: ToolExec, refresh: () => Promise<void>): (NonNullable<import('./types.ts').CodeModeObserveOptions['retained']>&{readyCaptured(output:unknown):void})|undefined {
   const retained = exec.retainOutcome?.()
   retained?.beforeRead(refresh)
-  return retained && { ...retained, ready: output => { declareObservationReplan(exec, output); retained.ready(observationOutput(output)) } }
+  return retained && { ...retained, ready: output => { declareObservationReplan(exec, output); retained.ready(observationOutput(output)) },readyCaptured(output){retained.ready(output)} }
 }
 
 /** Assembly-owned orchestration capability. Nested authority is registry-owned. */
 export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions): CodeModeMount {
+  if(!options||types.isProxy(options))throw TypeError('Original Code mount options required')
+  const factOwner = codeModeFactOwner(options,ctx)
+  if(options.kind==='managed-execution')options=Object.freeze({...options})
+  const session=options.session, sessionId=options.sessionId
   const mode = options.config?.mode ?? "off"
-  const factOwner = codeModeFactOwner(options), session=options.session, sessionId=options.sessionId
-  const nondurable = isNondurableSession(session)
+  const privateOptions=options.kind==='managed-execution'?options:undefined
+  const privateMode=!!privateOptions
+  const nondurable = !privateMode && isNondurableSession(session!)
+  const privateObservation=privateMode?privateOptions!.execution.observe():undefined
+  if(privateObservation && (privateObservation.formatVersion!==14||privateObservation.header?.parentSession||privateObservation.header?.delegationDepth||privateObservation.header?.subagentProtocolVersion||privateObservation.header?.origin))throw Error('Private delegated or unsupported Code owner')
   if (!["off", "mixed", "only"].includes(mode)) throw new Error("Invalid Code Mode mode")
   let disposed = false, closed = false, disposing: Promise<void> | undefined
   let initialized = false, localTransitions = 0, installationFailed = false
@@ -84,18 +96,18 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const finalizations = createCellFinalizations('cell-finalization',factOwner)
   const completionHandles=new Map<string,CompletionHandle>()
   type Producer=ReturnType<typeof createCodeDeliveryProducer>
-  const producers=new Set<Producer>(),admission=new AsyncLocalStorage<Producer|undefined>()
-  const originalCells = new Map<string, { terminal: ReturnType<typeof Promise.withResolvers<void>>; fence: ReturnType<typeof Promise.withResolvers<void>>; broker?: Pick<OriginalCellFinalization, 'settle'> }>()
+  const producers=new Set<Producer>(),admission=new AsyncLocalStorage<{producer:Producer;delegation?:import('@i-harness/core-tools/internal/code-origin').PrivateCodeCellDelegation}|undefined>()
+  const originalCells = new Map<string, { terminal: ReturnType<typeof Promise.withResolvers<void>>; fence: ReturnType<typeof Promise.withResolvers<void>>; closedObserved?:boolean; broker?: Pick<OriginalCellFinalization, 'settle'> }>()
   const finalOutputFactory=options.finalOutput
-  const finalOutputs = createFinalCodeOutputs(factOwner, finalOutputFactory, () => facts.refresh(), id=>{completionHandles.delete(id)})
-  const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged, finalOutputFactory ? {retains:cellId=>finalOutputs.retains(cellId),commit:record=>finalOutputs.commit(record)} : undefined)
+  const finalOutputs = createFinalCodeOutputs(factOwner, finalOutputFactory, () => facts.refresh(), id=>{completionHandles.delete(id)},privateOptions?.domain,privateObservation?.formatVersion)
+  const facts = createCodeModeEventFacts(factOwner, async () => { broker.revokeCells(); await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged, finalOutputFactory ? {retains:cellId=>finalOutputs.retains(cellId),commit:record=>finalOutputs.commit(record)} : undefined, privateOptions?.domain)
   const publishOutput = createCodeOutputPublisher(facts, options.retainText)
   const pendingFinishes = new Map<string, () => Promise<void>>()
   const admissionDebts = new Map<string, () => Promise<void>>()
   const refreshObservation = async () => { await facts.refresh(); for (const settle of admissionDebts.values()) await settle(); for (const finish of pendingFinishes.values()) await finish(); await runtime.drainRetainedObservations?.() }
   const liveCells = new Set<string>()
-  const open = new Map<string, string | undefined>()
-  for (const event of session.events) if (event.type === "code/cell" && event.sessionId === sessionId) {
+  const open = new Map<string, string | undefined>(privateMode ? privateObservation!.codeState().unfinished.map(cell=>[cell.cellId,cell.parentCallId]) : [])
+  for (const event of session?.events ?? []) if (event.type === "code/cell" && event.sessionId === sessionId) {
     if (event.state === "started" || event.state === "running") open.set(event.cellId, event.parentCallId)
     else open.delete(event.cellId)
   }
@@ -108,7 +120,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     tools: () => broker.definitions(),
     invoke: call => broker.invoke(call),
     drainInstructionCell: cellId => broker.drainCell(cellId),
-    restoreStore: origin => replayCodeModeStore(session, sessionId ?? origin.sessionId),
+    restoreStore: origin => {if(!privateMode)return replayCodeModeStore(session!, sessionId ?? origin.sessionId);const value=readManagedSourceCodeState(privateOptions!.domain,facts.source).store;if(value.kind==='limit-exceeded')throw Error('Session store transfer limit exceeded');return value.entries.map(([key,value])=>[key,value])},
     async commitStore({ cellId, origin, writes, signal, committed, cancelled, retainOutcome }) {
       localTransitions++; surfaceChanged()
       try {
@@ -144,7 +156,8 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
           const outputReady=Promise.withResolvers<NonNullable<ReturnType<typeof finalOutputs.captureCompletion>>>()
           void outputReady.promise.catch(()=>{})
           try {
-            if(finalOutputFactory && (sessionId ?? event.origin.sessionId) && !event.origin.instructionOrigin && !nondurable && session.formatVersion===14) {
+            if(privateMode&&event.origin.instructionOrigin)throw Error('Private instruction-backed Code unsupported')
+            if(finalOutputFactory && (sessionId ?? event.origin.sessionId) && !event.origin.instructionOrigin && !nondurable && (privateMode ? privateObservation!.formatVersion : session!.formatVersion)===14) {
               let settled:CompletionObservation|undefined
               const handle:CompletionHandle=Object.freeze({async settle(){
                 if(this!==handle)throw new Error('Original Code completion handle required')
@@ -166,10 +179,10 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
             const output=finalOutputs.captureCompletion(event.cellId)
             if(output)outputReady.resolve(output)
             else outputReady.reject(new Error('Original Code output unavailable'))
-            const producer=admission.getStore()
-            if(producer){if(event.origin.instructionOrigin)producer.unsupported();else{const handle=completionHandles.get(event.cellId);if(!handle)throw Error('Original Code completion prerequisite unavailable');await producer.started(event.cellId,handle)}}
+            const admitted=admission.getStore(),producer=admitted?.producer
+            if(producer){if(event.origin.instructionOrigin)producer.unsupported();else{const handle=completionHandles.get(event.cellId);if(!handle)throw Error('Original Code completion prerequisite unavailable');const evidence=await producer.started(event.cellId,handle);if(admitted?.delegation){if(!evidence||!isOriginalCellFinalization(finalization,factOwner))throw Error('Original Code cell finalization required');admitted.delegation.bind(event.cellId,evidence.source,evidence.capture,evidence.outcome)}}}
             await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
-            try { cell.broker = broker.startCell(event.cellId, event.origin.instructionOrigin); liveCells.add(event.cellId); event.instructionInstalled?.() }
+            try { cell.broker = broker.startCell(event.cellId, event.origin.instructionOrigin,admitted?.delegation,privateMode?facts.privateCellAction(event.cellId):undefined); liveCells.add(event.cellId); event.instructionInstalled?.() }
             catch (error) { installationFailed = true; throw error }
             surfaceChanged()
           } catch (error) {
@@ -190,6 +203,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
           await publishOutput(event)
         }
         else {
+          const originalCell=originalCells.get(event.cellId);if(originalCell)originalCell.closedObserved=true
           let receiptCommitted = false
           let finishFlight: Promise<void> | undefined
           const needsFinish = !!event.instructionReplan || !!event.origin.instructionOrigin
@@ -235,17 +249,20 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     async execute(args, exec) {
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
       const claim=enterOriginalCode(mount,exec)
-      let producer:Producer|undefined
-      if(claim && finalOutputFactory && !nondurable && session.formatVersion===14){claim.consume();const issuer=claim.takeCodeSourceIssuer();if(issuer){producer=createCodeDeliveryProducer(issuer,session,refreshObservation,async id=>{if(liveCells.has(id))await runtime.terminate(id,"Original Code source closing")},()=>{if(producer)producers.delete(producer)});producers.add(producer)}}
+      if(privateMode&&!claim)throw Error('Original private Code claim required')
+      let producer:Producer|undefined,delegation:import('@i-harness/core-tools/internal/code-origin').PrivateCodeCellDelegation|undefined
       try {
+      if(claim && finalOutputFactory && !nondurable && (privateMode ? privateObservation!.formatVersion : session!.formatVersion)===14){claim.consume();if(privateMode){if(!claim.retainPrivateCell)throw Error('Original private Code claim required');delegation=claim.retainPrivateCell()}const issuer=claim.takeCodeSourceIssuer();if(!issuer&&privateMode)throw Error('Original private Code issuer required');if(issuer){producer=createCodeDeliveryProducer(issuer,privateMode?privateOptions!.domain:session!,refreshObservation,async id=>{if(liveCells.has(id)&&!originalCells.get(id)?.closedObserved)await runtime.terminate(id,"Original Code source closing")},()=>{if(producer)producers.delete(producer)});producers.add(producer)}}
       const retained = retainedObservation(exec, refreshObservation)
       await ready
-      const out = await admission.run(producer,()=>runtime.exec(args as CodeModeExecInput, { sessionId: sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage, bindInstructionCell: cellId => retainInstructionCell(exec, cellId) }, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained }))
+      const out = await admission.run(producer?{producer,delegation}:undefined,()=>runtime.exec(args as CodeModeExecInput, { sessionId: sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage, ...privateMode?{}:{bindInstructionCell: (cellId:string) => retainInstructionCell(exec, cellId)} }, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained }))
+      let capturedOutput:unknown
+      if(privateMode&&producer&&out.status==='running'){const captured=captureLegacyFact(observationOutput(out));if(captured.kind!=='captured')throw new FactRecoveryRequiredError();capturedOutput=captured.value;if(!retained)throw new FactRecoveryRequiredError();producer.rememberObservation(()=>retained.readyCaptured(captured.value))}
       await producer?.observed(out.status==='running')
       declareObservationReplan(exec, out)
       declareToolResultOutcome(exec, out.status === 'failed' ? 'failed' : out.status === 'terminated' ? 'canceled' : 'succeeded')
-      return observationOutput(out)
-      }catch(error){producer?.failed();throw error}
+      return capturedOutput??observationOutput(out)
+      }catch(error){delegation?.revoke();producer?.failed();throw error}
     },
   }
   const waitTool: Tool = {
@@ -271,7 +288,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   }
   if (mode !== "off") {
     if (tools.get("code_exec") || tools.get("code_wait") || tools.get("code_status")) throw new Error("Code Mode tool names are already registered")
-    tools.register(execTool); if(finalOutputFactory&&!nondurable&&session.formatVersion===14)registration=captureCodeRegistration(tools,execTool,execTool.execute); tools.register(waitTool); tools.register(statusTool)
+    tools.register(execTool); if(finalOutputFactory&&!nondurable&&(privateMode ? privateObservation!.formatVersion : session!.formatVersion)===14)registration=captureCodeRegistration(tools,execTool,execTool.execute); tools.register(waitTool); tools.register(statusTool)
   }
   const mount: CodeModeMount = {
     ready: () => ready,
@@ -289,14 +306,15 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       await runtime.terminate(cellId, "Cell stopped by user")
       await options.flush?.()
     },
-    async cancel(reason) { facts.stopOptional(); await runtime.cancel(reason) },
+    async cancel(reason) { broker.revokeCells(); facts.stopOptional(); await runtime.cancel(reason) },
     async dispose() {
       if (closed) return
       if (disposing) return disposing
       if (!disposed) { disposed = true; const original=codeMounts.get(mount);if(original)original.retired=true; surfaceChanged() }
-      facts.stopOptional()
+      broker.revokeCells(); facts.stopOptional()
       const pending = (async () => {
         const errors: unknown[] = []
+        for(const producer of [...producers])try{await producer.reconcileCapturedHandoff()}catch(error){errors.push(error)}
         try { await runtime.cancel('Code Mode disposed') } catch (error) { errors.push(error) }
         let brokerFailure: unknown, brokerFailed = false
         try { await broker.dispose() } catch (error) { brokerFailure = error; brokerFailed = true }
@@ -320,9 +338,14 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       return pending
     },
   }
-  codeMounts.set(mount,{tools,ctx,view:session,factOwner,sessionId:sessionId,tool:execTool,leaf:execTool.execute,registration,retired:false})
+  codeMounts.set(mount,{tools,ctx,options,sessionId:sessionId,tool:execTool,leaf:execTool.execute,registration,retired:false})
   finalizations.bind(mount)
   finalOutputs.bind(mount)
   completionMounts.set(mount,completionHandles)
   return mount
 }
+
+
+
+
+

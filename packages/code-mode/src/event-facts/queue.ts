@@ -1,4 +1,6 @@
-import { committedFactSeqs, FactRecoveryRequiredError, type FactOwner } from '@i-harness/core-session'
+import type { ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
+import type { CodeModeFactOwner } from '../facts.ts'
+import { committedFactSeqs, FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { Callback, CellFacts, Pending, PumpResult } from './state.ts'
 import { isOriginalPreparationFailure } from './state.ts'
 import { bindOriginalCodeCommit, retainOriginalCodeCapture } from './commit-proof.ts'
@@ -8,7 +10,8 @@ export const recoveryError = (reasons: unknown[]) => Object.assign(new Aggregate
 /** One short lane, shared by the outer drive and every original cell owner.
  * A pass never waits for a source close, checkpoint or producer lifecycle. */
 export function createOutputQueue(options: {
-  owner?: FactOwner
+  owner?: CodeModeFactOwner
+  domain?: ManagedExecutionDomain
   changed(): void
   failed(record: Pending, reason: unknown): void
   hold(record: Pending): void
@@ -39,7 +42,7 @@ export function createOutputQueue(options: {
       record.prepare = undefined; record.capture = undefined; touch(record)
     }
     if (!record.disposed) {
-      if(record.descriptor && options.owner)retainOriginalCodeCapture(record,options.owner)
+      if(record.descriptor && options.owner)retainOriginalCodeCapture(record,options.owner,options.domain)
       const firstIssue = !record.attempted; record.attempted = true; touch(record)
       const outcome = await (firstIssue ? record.fact.admit() : record.fact.reconcile())
       if (outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP') {

@@ -1,18 +1,23 @@
+import { isRetiredCodeHandoff } from '../../session-persistence/src/coordinator/settlement-fact.ts'
+import { readManagedSourceCodeDelivery, retainAcknowledgedExecutionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
 import { randomUUID } from 'node:crypto';
 import { committedFactSeqs, FactRecoveryRequiredError, readDeliveries, type CapturedActionFact, type CapturedSettlementFact, type ProducerFactOutcome, type SessionView, type SettlementFacts, type CodeTerminalEvent } from '@i-harness/core-session';
 import type { OriginalCodeSourceIssuer } from '@i-harness/core-tools/model-origin';
 import { waitOriginalCompletionFinalization, type CompletionHandle, type CompletionObservation } from './register.ts';
 /** One actual Code execute owns this state; neither observation DTOs nor callers enroll it. */
-export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, view: SessionView, drive: () => Promise<void>, cancel: (cellId: string) => Promise<void>, released: () => void) {
+export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, owner: SessionView | ManagedExecutionDomain, drive: () => Promise<void>, cancel: (cellId: string) => Promise<void>, released: () => void) {
     const sourceId = randomUUID(), returned = Promise.withResolvers<void>();
     let cellId: string | undefined, completion: CompletionHandle | undefined, sourceCapture: CapturedActionFact<ProducerFactOutcome> | undefined, sourceOutcome: ProducerFactOutcome | undefined, sourceSeq: number | undefined, sourceAttempted = false, sourceRetired = false, unsupported = false;
-    let terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined, handoff: CapturedSettlementFact<ProducerFactOutcome> | undefined, terminalAttempted = false, handoffAttempted = false, terminalDone = false, handoffDone = false, wantsHandoff = false;
+    let terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined, handoff: CapturedSettlementFact<ProducerFactOutcome> | undefined, terminalAttempted = false, handoffAttempted = false, terminalDone = false, handoffDone = false, handoffRefused = false, wantsHandoff = false;
+    let sourcePin:ReturnType<typeof retainAcknowledgedExecutionMembers>|undefined,sourceMember:object|undefined;
+    let retainedObservation:(()=>void)|undefined,recoverObservation=false;
+    const publishObservation=()=>{if(recoverObservation&&handoffDone&&retainedObservation){retainedObservation();retainedObservation=undefined}};
     let settlement: Promise<void> | undefined, closing: Promise<void> | undefined, done = false;
     const settleFact = async (fact: CapturedSettlementFact<ProducerFactOutcome>, attempted: boolean) => {
         let outcome = attempted ? await fact.observe() : await fact.admit();
         if (outcome.kind === 'unknown' || outcome.kind === 'recovery-required' || outcome.kind === 'conflict' || outcome.kind === 'not-issued' && outcome.code === 'FACT_RECOVERY_REQUIRED')
             outcome = await fact.reconcile();
-        committedFactSeqs(outcome);
+        if(!isRetiredCodeHandoff(fact,outcome))committedFactSeqs(outcome);
         return outcome;
     };
     const settleSource = async () => {
@@ -26,20 +31,25 @@ export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, vie
             sourceRetired = true;
             return;
         }
-        const seq = committedFactSeqs(sourceOutcome)[0], indexed = readDeliveries(view).source('code', sourceId);
+        const seq = committedFactSeqs(sourceOutcome)[0], indexed = 'identity' in owner ? readManagedSourceCodeDelivery(owner.identity,source,sourceId) : readDeliveries(owner).source('code', sourceId);
         if (seq === undefined || indexed?.kind !== 'code' || indexed.seq !== seq || indexed.cellId !== cellId)
             throw new FactRecoveryRequiredError();
         sourceSeq = seq;
     };
-    const settleHandoff = async () => {
-        if (!wantsHandoff || handoffDone || sourceRetired || unsupported)
+    const assertHandoffCurrent = () => {
+        if(!('identity' in owner)){issuer.assertAdmissionCurrent();return}
+        if(!sourceCapture||!sourceOutcome||sourceOutcome.kind!=='committed'||sourceSeq===undefined||!completion||!sourcePin||!sourceMember)throw new FactRecoveryRequiredError();
+        source.assertHeld();sourcePin.assertCurrent();const members=sourcePin.members;if(members.length!==1||members[0]!==sourceMember)throw new FactRecoveryRequiredError();source.assertHeld();
+    };    const settleHandoff = async () => {
+        if (!wantsHandoff || handoffDone || handoffRefused || sourceRetired || unsupported)
             return;
         if (sourceSeq === undefined)
             throw new FactRecoveryRequiredError();
         handoff ??= source.delivery.capture({ type: 'agent/delivery-handoff', version: 1, kind: 'code', sourceSeq });
         const already = handoffAttempted;
         handoffAttempted = true;
-        await settleFact(handoff, already);
+        const outcome=await settleFact(handoff, already);
+        if(isRetiredCodeHandoff(handoff,outcome)){handoffRefused=true;committedFactSeqs(outcome)}
         handoffDone = true;
     };
     const captureTerminal = (observed: CompletionObservation): CodeTerminalEvent => {
@@ -63,6 +73,7 @@ export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, vie
         const flight = (async () => {
             await returned.promise;
             await settleSource();
+            publishObservation();
             if (unsupported || sourceRetired || !sourceCapture)
                 return;
             source.assertHeld();
@@ -77,6 +88,7 @@ export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, vie
                 await waitOriginalCompletionFinalization(completion);
             const observed = await completion.settle();
             await settleHandoff();
+            publishObservation();
             terminal ??= source.delivery.capture(captureTerminal(observed));
             if (!terminalDone) {
                 const attempted = terminalAttempted;
@@ -106,7 +118,7 @@ export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, vie
             return Promise.resolve();
         if (closing)
             return closing;
-        const flight = source.close().then(() => { done = true; released(); });
+        const flight = source.close().then(() => { sourcePin?.release();sourcePin=undefined;sourceMember=undefined;done = true; released(); });
         closing = flight;
         void flight.catch(() => {
             if (closing === flight)
@@ -124,6 +136,8 @@ export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, vie
         }).catch(() => { });
     };
     return Object.freeze({
+        rememberObservation(publish:()=>void){if(retainedObservation||typeof publish!=='function')throw Error('Original Code observation already retained');retainedObservation=publish},
+        async reconcileCapturedHandoff(){if(handoff&&!handoffDone&&!handoffRefused)await settleHandoff();},
         unsupported() {
             if (cellId || sourceCapture)
                 throw Error('Original Code source already started');
@@ -146,19 +160,22 @@ export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, vie
             issuer.assertAdmissionCurrent();
             if (!prepared.isCurrent())
                 throw new FactRecoveryRequiredError();
+            if(!sourceCapture||!sourceOutcome||sourceOutcome.kind!=='committed')throw new FactRecoveryRequiredError();
+            if('identity' in owner){sourcePin=retainAcknowledgedExecutionMembers(sourceCapture,sourceOutcome);const members=sourcePin.members,event=members[0];if(members.length!==1||event?.type!=='agent/delivery-source'||event.kind!=='code'||event.seq!==sourceSeq||event.cellId!==cellId||event.sourceId!==sourceId)throw new FactRecoveryRequiredError();sourceMember=event}
+            return {source,capture:sourceCapture,outcome:sourceOutcome};
         },
         async observed(running: boolean) {
             if (running && !unsupported) {
-                issuer.assertAdmissionCurrent();
+                assertHandoffCurrent();
                 wantsHandoff = true;
                 await settleHandoff();
-                issuer.assertAdmissionCurrent();
+                assertHandoffCurrent();
             }
             if (running) {
-                finish();
+                retainedObservation=undefined;finish();
                 return;
             }
-            returned.resolve();
+            retainedObservation=undefined;returned.resolve();
             await settle();
             void close().catch(() => {
                 try {
@@ -167,6 +184,10 @@ export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, vie
                 catch { /* Original owner keeps debt. */ }
             });
         },
-        failed() { finish(); }, close,
+        failed() { recoverObservation=true;finish(); }, close,
     });
 }
+
+
+
+

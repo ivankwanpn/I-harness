@@ -1,10 +1,13 @@
+import { subscribeManagedExecution, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
+import type { CodeModeFactOwner } from './facts.ts'
 import { captureLegacyFact, isStrictFactData, committedFactSeqs, FactRecoveryRequiredError, subscribe, type CodeSettlementFact, type FactOwner, type ManagedAction, type ProducerFactOutcome, type SessionEvent, type SettlementFacts, type SettlementOwnerProgress } from '@i-harness/core-session'
 import { callback, readCut, sameCut, type CellFacts, type Pending } from './event-facts/state.ts'
 import { createOutputQueue, recoveryError } from './event-facts/queue.ts'
 
 /** A mount owns one ordered queue. Each actual admission retains its one
  * original output source until its terminal has synchronously sealed it. */
-export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () => Promise<void>, onObservationChange?: () => void, committedDescriptor?: { retains(cellId:string):boolean; commit(record:object):Promise<void> }) {
+export function createCodeModeEventFacts(owner: CodeModeFactOwner, drainProducers: () => Promise<void>, onObservationChange?: () => void, committedDescriptor?: { retains(cellId:string):boolean; commit(record:object):Promise<void> }, domain?:ManagedExecutionDomain) {
+  if(domain&&domain.owner!==owner)throw TypeError('Original private Code owner required')
   const cells = new Map<string, CellFacts>(), pending = new Set<Pending>()
   const admissionHolds = new Map<string, { action?: ManagedAction<ProducerFactOutcome> }>()
   type Notification = { state: 'running' | 'succeeded' | 'failed'; reason?: unknown }
@@ -36,7 +39,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
   const changed = () => { try { onObservationChange?.() } catch { /* Passive observers cannot fail producers. */ } }
   const requireRecovery = () => { stickyRecovery = true; changed(); source.requireRecovery() }
   const observationState = (): 'available' | 'unavailable' | 'retired' => retired ? 'retired' : stickyRecovery || admitting || pending.size || held.size || admissionHolds.size ? 'unavailable' : 'available'
-  const queue = createOutputQueue({ changed, owner: committedDescriptor ? owner : undefined,
+  const queue = createOutputQueue({ changed, owner: committedDescriptor ? owner : undefined, domain,
     failed(record, reason) {
       const cell = record.cell ?? record.actionCell
       if (cell) {
@@ -120,7 +123,8 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
   }
   const mountAction = owner.beginAction(), source = mountAction.registerSettlementSource(drain)
   mountAction.finish()
-  const off = subscribe(owner.view, () => { if (pending.size) void refresh().catch(() => {}) })
+  const listener=()=>{if(pending.size)void refresh().catch(()=>{})}
+  const off = domain ? subscribeManagedExecution(domain,listener) : subscribe((owner as FactOwner).view,listener)
   const seal = (cell: CellFacts) => { if (!cell.sealed) { cell.sealed = true; cell.revision++; cell.sealNow() } }
   const required = (event: CodeSettlementFact, onCommit?: () => void, failedAdmission = false, onSettled?: () => void) => {
     if (!isStrictFactData(event)) { requireRecovery(); throw new FactRecoveryRequiredError() }
@@ -171,7 +175,8 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
     changed(); return refresh()
   }
   return {
-    refresh, observationState, requireRecovery,
+    source, refresh, observationState, requireRecovery,
+    privateCellAction(id:string){if(!domain)throw Error('Original private Code cell required');const cell=cells.get(id);if(!cell||cell.sealed)throw Error('Original private Code cell unavailable');cell.source.assertHeld();cell.action.assertOpen();return cell.action as ManagedAction<import('@i-harness/core-session').FactOutcome>},
     assertHeld() { source.assertHeld() },
     requiredPrepared(cellId: string, prepare: (assertHeld: () => void) => Promise<CodeSettlementFact>, onCommit?: () => void) {
       const cell = cells.get(cellId)
@@ -231,3 +236,6 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
     async close() { if (!retired) { retired = true; changed() }; await source.close(); off() },
   }
 }
+
+
+

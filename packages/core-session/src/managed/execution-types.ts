@@ -66,6 +66,7 @@ export interface ExecutionObservation {
  readonly prefix:Readonly<JournalPrefix>
  readonly projectionRevision:number
  readonly contextRevision:number
+ codeState():Readonly<{store:import('../projection/passive-code-store/types.ts').StoreReplay;unfinished:readonly {cellId:string;parentCallId?:string}[]}>
  readonly delivery:ExecutionDeliveryObservation
  readonly metadata:Readonly<Record<ExecutionFoldName,ExecutionFoldObservation>>
  readonly scheduleRevision:number

@@ -1,3 +1,4 @@
+import { createExecutionCodeState } from '../projection/execution-code-state.ts';
 import type { OriginalExecutionFoldFactory, OriginalExecutionFoldSink } from './execution-types.ts';
 import { types } from 'node:util';
 import { captureRewrites,type ConversationRewriteDraft,type ConversationCandidate } from '../conversation/candidate.ts';
@@ -36,6 +37,7 @@ type Candidate = {
     context: ReturnType<typeof createContextStateIndex>;
     prune: ReturnType<typeof createPruneDependencyIndex>;
     intake:ReturnType<typeof createManagedIntakeIndex>;
+    code:ReturnType<typeof createExecutionCodeState>;
     fold?: Pick<OriginalExecutionFoldSink,'appendValidated'|'finishRestore'|'snapshot'> & {assertHealthy():void;views:Readonly<Partial<Record<import('./execution-types.ts').ExecutionFoldName,(prefix:Readonly<import('./types.ts').JournalPrefix>)=>unknown>>>};
     installed: boolean;
     retired: boolean;
@@ -113,6 +115,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
         snapshot: synchronous(supplied.snapshot.bind(supplied), true),
         views:Object.freeze(named),
     });
+    const code = createExecutionCodeState(source.header,sessionId);
     let ordinal = 0;
     const scan = createConversationValidationScan({ formatVersion: source.formatVersion, header: { ...source.header, sessionId }, readEvent: source.readEvent.bind(source) });
     const sources = createConversationSourceCoordinates(), state = createConversationStateIndex(), context = createContextStateIndex(), prune = createPruneDependencyIndex(),intake=createManagedIntakeIndex();
@@ -121,6 +124,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
         await scan.push(unit);
         source.assertCurrent();
         fold?.appendValidated(unit, ordinal);
+        code.append(unit, ordinal);
         ordinal += unit.length;
         source.assertCurrent();
         sources.stage(unit).commit();
@@ -137,7 +141,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     fold?.finishRestore(source.prefix);
     source.assertCurrent();
     const candidate = Object.freeze({});
-    candidates.set(candidate, { source, owner, sessionId, index, sources, state, context, prune,intake, fold, installed: false, retired: false });
+    candidates.set(candidate, { source, owner, sessionId, index, sources, state, context, prune,intake, code, fold, installed: false, retired: false });
     return candidate;
 }
 /** Original managed constructor alone consumes its exact owner's candidate. */
@@ -167,7 +171,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
     };
     function appendStage(events:readonly SessionEventView[],validation:ReturnType<Candidate['index']['stage']>,discardValidation?:()=>void){
         const expected=revision,sources=owned.sources.stage(events),state=owned.state.stage(events),context=owned.context.stage(events),prune=owned.prune.stage(events),intake=owned.intake.stage(events);
-        let installed=false,started=false,discarded=false,sourceDone=false,validationDone=false,sourcesDone=false,stateDone=false,contextDone=false,pruneDone=false,intakeDone=false,foldDone=false,foldFailed=false;
+        let installed=false,started=false,discarded=false,sourceDone=false,validationDone=false,sourcesDone=false,stateDone=false,contextDone=false,pruneDone=false,intakeDone=false,foldDone=false,foldFailed=false,codeDone=false;
         return {events,discard(){if(started)failure('CONVERSATION_RESTORATION_ISSUED_STAGE');discarded=true;discardValidation?.()},install(batch:EncodedFactBatch,receipt:FactReceipt){
             if(discarded)failure('CONVERSATION_RESTORATION_DISCARDED_STAGE');
             if(installed)return;
@@ -176,6 +180,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             if(!validationDone){validation.commit();validationDone=true}
             if(foldFailed)failure('CONVERSATION_RESTORATION_RECOVERY_REQUIRED');
             if(!foldDone){try{owned.fold?.appendValidated(events,batch.key.firstSeq);owned.fold?.finishRestore(owned.source.prefix);foldDone=true}catch(error){foldFailed=true;throw error}sourceCurrent()}
+            if(!codeDone){owned.code.append(events,batch.key.firstSeq);codeDone=true}
             if(!sourcesDone){sources.commit();sourcesDone=true}
             if(!stateDone){state.commit();stateDone=true}
             if(!contextDone){context.commit();contextDone=true}
@@ -185,6 +190,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         }};
     }
     return {
+        codeState(){check();return owned.code.snapshot()},
         foldSnapshot(prefix:Readonly<import('./types.ts').JournalPrefix>){check();return owned.fold?.snapshot(prefix)},
         foldView(name:import('./execution-types.ts').ExecutionFoldName,prefix:Readonly<import('./types.ts').JournalPrefix>){check();return owned.fold?.views?.[name]?.(prefix)},
         hasFoldView(name:import('./execution-types.ts').ExecutionFoldName){check();return !!owned.fold?.views?.[name]},

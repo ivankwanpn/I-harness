@@ -132,3 +132,39 @@ it('translates original nonmonotone group aliases before union and preserves pos
   const nested = heldExport(ready(exported)); if (nested.kind !== 'seed' || nested.seed.version !== 2) throw Error('nested V2 required')
   expect(replayPassiveCodeStore(nested.seed.passive.codeStore, nested.seed.passive.codeStore.latest)).toEqual({ kind: 'value', entries: [['basis', 3], ['branch', 9]] })
 })
+
+it('original Code fold preserves a captured semantic seed and rewind alias', async () => {
+  const source=createSession();append(source,{type:'turn/start'});append(source,{type:'user/message',text:'one'})
+  append(source,{type:'code/store',version:1,sessionId:'o',cellId:'c',writes:[['x',7]]});append(source,{type:'code/cell',sessionId:'o',cellId:'c',state:'completed'});append(source,{type:'turn/end'})
+  const exported=heldExport(source);if(exported.kind!=='seed'||exported.seed.version!==2)throw Error('V2 required')
+  const target=ready(exported)
+  const {createExecutionCodeState}=await import('../src/projection/execution-code-state.ts')
+  const {replaySessionCodeStore}=await import('../src/projection/passive-code-store/restore.ts')
+  const fold=createExecutionCodeState(target.header,'child')
+  fold.append(target.events,0)
+  expect(fold.snapshot().store).toEqual(replaySessionCodeStore(target,'child'))
+  const point={type:'rewind/point' as const,version:1 as const,targetTurn:1,anchorSeq:1,mode:'conversation' as const,fileOps:[],seq:target.events.length}
+  fold.append([point],point.seq);target.events.push(point)
+  expect(fold.snapshot().store).toEqual(replaySessionCodeStore(target,'child'))
+})
+
+it('original Code fold preserves inherited fault and refuses missing semantic manifest', async () => {
+  const source=createSession();append(source,{type:'turn/start'});append(source,{type:'user/message',text:'one'});append(source,{type:'turn/end'})
+  const ordinary=exportConversationSeed(source,{kind:'session',sessionId:'o'},{kind:'completed'});if(ordinary.kind!=='seed')throw Error('seed required')
+  const seed:SemanticSeedV2={...ordinary.seed,version:2,selection:{kind:'completed'},passive:{codeStore:{version:1,units:0,keys:[],values:[],rows:[],cuts:[{end:0,overLimit:true}],latest:0,groups:[0],completed:[{turn:1,cut:0}]}}}
+  const target=ready(wire(seed)),{createExecutionCodeState}=await import('../src/projection/execution-code-state.ts')
+  const fold=createExecutionCodeState(target.header,'child');fold.append(target.events,0)
+  expect(fold.snapshot().store).toEqual({kind:'limit-exceeded'})
+  const malformed=createExecutionCodeState(target.header,'child');malformed.append([{type:'turn/start',seq:0}],0)
+  expect(()=>malformed.snapshot()).toThrow('Invalid semantic seed')
+})
+
+it('private Code fold retains every original overlapping seed rewind alias',async()=>{
+ const source=createSession();for(const text of ['one','two']){append(source,{type:'turn/start'});append(source,{type:'user/message',text});if(text==='one'){append(source,{type:'code/store',version:1,sessionId:'o',cellId:'c',writes:[['x',1]]});append(source,{type:'code/cell',sessionId:'o',cellId:'c',state:'completed'})}append(source,{type:'turn/end'})}
+ const exported=heldExport(source);if(exported.kind!=='seed'||exported.seed.version!==2)throw Error('V2 required')
+ const seed=structuredClone(exported.seed);seed.passive.codeStore={version:1,units:1,keys:['x'],values:[{valueJson:'1'}],rows:[{kind:'put',unit:0,key:0,value:0},{kind:'eligible',unit:0,value:true}],cuts:[{end:0},{end:2}],latest:1,groups:[1,0],completed:[]}
+ const target=ready(wire(seed)),{createExecutionCodeState}=await import('../src/projection/execution-code-state.ts'),{replaySessionCodeStore}=await import('../src/projection/passive-code-store/restore.ts')
+ const fold=createExecutionCodeState(target.header,'child');fold.append(target.events,0)
+ for(const anchorSeq of [2,1]){const event={type:'rewind/point' as const,version:1 as const,targetTurn:1,anchorSeq,mode:'conversation' as const,fileOps:[],seq:target.events.length};fold.append([event],event.seq);target.events.push(event)}
+ expect(fold.snapshot().store).toEqual(replaySessionCodeStore(target,'child'))
+})
