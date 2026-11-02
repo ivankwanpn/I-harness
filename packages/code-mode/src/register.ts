@@ -306,7 +306,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       await runtime.terminate(cellId, "Cell stopped by user")
       await options.flush?.()
     },
-    async cancel(reason) { broker.revokeCells(); facts.stopOptional(); await runtime.cancel(reason) },
+    async cancel(reason) { broker.revokeCells(); facts.stopOptional(); await runtime.cancel(reason); for(const producer of [...producers])await producer.close() },
     async dispose() {
       if (closed) return
       if (disposing) return disposing

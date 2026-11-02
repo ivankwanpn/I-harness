@@ -311,7 +311,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
-  const managedCodeStops=new Map<string,Promise<void>>()
+  const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
   const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string}>()
   const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
   type CreatingAssembly = { work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
@@ -451,7 +451,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     void request.settled.catch(error => d.warn(`[i-harness] delivery Stop requires reconciliation: ${String(error)}`))
   }
   async function awaitDeliveryStop(id: string) {
-    await managedCodeStops.get(id)
+    await managedCodeStops.get(id)?.flight
     const pending=managedStopReceipts.get(id)
     if(pending)return pending.recipient.closeReceipt(pending.fenceId)
     const request = deliveryStops.get(id)
@@ -1408,7 +1408,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   function cancelRunning(sessionId: string): { cancelled: boolean } {
     requestDeliveryStop(sessionId)
     const code=managedCodeMounts.get(sessionId)
-    if(code&&!managedCodeStops.has(sessionId)){const pending=code.cancel('user-stop');managedCodeStops.set(sessionId,pending);void pending.catch(error=>d.warn('[i-harness] private Code Stop requires cleanup: '+String(error)))}
+    const priorCodeStop=managedCodeStops.get(sessionId)
+    if(code&&(!priorCodeStop||priorCodeStop.failed)){const record={flight:Promise.resolve(),failed:false};try{record.flight=Promise.resolve(code.cancel('user-stop')).catch(error=>{record.failed=true;throw error})}catch(error){record.failed=true;record.flight=Promise.reject(error)};managedCodeStops.set(sessionId,record);void record.flight.catch(error=>d.warn('[i-harness] private Code Stop requires cleanup: '+String(error)))}
     stopNotifications(sessionId)
     const current = laneControls(sessionId)?.currentInput()
     if (current !== undefined && laneControls(sessionId)?.cancelCurrent !== undefined) {
