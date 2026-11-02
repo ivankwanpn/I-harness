@@ -65,7 +65,13 @@ export function selectSeedHistory(view: SessionView, selection: Exclude<SeedSele
   const source = built ?? buildSelectionSource(view)
   const resolved = resolveSeedBoundary(view, selection, source.turns)
   if (resolved.kind === 'refused') return resolved
-  const history = source.history, turns = source.turns, last = resolved.boundary.last
+  return selectSeedHistoryFromStructure(source, selection, resolved.boundary, index => view.events[index]!.type, view.events.find(event => event.type === 'conversation/seed-manifest'))
+}
+
+/** Structural selection stays independent of payload archive access. */
+export function selectSeedHistoryFromStructure(source: Pick<SelectionSource, 'history' | 'turns'>, selection: Exclude<SeedSelection, { kind: 'none' }>, boundary: SemanticTurnBoundary, typeAt: (index: number) => string, manifest: Extract<import('../managed/types.ts').SessionEventView, { type: 'conversation/seed-manifest' }> | undefined) {
+  if (!validSelection(selection)) return { kind: 'refused' as const, reason: 'invalid-selection' as const }
+  const history = source.history, turns = source.turns, last = boundary.last
   const first = selection.kind === 'last-turns' ? Math.max(1, turns.total - selection.count + 1) : 1
   const includeUnframed = selection.kind !== 'last-turns' || selection.count >= turns.total
   const rebase = (extent: TurnExtent): TurnExtent => extent.kind === 'unframed' ? extent : { kind: 'framed', first: extent.first - first + 1, last: extent.last - first + 1 }
@@ -79,7 +85,7 @@ export function selectSeedHistory(view: SessionView, selection: Exclude<SeedSele
   for (const item of history.items) {
     if (item.kind === 'input' && !complete(item)) {
       const inputRefs = [...item.sources, ...item.provenance.evidence].filter(ref => ref.part !== 'step')
-      if (inputRefs.some(ref => !['user/message', 'agent/input/admitted', 'conversation/seed-group'].includes(view.events[ref.eventIndex]!.type)
+      if (inputRefs.some(ref => !['user/message', 'agent/input/admitted', 'conversation/seed-group'].includes(typeAt(ref.eventIndex))
         || !['message', 'admission', 'image', 'group'].includes(ref.part) && !/^item:\d+(?::media:\d+)?$/.test(ref.part))) return { kind: 'refused' as const, reason: 'unsafe-input-component' as const }
       const input = { ...item, unit: undefined, unitInfo: undefined, sources: item.sources.filter(ref => ref.part !== 'step'), provenance: { ...item.provenance, evidence: item.provenance.evidence.filter(ref => ref.part !== 'step') } }
       partitioned.push(input); originalInputs.set(input, item)
@@ -129,7 +135,6 @@ export function selectSeedHistory(view: SessionView, selection: Exclude<SeedSele
     if (ordinal === undefined) return { kind: 'refused' as const, reason: 'straddling-group' as const }
     retainedInputOmissions.set(input, ordinal)
   }
-  const manifest = view.events.find(event => event.type === 'conversation/seed-manifest')
   const inheritedOmissions: { ordinal: number; omission: SeedOmission }[] = []
   if (manifest?.type === 'conversation/seed-manifest') for (const [ordinal, omission] of manifest.omissions.entries()) {
     const selected = extentSelection(omission.extent)

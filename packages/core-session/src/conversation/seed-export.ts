@@ -3,7 +3,7 @@ import type { SeedExport, SeedSourceLabel, SeedSelection, SemanticSeedV1, Legacy
 import { seedData, seedFields, seedId, validateSemanticSeed } from './seed-codec.ts'
 import { seedHash, semanticSeedDomain } from './seed-digest.ts'
 import { selectSeedHistory } from './seed-selection.ts'
-import { captureSeedSelection, captureSeedSelectionForResults } from './seed-capture.ts'
+import { captureSeedSelection, captureSeedSelectionForResults, captureSeedSelectionFromArchive } from './seed-capture.ts'
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { createCompletedPassiveContext, type PassiveExportOption } from './passive-seed-context.ts'
 import { projectPassiveCodeStore, capturePassiveCodeStore } from '../projection/passive-code-store.ts'
@@ -12,6 +12,7 @@ import { isOriginalCompletedPassiveContext, type CompletedPassiveContext } from 
 import type { HeldInheritedResultMetadata, ResultClassification, SelectedResultPageV1 } from './selected-results-types.ts'
 import { capturePassiveCodeStoreData } from '../projection/passive-code-store/capture.ts'
 import { types } from 'node:util'
+import { readOriginalRestoredTaskHistory } from '../managed/restored-view.ts'
 
 const ownData = (value: unknown, key: string): unknown => value && typeof value === 'object' && !types.isProxy(value) ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined
 
@@ -34,18 +35,34 @@ export function exportConversationSeed(view: SessionView, sourceLabel: SeedSourc
     if (selected.kind === 'refused') return selected
     const codeStore = context?.kind === 'ready' ? capturePassiveCodeStore(projectPassiveCodeStore(context.context)) : undefined
     const captured = captureSeedSelection(view, selected)
-    const preimage = { version: codeStore ? 2 : 1, source: sourceLabel, inheritedOrigins: captured.inheritedOrigins, selection, turns: selected.turns,
-      omissions: captured.omissions, artifacts: captured.artifacts, groups: captured.groups, ...(codeStore ? { passive: { codeStore } } : {}) }
-    const sourceObservationDigest = seedHash(codeStore ? 'ih.semantic-seed.source.v2' : 'ih.semantic-seed.source.v1', preimage)
-    const origins: SeedOrigin[] = [sourceLabel.kind === 'session'
-      ? { kind: 'session', sessionId: sourceLabel.sessionId, revision: sourceObservationDigest } : { kind: 'anonymous', contentDigest: sourceObservationDigest }, ...captured.inheritedOrigins]
-    const common = { origins,
-      turns: selected.turns, omissions: captured.omissions, artifacts: captured.artifacts, groups: captured.groups }
-    const seed: LegacySemanticSeed = codeStore && selection.kind === 'completed' ? { ...common, version: 2, selection, passive: { codeStore } } : { ...common, version: 1, selection }
-    validateSemanticSeed(seed)
+    const result = finalizeSeed(sourceLabel, selection, selected, captured, codeStore)
     if (owned) { try { passive.owner.assertCurrent() } catch { return { kind: 'refused', reason: 'source-changed' } } }
-    return { kind: 'seed', seed, digest: seedHash(semanticSeedDomain(seed), seed), sourceObservationDigest }
+    return result
   } catch { return { kind: 'refused', reason: 'invalid-seed' } }
+}
+
+function finalizeSeed(sourceLabel: SeedSourceLabel, selection: Exclude<SeedSelection, {kind:'none'}>, selected: Extract<ReturnType<typeof selectSeedHistory>, {kind:'selected'}>, captured: ReturnType<typeof captureSeedSelection>, codeStore?: ReturnType<typeof capturePassiveCodeStore>) {
+  const preimage = { version: codeStore ? 2 : 1, source: sourceLabel, inheritedOrigins: captured.inheritedOrigins, selection, turns: selected.turns,
+    omissions: captured.omissions, artifacts: captured.artifacts, groups: captured.groups, ...(codeStore ? { passive: { codeStore } } : {}) }
+  const sourceObservationDigest = seedHash(codeStore ? 'ih.semantic-seed.source.v2' : 'ih.semantic-seed.source.v1', preimage)
+  const origins: SeedOrigin[] = [sourceLabel.kind === 'session'
+    ? { kind: 'session', sessionId: sourceLabel.sessionId, revision: sourceObservationDigest } : { kind: 'anonymous', contentDigest: sourceObservationDigest }, ...captured.inheritedOrigins]
+  const common = { origins,
+    turns: selected.turns, omissions: captured.omissions, artifacts: captured.artifacts, groups: captured.groups }
+  const seed: LegacySemanticSeed = codeStore && selection.kind === 'completed' ? { ...common, version: 2, selection, passive: { codeStore } } : { ...common, version: 1, selection }
+  validateSemanticSeed(seed)
+  return { kind: 'seed' as const, seed, digest: seedHash(semanticSeedDomain(seed), seed), sourceObservationDigest }
+}
+
+/** Internal entry accepts only a source issued by the restored conversation owner. */
+export async function exportManagedTaskConversationSeed(source: object, selection: Extract<SeedSelection, {kind:'all'|'last-turns'}>): Promise<SeedExport<SemanticSeedV1>> {
+  try {
+    const original = readOriginalRestoredTaskHistory(source), prepared = await original.select(selection)
+    if (prepared.kind === 'refused') return prepared
+    if (!Number.isSafeInteger(prepared.formatVersion) || prepared.formatVersion < 1 || prepared.formatVersion > CURRENT_FORMAT_VERSION || ownData(ownData(prepared.header, 'semanticSeed'), 'version') === 3 || ownData(prepared.manifest, 'version') === 3) return {kind:'refused', reason:'source-unsupported'}
+    const captured = captureSeedSelectionFromArchive(prepared.archive, prepared.header, prepared.manifest, prepared.selected, {sourceCoordinates:prepared.coordinates, pruneSubstitutes:prepared.substitutes})
+    return finalizeSeed({kind:'session', sessionId:original.sessionId}, selection, prepared.selected, captured) as SeedExport<SemanticSeedV1>
+  } catch { return {kind:'refused', reason:'invalid-seed'} }
 }
 
 /** Internal single-capture public metadata exporter. No route or grant is
