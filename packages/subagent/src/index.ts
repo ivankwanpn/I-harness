@@ -91,7 +91,9 @@ export interface RegisterSubagentOptions extends RoleModelHost {
    * provider` for every value it could ever hold. */
   resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
   exec: ExecService
-  parentModel: ModelClient
+  parentModel?: ModelClient
+  /** Constructor-bound live parent model, read only by actual child work. */
+  getParentModel?: () => ModelClient
   parentSession?: SessionView
   managedParent?: {domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment}
   factOwner?: FactOwner
@@ -166,6 +168,8 @@ export interface RegisterSubagentResult {
 // four built-in roles, creates the job registry + agent table, builds the 11
 // subagent/job tools, and registers them on the parent registry.
 export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistry, opts: RegisterSubagentOptions): RegisterSubagentResult {
+  const parentModel=opts.parentModel,modelAccessor=opts.getParentModel?.bind(opts)
+  if(!parentModel&&!modelAccessor)throw TypeError('Original parent model required')
   const managed=opts.managedParent
   if(managed&&(!isManagedExecutionAttachment(managed.execution)||!isManagedExecutionDomain(managed.domain,ctx)||managed.execution.identity!==managed.domain.identity||managed.execution.owner!==managed.domain.owner||opts.parentSession||opts.factOwner))throw TypeError('Original managed subagent parent required')
   if(!managed&&!opts.parentSession)throw TypeError('Original subagent parent required')
@@ -309,7 +313,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     results: opts.results,
     reportPolicy: opts.reportPolicy,
     table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, managedParent:managed, parentCtx: ctx,
-    parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
+    get parentModel(){const model=modelAccessor?modelAccessor():parentModel;if(!model)throw TypeError('Original parent model unavailable');return model}, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
     codeMode: opts.codeMode, codeModeFactory: opts.codeModeFactory,
     // The role-model gate travels with the resolver it gates: both ride

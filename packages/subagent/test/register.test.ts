@@ -11,6 +11,12 @@ import { registerSubagent } from "../src/index.ts"
 const resolveModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 
 describe("registerSubagent", () => {
+  it('defers the original parent model accessor until child work', async () => {
+    const ctx=createContext(),tools=createToolRegistry(ctx),model=createMockClient([]);let reads=0
+    const mounted=registerSubagent(ctx,tools,{resolveModel,exec:registerExec(ctx),parentSession:createSession(),getParentModel(){reads++;return model}})
+    await mounted.ready;expect(reads).toBe(0);expect(mounted.roles.get('general')).toBeDefined();expect(tools.get('spawn_agent')).toBeDefined()
+    await mounted.dispose()
+  })
   it("unbound legacy notification stays pending through activation and persistence teardown", async () => {
     let admissions = 0
     const saved: unknown[] = []
