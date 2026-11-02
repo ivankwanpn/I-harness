@@ -1,8 +1,10 @@
-import { createNondurableFactOwner, isNondurableSession, type SessionView } from '@i-harness/core-session'
+import { createNondurableFactOwner, isNondurableSession } from '@i-harness/core-session'
 import type { ExecuteToolCallsOptions } from './types.ts'
+import {isManagedBatchSource,type BatchSource} from './managed-source.ts'
 
-export function resolveBatchFacts(session: SessionView, options: ExecuteToolCallsOptions): ExecuteToolCallsOptions {
+export function resolveBatchFacts(session: BatchSource, options: ExecuteToolCallsOptions): ExecuteToolCallsOptions {
   const checkpoint = options.flush ? { flush: () => options.flush!() } : {}
+  if(isManagedBatchSource(session))return {...options,...checkpoint,facts:session.action.facts.tools,registerFactSource:session.register.bind(session),assertFactOpen:session.action.assertOpen.bind(session.action)}
   if (options.facts && options.registerFactSource) return { ...options, ...checkpoint }
   if (!isNondurableSession(session)) throw Object.assign(new Error('Managed tools require owned producer ports'), { code: 'FACT_OWNER_UNSUPPORTED' })
   // This explicit standalone batch already owns its received calls, including

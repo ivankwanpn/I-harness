@@ -1,10 +1,10 @@
-import { publishTransient } from "@i-harness/core-session"
 import { agentFacts, committedFactSeqs } from './facts.ts'
 import type { LLMStreamEvent } from "@i-harness/llm-seam"
 
-import type { AgentDeps } from "./types.ts"
+import {modelStreamSource,type ModelStreamDependencies} from './stream-source.ts'
 
-export function createStepReasoning(deps: Pick<AgentDeps, "session" | 'facts' | 'sourceFacts'>, reasoning: string[], abort: AbortSignal | undefined, startSeq: () => number) {
+export function createStepReasoning(deps: ModelStreamDependencies, reasoning: string[], abort: AbortSignal | undefined, startSeq: () => number) {
+  const stream=modelStreamSource(deps)
   let reasoningBlockIndex = 0
   let pendingReasoning: string[] = []
   let pendingFact: Promise<import('@i-harness/core-session').ProducerFactOutcome>|undefined
@@ -26,7 +26,7 @@ export function createStepReasoning(deps: Pick<AgentDeps, "session" | 'facts' | 
     const offset = reasoningOffset
     reasoningDelta = []
     reasoningOffset += text.length
-    publishTransient(deps.session, { type: "reasoning/chunk", streamId: reasoningStreamId, text, offset, atSeq: reasoningAtSeq, ...(pendingReasoningBlockId === undefined ? {} : { blockId: pendingReasoningBlockId }) })
+    stream.publish({ type: "reasoning/chunk", streamId: reasoningStreamId, text, offset, atSeq: reasoningAtSeq, ...(pendingReasoningBlockId === undefined ? {} : { blockId: pendingReasoningBlockId }) })
   }
   const flushReasoning = async () => {
     clearReasoningTimer()
@@ -52,7 +52,7 @@ export function createStepReasoning(deps: Pick<AgentDeps, "session" | 'facts' | 
       if (ev.text) {
         if (reasoningStreamId === undefined) {
           reasoningStreamId = `${startSeq()}:${reasoningBlockIndex++}`
-          reasoningAtSeq = deps.session.events.length
+          reasoningAtSeq = stream.eventCount()
         }
         pendingReasoningBlockId = ev.blockId
         pendingReasoning.push(ev.text)

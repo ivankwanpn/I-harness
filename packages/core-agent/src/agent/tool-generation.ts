@@ -2,8 +2,26 @@ import type { AgentDeps } from './types.ts'
 import type { ExecuteToolCallsOptions } from '../tool-batch/types.ts'
 import { generationError, type AuxiliaryGenerationAction, type ApprovalGenerationAction, type MediaGenerationAction, type ToolModelGeneration } from '@i-harness/llm-seam'
 import type { SessionView } from '@i-harness/core-session'
+import {isManagedBatchSource,type ManagedBatchSource} from '../tool-batch/managed-source.ts'
+import type {ManagedAgentHost,ManagedGenerationLifecycle} from './managed-types.ts'
+import {assertExecutionGeneration} from '../../../session-executor/src/lifecycle/generation-actions.ts'
+import {assertManagedActionCurrent} from '@i-harness/core-session/internal/execution'
 
 const reviewerBindings = new WeakMap<object, { view: object; action: AuxiliaryGenerationAction; consumed: boolean; check: () => void }>()
+/** Same original auxiliary generation protocol, over captured native members.
+ * Parent identity is observed while the real main generation is still live. */
+export function managedToolGenerationFactory(host:ManagedAgentHost,source:ManagedBatchSource,lifecycle:ManagedGenerationLifecycle,parentActionId:string):NonNullable<ExecuteToolCallsOptions['modelGeneration']>{
+ if(!isManagedBatchSource(source)||source.domain!==host.domain)throw generationError('GENERATION_UNSUPPORTED')
+ return (call,signal)=>{
+  const index=source.indexOfCall(call)
+  if(call.name==='code_exec')throw generationError('GENERATION_UNSUPPORTED')
+  const event=source.readCall(index),check=()=>{signal.throwIfAborted();assertManagedActionCurrent(host.domain,source.action);source.assertCall(index,call);if(source.readCall(index)!==event)throw generationError('GENERATION_STALE')}
+  const factories:ToolModelGeneration={
+   async approval(options){check();const generation=await lifecycle.open('approval',{kind:'tool',seq:event.seq!,parentActionId},{signal,timeoutMs:options.timeoutMs,selectedClient:options.selectedClient,start:{wall:Date.now(),monotonic:performance.now()}});assertExecutionGeneration(host.execution,generation,source.action);let attached=false;const capability:ApprovalGenerationAction={signal:generation.signal,control:generation.control('auxiliary',check),bind:(prepared,bindingSource)=>generation.bind(prepared,bindingSource),close:disposition=>generation.close(disposition),recoverClose:generation.recoverClose?.bind(generation),forChild(view){check();assertExecutionGeneration(host.execution,generation,source.action);const child=view as SessionView;if(this!==capability||attached||child.header?.origin!=='approval-review'||child.header.parentSession!==host.domain.sessionId||child.header.seedLength!==0)throw generationError('GENERATION_STALE');attached=true;const binding=Object.freeze({});reviewerBindings.set(binding,{view,action:capability,consumed:false,check(){check();assertExecutionGeneration(host.execution,generation,source.action)}});return binding}};return Object.freeze(capability)},
+   async media(timeoutMs){check();if(event.name!=='read_video')throw generationError('GENERATION_STALE');const dispatch=source.readDispatch(index),generation=await lifecycle.open('media',{kind:'tool',seq:dispatch.seq!,parentActionId},{signal,timeoutMs,start:{wall:Date.now(),monotonic:performance.now()}});assertExecutionGeneration(host.execution,generation,source.action);return Object.freeze({signal:generation.signal,control:generation.control('auxiliary',check),bindAudio:()=>generation.bindAudio(),close:(disposition:Parameters<MediaGenerationAction['close']>[0])=>generation.close(disposition)})},
+  };return Object.freeze(factories)
+ }
+}
 /** Read-only validator. Only actual accepted-tool composition below can mint. */
 export function borrowApprovalGeneration(binding: object | undefined, view: SessionView): AuxiliaryGenerationAction | undefined {
   if (!binding) return undefined

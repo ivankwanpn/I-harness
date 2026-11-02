@@ -5,6 +5,7 @@ import { managedSessions, managedFactOwners, subscribers } from '../events/state
 import { captureLegacyFact, freezeJsonData } from './capture.ts'
 import type { SessionView } from './types.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
+import { createManagedIntakeIndex } from './intake-index.ts'
 const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
 const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
 // Only managedSessionState enrolls: its initial copy and every appended row
@@ -64,11 +65,8 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   if (captured.kind !== 'captured') throw new TypeError('FACT_CAPTURE_FAILED')
   const events: SessionEvent[] = [...captured.value.events] as SessionEvent[]
   const index = createIndex(events, position => events[position], source.formatVersion, { ...source.header, ...scope })
-  const pendingInputs = new Set<string>()
-  for (const event of events) {
-    if (event.type === 'agent/input/admitted') pendingInputs.add(event.inputId)
-    if (event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') pendingInputs.delete(event.inputId)
-  }
+  const intake=createManagedIntakeIndex()
+  intake.stage(events,false).commit()
   const deny = (): never => { throw new TypeError('Managed Session is readonly') }
   const facade = new Proxy(events, {
     set: deny, deleteProperty: deny, defineProperty: deny, setPrototypeOf: deny, preventExtensions: deny,
@@ -94,18 +92,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
     stage(suffix: SessionEvent[]) {
       const prepared: SessionEvent[] = []
       for (const event of suffix) prepared.push(freezeJsonData(prepareSessionEvent(view, event, event.seq!, prepared)) as SessionEvent)
-      const changed = new Map<string, boolean>()
-      for (const event of prepared) {
-        if (event.type !== 'agent/input/admitted' && event.type !== 'agent/input/promoted' && event.type !== 'agent/input/cancelled') continue
-        const pending = changed.get(event.inputId) ?? pendingInputs.has(event.inputId)
-        if (event.type === 'agent/input/admitted') {
-          if (pending || !event.inputId || typeof event.text !== 'string' || !event.text || !['queue', 'steer'].includes(event.delivery) || !['user', 'system'].includes(event.intent)) throw new TypeError('Invalid or duplicate input admission')
-          changed.set(event.inputId, true)
-        } else {
-          if (!pending) throw new TypeError('Input is not pending')
-          changed.set(event.inputId, false)
-        }
-      }
+      const inputs=intake.stage(prepared)
       validateDeliveryFrame(prepared, view.formatVersion)
       const staged = index.stage(prepared)
       // Keep the validated installation array private and immutable. Exposing
@@ -119,7 +106,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
         // only owned data; observers are explicitly outside this capability.
         staged.commit()
         for (const event of prepared) events.push(event)
-        for (const [id, pending] of changed) { if (pending) pendingInputs.add(id); else pendingInputs.delete(id) }
+        inputs.commit()
         installed = true
       } })
     },
@@ -137,3 +124,23 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   }
 }
 export function isManagedFactOwner(view: SessionView, owner: object): boolean { return managedFactOwners.get(view) === owner }
+/** Explicit complete compatibility array over an already-owned index. It never
+ * reconstructs validation or supplies authority to a different producer. */
+export function createManagedIndexedView(source:readonly import('./types.ts').SessionEventView[],formatVersion:number,header:SessionView['header'],index:ConversationValidationIndex,owner:object,sessionId:string){
+  if(source.length!==index.eventCount)throw TypeError('Complete original compatibility history required')
+  const events=[...source] as SessionEvent[],deny=():never=>{throw TypeError('Managed Session is readonly')}
+  const facade=new Proxy(events,{set:deny,deleteProperty:deny,defineProperty:deny,setPrototypeOf:deny,preventExtensions:deny})
+  const view:SessionView=Object.freeze({formatVersion,events:facade,...header?{header}:{}})
+  managedSessions.add(view);managedFactOwners.set(view,owner);originalIndexes.set(view,index);originalSourceSessions.set(view,sessionId)
+  return {view,append(suffix:readonly import('./types.ts').SessionEventView[]){
+    const first=suffix[0]?.seq;if(first===undefined)return
+    if(events.length>first){if(suffix.some(event=>events[event.seq!]!==event))throw TypeError('Original compatibility suffix changed');return}
+    if(events.length!==first||index.eventCount!==first+suffix.length)throw TypeError('Original compatibility suffix mismatch')
+    for(const event of suffix)events.push(event as SessionEvent)
+  },observe(suffix:readonly SessionEvent[],report:(error:unknown)=>void){
+    const failed=()=>{try{Promise.resolve(report(Object.assign(Error('Managed fact observer failed'),{code:'FACT_OBSERVER_FAILED'}))).catch(()=>{})}catch{}}
+    for(const event of suffix)for(const observer of [...(subscribers.get(view)??[])])try{Promise.resolve(observer(event)).catch(failed)}catch{failed()}
+  }}
+}
+export { restoreManagedExecutionState,isManagedExecutionOwner } from './execution-state.ts'
+export { readAcknowledgedExecutionMembers,retainAcknowledgedExecutionMembers } from './execution-members.ts'

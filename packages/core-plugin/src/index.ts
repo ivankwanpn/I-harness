@@ -3,6 +3,9 @@ import { createScope } from "./scope/create-scope.ts"
 
 export type { NextFn, Listener, WaterfallHandler, CascadeHandler, GuardFn, Plugin, PluginContext } from "./types.ts"
 export { CASCADE_REDISPATCH, markCascadeRedispatch, isCascadeRedispatch } from "./redispatch.ts"
+export {onExecutionEvent,waterfallExecutionEvent,onExecutionCascade,isOriginalExecutionHookScope,captureExecutionHookChannel,isExecutionHookChannel,registerExecutionHookRuntime} from './execution-hooks.ts'
+export type {ExecutionHookChannel} from './execution-hooks.ts'
+export type {ExecutionHookRuntime,ExecutionHookStopInput} from './execution-runtime.ts'
 
 export function createContext(): PluginContext {
   return createScope(null, null, async () => {})

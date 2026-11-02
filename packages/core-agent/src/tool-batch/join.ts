@@ -1,6 +1,5 @@
 import { resolveBatchFacts } from "./facts.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { SessionView as Session } from "@i-harness/core-session"
 import { isInstructionReplan, isPolicyRefusal, instructionReplan, registryRequiresInstructionOrigin, type ToolRegistry, type CapturedToolCall, type AcceptedInstructionCall } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import { createBatchCancellation, finishCancelledBatch, finishCheckpointFailure } from "./cancel.ts"
@@ -8,6 +7,8 @@ import { createBatchRecords } from "./record.ts"
 import { createStartCall } from "./dispatch.ts"
 import { prepareLiveBatch, bindLiveBatchSource, markLiveBatchClosed } from './live-continuation.ts'
 import { recordPreparationFailure } from './prepare.ts'
+import {isManagedBatchSource,type BatchSource} from './managed-source.ts'
+import {savingFailure} from '../agent/saving-failure.ts'
 
 // M13 bounded rolling-pool scheduler. Model-order guarantees:
 //   - start order = model order (groups walk the batch left-to-right);
@@ -40,8 +41,9 @@ import { recordPreparationFailure } from './prepare.ts'
 // (no finalize / no agent/post-tool) so an already-settled sibling commits
 // its REAL result instead of being orphaned behind the failed slot.
 
-export async function executeToolCalls(ctx: PluginContext, session: Session, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions): Promise<void> {
-  const liveToken = prepareLiveBatch(opts, session, batch)
+export async function executeToolCalls(ctx: PluginContext, session: BatchSource, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions): Promise<void> {
+  if(isManagedBatchSource(session))batch=session.captureBatch(batch)
+  const liveToken = isManagedBatchSource(session)?undefined:prepareLiveBatch(opts, session, batch)
   opts = resolveBatchFacts(session, opts)
   // Allocate model-order slots before reading the owner's signal, matching the
   // original initialization. The commit capability is resolved only on use.
@@ -69,7 +71,8 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
     for (let index = 0; index < batch.length; index++) {
       const call = batch[index]!
       try {
-        const capture = tools.capture({ name: call.name, args: call.args }, { sessionId: opts.sessionId, session, callId: call.callId, callEventSeq: call.eventSeq, settlementSource: opts.settlementSource, modelGeneration: opts.modelGeneration?.(call, cancellation.batchSignal) })
+        if(isManagedBatchSource(session))session.assertCall(index,call)
+        const capture = tools.capture({ name: call.name, args: call.args }, { sessionId: opts.sessionId, ...isManagedBatchSource(session)?{}:{session}, callId: call.callId, callEventSeq: call.eventSeq, settlementSource: opts.settlementSource, modelGeneration: opts.modelGeneration?.(call, cancellation.batchSignal) })
         const origin = opts.instructionBatch?.bind(index, capture), inspected = tools.inspectCapture(capture)
         captured.set(index, { capture, origin, concurrencySafe: inspected.concurrencySafe })
         if (origin) entries.push({ registry: tools, capture, origin })
@@ -142,6 +145,7 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
   cancellation.observeAbort()
   if (cancellation.aborted) return await finishCancelledBatch(session, batch, records, cancellation)
   if (cancellation.hasRefusal) {
+    if(isManagedBatchSource(session))records.cancelNeverDispatched()
     try { await records.drainSettled() }
     catch (cause) { throw Object.assign(new AggregateError([cancellation.firstRefusal, cause], `${cancellation.firstRefusal instanceof Error ? cancellation.firstRefusal.message : 'Tool execution failed'}; real tool settlement requires recovery`), { code: 'FACT_RECOVERY_REQUIRED' }) }
     throw cancellation.firstRefusal
@@ -154,11 +158,12 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
     }
     await records.commitReady()
   }
-  } catch (error) { executionFailed = true; executionFailure = error; throw error }
+  } catch (error) { executionFailed = true; executionFailure = error;try{if(isManagedBatchSource(session))records.cancelNeverDispatched()}catch(cleanup){executionFailure=savingFailure(error,[cleanup],'Original never-dispatched cancellation failed')}throw executionFailure }
   finally {
     finished.resolve()
     try { await closeSource() }
     catch (cause) { throw Object.assign(new AggregateError([...(executionFailed ? [executionFailure] : []), cause], `${executionFailure instanceof Error ? executionFailure.message : 'Tool execution failed'}; real tool settlement requires recovery`), { code: 'FACT_RECOVERY_REQUIRED' }) }
+    if(isManagedBatchSource(session))session.release()
     if (executionFailed && cancellation.hasFlushError && executionFailure === cancellation.firstFlushError && cancellation.liveEligible && records.liveComplete) markLiveBatchClosed(liveToken, source, executionFailure)
   }
 }

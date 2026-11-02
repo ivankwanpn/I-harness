@@ -30,6 +30,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
   holdRecovery(): void
   releaseRecovery(): void
   onCloseRequested(): void
+  captureMembers?(source:SettlementFacts):import('@i-harness/core-session/internal/execution').OriginalExecutionCaptureHooks
 }, released: () => void, reconcilePending?: () => Promise<void>, checkpointOwner?: SettlementCheckpointOwner): SettlementFacts {
   let active = true, closeRequested = false, closing: Promise<void> | undefined
   const closeAck = Promise.withResolvers<void>()
@@ -53,7 +54,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
     if (!active) throw Object.assign(new Error('Settlement source is closed'), { code: 'FACT_CLOSED' })
   }
   const quarantineCapture = () => { failed = true; operations.quarantineCapture() }
-  const retained = { assertHeld, admit: operations.admitCaptured, reconcile: operations.reconcile, status: operations.status, quarantineCapture }
+  const retained:Parameters<typeof import('./settlement-fact.ts').captureSettlementFact>[1] = { assertHeld, admit: operations.admitCaptured, reconcile: operations.reconcile, status: operations.status, quarantineCapture }
   const records = createSourceFacts(retained)
   // Only short settlement stages hold this lane. In particular, a producer's
   // lifecycle drain can wait for a seal while checkpoints continue to run.
@@ -147,7 +148,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
     void pending.then(() => { closeAck.resolve() }, () => { if (closing === pending) closing = undefined })
     return pending
   }
-  const source = {
+  const source:SettlementFacts = {
     recovery: { capture: event => capture('recovery', event, { kind: 'metadata', event }) },
     softReduction: { capture(event) {
       assertHeld()
@@ -193,5 +194,6 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
   } satisfies SettlementFacts
   originalSources.add(source)
   closeAcknowledgments.set(source, { assertLive() { if(closeRequested)throw Object.assign(new Error('Original settlement close observation retired'),{code:'FACT_CLOSED'});assertHeld() }, acknowledgment: closeAck.promise })
+  retained.captureMembers=operations.captureMembers?.(source)
   return source
 }

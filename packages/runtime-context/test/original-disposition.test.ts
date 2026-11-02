@@ -3,11 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createRuntimeContext } from '../src/index.ts'
 
 const installation = vi.hoisted(() => ({ blocked: false }))
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load=>{const original=await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return{...original,createFactJournalBackend(...args:Parameters<typeof original.createFactJournalBackend>){const journal=original.createFactJournalBackend(...args);return{...journal,appendOwnedBatch:vi.fn(journal.appendOwnedBatch),reconcileOwnedBatch:vi.fn(journal.reconcileOwnedBatch)}}}})
 vi.mock('@i-harness/core-session', async original => {
   const api = await original<typeof import('@i-harness/core-session')>()
   return { ...api, createManagedSessionState(...args: Parameters<typeof api.createManagedSessionState>) {
@@ -18,10 +20,10 @@ vi.mock('@i-harness/core-session', async original => {
 })
 
 async function fixture(disposition: 'committed' | 'absent' | 'install') {
-  const root = await mkdtemp(join(tmpdir(), 'ih-runtime-disposition-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+  const root = await mkdtemp(join(tmpdir(), 'ih-runtime-disposition-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } },taskDocumentStorageContract), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const append = vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!, reconcile = vi.mocked(backend.reconcileOwnedBatch!).getMockImplementation()!
   let key: BatchKey | undefined, ready = false, issues = 0, getters = 0, factories = 0, captures = 0, finishes = 0, retains = 0, releases = 0, text = 'first'
-  backend.appendOwnedBatch = async (...args) => {
+  vi.mocked(backend.appendOwnedBatch!).mockImplementation(async (...args) => {
     const records = decodeFactBatch(args[3].bytes).events
     if (records.some(event => event.type === 'runtime/context')) {
       issues++
@@ -33,8 +35,8 @@ async function fixture(disposition: 'committed' | 'absent' | 'install') {
       }
     }
     return append(...args)
-  }
-  backend.reconcileOwnedBatch = (...args) => !ready && disposition !== 'install' && key?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
+  })
+  vi.mocked(backend.reconcileOwnedBatch!).mockImplementation((...args) => !ready && disposition !== 'install' && key?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args))
   const rc = createRuntimeContext(document.view, signal => {
     factories++; const action = document.beginAction(signal)
     return { finish() { finishes++; action.finish() }, captureRuntimeContext(record, check) { captures++; return action.captureRuntimeContext(record, check) } }

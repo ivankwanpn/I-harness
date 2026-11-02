@@ -1,5 +1,6 @@
 import { associateOriginalResultRevocation } from './coordinator/result-revocation.ts'
 import { associateRestoredContextAcquisition } from './restored-context-internal.ts'
+import {associateManagedExecution} from './execution-internal.ts'
 import { attachArchiveReadResources } from './archive-read-internal.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
@@ -206,6 +207,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       }
   }
   associateRestoredContextAcquisition(coordinator,{acquire:id=>managed.acquireRestoredContext(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
+  associateManagedExecution(coordinator,{acquire:id=>managed.acquireExecution(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
   associateOriginalResultOrdering(coordinator, ownership)
   if (ownership.lockEnabled) associateOriginalResultRevocation(coordinator, observations.createResultRevocationAdmission(ownership), ownership)

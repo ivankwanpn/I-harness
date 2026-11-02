@@ -1,5 +1,5 @@
 import { agentFacts, committedFactSeqs } from "./facts.ts"
-import { publishTransient, type ModelActivityInfo } from "@i-harness/core-session"
+import { type ModelActivityInfo } from "@i-harness/core-session"
 import type { LLMStreamEvent, LLMUsage } from "@i-harness/llm-seam"
 import { modelFailureFacts, consumeRetryFailure } from "@i-harness/llm-seam"
 import type { BatchCall } from "../execute-tool-calls.ts"
@@ -10,10 +10,13 @@ import { randomUUID } from "node:crypto"
 import { closeStepBoundary, failStepBoundary, openStepBoundary } from './boundaries.ts'
 import { savingFailure } from './saving-failure.ts'
 import { reportModelUsage } from './finalization.ts'
+import {modelStreamSource,type ModelStreamDependencies} from './stream-source.ts'
 
-export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 'facts' | 'sourceFacts'>, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => Promise<BatchCall>, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
+export function createModelStep(deps: ModelStreamDependencies & Pick<AgentDeps,'telemetry'>, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => Promise<BatchCall>, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number, originalStart?:Extract<import('@i-harness/core-session').SessionEventView,{type:'step/start'}>) {
+  const stream=modelStreamSource(deps)
   let stepStartSeq = initialStartSeq
-  const initialStart = deps.session.events[initialStartSeq]
+  const initialStart = originalStart??deps.session?.events[initialStartSeq]
+  if(!deps.session&&(!originalStart||originalStart.seq!==initialStartSeq))throw TypeError('Original private step member required')
   const actionId = initialStart?.type === "step/start" ? initialStart.actionId! : ""
   let attemptId = initialStart?.type === "step/start" ? initialStart.attemptId! : ""
   let reopenedRetry: string | undefined
@@ -98,7 +101,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
       switch (ev.type) {
         case "activity":
           modelActivity = ev.activity
-          publishTransient(deps.session, { type: "model/activity", version: 1, ts: Date.now(), activity: ev.activity })
+          stream.publish({ type: "model/activity", version: 1, ts: Date.now(), activity: ev.activity })
           break
         case "retry":
           if (settlingRetry) {
@@ -187,7 +190,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
     },
     async settle() {
       if (modelActivity && modelActivity.phase !== "settled") {
-        publishTransient(deps.session, { type: "model/activity", version: 1, ts: Date.now(), activity: { ...modelActivity, phase: "settled", outcome: abort?.aborted ? "cancelled" : modelFailed ? "failed" : "completed" } })
+        stream.publish({ type: "model/activity", version: 1, ts: Date.now(), activity: { ...modelActivity, phase: "settled", outcome: abort?.aborted ? "cancelled" : modelFailed ? "failed" : "completed" } })
       }
       await (failedSettlement ?? stepReasoning.flush())
     },

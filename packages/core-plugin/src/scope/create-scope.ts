@@ -5,13 +5,14 @@ import { createListeners } from "./listeners.ts"
 import { createWaterfalls } from "./waterfall.ts"
 import { createCascades } from "./cascade.ts"
 import { createPluginLifecycle } from "./dispose.ts"
+import {associateExecutionHookScope} from '../execution-hooks.ts'
 
 export function createScope(
   parentStore: ServiceStore | null,
   parentScope: InternalScope | null,
-  parentEmit: (event: string, payload: unknown) => Promise<unknown>,
+  parentEmit: (event: string, payload: unknown,current?:()=>void) => Promise<unknown>,
 ): PluginContext {
-  const { store, services } = createServices(parentStore)
+  const { store, services,lookup } = createServices(parentStore)
   const scopes = new Set<PluginContext>()
   // Accessors are consumed only after ctx/lifecycle initialization, retaining
   // the live mounting stack and scope references across nested calls.
@@ -43,11 +44,11 @@ export function createScope(
         scopes.delete(ctx)
       },
     },
-    on: listeners.register,
-    emit: listeners.emit,
-    waterfall: waterfall.register,
-    cascade: cascades.dispatch,
-    onCascade: cascades.register,
+    on: (event,handler)=>listeners.register(event,handler),
+    emit: (event,payload)=>listeners.emit(event,payload),
+    waterfall: (event,handler)=>waterfall.register(event,handler),
+    cascade: (event,input,final)=>cascades.dispatch(event,input,final),
+    onCascade: (event,handler)=>cascades.register(event,handler),
     guard: listeners.guard,
     checkGuards: listeners.checkGuards,
     resolveDecision: listeners.resolveDecision,
@@ -56,5 +57,6 @@ export function createScope(
     unmount: lifecycle.unmount,
   }
 
+  associateExecutionHookScope(ctx,{parent:parentScope,lookup,surface(event,kind){if(kind==='cascade')return cascades.surface(event);const plain=listeners.surface(event),chain=waterfall.surface(event);return {version:plain.version+':'+chain.version,compatible:plain.compatible&&chain.compatible}},on:(event,handler)=>listeners.register(event,handler,true),waterfall:(event,handler)=>waterfall.register(event,handler,true),onCascade:(event,handler)=>cascades.register(event,handler,true),emit:listeners.emit,cascade:cascades.dispatch})
   return ctx
 }

@@ -3,6 +3,11 @@ import type { ImageInput, SessionView as Session } from "@i-harness/core-session
 import { Inbox, AsyncInbox, type AdmittedInput, type PendingInput } from "@i-harness/core-session"
 import type { AgentResult } from "./index.ts"
 import type { AgentInputOptions } from "./agent/types.ts"
+import type {ManagedAgent,ManagedAgentInputOptions} from './agent/managed-types.ts'
+import type {ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
+import {receivedExecutionInputsFor} from '../../session-executor/src/lifecycle/execution-inputs.ts'
+import {assertManagedAgentCurrent} from './agent/managed-create.ts'
+import {savingFailure} from './agent/saving-failure.ts'
 
 export type InputSubmit = (
   /** `signal` (M41b): the per-turn abort — the pump forwards it to
@@ -107,6 +112,24 @@ export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
 // Observer/error reporting does not change this lane's restart policy;
 // consult the contract before altering it.
 export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecutor {
+  return createInputLane<Pick<AgentInputOptions,'generation'|'preparation'|'delegatedOrigin'>>({
+    get signal(){return deps.signal},pending:()=>deps.inbox.pending(),isPending:id=>deps.inbox.isPending(id),cancel:(id,reason)=>deps.inbox.cancel(id,reason),admit:(input,signal)=>deps.inbox instanceof AsyncInbox?deps.inbox.admit(input,signal):deps.inbox.admit(input),failure:error=>withPendingCount(error,deps.inbox.pending().length),
+    async run(input,signal,options){if(!deps.agent.runAdmitted){if(!(deps.inbox instanceof Inbox))throw Object.assign(Error('Managed Agent must own atomic input-start'),{code:'FACT_OWNER_UNSUPPORTED'});deps.inbox.promote(input.inputId)}const run=deps.agent.runAdmitted??deps.agent.run;return run.call(deps.agent,input.text,signal,input.images,input.inputId,input.provenance?{provenance:input.provenance,...options}:undefined)},
+  })
+}
+type ManagedAdoption=Pick<ManagedAgentInputOptions,'generation'|'preparation'|'delegatedOrigin'>
+export interface ManagedSessionExecutor extends Omit<SessionExecutor,'runAdmitted'> {runAdmitted(inputId:string,signal?:AbortSignal,options?:ManagedAdoption):Promise<void>}
+export interface ManagedSessionExecutorDeps {execution:ManagedExecutionAttachment;agent:ManagedAgent;signal?:AbortSignal}
+/** Same queue/pump, with genuine original private acquisition and input owner. */
+export function createManagedSessionExecutor(deps:ManagedSessionExecutorDeps):ManagedSessionExecutor{
+ assertManagedAgentCurrent(deps.execution,deps.agent)
+ const inbox=receivedExecutionInputsFor(deps.execution).inbox
+ const lane=createInputLane<ManagedAdoption>({get signal(){return deps.signal},pending:()=>inbox.pending(),isPending:id=>inbox.isPending(id),cancel:(id,reason)=>inbox.cancel(id,reason),admit(input,signal){assertManagedAgentCurrent(deps.execution,deps.agent);return inbox.admit(input,signal)},failure(error){try{return withPendingCount(error,inbox.pending().length)}catch(observation){return savingFailure(error,[observation],'Original pending-input observation unavailable')}},run(input,signal,options){assertManagedAgentCurrent(deps.execution,deps.agent);return deps.agent.runAdmitted(input.text,signal,input.images,input.inputId,input.provenance?{provenance:input.provenance,...options}:undefined)}})
+ let retired=false
+ return Object.freeze({...lane,submit(input:InputSubmit,inputId?:string){if(retired)throw Error('session executor disposed');assertManagedAgentCurrent(deps.execution,deps.agent);return lane.submit(input,inputId)},runAdmitted(inputId:string,signal?:AbortSignal,options?:ManagedAdoption){if(retired)return Promise.reject(Error('session executor disposed'));assertManagedAgentCurrent(deps.execution,deps.agent);return lane.runAdmitted(inputId,signal,options)},dispose(){retired=true;lane.dispose()}})
+}
+interface InputLaneDeps<Adoption>{readonly signal?:AbortSignal;pending():PendingInput[];isPending(id:string):boolean;cancel(id:string,reason?:string):boolean|Promise<boolean>;admit(input:AdmittedInput,signal:AbortSignal):unknown|Promise<unknown>;failure(error:unknown):unknown;run(input:PendingInput,signal:AbortSignal,options?:Adoption):Promise<AgentResult>}
+function createInputLane<Adoption>(deps:InputLaneDeps<Adoption>):Omit<SessionExecutor,'runAdmitted'>&{runAdmitted(inputId:string,signal?:AbortSignal,options?:Adoption):Promise<void>}{
   let chain: Promise<void> = Promise.resolve()
   let running = false
   let current: PendingInput | undefined
@@ -117,44 +140,40 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   // reach the last drain() caller, otherwise hosts (CLI exitCode) silently
   // report success on a failed turn. Captured; thrown by drain(); cleared when
   // a later turn succeeds.
-  let lastError: SessionExecutorFailure | undefined
+  let lastError:unknown,hasError=false
+  const recordError=(error:unknown)=>{hasError=true;try{lastError=deps.failure(error)}catch(observation){lastError=savingFailure(error,[observation],'Original lane failure observation failed')}}
   // M41b: per-submit signals ride in by inputId (the FIFO may hold several).
   const turnSignals = new Map<string, AbortSignal>()
-  const turnOptions = new Map<string, Pick<AgentInputOptions, 'generation' | 'preparation' | 'delegatedOrigin'>>()
+  const turnOptions = new Map<string, Adoption>()
   const admissions = new Map<string, { admitted: Promise<void>; controller: AbortController }>()
 
   function pump(onlyId?: string): Promise<void> {
     chain = chain.then(async () => {
       for (;;) {
         if (disposed || (deps.signal?.aborted ?? false)) return
-        const next = onlyId === undefined ? deps.inbox.pending()[0] : deps.inbox.pending().find((input) => input.inputId === onlyId)
+        const next = onlyId === undefined ? deps.pending()[0] : deps.pending().find((input) => input.inputId === onlyId)
         if (next === undefined) return
         const inputSignal = turnSignals.get(next.inputId)
         const sig = inputSignal && deps.signal ? AbortSignal.any([inputSignal, deps.signal]) : inputSignal ?? deps.signal
         if (sig?.aborted) {
           turnSignals.delete(next.inputId)
           if (onlyId !== undefined) return // durable input remains available for explicit resume
-          await deps.inbox.cancel(next.inputId, "aborted")
+          await deps.cancel(next.inputId, "aborted")
           continue
         }
         running = true
         current = next
         try {
-          if (!deps.agent.runAdmitted) {
-            if (!(deps.inbox instanceof Inbox)) throw Object.assign(new Error('Managed Agent must own atomic input-start'), { code: 'FACT_OWNER_UNSUPPORTED' })
-            deps.inbox.promote(next.inputId)
-          }
           // turn/start + user/message are appended BY the agent loop here
           // (agent.run), so the promoted marker immediately precedes them.
           turnSignals.delete(next.inputId)
           currentAbort = new AbortController()
-          const run = deps.agent.runAdmitted ?? deps.agent.run
           const prepared = turnOptions.get(next.inputId)
           turnOptions.delete(next.inputId)
-          await run.call(deps.agent, next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId, next.provenance ? { provenance: next.provenance, ...prepared } : undefined)
-          lastError = undefined
+          await deps.run(next,sig?AbortSignal.any([sig,currentAbort.signal]):currentAbort.signal,prepared)
+          lastError = undefined;hasError=false
         } catch (err) {
-          lastError = withPendingCount(err, deps.inbox.pending().length)
+          recordError(err)
           return // a failed turn stops this pump (its remaining pending stay
           // for a future pump); the error surfaces through drain()
         } finally {
@@ -164,9 +183,10 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
         }
         if (onlyId !== undefined) return
       }
-    }).catch(() => {
+    }).catch(error => {
       // Hardening: an unexpected pump rejection must never unwrap the lane
       // chain itself (new submissions pump again from the current set).
+      recordError(error)
     })
     return chain
   }
@@ -174,10 +194,10 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   return {
     runAdmitted(inputId, signal, options) {
       if (disposed) return Promise.reject(new Error("session executor disposed"))
-      if (!deps.inbox.isPending(inputId)) return Promise.reject(new Error("Input is no longer pending"))
+      if (!deps.isPending(inputId)) return Promise.reject(new Error("Input is no longer pending"))
       if (signal) turnSignals.set(inputId, signal)
       if (options) turnOptions.set(inputId, options)
-      return pump(inputId).then(() => { if (lastError !== undefined) throw lastError })
+      return pump(inputId).then(() => { if (hasError) throw lastError })
     },
     submit(input: InputSubmit, inputId?: string) {
       const admission = mapSubmitToAdmission(input)
@@ -189,30 +209,32 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
       const controller = new AbortController()
       const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
       turnSignals.set(admission.inputId, combined)
-      const admitted = Promise.resolve(deps.inbox instanceof AsyncInbox ? deps.inbox.admit(admission, combined) : deps.inbox.admit(admission)).then(() => { void pump() })
+      let receiving:unknown
+      try{receiving=deps.admit(admission,combined)}catch(error){turnSignals.delete(admission.inputId);recordError(error);throw error}
+      const admitted = Promise.resolve(receiving).then(() => { void pump() })
       admissions.set(admission.inputId, { admitted, controller })
-      void admitted.then(() => { admissions.delete(admission.inputId) }, error => { lastError = withPendingCount(error, deps.inbox.pending().length) })
+      void admitted.then(() => { admissions.delete(admission.inputId) }, recordError)
       return Object.defineProperty({ inputId: admission.inputId }, 'admitted', { value: admitted }) as { inputId: string; admitted: Promise<void> }
     },
     async cancel(inputId) {
       if (current?.inputId === inputId) return { cancelled: false }
-      const wasPending = deps.inbox.isPending(inputId)
+      const wasPending = deps.isPending(inputId)
       const front = admissions.get(inputId)
       front?.controller.abort()
       if (front) await front.admitted
-      const cancelled = await deps.inbox.cancel(inputId)
-      return { cancelled: cancelled || wasPending && !deps.inbox.isPending(inputId) }
+      const cancelled = await deps.cancel(inputId)
+      return { cancelled: cancelled || wasPending && !deps.isPending(inputId) }
     },
     cancelCurrent() {
       if (!currentAbort) return { cancelled: false }
       currentAbort.abort()
       return { cancelled: true }
     },
-    pending: () => deps.inbox.pending(),
+    pending: () => deps.pending(),
     isRunning: () => running,
     currentInput: () => current,
     drain: async () => { await Promise.allSettled([...admissions.values()].map(record => record.admitted)); await chain; {
-      if (lastError !== undefined) throw lastError
+      if (hasError) throw lastError
     } },
     dispose() {
       disposed = true

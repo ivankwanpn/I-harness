@@ -5,6 +5,7 @@ import { runHookHandler } from "../runner.ts"
 import { verifyHandlerTrust } from "../trust.ts"
 import type { createClaudeTranscriptProjection } from "../claude-transcript.ts"
 import type { claudeRuntimeService } from "../claude-runtime.ts"
+import {assertHookExecutionDomain} from '../claude-runtime.ts'
 
 /** Per-registry command invocation capability; owns only ephemeral child identities. */
 export function createHandlerRuntime(
@@ -19,7 +20,14 @@ export function createHandlerRuntime(
   const fallbackSession = (): ClaudeHookSession | undefined => typeof opts.session === "function" ? opts.session() : opts.session
 
   return async function run(handler, context, input = {}) {
-    if (handler.spec.claude === undefined) return runHookHandler(handler.spec, context, configDir, { env: registry.opts.env, signal: input.signal, validateCurrent: () => registry.current(handler) })
+    if (handler.spec.claude === undefined) {
+      const current=()=>{if(input.domain)assertHookExecutionDomain(input.domain);return registry.current(handler)}
+      if(input.domain)assertHookExecutionDomain(input.domain)
+      const output=await runHookHandler(handler.spec, context, configDir, { env: registry.opts.env, signal: input.signal, validateCurrent: current })
+      if(input.domain&&!input.signal?.aborted)assertHookExecutionDomain(input.domain)
+      return output
+    }
+    if(input.domain)throw Error('Physical Claude transcript hooks require complete compatibility')
     if (!registry.current(handler)) throw new HookTrustError(handler.spec.id, handler.spec.trust.sha256, "handler grant is not current")
     const fallback = fallbackSession(), session = input.session ?? fallback
     let sessionId = "sessionId" in context && context.sessionId ? context.sessionId : input.sessionId

@@ -1,4 +1,4 @@
-import { type SessionView as Session } from "@i-harness/core-session"
+import type {BatchSource} from './managed-source.ts'
 import { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_MID_FLIGHT, TOOL_CANCELLED_BY_SIBLING, TOOL_FAILED } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchRecords } from "./record.ts"
@@ -87,7 +87,7 @@ export function createBatchCancellation(opts: ExecuteToolCallsOptions) {
 }
 export type BatchCancellation = ReturnType<typeof createBatchCancellation>
 
-export async function finishCancelledBatch(_session: Session, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<never> {
+export async function finishCancelledBatch(_session: BatchSource, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<never> {
   // Abort dominates coincident failures. Own rejection identity wins over the
   // defensive fallback, including a recorded rejection with undefined.
   const fallbackMessage = cancellation.firstError instanceof Error
@@ -112,7 +112,7 @@ export async function finishCancelledBatch(_session: Session, batch: BatchCall[]
   throw new Error("agent aborted")
 }
 
-export async function finishCheckpointFailure(_session: Session, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<void> {
+export async function finishCheckpointFailure(_session: BatchSource, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<void> {
   for (let i = records.committed; i < records.startedUpTo; i += 1) {
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!

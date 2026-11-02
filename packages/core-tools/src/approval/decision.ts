@@ -1,4 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
+import {isOriginalExecutionHookScope,waterfallExecutionEvent} from '@i-harness/core-plugin'
 import type { ToolDecision } from "../types.ts"
 
 const DECISION_KINDS = new Set(["allow", "deny", "ask"])
@@ -51,7 +52,8 @@ export function installPreExecuteDecision(ctx: PluginContext): void {
   // call and skip classification (fail-open for ancestor approval). Returning
   // undefined falls back to the chain payload (the call) — the pre-M13
   // semantics. `prepare` normalizes the undefined case to allow.
-  ctx.waterfall("tools/pre-execute", async (payload, next) => {
+  const register=isOriginalExecutionHookScope(ctx)?(event:string,handler:import('@i-harness/core-plugin').WaterfallHandler)=>waterfallExecutionEvent(ctx,event,handler):ctx.waterfall.bind(ctx)
+  register("tools/pre-execute", async (payload, next) => {
     const chainValue = await next(payload)
     // Closed-vocabulary rules (audit F03-1):
     //   - undefined                → no decision (allow)

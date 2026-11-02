@@ -22,3 +22,13 @@ export function cancellationRetirementFor(view: SessionView, owner: object) {
     }
   }
 }
+/** Same original admission/terminal bookkeeping without retaining its payload. */
+export function cancellationRetirementForIndex(assertOriginal:()=>void,intake:{record(id:string):Readonly<{seq:number;inherited:boolean}>|undefined;isPending(id:string):boolean},seedLength:number) {
+ return (value:unknown):((outcome:InvalidNotIssued)=>boolean)|undefined=>{
+  assertOriginal();if(!isStrictFactData(value)||!value||typeof value!=='object'||Array.isArray(value))return
+  const event=value as {type?:unknown;version?:unknown;inputId?:unknown;reason?:unknown},fields=Object.getOwnPropertyDescriptors(event)
+  if(!fields.type||!fields.version||!fields.inputId||Object.keys(fields).some(key=>!['type','version','inputId','reason'].includes(key)||!fields[key]!.enumerable)||event.type!=='agent/input/cancelled'||event.version!==1||typeof event.inputId!=='string'||!event.inputId||event.reason!==undefined&&typeof event.reason!=='string')return
+  const id=event.inputId,record=intake.record(id);if(!record||record.seq<seedLength||record.inherited||!intake.isPending(id))return
+  return outcome=>{assertOriginal();return outcome.kind==='not-issued'&&outcome.code==='FACT_INVALID_GROUP'&&intake.record(id)===record&&!intake.isPending(id)}
+ }
+}

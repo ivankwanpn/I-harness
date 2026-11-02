@@ -1,4 +1,5 @@
 import type { PreparedConversationArchive } from '@i-harness/core-session/internal/restoration';
+export {acquireManagedExecution} from './execution-internal.ts'
 /** Read-only private attachment, never a partial Session or a fact owner. */
 export interface ManagedRestoredContextRead {
     readonly identity: object;

@@ -5,6 +5,7 @@ import type { ServiceStore } from "./types.ts"
 export function createServices(parentStore: ServiceStore | null): {
   store: ServiceStore
   services: PluginContext["services"]
+  lookup(name:string):{present:boolean;value?:unknown}
 } {
   const store: ServiceStore = new Map()
   const services: PluginContext["services"] = {
@@ -18,5 +19,5 @@ export function createServices(parentStore: ServiceStore | null): {
       throw new Error(`service not found: ${name}`)
     },
   }
-  return { store, services }
+  return { store, services,lookup(name){return store.has(name)?{present:true,value:store.get(name)}:parentStore?.has(name)?{present:true,value:parentStore.get(name)}:{present:false}} }
 }
