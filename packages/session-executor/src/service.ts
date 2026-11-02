@@ -340,7 +340,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
-  const managedTaskOwners=new Map<string,RegisterSubagentResult>()
+  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>}
+  const managedTaskOwners=new Map<string,TaskLifecycle>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
   const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
   const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>}>()
@@ -474,7 +475,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
   function requestDeliveryStop(id: string) {
     const recipient=managedRecipients.get(id)
-    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop');managedStopReceipts.set(id,{recipient,fenceId:request.fenceId,...managedTaskOwners.has(id)?{settleSources:managedTaskOwners.get(id)!.settleParentDeliveryJournalDebt.bind(managedTaskOwners.get(id)!)}:{}});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
+    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop');managedStopReceipts.set(id,{recipient,fenceId:request.fenceId,...managedTaskOwners.has(id)?{settleSources:managedTaskOwners.get(id)!.journal}:{}});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
     const assembly = liveAssembly(id)
     if (!assembly) return
     const delivery = receivedInputsFor(assembly.factOwner, id).delivery
@@ -1090,7 +1091,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       })()
       let instructionBinding:import('./managed-assembly.ts').OwnedInstructionBinding|undefined
       if(opts.managedRuntime!.acquireInstructions){let acquiring=true;try{instructionBinding=await opts.managedRuntime!.acquireInstructions(sessionId,entry.execution,cleanup=>{if(!acquiring||retired)throw Error('Original instruction retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original instruction cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
-      let taskMount:RegisterSubagentResult|undefined
+      let taskMount:RegisterSubagentResult|undefined,taskLifecycle:TaskLifecycle|undefined
       let taskShell:import('@i-harness/exec').ExecService|undefined
       let codeMount:import('@i-harness/code-mode').CodeModeMount|undefined
       let shellExecution:import('@i-harness/exec').ExecExecutionHost|undefined
@@ -1107,7 +1108,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const originalRecipient=recipient,current=()=>{if(retired||closed||closing.has(sessionId)||!runtime||managedRuntimes.get(sessionId)!==runtime)throw new ParentNotificationStoppedError();assertWritableOpen(sessionId)}
         const notify:ParentInputAdmission={taskEvidence(namespace,id){current();return originalRecipient.taskEvidence(namespace,id)},async prepareTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.prepareTaskLaunch(input);current();return result},async admitTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.admitTask(input.evidence,{text:input.text,description:input.description,display:input.display});current();privateDrain?.signal();return result},async admit(){throw new ParentNotificationStoppedError('Original Task delivery evidence required')},wake(id){if(id!==sessionId)return;try{current();privateDrain?.signal()}catch{/* Retired original parent cannot be woken. */}}}
         const selected=await resolveModel();original.assertCurrent();const taskOptions=await opts.managedRuntime!.ownedTask.options(original,selected.model,{...taskShell?{shell:taskShell}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()
-        taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify});original.retain(()=>taskMount!.dispose());await taskMount.ready;original.assertCurrent()
+        taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify})
+        const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt
+        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[])})
+        original.retain(taskLifecycle.dispose);await mounted.ready;original.assertCurrent()
        }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},opts.managedRuntime!.ownedCode.config)}if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();return opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),...taskMount?{task:taskMount}:{}})}return registrySurface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
@@ -1117,7 +1121,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const published=runtime,originalRecipient=recipient
         privateDrain=createDeliveryDrain({
           current:()=>!retired&&!closed&&!closing.has(sessionId)&&!failedClose.has(sessionId)&&managedRuntimes.get(sessionId)===published,
-          reconcile:async()=>{await taskMount?.drainParentNotifications();await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates()},
+          reconcile:async()=>{await taskLifecycle?.drain();await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates()},
           pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
           schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,settled);return true},
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
@@ -1125,7 +1129,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled'].includes(event.type))drain.signal()})
         unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
       }
-      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskMount)managedTaskOwners.set(sessionId,taskMount)
+      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle)
       publishManaged(sessionId,runtime)
       privateDrain?.signal()
       return runtime
