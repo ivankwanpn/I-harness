@@ -1,10 +1,11 @@
 import type { SessionEventView } from '../../managed/types.ts'
-import { managedResultSlots } from '../../results/projection.ts'
+import { managedResultSlots,managedResultRefs } from '../../results/projection.ts'
 import { resultData as data, resultScalars, closedResultMetadata } from '../../results/metadata.ts'
 import type { LegacyRef, ManagedResultObservation } from '../selected-results-types.ts'
 
 export interface ResultFactMetadata {
   readonly resultDeclarations?: readonly ManagedResultObservation[]
+  readonly terminalResultRefs?:readonly import('../../results/types.ts').ManagedArtifactRef[]
   readonly legacyResult?: LegacyRef
   readonly cellId?: string
   readonly cellSessionId?: string
@@ -34,6 +35,7 @@ export function legacyResultMetadata(raw: unknown): LegacyRef {
 export function resultFactMetadata(event: SessionEventView): ResultFactMetadata {
   const type = data(event, 'type'), declarations = managedResultSlots(event)
   const result: Record<string, unknown> = declarations.length ? { resultDeclarations: declarations } : {}
+  if(type==='exec/end'||type==='workflow/end'||type==='code/end')result.terminalResultRefs=managedResultRefs(event)
   const copy = (target: string, object: unknown, key: string) => {
     const value = resultScalars(object, [key])[key]
     if (value !== undefined && (target === 'nativeEventSeq' ? !Number.isSafeInteger(value) || (value as number) < 0 : typeof value !== 'string' || !value)) throw new TypeError('Invalid result identity: ' + key)

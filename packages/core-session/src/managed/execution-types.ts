@@ -68,6 +68,9 @@ export interface ExecutionObservation {
  readonly prefix:Readonly<JournalPrefix>
  readonly projectionRevision:number
  readonly contextRevision:number
+ readonly hasConversationMessages:boolean
+ readonly turnCount:number
+ readonly todosRevision:number
  codeState():Readonly<{store:import('../projection/passive-code-store/types.ts').StoreReplay;unfinished:readonly {cellId:string;parentCallId?:string}[]}>
  readonly delivery:ExecutionDeliveryObservation
  readonly metadata:Readonly<Record<ExecutionFoldName,ExecutionFoldObservation>>
@@ -79,6 +82,7 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  lastCancellationSeq(inputId:string):number|undefined}>
  assertCurrent():void
  recentNativeRecoveryRefs():Promise<DeepReadonly<readonly Extract<SessionEventView,{type:'context/result-ref'}>['ref'][]>>
+ hasVisibleResultRef(candidate:Readonly<{kind:'legacy';id:string}|{kind:'managed';ref:import('../results/types.ts').ManagedArtifactRef}>):boolean
  plan():Readonly<PlanModeView>
  sandboxMode(fromSeq?:number):Extract<SessionEventView,{type:'sandbox/mode'}>['mode']|undefined
  sandboxPolicy(fromSeq?:number):Readonly<{mode:Extract<SessionEventView,{type:'sandbox/mode'}>['mode'];seq:number}>|undefined

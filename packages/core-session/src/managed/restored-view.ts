@@ -24,6 +24,7 @@ import { createConversationStateIndex, readIndexedConversationState, type Conver
 import { createContextStateIndex } from '../projection/context.ts';
 import { createPruneDependencyIndex, preparePruneSubstitutes, selectPruneDependencies, retainPruneDependencyView } from '../projection/pruning.ts';
 import { historyVisibility } from '../conversation/history/visibility.ts';
+import {sameManagedArtifactRef} from '../results/seed-refs.ts';
 import { renderConversationItems } from '../conversation/render-items.ts';
 import {createManagedIndexedView} from './view.ts';
 function failure(code: string): never {
@@ -270,6 +271,8 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         context:owned.context,
         generations(){check();return readConversationGenerations(owned.index)??[]},
         executionScalars(){check();return {semanticsStartSeq:owned.index.semanticsStartSeq,hasToolCallId:(id:string)=>{check();return hasConversationToolCall(owned.index,id)}}},
+        uiScalars(){check();const facts=owned.index.resultFacts();return {hasConversationMessages:facts.some(f=>f.type==='user/message'||f.type==='assistant/message'),turnCount:facts.filter(f=>f.type==='turn/end').length,todosRevision:facts.filter(f=>f.type==='todo/write').length}},
+        hasVisibleResultRef(candidate:Readonly<{kind:'legacy';id:string}|{kind:'managed';ref:import('../results/types.ts').ManagedArtifactRef}>){check();const facts=owned.index.resultFacts(),visibility=historyVisibility(facts);if(candidate.kind==='managed'&&owned.index.semanticSeedResultRefs().some(ref=>sameManagedArtifactRef(ref,candidate.ref)))return true;for(const fact of facts){if(!visibility.branch(fact))continue;if(candidate.kind==='legacy'){if(fact.legacyResult?.id===candidate.id)return true}else if(fact.resultDeclarations?.some(value=>sameManagedArtifactRef(value.ref,candidate.ref))||fact.terminalResultRefs?.some(ref=>sameManagedArtifactRef(ref,candidate.ref)))return true}check();return false},
         softReduction(){check();const facts=owned.index.resultFacts();const advances=(end:number)=>{const results=new Set<string>();let humanTurns=0,acceptedExchanges=0;for(let index=0;index<end;index++){const fact=facts[index]!;if(fact.type==='tool/result'&&fact.disposition!=='unknown'&&fact.callId)results.add(fact.callId);if(fact.type==='turn/end')humanTurns++}for(let index=0;index<end;index++){const fact=facts[index]!;if(fact.type==='model/exchange-accepted'&&fact.callSeqs?.every(seq=>facts[seq]?.type==='tool/call'&&results.has(facts[seq]!.callId!)))acceptedExchanges++}return {humanTurns,acceptedExchanges}};const current=advances(facts.length),last=facts.findLastIndex(fact=>['compaction/replacement','compaction/prune','compaction/end'].includes(fact.type)),prior=last<0?undefined:advances(last+1);return {state:owned.index.softReduction(owned.sessionId),...current,...prior?{sinceRewrite:{humanTurns:current.humanTurns-prior.humanTurns,acceptedExchanges:current.acceptedExchanges-prior.acceptedExchanges}}:{}}},
         get eventCount(){check();return owned.index.eventCount},
         get prefix(){check();return owned.source.prefix},
