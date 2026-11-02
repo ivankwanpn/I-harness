@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest"
+const appendGate=vi.hoisted(()=>({path:'',entered:undefined as undefined|(()=>void),release:undefined as undefined|Promise<void>}))
+vi.mock('node:fs/promises',async load=>{const actual=await load<typeof import('node:fs/promises')>();return {...actual,async open(...args:Parameters<typeof actual.open>){const handle=await actual.open(...args);if(appendGate.path&&String(args[0])===appendGate.path&&args[1]==='r+'){const write=handle.write.bind(handle);handle.write=(async(...input:Parameters<typeof write>)=>{const release=appendGate.release;if(release){appendGate.entered?.();await release}return write(...input)}) as typeof handle.write}return handle}}})
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -127,12 +129,12 @@ it("uses the live session snapshot before its events are flushed to disk", async
 it("keeps a cold inspection on the durable prefix instead of invoking the host's writable fallback", async () => {
   const root = mkdtempSync(join(tmpdir(), "desktop-work-state-source-")); roots.push(root)
   const backend=createJsonlBackend(join(root,'sessions'))
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+  appendGate.path=join(root,"sessions","s1.jsonl");appendGate.entered=entered.resolve;appendGate.release=release.promise
   const coordinator = composeJsonlTaskTransitionCoordinator(backend, { maxDelayMs: 60_000, lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s1" })
   const document=await coordinator.openManagedDocument('s1'), authoritative=document.view
   const { createTodoTool } = await import("@i-harness/todo")
-  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),actual=backend.appendOwnedBatch!
-  backend.appendOwnedBatch=async(...args)=>{entered.resolve();await release.promise;return actual(...args)}
   const writing=createTodoTool({session:authoritative,metadata:document.metadata}).execute({todos:[{content:'Pending durability',status:'pending'}]}, {})
   const service = { liveSession: () => undefined } as unknown as SessionService
   try {
@@ -144,7 +146,7 @@ it("keeps a cold inspection on the durable prefix instead of invoking the host's
     expect(writable).not.toHaveBeenCalled()
     release.resolve();await writing
     expect(await state.read("s1")).toMatchObject({ todos: [{ content: "Pending durability", status: "pending" }], todosRevision: 1 })
-  } finally { release.resolve();await writing;await coordinator.close() }
+  } finally { release.resolve();appendGate.path="";appendGate.release=undefined;appendGate.entered=undefined;await writing;await coordinator.close() }
 })
 
 it("restores the same Todo and CAS revision after summary, prune, reset, and gateway restart", async () => {
