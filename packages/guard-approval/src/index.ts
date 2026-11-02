@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve } from "node:path"
-import type { PluginContext } from "@i-harness/core-plugin"
+import { onExecutionEvent, waterfallExecutionEvent, type PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolCall, ToolDecision, ToolRegistry } from "@i-harness/core-tools"
 import { classifyDanger } from "./danger-class.ts"
 export type { IsolatedInstructionFactory, IsolatedInstructionLease, IsolatedInstructionAttempt } from './guardian/instruction-context.ts'
@@ -216,31 +216,19 @@ function decide(
 // its decision is recorded in this scope's per-emit decisions map, which
 // core-tools' `execute` consults after emit to gate dispatches from any
 // descendant scope's registry.
-export function createApprovalPolicy(
-  ctx: PluginContext,
-  registry: ToolRegistry,
-  config: ApprovalConfig,
-): void {
+function installApprovalPolicy(registry: ToolRegistry, config: ApprovalConfig, register: (listener: import('@i-harness/core-plugin').Listener, waterfall: import('@i-harness/core-plugin').WaterfallHandler) => void): void {
   const workspace = config.workspace
   const dangerousCommands = config.dangerousCommands ?? DEFAULT_DANGEROUS_COMMANDS
   const dangerousFlags = config.dangerousFlags ?? DEFAULT_DANGEROUS_FLAGS
   const askForNonReadOnly = config.askForNonReadOnly ?? true
   const modeNow = () => typeof config.mode === "function" ? config.mode() : config.mode
-
-  ctx.on("tools/pre-execute", (payload) =>
-    applyNever(
-      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow(), config.workspaceRoots?.() ?? [workspace]),
-      config.approvalPolicy,
-    ),
-  )
-
-  ctx.waterfall("tools/pre-execute", async (payload, next) => {
-    const decision = applyNever(
-      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow(), config.workspaceRoots?.() ?? [workspace]),
-      config.approvalPolicy,
-    )
-    // Always release the chain; veto by returning our decision object.
-    const chainValue = await next(payload)
-    return decision ?? chainValue
-  })
+  const policy = (payload: unknown) => applyNever(decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow(), config.workspaceRoots?.() ?? [workspace]), config.approvalPolicy)
+  register(policy, async (payload, next) => { const decision = policy(payload); const chainValue = await next(payload); return decision ?? chainValue })
+}
+export function createApprovalPolicy(ctx: PluginContext, registry: ToolRegistry, config: ApprovalConfig): void {
+  installApprovalPolicy(registry, config, (listener, waterfall) => { ctx.on('tools/pre-execute', listener); ctx.waterfall('tools/pre-execute', waterfall) })
+}
+/** The same policy on the original managed hook scope. */
+export function createExecutionApprovalPolicy(ctx: PluginContext, registry: ToolRegistry, config: ApprovalConfig): void {
+  installApprovalPolicy(registry, config, (listener, waterfall) => { onExecutionEvent(ctx, 'tools/pre-execute', listener); waterfallExecutionEvent(ctx, 'tools/pre-execute', waterfall) })
 }
