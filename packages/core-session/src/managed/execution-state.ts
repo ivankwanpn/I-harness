@@ -260,11 +260,15 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     readinessQueued=false;if(!readinessWasReady)return
     const state=readinessState();if(state.kind==='busy'){markBusy();return}if(state.kind==='failed'){signalUnavailable(state.error,true);return}
     const epoch=readinessEpoch
+    let initial=true,delivered=false
     for(const item of [...readinessListeners]){
       if(epoch!==readinessEpoch)break
-      const current=readinessState();if(current.kind==='busy'){markBusy();break}if(current.kind==='failed'){signalUnavailable(current.error,true);break}
-      if(!readinessListeners.has(item)||item.delivered===epoch)continue;item.delivered=epoch;try{item.listener(epoch)}catch{/* Listener failure cannot affect source settlement. */}
+      if(!readinessListeners.has(item)||item.delivered===epoch)continue
+      const current=initial?state:readinessState();initial=false
+      if(current.kind==='busy'){markBusy();break}if(current.kind==='failed'){signalUnavailable(current.error,true);break}
+      item.delivered=epoch;delivered=true;try{item.listener(epoch)}catch{/* Listener failure cannot affect source settlement. */}
     }
+    if(delivered){const after=readinessState();if(after.kind==='busy')markBusy();else if(after.kind==='failed')signalUnavailable(after.error,true)}
     if(readinessWasReady&&epoch!==readinessEpoch)queueReadiness()
   })}
   const signalReady=()=>{if(!readinessListeners.size||readinessWasReady)return;const state=readinessState();if(state.kind==='failed'){signalUnavailable(state.error,true);return}if(state.kind==='busy')return;readinessFailure=undefined;readinessWasReady=true;readinessEpoch++;queueReadiness()}

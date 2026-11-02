@@ -325,3 +325,24 @@ it('flushes around an opaque original fold snapshot and rejects native retarget 
   try{expect(()=>{execution.observe();effects++}).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);changed=true}finally{armed=false;Object.assign(node,before)}
  }finally{if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
+it('does not re-observe skipped readiness listeners and validates every actual callback',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{subscribeManagedExecutionReadiness,createManagedExecutionDomain}=await import('../../core-session/src/managed/execution-state.ts'),{createOwnedMetadataFold}=await import('../../session-executor/src/lifecycle/owned-metadata-fold.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'readiness-fanout-'));let snapshots=0,calls=0
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true},originalExecutionFoldFactory:input=>{const fold=createOwnedMetadataFold(input),original=fold.views.todo.snapshot;fold.views.todo.snapshot=prefix=>{snapshots++;return original(prefix)};return fold}},taskDocumentStorageContract),offs:Array<()=>void>=[]
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,{},'parent')
+  for(let i=0;i<3;i++){offs.push(subscribeManagedExecutionReadiness(domain,()=>{calls++}));await new Promise(resolve=>setImmediate(resolve))}
+  expect(calls).toBe(3);offs.push(subscribeManagedExecutionReadiness(domain,()=>{calls++}))
+  const before=snapshots,opened=probe.opens;await new Promise(resolve=>setImmediate(resolve))
+  console.info('READINESS_DELIVERY_NATIVE',{snapshots:snapshots-before,opens:probe.opens-opened});expect(snapshots-before).toBe(2);expect(calls).toBe(4)
+ }finally{for(const off of offs)off();await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+
+it('reports original native ownership loss after the last readiness callback',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{subscribeManagedExecutionReadiness,createManagedExecutionDomain}=await import('../../core-session/src/managed/execution-state.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'readiness-last-loss-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);let lost=0,calls=0,effects=0,changed=false;const offs:Array<()=>void>=[]
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,{},'parent'),node=probe.nodes.get(root)!,before={...node}
+  offs.push(subscribeManagedExecutionReadiness(domain,()=>{},()=>{lost++}));await new Promise(resolve=>setImmediate(resolve))
+  offs.push(subscribeManagedExecutionReadiness(domain,()=>{calls++;node.id+=1000},()=>{lost++}))
+  try{await new Promise(resolve=>setImmediate(resolve));expect(calls).toBe(1);expect(lost).toBe(2);expect(()=>{execution.observe();effects++}).toThrow();expect(effects).toBe(0);changed=true}finally{Object.assign(node,before)}
+ }finally{for(const off of offs)off();if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
