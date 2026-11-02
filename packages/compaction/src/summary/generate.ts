@@ -73,6 +73,7 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
     let result
     try { result = await readSummaryStream(prepared.candidate, { ...limits, validateBeforeTransport: check, maxRetainedChars: maxTokens * 4 }) }
     catch (error) { check(); if (confirmedSummaryOverflow(error)) { shrink(); continue } throw error }
+    await limits.afterStream?.()
     check()
     if (!result.chars) throw new Error('compaction: summarizer returned empty output')
     const checkpoint = inspectCheckpoint(result.text)

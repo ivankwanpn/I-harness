@@ -109,6 +109,27 @@ it('does not feed a schedule fold until an unknown original write reconciles',as
  action.finish()
 })
 
+it('publishes Schedule Todo and Goal from one original acknowledged stream',async()=>{
+ const {createOwnedMetadataFold}=await import('../../session-executor/src/lifecycle/owned-metadata-fold.ts')
+ const {createAfterScheduleRecord}=await import('../../schedule/src/index.ts')
+ let feeds=0
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'composite-fold-')),backend=createJsonlBackend(root)
+ const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:info=>{const sink=createOwnedMetadataFold(info);return {...sink,appendValidated(unit,ordinal){feeds++;sink.appendValidated(unit,ordinal)}}}},taskDocumentStorageContract);coordinators.push(coordinator)
+ await coordinator.create({sessionId:'owner'});const execution=await acquireManagedExecution(coordinator,'owner'),action=execution.owner.beginAction()
+ try{
+  let view=execution.observe();expect(view.metadata.todo).toMatchObject({kind:'available',snapshot:{kind:'absent'}});expect(view.metadata.goal).toMatchObject({kind:'available',snapshot:{kind:'absent'}})
+  const schedule=createAfterScheduleRecord('schedule-1','reminder',60,Date.parse('2026-08-31T10:00:00Z'))
+  const capture=action.captureMetadata!({type:'schedule/change',version:1,operation:'create',schedule})
+  probe.unknown=true;expect((await capture.admit()).kind).toBe('unknown');expect(feeds).toBe(0);expect(()=>execution.observe()).toThrow()
+  probe.unknown=false;expect((await capture.reconcile()).kind).toBe('committed')
+  expect((await action.captureMetadata!({type:'todo/write',version:1,items:[]}).admit()).kind).toBe('committed')
+  expect((await action.captureMetadata!({type:'goal/change',version:1,operation:'create',goal:{id:'g',revision:1,phase:'active',objective:'original'}}).admit()).kind).toBe('committed')
+  view=execution.observe();expect(feeds).toBe(3);expect(view.schedules).toMatchObject({kind:'available',snapshot:{active:[schedule]}})
+  expect(view.metadata.todo).toMatchObject({kind:'available',revision:view.eventCount,snapshot:{kind:'present',items:[]}})
+  expect(view.metadata.goal).toMatchObject({kind:'available',revision:view.eventCount,snapshot:{kind:'present',value:{id:'g',objective:'original'}}})
+ }finally{probe.unknown=false;action.finish()}
+},20000)
+
 it('signals original readiness only after a held writer dependency closes, even when subscribed while busy',async()=>{
  const {execution}=await fixture(),ctx={}
  const core=await import('@i-harness/core-session/internal/execution'),domain=core.createManagedExecutionDomain(execution.identity,execution.owner,ctx)
@@ -123,6 +144,20 @@ it('signals original readiness only after a held writer dependency closes, even 
   expect(calls).toBe(0);release.resolve();expect((await write).kind).toBe('committed')
   expect(calls).toBeGreaterThan(0);expect(execution.observe().eventCount).toBeGreaterThan(0)
  }finally{release.resolve();await write.catch(()=>{});off?.();action.finish()}
+},20000)
+
+it('holds the same readiness edge while the original delivery hydration closes',async()=>{
+ const {execution}=await fixture(),ctx={},core=await import('@i-harness/core-session/internal/execution')
+ const received=execution.owner.registerReceivedInputSource(async()=>{})
+ const outcome=await received.captureAdmitted({type:'agent/input/admitted',version:1,inputId:'human-observer',text:'original',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}).admit()
+ expect(outcome.kind).toBe('committed')
+ const domain=core.createManagedExecutionDomain(execution.identity,execution.owner,ctx),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ let calls=0;const off=core.subscribeManagedExecutionReadiness(domain,()=>{calls++})
+ await new Promise<void>(done=>setImmediate(done));calls=0
+ const observation=execution.observe();probe.closeGate={entered:entered.resolve,wait:release.promise}
+ const reading=observation.delivery.ownHuman()
+ try{await entered.promise;await Promise.resolve();expect(calls).toBe(0);release.resolve();expect(await reading).toMatchObject({inputId:'human-observer'});await new Promise<void>(done=>setImmediate(done));expect(calls).toBeGreaterThan(0)}
+ finally{release.resolve();await reading.catch(()=>{});off();await received.close()}
 },20000)
 
 it('does not announce readiness for unknown original commit until its same capture reconciles',async()=>{

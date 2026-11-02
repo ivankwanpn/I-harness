@@ -196,11 +196,29 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
 }
 
 export function createDesktopGoalTools(sessionFor: (id: string) => Session | undefined, changed: (id: string) => void, metadataFor:(id:string)=>import('@i-harness/core-session').MetadataFactSource|undefined=()=>undefined): Tool[] {
+  return goalTools({
+    read: exec => {const session=exec.sessionId&&sessionFor(exec.sessionId);return session?foldGoal(session.events):null},
+    complete: async (args,exec) => { const id=exec.sessionId,session=id&&sessionFor(id);if(!id||!session)throw new Error('Goal session unavailable');const current=foldGoal(session.events);if(current?.phase!=='active')throw new Error('Goal is not active');committedFactSeqs(await metadataFactsFor(session,metadataFor(id),exec.abortSignal).admit(applyGoalMutation(current,'complete',{ref:object(args) as unknown as {id:string;revision:number}},Date.now()).event));changed(id);return foldGoal(session.events) },
+  })
+}
+
+export interface OwnedGoalToolPort {
+  read():Readonly<GoalView>|null
+  complete(ref:{id:string;revision:number},signal?:AbortSignal):Promise<Readonly<GoalView>|null>
+}
+/** The same Gateway tool schemas and transitions over an owned metadata port. */
+export function createDesktopOwnedGoalTools(port:OwnedGoalToolPort,changed:()=>void):Tool[] {
+  return goalTools({
+    read:()=>port.read(),
+    complete:async(args,exec)=>{const current=port.read();if(current?.phase!=='active')throw new Error('Goal is not active');const result=await port.complete(object(args) as unknown as {id:string;revision:number},exec.abortSignal);changed();return result},
+  })
+}
+function goalTools(ops:{read:(exec:Parameters<Tool['execute']>[1])=>unknown;complete:(args:unknown,exec:Parameters<Tool['execute']>[1])=>Promise<unknown>}):Tool[] {
   return [
     { name: "goal_read", description: "Read this conversation's persisted goal and revision.", inputSchema: { type: "object", properties: {} }, isReadOnly: true,
-      execute: async (_args, exec) => { const session = exec.sessionId && sessionFor(exec.sessionId); return session ? foldGoal(session.events) : null } },
+      execute: async (_args, exec) => ops.read(exec) },
     { name: "goal_complete", description: "Mark the current goal complete only after the work is actually verified. Include its latest id and revision from goal_read.",
       inputSchema: { type: "object", properties: { id: { type: "string" }, revision: { type: "integer", minimum: 1 } }, required: ["id", "revision"] }, isReadOnly: true,
-      execute: async (args, exec) => { const id = exec.sessionId; const session = id && sessionFor(id); if (!id || !session) throw new Error("Goal session unavailable"); const current = foldGoal(session.events); if (current?.phase !== "active") throw new Error("Goal is not active"); committedFactSeqs(await metadataFactsFor(session,metadataFor(id),exec.abortSignal).admit(applyGoalMutation(current, "complete", { ref: object(args) as unknown as { id: string; revision: number } }, Date.now()).event)); changed(id); return foldGoal(session.events) } },
+      execute: async (args, exec) => ops.complete(args,exec) },
   ]
 }

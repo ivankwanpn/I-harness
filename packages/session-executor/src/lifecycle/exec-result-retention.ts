@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { currentToolResultProducer, registerToolResultDependency, type ToolExec, type ToolResultDependency } from '@i-harness/core-tools'
+import { assertResultPrepared,currentToolResultProducer, registerToolResultDependency, type ToolExec, type ToolResultDependency } from '@i-harness/core-tools'
 import { createExecFrameCapture } from '@i-harness/output-retention'
 import type { ContextOutputService, ResultArtifactScope } from '@i-harness/context-output'
 import { resultPageFailure, summarizeExecFrames, type ExecFrameSummary } from '@i-harness/context-output'
@@ -131,7 +131,9 @@ export function createExecResultRetention(service: ContextOutputService | undefi
       const exec = currentToolResultProducer(), binding = exec ? resultSourceBinding(exec) : undefined, operationId = randomUUID()
       let scope: ResultArtifactScope | undefined
       const capture = createExecFrameCapture({ sourceId: input.sourceId, async openArtifact() {
-        if (!service || !binding?.source || !binding.view || !binding.sessionId || binding.sessionId !== input.owner.sessionId) throw Object.assign(new Error('Native result owner unavailable'), { code: 'ARTIFACT_OWNER_UNSUPPORTED' })
+        if (!service || !binding?.source || !binding.sessionId || binding.sessionId !== input.owner.sessionId) throw Object.assign(new Error('Native result owner unavailable'), { code: 'ARTIFACT_OWNER_UNSUPPORTED' })
+        if(binding.domain){if(!binding.prepared||binding.prepared.exec!==exec)throw TypeError('Original private result preparation required');const original=assertResultPrepared(binding.prepared);if(original.domain!==binding.domain||original.source!==binding.source||binding.domain.sessionId!==binding.sessionId)throw TypeError('Original private result source required')}
+        else if(!binding.view)throw Object.assign(new Error('Native result owner unavailable'),{code:'ARTIFACT_OWNER_UNSUPPORTED'})
         scope ??= service.registerResultScope({ operationId, sessionId: binding.sessionId, callId: binding.callId!, ...(binding.descriptor ? { source: binding.descriptor } : {}) }, () => captures.has(capture))
         return service.beginResult(scope, 'exec-frames-v1')
       } })

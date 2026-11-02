@@ -8,6 +8,20 @@ import type {ProjectionRewrite} from '../projection/rewrite.ts'
 import type {createContextStateIndex} from '../projection/context.ts'
 import type {GenerationActionState} from '../conversation/generation.ts'
 import type {PreparedConversationArchive} from '../conversation/restoration-types.ts'
+import type {DeliveryState} from '../conversation/delivery.ts'
+import type {DeliveryKey} from '../events/delivery.ts'
+
+export interface ExecutionDeliveryObservation {
+ readonly revision:number
+ activeGeneration():DeepReadonly<ReturnType<DeliveryState['activeGeneration']>>
+ lastFenceSeq():number|undefined
+ source(namespace:string,id:string):DeepReadonly<ReturnType<DeliveryState['source']>>
+ receipt(key:DeliveryKey):DeepReadonly<ReturnType<DeliveryState['receipt']>>
+ execPending():DeepReadonly<ReturnType<DeliveryState['execPending']>>
+ codePending():DeepReadonly<ReturnType<DeliveryState['codePending']>>
+ ownHuman():Promise<DeepReadonly<Extract<SessionEventView,{type:'agent/input/admitted'}>>|undefined>
+ dispatchedCall(callSeq:number):Promise<Readonly<{call:DeepReadonly<Extract<SessionEventView,{type:'tool/call'}>>;dispatch:DeepReadonly<Extract<SessionEventView,{type:'tool/dispatch'}>>}>|undefined>
+}
 
 declare const executionIdentity:unique symbol
 /** Original constructor identity, never a Session, read candidate or DTO. */
@@ -52,6 +66,8 @@ export interface ExecutionObservation {
  readonly prefix:Readonly<JournalPrefix>
  readonly projectionRevision:number
  readonly contextRevision:number
+ readonly delivery:ExecutionDeliveryObservation
+ readonly metadata:Readonly<Record<ExecutionFoldName,ExecutionFoldObservation>>
  readonly scheduleRevision:number
 readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapter-not-connected';revision:number}|{kind:'available';revision:number;snapshot:unknown}>
  readonly inbox:Readonly<{pending(fromSeq?:number):readonly DeepReadonly<PendingInput>[];isPending(inputId:string,fromSeq?:number):boolean;everAdmitted(inputId:string):boolean;isExecutable(inputId:string):boolean;
@@ -83,5 +99,9 @@ export interface OriginalExecutionFoldSink {
   finishRestore(prefix: Readonly<JournalPrefix>): void
   snapshot(prefix: Readonly<JournalPrefix>): unknown
   validateSnapshot(value: unknown): boolean
+  readonly views?:Readonly<Partial<Record<ExecutionFoldName,OriginalExecutionFoldView>>>
 }
+export type ExecutionFoldName='todo'|'goal'
+export interface OriginalExecutionFoldView {snapshot(prefix:Readonly<JournalPrefix>):unknown;validateSnapshot(value:unknown):boolean}
+export type ExecutionFoldObservation=Readonly<{kind:'unavailable';reason:'original-adapter-not-connected';revision:number}|{kind:'available';revision:number;snapshot:unknown}>
 export type OriginalExecutionFoldFactory = (source: Readonly<{sessionId:string; seedLength:number; formatVersion:number}>) => OriginalExecutionFoldSink

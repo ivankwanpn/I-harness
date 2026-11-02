@@ -5,11 +5,23 @@ import type { OriginalExecDeliveryOwner } from '../../../exec/src/direct-deliver
 import type { Capture, CaptureAttempt } from '../../../exec/src/capture/contracts.ts'
 import type { ExecFrameCapture, ExecFrameObservation } from '@i-harness/exec'
 import { execResultOutcome } from '@i-harness/exec'
+import {isManagedExecutionDomain,readManagedSourceExecDelivery,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../../session-persistence/src/execution-internal.ts'
+import {isOriginalPrivateExecRecipient,type PrivateExecRecipient} from './execution-inputs.ts'
 export type ExecPreparationInput = {view:SessionView;sessionId:string;callId:string;callSeq:number;sourceId:string}
 export type PrepareExecDelivery = (input:ExecPreparationInput)=>Promise<DeliveryLaunchPreparation & {isCurrent?:()=>boolean}>
+export type PrivateExecPreparationInput = {sessionId:string;callId:string;callSeq:number;sourceId:string}
 
 /** One original reservation/action source. Admission can expire; settlement cannot be reissued. */
 export function createExecDeliveryOwner(issuer:OriginalExecSourceIssuer,input:ExecPreparationInput,delivery:'tool'|'parent',prepare:PrepareExecDelivery):OriginalExecDeliveryOwner {
+  return createOriginalOwner(issuer,input,delivery,()=>prepare(input),()=>readDeliveries(input.view).activeGeneration(),()=>readDeliveries(input.view).source('exec',input.sourceId))
+}
+/** Private observations come only from the original attachment and its held settlement source. */
+export function createPrivateExecDeliveryOwner(issuer:OriginalExecSourceIssuer,input:PrivateExecPreparationInput,delivery:'tool'|'parent',recipient:PrivateExecRecipient,execution:ManagedExecutionAttachment,domain:ManagedExecutionDomain):OriginalExecDeliveryOwner {
+  if(!isManagedExecutionAttachment(execution)||!isManagedExecutionDomain(domain)||domain.identity!==execution.identity||domain.owner!==execution.owner||domain.sessionId!==input.sessionId||!isOriginalPrivateExecRecipient(recipient,execution,domain))throw TypeError('Original private Exec owner required')
+  return createOriginalOwner(issuer,input,delivery,()=>recipient.prepareExecLaunch(input),()=>execution.observe().delivery.activeGeneration(),source=>readManagedSourceExecDelivery(execution.identity,source,input.sourceId))
+}
+function createOriginalOwner(issuer:OriginalExecSourceIssuer,input:PrivateExecPreparationInput,delivery:'tool'|'parent',prepare:()=>Promise<DeliveryLaunchPreparation & {isCurrent?:()=>boolean}>,active:()=>ReturnType<import('@i-harness/core-session').DeliveryState['activeGeneration']>,readSource:(source:import('@i-harness/core-session').SettlementFacts<ProducerFactOutcome>)=>ReturnType<import('@i-harness/core-session').DeliveryState['source']>):OriginalExecDeliveryOwner {
   let sourceCapture:CapturedActionFact<ProducerFactOutcome>|undefined, sourceOutcome:ProducerFactOutcome|undefined, sourceSeq:number|undefined
   let sourceEverIssued=false,sourceRetired=false
   let sourceAttempted=false,handoffAttempted=false,terminalAttempted=false
@@ -40,7 +52,7 @@ export function createExecDeliveryOwner(issuer:OriginalExecSourceIssuer,input:Ex
     if(sourceOutcome.kind==='unknown'||sourceOutcome.kind==='recovery-required')sourceOutcome=await sourceCapture.reconcile()
     if(!sourceEverIssued&&sourceOutcome.kind==='not-issued'&&['FACT_PRECONDITION_STALE','FACT_CANCELLED'].includes(sourceOutcome.code)){sourceRetired=true;return}
     const seqs=committedFactSeqs(sourceOutcome)
-    const indexed=readDeliveries(input.view).source('exec',input.sourceId)
+    const indexed=readSource(source)
     if(!indexed||indexed.seq!==seqs[0]||indexed.kind!=='exec'||indexed.callSeq!==input.callSeq)throw new FactRecoveryRequiredError()
     sourceSeq=indexed.seq
   }
@@ -105,10 +117,10 @@ export function createExecDeliveryOwner(issuer:OriginalExecSourceIssuer,input:Ex
     prepareAttempt(original,settleOriginal,retire){if(attempt)throw new Error('Exec attempt already attached');attempt=original;settleFrames=settleOriginal;retireReservation=retire},
     async admit(){
       issuer.assertAdmissionCurrent()
-      const prepared=await prepare(input)
+      const prepared=await prepare()
       issuer.assertAdmissionCurrent()
       if(prepared.kind==='unavailable'){unavailable=true;return}
-      const current=()=>prepared.isCurrent?.()!==false&&readDeliveries(input.view).activeGeneration()?.generationId===prepared.binding.generationId
+      const current=()=>prepared.isCurrent?.()!==false&&active()?.generationId===prepared.binding.generationId
       admissionCurrent=current
       if(!current())throw new FactRecoveryRequiredError()
       sourceCapture=issuer.captureSource({...prepared.binding,sourceNamespace:'exec',delivery},current)

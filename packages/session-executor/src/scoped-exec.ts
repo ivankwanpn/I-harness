@@ -3,7 +3,8 @@ export function createScopedWorkflowExec(pair: Parameters<typeof createWorkflowS
   return createWorkflowStepFactory(pair, command => ({ ...command, cwd: command.cwd ?? cwd, sandbox: command.sandbox ?? policy() }))
 }
 import { bindPreparedShellLeaf } from '@i-harness/core-tools'
-import { createExecDeliveryOwner } from './lifecycle/exec-delivery-owner.ts'
+import { createExecDeliveryOwner,createPrivateExecDeliveryOwner } from './lifecycle/exec-delivery-owner.ts'
+import {isOriginalPrivateExecRecipient} from './lifecycle/execution-inputs.ts'
 import type { ExecCommand, ExecResult, ExecService, ExecStreamRunOptions, PromotedRun } from "@i-harness/exec"
 import type { SandboxExecutionPolicy } from "@i-harness/sandbox"
 
@@ -36,6 +37,16 @@ const directContexts = new WeakMap<import('@i-harness/core-plugin').PluginContex
 export function createScopedExecWithReservation(pair: ReturnType<typeof import('@i-harness/exec/direct-reservation').createExecServiceWithReservation>, cwd:string,
   policy:()=>SandboxExecutionPolicy|undefined, prepare:import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery,
   context?:import('@i-harness/core-plugin').PluginContext) {
+  return createScopedReservation(pair,cwd,policy,{kind:'public',prepare},context)
+}
+export function createScopedPrivateExecWithReservation(pair:ReturnType<typeof import('@i-harness/exec/direct-reservation').createExecServiceWithReservation>,cwd:string,
+  policy:()=>SandboxExecutionPolicy|undefined,execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment,
+  domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain,context:import('@i-harness/core-plugin').PluginContext,recipient:import('./lifecycle/execution-inputs.ts').PrivateExecRecipient){
+  if(domain.context!==context||!isOriginalPrivateExecRecipient(recipient,execution,domain))throw TypeError('Original private Exec context and recipient required')
+  return createScopedReservation(pair,cwd,policy,{kind:'private',execution,domain,recipient},context)
+}
+function createScopedReservation(pair:ReturnType<typeof import('@i-harness/exec/direct-reservation').createExecServiceWithReservation>,cwd:string,
+  policy:()=>SandboxExecutionPolicy|undefined,config:{kind:'public';prepare:import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery}|{kind:'private';execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment;domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;recipient:import('./lifecycle/execution-inputs.ts').PrivateExecRecipient},context?:import('@i-harness/core-plugin').PluginContext){
   assertOriginalExecPair(pair)
   const commandFor=(command:ExecCommand):ExecCommand=>({...command,cwd:command.cwd??cwd,sandbox:command.sandbox??policy()})
   const service=scopedService(pair.service,cwd,policy,commandFor)
@@ -49,7 +60,13 @@ export function createScopedExecWithReservation(pair: ReturnType<typeof import('
       const reservation=pair.port.reserve(),instanceId=pair.port.instanceId(reservation)
       let owner:ReturnType<typeof createExecDeliveryOwner>|undefined,installed=false,started=false
       try{
-        owner=createExecDeliveryOwner(issuer,{view:claim.context.view,sessionId:claim.context.sessionId??claim.exec.sessionId!,callId:claim.exec.callId!,callSeq:claim.exec.callEventSeq!,sourceId:instanceId},mode==='background'?'parent':'tool',prepare)
+        if(config.kind==='private'){
+          if(!('kind'in claim.context)||claim.context.domain!==config.domain)throw new Error('Original private Shell domain required')
+          owner=createPrivateExecDeliveryOwner(issuer,{sessionId:claim.context.sessionId,callId:claim.exec.callId!,callSeq:claim.exec.callEventSeq!,sourceId:instanceId},mode==='background'?'parent':'tool',config.recipient,config.execution,config.domain)
+        }else{
+          if('kind'in claim.context)throw new Error('Original public Shell owner required')
+          owner=createExecDeliveryOwner(issuer,{view:claim.context.view,sessionId:claim.context.sessionId??claim.exec.sessionId!,callId:claim.exec.callId!,callSeq:claim.exec.callEventSeq!,sourceId:instanceId},mode==='background'?'parent':'tool',config.prepare)
+        }
         pair.port.attachDelivery(reservation,owner);installed=true
         const scoped=commandFor(command)
         claim.assertCurrent();issuer.assertAdmissionCurrent()

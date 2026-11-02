@@ -19,7 +19,8 @@ interface PreparedBodyClaim {
   assertCurrent(): void
   consume(): void
 }
-export interface PreparedShellBodyClaim extends PreparedBodyClaim {
+export interface PreparedShellBodyClaim extends Omit<PreparedBodyClaim,'context'> {
+  readonly context: ToolExecutionOwnerConfiguration
   takeExecSourceIssuer(): import('../model-origin.ts').OriginalExecSourceIssuer | undefined
   hasExecSourceIssuer(): boolean
 }
@@ -134,13 +135,13 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
     if(!body){if(frame?.active)throw new Error('Foreign prepared exec');return}
     if(!frame?.active||frame.body!==body||body.tool!==tool||body.leaf!==leaf||!['shell','bash','pwsh'].includes(body.call.name))throw new Error('Not the original prepared Shell body')
     check(body,frame)
-    if(body.managed)throw new Error('Original private Shell source adapter is not connected')
     if(body.foreignContext)throw new Error('Foreign prepared execution context')
     if(body.claimed)throw new Error('Prepared Shell body already claimed')
-    if(!body.context||!body.source||!frame.domain||body.exec.resultConsumer==='code')return
+    const context=body.context??body.managed
+    if(!context||!body.source||!frame.domain||body.exec.resultConsumer==='code')return
     for(let parent=frame.parent;parent;parent=parent.parent)if(parent.domain===frame.domain)return
     body.claimed=true;let consumed=false
-    const claim:PreparedShellBodyClaim=Object.freeze({ context:body.context,source:body.source,exec:body.exec,
+    const claim:PreparedShellBodyClaim=Object.freeze({ context,source:body.source,exec:body.exec,
       assertCurrent(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)},
       consume(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame);if(consumed)throw new Error('Prepared Shell body already consumed');consumed=true},
       takeExecSourceIssuer(){

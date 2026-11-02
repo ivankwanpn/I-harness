@@ -8,6 +8,7 @@ import type { Telemetry } from '@i-harness/telemetry'
 export interface SummaryFactoryInput {
   generation?: import('@i-harness/llm-seam').GenerationControl
   bindGeneration?: (prepared: import('@i-harness/llm-seam').PreparedModelRequest) => Promise<void>
+  afterStream?: () => Promise<void>
   model: ModelClient
   config: ResolvedCompactionConfig
   contextMetadata?: ContextBindingMetadata

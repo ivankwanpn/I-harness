@@ -12,7 +12,7 @@ import {captureOriginalRestorationSource} from './restoration-source.ts'
 import {originalDeliveryObservation} from './delivery-control.ts'
 import {subscribers} from '../events/state.ts'
 
-const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;generations():readonly import('../conversation/generation.ts').GenerationActionState[];newWork?():void}>()
+const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;generations():readonly import('../conversation/generation.ts').GenerationActionState[];execSource(id:string):ReturnType<import('../conversation/delivery.ts').DeliveryState['source']>;assertExecIssue(event:import('../events/exec-delivery.ts').ExecDeliverySourceEvent):void;newWork?():void}>()
 const readinessOwners=new WeakMap<object,{subscribe(listener:(epoch:number)=>void,onUnavailable?:(error:unknown,terminal:boolean)=>void):()=>void}>()
 const observations=new WeakSet<object>()
 export function isOriginalExecutionObservation(value:object):value is ExecutionObservation{return observations.has(value)}
@@ -39,8 +39,24 @@ export function readManagedSourceGenerations(identity:ManagedExecutionIdentity,s
  registered.current();original.current()
  return snapshot
 }
+/** A held settlement source may inspect only its execution's committed Exec binding after admission retires. */
+export function readManagedSourceExecDelivery(identity:ManagedExecutionIdentity,source:import('./ports.ts').SettlementFacts<import('./ports.ts').ProducerFactOutcome>,sourceId:string){
+ const original=owners.get(identity),registered=sources.get(source)
+ if(!original||registered?.identity!==identity||typeof sourceId!=='string'||!sourceId)throw TypeError('Original same-execution held source required')
+ original.current();registered.current();const result=freezeJsonData(structuredClone(original.execSource(sourceId)));registered.current();original.current();return result
+}
 const actions=new WeakMap<object,{identity:ManagedExecutionIdentity;current():void}>()
 export function assertManagedActionCurrent(domain:ManagedExecutionDomain,action:object){const original=domains.get(domain),registered=actions.get(action);if(!original||registered?.identity!==original.identity)throw TypeError('Original same-domain action required');domain.assertCurrent();registered.current()}
+/** Consult the original live fence; this check issues no fact or model permission. */
+export function assertManagedExecDeliveryCurrent(domain:ManagedExecutionDomain,binding:Readonly<{recipientSessionId:string;generationId:string;sourceId:string;callSeq:number;delivery:'tool'|'parent'}>){
+ const registered=domains.get(domain),owner=registered&&owners.get(registered.identity)
+ if(!registered||!owner||owner.owner!==registered.owner||!binding||typeof binding!=='object'||types.isProxy(binding))throw TypeError('Original managed Exec delivery domain required')
+ const keys=['recipientSessionId','generationId','sourceId','callSeq','delivery'] as const,fields=Object.getOwnPropertyDescriptors(binding)
+ if(Reflect.ownKeys(fields).length!==keys.length||keys.some(key=>!fields[key]||!('value'in fields[key]!)))throw TypeError('Closed original Exec binding required')
+ const recipient:unknown=fields.recipientSessionId!.value,generation:unknown=fields.generationId!.value,source:unknown=fields.sourceId!.value,call:unknown=fields.callSeq!.value,delivery:unknown=fields.delivery!.value
+ if(recipient!==owner.sessionId||typeof generation!=='string'||!generation||typeof source!=='string'||!source||typeof call!=='number'||!Number.isSafeInteger(call)||call<0||delivery!=='tool'&&delivery!=='parent')throw TypeError('Closed original Exec binding required')
+ domain.assertCurrent();owner.assertExecIssue({type:'agent/delivery-source',version:1,kind:'exec',sourceNamespace:'exec',recipientSessionId:recipient,generationId:generation,sourceId:source,callSeq:call,delivery});domain.assertCurrent()
+}
 export function createManagedExecutionDomain(identity:ManagedExecutionIdentity,owner:ManagedExecutionOwner,context:object,sessionId?:string):ManagedExecutionDomain{
  const original=owners.get(identity);if(!original||original.owner!==owner||!original.newWork||!context||typeof context!=='object'||types.isProxy(context)||sessionId!==undefined&&sessionId!==original.sessionId)throw TypeError('Original managed execution domain required');original.newWork()
  const domain=Object.freeze({identity,owner,context,sessionId:original.sessionId,assertCurrent(){if(this!==domain)throw TypeError('Original domain receiver required');original.newWork!()}}) as ManagedExecutionDomain
@@ -129,11 +145,31 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
         current();signalReady();return record
       }
     })
+    const readRecords=async(ordinals:readonly number[])=>{
+      current();const scope=captureWriterDependencies(open(expected));debt.add(scope);markBusy()
+      let records:import('./types.ts').SessionEventView[]|undefined,failed=false,primary:unknown
+      try{records=[];for(const ordinal of ordinals){current(scope);scope.assertCurrent();const record=await scope.readEvent(ordinal);current(scope);scope.assertCurrent();if(record.seq!==ordinal)throw TypeError('Original indexed record required');records.push(freezeJsonData(structuredClone(record)))}}
+      catch(error){failed=true;primary=error}
+      try{await scope.close();debt.delete(scope)}catch(cleanup){const cause=failed?new AggregateError([primary,cleanup],'Delivery read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
+      if(failed)throw primary;current();signalReady();return records!
+    }
+    const deliveryView:ExecutionObservation['delivery']=Object.freeze({
+      revision:fence,
+      activeGeneration(){if(this!==deliveryView)throw TypeError('Original delivery receiver required');current();return freezeJsonData(structuredClone(original.delivery().activeGeneration()))},
+      lastFenceSeq(){if(this!==deliveryView)throw TypeError('Original delivery receiver required');current();return original.delivery().lastFenceSeq()},
+      source(namespace:string,id:string){if(this!==deliveryView)throw TypeError('Original delivery receiver required');current();return freezeJsonData(structuredClone(original.delivery().source(namespace,id)))},
+      receipt(key:import('../events/delivery.ts').DeliveryKey){if(this!==deliveryView)throw TypeError('Original delivery receiver required');current();return freezeJsonData(structuredClone(original.delivery().receipt(key)))},
+      execPending(){if(this!==deliveryView)throw TypeError('Original delivery receiver required');current();return freezeJsonData(structuredClone(original.delivery().execPending()))},
+      codePending(){if(this!==deliveryView)throw TypeError('Original delivery receiver required');current();return freezeJsonData(structuredClone(original.delivery().codePending()))},
+      async ownHuman(){if(this!==deliveryView)throw TypeError('Original delivery receiver required');current();const index=original.delivery(),ordinal=index.ownHumanAdmissionSeq(token.sessionId,original.header?.seedLength??0,index.lastFenceSeq()??-1);if(ordinal===undefined)return undefined;const [event]=await readRecords([ordinal]);if(event?.type!=='agent/input/admitted'||event.intent!=='user'||event.synthetic||event.provenance?.kind!=='human'||event.provenance.authority!=='request'||event.provenance.originSessionId!==undefined&&event.provenance.originSessionId!==token.sessionId)throw TypeError('Original human admission required');return event},
+      async dispatchedCall(callSeq:number){if(this!==deliveryView)throw TypeError('Original delivery receiver required');current();if(!Number.isSafeInteger(callSeq)||callSeq<0||callSeq>=expected.eventCount)throw RangeError('Invalid original call ordinal');const match=original.delivery().dispatchForCall(callSeq);if(!match)return undefined;const [call,dispatch]=await readRecords([callSeq,match.seq]);if(call?.type!=='tool/call'||dispatch?.type!=='tool/dispatch'||call.callId!==match.callId||dispatch.callId!==call.callId||dispatch.eventSeq!==callSeq||match.seq<=callSeq)throw TypeError('Original dispatched call required');return Object.freeze({call,dispatch})},
+    })
     const header=original.header===undefined?undefined:freezeJsonData(structuredClone(original.header))
     current();const folded=original.hasFold?original.foldSnapshot(expected):undefined;current()
     if(original.hasFold && (!folded || !isStrictFactData(folded)))throw TypeError('Synchronous original fold data required')
     const schedules:ExecutionObservation['schedules']=original.hasFold?Object.freeze({kind:'available' as const,revision:original.context.scheduleRevision(),snapshot:freezeJsonData(structuredClone(folded))}):Object.freeze({kind:'unavailable' as const,reason:'original-schedule-adapter-not-connected' as const,revision:original.context.scheduleRevision()})
-    const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:original.formatVersion,...header?{header}:{},prefix:Object.freeze({...expected}),projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules,inbox,
+    const metadata=Object.freeze(Object.fromEntries((['todo','goal'] as const).map(name=>{current();if(!original.hasFoldView(name))return [name,Object.freeze({kind:'unavailable' as const,reason:'original-adapter-not-connected' as const,revision:expected.eventCount})];const value=original.foldView(name,expected);current();return [name,Object.freeze({kind:'available' as const,revision:expected.eventCount,snapshot:freezeJsonData(structuredClone(value))})]}))) as ExecutionObservation['metadata']
+    const observation:ExecutionObservation=Object.freeze({identity,eventCount:expected.eventCount,formatVersion:original.formatVersion,...header?{header}:{},prefix:Object.freeze({...expected}),projectionRevision:original.context.projectionRevision(),contextRevision:original.context.contextRevision(),scheduleRevision:original.context.scheduleRevision(),schedules,metadata,inbox,delivery:deliveryView,
       assertCurrent(){if(this!==observation)throw TypeError('Original observation receiver required');current()},
       plan(){if(this!==observation)throw TypeError('Original observation receiver required');current();return freezeJsonData(original.context.plan())},
       sandboxMode(fromSeq=0){if(this!==observation)throw TypeError('Original observation receiver required');current();return original.context.sandboxMode(fromSeq)},
@@ -173,7 +209,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       if(fields.some(field=>!field||!('value'in field)||typeof field.value!=='function'))throw new TypeError('Original execution owner methods required')
       const ready=Object.getOwnPropertyDescriptor(owner,'assertReady');if(ready&&(!('value'in ready)||typeof ready.value!=='function'||types.isProxy(ready.value)))throw TypeError('Original owner readiness required')
       const current=()=>{assertHeld();for(let index=0;index<methods.length;index++)if(Object.getOwnPropertyDescriptor(owner,methods[index]!)?.value!==fields[index]!.value)throw new TypeError('Original execution owner changed');if(ready&&Object.getOwnPropertyDescriptor(owner,'assertReady')?.value!==ready.value)throw TypeError('Original owner readiness changed')}
-      ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,generations(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},...ready?{newWork(){current();assertNewWork();Reflect.apply(ready.value,owner,[])}}:{}})
+      ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,generations(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},execSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('exec',id)},assertExecIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},...ready?{newWork(){current();assertNewWork();Reflect.apply(ready.value,owner,[])}}:{}})
     },
     assertNewWork,
     readinessChanged(recoverableBlocked=false){ownerRecoveryBlocked=recoverableBlocked;if(!readinessListeners.size)return;const state=readinessState();if(state.kind==='failed')signalUnavailable(state.error,true);else if(state.kind==='busy')markBusy();else signalReady()},

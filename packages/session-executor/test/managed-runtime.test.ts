@@ -14,6 +14,314 @@ import {createMainInstructionManager} from '../src/context/instructions/manager.
 import {createProjectInstructionEnvironment} from '../src/context/instructions/index.ts'
 import {createExecutionRuntimeContext} from '../src/lifecycle/execution-runtime-context.ts'
 import {registerApprovalAnswerer} from '@i-harness/interaction'
+import {createManagedExecutionRuntime} from '../src/managed-assembly.ts'
+import {controlledModel} from './controlled-model.ts'
+import {completeCheckpoint} from '../../compaction/test/fixtures/checkpoint.ts'
+import {committedFactSeqs} from '@i-harness/core-session'
+
+it('private runtime honors live automatic compaction policy',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-auto-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ let enabled=false,summaries=0
+ const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ const summarizer=controlledModel(async function*(){summaries++;yield {type:'text/chunk',text:completeCheckpoint()};yield {type:'end'}})
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:'system',tools:[],contextWindow:20000,maxOutputTokens:5000,compact:{auto:true,thresholdRatio:.15,targetRatio:.1,minTurnsBeforeRecompact:0,summarizationModel:summarizer,minSummaryChars:1},autoCompactionEnabled:()=>enabled})
+  await entry.inputs.inbox.admit({inputId:'a',text:'work '.repeat(1500),delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('a')
+  expect(summaries).toBe(0)
+  enabled=true
+  await entry.inputs.inbox.admit({inputId:'b',text:'continue',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('b')
+  expect(summaries).toBe(1)
+  expect((await backend.read('main')).events.some(event=>event.type==='compaction/replacement')).toBe(true)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private runtime atomically rebinds an idle model and its limits',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const firstRequests:unknown[]=[],secondRequests:{maxOutputTokens?:number;reasoningEffort?:string}[]=[]
+ const first=controlledModel(async function*(request){firstRequests.push(request);yield {type:'text/chunk',text:'first'};yield {type:'end'}})
+ const second=controlledModel(async function*(request){secondRequests.push(request);yield {type:'text/chunk',text:'second'};yield {type:'end'}})
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model:first,systemPrompt:'system',tools:[],contextWindow:10000,maxOutputTokens:100})
+  await entry.inputs.inbox.admit({inputId:'a',text:'first',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('a')
+  runtime.setModelBinding({model:second,contextWindow:20000,maxOutputTokens:200,reasoningEffort:'low'})
+  await entry.inputs.inbox.admit({inputId:'b',text:'second',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('b')
+  expect(firstRequests).toHaveLength(1);expect(secondRequests).toHaveLength(1)
+  expect(secondRequests[0]).toMatchObject({maxOutputTokens:200,reasoningEffort:'low'})
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private model binding rejects a busy turn and invalid limits without changing the model',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-busy-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main'),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ let original=0,replacement=0
+ const first=controlledModel(async function*(){original++;entered.resolve();await release.promise;yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ const second=controlledModel(async function*(){replacement++;yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model:first,systemPrompt:'system',tools:[],contextWindow:10000})
+  await entry.inputs.inbox.admit({inputId:'a',text:'first',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  const turn=runtime.lane.runAdmitted('a');await entered.promise
+  expect(()=>runtime.setModelBinding({model:second,contextWindow:10000})).toThrow(/busy/)
+  release.resolve();await turn
+  expect(()=>runtime.setModelBinding({model:second,contextWindow:10000,maxOutputTokens:0})).toThrow()
+  await entry.inputs.inbox.admit({inputId:'b',text:'second',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('b')
+  expect(original).toBe(2);expect(replacement).toBe(0)
+  await cache.close('main')
+  expect(()=>runtime.setModelBinding({model:second,contextWindow:10000})).toThrow()
+  await runtime.close()
+ }finally{release.resolve();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private model binding rechecks currentness after dynamic prompt evaluation',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-retire-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ let retire=false
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:()=>{if(retire)entry.execution.revokeNewWork();return 'system'},tools:[],contextWindow:10000})
+  retire=true
+  expect(()=>runtime.setModelBinding({model,contextWindow:10000})).toThrow()
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private model binding refuses runtime close during dynamic prompt evaluation',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-close-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ let originalCalls=0,replacementCalls=0,output:number|undefined
+ const model=controlledModel(async function*(request){originalCalls++;output=request.maxOutputTokens;yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ const replacement=controlledModel(async function*(){replacementCalls++;yield {type:'text/chunk',text:'replacement'};yield {type:'end'}})
+ let trigger=false,closing:Promise<void>|undefined,runtime!:ReturnType<typeof createManagedExecutionRuntime>
+ try{
+  runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:()=>{if(trigger)closing=runtime.close();return 'system'},tools:[],contextWindow:10000,maxOutputTokens:100})
+  trigger=true
+  expect(()=>runtime.setModelBinding({model:replacement,contextWindow:20000,maxOutputTokens:200})).toThrow()
+  expect(closing).toBeDefined();await closing
+  trigger=false
+  await entry.inputs.inbox.admit({inputId:'after',text:'probe old binding',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.agent.runAdmitted('probe old binding',undefined,undefined,'after')
+  expect(originalCalls).toBe(1);expect(replacementCalls).toBe(0);expect(output).toBe(100)
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private model binding rejects accessor-bearing input without invoking getters',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-accessors-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ let reads=0
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:'system',tools:[],contextWindow:10000})
+  const binding={get model(){reads++;return model},contextWindow:10000}
+  expect(()=>runtime.setModelBinding(binding)).toThrow()
+  const compact={prune:{get thresholdChars(){reads++;return 100}}}
+  expect(()=>runtime.setModelBinding({model,contextWindow:10000},compact)).toThrow()
+  expect(reads).toBe(0)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private model binding refuses Date and byte objects without invoking caller hooks',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-nonplain-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ let reads=0
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:'system',tools:[],contextWindow:10000})
+  const date=new Date();Object.defineProperty(date,'getTime',{get(){reads++;return Date.prototype.getTime}})
+  const bytes=new Uint8Array([1,2]);Object.defineProperty(bytes,Symbol.iterator,{get(){reads++;return Uint8Array.prototype[Symbol.iterator]}})
+  expect(()=>runtime.setModelBinding({model,contextWindow:10000},Object.assign({auto:false},{extra:date}))).toThrow()
+  expect(()=>runtime.setModelBinding({model,contextWindow:10000},Object.assign({auto:false},{extra:bytes}))).toThrow()
+  expect(reads).toBe(0)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private model binding refuses a turn started during prompt evaluation',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-reentry-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ let originalCalls=0,replacementCalls=0,trigger=false,turn:Promise<unknown>|undefined,runtime!:ReturnType<typeof createManagedExecutionRuntime>
+ const model=controlledModel(async function*(){originalCalls++;yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ const replacement=controlledModel(async function*(){replacementCalls++;yield {type:'text/chunk',text:'replacement'};yield {type:'end'}})
+ try{
+  runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:()=>{if(trigger){trigger=false;turn=runtime.agent.runAdmitted('original',undefined,undefined,'input')};return 'system'},tools:[],contextWindow:10000})
+  await entry.inputs.inbox.admit({inputId:'input',text:'original',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  trigger=true;expect(()=>runtime.setModelBinding({model:replacement,contextWindow:10000})).toThrow(/busy/)
+  expect(turn).toBeDefined();await turn
+  expect(originalCalls).toBe(1);expect(replacementCalls).toBe(0)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private model binding uses one captured value when the prompt mutates its caller input',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-capture-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ let secondCalls=0,thirdCalls=0,output:number|undefined,trigger=false
+ const first=controlledModel(async function*(){yield {type:'text/chunk',text:'first'};yield {type:'end'}})
+ const second=controlledModel(async function*(request){secondCalls++;output=request.maxOutputTokens;yield {type:'text/chunk',text:'second'};yield {type:'end'}})
+ const third=controlledModel(async function*(){thirdCalls++;yield {type:'text/chunk',text:'third'};yield {type:'end'}})
+ const binding={model:second,contextWindow:10000,maxOutputTokens:200}
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model:first,systemPrompt:()=>{if(trigger){binding.model=third;binding.maxOutputTokens=500};return 'system'},tools:[],contextWindow:10000})
+  trigger=true;runtime.setModelBinding(binding)
+  await entry.inputs.inbox.admit({inputId:'input',text:'test',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('input')
+  expect(secondCalls).toBe(1);expect(thirdCalls).toBe(0);expect(output).toBe(200)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private rebinding preserves the configured summary model identity',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-summary-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ let summaries=0
+ const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ const summarizer=controlledModel(async function*(){summaries++;yield {type:'text/chunk',text:completeCheckpoint()};yield {type:'end'}})
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:'system',tools:[],contextWindow:100000})
+  runtime.setModelBinding({model,contextWindow:100000},{auto:false,summarizationModel:summarizer,minSummaryChars:1})
+  await entry.inputs.inbox.admit({inputId:'input',text:'original work '.repeat(300),delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('input')
+  await entry.inputs.inbox.admit({inputId:'next',text:'continue',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('next')
+  expect((await runtime.agent.compact()).publication).toBe('committed')
+  expect(summaries).toBe(1)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private rebinding preserves a per-model summary client in compact policy',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-rebind-policy-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ let summaries=0
+ const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}},{providerId:'fixture',modelId:'fixture'})
+ const summarizer=controlledModel(async function*(){summaries++;yield {type:'text/chunk',text:completeCheckpoint()};yield {type:'end'}})
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:'system',tools:[],contextWindow:100000})
+  runtime.setModelBinding({model,contextWindow:100000,contextMetadata:{version:1,providerId:'fixture',modelId:'fixture',protocol:'openai-compatible',identityCoverage:'partial'}},{auto:false,minSummaryChars:1,modelPolicies:{'fixture/fixture':{summarizationModel:summarizer,retainTokens:0}}})
+  await entry.inputs.inbox.admit({inputId:'input',text:'original work '.repeat(300),delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('input')
+  await entry.inputs.inbox.admit({inputId:'next',text:'continue',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('next')
+  expect((await runtime.agent.compact()).publication).toBe('committed')
+  expect(summaries).toBe(1)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private summary cannot publish after its selected conversation changes',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-summary-stale-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ const summarizer=controlledModel(async function*(){entered.resolve();await release.promise;yield {type:'text/chunk',text:completeCheckpoint('STALE_SUMMARY')};yield {type:'end'}})
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:'system',tools:[],contextWindow:100000,compact:{auto:false,summarizationModel:summarizer,minSummaryChars:1}})
+  await entry.inputs.inbox.admit({inputId:'input',text:'original work '.repeat(300),delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('input')
+  const pending=runtime.agent.compact(undefined,{maxSummaryCalls:1})
+  await entered.promise
+  const action=entry.execution.owner.beginAction()
+  try{committedFactSeqs(await action.facts.agent.feedback({type:'user/message',text:'changed during summary',source:{kind:'plugin',plugin:'fixture'}}))}finally{action.finish()}
+  release.resolve()
+  await pending
+  expect(JSON.stringify((await backend.read('main')).events.filter(event=>event.type==='compaction/replacement'))).not.toContain('STALE_SUMMARY')
+  await runtime.close()
+ }finally{release.resolve();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private runtime binds the original summary factory to manual compaction',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-summary-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ let summaries=0
+ const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}})
+ const summarizer=controlledModel(async function*(){summaries++;yield {type:'text/chunk',text:completeCheckpoint()};yield {type:'end'}})
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model,systemPrompt:'system',tools:[],contextWindow:100000,compact:{auto:false,summarizationModel:summarizer,minSummaryChars:1}})
+  await entry.inputs.inbox.admit({inputId:'input',text:'original work '.repeat(300),delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('input')
+  await entry.inputs.inbox.admit({inputId:'next',text:'continue',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('next')
+  const result=await runtime.agent.compact()
+  if(!result.compacted)throw Error(`summary result ${JSON.stringify(result)} calls ${summaries}; events ${JSON.stringify((await backend.read('main')).events.map(event=>event.type))}`)
+  expect(result).toMatchObject({compacted:true,publication:'committed'})
+  expect(result.publication).toBe('committed')
+  expect(summaries).toBe(1)
+  expect((await backend.read('main')).events.some(event=>event.type==='compaction/replacement')).toBe(true)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('private runtime composes manual compaction over real tool output',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-compact-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'large',function:{name:'large',arguments:'{}'}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire(true))},async response=>{response.end(wire(false))}])
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),systemPrompt:'system',tools:[{name:'large',description:'produce output',inputSchema:{type:'object'},async execute(){return 'large-output-'.repeat(200)}}],contextWindow:16000,compact:{auto:false,retainTokens:0,prune:{thresholdChars:100,headChars:16,tailChars:16}}})
+  await entry.inputs.inbox.admit({inputId:'input',text:'read',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('input')
+  const result=await runtime.agent.compact()
+  expect(result.compacted).toBe(true)
+  expect(result.publication).toBe('committed')
+  expect((await backend.read('main')).events.some(event=>event.type==='compaction/prune')).toBe(true)
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close();await server.close()}
+},30000)
+
+it('private runtime reads dynamic system prompt for each actual model request',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-prompt-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'prompt-update',function:{name:'prompt_update',arguments:'{}'}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ let prompt='before'
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire(true))},async response=>{response.end(wire(false))}])
+ try{
+  const runtime=createManagedExecutionRuntime({execution:entry.execution,model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),systemPrompt:()=>prompt,tools:[{name:'prompt_update',description:'update state',inputSchema:{type:'object'},async execute(){prompt='after';return 'updated'}}]})
+  await entry.inputs.inbox.admit({inputId:'input',text:'update',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'desktop.input'}})
+  await runtime.lane.runAdmitted('input')
+  expect(JSON.stringify(server.requests[0]!.body)).toContain('before')
+  expect(JSON.stringify(server.requests[1]!.body)).toContain('after')
+  expect(JSON.stringify(server.requests[1]!.body)).toContain('updated')
+  await runtime.close()
+ }finally{await cache.closeAll();await coordinator.close();await server.close()}
+},30000)
 
 it('original private runtime consumes the cache admission on the genuine lane through tool body and continuation',async()=>{
  const create=Reflect.get(assembly,'createManagedExecutionRuntime')

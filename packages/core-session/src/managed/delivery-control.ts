@@ -8,7 +8,7 @@ const controls = new WeakMap<object, {
 }>();
 const ports = new WeakMap<object, ReturnType<typeof createDeliveryControl>>();
 const listeners = new WeakMap<object, Set<() => void>>();
-const ownerObservations=new WeakMap<()=>DeliveryReadIndex,{revision():number;isExecutable(inputId:string):boolean}>();
+const ownerObservations=new WeakMap<()=>DeliveryReadIndex,{revision():number;isExecutable(inputId:string):boolean;assertIssue(events:readonly SessionEventView[]):void}>();
 /** Original fence observation; no callback/label can enroll a replacement. */
 export function originalDeliveryObservation(readIndex:()=>DeliveryReadIndex){const original=ownerObservations.get(readIndex);if(!original)throw TypeError('Original delivery observation unavailable');return original}
 export function subscribeDeliveryControl(view: SessionView, listener: () => void): () => void {
@@ -94,7 +94,7 @@ export function createOwnerDeliveryControl(readIndex:()=>DeliveryReadIndex,event
       }
     }
   };
-  ownerObservations.set(readIndex,Object.freeze({revision:()=>revision,isExecutable:(inputId:string)=>executable(readIndex(),inputId,control)}));
+  ownerObservations.set(readIndex,Object.freeze({revision:()=>revision,isExecutable:(inputId:string)=>executable(readIndex(),inputId,control),assertIssue:port.assert.bind(port)}));
   return {control,port,bindView(view:SessionView){if(publicView||controls.has(view))throw TypeError('Original delivery view already bound');publicView=view;controls.set(view,control);ports.set(view,port)}};
 }
 export function isBoundDeliveryInput(view: SessionView, inputId: string): boolean {

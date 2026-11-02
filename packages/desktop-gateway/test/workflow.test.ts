@@ -5,10 +5,32 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { foldGoal } from "@i-harness/goal"
+import { applyGoalMutation, foldGoal } from "@i-harness/goal"
+import { append, createSession, metadataFactsFor, committedFactSeqs } from '@i-harness/core-session'
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import { forkSession } from "@i-harness/session-persistence"
-import { createDesktopWorkflow, createDesktopGoalTools } from "../src/workflow.ts"
+import { createDesktopWorkflow, createDesktopGoalTools, createDesktopOwnedGoalTools } from "../src/workflow.ts"
+
+it('owned goal tools preserve revision checks and commit the original goal fact',async()=>{
+ const session=createSession()
+ append(session,applyGoalMutation(null,'create',{objective:'verify'},1).event)
+ const tools=createDesktopOwnedGoalTools({read:()=>foldGoal(session.events),complete:async(ref,signal)=>{const mutation=applyGoalMutation(foldGoal(session.events),'complete',{ref},Date.now());committedFactSeqs(await metadataFactsFor(session,undefined,signal).admit(mutation.event));return foldGoal(session.events)}},()=>{})
+ const read=tools.find(tool=>tool.name==='goal_read')!,complete=tools.find(tool=>tool.name==='goal_complete')!
+ const goal=await read.execute({}, {}) as {id:string;revision:number}
+ await expect(complete.execute({id:goal.id,revision:goal.revision+1},{})).rejects.toThrow(/stale/i)
+ expect((await complete.execute(goal,{}))).toMatchObject({phase:'complete',revision:2})
+ expect(foldGoal(session.events)).toMatchObject({phase:'complete',revision:2})
+})
+
+it('complete Session goal tools retain their original read and completion behavior',async()=>{
+ const session=createSession()
+ append(session,applyGoalMutation(null,'create',{objective:'verify'},1).event)
+ const tools=createDesktopGoalTools(id=>id==='s'?session:undefined,()=>{})
+ const read=tools.find(tool=>tool.name==='goal_read')!,complete=tools.find(tool=>tool.name==='goal_complete')!
+ const goal=await read.execute({},{sessionId:'s'}) as {id:string;revision:number}
+ await expect(complete.execute({id:goal.id,revision:goal.revision+1},{sessionId:'s'})).rejects.toThrow(/stale/i)
+ expect(await complete.execute(goal,{sessionId:'s'})).toMatchObject({phase:'complete',revision:2})
+})
 
 it("persists Goal/Plan controls and job history, rejecting stale Goal edits", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-workflow-"))

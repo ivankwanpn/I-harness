@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
 import {
   applyGoalMutation,
+  applyGoalProjection,
   foldGoal,
+  isGoalSnapshot,
+  renderGoalContext,
   GoalStateError,
   type GoalView,
 } from "../src/index.ts"
@@ -24,6 +27,25 @@ function createEvent(goalOverrides: object = {}): SessionEvent {
 }
 
 describe("goal fold (task 4.2)", () => {
+  it("renders the original goal guidance for each phase", () => {
+    expect(renderGoalContext(null)).toBe('')
+    expect(renderGoalContext({id:'g',revision:2,objective:'work',phase:'active'})).toContain('Continue until fully achieved and verified, then call goal_complete')
+    expect(renderGoalContext({id:'g',revision:3,objective:'work',phase:'paused'})).toContain('Do not continue a paused or completed goal')
+  })
+  it("validates closed goal snapshot data", () => {
+    expect(isGoalSnapshot({kind:'absent'})).toBe(true)
+    expect(isGoalSnapshot({kind:'present',value:{id:'g',revision:1,objective:'work',phase:'active'}})).toBe(true)
+    expect(isGoalSnapshot({kind:'present',value:{id:'g',revision:0,objective:'work',phase:'active'}})).toBe(false)
+    expect(isGoalSnapshot({kind:'absent',value:null})).toBe(false)
+    Object.defineProperty(Object.prototype,'kind',{value:'absent',configurable:true})
+    try { expect(isGoalSnapshot({other:true})).toBe(false) } finally { delete (Object.prototype as {kind?:unknown}).kind }
+  })
+  it("incrementally projects original events and preserves malformed and clear semantics", () => {
+    const current = applyGoalProjection(null, createEvent())
+    expect(current).toEqual(foldGoal([createEvent()]))
+    expect(applyGoalProjection(current, { type: "goal/change", version: 1, operation: "clear" })).toBe(current)
+    expect(applyGoalProjection(current, { type: "goal/change", version: 1, operation: "clear", cleared: { id: "goal-1", revision: 1 } })).toBeNull()
+  })
   it("folds null on an empty log", () => {
     expect(foldGoal([])).toBeNull()
   })

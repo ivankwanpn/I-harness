@@ -103,7 +103,7 @@ export interface ManagedAction<Outcome = FactOutcome> {
   /** Original producer capture, when supported; copied outcomes cannot replace it. */
   captureToolCall?(event:Event<'tool/call'>):CapturedActionFact<Outcome>
   captureLifecycle?(event:LifecycleFact):CapturedActionFact<Outcome>
-  captureMetadata?(event:MetadataFact):CapturedActionFact<Outcome>
+  captureMetadata?(event:MetadataFact,checkCurrent?:()=>boolean):CapturedActionFact<Outcome>
   captureToolDispatch?(callId:string,reference:SeqRef<'tool/call'>):CapturedActionFact<Outcome>
   captureModelExchange(...args: Parameters<AgentFacts<Outcome>['accept']>): CapturedActionFact<Outcome>
   captureRuntimeContext(record: import('../events/runtime-context.ts').RuntimeContextRecordV1, checkCurrent: () => boolean): CapturedActionFact<Outcome>

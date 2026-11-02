@@ -17,6 +17,7 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { isStrictFactData } from '@i-harness/core-session'
 import type {
   GoalOperation,
   GoalPhase,
@@ -44,6 +45,22 @@ export interface GoalView {
   round?: number
   /** Epoch ms of the latest goal mutation (host-stamped at append time). */
   updatedAt?: number
+}
+
+export type GoalProjectionSnapshot = {kind:'absent'}|{kind:'present';value:Readonly<GoalView>}
+export function renderGoalContext(goal:Readonly<GoalView>|null):string {
+  return goal ? `Current goal (${goal.phase}, id ${goal.id}, revision ${goal.revision}): ${goal.objective}. ${goal.phase === "active" ? "Continue until fully achieved and verified, then call goal_complete with its current id/revision." : "Do not continue a paused or completed goal unless the user explicitly asks."}` : ""
+}
+export function isGoalSnapshot(value:unknown):value is GoalProjectionSnapshot {
+  try {
+    if(!value||typeof value!=='object'||Array.isArray(value)||!isStrictFactData(value))return false
+    const v=value as Record<string,unknown>, names=Reflect.ownKeys(v)
+    if(!Object.hasOwn(v,'kind'))return false
+    if(v.kind==='absent')return names.length===1
+    if(v.kind!=='present'||names.length!==2||!v.value||typeof v.value!=='object'||Array.isArray(v.value))return false
+    const g=v.value as Record<string,unknown>, required=['id','revision','objective','phase'], optional=['maxGoalRounds','round','updatedAt']
+    return required.every(key=>Object.hasOwn(g,key))&&Reflect.ownKeys(g).every(key=>typeof key==='string'&&(required.includes(key)||optional.includes(key)))&&typeof g.id==='string'&&g.id!==''&&Number.isSafeInteger(g.revision)&&(g.revision as number)>=1&&typeof g.objective==='string'&&g.objective.trim()!==''&&['active','paused','complete'].includes(g.phase as string)&&(g.maxGoalRounds===undefined||(Number.isSafeInteger(g.maxGoalRounds)&&(g.maxGoalRounds as number)>=1))&&(g.round===undefined||(Number.isSafeInteger(g.round)&&(g.round as number)>=0))&&(g.updatedAt===undefined||typeof g.updatedAt==='number')
+  } catch{return false}
 }
 
 export type GoalStateErrorCode =
@@ -141,12 +158,14 @@ function viewFromEvent(ev: SessionEventView): GoalView | null | undefined {
  */
 export function foldGoal(events: readonly SessionEventView[]): GoalView | null {
   let view: GoalView | null = null
-  for (const ev of events) {
-    const next = viewFromEvent(ev)
-    if (next === undefined) continue
-    view = next
-  }
+  for (const ev of events) view = applyGoalProjection(view, ev)
   return view
+}
+
+/** Incremental form of the original projection for validated stream owners. */
+export function applyGoalProjection(current: GoalView | null, event: SessionEventView): GoalView | null {
+  const next = viewFromEvent(event)
+  return next === undefined ? current : next
 }
 
 /** Require a current goal and a matching CAS ref; throws the typed conflicts. */

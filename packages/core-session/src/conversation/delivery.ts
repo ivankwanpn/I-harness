@@ -88,6 +88,8 @@ export interface DeliveryReadIndex extends DeliveryState {
   input(inputId: string): InputClass | undefined;
   isBound(inputId: string): boolean;
   inputIdAt(seq: number): string | undefined;
+  ownHumanAdmissionSeq(recipientSessionId:string,fromSeq:number,afterSeq:number): number | undefined;
+  dispatchForCall(callSeq:number): Readonly<Dispatch> | undefined;
 }
 function disposition(receipt: Receipt, active: ReturnType<DeliveryState['activeGeneration']>): DeliveryAdmissionReceipt['disposition'] {
   return receipt.disposition === 'pending' && receipt.generationId !== active?.generationId ? 'suppressed' : receipt.disposition;
@@ -127,6 +129,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
   const workflows = createWorkflowDeliveryIndex();
   const codes = createCodeDeliveryIndex(), codeCells=new Set<string>(), codeCalls=new Set<number>();
   const dispatches = new Map<number, Dispatch>(), admissions = new Map<string, InputClass>(), opens = new Set<string>(), fences = new Set<string>();
+  const humanAdmissions:number[]=[];
   let active: ReturnType<DeliveryState['activeGeneration']>, fence: number | undefined, owner = scope.sessionId, turn: number | undefined, turnAction: string | undefined;
   const state = (): DeliveryState => ({
     activeGeneration: () => active, lastFenceSeq: () => fence, source: (ns, id) => {
@@ -144,7 +147,10 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
   });
   return {
     read: state,
-    readIndex: (): DeliveryReadIndex => Object.freeze({ ...state(), input: (id: string) => admissions.get(id), isBound: (id: string) => inputs.has(id), inputIdAt: (seq: number) => refs.get(seq)?.inputId }),
+    readIndex: (): DeliveryReadIndex => Object.freeze({ ...state(), input: (id: string) => admissions.get(id), isBound: (id: string) => inputs.has(id), inputIdAt: (seq: number) => refs.get(seq)?.inputId,
+      ownHumanAdmissionSeq(recipientSessionId:string,fromSeq:number,afterSeq:number){for(let i=humanAdmissions.length-1;i>=0;i--){const seq=humanAdmissions[i]!;if(seq<fromSeq||seq<=afterSeq)break;const ref=refs.get(seq)!;if(ref.originSessionId===undefined||ref.originSessionId===recipientSessionId)return seq}return undefined},
+      dispatchForCall(callSeq:number){const found=dispatches.get(callSeq);return found&&Object.freeze({...found})},
+    }),
     stage() {
       const stagedRefs = new Map<number, Ref>(), stagedSources = new Map<string, DeliverySourceEvent>(), stagedInputs = new Map<string, string>(), stagedReceipts = new Map<string, Receipt>();
       const stagedExecTerminals = new Map<number, ExecTerminalEvent>(), stagedHandoffs = new Set<number>(), stagedExecPending = new Map<number, ExecDeliveryCandidate | undefined>();
@@ -374,7 +380,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
         }, commit() {
           if (awaiting)
             fail('unpaired delivery receipt');
-          for (const [key, value] of stagedRefs) refs.set(key, value);
+          for (const [key, value] of stagedRefs) {refs.set(key, value);if(value.type==='agent/input/admitted'&&value.human)humanAdmissions.push(key)}
           for (const [key, value] of stagedSources) sources.set(key, value);
           for(const cell of stagedCodeCells)codeCells.add(cell);
           for(const call of stagedCodeCalls)codeCalls.add(call);

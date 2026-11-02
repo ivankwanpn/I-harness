@@ -78,7 +78,7 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
             ports.capture = () => { const snapshot = capture(), selected = selectedPolicy(snapshot); policies.set(snapshot, selected); return snapshot; };
             ports.current = (source, groups) => { const selected = policies.get(source), now = selectedPolicy(source); return !!selected && selected.model === now.model && selected.key === now.key && current(source, groups); };
             ports.prepare = async (...args) => { await context.capture(action); return prepare(...args); };
-            ports.summary = host.summaryFactory ? selection => {
+            ports.summary = host.summaryFactory ? async selection => {
                 const selected = actual(), surface = selected.snapshot.surface, configuration = resolveCompactSpec({ ...config, contextWindow: surface.contextWindow ?? config.contextWindow }, selected.metadata?.providerId, selected.metadata?.modelId), model = mapModelRequest(selected.model, request => ({ ...request, sessionId: request.sessionId ?? host.domain.sessionId })), owner = generation();
                 if (!owner)
                     throw TypeError('Original summary generation required');
@@ -88,12 +88,18 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
                     if (!selection.current())
                         throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
                 }), async () => !!await context.refresh(action, selected) && selection.current());
-                return host.summaryFactory!({ model, config: configuration.summarizationModel === selected.model ? { ...configuration, summarizationModel: model } : configuration, generation: control, async bindGeneration(prepared) {
+                const result = await host.summaryFactory!({ model, config: configuration.summarizationModel === selected.model ? { ...configuration, summarizationModel: model } : configuration, generation: control, async bindGeneration(prepared) {
                         assertExecutionGeneration(host.execution, owner);
                         await owner.bind(prepared, 'summary');
                         if (!await context.refresh(action, selected))
                             throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
-                    }, contextMetadata: selected.metadata, budgetBinding: surface.budgetBinding, maxOutputTokens: surface.maxOutputTokens, reasoningEffort: surface.reasoningEffort, flush: host.flush, telemetry: host.telemetry })(selection);
+                }, async afterStream() {
+                    // Attempt receipts advance the prefix; refresh only the
+                    // same evidence before the summary checks its source again.
+                    if (!await context.refresh(action, selected) || !selection.current())
+                        throw Object.assign(Error('CONTEXT_INPUT_STALE'), { code: 'CONTEXT_INPUT_STALE' });
+                }, contextMetadata: selected.metadata, budgetBinding: surface.budgetBinding, maxOutputTokens: surface.maxOutputTokens, reasoningEffort: surface.reasoningEffort, flush: host.flush, telemetry: host.telemetry })(selection);
+                return result;
             } : undefined;
             let result: ReductionResult;
             try {

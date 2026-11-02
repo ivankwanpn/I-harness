@@ -1,4 +1,5 @@
 import type { OriginalExecutionFoldFactory, OriginalExecutionFoldSink } from './execution-types.ts';
+import { types } from 'node:util';
 import { captureRewrites,type ConversationRewriteDraft,type ConversationCandidate } from '../conversation/candidate.ts';
 import {extendConversationSourceCoordinates} from '../conversation/sources.ts';
 import {extendPruneDependencyView} from '../projection/pruning.ts';
@@ -35,7 +36,7 @@ type Candidate = {
     context: ReturnType<typeof createContextStateIndex>;
     prune: ReturnType<typeof createPruneDependencyIndex>;
     intake:ReturnType<typeof createManagedIntakeIndex>;
-    fold?: Omit<OriginalExecutionFoldSink, 'validateSnapshot'>;
+    fold?: Pick<OriginalExecutionFoldSink,'appendValidated'|'finishRestore'|'snapshot'> & {assertHealthy():void;views:Readonly<Partial<Record<import('./execution-types.ts').ExecutionFoldName,(prefix:Readonly<import('./types.ts').JournalPrefix>)=>unknown>>>};
     installed: boolean;
     retired: boolean;
 };
@@ -58,6 +59,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     const source = captureOriginalRestorationSource(input);
     source.assertCurrent();
     const supplied = foldFactory?.(Object.freeze({sessionId, seedLength: source.header?.seedLength ?? 0, formatVersion: source.formatVersion}));
+    if(supplied&&types.isProxy(supplied))throw TypeError('Original fold must not be a proxy');
     const validator = supplied && Object.getOwnPropertyDescriptor(supplied, 'validateSnapshot')?.value;
     if (supplied && typeof validator !== 'function') throw TypeError('Original fold snapshot validator required');
     // Capture once. A callback that returns before its work is acknowledged
@@ -69,9 +71,13 @@ export async function restoreManagedConversation(input: OriginalConversationRest
         void Promise.resolve(result).catch(cause => { error.cause = cause; });
         throw error;
     };
+    let checkViews=()=>{};
     const synchronous = (method: (...args: any[]) => unknown, snapshot = false) => (...args: any[]) => {
         if (foldFailure) throw foldFailure;
-        const result = method(...args);
+        checkViews();
+        let result:unknown;
+        try { result = method(...args); } catch(cause) { foldFailure ??= new TypeError('Original fold callback failed',{cause}); throw foldFailure; }
+        checkViews();
         if (snapshot) {
             if (!isStrictFactData(result) || Object.getOwnPropertyDescriptor(supplied!, 'validateSnapshot')?.value !== validator) refuse(result);
             let valid: unknown;
@@ -79,13 +85,33 @@ export async function restoreManagedConversation(input: OriginalConversationRest
             catch (cause) { foldFailure ??= new TypeError('Synchronous original fold snapshot validation failed', {cause}); throw foldFailure; }
             if (valid !== true) refuse(valid);
             if (Object.getOwnPropertyDescriptor(supplied!, 'validateSnapshot')?.value !== validator) refuse(result);
+            checkViews();
         } else if (result !== undefined) refuse(result);
         return result;
     };
+    const viewsField=supplied&&Object.getOwnPropertyDescriptor(supplied,'views');
+    if(viewsField&&!('value'in viewsField))throw TypeError('Original fold views must be own data');
+    const views=viewsField?.value;
+    if(views!==undefined&&(!views||typeof views!=='object'||types.isProxy(views)||Array.isArray(views)||Reflect.ownKeys(views).some(key=>key!=='todo'&&key!=='goal')))throw TypeError('Invalid original fold views');
+    const capturedFields=views?Object.getOwnPropertyDescriptors(views):undefined;
+    const viewMethodChecks:Array<()=>void>=[];
+    checkViews=()=>{const current=Object.getOwnPropertyDescriptor(supplied!,'views');if(!!current!==!!viewsField||current&&(!('value'in current)||current.value!==views))refuse('Original fold views changed');if(views){const keys=Reflect.ownKeys(views);if(keys.length!==Reflect.ownKeys(capturedFields!).length||keys.some(key=>{const before=Object.getOwnPropertyDescriptor(capturedFields!,key)?.value,after=Object.getOwnPropertyDescriptor(views,key);return !before||!after||!('value'in before)||!('value'in after)||before.value!==after.value}))refuse('Original fold views changed')}for(const check of viewMethodChecks)check()};
+    const named:Partial<Record<import('./execution-types.ts').ExecutionFoldName,(prefix:Readonly<import('./types.ts').JournalPrefix>)=>unknown>>={};
+    for(const name of ['todo','goal'] as const){
+      const field=views&&Object.getOwnPropertyDescriptor(views,name);if(!field)continue;
+      if(!('value'in field)||!field.value||typeof field.value!=='object'||types.isProxy(field.value)||Array.isArray(field.value)||Reflect.ownKeys(field.value).some(key=>key!=='snapshot'&&key!=='validateSnapshot'))throw TypeError('Original fold view required');
+      const view=field.value,snapshot=Object.getOwnPropertyDescriptor(view,'snapshot'),validate=Object.getOwnPropertyDescriptor(view,'validateSnapshot');
+      if(!snapshot||!('value'in snapshot)||typeof snapshot.value!=='function'||types.isProxy(snapshot.value)||types.isAsyncFunction(snapshot.value)||!validate||!('value'in validate)||typeof validate.value!=='function'||types.isProxy(validate.value)||types.isAsyncFunction(validate.value))throw TypeError('Original fold view methods required');
+      viewMethodChecks.push(()=>{if(Object.getOwnPropertyDescriptor(view,'snapshot')?.value!==snapshot.value||Object.getOwnPropertyDescriptor(view,'validateSnapshot')?.value!==validate.value)refuse('Original fold view changed')});
+      const checkView=()=>checkViews();
+      named[name]=(prefix)=>{if(foldFailure)throw foldFailure;try{checkView();const result=Reflect.apply(snapshot.value,view,[prefix]);if(!isStrictFactData(result))refuse(result);checkView();const valid=Reflect.apply(validate.value,view,[result]);if(valid!==true)refuse(valid);checkView();if(!isStrictFactData(result))refuse(result);return result}catch(cause){foldFailure??=new TypeError('Original fold view failed',{cause});throw foldFailure}};
+    }
     const fold = supplied && Object.freeze({
+        assertHealthy(){if(foldFailure)throw foldFailure;checkViews()},
         appendValidated: synchronous(supplied.appendValidated.bind(supplied)),
         finishRestore: synchronous(supplied.finishRestore.bind(supplied)),
         snapshot: synchronous(supplied.snapshot.bind(supplied), true),
+        views:Object.freeze(named),
     });
     let ordinal = 0;
     const scan = createConversationValidationScan({ formatVersion: source.formatVersion, header: { ...source.header, sessionId }, readEvent: source.readEvent.bind(source) });
@@ -137,6 +163,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         sourceCurrent();
         if (installationBlocked)
             failure('CONVERSATION_RESTORATION_RECOVERY_REQUIRED');
+        owned.fold?.assertHealthy();
     };
     function appendStage(events:readonly SessionEventView[],validation:ReturnType<Candidate['index']['stage']>,discardValidation?:()=>void){
         const expected=revision,sources=owned.sources.stage(events),state=owned.state.stage(events),context=owned.context.stage(events),prune=owned.prune.stage(events),intake=owned.intake.stage(events);
@@ -159,6 +186,8 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
     }
     return {
         foldSnapshot(prefix:Readonly<import('./types.ts').JournalPrefix>){check();return owned.fold?.snapshot(prefix)},
+        foldView(name:import('./execution-types.ts').ExecutionFoldName,prefix:Readonly<import('./types.ts').JournalPrefix>){check();return owned.fold?.views?.[name]?.(prefix)},
+        hasFoldView(name:import('./execution-types.ts').ExecutionFoldName){check();return !!owned.fold?.views?.[name]},
         hasFold:!!owned.fold,
         compatibility(events:readonly SessionEventView[],owner:object){check();return createManagedIndexedView(events,owned.source.formatVersion,owned.source.header,owned.index,owner,owned.sessionId)},
         delivery(){check();return readConversationDeliveries(owned.index)!},

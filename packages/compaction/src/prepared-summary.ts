@@ -6,6 +6,7 @@ export interface SummaryLimits {
   budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding
   generation?: import('@i-harness/llm-seam').GenerationControl
   bindGeneration?: (prepared: import('@i-harness/llm-seam').PreparedModelRequest) => Promise<void>
+  afterStream?: () => Promise<void>
   expectedImages?: number
   maxOutputTokens?: number
   outputCapExplicit?: boolean

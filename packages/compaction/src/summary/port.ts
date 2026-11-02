@@ -28,6 +28,7 @@ export const createSummaryPort: SummaryFactory = input => async source => {
     budgetBinding: binding,
     generation: input.generation,
     bindGeneration: input.bindGeneration,
+    afterStream: input.afterStream,
     maxOutputTokens: config.summaryMaxOutputTokens, outputCapExplicit: config.summaryOutputCapExplicit,
     contextWindow: inherited ? metadata?.contextWindow ?? binding?.limits.contextTokens?.value ?? config.contextWindow : config.summaryLimits?.contextWindow ?? metadata?.contextWindow ?? binding?.limits.contextTokens?.value,
     modelMaxOutputTokens: inherited ? binding?.limits.outputTokens?.value : config.summaryLimits?.maxOutputTokens ?? binding?.limits.outputTokens?.value,

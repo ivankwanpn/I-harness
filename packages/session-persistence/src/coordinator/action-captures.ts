@@ -19,7 +19,7 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
   }
   return {
     captureLifecycle:event=>actionHandle(captureSettlementFact({kind:'lifecycle',event},operations,true)),
-    captureMetadata:event=>actionHandle(captureSettlementFact({kind:'metadata',event},operations,true)),
+    captureMetadata:(event,checkCurrent)=>actionHandle(captureSettlementFact({kind:'metadata',event},checkCurrent===undefined?operations:guarded(checkCurrent),true)),
     captureToolDispatch:(callId,eventSeq)=>actionHandle(captureSettlementFact({kind:'tool',event:{type:'tool/dispatch',callId,eventSeq}},operations,true)),
     captureToolCall(event) {
       operations.assertHeld()
