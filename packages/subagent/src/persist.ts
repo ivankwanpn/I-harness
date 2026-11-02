@@ -1,4 +1,4 @@
-import {associateJobProjection,assertJobProjectionCurrent,originalJobProjectionFor,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
+import {associateJobProjection,assertJobProjectionCurrent,waitJobProjectionCurrent,originalJobProjectionFor,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, isManagedFactOwner, validRetainedResultRevision, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
 import { retainedResultWitness, unknownResult, validResultPublication, type ResultPublication, type AuxiliaryResultStatus } from './result-publication.ts'
@@ -241,7 +241,7 @@ export function persistentJobRegistry(
     registerJob(owner, kind, label, id, startedAt, cancel, identity, acquired) {
       const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity, registration=>{
         const original=originalJobProjectionFor(registration)
-        if(original)associateJobProjection(registration,persistProjection(original,async()=>{assertJobProjectionCurrent(registration);observe?.(jobs.read(registration.id));await save()},()=>assertJobProjectionCurrent(registration),settleRequiredFacts),retainRequiredProjection)
+        if(original)associateJobProjection(registration,persistProjection(original,async()=>{assertJobProjectionCurrent(registration);observe?.(jobs.read(registration.id));await save()},()=>assertJobProjectionCurrent(registration),settleRequiredFacts,()=>waitJobProjectionCurrent(registration)),retainRequiredProjection)
         acquired?.(registration)
       })
       observe?.(jobs.read(result.id))
@@ -339,7 +339,7 @@ export function persistentAgentTable(
       void save()
     },
   }
-  associateTableProjection(result,(entry,current)=>persistProjection(captureTableProjection(table,entry),save,current,settleRequiredFacts));return result
+  associateTableProjection(result,(entry,current,wait)=>persistProjection(captureTableProjection(table,entry),save,current,settleRequiredFacts,wait));return result
 }
 
 export function persistentRoleRegistry(

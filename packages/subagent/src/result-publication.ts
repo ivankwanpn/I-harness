@@ -58,6 +58,12 @@ function sameResult(saved: RetainedResultRevision, published: RetainedResultRevi
   // never hashed or treated as independent proof of execution.
   return before.kind === 'inline' && after.kind === 'inline' && before.encodedBytes === after.encodedBytes
 }
+export function retainedTaskResultWitness(event:import('@i-harness/core-session').SessionEventView|undefined,saved:RetainedResultRevision,taskId:string){
+ if(!event||event.type!=='subagent/end'||event.taskId!==taskId)return
+ const result:RetainedResultRevision|undefined=event.envelope&&event.resultRevision?{version:1,kind:'retained',revision:event.resultRevision,envelope:event.envelope}:undefined
+ if(!sameResult(saved,result)||!['completed','cancelled','error'].includes(event.outcome))return
+ return {status:event.outcome==='completed'?'completed' as const:event.outcome==='cancelled'?'killed' as const:'error' as const,result}
+}
 
 /** Inspect only an already authorized parent's committed facts. The latest
  * matching source identity fences old revisions, including running followups. */
@@ -72,9 +78,7 @@ export function retainedResultWitness(session: SessionView | undefined, saved: R
       return { status: event.job.status, result: event.job.result }
     }
     if (identity.taskId && event.type === 'subagent/end' && event.taskId === identity.taskId) {
-      const result: RetainedResultRevision | undefined = event.envelope && event.resultRevision ? { version: 1, kind: 'retained', revision: event.resultRevision, envelope: event.envelope } : undefined
-      if (!sameResult(saved, result) || !['completed', 'cancelled', 'error'].includes(event.outcome)) return
-      return { status: event.outcome === 'completed' ? 'completed' : event.outcome === 'cancelled' ? 'killed' : 'error', result }
+      return retainedTaskResultWitness(event,saved,identity.taskId)
     }
   }
   return undefined

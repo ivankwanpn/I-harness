@@ -33,6 +33,8 @@ it('retains the acknowledged private spawn start without a parent view',async()=
   const original=inspectOriginalSpawnStart(receipt,execution.owner)
   expect(inspectManagedSpawnStart(receipt,domain).members).toEqual(original.events)
   expect(()=>inspectManagedSpawnStart({...receipt},domain)).toThrow()
+  source.finish()
+  expect(inspectManagedSpawnStart(receipt,domain).members).toEqual(original.events)
   expect(original.events).toEqual([expect.objectContaining({type:'subagent/start',taskId:'private-task',seq:original.seqs[0]})])
   expect(()=>inspectOriginalSpawnStart({...receipt},execution.owner)).toThrow()
  }finally{await source.releaseUnused();source.finish();await coordinator.close()}

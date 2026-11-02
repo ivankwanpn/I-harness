@@ -7,7 +7,7 @@ import type { RetainedOutcomeSink } from '@i-harness/core-tools'
 import type { TaskRecord } from '../task-protocol.ts'
 import { OriginalTerminalRecoveryError } from '../task-notification.ts'
 import type { TaskRegistry } from '../task/types.ts'
-import {isManagedExecutionDomain,readManagedActionMembers,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {isManagedExecutionDomain,readManagedActionMembers,retainAcknowledgedExecutionMembers,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface OriginalSpawnStart {readonly kind:'original-spawn-start'}
 type ManagedSpawnStart={domain:ManagedExecutionDomain;action:object;source:import('@i-harness/core-session').SettlementFacts<ProducerFactOutcome>;capture:object;outcome:import('@i-harness/core-session').FactOutcome}
@@ -45,13 +45,15 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
   let requiredTask:RequiredTaskSettlement|undefined,requiredRun:{project:import('../runtime-projection.ts').TerminalProjection;entry:import('../agent-table.ts').ChildAgentEntry;run:Promise<unknown>}|undefined
   const producer=Promise.withResolvers<TaskTerminalizeInput>();let producerInput:TaskTerminalizeInput|undefined;
   const action = owner.beginAction(signal)
+  let actionFinished=false,startPin:ReturnType<typeof retainAcknowledgedExecutionMembers>|undefined
+  const finishAction=()=>{if(!actionFinished){actionFinished=true;action.finish()}}
   let closeAcquired: (() => Promise<void>) | undefined
   let unused = false
   // Retain the original acquisition before any later constructor step can
   // throw. The same handle gains its actual source below, before beforeRead.
   retainUnused?.(Object.freeze({ async close() {
     if(!start&&!published)unused = true
-    try { await closeAcquired?.() } finally { action.finish() }
+    try { await closeAcquired?.() } finally { finishAction() }
   } }))
   let start: CapturedActionFact<ProducerFactOutcome> | undefined
   let terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined
@@ -67,7 +69,7 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
   let resultPublished = false
   let terminalSignalled = false
   let recoverySignalled = false, terminalOutcome: ProducerFactOutcome | undefined
-  let settling = false
+  let settling = false,projectionRetry=false,terminalTaskAcknowledged=false
   let beginHandoff: ReturnType<TaskRegistry['bindForegroundHandoff']> | undefined
   let handoff: ReturnType<NonNullable<typeof beginHandoff>> | undefined
   let handoffAcknowledged = false, handoffReleased = false, handoffConsumerPending = false
@@ -81,7 +83,7 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
 
   let localProjection:Promise<void>|undefined
   const projectRequiredTerminal=()=>{
-    const pending=localProjection??=(async()=>{if(requiredTask){const original=await requiredTask.settle();requiredTask.assertProjectionCurrent();if(requiredRun)await requiredRun.project(original);else await projectOriginalSpawnJob(originalPublished,original);requiredTask.assertProjectionCurrent()}})()
+    const pending=localProjection??=(async()=>{if(requiredTask){const original=await requiredTask.settle();terminalTaskAcknowledged=true;await requiredTask.waitProjectionCurrent();if(requiredRun)await requiredRun.project(original);else await projectOriginalSpawnJob(originalPublished,original);await requiredTask.waitProjectionCurrent()}})()
     void pending.catch(()=>{if(localProjection===pending)localProjection=undefined});return pending
   }
 
@@ -163,7 +165,7 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
   if(originalCloseAck)void originalCloseAck.then(()=>{sourceReleased=true;completed()}).catch(cause=>{captureFailure=Object.freeze({cause})})
   let closing: Promise<void> | undefined
   const closeSource = () => {
-    const pending = closing ??= originalSourceClose().then(async()=>{if(originalCloseAck)await originalCloseAck;sourceReleased=true;completed()})
+    const pending = closing ??= originalSourceClose().then(async()=>{if(originalCloseAck)await originalCloseAck;sourceReleased=true;startPin?.release();startPin=undefined;completed()})
     void pending.catch(() => { if (closing === pending) closing = undefined })
     return pending
   }
@@ -208,6 +210,7 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
       // Discovery can retry an existing terminal capture. It cannot start or
       // join nonterminal body/Task preparation; explicit close owns that debt.
       if (requiredTask && !terminal) {
+        if(projectionRetry){await settleTerminal();projectionRetry=false;terminalReady.resolve();await closeSource();return}
         let recovered:Readonly<TaskRecord>|undefined
         try{recovered=await requiredTask.recoverCapturedAcknowledgment()}catch(cause){throw requiredTask.acknowledgmentRecovery(cause)??cause}
         if(!recovered)return
@@ -289,6 +292,7 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
       if(!seqs.length)throw Error('Missing spawn start fact')
       if(domain && outcome.kind!=='committed')throw Error('Original managed spawn acknowledgment required')
       const events=domain?readManagedActionMembers(domain,action,start,outcome as import('@i-harness/core-session').FactOutcome):seqs.map(seq=>(owner as FactOwner).view.events[seq]!)
+      if(domain&&!startPin)startPin=retainAcknowledgedExecutionMembers(start,outcome as import('@i-harness/core-session').FactOutcome)
       if(events.length!==seqs.length || events.some((member,index)=>member.seq!==seqs[index]))throw Error('Original spawn start members unavailable')
       const receipt=Object.freeze({kind:'original-spawn-start' as const});spawnStarts.set(receipt,Object.freeze({owner,seqs:Object.freeze([...seqs]),events:Object.freeze([...events]),event:Object.freeze({...event}),...domain?{managed:{domain,action,source,capture:start,outcome:outcome as import('@i-harness/core-session').FactOutcome}}:{}}));return receipt
     },
@@ -298,13 +302,13 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
       terminal ??= source.delivery.capture(terminalEvent)
       terminalOutput ??= output
       try { await settleTerminal(); terminalReady.resolve(); if (handoff?.kind !== 'parent' || handoffReleased) await closeSource() }
-      catch (error) { terminalReady.reject(error); throw error }
+      catch (error) { terminalReady.reject(error); if(requiredTask&&!terminal&&terminalTaskAcknowledged)projectionRetry=true;if(requiredTask&&!recoverySignalled){recoverySignalled=true;try{onTerminalRecovery?.()}catch{}} throw error }
     },
     async prepareEnd(prepare: NonNullable<typeof prepareEnd>) {
       prepareEnd ??= prepare
       settling = true
       try { await settleTerminal(); terminalReady.resolve(); if (handoff?.kind !== 'parent' || handoffReleased) await closeSource() }
-      catch (error) { terminalReady.reject(error); throw error }
+      catch (error) { terminalReady.reject(error); if(requiredTask&&!terminal&&terminalTaskAcknowledged)projectionRetry=true;if(requiredTask&&!recoverySignalled){recoverySignalled=true;try{onTerminalRecovery?.()}catch{}} throw error }
     },
     async foreground() {
       if (prepareEnd) await settleTerminal()
@@ -323,9 +327,9 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
       terminalReady.reject(cause)
       source.requireRecovery()
     },
-    finish() { action.finish() },
+    finish() { finishAction() },
   }
   const originalPublished=result.published
-  registerOriginalSpawnRun(result.published,()=>requiredTask!==undefined,(entry,run,project)=>{if(requiredRun)throw Error('Original spawn run replaced');requiredRun={entry,run,project}},()=>requiredTask!.assertProjectionCurrent(),projectRequiredTerminal)
+  registerOriginalSpawnRun(result.published,()=>requiredTask!==undefined,(entry,run,project)=>{if(requiredRun)throw Error('Original spawn run replaced');requiredRun={entry,run,project}},()=>requiredTask!.assertProjectionCurrent(),projectRequiredTerminal,()=>requiredTask!.waitProjectionCurrent())
   return result
 }
