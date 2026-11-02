@@ -178,7 +178,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         try { held.assertHeld(); return 'available'; } catch { return 'unavailable'; }
     };
     let publishedStatus = executionStatus();
-    const publishExecutionStatus = () => { const next = executionStatus(); if (next !== publishedStatus) { publishedStatus = next; executionChanges?.invalidated(id); } core?.readinessChanged(!sourceFault && (quarantined || recoveryHolds.size > 0)); };
+    const publishExecutionStatus = () => { const next = executionStatus(); if (next !== publishedStatus) { publishedStatus = next; executionChanges?.invalidated(id); } if(sourceFault)core?.readinessUnavailable(new FactRecoveryRequiredError());else core?.readinessChanged(quarantined || recoveryHolds.size > 0); };
     type SelectedScope=Readonly<{kind:'selected-lane'}>
     const selectedJournal=(backend as PersistenceBackend & {selectedJournal?:{
       resolveCheckedBirth(id:string,owner:typeof held):Promise<unknown>;bindCheckedBirthLane(id:string,owner:typeof held,birth:unknown):SelectedScope;

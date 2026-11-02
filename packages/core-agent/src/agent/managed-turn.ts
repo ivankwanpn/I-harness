@@ -1,7 +1,7 @@
 import type { PluginContext } from '@i-harness/core-plugin';
 import { randomUUID } from 'node:crypto';
 import { committedFactSeqs, SYSTEM_INPUT_PLUGIN, type ImageInput, type SessionEventView, type FactOutcome, type GenerationOrigin, type CapturedActionFact } from '@i-harness/core-session';
-import { assertManagedActionCurrent, readManagedActionMembers, publishManagedExecutionTransient } from '@i-harness/core-session/internal/execution';
+import { getManagedExecutionAdmissionWait, assertManagedActionCurrent, readManagedActionMembers, publishManagedExecutionTransient } from '@i-harness/core-session/internal/execution';
 import { assertExecutionGeneration } from '../../../session-executor/src/lifecycle/generation-actions.ts';
 import { receivedExecutionInputsFor } from '../../../session-executor/src/lifecycle/execution-inputs.ts';
 import { modelFailureFacts, type LLMStreamEvent } from '@i-harness/llm-seam';
@@ -357,6 +357,11 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                         if (record.handled)
                             calls.delete(record);
                     callWitnesses.clear();
+                    for (;;) {
+                        const wait = getManagedExecutionAdmissionWait(host.domain, action, signal);
+                        if (!wait) break;
+                        await wait;
+                    }
                     await admissionOwner.recovery.resolve(candidate!.prepared.measurement, signal);
                     origin = { kind: 'predecessor', seq: result.acceptedSeq };
                 }

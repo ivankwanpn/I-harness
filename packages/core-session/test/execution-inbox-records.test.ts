@@ -1,5 +1,5 @@
-import {expect,it} from 'vitest'
-import {restoreManagedExecutionState,createManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,subscribeManagedExecutionReadiness} from '../src/managed/execution-state.ts'
+import {expect,it,vi} from 'vitest'
+import {restoreManagedExecutionState,createManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,subscribeManagedExecutionReadiness,getManagedExecutionAdmissionWait} from '../src/managed/execution-state.ts'
 import {createOwnerDeliveryControl} from '../src/managed/delivery-control.ts'
 import type {SessionEventView} from '../src/managed/types.ts'
 import {createNondurableFactOwner} from '../src/managed/nondurable.ts'
@@ -17,9 +17,9 @@ async function fixture(controls:{read?():Promise<void>;close?():Promise<void>;fo
  const binding={token:Object.freeze({sessionId:'inbox',incarnation:'original'}),assertHeld:source.assertCurrent,openDependencies(expected:typeof prefix){opened++;const captured=epoch;let disposed=false;lastScope={assertCurrent(){if(disposed||captured!==epoch||expected!==prefix)throw Error('changed original prefix');binding.assertHeld()},async readEvent(ordinal:number){reads.push(ordinal);await controls.read?.();return events[ordinal]!},async close(){await controls.close?.();disposed=true;closed++}};return lastScope}}
  const state=await restoreManagedExecutionState(source,binding,controls.fold)
  const deliveryControl=createOwnerDeliveryControl(state.delivery,()=>state.eventCount)
- const owner={ownsAction(){return false},beginAction(){throw Error('No observation action')},registerReceivedInputSource(){throw Error('No observation source')},async drain(){},assertReady(){}}
- state.bindOwner(owner)
- return {state,owner,deliveryControl,events,reads,get opened(){return opened},get closed(){return closed},get lastScope(){return lastScope},change(){epoch++},lose(){held=false}}
+ const action={signal:new AbortController().signal,assertOpen(){}},owner={ownsAction(value:object){return value===action},beginAction(){throw Error('No observation action')},registerReceivedInputSource(){throw Error('No observation source')},async drain(){},assertReady(){}}
+ state.bindOwner(owner);state.captureHooks(action,()=>{})
+ return {state,owner,action:action as unknown as import('../src/managed/ports.ts').ManagedAction<import('../src/managed/types.ts').FactOutcome>,deliveryControl,events,reads,get opened(){return opened},get closed(){return closed},get lastScope(){return lastScope},change(){epoch++},lose(){held=false}}
 }
 
 it('hydrates the indexed actual matching dispatch and no missing or mismatched dispatch',async()=>{
@@ -174,4 +174,33 @@ it('withholds a valid admission until its original cleanup ACK and retries clean
  expect(f.reads).toEqual([0]);expect(()=>observed.assertCurrent()).toThrow('cleanup unresolved')
  failing=false;await f.state.settleDependencies();observed.assertCurrent()
  expect(f.reads).toEqual([0]);expect(f.closed).toBe(1);await f.state.close()
+})
+
+for(const end of ['ready','abort','Stop','falsey-close','unknown'] as const)it(`finite admission joins original active scope and rejects ${end} honestly`,async()=>{
+ let release!:()=>void,entered!:()=>void;const held=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r);let fail=false
+ const f=await fixture({async read(){entered();await held},async close(){if(fail)throw undefined}}),domain=createManagedExecutionDomain(f.state.identity,f.owner,{}),controller=new AbortController()
+ expect(getManagedExecutionAdmissionWait(domain,f.action,controller.signal)).toBeUndefined()
+ const reading=f.state.observe().inbox.admitted('done');await started
+ const add=vi.spyOn(controller.signal,'addEventListener'),remove=vi.spyOn(controller.signal,'removeEventListener');const wait=getManagedExecutionAdmissionWait(domain,f.action,controller.signal);expect(wait).toBeInstanceOf(Promise);let advanced=false;const result=wait!.then(()=>{advanced=true;return {ok:true}},error=>({ok:false,error}))
+ await Promise.resolve();expect(advanced).toBe(false)
+ if(end==='abort')controller.abort('cancelled');if(end==='Stop')f.state.stopNewWork();if(end==='falsey-close')fail=true;if(end==='unknown')f.state.readinessChanged(true)
+ release();const readResult=await reading.then(()=>true,()=>false);expect(readResult).toBe(end!=='Stop'&&end!=='falsey-close')
+ expect((await result).ok).toBe(end==='ready');expect(advanced).toBe(end==='ready');expect(add).toHaveBeenCalledTimes(1);expect(remove).toHaveBeenCalledTimes(1)
+ if(end==='ready')expect(getManagedExecutionAdmissionWait(domain,f.action,controller.signal)).toBeUndefined()
+ if(end==='falsey-close'){expect(()=>getManagedExecutionAdmissionWait(domain,f.action,controller.signal)).toThrow();fail=false;await f.state.settleDependencies()}
+ await f.state.close()
+})
+
+it('rechecks a second genuine busy epoch started by an earlier readiness listener',async()=>{
+ let release1!:()=>void,release2!:()=>void,enter2!:()=>void,count=0
+ const one=new Promise<void>(r=>release1=r),two=new Promise<void>(r=>release2=r),secondEntered=new Promise<void>(r=>enter2=r)
+ const f=await fixture({async read(){if(++count===1)await one;else{enter2();await two}}}),domain=createManagedExecutionDomain(f.state.identity,f.owner,{}),observation=f.state.observe()
+ let second:Promise<unknown>|undefined;const off=subscribeManagedExecutionReadiness(domain,()=>{if(!second)second=f.state.observe().inbox.admitted('done')})
+ const first=observation.inbox.admitted('done'),wait=getManagedExecutionAdmissionWait(domain,f.action,f.action.signal)!;let ready=false;const done=wait.then(()=>{ready=true})
+ release1();await first;await secondEntered;expect(ready).toBe(false);expect(()=>domain.assertCurrent()).toThrow('cleanup unresolved')
+ release2();await second;await done;expect(ready).toBe(true);expect(count).toBe(2);off();await f.state.close()
+})
+it('subscribes while completion is already queued without losing the original wake',async()=>{
+ let release!:()=>void;const held=new Promise<void>(r=>release=r),f=await fixture({async read(){await held}}),domain=createManagedExecutionDomain(f.state.identity,f.owner,{}),reading=f.state.observe().inbox.admitted('done')
+ release();const wait=getManagedExecutionAdmissionWait(domain,f.action,f.action.signal);expect(wait).toBeInstanceOf(Promise);await reading;await wait;expect(getManagedExecutionAdmissionWait(domain,f.action,f.action.signal)).toBeUndefined();await f.state.close()
 })

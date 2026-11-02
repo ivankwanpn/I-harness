@@ -13,7 +13,7 @@ import {originalDeliveryObservation} from './delivery-control.ts'
 import {subscribers} from '../events/state.ts'
 
 const owners=new WeakMap<ManagedExecutionIdentity,{owner:ManagedExecutionOwner;sessionId:string;current():void;generations():readonly import('../conversation/generation.ts').GenerationActionState[];execSource(id:string):ReturnType<import('../conversation/delivery.ts').DeliveryState['source']>;codeSource(id:string):ReturnType<import('../conversation/delivery.ts').DeliveryState['source']>;codeEvidence(sourceSeq:number,terminalSeq:number):ReturnType<import('../conversation/delivery.ts').DeliveryReadIndex['codeEvidence']>;assertExecIssue(event:import('../events/exec-delivery.ts').ExecDeliverySourceEvent):void;assertCodeIssue(event:import('../events/code-delivery.ts').CodeDeliverySourceEvent):void;newWork?():void}>()
-const readinessOwners=new WeakMap<object,{subscribe(listener:(epoch:number)=>void,onUnavailable?:(error:unknown,terminal:boolean)=>void):()=>void}>()
+const readinessOwners=new WeakMap<object,{admission():boolean;subscribe(listener:(epoch:number)=>void,onUnavailable?:(error:unknown,terminal:boolean)=>void):()=>void}>()
 const observations=new WeakSet<object>()
 export function isOriginalExecutionObservation(value:object):value is ExecutionObservation{return observations.has(value)}
 const domains=new WeakMap<object,{identity:ManagedExecutionIdentity;owner:ManagedExecutionOwner;context:object;current():void}>()
@@ -26,6 +26,22 @@ export function subscribeManagedExecutionReadiness(domain:ManagedExecutionDomain
  if(!registered||!owner||owner.owner!==registered.owner||!readiness||typeof listener!=='function'||types.isProxy(listener)||onUnavailable!==undefined&&(typeof onUnavailable!=='function'||types.isProxy(onUnavailable)))throw TypeError('Original readiness domain required')
  owner.current()
  return readiness.subscribe(listener,onUnavailable)
+}
+/** Scheduling only: a ready result never survives an await as an admission token. */
+export function getManagedExecutionAdmissionWait(domain:ManagedExecutionDomain,action:import('./ports.ts').ManagedAction<FactOutcome>,signal:AbortSignal):Promise<void>|undefined {
+ const registered=domains.get(domain),owner=registered&&owners.get(registered.identity),originalAction=actions.get(action),readiness=registered&&readinessOwners.get(registered.identity)
+ if(!registered||!owner||owner.owner!==registered.owner||!readiness||originalAction?.identity!==registered.identity)throw TypeError('Original same-domain admission action required')
+ const busy=()=>{signal.throwIfAborted();owner.current();originalAction.current();action.signal.throwIfAborted();if(!owner.owner.ownsAction(action))throw TypeError('Original admission action retired');return readiness.admission()}
+ if(!busy())return undefined
+ const actionSignal=action.signal
+ return new Promise<void>((resolve,reject)=>{
+  let done=false,off:(()=>void)|undefined
+  const finish=(failed:boolean,error?:unknown)=>{if(done)return;done=true;signal.removeEventListener('abort',abort);actionSignal.removeEventListener('abort',actionAbort);off?.();failed?reject(error):resolve()}
+  const abort=()=>finish(true,signal.reason),actionAbort=()=>finish(true,actionSignal.reason)
+  const check=()=>{try{if(!busy())finish(false)}catch(error){finish(true,error)}}
+  signal.addEventListener('abort',abort,{once:true});actionSignal.addEventListener('abort',actionAbort,{once:true})
+  try{off=subscribeManagedExecutionReadiness(domain,check,error=>finish(true,error));if(done)off();else check()}catch(error){finish(true,error)}
+ })
 }
 export function subscribeManagedExecution(domain:ManagedExecutionDomain,listener:(event:import('../events/types.ts').SessionEvent)=>void){domain.assertCurrent();if(!isManagedExecutionDomain(domain))throw TypeError('Original execution domain required');let set=subscribers.get(domain.identity);if(!set){set=new Set();subscribers.set(domain.identity,set)}set.add(listener);return()=>{set.delete(listener)}}
 const sources=new WeakMap<object,{identity:ManagedExecutionIdentity;current():void}>()
@@ -118,8 +134,9 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   if(!token.sessionId||!token.incarnation)throw new TypeError('Original writer incarnation required')
   const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId,foldFactory)
   assertHeld()
-  const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>()
+  const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>(),activeDependencyScopes=new Set<OriginalWriterDependencyScope>()
   let stopped=false,ownerBound=false,closed=false,pendingWrite:object|undefined
+  let pendingWriteActive=false
   let readinessWasReady=false,readinessEpoch=0,readinessQueued=false,ownerRecoveryBlocked=false
   let readinessFailure:{error:unknown;terminal:boolean}|undefined
   const readinessListeners=new Set<{listener:(epoch:number)=>void;onUnavailable?:(error:unknown,terminal:boolean)=>void;delivered:number}>()
@@ -145,9 +162,19 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     if(readinessWasReady&&epoch!==readinessEpoch)queueReadiness()
   })}
   const signalReady=()=>{if(!readinessListeners.size||readinessWasReady)return;const state=readinessState();if(state.kind==='failed'){signalUnavailable(state.error,true);return}if(state.kind==='busy')return;readinessFailure=undefined;readinessWasReady=true;readinessEpoch++;queueReadiness()}
-  readinessOwners.set(identity,{subscribe(listener,onUnavailable){assertHeld();const owner=owners.get(identity);if(stopped||closed||!owner)throw TypeError('Original readiness owner retired');owner.current();const item={listener,onUnavailable,delivered:-1};readinessListeners.add(item);try{if(!pendingWrite&&!debt.size&&!ownerRecoveryBlocked){if(!owner.newWork)throw TypeError('Original readiness unavailable');owner.newWork();observe();readinessFailure=undefined;if(!readinessWasReady){readinessWasReady=true;readinessEpoch++}queueReadiness()}else if(readinessFailure){const failure=readinessFailure;queueMicrotask(()=>{if(!readinessListeners.has(item))return;try{item.onUnavailable?.(failure.error,failure.terminal)}catch{}if(failure.terminal)readinessListeners.delete(item)})}}catch(error){readinessListeners.delete(item);throw error}let active=true;return()=>{if(active){active=false;readinessListeners.delete(item)}}}})
+  readinessOwners.set(identity,{admission(){
+    assertHeld()
+    if(stopped||closed)throw Object.assign(Error('FACT_CLOSED'),{code:'FACT_CLOSED'})
+    // Retained debt and uncertain native issuance never count as active work.
+    if(dependencyFailure)throw dependencyFailure.cause
+    if(readinessFailure)throw readinessFailure.error
+    if(ownerRecoveryBlocked||pendingWrite&&!pendingWriteActive||[...debt].some(scope=>!activeDependencyScopes.has(scope)))throw Object.assign(Error('Original admission requires explicit recovery'),{code:'FACT_RECOVERY_REQUIRED'})
+    if(pendingWrite||debt.size)return true
+    const owner=owners.get(identity);if(!owner?.newWork)throw TypeError('Original readiness unavailable')
+    owner.newWork();observe();return false
+  },subscribe(listener,onUnavailable){assertHeld();const owner=owners.get(identity);if(stopped||closed||!owner)throw TypeError('Original readiness owner retired');owner.current();const item={listener,onUnavailable,delivered:-1};readinessListeners.add(item);try{if(!pendingWrite&&!debt.size&&!ownerRecoveryBlocked){if(!owner.newWork)throw TypeError('Original readiness unavailable');owner.newWork();observe();readinessFailure=undefined;if(!readinessWasReady){readinessWasReady=true;readinessEpoch++}queueReadiness()}else if(readinessFailure){const failure=readinessFailure;queueMicrotask(()=>{if(!readinessListeners.has(item))return;try{item.onUnavailable?.(failure.error,failure.terminal)}catch{}if(failure.terminal)readinessListeners.delete(item)})}}catch(error){readinessListeners.delete(item);throw error}let active=true;return()=>{if(active){active=false;readinessListeners.delete(item)}}}})
   let dependencyFailure:{cause:unknown}|undefined
-  const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();debt.delete(scope)}catch(error){errors.push(error)}if(errors.length){const error=new AggregateError(errors,'Exact writer dependency cleanup unresolved');signalUnavailable(error,!sameHeldOwner());throw error};dependencyFailure=undefined;signalReady()}
+  const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(error){errors.push(error)}if(errors.length){const error=new AggregateError(errors,'Exact writer dependency cleanup unresolved');signalUnavailable(error,!sameHeldOwner());throw error};dependencyFailure=undefined;readinessFailure=undefined;signalReady()}
   const assertFresh=(reading?:OriginalWriterDependencyScope)=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size>(reading&&debt.has(reading)?1:0))throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
   const assertNewWork=()=>assertFresh()
   const requestActions=new WeakMap<object,()=>void>()
@@ -161,7 +188,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       async admitted(inputId:string){
         if(this!==inbox)throw TypeError('Original inbox receiver required');current()
         const ordinal=original.intake.admission(inputId);if(ordinal===undefined)return undefined
-        const scope=captureWriterDependencies(open(expected));debt.add(scope);markBusy()
+        const scope=captureWriterDependencies(open(expected));debt.add(scope);activeDependencyScopes.add(scope);markBusy()
         // Only this synchronous invocation's original registered reader is
         // exempt from its own debt check. Every public admission remains fenced.
         let record:Extract<import('./types.ts').SessionEventView,{type:'agent/input/admitted'}>|undefined,failed=false,primary:unknown
@@ -170,18 +197,18 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
           if(event.type!=='agent/input/admitted'||event.seq!==ordinal||event.inputId!==inputId)throw TypeError('Original indexed admission record required')
           record=freezeJsonData(event)
         }catch(error){failed=true;primary=error}
-        try{await scope.close();debt.delete(scope)}catch(cleanup){const cause=failed?new AggregateError([primary,cleanup],'Admission read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
-        if(failed)throw primary
-        current();signalReady();return record
+        try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);const cause=failed?new AggregateError([primary,cleanup],'Admission read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
+        if(failed){signalReady();throw primary}
+        try{current()}catch(error){signalUnavailable(error,!sameHeldOwner());throw error};signalReady();return record
       }
     })
     const readRecords=async(ordinals:readonly number[])=>{
-      current();const scope=captureWriterDependencies(open(expected));debt.add(scope);markBusy()
+      current();const scope=captureWriterDependencies(open(expected));debt.add(scope);activeDependencyScopes.add(scope);markBusy()
       let records:import('./types.ts').SessionEventView[]|undefined,failed=false,primary:unknown
       try{records=[];for(const ordinal of ordinals){current(scope);scope.assertCurrent();const record=await scope.readEvent(ordinal);current(scope);scope.assertCurrent();if(record.seq!==ordinal)throw TypeError('Original indexed record required');records.push(freezeJsonData(structuredClone(record)))}}
       catch(error){failed=true;primary=error}
-      try{await scope.close();debt.delete(scope)}catch(cleanup){const cause=failed?new AggregateError([primary,cleanup],'Delivery read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
-      if(failed)throw primary;current();signalReady();return records!
+      try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);const cause=failed?new AggregateError([primary,cleanup],'Delivery read and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}
+      if(failed){signalReady();throw primary};current();signalReady();return records!
     }
     const deliveryView:ExecutionObservation['delivery']=Object.freeze({
       revision:fence,
@@ -242,8 +269,8 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       ownerBound=true;owners.set(identity,{owner,sessionId:token.sessionId,current,generations(){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.generations()},execSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('exec',id)},codeSource(id){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().source('code',id)},codeEvidence(first,last){current();if(pendingWrite)throw Object.assign(Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});return original.delivery().codeEvidence(first,last)},assertExecIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},assertCodeIssue(event){current();assertNewWork();const index=original.delivery();if(index.activeGeneration()?.generationId!==event.generationId)throw Object.assign(Error('Delivery precondition is stale'),{code:'FACT_PRECONDITION_STALE'});originalDeliveryObservation(original.delivery).assertIssue([event])},...ready?{newWork(){current();assertNewWork();Reflect.apply(ready.value,owner,[])}}:{}})
     },
     assertNewWork,
-    readinessChanged(recoverableBlocked=false){ownerRecoveryBlocked=recoverableBlocked;if(!readinessListeners.size)return;const state=readinessState();if(state.kind==='failed')signalUnavailable(state.error,true);else if(state.kind==='busy')markBusy();else signalReady()},
-    readinessUnavailable(error:unknown,terminal=false){signalUnavailable(error,terminal)},
+    readinessChanged(recoverableBlocked=false){ownerRecoveryBlocked=recoverableBlocked;if(recoverableBlocked){pendingWriteActive=false;signalUnavailable(Object.assign(Error('Original owner requires explicit recovery'),{code:'FACT_RECOVERY_REQUIRED'}));return}if(!readinessListeners.size&&!readinessFailure)return;const state=readinessState();if(state.kind==='failed')signalUnavailable(state.error,true);else if(state.kind==='busy')markBusy();else{readinessFailure=undefined;signalReady()}},
+    readinessUnavailable(error:unknown,terminal=false){pendingWriteActive=false;signalUnavailable(error,terminal)},
     settleDependencies,
     stopNewWork(){if(!stopped){stopped=true;signalUnavailable(Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'}),true)}},
     prepare(){assertNewWork();return original.prepare()},
@@ -253,13 +280,13 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       // already-admitted/source-required work can drain after new-work Stop.
       assertHeld();if(closed)throw new TypeError('Original writer closed');if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size)throw new TypeError('Writer dependency cleanup unresolved')
       const expected=original.prefix,scope=captureWriterDependencies(open(expected))
-      debt.add(scope);markBusy() // installed before the first asynchronous read/open
+      debt.add(scope);activeDependencyScopes.add(scope);markBusy() // installed before the first asynchronous read/open
       const check=scope.assertCurrent.bind(scope),readOriginal=scope.readEvent.bind(scope),read=async(ordinal:number)=>{const event=await readOriginal(ordinal);return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event},close=scope.close.bind(scope)
       let reading=true,prepared:Awaited<ReturnType<typeof original.prepareWrite>>|undefined,primary:unknown,failed=false
       const current=()=>{assertHeld();if(reading){check();if(original.prefix!==expected)throw new TypeError('Writer prefix changed during preparation')}}
       try{current();prepared=await original.prepareWrite(groups,read,current,rejectInvalidGroups);current()}catch(error){failed=true;primary=error}
-      try{await close();debt.delete(scope)}catch(cleanup){prepared?.discard();const cause=failed?new AggregateError([primary,cleanup],'Writer preparation and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}finally{reading=false}
-      if(failed)throw primary
+      try{await close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(cleanup){activeDependencyScopes.delete(scope);prepared?.discard();const cause=failed?new AggregateError([primary,cleanup],'Writer preparation and exact dependency cleanup failed'):cleanup;dependencyFailure={cause};signalUnavailable(cause,!sameHeldOwner());throw cause}finally{reading=false}
+      if(failed){signalReady();throw primary}
       try{assertHeld()}catch(error){prepared?.discard();throw error}
       signalReady()
       const staged=prepared!,operation=Object.freeze({});let installed=false,started=false,discarded=false,absent=false,published=0,issuedBatch:EncodedFactBatch|undefined,originalBatch:EncodedFactBatch|undefined,originalReceipt:FactReceipt|undefined
@@ -267,10 +294,10 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
       return {events:staged.events,members:staged.members,rejected:staged.rejected,assertIssuable,discardUnissued(){if(issuedBatch||started)throw new TypeError('Original issued write cannot be discarded');discarded=true;staged.discard()},beforeIssue(batch:EncodedFactBatch){
         assertIssuable()
         if(batch.key.firstSeq!==expected.eventCount||batch.key.count!==staged.events.length||batch.key.previousPrefixDigest!==expected.prefixDigest)throw new TypeError('Original writer batch scope required')
-        issuedBatch=batch;pendingWrite=operation;markBusy()
+        issuedBatch=batch;pendingWrite=operation;pendingWriteActive=true;markBusy()
       },settleAbsent(outcome:Extract<FactOutcome,{key:BatchKey}>&{readonly kind:'absent'}){
         assertHeld();if(started||absent||!issuedBatch||outcome.kind!=='absent'||outcome.key!==issuedBatch.key||pendingWrite!==operation)throw new TypeError('Original verified absence required')
-        absent=true;staged.discard();pendingWrite=undefined;signalReady()
+        absent=true;staged.discard();pendingWrite=undefined;pendingWriteActive=false;signalReady()
       },install(batch:EncodedFactBatch,receipt:FactReceipt){
         if(absent||!issuedBatch||issuedBatch!==batch)throw new TypeError('Original writer issuance required before installation')
         if(started&&(batch!==originalBatch||receipt!==originalReceipt))throw new TypeError('Original pending installation required')
@@ -280,7 +307,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
         staged.install(batch,receipt)
         if(compatibility)compatibility.append(staged.events);else{for(const event of staged.events)liveEvents.set(event.seq!,new WeakRef(event));while(published<staged.events.length){const event=staged.events[published++]!;subscribers.get(identity)?.forEach(listener=>listener(event as import('../events/types.ts').SessionEvent))}}
         for(const member of staged.members)members.installed(member.group,member.events,receipt)
-        installed=true;pendingWrite=undefined;signalReady()
+        installed=true;pendingWrite=undefined;pendingWriteActive=false;signalReady()
       }}
     },
     captureHooks(source:object,assertCaptureCurrent:()=>void):OriginalExecutionCaptureHooks{
