@@ -26,7 +26,7 @@ checkpointControls(async () => {
   const { id } = await store.create(), document = await store.openManagedDocument(id), action = document.beginAction()
   expect(document.view.formatVersion).toBe(14)
   return { action, view: document.view, assertOptional() { action.assertOpen() }, watchNativeIssues(listener) { probe.onIssue = listener; return () => { probe.onIssue = undefined } }, async cleanup(expectedRecovery) { if (expectedRecovery) await expect(store.close()).rejects.toThrow(); else await store.close() } }
-}, 'committed')
+}, 'committed', 'reject')
 
 it('keeps ordinary zero-argument pre-drain and post-drain behavior during a C-only late capture', async () => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'ordinary-checkpoint-control-')), store = createSessionCoordinator(createJsonlBackend(root))

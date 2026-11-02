@@ -35,7 +35,7 @@ export type CheckpointFixture = {
 
 // The shared controls exercise the real public source and capture handles in
 // both adapters. Native fixtures use the actual owned JSONL coordinator.
-export function checkpointControls(fixture: () => Promise<CheckpointFixture>, committed: 'committed' | 'memory-committed') {
+export function checkpointControls(fixture: () => Promise<CheckpointFixture>, committed: 'committed' | 'memory-committed', closeReentry: 'share' | 'reject' = 'share') {
   it('drains the fixed original captures and retains the same live source after checkpoint', async () => {
     const f = await fixture(), { owner } = ownerState(); let drains = 0
     const source = f.action.registerSettlementSource(async () => { drains++ }, undefined, owner)
@@ -311,11 +311,12 @@ export function checkpointControls(fixture: () => Promise<CheckpointFixture>, co
     const f = await fixture(), { owner, work } = ownerState()
     let source: SettlementFacts<ProducerFactOutcome>, first: ReturnType<typeof source.checkpoint>, reentered: ReturnType<typeof source.checkpoint> | undefined
     work.settle = async () => { reentered = source.checkpoint(); return { kind: 'advanced' } }
-    let closing: Promise<void>, nestedClose: Promise<void> | undefined
-    source = f.action.registerSettlementSource(async () => { nestedClose = source.close() }, undefined, owner)
+    let closing: Promise<void>, nestedClose: Promise<void> | undefined, rejectedClose: Promise<unknown> | undefined
+    source = f.action.registerSettlementSource(async () => { nestedClose = source.close(); if (closeReentry === 'reject') rejectedClose = expect(nestedClose).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' }) }, undefined, owner)
     try {
       first = source.checkpoint(); expect(source.checkpoint()).toBe(first); await first; expect(reentered).toBe(first)
-      closing = source.close(); await closing; expect(nestedClose).toBe(closing)
+      closing = source.close(); await closing; if (closeReentry === 'reject') { expect(nestedClose).not.toBe(closing); await rejectedClose } else expect(nestedClose).toBe(closing)
+      expect(() => source.assertHeld()).toThrow()
     } finally { f.action.finish(); await f.cleanup() }
   })
 
