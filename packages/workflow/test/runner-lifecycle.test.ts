@@ -97,3 +97,8 @@ it('a reentrant store observer cannot start the original reservation twice', asy
   expect(reentrant).toBeInstanceOf(Error); expect(String(reentrant)).toContain('start in progress')
   expect(jobs.list()).toHaveLength(1); expect(run).toHaveBeenCalledTimes(1)
 })
+
+it('preserves source-limited native output in the original workflow completion',async()=>{
+ const jobs=createWorkflowJobStore(),reservation=reserveWorkflowIn(definition(),{},service(async()=>({...ok,stdout:'partial',truncated:{stdout:true,stderr:false}})),jobs)
+ const completion=await reservation.start().join();expect(completion.resultCompleteness).toBe('source-limited');expect(completion.result.steps[0]?.stdout).toBe('partial')
+})

@@ -166,6 +166,7 @@ export interface WorkflowLoopCompletion {
   readonly cleanup: 'unqualified' | 'clean' | 'recovery-required'
   readonly status: BackgroundJobStatus
   readonly dispatch: 'not-dispatched' | 'dispatched' | 'unknown'
+  readonly resultCompleteness:'complete'|'source-limited'
   readonly result: import('../../core-session/src/events/workflow-delivery.ts').WorkflowRunResult
   readonly failures: readonly WorkflowLoopFailure[]
 }
@@ -301,6 +302,7 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
   const total = steps.length
   const failures: WorkflowLoopFailure[] = []
   let cleanup: WorkflowLoopCompletion['cleanup'] = stepFactory ? 'clean' : 'unqualified', dispatched=false, unknown=!stepFactory
+  let sourceLimited=false
   const stepResults:import('../../core-session/src/events/workflow-delivery.ts').WorkflowRunResult['steps']=[]
 
   function setStatus(status: BackgroundJobStatus, exitCode: number): void {
@@ -338,6 +340,7 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
           // ordinary step failure so the failure discipline applies uniformly.
           result = { stdout: "", stderr: e instanceof Error ? e.message : String(e), exitCode: -1, timedOut: false }
         }
+        if(result.truncated?.stdout||result.truncated?.stderr||result.stdoutSpillPath||result.stderrSpillPath||result.outputDiagnostics?.outputAbandoned||result.outputDiagnostics?.discardedOutputBytes||result.retentionFailure||result.stream?.stopReason)sourceLimited=true
         stepResults.push({step:i,attempt,outcome:controller.signal.aborted?'canceled':result.exitCode===0?'succeeded':'failed',exitCode:result.exitCode,timedOut:result.timedOut,stdout:result.stdout,stderr:result.stderr})
         if (owned) {
           const ownership = await owned.join()
@@ -395,7 +398,7 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
     // Original run-disposal boundary. No aggregate output proof is emitted.
     if (cleanup === 'clean') { for (const step of ownedSteps) step.release(); ownedSteps.length = 0 }
     completed(Object.freeze({ kind: 'loop-finished', cleanup,
-    status: job.status,dispatch:unknown?'unknown':dispatched?'dispatched':'not-dispatched',result:Object.freeze({version:1,kind:'workflow-run-result',invocationId,steps:Object.freeze(stepResults.map(value=>Object.freeze({...value}))) as unknown as typeof stepResults,stdout:job.stdout,stderr:job.stderr}), failures: Object.freeze([...failures]),
+    status: job.status,resultCompleteness:sourceLimited?'source-limited':'complete',dispatch:unknown?'unknown':dispatched?'dispatched':'not-dispatched',result:Object.freeze({version:1,kind:'workflow-run-result',invocationId,steps:Object.freeze(stepResults.map(value=>Object.freeze({...value}))) as unknown as typeof stepResults,stdout:job.stdout,stderr:job.stderr}), failures: Object.freeze([...failures]),
   })) })
 
   return { runId: job.id, jobId: job.id }
