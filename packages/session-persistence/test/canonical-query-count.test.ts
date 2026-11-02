@@ -229,3 +229,24 @@ it('flushes before an unknown settlement guard retargets the original native pat
   try{expect(()=>withArtifactCurrentChecks(()=>{guard();source.assertHeld();effects++})).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);refused=true}finally{Object.assign(node,before);await source.close().catch(()=>{});Object.assign(node,before)}
  })).rejects.toThrow('Original query control and cleanup failed');expect(refused).toBe(true)
 })
+it('coalesces exact original capture currentness constituents before its command',async()=>{
+ const {originalOwnershipArtifactGuard}=await import('../src/coordinator/ownership.ts'),{createExecutionMemberOwner}=await import('../../core-session/src/managed/execution-members.ts'),{captureFactGroup}=await import('../../core-session/src/managed/groups.ts')
+ await methodContexts(({owner,measure})=>{
+  const guard=originalOwnershipArtifactGuard(owner,'left-a')!,members=createExecutionMemberOwner(guard),source={},capture=captureFactGroup({kind:'metadata',event:{type:'plan/mode',mode:'off'}});if(capture.kind!=='captured')throw Error('Original group required');let commands=0
+  const operations={async admit(){return {kind:'not-issued' as const,code:'FACT_CANCELLED' as const}},async observe(){commands++;return {kind:'not-issued' as const,code:'FACT_CANCELLED' as const}},async reconcile(){return {kind:'not-issued' as const,code:'FACT_CANCELLED' as const}}}
+  const original=members.capture(capture.group,operations,source,guard)
+  expect(measure(()=>{void original.observe()})).toEqual({captures:0,opens:8});expect(commands).toBe(1)
+  const fallback=members.capture(capture.group,operations,source,()=>guard())
+  expect(measure(()=>{void fallback.observe()})).toEqual({captures:0,opens:16});expect(commands).toBe(2);members.releaseSource(source)
+ })
+})
+
+it('flushes capture ownership before an unknown source callback retargets native identity',async()=>{
+ const {originalOwnershipArtifactGuard}=await import('../src/coordinator/ownership.ts'),{createExecutionMemberOwner}=await import('../../core-session/src/managed/execution-members.ts'),{captureFactGroup}=await import('../../core-session/src/managed/groups.ts');let refused=false
+ await expect(methodContexts(({owner,root})=>{
+  const guard=originalOwnershipArtifactGuard(owner,'left-a')!,members=createExecutionMemberOwner(guard),source={},node=probe.nodes.get(root)!,before={...node},capture=captureFactGroup({kind:'metadata',event:{type:'plan/mode',mode:'off'}});if(capture.kind!=='captured')throw Error('Original group required');let commands=0,callbacks=0
+  const operations={async admit(){return {kind:'not-issued' as const,code:'FACT_CANCELLED' as const}},async observe(){commands++;return {kind:'not-issued' as const,code:'FACT_CANCELLED' as const}},async reconcile(){return {kind:'not-issued' as const,code:'FACT_CANCELLED' as const}}}
+  let armed=false;const handle=members.capture(capture.group,operations,source,()=>{callbacks++;if(armed)node.id+=1000;guard()});armed=true;callbacks=0
+  try{expect(()=>handle.observe()).toThrow();expect(callbacks).toBe(1);expect(commands).toBe(0);refused=true}finally{Object.assign(node,before);members.releaseSource(source)}
+ })).rejects.toThrow('Original query control and cleanup failed');expect(refused).toBe(true)
+})

@@ -1,4 +1,5 @@
 import { types } from 'node:util'
+import {composeOriginalCurrentnessGuards,runUnassociatedCurrentnessChecks} from './currentness-guards.ts'
 import { isOriginalCapturedFactGroup, type CapturedFactGroup } from './groups.ts'
 import type { CapturedActionFact } from './ports.ts'
 import type { FactOutcome, SessionEventView, FactReceipt } from './types.ts'
@@ -113,7 +114,7 @@ export function createExecutionMemberOwner(assertHeld: () => void,identity?:obje
       const record: CaptureRecord = {
         identity,source,
         active: true, pins: 0, sourceReleased: false, reference: undefined!,
-        current() { assertHeld(); assertSource() },
+        current: composeOriginalCurrentnessGuards(assertHeld,assertSource) ?? (() => runUnassociatedCurrentnessChecks(assertHeld,assertSource)),
         releaseIfDone() {
           if (!record.sourceReleased || record.pins) return
           const records = groups.get(group)
