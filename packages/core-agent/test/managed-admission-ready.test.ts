@@ -14,6 +14,8 @@ import { createLoopbackProvider } from './helpers/provider-loopback.ts';
 import { createManagedAgent } from '../src/index.ts';
 import { createManagedAgentModelOriginOwner } from '../src/tool-batch/model-origin.ts';
 
+const afterPrepare=vi.hoisted(()=>({armed:false,start:undefined as undefined|(()=>Promise<void>),settled:0}));
+vi.mock('../../session-persistence/src/coordinator/ownership.ts',async load=>{const original=await load<typeof import('../../session-persistence/src/coordinator/ownership.ts')>();return {...original,createOwnership(...args:Parameters<typeof original.createOwnership>){const owner=original.createOwnership(...args),operation=owner.withSessionOperation;owner.withSessionOperation=(async (...input:Parameters<typeof operation>)=>{const value=await operation(...input);if(afterPrepare.armed&&value&&typeof value==='object'&&'archive'in value&&'observation'in value&&'settle'in value){afterPrepare.armed=false;await afterPrepare.start?.();const lease=value as {archive:unknown;observation:unknown;assertCurrent():void;settle():Promise<void>};return {...lease,assertCurrent:lease.assertCurrent.bind(lease),async settle(){await lease.settle();afterPrepare.settled++}}}return value}) as typeof operation;return owner}}});
 const probe=vi.hoisted(()=>({hold:undefined as undefined|(()=>Promise<void>),failClose:false,unknown:false,nativeReads:0,resolves:0,afterUnstartedClose:undefined as undefined|(()=>Promise<void>)}));
 vi.mock('../../session-persistence/src/execution-internal.ts',async load=>{
  const original=await load<typeof import('../../session-persistence/src/execution-internal.ts')>();
@@ -74,3 +76,14 @@ for(const mode of ['ready','abort','falsey-close'] as const)it(`actual accepted 
   const events=(await backend.read(id)).events;expect(events.filter(e=>e.type==='model/exchange-accepted')).toHaveLength(1);expect(events.filter(e=>e.type==='assistant/message')).toHaveLength(1);
  }finally{release.resolve();probe.failClose=false;probe.afterUnstartedClose=undefined;await writing;await result;writer.finish();await c.close().catch(()=>{});await server.close()}
 },30000);
+
+
+it('settles a prepared request before waiting for a real reader started at the return boundary',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'after-prepare-')),backend=createJsonlBackend(root),c=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract),{id}=await c.create(),execution=await acquireManagedExecution(c,id),ctx=createContext(),origin=createManagedAgentModelOriginOwner(ctx,execution),pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:id}},origin.verifier)
+ const received=execution.owner.registerReceivedInputSource(async()=>{});expect((await received.captureAdmitted({type:'agent/input/admitted',version:1,inputId:'human',text:'reader',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}).admit()).kind).toBe('committed')
+ const entered=deferred(),release=deferred(),sent=deferred();let reading:Promise<unknown>|undefined
+ afterPrepare.settled=0;afterPrepare.armed=true;afterPrepare.start=async()=>{probe.hold=async()=>{entered.resolve();await release.promise};reading=execution.observe().delivery.ownHuman();await entered.promise}
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{sent.resolve();response.end(wire())}]);const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),systemPrompt:'original',budget:{contextWindow:4096},maxOutputTokens:128,generationFactory:(action,deps)=>createExecutionGenerationLifecycle(execution,id,action,undefined,deps)})
+ const result=agent.run('one request').then(value=>({ok:true as const,value}),error=>({ok:false as const,error}))
+ try{await Promise.race([entered.promise,result.then(value=>{if(!value.ok)throw value.error;throw Error('request escaped held original reader')})]);await vi.waitFor(()=>expect(afterPrepare.settled).toBe(1));expect(server.requests).toHaveLength(0);release.resolve();await reading;await sent.promise;expect((await result).ok).toBe(true);expect(server.requests).toHaveLength(1)}finally{afterPrepare.armed=false;afterPrepare.start=undefined;release.resolve();await reading;await result;await received.close();await c.close();await server.close()}
+},60000)

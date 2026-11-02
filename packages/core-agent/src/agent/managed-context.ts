@@ -80,6 +80,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
         bindAction(originalFacts: FactPorts<FactOutcome>, originalSource: SettlementFacts<FactOutcome>) { facts = originalFacts; source = originalSource; },
         acknowledge(event: ExchangeAcceptedEventV2) { accepted.add(event); },
         async capture(action: ManagedAction<FactOutcome>, signal: AbortSignal = action.signal) {
+          for (;;) {
             for (;;) {
                 signal.throwIfAborted();
                 const wait = getManagedExecutionAdmissionWait(host.domain, action, signal);
@@ -90,6 +91,13 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
             const hooks = host.hooks.capture(), lease = await host.execution.prepareRequest(action);
             leases.add(lease);
             try {
+                const afterPrepare = getManagedExecutionAdmissionWait(host.domain, action, signal);
+                if (afterPrepare) {
+                    await lease.settle();
+                    leases.delete(lease);
+                    await afterPrepare;
+                    continue;
+                }
                 lease.assertCurrent();
                 host.hooks.assertCurrent(hooks);
                 const result = captureRestoredContextSnapshot(lease.archive, { ownerSessionId: host.domain.sessionId, surface: surface() });
@@ -119,6 +127,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 }
                 throw primary;
             }
+          }
         },
         async refresh(action: ManagedAction<FactOutcome>, expected: RequestEvidence, signal: AbortSignal = action.signal) {
             if (!capturedEvidence.has(expected))
