@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./context-remaining": "./src/context-remaining.ts",
     "./internal/task-caller": "./src/task-caller.ts",
+    "./internal/workflow-origin": "./src/workflow-origin.ts",
     "./internal/team-caller": "./src/team-caller.ts",
     "./internal/code-origin": "./src/code-origin.ts",
     "./model-origin": "./src/model-origin.ts"

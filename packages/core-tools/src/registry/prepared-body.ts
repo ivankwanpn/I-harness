@@ -91,7 +91,7 @@ export function attachPreparedModelOrigin(prepared: PreparedCall, registry: impo
     if(body.managed&&(!field||!('value'in field)||!field.enumerable||typeof field.value!=='function'||types.isProxy(field.value)||types.isAsyncFunction(field.value)))throw Error('Original private admission scheduler required')
     const getAdmissionWait=field&&'value'in field?field.value as (signal:AbortSignal)=>Promise<void>|undefined:undefined
     assertCurrent()
-    body.permit = Object.freeze({assertCurrent,...getAdmissionWait?{getAdmissionWait(signal:AbortSignal){if(Object.getOwnPropertyDescriptor(permit,'getAdmissionWait')?.value!==getAdmissionWait)throw Error('Original private admission scheduler changed');const wait=Reflect.apply(getAdmissionWait,permit,[signal]);if(wait!==undefined&&!types.isPromise(wait))throw Error('Original private admission wait required');return wait}}:{},...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{}})
+    body.permit = Object.freeze({assertCurrent,...getAdmissionWait?{getAdmissionWait(signal:AbortSignal){if(Object.getOwnPropertyDescriptor(permit,'getAdmissionWait')?.value!==getAdmissionWait)throw Error('Original private admission scheduler changed');const wait=Reflect.apply(getAdmissionWait,permit,[signal]);if(wait!==undefined&&!types.isPromise(wait))throw Error('Original private admission wait required');return wait}}:{},...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{},...permit.takeWorkflowSourceIssuer?{takeWorkflowSourceIssuer:permit.takeWorkflowSourceIssuer.bind(permit)}:{}})
   } finally { body.attaching = false }
 }
 export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerConfiguration | undefined, signal: AbortSignal | undefined, registry: ToolRegistry,hooks?:PreparedExecutionHooks): () => Promise<unknown> {
@@ -314,3 +314,31 @@ export function bindPreparedTeamLaunchLeaf(tool:Tool,leaf:Tool['execute']){
 
 
 
+
+export interface OriginalManagedWorkflowCaller extends Omit<PreparedBodyClaim,'context'> {
+ readonly context:ManagedToolExecutionOwnerContext
+ readonly call:Readonly<PreparedCall['call']>
+ readonly identity:Readonly<{parentSessionId:string;callEventSeq:number;toolCallId:string}>
+ takeWorkflowSourceIssuer():import('../model-origin.ts').OriginalWorkflowSourceIssuer
+}
+const workflowCallers=new WeakSet<object>()
+export function assertOriginalManagedWorkflowCaller(caller:OriginalManagedWorkflowCaller):void{if(!workflowCallers.has(caller))throw TypeError('Original managed Workflow caller required');caller.assertCurrent()}
+/** Only the actual model-issued Workflow leaf may claim its original frame. */
+export function bindPreparedWorkflowLeaf(tool:Tool,leaf:Tool['execute']){
+ const entry=Object.freeze({enter(exec:ToolExec):OriginalManagedWorkflowCaller|undefined{
+  if(this!==entry)throw TypeError('Foreign Workflow leaf receiver')
+  const body=byExec.get(exec),frame=active.getStore();if(!body){if(frame?.active)throw Error('Foreign prepared exec');return}
+  if(!frame?.active||frame.body!==body||body.tool!==tool||body.leaf!==leaf||body.call.name!=='workflow_run')throw Error('Not the original Workflow body')
+  check(body,frame);if(body.foreignContext||body.claimed)throw Error('Original Workflow body unavailable')
+  const context=body.managed;if(!context||!body.source||frame.domain!==context.domain.owner)return
+  if(!body.permit||body.codeInvocation||body.exec.resultConsumer==='code')throw Error('Original private Workflow model member required')
+  const id=own(exec,'sessionId'),seq=own(exec,'callEventSeq'),callId=own(exec,'callId')
+  if(id!==context.sessionId||!Number.isSafeInteger(seq)||(seq as number)<0||typeof callId!=='string'||!callId)throw Error('Original Workflow call identity unavailable')
+  const identity=Object.freeze({parentSessionId:context.sessionId,callEventSeq:seq as number,toolCallId:callId});body.claimed=true;let consumed=false,taken=false
+  const claim:OriginalManagedWorkflowCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
+   assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign Workflow caller');check(body,frame)},
+   consume(){if(this!==claim)throw TypeError('Foreign Workflow caller');check(body,frame);if(consumed)throw Error('Workflow caller consumed');consumed=true},
+   takeWorkflowSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Workflow caller required');check(body,frame);taken=true;const issuer=(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeWorkflowSourceIssuer?.();if(!issuer)throw Error('Original Workflow issuer unavailable');return issuer},
+  });workflowCallers.add(claim);return claim
+ }});return entry
+}
