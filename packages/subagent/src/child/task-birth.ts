@@ -13,7 +13,7 @@ import type {TaskChildHostPreparation} from './task-host.ts'
 import {inspectTaskChildHistory} from './task-history.ts'
 
 export interface CommittedTaskChildBirth {readonly kind:'original-task-child-birth'}
-type Birth={document:ManagedDocument;request:ChildBootstrapCaptureRequest;payload:BootstrapRequest;receipt:BootstrapReceipt;start:{wall:number;monotonic:number};declared:RoleModelSelection|undefined;slot:TaskLaunchSlot;adopted:boolean;claimed:boolean}
+type Birth={document:ManagedDocument;request:ChildBootstrapCaptureRequest;payload:BootstrapRequest;receipt:BootstrapReceipt;start:{wall:number;monotonic:number};declared:RoleModelSelection|undefined;slot:TaskLaunchSlot;adopted:boolean;claimed:boolean;assertDependencyReceipt?:(receipt:BootstrapReceipt,seed:ReturnType<typeof compileSemanticSeed>)=>void}
 const births=new WeakMap<CommittedTaskChildBirth,Birth>()
 export function originalTaskChildBirth(capability:CommittedTaskChildBirth):Birth {const birth=births.get(capability);if(!birth)throw TypeError('Foreign committed child birth');return birth}
 export function claimTaskChildBirth(capability:CommittedTaskChildBirth):Birth{const birth=originalTaskChildBirth(capability);assertOriginalTaskLaunchSlot(birth.slot);if(birth.claimed)throw Error('Original child birth already claimed');birth.claimed=true;return birth}
@@ -23,7 +23,7 @@ export async function prepareOriginalTaskChildHost(slot:TaskLaunchSlot,deps:Suba
  const coordinator=deps.childSessions?.coordinator,prepare=deps.prepareTaskChild
  if(!coordinator?.bootstrapChildTargetWithCapture||!coordinator.resumeChildTarget||!prepare)throw Error('Original task child host unavailable')
  const assertCurrent=()=>{slot.assertCurrent();slot.caller.exec.abortSignal?.throwIfAborted()}
- const host=await prepare({coordinator,parentSessionId:slot.caller.identity.parentSessionId,...slot.history?{history:slot.history}:{},signal:slot.caller.exec.abortSignal,assertCurrent(){assertCurrent();if(slot.history)inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId)},sourceAvailable(){try{assertCurrent();if(slot.history)inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId);return true}catch{return false}},retire:slot.retire.bind(slot),retain:slot.keepRecovery.bind(slot)})
+ const host=await prepare({coordinator,parentSessionId:slot.caller.identity.parentSessionId,...slot.history?{history:slot.history}:{},signal:slot.caller.exec.abortSignal,assertSourceCut(){slot.assertSourceCut()},assertCurrent(){assertCurrent();if(slot.history)inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId)},sourceAvailable(){try{assertCurrent();if(slot.history)inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId);return true}catch{return false}},retire:slot.retire.bind(slot),retain:slot.keepRecovery.bind(slot)})
  assertCurrent()
  if(host.beforeResultIssue)slot.beforeResultIssue(host.beforeResultIssue.bind(host))
  return host
@@ -52,7 +52,7 @@ export async function bootstrapTaskChild(slot:TaskLaunchSlot,deps:SubagentToolDe
   let result=await coordinator.bootstrapChildTargetWithCapture!(request,{...guards,signal:slot.caller.exec.abortSignal,assertCurrent:current},async()=>{if(captured)throw Error('Original child payload already captured');captured=true;current();return payload})
   if(result.kind==='blocked')result=await coordinator.resumeChildTarget!(request,{...guards,signal:slot.caller.exec.abortSignal,assertCurrent:current},payload)
   if(result.kind==='ready'||result.kind==='already-ready'){
-   const birth:Birth={document:result.document,receipt:result.receipt,request,payload,start,declared,slot,adopted:false,claimed:false}
+   const birth:Birth={document:result.document,receipt:result.receipt,request,payload,start,declared,slot,adopted:false,claimed:false,...transfer.assertDependencyReceipt?{assertDependencyReceipt:transfer.assertDependencyReceipt.bind(transfer)}:{}}
    retainedBirth=birth
    slot.keep({async close(){if(!birth.adopted)await birth.document.close()}})
   }
@@ -61,6 +61,7 @@ export async function bootstrapTaskChild(slot:TaskLaunchSlot,deps:SubagentToolDe
  if(outcome.kind!=='ready'&&outcome.kind!=='already-ready')throw Object.assign(Error('Original child birth requires recovery'),{code:'FACT_RECOVERY_REQUIRED',outcome})
  const birth=retainedBirth!
  verifyTaskChildBirth(birth)
+ await transfer.releaseSource?.()
  const capability=Object.freeze({kind:'original-task-child-birth' as const});births.set(capability,birth);return capability
 }
 export function markTaskChildAdopted(capability:CommittedTaskChildBirth){const birth=originalTaskChildBirth(capability);if(birth.adopted)throw Error('Original task child already adopted');birth.adopted=true}
@@ -69,9 +70,10 @@ function verifyTaskChildBirth(birth:Birth){
  const {document,receipt,request,payload}=birth,{view}=document,header=view.header,initial=receipt.initial,frame=receipt.completion,key=frame.key
  if(!header||request.core.caller.kind!=='task')throw Error('Original task child header unavailable')
  if(!isManagedFactOwner(view,document)||canonicalJsonData(receipt.invocation)!==canonicalJsonData(request.invocation)||!isManagedResultSource(view,document,request.invocation.targetSessionId)||header.origin!=='subagent'||header.subagentProtocolVersion!==1||header.parentSession!==request.core.caller.parentSessionId||header.seedLength!==payload.seed.records.length||receipt.seedLength!==payload.seed.records.length||header.semanticSeed?.seedDigest!==payload.seed.digest||header.semanticSeed?.manifestDigest!==receipt.manifestDigest||header.semanticSeed.requestDigest!==request.invocation.requestDigest||!initial||initial.inputId!==payload.initial!.inputId||initial.startedAt!==payload.initial!.startedAt||initial.expiresAt!==payload.initial!.expiresAt||frame.owner.sessionId!==request.invocation.targetSessionId||key.count<2||frame.lastSeq!==key.firstSeq+key.count-1||initial.seq<key.firstSeq||initial.seq>frame.lastSeq)throw new Error('Original B2 initial receipt mismatch',{cause:{header,receipt}})
+ if(birth.assertDependencyReceipt)birth.assertDependencyReceipt(receipt,payload.seed);else if(receipt.dependencyClosureDigest!==payload.seed.dependencyDigest)throw Error('Original empty dependency receipt mismatch')
  const event=view.events[initial.seq],bootstrap=view.events[key.firstSeq]
- if(bootstrap?.type!=='session/bootstrap'||bootstrap.operationId!==request.invocation.operationId||bootstrap.manifestDigest!==receipt.manifestDigest||event?.type!=='agent/input/admitted'||event.seq!==initial.seq||event.inputId!==payload.initial!.inputId||event.text!==payload.initial!.text||event.intent!=='user'||event.delivery!=='queue'||canonicalJsonData(event.provenance)!==canonicalJsonData({kind:'inherited',authority:'observation',scope:'turn',producer:'subagent.initial',originSessionId:payload.initial!.parentSessionId})||canonicalJsonData(childInitialCommitment(payload))!==canonicalJsonData(request.core.initial))throw Error('Original B2 initial event mismatch')
+ if(bootstrap?.type!=='session/bootstrap'||bootstrap.operationId!==request.invocation.operationId||bootstrap.manifestDigest!==receipt.manifestDigest||bootstrap.dependencyClosureDigest!==receipt.dependencyClosureDigest||event?.type!=='agent/input/admitted'||event.seq!==initial.seq||event.inputId!==payload.initial!.inputId||event.text!==payload.initial!.text||event.intent!=='user'||event.delivery!=='queue'||canonicalJsonData(event.provenance)!==canonicalJsonData({kind:'inherited',authority:'observation',scope:'turn',producer:'subagent.initial',originSessionId:payload.initial!.parentSessionId})||canonicalJsonData(childInitialCommitment(payload))!==canonicalJsonData(request.core.initial))throw Error('Original B2 initial event mismatch')
  document.assertReady()
- if(view.formatVersion<14||header.delegationDepth!==payload.lineage.delegationDepth||receipt.dependencyClosureDigest!==payload.seed.dependencyDigest||header.semanticSeed?.initialInputId!==initial.inputId||header.semanticSeed.initialStartedAt!==initial.startedAt||header.semanticSeed.initialExpiresAt!==initial.expiresAt||header.semanticSeed.initialInputDigest!==request.core.initial.digest||bootstrapInitialInputDigest(event,initial.startedAt,initial.expiresAt)!==request.core.initial.digest)throw Error('Original child birth commitment mismatch')
+ if(view.formatVersion<14||header.delegationDepth!==payload.lineage.delegationDepth||header.semanticSeed?.dependencyDigest!==payload.seed.dependencyDigest||header.semanticSeed?.initialInputId!==initial.inputId||header.semanticSeed.initialStartedAt!==initial.startedAt||header.semanticSeed.initialExpiresAt!==initial.expiresAt||header.semanticSeed.initialInputDigest!==request.core.initial.digest||bootstrapInitialInputDigest(event,initial.startedAt,initial.expiresAt)!==request.core.initial.digest)throw Error('Original child birth commitment mismatch')
 }
 export function committedTaskInitial(capability:CommittedTaskChildBirth):{inputId:string;outcome:ProducerFactOutcome;start:Birth['start']}{const birth=originalTaskChildBirth(capability);verifyTaskChildBirth(birth);return {inputId:birth.receipt.initial!.inputId,outcome:{kind:'committed',receipt:birth.receipt.completion,seqs:[birth.receipt.initial!.seq]},start:birth.start}}

@@ -1,14 +1,19 @@
+import {inspectOriginalTaskDeliveryOpen} from '@i-harness/session-persistence/internal/retained-inspection'
+import {inspectOriginalSpawnStart,type OriginalSpawnStart} from '../tools/spawn-source.ts'
 import { assertOriginalTaskCaller, type OriginalTaskCaller, type ToolExecutionOwnerContext } from '@i-harness/core-tools/internal/task-caller'
 import type { TaskRecord, TaskRegistry, TaskSubmissionInput, TaskChildBirthBinding } from './types.ts'
 import type { SubagentRole } from '../roles.ts'
 import type { OwnedTaskSave } from './persistence.ts'
 import { captureTaskSnapshot } from '@i-harness/session-persistence/internal/task-document-operations'
 import {canonicalJsonData} from '@i-harness/core-session'
-import {captureTaskChildHistory,parseTaskHistorySelection,type OriginalTaskChildHistory} from '../child/task-history.ts'
+import {captureTaskChildHistory,inspectTaskChildSource,parseTaskHistorySelection,type OriginalTaskChildHistory} from '../child/task-history.ts'
 export interface TaskLaunchSlot {
  readonly history?:OriginalTaskChildHistory
  readonly task: Readonly<TaskRecord>; readonly caller: OriginalTaskCaller; readonly role: Readonly<SubagentRole>; readonly flight: Promise<TaskLaunchResult>
  readonly accepted: Promise<void>
+ acknowledgeDelivery(preparation:object):void
+ acknowledgeStart(receipt:OriginalSpawnStart):void
+ assertSourceCut():void
  captureSelection<T>(read:()=>T):T
  keep(cleanup: {close():Promise<void>}): void
  keepRecovery(cleanup:{close():Promise<void>}):void
@@ -56,7 +61,7 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
    const publication=new Map<string,object>()
    let selection:{value:unknown}|{cause:unknown}|undefined
    let bindingIntent: TaskChildBirthBinding | undefined,removeAbort=()=>{}
-   let preparation:Promise<void>|undefined,published=false
+   let preparation:Promise<void>|undefined,published=false,startReceipt:OriginalSpawnStart|undefined,deliveryPreparation:object|undefined
    let task:TaskRecord,accepted:Promise<void>=Promise.resolve(),binding:OwnedTaskSave|undefined,started=false,retired:{cause:unknown}|undefined,consumed=false,consumerClean=false,bindingCleanupFailed=false,closing:Promise<void>|undefined
    const current=()=>{if(retired)throw retired.cause;if(!published)checkCaller(caller);hooks.current(task)}
    const retire=(cause:unknown)=>{if(!retired){retired={cause};removeAbort();if(!published){if(!started)completion.reject(cause);void Promise.resolve().then(close).catch(()=>{})}}}
@@ -69,6 +74,9 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
     if(errors.length)throw new AggregateError(errors,'Original task slot cleanup unresolved');removeAbort()
    })();closing=flight;void flight.finally(()=>{if(closing===flight)closing=undefined}).catch(()=>{});return flight}
    const slot:TaskLaunchSlot={get task(){return task},caller,...history?{history}:{},role:roleIntent,flight:completion.promise,get accepted(){return accepted},
+    acknowledgeDelivery(value){if(this!==slot||deliveryPreparation)throw Error('Original delivery already acknowledged');current();deliveryPreparation=value},
+    acknowledgeStart(receipt){if(this!==slot||startReceipt)throw Error('Original start already acknowledged');current();inspectOriginalSpawnStart(receipt,caller.context.factOwner);startReceipt=receipt},
+    assertSourceCut(){if(this!==slot||!history||!startReceipt)throw Error('Original task start unavailable');current();const captured=inspectTaskChildSource(history,caller.identity.parentSessionId),start=inspectOriginalSpawnStart(startReceipt,captured.owner),open=deliveryPreparation?inspectOriginalTaskDeliveryOpen(deliveryPreparation,captured.owner):undefined,event=captured.view.events[start.seqs[0]!];if(open&&(open.view!==captured.view||open.seq!==captured.count||captured.view.events[open.seq]!==open.event||canonicalJsonData(open.event)!==open.eventData||open.binding.recipientSessionId!==caller.identity.parentSessionId||open.binding.sourceId!==task.id||open.binding.callSeq!==caller.identity.callEventSeq||canonicalJsonData(deliveryPreparation)!==canonicalJsonData({kind:'bound',binding:open.binding})))throw Error('Original delivery preparation changed');const offset=open?1:0;if(!start.seqs.length||captured.view.events.length!==captured.count+offset+start.seqs.length||start.seqs.some((seq,index)=>seq!==captured.count+offset+index||captured.view.events[seq]!==start.events[index])||!event||canonicalJsonData(event)!==canonicalJsonData({...start.event,seq:start.seqs[0]})||event.type!=='subagent/start'||event.taskId!==task.id||event.agentPath!==task.agentPath||event.role!==roleIntent.name||event.parentSessionId!==caller.identity.parentSessionId)throw Error('Original task history suffix changed')},
     captureSelection<T>(read:()=>T):T {if(this!==slot)throw TypeError('Foreign slot');current();if(!selection){try{const value=read();selection={value:value===undefined?undefined:freeze(captureTaskSnapshot(value))};current()}catch(cause){selection={cause};throw cause}}if('cause'in selection)throw selection.cause;return selection.value as T},
     keep(cleanup){if(this!==slot)throw TypeError('Foreign slot');const close=cleanup.close.bind(cleanup);setup.push({close,closed:false});try{current()}catch(cause){retire(cause);throw cause}},
     keepRecovery(cleanup){if(this!==slot)throw TypeError('Foreign slot');recovery.push({close:cleanup.close.bind(cleanup),closed:false});current()},

@@ -1,5 +1,5 @@
 import { freezeJsonData, type HeldInheritedResultMetadata } from '@i-harness/core-session'
-import { captureObservation } from './observed-read.ts'
+import { captureObservation,hasOriginalZeroSource } from './observed-read.ts'
 import { assertSelectedGrant, assertSelectedPlan, readSelectedPlan, qualifySelectedGraph, selectedRow, walkSelectedPages, type OriginalSelectedPlan } from './selected-readonly-plan.ts'
 import type { ContextStore } from '../store.ts'
 import type { LegacyReadObservation, LegacyRow } from './fork-types.ts'
@@ -53,18 +53,19 @@ export function createColdSelectedMetadata(observation: LegacyReadObservation, w
   return handle
 }
 /** Trusted original-service composition only; this input is not provenance. */
-export async function createSelectedMetadata(input: LegacyReadObservation, withRead: WithRead, settle: (store: ContextStore) => Promise<void>, assertService: () => void, onClosed: () => void) {
-  const observation = captureObservation(input)
+export async function createSelectedMetadata(input: LegacyReadObservation, withRead: WithRead, settle: (store: ContextStore) => Promise<void>, assertService: () => void, onClosed: () => void, service?:object) {
+  const observation = captureObservation(input,service)
   let originalStore: ContextStore | undefined, plan: OriginalSelectedPlan | undefined, minimumExpiry: number | undefined
-  let revoked = false, closed = false, entered = false, ended = false, qualified = false
+  let revoked = false, closed = false, entered = false, ended = false, qualified = false, noSource = false
   let iterator: AsyncGenerator<LegacyRow> | undefined, flight: Promise<unknown> | undefined, returnFlight: Promise<void> | undefined, closeFlight: Promise<void> | undefined, iteratorClosed = false
   const current = () => {
     if (revoked || closed) throw Error('Selected metadata reader revoked')
-    try { assertService(); observation.assertCurrent(); if (minimumExpiry !== undefined && minimumExpiry <= Date.now()) throw Error('Original selected metadata expired') }
+    try { assertService(); if(noSource){if(!hasOriginalZeroSource(observation,service))throw Error('Original zero-source proof unavailable')}else observation.assertCurrent(); if (minimumExpiry !== undefined && minimumExpiry <= Date.now()) throw Error('Original selected metadata expired') }
     catch (failure) { revoked = true; throw failure }
   }
   current()
-  if (observation.bootstrap) await withRead(async store => {
+  noSource=hasOriginalZeroSource(observation,service)
+  if (observation.bootstrap && !noSource) await withRead(async store => {
     current(); originalStore = store; plan = await readSelectedPlan(store, observation, current)
     const proof = await qualifySelectedGraph(store, plan, observation, current); minimumExpiry = proof.minimumExpiry
     await assertSelectedPlan(store, plan, observation, current); current()

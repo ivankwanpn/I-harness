@@ -1,6 +1,6 @@
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {createExecutorExecutionCache} from './durable-session.ts'
-import {createManagedExecutionRuntime} from './managed-assembly.ts'
+import {createManagedExecutionRuntime,createManagedExecutionRuntimeWithRegistry} from './managed-assembly.ts'
 import {subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
 import {supportsManagedServiceOptions} from './service/execution-mode.ts'
 import {createContext,captureExecutionHookChannel,type PluginContext} from '@i-harness/core-plugin'
@@ -132,6 +132,7 @@ export interface SessionServiceOptions extends AssemblyOptions {
   managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'|'originalFilesystem'|'originalSchedule'> & {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
+    mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
   }
   /** Read-only host authority; never invokes execution project setup. */
   resultReadScopeFor?: import('./lifecycle/result-store.ts').ResultReadScopeResolver
@@ -1010,7 +1011,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     creating.set(sessionId,row);privateEntries.add(sessionId)
     let runtime:ManagedRuntime|undefined
     const mounted=new Set<()=>void|Promise<void>>()
-    row.cleanup=async()=>{await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);privateEntries.delete(sessionId)}
+    let retired=false
+    row.cleanup=async()=>{retired=true;await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);privateEntries.delete(sessionId)}
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
       const context=createContext()
@@ -1019,17 +1021,22 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       assertWritableOpen(sessionId)
       // Reject unmarked Session callbacks/legacy runtime before resolving a model.
       captureExecutionHookChannel(context).capture()
-      const binding=opts.modelBindingFor?await bindingFor(sessionId):undefined
-      const meta=!binding&&opts.loadMeta?await opts.loadMeta(sessionId):undefined
-      const model=binding?.status==='ready'?binding.binding.model:binding?undefined:opts.modelBuilder?await opts.modelBuilder(sessionId,meta):opts.model
-      const contextWindow=binding?.status==='ready'?binding.binding.contextWindow:opts.contextWindowFor===undefined?opts.contextWindow:opts.contextWindowFor(sessionId,meta)
-      const reasoningEffort=binding?.status==='ready'?binding.binding.reasoningEffort:opts.reasoningEffortFor===undefined?opts.reasoningEffort:opts.reasoningEffortFor(sessionId,meta)
-      assertWritableOpen(sessionId)
-      if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
-      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,context,execution:entry.execution,model,contextWindow,workspace:opts.workspace,retainConstructionCleanup:cleanup=>mounted.add(cleanup),scheduleWake:(inputId,text)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
+      const resolveModel=async()=>{
+       const binding=opts.modelBindingFor?await bindingFor(sessionId):undefined
+       const meta=!binding&&opts.loadMeta?await opts.loadMeta(sessionId):undefined
+       const model=binding?.status==='ready'?binding.binding.model:binding?undefined:opts.modelBuilder?await opts.modelBuilder(sessionId,meta):opts.model
+       const contextWindow=binding?.status==='ready'?binding.binding.contextWindow:opts.contextWindowFor===undefined?opts.contextWindow:opts.contextWindowFor(sessionId,meta)
+       const reasoningEffort=binding?.status==='ready'?binding.binding.reasoningEffort:opts.reasoningEffortFor===undefined?opts.reasoningEffort:opts.reasoningEffortFor(sessionId,meta)
+       assertWritableOpen(sessionId)
+       if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
+       return {model,contextWindow,reasoningEffort,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata}
+      }
+      const common={...opts.managedRuntime!,context,execution:entry.execution,workspace:opts.workspace,retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
-        reasoningEffort,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata,
-        ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})})
+        ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})}
+      if(opts.managedRuntime!.mountRegistry){
+       runtime=await createManagedExecutionRuntimeWithRegistry({...common,configureRegistry:opts.managedRuntime!.mountRegistry,resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
+      }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
       assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime)
       return runtime

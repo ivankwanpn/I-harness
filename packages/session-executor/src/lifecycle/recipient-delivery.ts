@@ -150,6 +150,7 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
       const original = state().source(namespace, sourceId)
       if (original) throw failed({ kind: 'blocked', reason: 'conflict', debt: 'none' })
       let generation = state().activeGeneration()
+      let taskOpen: ReturnType<NonNullable<typeof source.captureTaskDeliveryOpen>> | undefined
       if (!generation) {
         const { human, fence } = ownHuman()
         if (!human) {
@@ -157,12 +158,15 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
           return { kind: 'unavailable', reason: 'no-own-human-origin' }
         }
         // No await between deciding and retaining the sole original open.
-        opening = { fact: source.captureDeliveryOpen({ type: 'agent/delivery-generation', version: 1, op: 'open', recipientSessionId: recipient, generationId: randomUUID(), originInputSeq: human.seq! }, current) }
+        const event = { type: 'agent/delivery-generation' as const, version: 1 as const, op: 'open' as const, recipientSessionId: recipient, generationId: randomUUID(), originInputSeq: human.seq! }
+        if (!execCall && source.captureTaskDeliveryOpen) taskOpen=source.captureTaskDeliveryOpen(event,current,{recipientSessionId:recipient,sourceNamespace:namespace,sourceId,callSeq})
+        opening = { fact: taskOpen ?? source.captureDeliveryOpen(event,current) }
         const opened = await settle(opening); opening = undefined; assertCurrent()
         if (!opened) throw failed({ kind: 'blocked', reason: 'out-of-scope', debt: 'none' })
         generation = state().activeGeneration()
       }
       if (!generation) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'none' })
+      if (taskOpen) return taskOpen.preparation()
       return { kind: 'bound', binding: { recipientSessionId: recipient, generationId: generation.generationId, sourceNamespace: namespace, sourceId, callSeq } }
     }
   const adapter = {

@@ -26,12 +26,18 @@ export function captureTaskChildProject(value:TaskChildProjectCapture){
  return Object.freeze({request,invocation:request.invocation,requestIntent:request.requestIntent,sourceSessionId:value.sourceSessionId,sourceAvailable:value.sourceAvailable,assertNewWorkCurrent:value.assertNewWorkCurrent,targetAvailable:value.targetAvailable})
 }
 export interface BootstrapTargetScope { projectId?: string; scope?: SessionProjectContext; revision: string }
-export interface BootstrapProjectPreparation {
+export interface ExistingBootstrapProjectPreparation {
   targetPreparation: BootstrapTargetPreparationPort;
   targetScope(): BootstrapTargetScope;
   assertSourceCurrent(): void;
   close(): void;
 }
+/** Original broker variant: active observes source and target together; passive observes target only. */
+export interface CoherentBootstrapProjectPreparation extends ExistingBootstrapProjectPreparation {
+  kind:'coherent-project-observation-v1';
+  observeCurrent(mode:'active'|'passive'):BootstrapTargetScope;
+}
+export type BootstrapProjectPreparation=ExistingBootstrapProjectPreparation|CoherentBootstrapProjectPreparation
 export function captureBootstrapProject(value: BootstrapProjectCapture): BootstrapProjectCapture {
   if (!value || typeof value !== 'object' || types.isProxy(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError('Invalid bootstrap project capture')
   const required = ['invocation', 'requestIntent', 'sourceAvailable', 'assertNewWorkCurrent', 'targetAvailable'], optional = ['sourceSessionId']

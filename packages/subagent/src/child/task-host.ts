@@ -6,6 +6,7 @@ export interface TaskChildHostInput {
  readonly coordinator: import('@i-harness/session-persistence').SessionCoordinator
  readonly parentSessionId: string
  readonly signal?: AbortSignal
+ assertSourceCut(): void
  assertCurrent(): void
  sourceAvailable(): boolean
  retire(cause: unknown): void
@@ -15,6 +16,6 @@ export interface TaskChildHostPreparation {
  readonly project: BootstrapProjectIntent
  readonly metadata: BootstrapCallerMetadata
  beforeResultIssue?():Promise<void>
- prepare(request: ChildBootstrapCaptureRequest): {run<T>(work:(guards:BootstrapGuards)=>Promise<T>):Promise<T>;close(): Promise<void>|void}
+ prepare(request: ChildBootstrapCaptureRequest): {run<T>(work:(guards:BootstrapGuards)=>Promise<T>):Promise<T>;releaseSource?():Promise<void>;assertDependencyReceipt?(receipt:import('@i-harness/session-persistence').BootstrapReceipt,seed:import('@i-harness/session-persistence').CompiledSemanticSeed):void;close(): Promise<void>|void}
 }
 export type PrepareTaskChild = (input: TaskChildHostInput) => Promise<TaskChildHostPreparation>

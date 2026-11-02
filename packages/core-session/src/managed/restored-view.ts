@@ -94,12 +94,12 @@ export async function restoreManagedConversation(input: OriginalConversationRest
     const viewsField=supplied&&Object.getOwnPropertyDescriptor(supplied,'views');
     if(viewsField&&!('value'in viewsField))throw TypeError('Original fold views must be own data');
     const views=viewsField?.value;
-    if(views!==undefined&&(!views||typeof views!=='object'||types.isProxy(views)||Array.isArray(views)||Reflect.ownKeys(views).some(key=>key!=='todo'&&key!=='goal')))throw TypeError('Invalid original fold views');
+    if(views!==undefined&&(!views||typeof views!=='object'||types.isProxy(views)||Array.isArray(views)||Reflect.ownKeys(views).some(key=>key!=='todo'&&key!=='goal'&&key!=='title')))throw TypeError('Invalid original fold views');
     const capturedFields=views?Object.getOwnPropertyDescriptors(views):undefined;
     const viewMethodChecks:Array<()=>void>=[];
     checkViews=()=>{const current=Object.getOwnPropertyDescriptor(supplied!,'views');if(!!current!==!!viewsField||current&&(!('value'in current)||current.value!==views))refuse('Original fold views changed');if(views){const keys=Reflect.ownKeys(views);if(keys.length!==Reflect.ownKeys(capturedFields!).length||keys.some(key=>{const before=Object.getOwnPropertyDescriptor(capturedFields!,key)?.value,after=Object.getOwnPropertyDescriptor(views,key);return !before||!after||!('value'in before)||!('value'in after)||before.value!==after.value}))refuse('Original fold views changed')}for(const check of viewMethodChecks)check()};
     const named:Partial<Record<import('./execution-types.ts').ExecutionFoldName,(prefix:Readonly<import('./types.ts').JournalPrefix>)=>unknown>>={};
-    for(const name of ['todo','goal'] as const){
+    for(const name of ['todo','goal','title'] as const){
       const field=views&&Object.getOwnPropertyDescriptor(views,name);if(!field)continue;
       if(!('value'in field)||!field.value||typeof field.value!=='object'||types.isProxy(field.value)||Array.isArray(field.value)||Reflect.ownKeys(field.value).some(key=>key!=='snapshot'&&key!=='validateSnapshot'))throw TypeError('Original fold view required');
       const view=field.value,snapshot=Object.getOwnPropertyDescriptor(view,'snapshot'),validate=Object.getOwnPropertyDescriptor(view,'validateSnapshot');

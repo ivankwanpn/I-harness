@@ -102,7 +102,7 @@ export interface OriginalExecutionFoldSink {
   validateSnapshot(value: unknown): boolean
   readonly views?:Readonly<Partial<Record<ExecutionFoldName,OriginalExecutionFoldView>>>
 }
-export type ExecutionFoldName='todo'|'goal'
+export type ExecutionFoldName='todo'|'goal'|'title'
 export interface OriginalExecutionFoldView {snapshot(prefix:Readonly<JournalPrefix>):unknown;validateSnapshot(value:unknown):boolean}
 export type ExecutionFoldObservation=Readonly<{kind:'unavailable';reason:'original-adapter-not-connected';revision:number}|{kind:'available';revision:number;snapshot:unknown}>
 export type OriginalExecutionFoldFactory = (source: Readonly<{sessionId:string; seedLength:number; formatVersion:number}>) => OriginalExecutionFoldSink

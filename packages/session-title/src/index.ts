@@ -69,16 +69,21 @@ export async function suggestTitle(deps: {
 }): Promise<{ title: string; source: "provider" | "fallback" }> {
   const execution = resolveTitleAction(deps.session, deps.action, deps.signal)
   const action = execution.context
-  let generation: import('@i-harness/llm-seam').AuxiliaryGenerationAction | undefined
   try {
     const inputs = eligibleUserTexts(deps.session)
-    const first = inputs[0]?.text ?? ""
+    const candidate = inputs[0] ? { firstSeq: inputs[0].seq, promptText: inputs.map(i => i.text).join("\n\n").slice(0,4000), fallback: fallbackTitle(inputs[0].text, deps.maxWords) } : null
+    return await requestTitle(deps, action, candidate, isNondurableSession(deps.session))
+  } finally { execution.finish() }
+}
+
+export async function requestTitle(deps: { model: ModelClient; budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding; contextWindow?: number; maxOutputTokens?: number; titleMaxOutputTokens?: number; timeoutMs?: number; maxWords?: number }, action: Pick<TitleAction,'signal'|'assertOpen'|'openGeneration'>, candidate: {firstSeq:number;promptText:string;fallback:string}|null, allowNondurable=false): Promise<{title:string;source:'provider'|'fallback'}> {
+  let generation: import('@i-harness/llm-seam').AuxiliaryGenerationAction | undefined
     try {
       const timeoutMs = deps.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS
       if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw generationError('GENERATION_UNSUPPORTED')
-      if (action.openGeneration && inputs[0]) generation = await action.openGeneration(inputs[0].seq, timeoutMs)
-      else if (!isNondurableSession(deps.session)) throw generationError('GENERATION_UNSUPPORTED')
-      const messages: LLMMessage[] = [{ role: "user", content: inputs.map((i) => i.text).join("\n\n").slice(0, 4000) || "(no messages)" }]
+      if (action.openGeneration && candidate) generation = await action.openGeneration(candidate.firstSeq, timeoutMs)
+      else if (!allowNondurable) throw generationError('GENERATION_UNSUPPORTED')
+      const messages: LLMMessage[] = [{ role: "user", content: (candidate?.promptText ?? "") || "(no messages)" }]
       const requestedCap = deps.titleMaxOutputTokens === undefined
         ? deps.maxOutputTokens
         : Math.min(deps.maxOutputTokens ?? deps.titleMaxOutputTokens, deps.titleMaxOutputTokens)
@@ -140,9 +145,8 @@ export async function suggestTitle(deps: {
       await generation?.close(action.signal.aborted ? 'stopped' : 'failed')
       action.assertOpen()
       action.signal.throwIfAborted()
-      return { title: fallbackTitle(first, deps.maxWords), source: "fallback" }
+      return { title: candidate?.fallback ?? fallbackTitle("", deps.maxWords), source: "fallback" }
     }
-  } finally { execution.finish() }
 }
 
 export async function applyTitle(session: Session, title: string, source: "fallback" | "provider" | "user", messageSeqs?: number[], metadata?: MetadataFactSource): Promise<void> {

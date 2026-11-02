@@ -16,7 +16,7 @@ import { captureHost, captureRequest, captureTarget, TransferBlocked, type SeedD
 import { canonicalCompare, createTransferClosure } from './transfer-closure.ts'
 export type { SeedDependencyHostAccess, SeedDependencyTransferBinding, SeedDependencyTransferScope } from './transfer-codec.ts'
 
-interface Registration { passiveOnly?: boolean; io:ArtifactQualificationIO; access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
+interface Registration { passiveOnly?: boolean; io:ArtifactQualificationIO; access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; checking?:boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
 export interface ColdManagedQualification { qualify(): Promise<void>; sealWhileActive(): void; settle(): Promise<void>; assertSettledCurrent(): void; revoke(): void; close(): Promise<void> }
 interface SourceRelation { ref: ManagedArtifactRef; viaCatalog?: ManagedArtifactRef }
 interface Publication { path: string; value: ArtifactPin | TransferMembership | { version: 1; sessionId: string; revision: string; pinId: string }; relations: Set<SourceRelation> }
@@ -50,6 +50,7 @@ export function createSeedDependencyTransfer(deps: {
     let registration: Registration, request: BootstrapDependencyRequest
     try {
       const held = scopes.get(scope); if (!held) throw new TransferBlocked('unavailable')
+      if(held.checking){held.revoked=true;throw new TransferBlocked('policy')}
       if (held.passiveOnly && caller !== undefined) throw new TransferBlocked('policy')
       registration = held; request = captureRequest(input, held.access.binding, held.passiveOnly)
       const encoded = canonicalJsonData(request)
@@ -64,6 +65,22 @@ export function createSeedDependencyTransfer(deps: {
         if(passive&&qualificationClosing)throw new TransferBlocked('unavailable')
         if (!deps.available(binding.targetSessionId) || !deps.available(binding.targetDocumentId)) throw new TransferBlocked('unavailable')
         if (registration.revoked) throw new TransferBlocked('policy')
+        if('kind' in access){
+          if(qualificationClosing)throw new TransferBlocked('unavailable')
+          if(registration.checking){registration.revoked=true;throw new TransferBlocked('policy')}
+          registration.checking=true
+          try{
+            try{if(!passive){if(!deps.available(binding.sourceSessionId)||caller!()!==true)throw Error('source or caller unavailable');access.sourceAccess.signal?.throwIfAborted()}}catch{throw new TransferBlocked('policy')}
+            if(registration.revoked)throw new TransferBlocked('policy')
+            try{
+              const observed=access.observeCurrent(passive?'passive':'active'),target=captureTarget(observed)
+              if(registration.target!==undefined&&registration.target!==target)throw Error('target revision changed')
+              registration.target??=target;targetSourceId=observed.source.sourceId
+              if(qualificationClosing||registration.revoked||!deps.available(binding.targetSessionId)||!deps.available(binding.targetDocumentId)||!passive&&!deps.available(binding.sourceSessionId))throw Error('transfer retired')
+            }catch{registration.revoked=true;throw new TransferBlocked('policy')}
+          }finally{registration.checking=false}
+          return
+        }
         try {
           if (access.targetAvailable() !== true) throw new Error('target unavailable')
           access.assertTargetCurrent()
@@ -254,8 +271,9 @@ export function createSeedDependencyTransfer(deps: {
       },
       sealWhileActive() {
         if (this !== handle || !qualified || closed || registration.revoked || qualificationClosing) throw Error('Cold managed qualification unverified')
-        registration.access.assertTargetCurrent()
-        if (captureTarget(registration.access.targetScope()) !== registration.target) throw Error('Cold managed target changed')
+        const originalAccess=registration.access;if('kind'in originalAccess)throw Error('Cold coherent qualification unavailable')
+        originalAccess.assertTargetCurrent()
+        if (captureTarget(originalAccess.targetScope()) !== registration.target) throw Error('Cold managed target changed')
         target = registration.target; independent(); sealed = true
       },
       settle() {

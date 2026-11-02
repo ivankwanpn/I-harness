@@ -9,11 +9,18 @@ export interface SeedDependencyTransferScope { readonly kind: 'seed-dependency-t
 export interface SeedDependencyTransferBinding {
   operationId: string; manifestDigest: string; sourceSessionId: string; targetSessionId: string; targetDocumentId: string
 }
-export interface SeedDependencyHostAccess {
+export type SeedDependencyTargetScope = {source:NonNullable<ContextCapture['source']>;revision:string}
+export interface ExistingSeedDependencyHostAccess {
   binding: SeedDependencyTransferBinding; sourceAccess: ContextAccess;
   sourceAvailable(): boolean; assertSourceCurrent(): void; targetAvailable(): boolean;
-  targetScope(): { source: NonNullable<ContextCapture['source']>; revision: string }; assertTargetCurrent(): void;
+  targetScope(): SeedDependencyTargetScope; assertTargetCurrent(): void;
 }
+/** Active observes both source and target; passive observes only target. */
+export interface CoherentSeedDependencyHostAccess {
+  kind:'coherent-observation-v1';binding:SeedDependencyTransferBinding;sourceAccess:ContextAccess;
+  observeCurrent(mode:'active'|'passive'):SeedDependencyTargetScope;
+}
+export type SeedDependencyHostAccess = ExistingSeedDependencyHostAccess|CoherentSeedDependencyHostAccess
 export class TransferBlocked extends Error {
   constructor(readonly reason: 'unknown' | 'unavailable' | 'conflict' | 'policy', message = 'Seed dependency transfer ' + reason) { super(message) }
 }
@@ -35,16 +42,43 @@ export function validTransferBinding(value: unknown): value is SeedDependencyTra
   } catch { return false }
 }
 export function captureHost(value: SeedDependencyHostAccess): SeedDependencyHostAccess {
+  if(!value||typeof value!=='object'||types.isProxy(value))throw new TransferBlocked('conflict')
+  const kind=Object.getOwnPropertyDescriptor(value,'kind')
+  if(kind){
+    fields(value,['kind','binding','sourceAccess','observeCurrent'])
+    if(value.kind!=='coherent-observation-v1'||!validTransferBinding(value.binding))throw new TransferBlocked('conflict')
+    fields(value.sourceAccess,['sessionId'],['signal'])
+    if(value.sourceAccess.sessionId!==value.binding.sourceSessionId||value.sourceAccess.signal!==undefined&&(types.isProxy(value.sourceAccess.signal)||!(value.sourceAccess.signal instanceof AbortSignal)))throw new TransferBlocked('conflict')
+    const descriptor=Object.getOwnPropertyDescriptor(value,'observeCurrent')!,observer=descriptor.value as CoherentSeedDependencyHostAccess['observeCurrent']
+    if(typeof observer!=='function'||types.isProxy(observer))throw new TransferBlocked('conflict')
+    const originalBinding=value.binding,originalAccess=value.sourceAccess,hostDescriptors=Object.getOwnPropertyDescriptors(value),bindingDescriptors=Object.getOwnPropertyDescriptors(originalBinding),accessDescriptors=Object.getOwnPropertyDescriptors(originalAccess)
+    const {operationId,manifestDigest,sourceSessionId,targetSessionId,targetDocumentId}=originalBinding
+    const checkDescriptors=(object:object,original:PropertyDescriptorMap,keys:readonly string[])=>{
+      if(Reflect.ownKeys(object).length!==keys.length)throw new TransferBlocked('policy')
+      for(const key of keys){const before=original[key],after=Object.getOwnPropertyDescriptor(object,key);if(!before||!after||!('value'in before)||!('value'in after)||after.value!==before.value||after.enumerable!==before.enumerable||after.configurable!==before.configurable||after.writable!==before.writable)throw new TransferBlocked('policy')}
+    }
+    const hostKeys=['kind','binding','sourceAccess','observeCurrent'],bindingKeys=['operationId','manifestDigest','sourceSessionId','targetSessionId','targetDocumentId'],accessKeys=Object.hasOwn(accessDescriptors,'signal')?['sessionId','signal']:['sessionId']
+    const checkOriginal=()=>{fields(value,hostKeys);fields(originalBinding,bindingKeys);fields(originalAccess,['sessionId'],['signal']);checkDescriptors(value,hostDescriptors,hostKeys);checkDescriptors(originalBinding,bindingDescriptors,bindingKeys);checkDescriptors(originalAccess,accessDescriptors,accessKeys)}
+    let entered=false,violated=false
+    return Object.freeze({kind:'coherent-observation-v1' as const,binding:Object.freeze({operationId,manifestDigest,sourceSessionId,targetSessionId,targetDocumentId}),sourceAccess:Object.freeze({...originalAccess}),observeCurrent(mode:'active'|'passive'){
+      if(entered){violated=true;throw new TransferBlocked('policy')}
+      if(violated)throw new TransferBlocked('policy')
+      checkOriginal();entered=true
+      try{const result=Reflect.apply(observer,value,[mode]);if(types.isPromise(result)){void Promise.prototype.then.call(result,undefined,()=>{});throw new TransferBlocked('policy')}checkOriginal();if(violated)throw new TransferBlocked('policy');return result}
+      finally{entered=false}
+    }})
+  }
   fields(value, ['binding', 'sourceAccess', 'sourceAvailable', 'assertSourceCurrent', 'targetAvailable', 'targetScope', 'assertTargetCurrent'])
   if (!validTransferBinding(value.binding)) throw new TransferBlocked('conflict')
   fields(value.sourceAccess, ['sessionId'], ['signal'])
   if (value.sourceAccess.sessionId !== value.binding.sourceSessionId || value.sourceAccess.signal !== undefined && (types.isProxy(value.sourceAccess.signal) || !(value.sourceAccess.signal instanceof AbortSignal))) throw new TransferBlocked('conflict')
   for (const key of ['sourceAvailable', 'assertSourceCurrent', 'targetAvailable', 'targetScope', 'assertTargetCurrent'] as const) if (typeof value[key] !== 'function' || types.isProxy(value[key])) throw new TransferBlocked('conflict')
-  const { operationId, manifestDigest, sourceSessionId, targetSessionId, targetDocumentId } = value.binding
-  return Object.freeze({ binding: Object.freeze({ operationId, manifestDigest, sourceSessionId, targetSessionId, targetDocumentId }), sourceAccess: Object.freeze({ ...value.sourceAccess }), sourceAvailable: value.sourceAvailable,
-    assertSourceCurrent: value.assertSourceCurrent, targetAvailable: value.targetAvailable, targetScope: value.targetScope, assertTargetCurrent: value.assertTargetCurrent })
+  const legacy=value as ExistingSeedDependencyHostAccess
+  const { operationId, manifestDigest, sourceSessionId, targetSessionId, targetDocumentId } = legacy.binding
+  return Object.freeze({ binding: Object.freeze({ operationId, manifestDigest, sourceSessionId, targetSessionId, targetDocumentId }), sourceAccess: Object.freeze({ ...legacy.sourceAccess }), sourceAvailable: legacy.sourceAvailable,
+    assertSourceCurrent: legacy.assertSourceCurrent, targetAvailable: legacy.targetAvailable, targetScope: legacy.targetScope, assertTargetCurrent: legacy.assertTargetCurrent })
 }
-export function captureTarget(value: ReturnType<SeedDependencyHostAccess['targetScope']>): string {
+export function captureTarget(value: SeedDependencyTargetScope): string {
   fields(value, ['source', 'revision']); fields(value.source, ['sourceId'], ['path', 'revision', 'readonly'])
   if (!isMetadataData(value)) throw new TransferBlocked('policy')
   identity(value.revision, 'target revision'); identity(value.source.sourceId, 'target source')

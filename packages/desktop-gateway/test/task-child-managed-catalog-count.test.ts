@@ -1,0 +1,51 @@
+import * as executorApi from '@i-harness/session-executor'
+import {describe,it,expect,vi,beforeAll,afterAll} from 'vitest'
+import {mkdtemp,mkdir,rm} from 'node:fs/promises'
+import {join} from 'node:path'
+import {createContext} from '@i-harness/core-plugin'
+import {createToolRegistry} from '@i-harness/core-tools'
+import {committedFactSeqs,semanticSeedResultRefs,managedResultRefs,type ManagedArtifactRef,type ResultDependency} from '@i-harness/core-session'
+import {createJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
+import {createProjectScopeBroker} from '../src/project-scope.ts'
+import {createNativeContextRuntime} from '../src/context-runtime.ts'
+import {registerSubagent,SHIPPING_REPORT_POLICY} from '@i-harness/subagent'
+import {registerExec} from '@i-harness/exec'
+import {createGenerationLifecycle} from '../../session-executor/src/lifecycle/generation-actions.ts'
+import {createTaskResultRetention} from '../../session-executor/src/lifecycle/task-result-retention.ts'
+import {receivedInputsFor} from '../../session-executor/src/lifecycle/received-inputs.ts'
+import {createLoopbackProvider} from '../../core-agent/test/helpers/provider-loopback.ts'
+import {createOpenAICompatibleClient} from '../../llm-openai-compatible/src/index.ts'
+
+describe('original Gateway coherent catalog guard count',()=>{
+ let resultChecks=0,projectChecks=0;const counts:{mode:string;result:number;project:number}[]=[]
+ let root:string,coordinator:ReturnType<typeof createJsonlTaskTransitionCoordinator>,broker:ReturnType<typeof createProjectScopeBroker>,runtime:Awaited<ReturnType<typeof createNativeContextRuntime>>,server:Awaited<ReturnType<typeof createLoopbackProvider>>,mounted:ReturnType<typeof registerSubagent>|undefined,parent:Awaited<ReturnType<typeof coordinator.openManagedDocument>>,action:ReturnType<typeof parent.beginAction>|undefined,source:ReturnType<NonNullable<typeof action>['registerSettlementSource']>|undefined
+ let textRef:ManagedArtifactRef,memberRef:ManagedArtifactRef,catalogRef:ManagedArtifactRef,omittedRef:ManagedArtifactRef,launch:()=>Promise<unknown>,setupMs:number
+ beforeAll(async()=>{
+  const start=performance.now();root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'task-catalog-'));const workspace=join(root,'workspace');await mkdir(workspace)
+  coordinator=createJsonlTaskTransitionCoordinator(join(root,'sessions'),{lock:{enabled:true}},taskDocumentStorageContract);broker=createProjectScopeBroker(coordinator,workspace);await coordinator.create({sessionId:'parent'});await broker.configure({id:'p',name:'P',roots:[workspace],primaryRoot:workspace});await broker.bind('parent','p')
+  const originalScope=executorApi.createResultObservationScope;vi.spyOn(executorApi,'createResultObservationScope').mockImplementation(()=>{const scope=originalScope();return {...scope,retainSelected(capture){return scope.retainSelected({...capture,assertHostCurrent(){resultChecks++;capture.assertHostCurrent()}})}}})
+  const originalProject=broker.prepareTaskChildInheritance.bind(broker)
+  runtime=await createNativeContextRuntime({workspace,storageRoot:join(root,'native'),coordinator,projectFor:broker.nativeScopeFor,resultReadScopeFor:broker.resultReadScopeFor,prepareTaskChildInheritance:input=>{const prep=originalProject(input);if(!('kind'in prep))return prep;const observe=prep.observeCurrent;return Object.freeze({...prep,observeCurrent(mode:'active'|'passive'){projectChecks++;return Reflect.apply(observe,prep,[mode])}})},withBindingObservation:broker.withBindingObservation,retainSelectedProjectRead:broker.retainSelectedBindingRead,visibleRefsFor:async id=>{const view=(await coordinator.snapshot!(id)).session;return [...semanticSeedResultRefs(view),...view.events.flatMap(managedResultRefs)]}})
+  const owner=runtime.contextOutput,originalSource=await runtime.sourceFor('parent'),register=owner.registerSeedDependencyTransfer.bind(owner)
+  vi.spyOn(owner,'registerSeedDependencyTransfer').mockImplementation((host,publication)=>{if(!('kind'in host))return register(host,publication);const observe=host.observeCurrent;return register({...host,observeCurrent(mode){const beforeR=resultChecks,beforeP=projectChecks,value=Reflect.apply(observe,host,[mode]);counts.push({mode,result:resultChecks-beforeR,project:projectChecks-beforeP});return value}},publication)})
+  async function save(operationId:string,callId:string,codec:ManagedArtifactRef['codec'],body:string){const scope=owner.registerResultScope({operationId,sessionId:'parent',callId,source:originalSource},()=>true),sink=await owner.beginResult(scope,codec);await sink.write(Buffer.from(body));const result=await sink.finish('complete');if(result.kind!=='committed')throw Error('Fixture publication failed');return result.ref}
+  textRef=await save('text','observe','text-utf8-v1','ORIGINAL MANAGED RESULT')
+  memberRef=await save('member','member','exec-frames-v1','IHEXEC01\n{"channel":"stdout","frame":0,"offset":0,"end":true,"data":"eA=="}\n')
+  omittedRef=await save('omitted','omitted','exec-frames-v1','IHEXEC01\n{"channel":"stdout","frame":0,"offset":0,"end":true,"data":"eQ=="}\n')
+  const entries:ResultDependency[]=[{kind:'exec-frames',sourceId:'member',retention:{kind:'artifact',ref:memberRef}}],catalogScope=owner.registerResultDependencyScope({operationId:'catalog',sessionId:'parent',callId:'observe',source:originalSource},()=>true,entries),sink=await owner.beginResult(catalogScope,'json-utf8-v1');await sink.write(Buffer.from(JSON.stringify({version:1,kind:'result-dependencies',entries})));const catalog=await sink.finish('complete');if(catalog.kind!=='committed')throw Error('Fixture catalog unavailable');catalogRef=catalog.ref;expect(await owner.settleResultDependencyMembership(catalogScope,catalogRef)).toBe('ready')
+  await coordinator.append('parent',[{type:'turn/start'},{type:'user/message',text:'earlier turn'},{type:'step/start'},{type:'tool/call',callId:'observe',name:'read',args:{}},{type:'assistant/message',text:''},{type:'tool/result',callId:'observe',name:'read',envelope:{version:1,execution:{outcome:'succeeded',dispatch:'dispatched'},preview:'managed',media:[],retention:{kind:'artifact',ref:textRef},dependencies:{kind:'artifact-set',ref:catalogRef,count:1}}},{type:'step/end'},{type:'turn/end'}])
+  server=await createLoopbackProvider('/v1/chat/completions',[async res=>{res.end('data: '+JSON.stringify({choices:[{delta:{content:'done'},finish_reason:'stop'}],usage:{prompt_tokens:2,completion_tokens:1}})+'\n\ndata: [DONE]\n\n')}]);const model=createOpenAICompatibleClient({apiKey:'loopback',model:'child',baseUrl:server.baseUrl})
+  parent=await coordinator.openManagedDocument('parent');const ctx=createContext(),tools=createToolRegistry(ctx,{executionOwner:{view:parent.view,factOwner:parent,context:ctx,sessionId:'parent'}})
+  mounted=registerSubagent(ctx,tools,{parentSession:parent.view,factOwner:parent,parentModel:model,exec:registerExec(ctx),resolveModel:async()=>{throw Error('unexpected resolver')},prepareTaskChild:runtime.prepareTaskChild,reportPolicy:SHIPPING_REPORT_POLICY,results:createTaskResultRetention(owner,runtime.sourceFor,'parent'),generationFactoryFor:(document,id,selected)=>(owned,deps)=>createGenerationLifecycle(document.view,id,owned,{enabled:false,selectedClient:selected},deps),persist:{coordinator,stateId:'parent',parentSessionId:'parent'}});await mounted.ready;mounted.roles.register({name:'small',description:'s',systemPrompt:'s',tools:[]})
+  await receivedInputsFor(parent,'parent').inbox.admit({inputId:'input',text:'task',intent:'user',delivery:'queue',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}});action=parent.beginAction();committedFactSeqs(await action.facts.inputs.start({type:'agent/input/promoted',version:1,inputId:'input'},{type:'user/message',text:'task',input:{inputId:'input',intent:'user'}}));source=action.registerSettlementSource(async()=>{});const args={message:'work',task_name:'one',agent_type:'small',background:false,fork_turns:'all' as const},[seq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'call',name:'spawn_agent',args}));committedFactSeqs(await action.facts.tools.dispatch('call',{kind:'prior',seq:seq!,expectedType:'tool/call'}));const prepared=await tools.prepare({name:'spawn_agent',args},action.signal,{session:parent.view,sessionId:'parent',callId:'call',callEventSeq:seq!,settlementSource:source});launch=()=>tools.dispatch(prepared);setupMs=performance.now()-start
+ },60_000)
+ it('preserves selected root and catalog member after source close, denying an omitted member',async()=>{
+  expect(setupMs).toBeLessThan(60_000);expect(await launch()).toMatchObject({status:'completed'});const target=mounted!.tasks.get('task-1')!.childSessionId!;expect(server.requests).toHaveLength(1);expect(server.errors).toEqual([]);expect(counts.some(value=>value.mode==='active')).toBe(true);expect(counts.some(value=>value.mode==='passive')).toBe(true);expect(counts.every(value=>value.project===1&&(value.mode==='active'?value.result===1:value.mode==='passive'&&value.result===0))).toBe(true);console.info('coherent original transfer counts',JSON.stringify({active:counts.filter(value=>value.mode==='active').length,passive:counts.filter(value=>value.mode==='passive').length}))
+  await source!.close();source=undefined;action!.finish();action=undefined;await mounted!.dispose();mounted=undefined;await coordinator.closeManagedDocument('parent')
+  expect(await runtime.contextOutput.readResult({sessionId:target},{ref:textRef})).toMatchObject({data:{text:'ORIGINAL MANAGED RESULT'}})
+  expect(await runtime.contextOutput.readExecResult({sessionId:target},{ref:memberRef,viaCatalog:catalogRef})).toMatchObject({frames:[{data:'eA=='}]})
+  await expect(runtime.contextOutput.readExecResult({sessionId:target},{ref:omittedRef,viaCatalog:catalogRef})).rejects.toThrow()
+ },60_000)
+ afterAll(async()=>{vi.restoreAllMocks();await source?.close();action?.finish();await mounted?.dispose();await runtime?.close();await broker?.close();await coordinator?.close();await server?.close();if(root)await rm(root,{recursive:true,force:true})},60_000)
+})

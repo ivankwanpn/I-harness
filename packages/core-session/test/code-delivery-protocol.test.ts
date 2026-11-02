@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { validDeliveryEvent, deliveryMinimumFormat, deliveryInputId } from '../src/events/delivery.ts'
 import { validateConversationEventShape } from '../src/events/conversation.ts'
-import { readDeliveries } from '../src/conversation/delivery.ts'
+import { createDeliveryIndex,readDeliveries } from '../src/conversation/delivery.ts'
 import { encodeFactBatch, readFactJournal, legacyPrefixDigest } from '../src/serialization/fact-journal.ts'
 import { managedResultRefs } from '../src/results/projection.ts'
 
@@ -55,4 +55,15 @@ it('reconciles one Code receipt and rejects duplicate receipts',()=>{
  events.push({type:'agent/input/admitted',version:1,inputId,text:'done',delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.code'},synthetic:{scope:'turn',description:'Code completed',display:{kind:'task',title:'code',body:'done'}},seq:events.length})
  expect(read(events).codePending()).toEqual([]);expect(read(events).receipt(key as never)).toMatchObject({disposition:'pending'})
  expect(()=>read([...events,{...events[8],seq:events.length},{...events[9],seq:events.length+1}])).toThrow()
+})
+it('retains exact Code evidence and receipt after pending removal and a later fence',()=>{
+ const events=history(),key={kind:'code',sourceNamespace:'code',recipientSessionId:'parent',sourceId:'outer',resultRevision:ref.revision},inputId=deliveryInputId(key as never)
+ events.push({type:'agent/delivery-received',version:1,key,sourceSeq:4,terminalSeq:6,inputId,seq:events.length})
+ events.push({type:'agent/input/admitted',version:1,inputId,text:'done',delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.code'},synthetic:{scope:'turn',description:'Code completed',display:{kind:'task',title:'code',body:'done'}},seq:events.length})
+ const index=createDeliveryIndex({sessionId:'parent'});for(const event of events.slice(0,-2)){const stage=index.stage();stage.advance(event);stage.commit()}const received=index.stage();for(const event of events.slice(-2))received.advance(event);received.commit()
+ expect(index.readIndex().codePending()).toHaveLength(0)
+ expect(index.readIndex().codeEvidence(4,6)).toMatchObject({source:{seq:4},terminal:{seq:6},key,receipt:{event:{inputId},disposition:'pending'}})
+ expect(index.readIndex().codeEvidence(4,7)).toBeUndefined();expect(index.readIndex().codeEvidence(3,6)).toBeUndefined()
+ const close=index.stage();close.advance({type:'agent/delivery-generation',version:1,op:'close',recipientSessionId:'parent',fenceId:'stop',reason:'user-stop',seq:events.length});close.commit()
+ expect(index.readIndex().codeEvidence(4,6)).toMatchObject({receipt:{event:{inputId},disposition:'suppressed'}})
 })

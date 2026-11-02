@@ -281,7 +281,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     if (ids.length) await moveOptions.authorityChanged?.(ids)
     for (const id of projectIds) pendingChanges.delete(id)
   }
-  function prepareProject(capture: Pick<BootstrapProjectCapture,'invocation'|'sourceSessionId'|'sourceAvailable'|'assertNewWorkCurrent'|'targetAvailable'> & {requestIntent:{project:BootstrapProjectCapture['requestIntent']['project']}}, inspect:()=>Promise<{invocation:BootstrapProjectCapture['invocation'];manifestDigest:string}|undefined>):BootstrapProjectPreparation {
+  function prepareProject(capture: Pick<BootstrapProjectCapture,'invocation'|'sourceSessionId'|'sourceAvailable'|'assertNewWorkCurrent'|'targetAvailable'> & {requestIntent:{project:BootstrapProjectCapture['requestIntent']['project']}}, inspect:()=>Promise<{invocation:BootstrapProjectCapture['invocation'];manifestDigest:string}|undefined>,coherent=false):BootstrapProjectPreparation {
       const id = capture.invocation.targetSessionId
       const projectId = capture.requestIntent.project.kind === 'project' ? capture.requestIntent.project.projectId : undefined
       let active = true, targetBaseline: string | undefined, sourceBaseline: string | undefined, attemptEpoch: string | undefined
@@ -394,16 +394,28 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
           }
         })
       }
-      return {
-        targetPreparation: Object.freeze({ confirm: (request: BootstrapTargetPreparationRequest, current: () => boolean) => prepare(request, false, current), reconcile: (request: BootstrapTargetPreparationRequest) => prepare(request, true, () => true), assertTargetCurrent }),
-        targetScope(): BootstrapTargetScope {
-          assertTargetCurrent()
-          const scope = projectId ? projects.get(projectId)! : undefined
-          return { ...(projectId ? { projectId } : {}), ...(scope ? { scope: { id: scope.id, name: scope.name, roots: [...scope.roots], primaryRoot: scope.primaryRoot! } } : {}), revision: targetBaseline! }
-        },
-        assertSourceCurrent,
-        close() { active = false },
+      const snapshotTarget=():BootstrapTargetScope=>{
+        const scope=projectId?projects.get(projectId)!:undefined
+        return {...(projectId?{projectId}:{}),...(scope?{scope:{id:scope.id,name:scope.name,roots:[...scope.roots],primaryRoot:scope.primaryRoot!}}:{}),revision:targetBaseline!}
       }
+      const base={
+        targetPreparation: Object.freeze({ confirm: (request: BootstrapTargetPreparationRequest, current: () => boolean) => prepare(request, false, current), reconcile: (request: BootstrapTargetPreparationRequest) => prepare(request, true, () => true), assertTargetCurrent }),
+        targetScope():BootstrapTargetScope{assertTargetCurrent();return snapshotTarget()},assertSourceCurrent,close(){active=false},
+      }
+      if(!coherent)return base
+      return Object.freeze({...base,kind:'coherent-project-observation-v1' as const,observeCurrent(mode:'active'|'passive'){
+        if(mode!=='active'&&mode!=='passive')fail('policy')
+        available();const generation=epoch()
+        if(mode==='active'){
+          if(!capture.sourceAvailable())fail('policy')
+          capture.assertNewWorkCurrent()
+          if(sourceBaseline===undefined||sourceBaseline!==sourceRevision())fail('policy')
+        }
+        assertOpen();if(!active||!capture.targetAvailable()||generation!==epoch()||referenceFailure||referenceUpdates||scopeUpdates.has(projectId??'')||pendingChanges.has(projectId??''))fail('policy')
+        assertAvailable(projectId)
+        if(!bindings.get(id)?.bound||bindings.get(id)?.projectId!==projectId||targetBaseline===undefined||targetBaseline!==targetRevision())fail('policy')
+        return snapshotTarget()
+      }})
     }
   const broker = {
     acquireColdTargetPolicy(input: ColdSelectedObservation, inputBinding: SessionBindingObservation): ColdTargetPolicy {
@@ -628,7 +640,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     },
     prepareTaskChildInheritance(input:TaskChildProjectCapture):BootstrapProjectPreparation{
       const capture=captureTaskChildProject(input)
-      return prepareProject(capture,async()=>{if(!coordinator.inspectChildBootstrap)return;const inspection=await coordinator.inspectChildBootstrap(capture.request);return ['reserved','ready'].includes(inspection.kind)&&inspection.token&&'manifestDigest'in inspection.token?{invocation:inspection.invocation,manifestDigest:inspection.token.manifestDigest}:undefined})
+      return prepareProject(capture,async()=>{if(!coordinator.inspectChildBootstrap)return;const inspection=await coordinator.inspectChildBootstrap(capture.request);return ['reserved','ready'].includes(inspection.kind)&&inspection.token&&'manifestDigest'in inspection.token?{invocation:inspection.invocation,manifestDigest:inspection.token.manifestDigest}:undefined},true)
     },
     prepareSelectedInheritance(input: import('./bootstrap-project.ts').SelectedProjectCapture) {
       const capture=importSelectedProject(input),owner=prepareProject(capture,async()=>inspectSelectedTarget(coordinator,capture.target))

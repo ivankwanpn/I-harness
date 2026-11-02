@@ -109,14 +109,16 @@ export function legacyObservationFor(source: ResultSourceObservation): LegacyRea
   if (canonicalJsonData(seed ?? null) !== canonicalJsonData(header?.semanticSeed ?? null)
     || source.metadata.seedLength !== header?.seedLength) throw new Error('Legacy READY header changed')
   const bootstrap = seed ? { invocation: { version: 1 as const, operationId: seed.operationId, targetSessionId: source.sessionId, createdAt: source.metadata.createdAt, requestDigest: seed.requestDigest }, manifestDigest: seed.manifestDigest, seedDigest: seed.seedDigest } : undefined
-  const selectedOwner=seed?.version===3?originalResultDocuments.get(source):undefined
+  const originalOwner=originalResultDocuments.get(source),selectedOwner=seed?.version===3?originalOwner:undefined
   if(seed?.version===3&&!selectedOwner)throw Error('Original selected result observation required')
-  return { sessionId: source.sessionId, sourceId: source.source.sourceId, ...(bootstrap ? { bootstrap } : {}), ...(selectedOwner?{selectedView:source.view,selectedOwner}:{}), assertCurrent,
+  const result:LegacyReadObservation={ sessionId: source.sessionId, sourceId: source.source.sourceId, ...(bootstrap ? { bootstrap } : {}), ...(selectedOwner?{selectedView:source.view,selectedOwner}:{}), assertCurrent,
     localVisible: c => predicate(() => local.has(commitmentKey(c))), anchorVisible: (anchor, extent, commitment, original) => predicate(() => {
       if(anchor.kind!=='seed-result')return visibility.anchorVisible(anchor,extent)
       const row=visibility.resultRow(anchor,extent)
       return !!row&&!!commitment&&!!original&&commitmentKey(captureLegacyRefCommitment(row.ref))===commitmentKey(commitment)&&canonicalJsonData(row.original)===canonicalJsonData({kind:'local',sessionId:original.sessionId,seq:original.seq,event:'context/result-ref',slot:'ref'})
     }) }
+  if(seed?.seedLength===0&&!originalOwner)throw Error('Original result observation required')
+  return result
 }
 export function createLegacyReadObservationRunner(options: {
   coordinator: Pick<SessionCoordinator, 'profile'|'openManagedDocument'|'withExistingSessionBindingObservation'>; observations: ResultObservationScope

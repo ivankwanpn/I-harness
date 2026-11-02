@@ -1,10 +1,10 @@
-import {exportConversationSeed,freezeJsonData,type SessionView} from '@i-harness/core-session'
+import {createLegacyReadVisibility,exportConversationSeed,freezeJsonData,type SessionView} from '@i-harness/core-session'
 import {captureManagedHistoryCut,assertManagedHistoryCut} from '@i-harness/core-session/internal/bootstrap'
 import {compileSemanticSeed,type ChildHistory} from '@i-harness/session-persistence'
 import {assertOriginalTaskCaller,type OriginalTaskCaller} from '@i-harness/core-tools/internal/task-caller'
 
 export interface OriginalTaskChildHistory {readonly kind:'original-task-child-history'}
-type History={view:SessionView;parentSessionId:string;history:ChildHistory;seed:ReturnType<typeof compileSemanticSeed>;assertCurrent():void}
+type History={view:SessionView;parentSessionId:string;owner:object;count:number;hasDependencies:boolean;hasLegacy:boolean;inheritedLegacyUnknown:boolean;history:ChildHistory;seed:ReturnType<typeof compileSemanticSeed>;assertCurrent():void}
 const histories=new WeakMap<OriginalTaskChildHistory,History>()
 export function parseTaskHistorySelection(value:unknown):'none'|'all'|number {
   if(value===undefined||value==='none')return 'none'
@@ -27,12 +27,15 @@ export function captureTaskChildHistory(caller:OriginalTaskCaller):OriginalTaskC
   }
   assertCurrent()
   const exported=exportConversationSeed(view,{kind:'session',sessionId:parentSessionId},selection)
-  if(exported.kind!=='seed'||exported.seed.version!==1||exported.seed.artifacts.length)throw Error('Unsupported task semantic history dependencies')
+  if(exported.kind!=='seed'||exported.seed.version!==1)throw Error('Unsupported task semantic history dependencies')
+  const legacy=createLegacyReadVisibility(view)
+  if(legacy.kind!=='visible')throw Error('Unsupported task legacy result membership')
+  const hasLegacy=!legacy.local()[Symbol.iterator]().next().done
   const seed=compileSemanticSeed(exported);freezeJsonData(seed)
   const history=freezeJsonData({selection,source:{kind:'session' as const,sessionId:parentSessionId}})
   assertCurrent()
   const capability=Object.freeze({kind:'original-task-child-history' as const})
-  histories.set(capability,{view,parentSessionId,history,seed,assertCurrent})
+  histories.set(capability,{view,owner,parentSessionId,count:view.events.length,hasDependencies:exported.seed.artifacts.length>0,hasLegacy,inheritedLegacyUnknown:view.header?.semanticSeed!==undefined,history,seed,assertCurrent})
   return capability
 }
 export function inspectTaskChildHistory(capability:OriginalTaskChildHistory,parentSessionId:string) {
@@ -40,4 +43,14 @@ export function inspectTaskChildHistory(capability:OriginalTaskChildHistory,pare
   if(!original||original.parentSessionId!==parentSessionId)throw Error('Original task child history required')
   original.assertCurrent()
   return {history:original.history,seed:original.seed}
+}
+
+/** Private host association. The caller cut, view and owner remain nominal. */
+export function inspectTaskChildSource(capability:OriginalTaskChildHistory,parentSessionId:string) {
+ const original=histories.get(capability)
+ if(!original||original.parentSessionId!==parentSessionId)throw Error('Original task child history required')
+ original.assertCurrent()
+ const manifest=original.seed.records[0]
+ if(!manifest||manifest.type!=='conversation/seed-manifest')throw Error('Original task seed manifest unavailable')
+ return Object.freeze({view:original.view,owner:original.owner,count:original.count,artifacts:manifest.artifacts,hasDependencies:original.hasDependencies,hasLegacy:original.hasLegacy,inheritedLegacyUnknown:original.inheritedLegacyUnknown,assertCurrent:original.assertCurrent})
 }

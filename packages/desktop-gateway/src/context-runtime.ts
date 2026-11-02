@@ -1,8 +1,9 @@
+import {inspectTaskChildSource} from '@i-harness/subagent'
 import {join} from 'node:path'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {types} from 'node:util'
-import {contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope,type LegacyReadObservationRunner} from '@i-harness/context-output'
-import {isStrictFactData,freezeJsonData,EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
+import {contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope,type SeedDependencyHostAccess,type LegacyReadObservationRunner} from '@i-harness/context-output'
+import {canonicalJsonData,isStrictFactData,freezeJsonData,EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
 import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
 import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparationPort,ExistingSessionBindingObservation} from '@i-harness/session-persistence'
 import {createResultObservationScope,createLegacyReadObservationRunner,type ResultObservationCapture,type SessionProjectContext,type ResultReadScopeResolver} from '@i-harness/session-executor'
@@ -96,9 +97,10 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     const sourceId=contextSourceIdentity(workspaceKey,canonical,scope)
     return{sourceId,readonly:true}
   }
+  const originalLegacyReads=new WeakMap<import('@i-harness/context-output').LegacyReadObservation,{document:import('@i-harness/session-persistence').ManagedDocument;view:import('@i-harness/core-session').SessionView}>()
   const ordering=originalResultOrderingFor(options.coordinator as SessionCoordinator)
   const bridge=createProcessAwareResultService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,requireObservedLegacyRecipients:true,
-    coordinatorFor:()=>options.coordinator as SessionCoordinator,...(ordering?{orderingCoordinators:[options.coordinator as SessionCoordinator]}:{}),sourceFor,guardedRead,
+    coordinatorFor:()=>options.coordinator as SessionCoordinator,originalLegacySourceFor(observation){return originalLegacyReads.get(observation)},...(ordering?{orderingCoordinators:[options.coordinator as SessionCoordinator]}:{}),sourceFor,guardedRead,
     ...(options.coordinator.onDocumentDeleted&&!(ordering&&originalDeletionPreparationAvailable(options.coordinator as SessionCoordinator))?{documentDeletions:listener=>options.coordinator.onDocumentDeleted!((id,manifest)=>listener([id,...manifest.documents]))}:{}),
     genericVisible:async(sessionId,visibleRef)=>{
         const observed=observations.current(sessionId)
@@ -143,7 +145,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       let metadata:Awaited<ReturnType<typeof bridge.acquireSelectedMetadata>>|undefined
       let metadataCleanup:ReturnType<typeof bridge.selectedMetadataCleanupFor>
       project.attachResult({revoke(){result.revoke();metadata?.revoke()},async close(){if(metadataCleanup){await metadataCleanup.retry();metadataCleanup=undefined}if(metadata)await metadata.close();await result.close();witness.unsubscribe()}})
-      await project.use(()=>result.use(async()=>{const originalRead=legacyObservationFor(result.observation);try{metadata=await bridge.acquireSelectedMetadata(originalRead)}catch(error){metadataCleanup=bridge.selectedMetadataCleanupFor(error);throw error}current()}));current()
+      await project.use(()=>result.use(async()=>{const originalRead=legacyObservationFor(result.observation);originalLegacyReads.set(originalRead,{document,view:result.observation.view});try{metadata=await bridge.acquireSelectedMetadata(originalRead)}catch(error){metadataCleanup=bridge.selectedMetadataCleanupFor(error);throw error}current()}));current()
       const retained=metadata!
       const uses=new AsyncLocalStorage<{active:boolean}>()
       const useCurrent=()=>{if(!uses.getStore()?.active)throw Error('Selected source use expired');current();retained.assertCurrent()}
@@ -318,26 +320,103 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     return{targetPreparation,dependencies:{confirm:(request,current)=>typeof current==='function'?invoke(request,current):Promise.resolve({kind:'blocked',reason:'conflict'}),reconcile:request=>invoke(request)},
       targetScope(){assertTargetCurrent();return preparation.targetScope()},close(){active=false;preparation.close()}}
   }
-  function prepareTaskChildTransfer(input:TaskChildProjectCapture){
-    if(closed||!options.prepareTaskChildInheritance)throw Error('Original task project preparation unavailable')
-    const captured=captureTaskChildProject(input),preparation=options.prepareTaskChildInheritance(input)
-    let active=true
-    const assertCurrent=()=>{if(closed||!active||!captured.sourceAvailable()||!captured.targetAvailable())throw Error('Original task project retired');captured.assertNewWorkCurrent()}
-    return {async run<T>(work:(guards:import('@i-harness/session-persistence').BootstrapGuards)=>Promise<T>):Promise<T>{
-      assertCurrent()
-      return work({assertCurrent,targetPreparation:preparation.targetPreparation,dependencies:{async confirm(){throw Error('Unexpected task none dependency')},async reconcile(){throw Error('Unexpected task none dependency')}}})
-    },targetScope:preparation.targetScope,close(){active=false;preparation.close()}}
+  function captureCoherentProject(preparation:BootstrapProjectPreparation):((mode:'active'|'passive')=>import('./bootstrap-project.ts').BootstrapTargetScope)|undefined {
+    if(!preparation||typeof preparation!=='object'||types.isProxy(preparation)||![Object.prototype,null].includes(Object.getPrototypeOf(preparation)))throw Error('Invalid task project preparation')
+    const descriptors=Object.getOwnPropertyDescriptors(preparation),kind=descriptors.kind
+    if(!kind)return
+    const keys=['kind','targetPreparation','targetScope','assertSourceCurrent','close','observeCurrent']
+    if(Reflect.ownKeys(preparation).length!==keys.length||keys.some(key=>!descriptors[key]?.enumerable||!('value'in descriptors[key]!))||kind.value!=='coherent-project-observation-v1'||typeof descriptors.observeCurrent!.value!=='function'||types.isProxy(descriptors.observeCurrent!.value))throw Error('Invalid coherent task project preparation')
+    const observer=descriptors.observeCurrent!.value as (mode:'active'|'passive')=>import('./bootstrap-project.ts').BootstrapTargetScope
+    const check=()=>{if(Reflect.ownKeys(preparation).length!==keys.length)throw Error('Coherent project preparation changed');for(const key of keys){const before=descriptors[key]!,after=Object.getOwnPropertyDescriptor(preparation,key);if(!after||!('value'in after)||after.value!==before.value||after.enumerable!==before.enumerable||after.configurable!==before.configurable||after.writable!==before.writable)throw Error('Coherent project preparation changed')}}
+    return mode=>{check();const value=Reflect.apply(observer,preparation,[mode]);check();return value}
+  }
+  const originalTaskSources=new WeakSet<object>()
+  function prepareTaskChildTransfer(input:TaskChildProjectCapture,source?:{artifacts:ReturnType<typeof inspectTaskChildSource>['artifacts'];assertCurrent():void;access():ContextAccess;release():Promise<void>;use<T>(work:()=>Promise<T>):Promise<T>}){
+    if(closed||!options.prepareTaskChildInheritance||source&&!originalTaskSources.has(source))throw Error('Original task project preparation unavailable')
+    const captured=captureTaskChildProject(input),preparation=options.prepareTaskChildInheritance(input),observeProject=captureCoherentProject(preparation)
+    let active=true,manifestDigest:string|undefined,scope:SeedDependencyTransferScope|undefined,closureDigest:string|undefined
+    const available=()=>active&&!closed&&captured.targetAvailable()
+    const assertTargetCurrent=()=>{if(!available())throw Error('Original task target retired');preparation.targetPreparation.assertTargetCurrent()}
+    const assertCurrent=()=>{if(!available()||!captured.sourceAvailable())throw Error('Original task project retired');captured.assertNewWorkCurrent();source?.assertCurrent()}
+    const targetPreparation:BootstrapTargetPreparationPort={
+      async confirm(request,current,facts){const result=await preparation.targetPreparation.confirm(request,current,facts);if(result.kind==='confirmed'){assertTargetCurrent();manifestDigest=request.manifestDigest}return result},
+      async reconcile(request,facts){const result=await preparation.targetPreparation.reconcile(request,facts);if(result.kind==='confirmed'){assertTargetCurrent();manifestDigest=request.manifestDigest}return result},assertTargetCurrent,
+    }
+    const invoke=(request:BootstrapDependencyRequest,current?:()=>boolean):Promise<BootstrapDependencyOutcome>=>{
+      try{
+        if(!source||!available()||!isStrictFactData(request)||request.operationId!==captured.invocation.operationId||request.targetSessionId!==captured.invocation.targetSessionId||request.sourceSessionId!==captured.sourceSessionId||request.manifestDigest!==manifestDigest||canonicalJsonData(request.artifacts)!==canonicalJsonData(source.artifacts))return Promise.resolve({kind:'blocked',reason:'conflict'})
+        assertTargetCurrent()
+        if(!scope){
+          const binding={operationId:request.operationId,manifestDigest:request.manifestDigest,sourceSessionId:request.sourceSessionId,targetSessionId:request.targetSessionId,targetDocumentId:request.targetSessionId},sourceAccess=source.access()
+          const host:SeedDependencyHostAccess=observeProject?{kind:'coherent-observation-v1',binding,sourceAccess,observeCurrent(mode){
+            if(!available())throw Error('Original task transfer unavailable')
+            if(mode==='active')source.assertCurrent()
+            const target=observeProject(mode)
+            if(!available())throw Error('Original task transfer unavailable')
+            return {source:{sourceId:contextSourceIdentity(workspaceKey,canonical,target.scope),readonly:true},revision:target.revision}
+          }}:{binding,sourceAccess,sourceAvailable:()=>available()&&captured.sourceAvailable(),assertSourceCurrent(){assertCurrent();preparation.assertSourceCurrent()},targetAvailable:available,assertTargetCurrent,
+            targetScope(){assertTargetCurrent();const target=preparation.targetScope();return{source:{sourceId:contextSourceIdentity(workspaceKey,canonical,target.scope),readonly:true},revision:target.revision}}}
+          scope=contextOutput.registerSeedDependencyTransfer(host,'original-publication')
+        }
+        const result=current===undefined?contextOutput.reconcileSeedDependencies(scope,request):contextOutput.confirmSeedDependencies(scope,request,current)
+        return result.then(outcome=>{if(outcome.kind==='confirmed'){if(closureDigest!==undefined&&closureDigest!==outcome.closureDigest)throw Error('Original dependency closure changed');closureDigest=outcome.closureDigest}return outcome})
+      }catch{return Promise.resolve({kind:'blocked',reason:'policy'})}
+    }
+    return {async run<T>(work:(guards:import('@i-harness/session-persistence').BootstrapGuards)=>Promise<T>):Promise<T>{const run=()=>{assertCurrent();return work({assertCurrent,targetPreparation,dependencies:{confirm:(request,current)=>invoke(request,current),reconcile:request=>invoke(request)}})}
+      return source?source.use(run):run()
+    },releaseSource(){return source?source.release():Promise.resolve()},assertDependencyReceipt(receipt:import('@i-harness/session-persistence').BootstrapReceipt,seed:import('@i-harness/session-persistence').CompiledSemanticSeed){if(source?.artifacts.length){if(!closureDigest||receipt.dependencyClosureDigest!==closureDigest||receipt.manifestDigest!==manifestDigest||receipt.invocation.operationId!==captured.invocation.operationId||receipt.invocation.targetSessionId!==captured.invocation.targetSessionId||receipt.invocation.requestDigest!==captured.invocation.requestDigest)throw Error('Original managed dependency receipt mismatch')}else if(receipt.dependencyClosureDigest!==seed.dependencyDigest)throw Error('Original empty dependency receipt mismatch')},targetScope:preparation.targetScope,close(){active=false;preparation.close()}}
   }
   const prepareTaskChild:import('@i-harness/subagent').PrepareTaskChild=async input=>{
     if(input.coordinator!==options.coordinator||closed||!options.resultReadScopeFor||!options.prepareTaskChildInheritance)throw Error('Original Gateway task host unavailable')
     input.assertCurrent()
+    const association=input.history?inspectTaskChildSource(input.history,input.parentSessionId):undefined
+    let source:{artifacts:ReturnType<typeof inspectTaskChildSource>['artifacts'];assertCurrent():void;access():ContextAccess;release():Promise<void>;use<T>(work:()=>Promise<T>):Promise<T>}|undefined
+    if(association?.hasLegacy)throw Error('Unsupported task legacy result membership')
+
+    if(association&&(association.hasDependencies||association.inheritedLegacyUnknown)){
+      if(!options.retainSelectedProjectRead)throw Error('Original task result source unavailable')
+      const original=selectedSourceFor(options.coordinator as SessionCoordinator)
+      let binding:Awaited<ReturnType<typeof original.acquire>>|undefined,project:Awaited<ReturnType<NonNullable<typeof options.retainSelectedProjectRead>>>|undefined
+      let retired=false,flight:Promise<void>|undefined,cleanup:ReturnType<typeof original.cleanupForError>
+      let witness:ReturnType<typeof original.retainTask>|undefined
+      const current=()=>{if(retired||closed)throw Error('Original task source retired');input.assertCurrent();association.assertCurrent();if(witness){input.assertSourceCut();witness.assertCurrent()}binding?.assertCurrent();project?.assertCurrent()}
+      let sourceClosed=false,closeFlight:Promise<void>|undefined
+      const closeSource=()=>{
+        if(sourceClosed)return Promise.resolve()
+        if(closeFlight)return closeFlight
+        const pending=(async()=>{retired=true;binding?.revoke();await flight?.catch(()=>{});if(cleanup){await cleanup.retry();cleanup=undefined}if(project){await project.close();project=undefined}else if(binding){await binding.release();binding=undefined}witness?.unsubscribe();sourceClosed=true})()
+        closeFlight=pending;void pending.finally(()=>{if(closeFlight===pending)closeFlight=undefined}).catch(()=>{});return pending
+      }
+      input.retain({close:closeSource})
+      const acquire=()=>flight??=(async()=>{
+        input.assertSourceCut();witness=original.retainTask(association.owner,association.view,()=>binding?.revoke());current();
+        const ids=await discoverResultLineage(options.coordinator,input.parentSessionId,current);current();
+        binding=await original.acquire({sessionIds:ids});current();assertResultLineage(binding.observation,ids,input.parentSessionId);
+        project=await options.retainSelectedProjectRead!(ids,binding,input.parentSessionId);current();
+        const heldProject=project,result=observations.retainSelected({sessionId:input.parentSessionId,sessionIds:ids,observation:binding.observation,document:witness!.document,currentSource(){return canonicalSource(heldProject.sourceGetter)},assertHostCurrent:current})
+        let metadata:Awaited<ReturnType<typeof bridge.acquireSelectedMetadata>>|undefined,metadataCleanup:ReturnType<typeof bridge.selectedMetadataCleanupFor>
+        heldProject.attachResult({revoke(){result.revoke();metadata?.revoke()},async close(){if(metadataCleanup){await metadataCleanup.retry();metadataCleanup=undefined}if(metadata)await metadata.close();await result.close()}})
+        if(association.inheritedLegacyUnknown){
+          await heldProject.use(()=>result.use(async()=>{
+            const originalRead=legacyObservationFor(result.observation);originalLegacyReads.set(originalRead,{document:witness!.document,view:result.observation.view})
+            try{metadata=await bridge.acquireSelectedMetadata(originalRead)}catch(error){metadataCleanup=bridge.selectedMetadataCleanupFor(error);throw Object.assign(Error('Original inherited legacy membership unavailable',{cause:error}),{code:'TASK_LEGACY_MEMBERSHIP_UNAVAILABLE'})}
+            const iterator=metadata.reader.legacy()[Symbol.asyncIterator](),row=await iterator.next()
+            if(!row.done){await iterator.return?.();throw Error('Unsupported task inherited legacy result membership')}
+            metadata.assertCurrent();current();
+          }))
+        }
+        const assertSource=()=>{if(metadata)metadata.assertCurrent();else result.assertCurrent()}
+        source={artifacts:association.artifacts,release:closeSource,assertCurrent:assertSource,access(){assertSource();return Object.freeze({sessionId:result.observation.sessionId})},use<T>(work:()=>Promise<T>){return heldProject.use(()=>result.use(work))}}
+      })().catch(error=>{cleanup=original.cleanupForError(error);throw error})
+      const deferred={artifacts:association.artifacts,release:closeSource,assertCurrent(){if(source&&source!==deferred)source.assertCurrent();else current()},access(){if(!source||source===deferred)throw Error('Original source observation not entered');return source.access()},async use<T>(work:()=>Promise<T>){await acquire();current();return source!.use(work)}};source=deferred;originalTaskSources.add(deferred)
+    }
     const observed=await options.resultReadScopeFor(input.parentSessionId)
     if(!observed)throw Error('Original task project scope unavailable')
     const scope=observed();input.assertCurrent()
     const project=scope.projectId?{kind:'project' as const,projectId:scope.projectId}:{kind:'unassigned' as const}
     return {project,metadata:{workspaceId:workspaceKey},prepare(request){
       input.assertCurrent()
-      const transfer=prepareTaskChildTransfer({request,sourceSessionId:input.parentSessionId,...input.history?{history:input.history}:{},sourceAvailable:input.sourceAvailable,assertNewWorkCurrent(){input.assertCurrent();if(observed().revision!==scope.revision)throw Error('Original task project scope changed')},targetAvailable:input.sourceAvailable})
+      const transfer=prepareTaskChildTransfer({request,sourceSessionId:input.parentSessionId,...input.history?{history:input.history}:{},sourceAvailable:input.sourceAvailable,assertNewWorkCurrent(){input.assertCurrent();if(observed().revision!==scope.revision)throw Error('Original task project scope changed')},targetAvailable:()=>true},source)
       input.retain({async close(){transfer.close()}})
       return transfer
     }}
