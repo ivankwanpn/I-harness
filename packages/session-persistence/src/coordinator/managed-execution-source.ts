@@ -33,7 +33,9 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
   entryCheck!();if(retired||entry.headerUnknown)throw new FactRecoveryRequiredError()
  }):undefined
  const assertOriginal=local&&ownershipGuard?composeOriginalArtifactGuards(local,ownershipGuard):()=>{ports.assertEntry();if(retired||ports.entry.headerUnknown)throw new FactRecoveryRequiredError();ports.ownership.assertHeld(ports.id)}
- const assertCurrent=()=>{assertOriginal();if(ports.entry.metadataRevision!==revision)throw new FactRecoveryRequiredError()}
+ const assertCurrent=isArtifactCurrentGuard(assertOriginal)
+  ? composeOriginalArtifactGuards(assertOriginal,createArtifactCurrentGuard(()=>{if(entry!.metadataRevision!==revision)throw new FactRecoveryRequiredError()}))
+  : ()=>{assertOriginal();if(ports.entry.metadataRevision!==revision)throw new FactRecoveryRequiredError()}
  const held=heldFactOwner(token,ports.ownership,assertOriginal)
  const source:OriginalConversationRestorationSource={
   get formatVersion(){if(formatVersion===undefined)throw new FactRecoveryRequiredError();return formatVersion},get header(){return header},get prefix(){if(!prefix)throw new FactRecoveryRequiredError();return prefix},assertCurrent,

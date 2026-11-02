@@ -2,10 +2,11 @@ import {expect,it,vi} from 'vitest'
 import {mkdtemp,rm} from 'node:fs/promises'
 import {join,win32} from 'node:path'
 import type {Win32ArtifactApi} from '../../fs-lock/src/win32-artifact-api.ts'
-const probe=vi.hoisted(()=>({captures:0,opens:0,next:1n,nodes:new Map<string,{id:number;final:string;attributes?:number;sensitive?:number}>(),handles:new Map<bigint,{id:number;final:string;attributes?:number;sensitive?:number}>(),owners:new Map<object,import('../src/coordinator/binding-observation.ts').BindingObservations>(),onObserve:undefined as undefined|((id:string)=>Promise<void>)}))
+const probe=vi.hoisted(()=>({captures:0,opens:0,next:1n,nodes:new Map<string,{id:number;final:string;attributes?:number;sensitive?:number}>(),handles:new Map<bigint,{id:number;final:string;attributes?:number;sensitive?:number}>(),owners:new Map<object,import('../src/coordinator/binding-observation.ts').BindingObservations>(),onObserve:undefined as undefined|((id:string)=>Promise<void>),sourceCurrent:undefined as undefined|(()=>void)}))
 vi.mock('../src/coordinator/binding-observation.ts',async load=>{const actual=await load<typeof import('../src/coordinator/binding-observation.ts')>();return {...actual,createBindingObservations(...args:Parameters<typeof actual.createBindingObservations>){const owner=actual.createBindingObservations(...args);probe.owners.set(args[1],owner);return owner}}})
 vi.mock('../src/coordinator/ownership.ts',async load=>{const actual=await load<typeof import('../src/coordinator/ownership.ts')>();return {...actual,createOwnership(...args:Parameters<typeof actual.createOwnership>){const owner=actual.createOwnership(...args);latestOwners.push(owner);return owner}}})
 const latestOwners=vi.hoisted(()=>[] as import('../src/coordinator/ownership.ts').Ownership[])
+vi.mock('../src/coordinator/managed-execution-source.ts',async load=>{const actual=await load<typeof import('../src/coordinator/managed-execution-source.ts')>();return {...actual,createManagedExecutionSource(...args:Parameters<typeof actual.createManagedExecutionSource>){const source=actual.createManagedExecutionSource(...args);if(probe.sourceCurrent){const original=source.assertCurrent;source.assertCurrent=()=>{original();probe.sourceCurrent?.();original()}}return source}}})
 vi.mock('@i-harness/fs-lock/internal/artifact-path',async()=>{
  const {createWin32ArtifactPathOwnerWithApi}=await import('../../fs-lock/src/win32-artifact-path.ts')
  const api:Win32ArtifactApi={createFileW(name){probe.opens++;const node=probe.nodes.get(name);if(!node)return -1n;const handle=probe.next++;probe.handles.set(handle,{...node});return handle},getLastError:()=>3,getFileInformationByHandleEx(handle,kind,data){const node=probe.handles.get(handle)!;if(kind===18){data.writeBigUInt64LE(1n,0);data.writeUInt32LE(node.id,8)}else if(kind===23)data.writeUInt32LE(node.sensitive??0);else data.writeUInt32LE(node.attributes??0x10);return 1},getFinalPathNameByHandleW(handle,data){const name=probe.handles.get(handle)!.final;data.write(name+'\0','utf16le');return name.length},lcMapStringEx(_locale,_flags,value,_count,output){const name=value.toUpperCase();if(output)output.write(name,'utf16le');return name.length},closeHandle(handle){if(!probe.handles.delete(handle))throw Error('Foreign original handle');return 1}}
@@ -249,4 +250,24 @@ it('flushes capture ownership before an unknown source callback retargets native
   let armed=false;const handle=members.capture(capture.group,operations,source,()=>{callbacks++;if(armed)node.id+=1000;guard()});armed=true;callbacks=0
   try{expect(()=>handle.observe()).toThrow();expect(callbacks).toBe(1);expect(commands).toBe(0);refused=true}finally{Object.assign(node,before);members.releaseSource(source)}
  })).rejects.toThrow('Original query control and cleanup failed');expect(refused).toBe(true)
+})
+
+it('coalesces original private Task parent readiness without changing its logical checks',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{captureManagedTaskParentReadiness}=await import('../src/coordinator/managed-document.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'private-parent-guard-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract),owner=latestOwners.at(-1)!
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),proof=captureManagedTaskParentReadiness(execution.owner as unknown as import('../src/coordinator/fact-types.ts').ManagedDocument,owner)
+  expect(measure(()=>proof.assertCurrent())).toEqual({captures:0,opens:8});expect(measure(()=>(execution.owner as unknown as import('../src/coordinator/fact-types.ts').ManagedDocument).assertReady())).toEqual({captures:0,opens:8})
+ }finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+
+it('keeps an unknown private parent source callback outside the native batching interval',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{captureManagedTaskParentReadiness}=await import('../src/coordinator/managed-document.ts'),{originalOwnershipArtifactGuard}=await import('../src/coordinator/ownership.ts'),{withArtifactCurrentChecks}=await import('../src/coordinator/artifact-path-association.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'private-parent-unknown-'));let armed=false,callbacks=0,effects=0
+ probe.sourceCurrent=()=>{if(armed){callbacks++;probe.nodes.get(root)!.id+=1000}}
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract),owner=latestOwners.at(-1)!
+ let changed=false
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),proof=captureManagedTaskParentReadiness(execution.owner as unknown as import('../src/coordinator/fact-types.ts').ManagedDocument,owner),guard=originalOwnershipArtifactGuard(owner,'parent')!,node=probe.nodes.get(root)!,before={...node}
+  armed=true
+  try{expect(()=>withArtifactCurrentChecks(()=>{guard();proof.assertCurrent();effects++})).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);changed=true}finally{armed=false;Object.assign(node,before)}
+ }finally{probe.sourceCurrent=undefined;if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
