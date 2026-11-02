@@ -1,4 +1,4 @@
-import {associateJobProjection,assertJobProjectionCurrent,waitJobProjectionCurrent,originalJobProjectionFor,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
+import {associateJobProjection,assertJobProjectionCurrent,waitJobProjectionCurrent,originalJobProjectionFor,captureJobProjection,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, isManagedFactOwner, validRetainedResultRevision, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
 import { retainedResultWitness, unknownResult, validResultPublication, type ResultPublication, type AuxiliaryResultStatus } from './result-publication.ts'
@@ -208,6 +208,11 @@ function createSessionFromEmpty() {
 // for every transition that actually mutated state (never for no-op updates).
 export type JobTransitionObserver = (job: JobSnapshot) => void
 
+type JobTerminalStatus=Exclude<JobStatus,'running'|'recovery-required'>
+const persistentJobSettlements=new WeakMap<object,(status:JobTerminalStatus,output:string)=>Promise<boolean>>()
+/** Settle only the exact persistent producer and retain its original save outcome. */
+export function settlePersistentJob(registration:import('./jobs.ts').JobRegistration,status:JobTerminalStatus,output:string):Promise<boolean>{const settle=persistentJobSettlements.get(registration);if(!settle)return Promise.reject(TypeError('Original persistent job required'));try{captureJobProjection(registration);return settle(status,output)}catch(error){return Promise.reject(error)}}
+
 // Task 4.4: the additive `job/status` event (core-session SessionEvent,
 // registered in session-persistence's load gate). Whole-job snapshot per
 // event so a consumer folds last-wins by jobId (the goal/change pattern).
@@ -243,13 +248,20 @@ export function persistentJobRegistry(
       const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity, registration=>{
         const original=originalJobProjectionFor(registration)
         const finish=registration.finish
+        let terminal:{status:JobTerminalStatus;output:string;result:boolean;promise:Promise<boolean>}|undefined
         wrapped=finish?{...registration,finish(status,output){
-          const previous=jobs.read(registration.id),updated=finish(status,output)
-          if(updated){const next=jobs.read(registration.id);if(previous.status!==next.status||previous.output!==next.output){observe?.(next);void save()}}
-          return updated
+          if(terminal)return finish(status,output)
+          const previous=jobs.read(registration.id),completion=Promise.withResolvers<boolean>()
+          if(previous.status!=='running')return finish(status,output)
+          terminal={status,output,result:false,promise:completion.promise};void completion.promise.catch(()=>{})
+          try{const updated=finish(status,output);terminal.result=updated
+            if(updated){const next=jobs.read(registration.id);if(previous.status!==next.status||previous.output!==next.output){observe?.(next);const saved=save();void Promise.resolve(saved).then(()=>completion.resolve(updated),completion.reject);return updated}}
+            completion.resolve(updated);return updated
+          }catch(error){completion.reject(error);throw error}
         }}:registration
         const receipt=wrapped
         if(original)associateJobProjection(receipt,persistProjection(original,async()=>{assertJobProjectionCurrent(receipt);observe?.(jobs.read(receipt.id));await save()},()=>assertJobProjectionCurrent(receipt),settleRequiredFacts,()=>waitJobProjectionCurrent(receipt)),retainRequiredProjection)
+        if(finish)persistentJobSettlements.set(receipt,(status,output)=>{if(!terminal){if(jobs.read(receipt.id).status!=='running')return Promise.reject(Error('Original job terminal already decided'));try{receipt.finish!(status,output)}catch{} }if(!terminal||terminal.status!==status||terminal.output!==output)return Promise.reject(Error('Original job settlement changed'));return terminal.promise})
         acquired?.(receipt)
       })
       observe?.(jobs.read(result.id))

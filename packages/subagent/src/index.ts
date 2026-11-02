@@ -32,7 +32,7 @@ export { createSubagentTools } from "./tools.ts"
 export { driveFollowups, ensureResidentAgent, sweepPendingInbox, type FollowupDeps } from "./tools.ts"
 export type { SubagentToolDeps } from "./tools.ts"
 export type { ResidentInboxActivation } from './followup/activation.ts'
-export { restoreState, wireSubagentPersistence, snapshotState } from "./persist.ts"
+export { restoreState, wireSubagentPersistence, snapshotState, settlePersistentJob } from "./persist.ts"
 export { retainedResultWitness } from './result-publication.ts'
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"

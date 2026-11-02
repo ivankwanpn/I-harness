@@ -2,7 +2,7 @@ import {it,expect} from 'vitest'
 import {createJobRegistry,type JobRegistration} from '../src/jobs.ts'
 import {createAgentTable,type ChildAgentEntry} from '../src/agent-table.ts'
 import {createSession} from '@i-harness/core-session'
-import {persistentAgentTable,persistentJobRegistry} from '../src/persist.ts'
+import {persistentAgentTable,persistentJobRegistry,settlePersistentJob} from '../src/persist.ts'
 import {captureJobProjection,captureTableProjection} from '../src/runtime-projection.ts'
 import {createTaskRegistry} from '../src/task/registry.ts'
 function terminal(outcome:'completed'|'cancelled'|'error'='cancelled'){
@@ -35,6 +35,14 @@ it('retains the persistent producer before a post-acquire observer failure',()=>
  expect(()=>jobs.registerJob('root','code','one',undefined,undefined,()=>{},undefined,receipt=>{captured=receipt})).toThrow(cause)
  expect(captured?.finish).toBeTypeOf('function');expect(captured!.finish!('error','failed')).toBe(true)
  expect(original.read(captured!.id).status).toBe('error');expect(observations).toBe(2);expect(saves).toBe(1)
+})
+
+it('retains the exact persistent terminal save and never replays it after failure',async()=>{
+ const raw=createJobRegistry(),cause=new Error('save unavailable');let saves=0,observed=0
+ const jobs=persistentJobRegistry(raw,async()=>{if(++saves===2)throw cause},()=>{observed++}),receipt=jobs.registerJob('root','index','index',undefined,undefined,()=>{})
+ const first=settlePersistentJob(receipt,'error','original failure');await expect(first).rejects.toBe(cause)
+ expect(settlePersistentJob(receipt,'error','original failure')).toBe(first);await expect(settlePersistentJob(receipt,'completed','other')).rejects.toThrow('changed')
+ expect(saves).toBe(2);expect(observed).toBe(2);expect(raw.read(receipt.id)).toMatchObject({status:'error',output:'original failure'});await expect(settlePersistentJob({...receipt},'error','original failure')).rejects.toThrow('Original persistent job required')
 })
 
 it('refuses changed original registration fields before terminal mutation or a save',async()=>{
