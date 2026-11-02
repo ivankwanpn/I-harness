@@ -24,10 +24,13 @@ export async function mountOwnedTeam(options:OwnedTeamOptions):Promise<TeamMount
  const {ctx,tools,domain}=options
  if(!isManagedExecutionDomain(domain,ctx))throw TypeError('Original Team context required')
  domain.assertCurrent()
- const parent=captureManagedTeamParent(domain),resource=Object.freeze({close:()=>parent.close()})
- try{options.retain(resource)}catch(primary){try{await resource.close()}catch(cleanup){throw new AggregateError([primary,cleanup],'Team parent retention and cleanup failed')}throw primary}
+ let parent:ReturnType<typeof captureManagedTeamParent>|undefined,retired=false
+ const resource=Object.freeze({async close(){retired=true;await parent?.close()}})
+ options.retain(resource)
+ if(retired)throw Error('Original Team parent retention retired')
  let retained:TeamMountHandle|undefined
  try{
+  parent=captureManagedTeamParent(domain)
   await parent.ready;parent.assertCurrent()
   const originalRetain=options.team.retainMount
   return await mountAgentTeams(ctx,tools,withOriginalGetters(options.team,{parentRegistry:tools,managedParent:{domain,parent},retainMount(handle:TeamMountHandle){retained=handle;if(originalRetain)Reflect.apply(originalRetain,options.team,[handle])}}),options.config)
