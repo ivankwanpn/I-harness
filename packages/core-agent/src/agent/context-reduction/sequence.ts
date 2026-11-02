@@ -4,11 +4,11 @@ import type { AgentDeps } from '../types.ts'
 const recovery = () => Object.assign(new Error('Soft sequence requires original reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' })
 /** The original required source is registered before start issuance. It can
  * reconcile that capture and settle cancellation, never grant summary work. */
-export async function beginSoftSequence(deps: Pick<AgentDeps, 'session' | 'captureSoftReduction' | 'registerFactSource'>, draft: SoftReductionStart, current: () => boolean) {
+export async function beginSoftSequence(deps: Pick<AgentDeps, 'captureSoftReduction' | 'registerFactSource'> & ({session:AgentDeps['session'];softTerminalInstalled?:never}|{session?:never;softTerminalInstalled():boolean}), draft: SoftReductionStart, current: () => boolean) {
   if (!deps.captureSoftReduction || !deps.registerFactSource) throw recovery()
   const capturedStart = deps.captureSoftReduction(draft, current)
   let start = draft, running = false, terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined
-  const installed = () => deps.session.events.some(event => event.type === 'context/soft-reduction' && event.op === 'terminal' && event.sequenceId === start.sequenceId && event.ownerSessionId === start.ownerSessionId)
+  const installed = () => deps.softTerminalInstalled?deps.softTerminalInstalled():deps.session.events.some(event => event.type === 'context/soft-reduction' && event.op === 'terminal' && event.sequenceId === start.sequenceId && event.ownerSessionId === start.ownerSessionId)
   const commitTerminal = async (outcome: 'failed' | 'blocked' | 'unchanged' | 'canceled') => {
     if (start.seq === undefined) throw recovery()
     terminal ??= source.softReduction.capture({ type: 'context/soft-reduction', version: 1, op: 'terminal', ownerSessionId: start.ownerSessionId,

@@ -4,10 +4,11 @@ import { dirname } from "node:path"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { currentDiagnostics } from "@i-harness/diagnostics"
 import { HookConfigError } from "./types.ts"
-import type { HookRegistryOptions, HookRegistry, InternalRegistry } from "./registry-types.ts"
+import type { HookRegistryOptions, HookRegistry, InternalRegistry,LoadedHandler } from "./registry-types.ts"
 import type { HookTrustStore } from "./trust.ts"
 import { createClaudeTranscriptProjection } from "./claude-transcript.ts"
-import { claudeRuntimeService } from "./claude-runtime.ts"
+import { claudeRuntimeService,isOwnedClaudeRuntime,requireCompleteClaudeRuntime } from "./claude-runtime.ts"
+import {types} from 'node:util'
 import { loadHooksConfig, resolveHooksConfigPath } from "./configuration/load.ts"
 import { createHandlerRuntime } from "./execution/runtime.ts"
 import { createSessionLifecycle } from "./lifecycle/session.ts"
@@ -37,6 +38,19 @@ function defaultReport(err: unknown): void {
 }
 
 export async function createHookRegistry(ctx: PluginContext, opts: HookRegistryOptions = {}): Promise<HookRegistry> {
+  return createHookRegistryEngine(ctx,opts,'complete')
+}
+
+/** Explicit owned construction over the SAME loader, handlers and publisher.
+ * Session callbacks and physical Claude transcripts remain complete compatibility. */
+export async function createExecutionHookRegistry(ctx:PluginContext,opts:HookRegistryOptions={}):Promise<HookRegistry>{
+  if(types.isProxy(opts)||![null,Object.prototype].includes(Object.getPrototypeOf(opts)))throw new HookConfigError('Owned hooks require complete compatibility for inherited option surfaces')
+  const fields=Object.getOwnPropertyDescriptors(opts)
+  if(Object.values(fields).some(field=>!('value'in field))||fields.session?.value!==undefined||fields.claudePluginRoot?.value!==undefined||typeof fields.permissionMode?.value==='function')throw new HookConfigError('Owned hooks require complete compatibility for Session callbacks and physical transcripts')
+  return createHookRegistryEngine(ctx,opts,'owned')
+}
+
+async function createHookRegistryEngine(ctx:PluginContext,opts:HookRegistryOptions,mode:'owned'|'complete'):Promise<HookRegistry>{
   const explicitConfigPath = opts.configPath !== undefined
   const configPath = opts.configPath ?? resolveHooksConfigPath(opts.configDir)
   const configDir = opts.configDir ?? dirname(configPath)
@@ -61,13 +75,15 @@ export async function createHookRegistry(ctx: PluginContext, opts: HookRegistryO
   }
 
   const mountName = `hooks:${randomUUID()}`
+  const assertMode=(loaded:LoadedHandler[])=>{if(mode==='owned'&&(!isOwnedClaudeRuntime(runtimeService)||loaded.some(row=>row.spec.claude!==undefined))){requireCompleteClaudeRuntime(runtimeService);throw new HookConfigError('Owned hooks require complete compatibility for this runtime/configuration')}}
+  assertMode(registry.loaded)
   let disposed = false
   let trustRevision = 0
   let activeApprovals: Pick<HookTrustStore, "isApproved"> | undefined = opts.approvals
   const lifecycle = createSessionLifecycle(registry, () => disposed, () => trustRevision,
     sha256 => activeApprovals?.isApproved(sha256) === true)
-  const removeStop = registerRuntimeStop(registry, runtimeService, () => disposed)
-  mountHookListeners(ctx, registry, mountName)
+  const removeStop = registerRuntimeStop(registry, runtimeService, () => disposed,mode)
+  mountHookListeners(ctx, registry, mountName,mode)
   return {
     async refreshTrust(approvals) {
       if (disposed) throw new HookConfigError("hooks registry is disposed")
@@ -78,7 +94,7 @@ export async function createHookRegistry(ctx: PluginContext, opts: HookRegistryO
       registry.loaded = registry.loaded.map((row) => ({ ...row, valid: false, unapproved: false, trustError: "Hook trust refresh is in progress" }))
       const loaded = await loadHooksConfig(configPath, configDir, approvals, opts)
       if (disposed || revision !== trustRevision) return
-      registry.loaded = loaded
+      assertMode(loaded);registry.loaded = loaded
       registry.reportedUnapproved.clear()
       lifecycle.restoreStartup(previous, loaded)
     },

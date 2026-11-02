@@ -21,7 +21,18 @@ import {
   type ScheduleView,
 } from "./index.ts"
 
-export interface ScheduleToolDeps { session: Session; metadata?: MetadataFactSource }
+import {readOriginalSchedules, type OriginalScheduleSource} from './observation.ts'
+export type ScheduleToolDeps = {session:Session; metadata?:MetadataFactSource; original?:never} | {session?:never; metadata:MetadataFactSource; original:OriginalScheduleSource}
+function read(deps:ScheduleToolDeps) {
+ if (deps.original) return readOriginalSchedules(deps.original)
+ const events=ownEvents(deps.session)
+ const snapshot=foldScheduleEvents(events)
+ return {snapshot:{...snapshot,inactive:[] as {id:string;state:'already-fired'|'already-deleted'}[]},assertCurrent() {}}
+}
+function metadata(deps:ScheduleToolDeps, signal?:AbortSignal) {
+ if (deps.original) return typeof deps.metadata === 'function' ? deps.metadata(signal) : deps.metadata
+ return metadataFactsFor(deps.session,deps.metadata,signal)
+}
 
 function ownEvents(session: Session): readonly SessionEvent[] {
   return session.events.slice(session.header?.seedLength ?? 0)
@@ -55,7 +66,8 @@ function createScheduleCreateTool(deps: ScheduleToolDeps): Tool<ScheduleCreateAr
       if (selectors !== 1) {
         throw new ScheduleInputError("invalid_rule", "exactly one of after_seconds, at, every_seconds must be provided.")
       }
-      const folded = foldScheduleEvents(ownEvents(deps.session))
+      const observed = read(deps)
+      const folded = observed.snapshot
       const id = allocateScheduleId(folded)
       const now = Date.now()
       const record: ScheduleRecord = args.after_seconds !== undefined
@@ -64,7 +76,9 @@ function createScheduleCreateTool(deps: ScheduleToolDeps): Tool<ScheduleCreateAr
           ? createAtScheduleRecord(id, args.prompt, args.at, now)
           // selectors === 1 and the other two are absent ⇒ every_seconds is present
           : createEveryScheduleRecord(id, args.prompt, args.every_seconds as number, now)
-      committedFactSeqs(await metadataFactsFor(deps.session, deps.metadata, exec.abortSignal).admit({ type: "schedule/change", version: 1, operation: "create", schedule: record }))
+      const facts = metadata(deps, exec.abortSignal)
+      observed.assertCurrent()
+      committedFactSeqs(await facts.admit({ type: "schedule/change", version: 1, operation: "create", schedule: record }))
       return { id: record.id, kind: record.kind, scheduledAt: record.scheduledAt }
     },
   }
@@ -78,8 +92,10 @@ function createScheduleListTool(deps: ScheduleToolDeps): Tool<Record<string, nev
     isReadOnly: true,
     isConcurrencySafe: true,
     execute: async () => {
-      const folded = foldScheduleEvents(ownEvents(deps.session))
+      const observed = read(deps)
+      const folded = observed.snapshot
       const now = Date.now() // one instant for the whole list, so the states are a single snapshot
+      observed.assertCurrent()
       return { schedules: folded.active.map((record) => scheduleView(record, now)) }
     },
   }
@@ -93,16 +109,21 @@ function createScheduleDeleteTool(deps: ScheduleToolDeps): Tool<{ id: string }, 
     isReadOnly: false,
     isConcurrencySafe: false,
     execute: async ({ id }, exec) => {
-      const folded = foldScheduleEvents(ownEvents(deps.session))
+      const observed = read(deps)
+      const folded = observed.snapshot
       if (!folded.active.some((record) => record.id === id)) {
         if (!folded.seenIds.includes(id)) throw new Error(`schedule_delete: schedule ${JSON.stringify(id)} was not found in this session`)
         let state: "already-fired" | "already-deleted" = "already-fired"
-        for (const event of ownEvents(deps.session)) {
+        if (deps.original) state = folded.inactive.find(item => item.id === id)!.state
+        else for (const event of ownEvents(deps.session)) {
           if (event.type === "schedule/change" && event.operation === "delete" && event.id === id) state = "already-deleted"
         }
+        observed.assertCurrent()
         return { id, deleted: false, state }
       }
-      committedFactSeqs(await metadataFactsFor(deps.session, deps.metadata, exec.abortSignal).admit({ type: "schedule/change", version: 1, operation: "delete", id }))
+      const facts = metadata(deps, exec.abortSignal)
+      observed.assertCurrent()
+      committedFactSeqs(await facts.admit({ type: "schedule/change", version: 1, operation: "delete", id }))
       return { deleted: id }
     },
   }
@@ -111,3 +132,5 @@ function createScheduleDeleteTool(deps: ScheduleToolDeps): Tool<{ id: string }, 
 export function createScheduleTools(deps: ScheduleToolDeps): Tool[] {
   return [createScheduleCreateTool(deps), createScheduleListTool(deps), createScheduleDeleteTool(deps)]
 }
+
+export type { OriginalScheduleSource } from './observation.ts'

@@ -5,7 +5,7 @@ import type { SessionView as Session } from "../managed/types.ts"
  * ONLY through one of these, which is what makes it derivable. */
 type ProjectionRewriteCause = "compaction/summary" | "compaction/reset" | "rewind" | 'compaction/replacement'
 
-interface ProjectionRewrite {
+export interface ProjectionRewrite {
   /** How many rewrite markers the log carries right now. A CONSUMER COMPARES
    * THIS BETWEEN REQUESTS: a bigger number than last time means a rewrite landed
    * in between, which is what breaks the cached prefix. The absolute value is
@@ -21,10 +21,14 @@ interface ProjectionRewrite {
 }
 
 export function deriveProjectionRewrite(session: Session): ProjectionRewrite {
-  let markers = 0
-  let lastCause: ProjectionRewriteCause | undefined
-  let hiddenSeqs = 0
-  for (const ev of session.events) {
+  const index=createProjectionRewriteIndex();index.stage(session.events).commit();return index.read()
+}
+/** Same original rewrite arithmetic without retaining marker payloads. */
+export function createProjectionRewriteIndex(){
+ let current:ProjectionRewrite={markers:0,hiddenSeqs:0},revision=0
+ return {read:()=>({...current}),stage(events:readonly import('../managed/types.ts').SessionEventView[]){
+  const expected=revision;let {markers,hiddenSeqs,lastCause}=current,installed=false
+  for (const ev of events) {
     if (ev.type === 'compaction/replacement') {
       markers++
       lastCause = 'compaction/replacement'
@@ -46,5 +50,6 @@ export function deriveProjectionRewrite(session: Session): ProjectionRewrite {
       }
     }
   }
-  return { markers, hiddenSeqs, ...(lastCause !== undefined ? { lastCause } : {}) }
+  return {commit(){if(installed)return;if(revision!==expected)throw TypeError('Stale rewrite observation');current={markers,hiddenSeqs,...lastCause!==undefined?{lastCause}:{}};revision++;installed=true}}
+ }}
 }

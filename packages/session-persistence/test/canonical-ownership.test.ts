@@ -165,3 +165,46 @@ it('document-first registration selects the genuine complete session proof and r
  const {issueHeldTaskDocumentScope}=await import('../src/coordinator/task-document-scope.ts'),port=identity(),originalDocument=port.document;let documentCurrent=true;port.document=(key:string)=>{const captured=originalDocument(key);return{...captured,assertCurrent(){captured.assertCurrent();if(!documentCurrent)throw Error('document-only namespace changed')}}};const {owner}=make(port),{owner:foreign}=make(),document=await owner.pinDocumentOwnership('parent'),session=await owner.pinOwnership('parent')
  try{documentCurrent=false;expect(()=>document.assertHeld()).toThrow('document-only namespace changed');owner.assertHeld('parent');captureHeldOwnershipClaim(owner,'parent',session).assertHeld();const scope=issueHeldTaskDocumentScope(owner,'parent',session,{assertActive(){}});scope.assertActive();documentCurrent=true;await session.release();document.assertHeld();expect(()=>owner.assertHeld('parent')).toThrow('Exclusive managed ownership is unavailable');expect(()=>scope.assertActive()).toThrow();const next=await foreign.pinOwnership('parent');foreign.assertHeld('parent');await next.release()}finally{documentCurrent=true;await session.release();await document.release();await Promise.all([...owner.releaseHeldLocks(),...foreign.releaseHeldLocks()])}
 })
+import * as originalBatchPlanning from '../src/coordinator/ownership.ts'
+it('original deletion batch plans freeze complete session and Task resources before a single native issue', async () => {
+ const {owner}=make();let cleanup!:import('../src/coordinator/ownership.ts').OwnershipCleanup
+ const plan=await originalBatchPlanning.planOriginalOwnershipBatch(owner,['m','z'],value=>{cleanup=value})
+ const scope=originalBatchPlanning.captureOriginalOwnershipPlanScope(owner,plan)
+ expect(scope.keys).toHaveLength(4);expect(scope.keys.some(key=>key.includes('task-m'))).toBe(true);expect(scope.keys.some(key=>key.includes('task-z'))).toBe(true)
+ expect(native.acquired).toEqual([])
+ const batch=await originalBatchPlanning.acquireOriginalOwnershipPlan(owner,plan)
+ batch.assertCovered(['m','z']);expect(native.acquired).toHaveLength(4)
+ await expect(originalBatchPlanning.acquireOriginalOwnershipPlan(owner,plan)).rejects.toThrow()
+ await cleanup.close();cleanup.assertSettled();expect(native.held.size).toBe(0)
+})
+it('original deletion batch plan refuses a lower Task companion without retiring the original target',async()=>{
+ const port=identity(),capture=port.taskForParent;port.taskForParent=id=>id==='z'?port.session('a'):capture(id)
+ const {owner}=make(port),target=await owner.pinOwnership('m');target.retainLive();const before=[...native.acquired];let cleanup!:import('../src/coordinator/ownership.ts').OwnershipCleanup
+ await expect(originalBatchPlanning.planOriginalOwnershipBatch(owner,['m','z'],value=>{cleanup=value})).rejects.toThrow(/reordered/)
+ target.assertHeld();expect(native.acquired).toEqual(before)
+ await cleanup.close();cleanup.assertSettled();await owner.withSessionOperation('m',()=>owner.releaseOwnershipUnlocked('m'));await target.release();expect(native.held.size).toBe(0)
+})
+it('original deletion batch plan rejects copied and Proxy handles before invoking shaped properties',async()=>{
+ const {owner}=make();let cleanup!:import('../src/coordinator/ownership.ts').OwnershipCleanup,getters=0
+ const plan=await originalBatchPlanning.planOriginalOwnershipBatch(owner,['m'],value=>{cleanup=value})
+ const shaped=Object.defineProperty({},'acquire',{get(){getters++;throw Error('caller getter')}})
+ for(const fake of [shaped,{...plan},new Proxy(plan,{})])await expect(originalBatchPlanning.acquireOriginalOwnershipPlan(owner,fake as typeof plan)).rejects.toThrow()
+ expect(getters).toBe(0);expect(native.acquired).toEqual([]);await cleanup.close();cleanup.assertSettled();expect(native.held.size).toBe(0)
+})
+it('original deletion batch plan retains exact cleanup before validation without evaluating a replaced owner getter',async()=>{
+ const {owner}=make();let cleanup:import('../src/coordinator/ownership.ts').OwnershipCleanup|undefined,getters=0
+ Object.defineProperty(owner,'pinOwnership',{get(){getters++;throw Error('caller getter')}})
+ await expect(originalBatchPlanning.planOriginalOwnershipBatch(owner,['m'],value=>{cleanup=value})).rejects.toThrow(/Original ordering data method/)
+ expect(cleanup).toBeDefined();expect(getters).toBe(0);expect(native.acquired).toEqual([])
+ await cleanup!.close();cleanup!.assertSettled();expect(native.held.size).toBe(0)
+})
+it('original deletion batch plan publishes a single consume before callback-bearing checks can reenter',async()=>{
+ const port=identity(),original=port.session;let callback:(()=>void)|undefined
+ port.session=id=>{const capture=original(id);return{...capture,assertCurrent(){callback?.();capture.assertCurrent()}}}
+ const {owner}=make(port);let cleanup!:import('../src/coordinator/ownership.ts').OwnershipCleanup
+ const plan=await originalBatchPlanning.planOriginalOwnershipBatch(owner,['m'],value=>{cleanup=value});let nested:Promise<unknown>|undefined,entered=false
+ callback=()=>{if(!entered){entered=true;nested=originalBatchPlanning.acquireOriginalOwnershipPlan(owner,plan).then(batch=>({batch}),error=>({error}))}}
+ const outer=await originalBatchPlanning.acquireOriginalOwnershipPlan(owner,plan).then(batch=>({batch}),error=>({error})),inner=await nested!
+ try{expect(entered).toBe(true);expect([outer,inner].filter(value=>value&&typeof value==='object'&&'batch'in value)).toHaveLength(1);expect(native.acquired).toHaveLength(2)}
+ finally{callback=undefined;await cleanup.close();cleanup.assertSettled();expect(native.held.size).toBe(0)}
+})

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
+    "@i-harness/core-session": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/diagnostics": "workspace:*",
     "@i-harness/harness-home": "workspace:*",
@@ -19,7 +20,6 @@
   },
   "devDependencies": {
     "@i-harness/core-agent": "workspace:*",
-    "@i-harness/core-session": "workspace:*",
     "@i-harness/guard-retry": "workspace:*",
     "@i-harness/guard-timeout": "workspace:*",
     "@i-harness/llm-mock": "workspace:*"

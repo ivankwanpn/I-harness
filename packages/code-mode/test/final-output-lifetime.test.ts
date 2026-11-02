@@ -12,6 +12,20 @@ it('refuses copied record/outcome DTOs as original queue commit authority',()=>{
   expect(()=>originalCodeCommit({originalEvent:{type:'code/output',cellId:'copied'},nativeOutcome:{kind:'committed',seqs:[0]}})).toThrow('Original Code queue commit required')
 })
 
+it('joins independent external observers of the same original pending source',async()=>{
+ const session=createSession(),owner=createNondurableFactOwner(session),ctx=createContext(),tools=createToolRegistry(ctx)
+ const mount=registerCodeMode(ctx,tools,{session,factOwner:owner,config:{mode:'mixed'}})
+ const gate=Promise.withResolvers<void>(),entered=Promise.withResolvers<void>();let calls=0
+ let lifetime!:ReturnType<typeof createFinalOutputLifetime<string>>
+ const off=observeOriginalCellFinalizations(mount,(_id,handle)=>{lifetime=createFinalOutputLifetime(owner,handle,()=>({async finish(){calls++;entered.resolve();await gate.promise;return 'original'}}))})
+ try{
+  await tools.get('code_exec')!.execute({code:'text(1)',yield_time_ms:60000},{session})
+  const first=lifetime.settle();void first.catch(()=>{});await entered.promise
+  const second=lifetime.settle();void second.catch(()=>{});expect(second).toBe(first);expect(calls).toBe(1)
+  gate.resolve();expect(await first).toBe('original');expect(await second).toBe('original')
+  expect(await lifetime.settle()).toBe('original');expect(calls).toBe(1);expect(()=>lifetime.assertHeld()).toThrow()
+ }finally{gate.resolve();off();await mount.dispose()}
+})
 it('closes the independent retention source only after original cell ACK without making that cell await manifest finish', async () => {
   const session = createSession(), owner = createNondurableFactOwner(session), ctx = createContext(), tools = createToolRegistry(ctx)
   const finish = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()

@@ -1,5 +1,6 @@
 import { associateOriginalResultRevocation } from './coordinator/result-revocation.ts'
 import { associateRestoredContextAcquisition } from './restored-context-internal.ts'
+import {associateManagedExecution} from './execution-internal.ts'
 import { attachArchiveReadResources } from './archive-read-internal.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
@@ -62,6 +63,7 @@ export function createSelectedRuntimeCapture(coordinator:SessionCoordinator,make
  },async close(){retired=true;const results=await Promise.allSettled([...holders].map(holder=>holder.close())),errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Selected operation cleanup unresolved')}})
 }
 export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>, transitionStorage?: TaskTransitionConfiguration): SessionCoordinator {
+  opts = opts && {...opts, originalExecutionFoldFactory: opts.originalExecutionFoldFactory}
   const assertDurableTransition = () => { if (CURRENT_FORMAT_VERSION >= 14 && !transitionStorage) throw new Error('TASK_TRANSITION_UNSUPPORTED') }
   const archiveReads = attachArchiveReadResources(backend)
   const report = opts?.reportBackgroundFailure
@@ -206,6 +208,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       }
   }
   associateRestoredContextAcquisition(coordinator,{acquire:id=>managed.acquireRestoredContext(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
+  associateManagedExecution(coordinator,{acquire:id=>managed.acquireExecution(id),assertAdmission(id){assertDurableTransition();managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertManagedSessionAdmission(id);archiveReads?.assertPublicReadAdmission()}})
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
   associateOriginalResultOrdering(coordinator, ownership)
   if (ownership.lockEnabled) associateOriginalResultRevocation(coordinator, observations.createResultRevocationAdmission(ownership), ownership)

@@ -1,7 +1,8 @@
 import {taskParentMetadataProjection} from './task-parent-metadata.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts';
 import { canJoinOriginalNativePrewrite } from '../native-fact-writer-internal.ts';
-import { createDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
+import { createDeliveryControl,createOwnerDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
+import type {restoreManagedExecutionState,OriginalExecutionCaptureHooks} from '@i-harness/core-session/internal/execution';
 import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
 import type { BootstrapDocumentControl } from './bootstrap-types.ts';
 import { randomUUID } from 'node:crypto';
@@ -15,11 +16,13 @@ import { createSettlementSource } from './settlement-source.ts';
 import { heldFactOwner, issuingFactOwner } from './fact-owner.ts';
 import { preflightBatchShape } from '../format/validation.ts';
 import { createReceivedInputSource } from './received-input-source.ts';
-import { cancellationRetirementFor } from './received-input-cancellation.ts';
+import { cancellationRetirementFor,cancellationRetirementForIndex } from './received-input-cancellation.ts';
 import { ownBackendOutcome, sameBatchKey } from './fact-outcome.ts';
 import { createActionCaptures } from './action-captures.ts';
 import type { createProcessReadLatches } from './process-read-latches.ts';
 type TaskMetadataUpdate={before(meta:unknown):void;after(meta:unknown):void;finish(success:boolean):void}
+type RequiredTaskParentReadiness={assertOriginal():void;assertCurrent():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}
+
 type TaskParentReadiness=Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void}>
 type Ticket = {
     release(): void;
@@ -46,11 +49,12 @@ type Entry = {
     authorization: Authorization;
 };
 type Pending = {
+    staged?:Awaited<ReturnType<Awaited<ReturnType<typeof restoreManagedExecutionState>>['prepareWrite']>>;
     processReconciliation?: { token: ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']> | undefined; users: number };
     batch: ReturnType<typeof encodeFactBatch>;
     prefix: JournalPrefix;
     entries: Entry[];
-    events: Readonly<ReturnType<typeof resolveFactGroup>>;
+    events: readonly import('@i-harness/core-session').SessionEventView[];
     install(receipt: FactReceipt): void;
     receipt?: FactReceipt;
     issued: boolean;
@@ -70,6 +74,9 @@ export type SelectedSourceRead = ManagedReadyObservation & { readonly header: Se
 type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'; from: number; to: number; events: SessionView['events'] };
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
 const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
+type ExecutionState=Awaited<ReturnType<typeof restoreManagedExecutionState>>;
+const privateExecutionOwners=new WeakMap<ManagedDocument,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
+export function originalManagedExecution(document:ManagedDocument,ownership:Ownership){const original=privateExecutionOwners.get(document);if(!original||original.ownership!==ownership)throw TypeError('Original private execution owner required');return original}
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
@@ -86,11 +93,13 @@ export function captureManagedProcessRead(document: ManagedDocument, ownership: 
     return original.captureProcess(documentKeys, checkEntry);
 }
 export function captureManagedParentReadiness(document: ManagedDocument, ownership: Ownership) {
+    const execution=privateExecutionOwners.get(document);if(execution){if(execution.ownership!==ownership)throw new FactRecoveryRequiredError();return execution.parent()}
     const original = readyOwners.get(document);
     if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
     return original.captureParent();
 }
 export function captureManagedRequiredParent(document:ManagedDocument,ownership:Ownership,source:import('@i-harness/core-session').SettlementFacts) {
+ const execution=privateExecutionOwners.get(document);if(execution){if(execution.ownership!==ownership)throw new FactRecoveryRequiredError();return execution.captureRequiredParent(source)}
  const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.captureRequiredParent(source)
 }
 /** Private original-factory observation. No caller-shaped document/owner can issue it. */
@@ -106,21 +115,26 @@ export function retainSelectedSourceRead(document:ManagedDocument,ownership:Owne
 }
 /** Original owner invalidation; no caller can install a replacement witness. */
 export function invalidateManagedMetadataWitness(document:ManagedDocument,ownership:Ownership,revision:object) {
+ const execution=privateExecutionOwners.get(document);if(execution){if(execution.ownership!==ownership)throw new FactRecoveryRequiredError();execution.invalidateMetadata(revision);return}
  const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError()
  original.invalidateMetadata(revision)
 }
-export function captureManagedTaskParentReadiness(document:ManagedDocument,ownership:Ownership){const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.captureTaskParent()}
-export function beginManagedTaskMetadataUpdate(document:ManagedDocument,ownership:Ownership){const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.beginTaskMetadata()}
+export function captureManagedTaskParentReadiness(document:ManagedDocument,ownership:Ownership){const execution=privateExecutionOwners.get(document);if(execution){if(execution.ownership!==ownership)throw new FactRecoveryRequiredError();return execution.captureTaskParent()}const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.captureTaskParent()}
+export function beginManagedTaskMetadataUpdate(document:ManagedDocument,ownership:Ownership){const execution=privateExecutionOwners.get(document);if(execution){if(execution.ownership!==ownership)throw new FactRecoveryRequiredError();return execution.beginTaskMetadata()}const original=readyOwners.get(document);if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError();return original.beginTaskMetadata()}
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
-export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>): ManagedDocument & {
+export function createManagedDocument(id: string, source: Session|undefined, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; selected?:boolean; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}, executionChanges?: ReturnType<typeof createColdExecutionWrites>, execution?:{state:Awaited<ReturnType<typeof restoreManagedExecutionState>>;held:HeldFactOwner;assertCurrent():void}): ManagedDocument & {
     assertObservable(): void;
 } {
-    const state = (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }), incarnation = randomUUID();
-    const deliveryControl = createDeliveryControl(state.view);
+    const core=execution?.state;
+    let state = source ? (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }) : undefined, incarnation = execution?.held.owner.incarnation??randomUUID();
+    if(!state&&!core)throw TypeError('Original managed state required');
+    const originalDelivery=core?createOwnerDeliveryControl(core.delivery,()=>prefix.eventCount):undefined;
+    const deliveryControl = originalDelivery?.port??createDeliveryControl(state!.view);
+    let publicObservation:{observe:NonNullable<typeof state>['observe']}|undefined=state;
     let bootstrapReady = !bootstrap;
-    const formatVersion = source.formatVersion;
-    const owner = Object.freeze({ sessionId: id, incarnation });
+    const formatVersion = source?.formatVersion??core!.formatVersion;
+    const owner = execution?.held.owner??Object.freeze({ sessionId: id, incarnation });
     const maxPendingGroups = options?.maxPendingGroups ?? 64, targetBytes = options?.coalesceTargetBytes ?? 262144;
     const capacity = createFactCapacity(maxPendingGroups), queue: Entry[] = [];
     const sourceDrains = new Map<{
@@ -144,10 +158,12 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     let pump: Promise<void> = Promise.resolve();
     let requiredWriter: { released: Promise<void>; release(): void } | undefined;
     let settlingFinished: Promise<void> | undefined;
-    const held = heldFactOwner(owner, ownership, () => {
+    const held = execution?.held??heldFactOwner(owner, ownership, () => {
         if (closed)
             throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
     });
+    const actionMembers=new Set<{source:object;finished():boolean}>();
+    const releaseFinishedMembers=()=>{if(pending||queue.length)return;for(const record of actionMembers)if(record.finished()){core?.releaseSource(record.source);actionMembers.delete(record)}};
     const executionStatus = (): 'available' | 'unavailable' | 'retired' => {
         if (closing || closed) return 'retired';
         if (!bootstrapReady || quarantined || sourceFault || recoveryHolds.size) return 'unavailable';
@@ -165,10 +181,11 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     let selectedLane:SelectedScope|undefined,selectedIOStarted=false,selectedBindFlight:Promise<void>|undefined
     const settleSelected=async()=>{if(bootstrap?.selected&&selectedIOStarted){if(!backend.settleBootstrapCaptureIO)throw new FactRecoveryRequiredError();await backend.settleBootstrapCaptureIO(id,held);selectedIOStarted=false}}
     const assertAuthorized = (authorization: Authorization) => {
+        execution?.assertCurrent();
         held.assertHeld();
         try { authorization.assertSource?.(); }
         catch (error) {
-            const code = (error as { code?: string }).code;
+            const code = (error as { code?: string }|null)?.code;
             if (code === 'FACT_PRECONDITION_STALE' || code === 'FACT_CANCELLED' || code === 'FACT_CLOSED') throw error;
             failSource();
             throw new FactRecoveryRequiredError();
@@ -216,8 +233,8 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         if (outcome.kind === 'committed') {
             const cleanupDiagnostic = outcome.cleanupDiagnostic === 'file-close-failed' && !current.cleanupReported;
             if (cleanupDiagnostic) current.cleanupReported = true;
-            const receipt = outcome.receipt;
-            current.receipt = receipt;
+            const receipt = current.receipt??outcome.receipt;
+            current.receipt ??= receipt;
             try {
                 current.install(receipt);
                 current.installationFailure = undefined;
@@ -235,6 +252,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 const outcome = Object.freeze({ kind: 'committed' as const, receipt, seqs });
                 entry.settleProcess?.(outcome);
                 if (entry.group) sourceDispositions.set(entry.group, outcome);
+                if(entry.group)core?.acknowledge(entry.group,outcome);
                 return outcome;
             });
             return { results, observe: true, cleanupDiagnostic };
@@ -242,6 +260,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         if (outcome.kind === 'unknown' || outcome.kind === 'conflict')
             failQueued();
         else {
+            if(current.staged){if(outcome.kind==='absent')current.staged.settleAbsent({kind:'absent',key:outcome.key});else if(!current.issued)current.staged.discardUnissued()}
             pending = undefined;
             for (const entry of current.entries) {
                 entry.ticket.release();
@@ -252,7 +271,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         return { results: current.entries.map(() => outcome), observe: false };
     };
     const observeInstalled = (events: Pending['events']) => {
-        state.observe(events, report);
+        publicObservation?.observe(events as readonly import('@i-harness/core-session').SessionEvent[], report);
         if (events.some(event => ['code/cell', 'code/output', 'code/call', 'code/dispatch', 'code/result'].includes(event.type))) executionChanges?.committed(id);
     };
     const reportCleanup = () => {
@@ -276,7 +295,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     const entry = queue.shift()!;
                     try {
                         assertAuthorized(entry.authorization);
-                        const suffix = entry.bootstrap ? [...entry.bootstrap.events] : resolveFactGroup(entry.group!, state.view, prefix.eventCount + events.length);
+                        const suffix = core ? [] : entry.bootstrap ? [...entry.bootstrap.events] : resolveFactGroup(entry.group!, state!.view, prefix.eventCount + events.length);
                         if (entry.bootstrap && suffix.some((event, position) => event.seq !== prefix.eventCount + events.length + position)) throw new TypeError('Invalid bootstrap phase sequence');
                         entry.seqs = Object.freeze(suffix.map(event => event.seq!));
                         entries.push(entry);
@@ -287,20 +306,25 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         entry.ticket.release();
                         entry.resolve({ kind: 'not-issued', code: (error as {
                                 code?: 'FACT_CLOSED' | 'FACT_CANCELLED' | 'FACT_RECOVERY_REQUIRED';
-                            }).code ?? 'FACT_INVALID_GROUP' });
+                            }|null)?.code ?? 'FACT_INVALID_GROUP' });
                     }
                 }
                 if (!entries.length)
                     return;
+                let executionStage:Pending['staged'];
                 try {
-                    deliveryControl.assert(events);
-                    const staged = state.stage(events);
-                    preflightBatchShape(formatVersion, staged.events);
-                    const restored = restoredStages.get(document)?.(staged.events, position => state.view.events[position]);
+                    executionStage=core?await core.prepareWrite(entries.map(entry=>entry.group!),true):undefined;
+                    if(executionStage)for(const rejection of executionStage.rejected){for(let index=entries.length-1;index>=0;index--)if(entries[index]!.group===rejection.group){const entry=entries.splice(index,1)[0]!;entry.ticket.release();entry.resolve({kind:'not-issued',code:'FACT_INVALID_GROUP'})}}
+                    if(!entries.length){executionStage?.discardUnissued();return}
+                    for(const entry of entries)assertAuthorized(entry.authorization);
+                    const staged = executionStage??state!.stage(events);
+                    if(executionStage)for(const [index,entry]of entries.entries())entry.seqs=Object.freeze(executionStage.members[index]!.events.map(event=>event.seq!));
+                    deliveryControl.assert(staged.events);
+                    preflightBatchShape(formatVersion, staged.events as readonly import('@i-harness/core-session').SessionEvent[]);
+                    const restored = restoredStages.get(document)?.(staged.events, position => state!.view.events[position]);
                     const batch = encodeFactBatch(entries[0]!.bootstrap?.batchId ?? randomUUID(), prefix.prefixDigest, staged.events);
-                    current = { batch, prefix, entries, events: staged.events, install(receipt) { staged.install(); restored?.install(batch,receipt) }, issued: false, settlement: Promise.withResolvers<void>(), settlementSettled: false };
-                    pending = current;
-                    const operation = current;
+                    const operation:Pending = { batch, prefix, entries, events: staged.events,staged:executionStage, install(receipt) { if(executionStage)executionStage.install(batch,receipt);else (staged as ReturnType<NonNullable<typeof state>['stage']>).install(); restored?.install(batch,receipt) }, issued: false, settlement: Promise.withResolvers<void>(), settlementSettled: false };
+                    pending = current = operation;
                     const issuer = issuingFactOwner(held, () => {
                         if (requiredWriter) throw new FactRecoveryRequiredError();
                         if (operation.issued)
@@ -308,6 +332,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         for (const entry of entries)
                             assertAuthorized(entry.authorization);
                         deliveryControl.assert(operation.events);
+                        operation.staged?.beforeIssue(operation.batch);
                         operation.issued = true;
                     });
                     current.issuer = issuer;
@@ -322,10 +347,11 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         completed = finish(current, { kind: 'unknown', key: current.batch.key });
                     }
                     else {
+                        (current?.staged??executionStage)?.discardUnissued();
                         pending = undefined;
                         for (const entry of entries) {
                             entry.ticket.release();
-                            const code = (error as { code?: string }).code;
+                            const code = (error as { code?: string }|null)?.code;
                             entry.resolve({ kind: 'not-issued', code: code === 'FACT_PRECONDITION_STALE' || code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_RECOVERY_REQUIRED' ? code : 'FACT_INVALID_GROUP' });
                         }
                     }
@@ -349,6 +375,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         scheduled = true;
         pump = Promise.resolve().then(run).catch(report).finally(() => {
             scheduled = false;
+            releaseFinishedMembers();
             if (queue.length && !pending)
                 schedule();
         });
@@ -411,7 +438,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             closing = true;
             publishExecutionStatus();
             invalidateSelected();
-            deliveryControl.retire();
+            deliveryControl.retire();core?.stopNewWork();
             capacity.revokeNewWork();
             for (const source of inputSources) source.revoke();
             for (const controller of actionControllers) controller.abort();
@@ -443,13 +470,16 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             if (!bootstrapReady) throw new FactRecoveryRequiredError();
             assertAuthorized(rootAuthorization);
             const required: Authorization = { action: { stopped: false }, required: true, assertSource: () => source.assertHeld() };
+            let inputHooks:OriginalExecutionCaptureHooks|undefined;
+            const inputMembers:OriginalExecutionCaptureHooks={capture:(group,commands)=>inputHooks!.capture(group,commands),forward:(original,commands)=>inputHooks!.forward(original,commands)};
             const source = createReceivedInputSource(drain, {
+                ...(core?{captureMembers:inputMembers}:{}),
                 owner, deliveryControl,
                 guarded(checkCurrent) {
                     const guarded = {...required,source:{},assertSource() {source.assertHeld();if(!checkCurrent())throw Object.assign(new Error("FACT_PRECONDITION_STALE"),{code:"FACT_PRECONDITION_STALE"})}};
-                    return {assertHeld:held.assertHeld,admit:group=>{sourceDispositions.delete(group);return admit(group,guarded,true)},reconcile:key=>document.reconcile(key),status:group=>sourceDispositions.get(group),quarantineCapture:failSource};
+                    return {...(core?{captureMembers:inputMembers}:{}),assertHeld:held.assertHeld,admit:group=>{sourceDispositions.delete(group);return admit(group,guarded,true)},reconcile:key=>document.reconcile(key),status:group=>sourceDispositions.get(group),quarantineCapture:failSource};
                 },
-                cancellationRetirement: cancellationRetirementFor(state.view, document),
+                cancellationRetirement: core?cancellationRetirementForIndex(held.assertHeld,core.intake,core.header?.seedLength??0):cancellationRetirementFor(state!.view, document),
                 assertHeld: held.assertHeld, admit: group => {
                     sourceDispositions.delete(group);
                     return admit(group, required, true);
@@ -458,7 +488,9 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             }, () => {
                 sourceDrains.delete(source);
                 inputSources.delete(source);
+                core?.releaseSource(source);
             });
+            if(core)inputHooks=core.captureHooks(source,held.assertHeld);
             required.source = source;
             sourceDrains.set(source, { closeOriginal:source.close.bind(source), closeRequested: false });
             inputSources.add(source);
@@ -468,13 +500,19 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             if (!bootstrapReady) throw new FactRecoveryRequiredError();
             const cancel = new AbortController();
             let finished = false;
+            let actionHooks:OriginalExecutionCaptureHooks|undefined;
+            const actionCaptureMembers:OriginalExecutionCaptureHooks={capture:(group,commands)=>actionHooks!.capture(group,commands),forward:(original,commands)=>actionHooks!.forward(original,commands)};
             const action: Action = { signal: signal ? AbortSignal.any([signal, cancel.signal]) : cancel.signal, stopped: false, cancel }, authorization = { action, required: false };
             assertAuthorized(authorization);
             actionControllers.add(cancel);
             const capability: import('@i-harness/core-session').ManagedAction<FactOutcome> = {
                 signal: action.signal!,
-                facts: createFactPorts(draft => admit(draft, authorization)),
+                facts: createFactPorts(draft => admit(draft, authorization),async event=>{
+                    if(closing||closed||metadataStale||quarantined||sourceFault||recoveryHolds.size||action.stopped||action.signal?.aborted)return admit({kind:'tool',event},authorization);
+                    return capability.captureToolCall!(event).admit();
+                }),
                 ...createActionCaptures({
+                    ...(core?{captureMembers:actionCaptureMembers}:{}),
                     assertHeld: held.assertHeld,
                     admit: group => {
                         sourceDispositions.delete(group);
@@ -485,7 +523,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     const guarded: Authorization = { action, required: false, source: {}, assertSource() {
                         if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' });
                     } };
-                    return { assertHeld: held.assertHeld, admit: group => {
+                    return { ...(core?{captureMembers:actionCaptureMembers}:{}),assertHeld: held.assertHeld, admit: group => {
                         sourceDispositions.delete(group);
                         return admit(group, guarded, true);
                     }, reconcile: key => document.reconcile(key), status: group => sourceDispositions.get(group), quarantineCapture: failSource };
@@ -498,11 +536,13 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     finished = true;
                     action.stopped = true;
                     actionControllers.delete(cancel);
+                    releaseFinishedMembers();
                 },
                 registerSettlementSource(drain, reconcilePending, checkpointOwner) {
                     assertAuthorized(authorization);
                     const required: Authorization = { action, required: true, assertSource: () => source.assertHeld() };
                     const source = createSettlementSource(drain, {
+                        ...(core?{captureMembers:(source:import('@i-harness/core-session').SettlementFacts)=>core.captureHooks(source,held.assertHeld)}:{}),
                         assertHeld: held.assertHeld,
                         admitCaptured: group => {
                             sourceDispositions.delete(group);
@@ -526,15 +566,18 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                             }
                         },
                         releaseRecovery() { assertTaskOutside(); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() },
-                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() }, reconcilePending, checkpointOwner);
+                    }, () => { sourceDrains.delete(source);core?.releaseSource(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source); publishExecutionStatus() }, reconcilePending, checkpointOwner);
                     required.source = source;
-                    bindFactSettlementSource(state.view, document, source, id);
+                    const publicView=Object.getOwnPropertyDescriptor(document,'view')?.value as SessionView|undefined;
+                    if(publicView)bindFactSettlementSource(publicView, document, source, id);
                     sourceDrains.set(source, { closeOriginal:source.close.bind(source), action, finished: () => finished, closeRequested: false, sourceMethods:Object.getOwnPropertyDescriptors(source),deliveryMethods:Object.getOwnPropertyDescriptors(source.delivery) });
                     return source;
                 },
             };
             Object.defineProperty(capability, 'owner', { value: owner, enumerable: true, writable: false, configurable: false });
+            for(const name of ['captureToolCall','captureLifecycle','captureMetadata','captureToolDispatch'] as const)Object.defineProperty(capability,name,{value:capability[name],enumerable:true,writable:false,configurable:false});
             ownedActions.add(capability);
+            if(core){actionHooks=core.captureHooks(capability,held.assertHeld);actionMembers.add({source:capability,finished:()=>finished})}
             return capability;
         },
         ownsAction: action => ownedActions.has(action),
@@ -542,7 +585,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             if (!bootstrapReady || pending || quarantined)
                 throw new FactRecoveryRequiredError();
         },
-        view: state.view,
+        ...(state?{view:state.view}:{}),
         async reconcile(key) {
             assertTaskOutside();
             const original = pending && sameBatchKey(key, pending.batch.key) ? pending : undefined;
@@ -572,6 +615,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 observeInstalled(current.events);
             if (completed.cleanupDiagnostic) reportCleanup();
             if (!pending) {
+                releaseFinishedMembers();
                 quarantined = false;
                 // Only this original pending owner has resolved quarantine.
                 // Existing readers stay invalid; fresh readers may be admitted.
@@ -592,6 +636,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         },
         async drain() {
             await pump;
+            await core?.settleDependencies();
             if (pending || quarantined || sourceFault)
                 throw new FactRecoveryRequiredError();
         },
@@ -636,12 +681,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             if (closed)
                 return;
             revokeOriginalWork();
+            if(core){await pump;await core.settleDependencies()}
             await drainOriginalSourceOwners();
             if(selectedBindFlight)await selectedBindFlight.catch(()=>{});
             await settleSelected();
+            if(core){for(const member of actionMembers)core.releaseSource(member.source);actionMembers.clear();await core.close()}
             closed = true;
         },
-    };
+    } as ManagedDocument & {assertObservable():void};
     bootstrap?.bind({ held, bindSelected() {
         if(!bootstrap.selected||!selectedJournal||!backend.settleBootstrapCaptureIO||closed||closing)return Promise.reject(new FactRecoveryRequiredError());
         if(selectedLane)return Promise.resolve();if(selectedBindFlight)return selectedBindFlight;
@@ -671,9 +718,60 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             } finally { selectedAdmissions--; }
         }
     });
+    const originalPrivateReady=document.assertReady;
+    function beginTaskMetadataUpdate() {
+        held.assertHeld();if(closed||closing)throw new FactRecoveryRequiredError();
+        const revision=taskRevision;taskMetadataPending++;let done=false,before:string|undefined,after:string|undefined,invalid=false;
+        return Object.freeze({before(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{before=taskParentMetadataProjection(meta)}catch{invalid=true}},after(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{after=taskParentMetadataProjection(meta)}catch{invalid=true}},finish(success:boolean){if(done)return;done=true;taskMetadataPending--;try{held.assertHeld()}catch{success=false}if(!success||invalid||before===undefined||after===undefined||before!==after||revision!==taskRevision||closed||closing){taskRevision={};taskMetadataStale=true}}});
+    }
+    function captureRequiredWriterProof<T extends object>(source:import('@i-harness/core-session').SettlementFacts,checkIdentity:()=>void,check:()=>void,extra:T) {
+        const joinableWriter=()=>{ownership.assertOutsideSessionOperation(id);checkIdentity();const batch=pending;if(batch){if(batch.settlementSettled||(!batch.issued&&(!batch.issuer||!canJoinOriginalNativePrewrite(backend,id,batch.issuer,batch.batch)))||batch.entries.some(entry=>entry.authorization.source===source)||batch.receipt||batch.installationFailure)throw Object.assign(new FactRecoveryRequiredError(),{cause:{originalBatchIssued:batch.issued,sameRequiredSource:batch.entries.some(entry=>entry.authorization.source===source),receipt:!!batch.receipt,installationFailure:!!batch.installationFailure,eventTypes:batch.events.map(event=>event.type)}});}return batch};
+        const joinIssuedWriter=async()=>{const batch=joinableWriter();if(batch)await batch.settlement.promise;check()};
+        const result=Object.freeze({...extra,assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){
+          if(this!==result)throw new TypeError('Invalid required parent')
+          let retired=false,held=false,gate=Promise.withResolvers<void>();gate.resolve()
+          const writer={get released(){return gate.promise},release(){if(requiredWriter===writer){requiredWriter=undefined;held=false;gate.resolve()}}}
+          const lease=Object.freeze({
+            async resume(){if(this!==lease||retired)throw new TypeError('Retired original writer exclusion');if(held&&requiredWriter===writer){check();return}for(;;){const batch=joinableWriter();if(!batch)break;await batch.settlement.promise}check();if(requiredWriter)throw new FactRecoveryRequiredError();gate=Promise.withResolvers<void>();requiredWriter=writer;held=true},
+            park(){if(this!==lease)throw new TypeError('Invalid original writer exclusion');writer.release()},
+            release(){if(this!==lease)throw new TypeError('Invalid original writer exclusion');retired=true;writer.release()},
+          });await lease.resume();return lease
+        },async joinIssuedWriter(){if(this!==result)throw new TypeError('Invalid required parent');await joinIssuedWriter()},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTask14Ready(){if(this!==result)throw new TypeError('Invalid required parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return result;
+    }
+    function privateTaskParent(source:import('@i-harness/core-session').SettlementFacts):RequiredTaskParentReadiness;
+    function privateTaskParent():Omit<TaskParentReadiness,'view'>;
+    function privateTaskParent(source?:import('@i-harness/core-session').SettlementFacts) {
+      const original=source&&sourceDrains.get(source);
+      if(source&&(!original?.action||original.action.stopped||original.closeRequested||!original.sourceMethods||!original.deliveryMethods||formatVersion!==14))throw new FactRecoveryRequiredError();
+      const originalReady=originalPrivateReady,revision=taskRevision;
+      const checkIdentity=()=>{
+        if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||quarantined||sourceFault)throw new FactRecoveryRequiredError();
+        execution!.assertCurrent();held.assertHeld();
+        if(source){if(!sourceDrains.has(source))throw new FactRecoveryRequiredError();for(const [object,fields]of [[source,original!.sourceMethods!],[original!.sourceMethods!.delivery!.value as object,original!.deliveryMethods!]] as const)for(const key of Reflect.ownKeys(fields)){const field=Reflect.get(fields,key) as PropertyDescriptor,now=Object.getOwnPropertyDescriptor(object,key);if(!now||!('value'in now)||now.value!==field.value)throw new FactRecoveryRequiredError()}source.assertHeld()}
+      };
+      const check=()=>{checkIdentity();if(source){if(pending)throw new FactRecoveryRequiredError()}else Reflect.apply(originalReady,document,[])};check();
+      if(source)return captureRequiredWriterProof(source,checkIdentity,check,{});
+      const proof=Object.freeze({assertOriginal(){if(this!==proof)throw TypeError('Invalid original Task parent');checkIdentity()},assertCurrent(){if(this!==proof)throw TypeError('Invalid original Task parent');check()},assertTask14Ready(){if(this!==proof)throw TypeError('Invalid original Task parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return proof;
+    }
     executionStatuses.set(document, executionStatus);
-    state.bindOwner(document);
-    const originalReady = document.assertReady, originalView = state.view;
+    if(core){
+      const originalReady=document.assertReady;
+      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,materialize(events){
+        if(!Object.hasOwn(document,'view')){const compatibility=core.materialize(events,document);originalDelivery!.bindView(compatibility.view);bindPublicState(compatibility);publicObservation=compatibility}return document;
+      },beginTaskMetadata:beginTaskMetadataUpdate,captureTaskParent:()=>privateTaskParent(),captureRequiredParent:source=>privateTaskParent(source),invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected()},parent(){
+        Reflect.apply(originalReady,document,[]);const revision=metadataRevision;
+        const check=()=>{
+          if(closed||metadataStale||metadataRevision!==revision||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||pending||quarantined)throw new FactRecoveryRequiredError();
+          execution!.assertCurrent();held.assertHeld();
+          Reflect.apply(originalReady,document,[]);
+        };check();const proof=Object.freeze({assertOriginal(){if(this!==proof)throw TypeError('Invalid original parent');check()},assertCurrent(){if(this!==proof)throw TypeError('Invalid original parent');check()},assertTask14Ready(){if(this!==proof)throw TypeError('Invalid original parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return proof;
+      }});return document;
+    }
+    function bindPublicState(compatibility: {view:SessionView;observe(suffix:readonly import('@i-harness/core-session').SessionEvent[],report:(error:unknown)=>void):void}) {
+    const state=compatibility;
+    if(!Object.hasOwn(document,'view'))Object.defineProperty(document,'view',{value:state.view,enumerable:true,writable:false,configurable:false});
+    for(const source of sourceDrains.keys())if('delivery'in source)bindFactSettlementSource(state.view,document,source,id);
+    const originalReady = document.assertReady, originalView = state!.view;
     readyOwners.set(document, { ownership, invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected()}, captureProcess(documentKeys, checkEntry) {
         if (!processLatches) throw new FactRecoveryRequiredError();
         const latch = processLatches.capture({ sessionId: id, documentKeys, mode: 'managed', managedOwner: owner });
@@ -716,18 +814,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             close() { if (this !== result) throw new TypeError('Invalid process capture receiver'); retired = true; latch.retire(); },
         });
         return result;
-    }, beginTaskMetadata() {
-        held.assertHeld();if(closed||closing)throw new FactRecoveryRequiredError();
-        const revision=taskRevision;taskMetadataPending++;let done=false,before:string|undefined,after:string|undefined,invalid=false;
-        return Object.freeze({before(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{before=taskParentMetadataProjection(meta)}catch{invalid=true}},after(meta:unknown){if(done)throw TypeError('Metadata operation finished');try{after=taskParentMetadataProjection(meta)}catch{invalid=true}},finish(success:boolean){if(done)return;done=true;taskMetadataPending--;try{held.assertHeld()}catch{success=false}if(!success||invalid||before===undefined||after===undefined||before!==after||revision!==taskRevision||closed||closing){taskRevision={};taskMetadataStale=true}}});
-    }, captureTaskParent() {
+    }, beginTaskMetadata() {return beginTaskMetadataUpdate()}, captureTaskParent() {
         const revision=taskRevision;
         const checkOriginal=()=>{
             const ready=Object.getOwnPropertyDescriptor(document,'assertReady'),view=Object.getOwnPropertyDescriptor(document,'view');
             if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||!ready||!('value'in ready)||ready.value!==originalReady||!view||!('value'in view)||view.value!==originalView||state.view!==originalView)throw new FactRecoveryRequiredError();
             held.assertHeld();
         };
-        const check=()=>{checkOriginal();if(closing)throw new FactRecoveryRequiredError();Reflect.apply(originalReady,document,[])};check();
+        const check=()=>{checkOriginal();Reflect.apply(originalReady,document,[])};check();
         const result=Object.freeze({view:originalView,assertOriginal(){if(this!==result)throw TypeError('Invalid Task parent receiver');checkOriginal()},assertCurrent(){if(this!==result)throw TypeError('Invalid Task parent receiver');check()},assertTask14Ready(){if(this!==result)throw TypeError('Invalid Task parent receiver');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return result;
     }, captureRequiredParent(source) {
         const original=sourceDrains.get(source);if(!original?.action||original.action.stopped||original.closeRequested||!original.sourceMethods||!original.deliveryMethods||formatVersion!==14||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady)throw new FactRecoveryRequiredError();Reflect.apply(originalReady,document,[]);
@@ -736,18 +830,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         const revision=taskRevision;
         const checkIdentity=()=>{if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||!sourceDrains.has(source)||state.view!==originalView||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||Object.getOwnPropertyDescriptor(document,'view')?.value!==originalView||quarantined||sourceFault)throw new FactRecoveryRequiredError();assertSource();held.assertHeld()};
         const check=()=>{checkIdentity();if(pending)throw new FactRecoveryRequiredError()};check();
-        const joinableWriter=()=>{ownership.assertOutsideSessionOperation(id);checkIdentity();const batch=pending;if(batch){if(batch.settlementSettled||(!batch.issued&&(!batch.issuer||!canJoinOriginalNativePrewrite(backend,id,batch.issuer,batch.batch)))||batch.entries.some(entry=>entry.authorization.source===source)||batch.receipt||batch.installationFailure)throw Object.assign(new FactRecoveryRequiredError(),{cause:{originalBatchIssued:batch.issued,sameRequiredSource:batch.entries.some(entry=>entry.authorization.source===source),receipt:!!batch.receipt,installationFailure:!!batch.installationFailure,eventTypes:batch.events.map(event=>event.type)}});}return batch};
-        const joinIssuedWriter=async()=>{const batch=joinableWriter();if(batch)await batch.settlement.promise;check()};
-        const result=Object.freeze({view:originalView,assertOriginal(){if(this!==result)throw new TypeError('Invalid required parent');checkIdentity()},async acquireWriter(){
-          if(this!==result)throw new TypeError('Invalid required parent')
-          let retired=false,held=false,gate=Promise.withResolvers<void>();gate.resolve()
-          const writer={get released(){return gate.promise},release(){if(requiredWriter===writer){requiredWriter=undefined;held=false;gate.resolve()}}}
-          const lease=Object.freeze({
-            async resume(){if(this!==lease||retired)throw new TypeError('Retired original writer exclusion');if(held&&requiredWriter===writer){check();return}for(;;){const batch=joinableWriter();if(!batch)break;await batch.settlement.promise}check();if(requiredWriter)throw new FactRecoveryRequiredError();gate=Promise.withResolvers<void>();requiredWriter=writer;held=true},
-            park(){if(this!==lease)throw new TypeError('Invalid original writer exclusion');writer.release()},
-            release(){if(this!==lease)throw new TypeError('Invalid original writer exclusion');retired=true;writer.release()},
-          });await lease.resume();return lease
-        },async joinIssuedWriter(){if(this!==result)throw new TypeError('Invalid required parent');await joinIssuedWriter()},assertCurrent(){if(this!==result)throw new TypeError('Invalid required parent');check()},assertTask14Ready(){if(this!==result)throw new TypeError('Invalid required parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return result;
+        return captureRequiredWriterProof(source,checkIdentity,check,{view:originalView});
     }, captureParent() {
         const revision = metadataRevision;
         const check = () => {
@@ -781,5 +864,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         assertCurrent();
         return Object.freeze({ document, held, view, events, eventCount, prefix: Object.freeze({ ...originalPrefix }), assertCurrent });
     } });
+    }
+    state!.bindOwner(document);bindPublicState(state!);
     return document;
 }

@@ -3,8 +3,8 @@ import type { CapturedActionFact, ProducerFactOutcome } from '@i-harness/core-se
 import type { AgentDeps } from '../types.ts'
 
 /** One optional capture owns exact immutable bytes after issue. No absent retry authority. */
-export function createReductionPublication(deps: Pick<AgentDeps, 'captureContextReduction' | 'assertFactOpen' | 'registerFactSource' | 'requestContext'>, check: (source: ContextSnapshot, groups: readonly ReductionGroup[], rewrites: readonly ReductionRewrite[], proof: object) => boolean,
-  softTerminal?: (proof: object) => import('@i-harness/core-session').SoftReductionTerminalDraft | undefined, absent?: () => Promise<void>, instructions?: (source: ContextSnapshot) => import('../request-context.ts').InstructionRequestEvidence | undefined): ContextReductionPorts['publish'] {
+export function createReductionPublication(deps: Pick<AgentDeps, 'captureContextReduction' | 'assertFactOpen' | 'registerFactSource'> & {requestContext?:Pick<NonNullable<AgentDeps['requestContext']>,'retain'>}, check: (source: ContextSnapshot, groups: readonly ReductionGroup[], rewrites: readonly ReductionRewrite[], proof: object) => boolean,
+  softTerminal?: (proof: object) => import('@i-harness/core-session').SoftReductionTerminalDraft | undefined, absent?: () => Promise<void>, instructions?: (source: ContextSnapshot) => import('../request-context.ts').InstructionRequestEvidence | undefined,onCommitted?:(capture:CapturedActionFact<ProducerFactOutcome>,outcome:Extract<ProducerFactOutcome,{kind:'committed'|'memory-committed'}>)=>void): ContextReductionPorts['publish'] {
   return async (source, groups, rewrites, proof) => {
     const actionCapture = deps.captureContextReduction
     if (!actionCapture) return { kind: 'not-issued' }
@@ -19,6 +19,7 @@ export function createReductionPublication(deps: Pick<AgentDeps, 'captureContext
     let pin: import('../request-context.ts').RequestContextPin | undefined
     const reconcile = async () => {
       latest = await capture.reconcile()
+      if(latest.kind==='committed'||latest.kind==='memory-committed')onCommitted?.(capture,latest)
       if (latest.kind === 'unknown' || latest.kind === 'conflict' || latest.kind === 'recovery-required') throw Object.assign(new Error('Context reduction requires reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' })
       // A local stale precondition never issued a batch; C3 may recapture in
       // the same sequence. Backend-proven absence still cancels original work.
@@ -34,6 +35,7 @@ export function createReductionPublication(deps: Pick<AgentDeps, 'captureContext
     if (evidence && deps.requestContext) pin = deps.requestContext.retain(evidence)
     try {
       latest = await capture.admit()
+      if(latest.kind==='committed'||latest.kind==='memory-committed')onCommitted?.(capture,latest)
       if (latest.kind === 'committed') return { kind: 'committed' }
       if (latest.kind === 'memory-committed') return { kind: 'nondurable' }
       if (latest.kind === 'not-issued') return { kind: latest.code === 'FACT_PRECONDITION_STALE' ? 'stale' : latest.code === 'FACT_RECOVERY_REQUIRED' ? 'recovery-required' : 'not-issued' }

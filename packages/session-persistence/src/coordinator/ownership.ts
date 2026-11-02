@@ -18,6 +18,35 @@ export interface OriginalOwnershipBatch { assertCovered(ids: readonly string[]):
 const batchOwners = new WeakMap<object, (ids: readonly string[], retain: (cleanup: OwnershipCleanup) => void, origin?: OriginalOrderingOrigin) => Promise<OriginalOwnershipBatch>>()
 const batchParticipants = new WeakMap<object, (participant: OriginalLegacyOrderingParticipant) => void>()
 const batchCoverage = new WeakMap<OriginalOwnershipBatch, { owner: object; assertCovered(ids: readonly string[]): void }>()
+declare const planBrand: unique symbol
+export interface OriginalOwnershipPlan { readonly [planBrand]: true }
+const batchPlanners = new WeakMap<object, (ids: readonly string[], retain: (cleanup: OwnershipCleanup) => void, origin?: OriginalOrderingOrigin) => Promise<OriginalOwnershipPlan>>()
+const orderedPins = new WeakMap<object, (id: string, retain: (cleanup: OwnershipCleanup) => void, origin: OriginalOrderingOrigin) => Promise<Claim>>()
+export function pinOriginalOwnershipInOrder(owner: Ownership, id: string, retain: (cleanup: OwnershipCleanup) => void, origin: OriginalOrderingOrigin): Promise<Claim> {
+  const pin = orderedPins.get(owner)
+  if (!pin || utilTypes.isProxy(owner)) throw TypeError('Original ordered ownership required')
+  return pin(id, retain, origin)
+}
+const batchPlans = new WeakMap<OriginalOwnershipPlan, { owner: object; ids: readonly string[]; keys: readonly string[]; check(): void; acquire(): Promise<OriginalOwnershipBatch> }>()
+function originalPlan(owner: Ownership, plan: OriginalOwnershipPlan) {
+  const record = batchPlans.get(plan)
+  if (!record || record.owner !== owner || utilTypes.isProxy(plan)) throw TypeError('Original same-owner plan required')
+  return record
+}
+export function planOriginalOwnershipBatch(owner: Ownership, ids: readonly string[], retain: (cleanup: OwnershipCleanup) => void, origin?: OriginalOrderingOrigin): Promise<OriginalOwnershipPlan> {
+  const prepare = batchPlanners.get(owner)
+  if (!prepare || utilTypes.isProxy(owner)) throw TypeError('Original batch ownership required')
+  return prepare(ids, retain, origin)
+}
+export async function acquireOriginalOwnershipPlan(owner: Ownership, plan: OriginalOwnershipPlan): Promise<OriginalOwnershipBatch> { return originalPlan(owner, plan).acquire() }
+export function captureOriginalOwnershipPlanScope(owner: Ownership, plan: OriginalOwnershipPlan) {
+  const record = originalPlan(owner, plan); record.check()
+  return Object.freeze({ keys: Object.freeze([...record.keys]), assertCurrent() { record.check() } })
+}
+export function assertOriginalOwnershipPlanCoverage(owner: Ownership, plan: OriginalOwnershipPlan, ids: readonly string[]): void {
+  const record = originalPlan(owner, plan); record.check()
+  if (captureResultTargetIds(ids).some(id => !record.ids.includes(id))) throw Error('Original batch plan target not covered')
+}
 export function assertOriginalOwnershipBatchCoverage(owner: Ownership, batch: OriginalOwnershipBatch, ids: readonly string[]): void {
   const original = batchCoverage.get(batch)
   if (!original || original.owner !== owner || utilTypes.isProxy(batch)) throw TypeError('Original same-owner batch required')
@@ -292,7 +321,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     returned = resource; return resource
     } finally { done.resolve() }
   }
-  async function borrowBundle(id: string, document: boolean, retain?: (cleanup: OwnershipCleanup) => void, batchIds: readonly string[] = [id], batchCheck: () => void = () => {}, origin?: OriginalOrderingOrigin): Promise<Claim> {
+  async function borrowBundle(id: string, document: boolean, retain?: (cleanup: OwnershipCleanup) => void, batchIds: readonly string[] = [id], batchCheck: () => void = () => {}, origin?: OriginalOrderingOrigin, prepared?: (keys: readonly string[], check: () => void) => Promise<void>): Promise<Claim> {
     const held: Awaited<ReturnType<typeof borrowResource>>[] = []
     const acquisitions: OwnershipCleanup[] = []
     const done = Promise.withResolvers<void>(); let cleaned = false
@@ -367,6 +396,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     }
     const checkHeld = () => { for (const entry of descriptions) { if (entry.reuse) checkBundle(entry.reuse); for (const capture of entry.captures) capture.assertCurrent() }; for (const resource of held) resource.assertHeld() }
     const check = () => { orderingCheck(); batchCheck(); checkHeld() }
+    if (prepared) { check(); await prepared(resources.map(key => key.startsWith('artifact-ownership:') ? key.slice('artifact-ownership:'.length) : key), check); check() }
     try { for (const resource of resources) { check(); held.push(await borrowResource(resource, cleanup => { acquisitions.push(cleanup) })); check() } }
     catch (error) { const errors: unknown[] = []; for (const resource of held.reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length) throw new AggregateError([error,...errors], 'Ownership acquisition cleanup failed'); throw error }
     // Acquisition currency remains finite: do not expose a reusable bundle or
@@ -479,13 +509,31 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     if (!lockEnabled || !artifacts || orderingPending.size || !original) throw Error('Original complete service registration required')
     for (const entry of orderingParticipants.values()) entry.check()
   })
-  batchOwners.set(owner, async (input, retain, origin) => {
-    if (!lockEnabled || !artifacts || typeof retain !== 'function') throw TypeError('Original canonical lock-enabled batch required')
+  batchPlanners.set(owner, async (input, retain, origin) => {
+    if (typeof retain !== 'function') throw TypeError('Original retained batch cleanup required')
+    const ready = Promise.withResolvers<OriginalOwnershipPlan>(), proceed = Promise.withResolvers<void>()
+    void proceed.promise.catch(() => {})
+    let cleanup: OwnershipCleanup | undefined, retired = false, consumed = false, closing = false, settled = false
+    let flight: Promise<OriginalOwnershipBatch> | undefined
+    const retained: OwnershipCleanup = Object.freeze({ assertSettled() { if (!settled) throw Error('Original batch plan cleanup unresolved'); cleanup?.assertSettled() }, async close() {
+      closing = true; proceed.reject(Error('Original batch plan cancelled'))
+      await flight?.catch(() => {}); await cleanup?.close(); cleanup?.assertSettled(); settled = true
+    } })
+    // Retain the exact cancellation/rollback before preparation enters any await.
+    retain(retained)
+    if (!lockEnabled) throw TypeError('Original lock-enabled batch required')
     const ids = captureResultTargetIds(input)
     if (!ids.length) throw TypeError('Invalid original batch targets')
     const methods = orderingMethods(owner, ['pinOwnership', 'pinOwnershipRetained'])
-    let cleanup: OwnershipCleanup | undefined, retired = false
-    const claim = await borrowBundle(ids[0]!, false, original => { cleanup = original; retain(original) }, ids, methods.check, origin)
+    flight = (async () => {
+    const claim = await borrowBundle(ids[0]!, false, original => { cleanup = original }, ids, methods.check, origin, async (keys, check) => {
+      const plan = Object.freeze({}) as OriginalOwnershipPlan
+      batchPlans.set(plan, { owner, ids, keys: Object.freeze([...keys]), check() { if (closing || consumed) throw Error('Original batch plan unavailable'); check() }, async acquire() {
+        if (closing || consumed) throw Error('Original batch plan already consumed')
+        consumed = true; check(); if (closing) throw Error('Original batch plan cancelled'); proceed.resolve(); return flight!
+      } })
+      ready.resolve(plan); await proceed.promise
+    })
     methods.check(); claim.assertHeld()
     const batch: OriginalOwnershipBatch = Object.freeze({
       assertCovered(requested: readonly string[]) {
@@ -494,12 +542,21 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
         methods.check(); claim.assertHeld()
         if (captured.some(id => !ids.includes(id))) throw Error('Original batch target not covered')
       },
-      async close() { if (this !== batch) throw TypeError('Original batch receiver required'); retired = true; await cleanup!.close(); cleanup!.assertSettled() },
+      async close() { if (this !== batch) throw TypeError('Original batch receiver required'); retired = true; await retained.close(); retained.assertSettled() },
     })
     batchCoverage.set(batch, { owner, assertCovered: ids => batch.assertCovered(ids) })
     return batch
+    })()
+    void flight.catch(failure => { ready.reject(failure) })
+    return ready.promise
+  })
+  batchOwners.set(owner, async (input, retain, origin) => {
+    if (!artifacts) throw TypeError('Original canonical lock-enabled batch required')
+    const plan = await planOriginalOwnershipBatch(owner, input, retain, origin)
+    return acquireOriginalOwnershipPlan(owner, plan)
   })
   associateOriginalOrderingLedger(owner, finiteOrdering)
+  orderedPins.set(owner, (id, retain, origin) => borrowBundle(id, false, retain, [id], () => {}, origin))
   ownerClaims.set(owner, claims)
   return owner
 }

@@ -1,11 +1,12 @@
 import { modelExchangeGroup, validRuntimeContextRecord, isStrictFactData, validContextEvent, validContextReductionDraft, validGenerationEvent, validInputPreparationEvent, validInputPromotionDraft, validSoftReductionEvent, type CapturedActionFact, type FactOutcome, type ManagedAction } from '@i-harness/core-session'
-import { captureSettlementFact, retainSettlementCapture } from './settlement-fact.ts'
+import { captureSettlementFact, retainSettlementCapture,forwardSettlementCapture } from './settlement-fact.ts'
+import {types} from 'node:util'
 
 /** Optional action captures retain their original disposition after Stop.
  * Their read/reconcile handles never gain required-settlement admission. */
-export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
-  const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => ({
-    admit: retained.admit, reconcile: retained.reconcile, observe: retained.observe,
+export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureLifecycle' | 'captureMetadata' | 'captureToolDispatch' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
+  const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => forwardSettlementCapture(retained,{
+    admit: ()=>retained.admit(), reconcile: ()=>retained.reconcile(), observe: ()=>retained.observe(),
   })
   const invalid = () => actionHandle(retainSettlementCapture({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' }, operations))
   const invalidReduction = (): CapturedActionFact => {
@@ -17,12 +18,20 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
     catch { return false }
   }
   return {
+    captureLifecycle:event=>actionHandle(captureSettlementFact({kind:'lifecycle',event},operations,true)),
+    captureMetadata:event=>actionHandle(captureSettlementFact({kind:'metadata',event},operations,true)),
+    captureToolDispatch:(callId,eventSeq)=>actionHandle(captureSettlementFact({kind:'tool',event:{type:'tool/dispatch',callId,eventSeq}},operations,true)),
+    captureToolCall(event) {
+      operations.assertHeld()
+      if(!event||typeof event!=='object'||types.isProxy(event)||Object.getOwnPropertyDescriptor(event,'type')?.value!=='tool/call')return invalid()
+      return actionHandle(captureSettlementFact({kind:'tool',event},operations,true))
+    },
     captureModelExchange(...args) {
       const retained = captureSettlementFact(modelExchangeGroup(...args), operations, true)
-      return { admit: retained.admit, observe: retained.observe, async reconcile() {
+      return forwardSettlementCapture(retained,{ admit: ()=>retained.admit(), observe: ()=>retained.observe(), async reconcile() {
         const outcome = await retained.observe()
         return outcome.kind === 'unknown' || outcome.kind === 'conflict' || outcome.kind === 'recovery-required' ? retained.reconcile() : outcome
-      } }
+      } })
     },
     captureRuntimeContext(event, checkCurrent) {
       return validRuntimeContextRecord(event) && !Object.hasOwn(event, 'seq') ? actionHandle(captureSettlementFact({ kind: 'runtime-context', event }, guarded(checkCurrent), true)) : invalidReduction()

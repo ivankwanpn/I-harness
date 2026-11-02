@@ -1,10 +1,10 @@
 import type { FactGroupDraft } from "./groups.ts"
 import { modelExchangeGroup } from './groups.ts'
-import type { FactPorts } from "./ports.ts"
+import type { FactPorts,ToolFacts } from "./ports.ts"
 
 /** Closed constructors: each subsystem receives only its permitted producer
  * port. The admission callback remains private to the document composition. */
-export function createFactPorts<Outcome>(admit: (draft: FactGroupDraft) => Promise<Outcome>): FactPorts<Outcome> {
+export function createFactPorts<Outcome>(admit: (draft: FactGroupDraft) => Promise<Outcome>,capturedToolCall?:ToolFacts<Outcome>['call']): FactPorts<Outcome> {
   return {
     inputs: {
       scheduled: (dispatches, admitted) => admit({ kind: 'scheduled-input', dispatches, admitted }),
@@ -21,7 +21,7 @@ export function createFactPorts<Outcome>(admit: (draft: FactGroupDraft) => Promi
       usage: event => admit({ kind: 'usage', event }),
     },
     tools: {
-      call: event => admit({ kind: 'tool', event }),
+      call: event => capturedToolCall?capturedToolCall(event):admit({ kind: 'tool', event }),
       result: event => admit({ kind: 'tool', event }),
       dispatch: (callId, eventSeq) => eventSeq ? admit({ kind: 'tool', event: { type: 'tool/dispatch', callId, eventSeq } }) : Promise.reject(new TypeError('Managed dispatch requires a committed call reference')),
     },

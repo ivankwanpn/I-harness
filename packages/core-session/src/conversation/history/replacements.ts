@@ -84,7 +84,7 @@ export function validateHistoricalReplacement(archive: HistoryArchive, replaceme
     if((fact.type==='agent/input/promoted'||fact.type==='agent/input/cancelled')&&deliveryInputs.has(fact.inputId!)){pendingDeliverySources.delete(deliveryInputs.get(fact.inputId!)!);deliveryInputs.delete(fact.inputId!)}
   }
   for(const [,fact] of historyEntries(archive)) {
-    if((fact.type.startsWith('agent/delivery-')||fact.type==='exec/end'||fact.type==='workflow/end')&&fact.seq!==undefined&&selectedSeqs.has(fact.seq))fail('protected-source',seq)
+    if((fact.type.startsWith('agent/delivery-')||fact.type==='exec/end'||fact.type==='workflow/end'||fact.type==='code/end')&&fact.seq!==undefined&&selectedSeqs.has(fact.seq))fail('protected-source',seq)
     if((fact.type==='agent/delivery-source'&&pendingDeliverySources.has(fact.seq!)||fact.deliverySourceSeq!==undefined&&deliveryInputs.has(fact.inputId!))&&fact.deliveryDependencies?.some(ref=>selectedSeqs.has(ref)))fail('protected-source',seq)
   }
   if (ambiguousTurn) fail('protected-source', seq)

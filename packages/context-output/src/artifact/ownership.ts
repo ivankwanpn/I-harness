@@ -1,4 +1,5 @@
-import { passiveManagedReleaseInventory } from './release-inventory.ts'
+import { passiveManagedReleaseInventory, prepareOriginalManagedRelease, applyOriginalManagedRelease, assertOriginalManagedReleaseSettled, type ManagedReleaseInventory, type OriginalManagedRelease } from './release-inventory.ts'
+import type { OriginalRevocationCoverage } from '../../../session-persistence/src/coordinator/result-revocation.ts'
 import { mkdir, readdir, rm, lstat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { validManagedArtifactRef, type ManagedArtifactRef, type ResultCodec, type ResultDependency } from '@i-harness/core-session'
@@ -232,7 +233,11 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     return Object.freeze({operationId:registered.owner.operationId,sessionId:registered.owner.sessionId,callId:registered.owner.callId,source:Object.freeze({...registered.owner.source}),ref:Object.freeze({...ref})})
   }
   const transfers = createSeedDependencyTransfer({ root, options, directory, quota, mutate, membership, authorized, available: document => !closed && !deletedDocuments.has(document) })
-  return { ...transfers, assertOriginalManifestScope, captureConfirmedCodeManifest, passiveReleaseInventory(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, documents: readonly string[], io: import('./qualification-io.ts').ArtifactQualificationIO) { mutations.assertTurn(turn); return passiveManagedReleaseInventory(root, options.workspaceId, documents, io, () => mutations.assertTurn(turn)) }, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, readCodeOutputResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
+  return { ...transfers, assertOriginalManifestScope, captureConfirmedCodeManifest,
+    prepareCoveredRelease(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, inventory: ManagedReleaseInventory, coverage: OriginalRevocationCoverage) { mutations.assertTurn(turn); return prepareOriginalManagedRelease(root, inventory, coverage) },
+    async applyCoveredRelease(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, operation: OriginalManagedRelease) { mutations.assertTurn(turn); const documents = await applyOriginalManagedRelease(root, operation, () => mutations.assertTurn(turn)); for (const document of documents) deletedDocuments.add(document) },
+    assertCoveredReleaseSettled: assertOriginalManagedReleaseSettled,
+    passiveReleaseInventory(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, documents: readonly string[], io: import('./qualification-io.ts').ArtifactQualificationIO) { mutations.assertTurn(turn); return passiveManagedReleaseInventory(root, options.workspaceId, documents, io, () => mutations.assertTurn(turn)) }, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, readCodeOutputResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
     checkQuota: () => mutate(() => requireSpace(root, quota(), 0)),
     reconcileResult: (operationId: string, id: string) => mutate(async () => {
       if (closed) throw new Error('Artifact owner closed')

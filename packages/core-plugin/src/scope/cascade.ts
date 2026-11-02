@@ -10,12 +10,13 @@ export function createCascades(
   getMountingPlugin: () => string | null,
   getScope: () => InternalScope,
 ) {
-  const cascades = new Map<string, CascadeHandler<unknown, unknown>[]>()
+  const cascades = new Map<string, {handler:CascadeHandler<unknown,unknown>;executionAware:boolean}[]>()
+  const revisions=new Map<string,number>()
   const pluginCascades = new Map<string, OwnedCascade[]>()
 
-  function registerCascade(event: string, handler: CascadeHandler<unknown, unknown>): void {
+  function registerCascade(event: string, handler: CascadeHandler<unknown, unknown>,executionAware=false): void {
     const list = cascades.get(event) ?? []
-    list.push(handler)
+    list.push({handler,executionAware});revisions.set(event,(revisions.get(event)??0)+1)
     cascades.set(event, list)
     const mountingPlugin = getMountingPlugin()
     if (mountingPlugin !== null) {
@@ -29,7 +30,7 @@ export function createCascades(
   // THIS scope's handlers, re-snapshotted per call so mid-dispatch
   // registrations don't affect the current run.
   function localCascades(event: string): CascadeHandler<unknown, unknown>[] {
-    return [...(cascades.get(event) ?? [])]
+    return (cascades.get(event) ?? []).map(entry=>entry.handler)
   }
 
   // Cascade dispatch: `ctx.cascade` handlers are AROUND hooks over a single
@@ -50,7 +51,9 @@ export function createCascades(
     event: string,
     input: TInput,
     final: () => Promise<TOutput>,
+    current?:()=>void,
   ): Promise<TOutput> {
+    current?.()
     // Walk self → root, then reverse for root-first composition, flattening
     // each scope's local snapshot in registration order.
     const chain: InternalScope[] = []
@@ -58,9 +61,9 @@ export function createCascades(
     chain.reverse()
     const handlers: CascadeHandler<unknown, unknown>[] = []
     for (const scope of chain) handlers.push(...scope.localCascades(event))
-    if (handlers.length === 0) return final() // unchanged no-op path
-    const run = (i: number): Promise<TOutput> => {
-      if (i >= handlers.length) return final()
+    const run = async (i: number): Promise<TOutput> => {
+      current?.()
+      if (i >= handlers.length) {const result=await final();current?.();return result}
       let nextCalled = false
       const next = (): Promise<TOutput> => {
         if (nextCalled) {
@@ -69,7 +72,9 @@ export function createCascades(
         nextCalled = true
         return run(i + 1)
       }
-      return handlers[i]!(input, next) as Promise<TOutput>
+      const result=await handlers[i]!(input,next) as TOutput
+      current?.()
+      return result
     }
     return run(0)
   }
@@ -78,12 +83,12 @@ export function createCascades(
     for (const { event, handler } of pluginCascades.get(name) ?? []) {
       const list = cascades.get(event)
       if (list) {
-        const index = list.indexOf(handler)
-        if (index !== -1) list.splice(index, 1)
+        const index = list.findIndex(entry=>entry.handler===handler)
+        if (index !== -1) {list.splice(index, 1);revisions.set(event,(revisions.get(event)??0)+1)}
       }
     }
     pluginCascades.delete(name)
   }
 
-  return { register: registerCascade, localCascades, dispatch: dispatchCascade, reclaim }
+  return { register: registerCascade, localCascades, dispatch: dispatchCascade, reclaim,surface(event:string){const list=cascades.get(event)??[];return {version:String(revisions.get(event)??0),compatible:list.every(entry=>entry.executionAware)}} }
 }

@@ -12,8 +12,17 @@ import { createCodeModeEventFacts } from './event-facts.ts'
 import { createCodeOutputPublisher } from './output-facts.ts'
 import { observationOutput } from './observation-output.ts'
 import { originalObservationReplan } from './runtime/replan-observation.ts'
-import { captureOriginalCellFinalization, createCellFinalizations, type OriginalCellFinalization } from './finalization.ts'
+import { captureOriginalCellFinalization, createCellFinalizations, readOriginalWorkerAcquisition, type OriginalCellFinalization } from './finalization.ts'
 import { createFinalCodeOutputs } from './final-output.ts'
+
+type CompletionObservation = {kind:'unqualified'|'qualified';cellId:string;worker:'unknown'|'not-acquired'|'acquired';eligible:boolean;evidence?:object}
+type CompletionHandle = Readonly<{settle():Promise<CompletionObservation>}>
+const completionMounts=new WeakMap<object,Map<string,CompletionHandle>>()
+export function captureOriginalCodeCompletion(mount:object,cellId:string):CompletionHandle {
+  const handle=completionMounts.get(mount)?.get(cellId)
+  if(!handle)throw new Error('Original Code completion unavailable')
+  return handle
+}
 
 function declareObservationReplan(exec: ToolExec, out: import('./types.ts').CodeModeObservation) {
   const error = originalObservationReplan(out)
@@ -38,9 +47,10 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const surfaceChanged = () => { for (const listener of [...surfaceListeners]) { try { listener() } catch { /* Isolate consumers from publication. */ } } }
   const broker = createCodeModeBroker(ctx, tools, options, (cellId, detail) => runtime.replan(cellId, detail))
   const finalizations = createCellFinalizations('cell-finalization',factOwner)
+  const completionHandles=new Map<string,CompletionHandle>()
   const originalCells = new Map<string, { terminal: ReturnType<typeof Promise.withResolvers<void>>; fence: ReturnType<typeof Promise.withResolvers<void>>; broker?: Pick<OriginalCellFinalization, 'settle'> }>()
   const finalOutputFactory=options.finalOutput
-  const finalOutputs = createFinalCodeOutputs(factOwner, finalOutputFactory, () => facts.refresh())
+  const finalOutputs = createFinalCodeOutputs(factOwner, finalOutputFactory, () => facts.refresh(), id=>{completionHandles.delete(id)})
   const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged, finalOutputFactory ? {retains:cellId=>finalOutputs.retains(cellId),commit:record=>finalOutputs.commit(record)} : undefined)
   const publishOutput = createCodeOutputPublisher(facts, options.retainText)
   const pendingFinishes = new Map<string, () => Promise<void>>()
@@ -94,13 +104,35 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
             if (originalCells.get(event.cellId) === cell) originalCells.delete(event.cellId)
           })
           void terminal.promise.then(() => finalization.settle()).catch(() => {})
+          const outputReady=Promise.withResolvers<NonNullable<ReturnType<typeof finalOutputs.captureCompletion>>>()
+          void outputReady.promise.catch(()=>{})
           try {
+            if(finalOutputFactory && (options.sessionId ?? event.origin.sessionId) && !event.origin.instructionOrigin && !nondurable && options.session.formatVersion===14) {
+              let settled:CompletionObservation|undefined
+              const handle:CompletionHandle=Object.freeze({async settle(){
+                if(this!==handle)throw new Error('Original Code completion handle required')
+                if(settled)return settled
+                const output=await outputReady.promise
+                await output.settle()
+                if(settled)return settled
+                const evidence=output.evidence(),worker=readOriginalWorkerAcquisition(runtimeOwner)
+                const eligible=!!evidence && worker==='acquired' && (evidence.footer.status==='completed'||evidence.footer.status==='failed') && !evidence.footer.truncated && !evidence.footer.omitted && evidence.unavailableTextCount===0 && evidence.ref.completeness==='complete'
+                settled=Object.freeze({kind:evidence?'qualified':'unqualified',cellId:event.cellId,worker,eligible,...(evidence?{evidence}:{})})
+                if(completionHandles.get(event.cellId)===handle)completionHandles.delete(event.cellId)
+                return settled
+              }})
+              completionHandles.set(event.cellId,handle)
+            }
             finalOutputs.reserve(event.cellId, options.sessionId ?? event.origin.sessionId, finalization, runtimeOwner, !!event.origin.instructionOrigin)
+            const output=finalOutputs.captureCompletion(event.cellId)
+            if(output)outputReady.resolve(output)
+            else outputReady.reject(new Error('Original Code output unavailable'))
             await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
             try { cell.broker = broker.startCell(event.cellId, event.origin.instructionOrigin); liveCells.add(event.cellId); event.instructionInstalled?.() }
             catch (error) { installationFailed = true; throw error }
             surfaceChanged()
           } catch (error) {
+            outputReady.reject(error)
             const terminal = { type: 'code/cell' as const, cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: 'interrupted' as const, error: 'Code Mode admission did not complete' }
             let terminalDone = false, flight: Promise<void> | undefined
             const settle = () => {
@@ -241,5 +273,6 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   }
   finalizations.bind(mount)
   finalOutputs.bind(mount)
+  completionMounts.set(mount,completionHandles)
   return mount
 }

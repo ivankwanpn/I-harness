@@ -1,25 +1,26 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import { captureExecutionOwnerContext, preparedExecutionOwnerContext, type ToolExecutionOwnerContext } from './registry/prepared-body.ts'
+import { captureExecutionOwnerContext, preparedExecutionOwnerContext,preparedManagedExecutionDomain, type ToolExecutionOwnerContext,type ManagedToolExecutionOwnerContext } from './registry/prepared-body.ts'
 export { bindPreparedShellLeaf, assertPreparedExecutionOwnerContext } from './registry/prepared-body.ts'
-export type { PreparedShellBodyClaim, ToolExecutionOwnerContext } from './registry/prepared-body.ts'
+export {readToolInvocationDomain} from './registry/invocation-domain.ts'
+export type { PreparedShellBodyClaim, ToolExecutionOwnerContext,ManagedToolExecutionOwnerContext } from './registry/prepared-body.ts'
 import type { ToolRegistry, ToolCall, ToolResult } from "./types.ts"
 import { createCatalog } from "./registry/catalog.ts"
 import { createPreparer } from "./registry/prepare.ts"
 import { createDispatcher } from "./registry/dispatch.ts"
 import { createFinalizer } from "./registry/finalize.ts"
 import { installPreExecuteDecision } from "./approval/decision.ts"
-import { assertSyntheticResult, bindSyntheticFinalization, type ToolResultRetention } from './registry/result-finalization.ts'
+import { assertSyntheticResult,assertManagedSyntheticResult, bindSyntheticFinalization, type ToolResultRetention } from './registry/result-finalization.ts'
 import { isNativePlanValidationError } from './instructions.ts'
 import { isPolicyRefusal } from './types.ts'
-export { assertResultPrepared, assertSyntheticResult, declareToolResultOutcome, declareToolResultPresentation, resultExecution, resultPresentation, isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from './registry/result-finalization.ts'
-export type { ResultFinalization, ResultProgram, ToolResultRetention, SyntheticResultContext } from './registry/result-finalization.ts'
+export { assertResultPrepared, assertSyntheticResult, declareToolResultOutcome, declareToolResultPresentation, resultExecution, resultPresentation, isOriginalResultFinalization, isOriginalSyntheticResultFinalization,retainedFinalizedToolResult,releaseFinalizedToolResult } from './registry/result-finalization.ts'
+export type { ResultFinalization, ResultProgram, ToolResultRetention, SyntheticResultContext,ManagedSyntheticResultContext } from './registry/result-finalization.ts'
 export { currentToolResultProducer, registerToolResultDependency, toolResultDependencies } from './registry/result-dependencies.ts'
 export type { ToolResultDependency } from './registry/result-dependencies.ts'
 
 export { isPolicyRefusal, INVALID_ARGS, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_ABORTED_MID_FLIGHT, TOOL_TIMEOUT } from "./types.ts"
 export type { MediaGenerationAction, ToolModelGeneration, CodeGenerationLineage, CodeGenerationScope } from './types.ts'
 export type { NativeTarget, NativePlan, NativeMutation, NativeBoundary, CapturedToolCall, AcceptedInstructionCall, AcceptedCallDescriptor, AcceptedInstructionBatch, InstructionBatchEntry, InstructionCellOrigin, InstructionCellLease, ToolPrepareIdentity } from './types.ts'
-export { NativePlanValidationError, nativePlanValidationFailure, isNativePlanValidationError, nativeOperation, nativeMutation, capturedToolRegistry, instructionReplan, isInstructionReplan, InstructionReplanError, declareInstructionReplan, instructionReplanDisposition, retainInstructionCell, bindInstructionInvocation, preflightInstructionInvocations, releaseInstructionCell, isOriginalInstructionCellRequest } from './instructions.ts'
+export { NativePlanValidationError, nativePlanValidationFailure, isNativePlanValidationError, nativeOperation, nativeMutation, capturedToolRegistry,capturedManagedExecutionDomain, instructionReplan, isInstructionReplan, InstructionReplanError, declareInstructionReplan, instructionReplanDisposition, retainInstructionCell, bindInstructionInvocation, preflightInstructionInvocations, releaseInstructionCell, isOriginalInstructionCellRequest } from './instructions.ts'
 export type { InstructionReplanData } from './instructions.ts'
 export type { ToolExposure, Tool, PreparedToolIdentity, PreparedApprovalInput, ApprovalRememberView, PreparedApprovalProvider, ApprovalAuthorityProvider, ToolExec, ToolDecision, PolicyRefusal, ToolCall, ToolResult, PreparedCall, ToolDispatchMetadata, ToolSchema, SearchableTool, GuardianRequest, GuardianVerdict, ApprovalGuardian, ToolRegistry } from "./types.ts"
 export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
@@ -34,14 +35,18 @@ export type { ContextRemainingOptions } from "./context-remaining.ts"
 const registryRetention = new WeakMap<ToolRegistry, ToolResultRetention | undefined>()
 const registryInstructions = new WeakMap<ToolRegistry, { required: boolean; verify?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; retainCell?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined }>()
 export function registryRequiresInstructionOrigin(registry: ToolRegistry): boolean { return registryInstructions.get(registry)?.required === true }
-type RegistryOptions = { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; executionOwner?: ToolExecutionOwnerContext; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; instructionCellRetainer?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined }
+const originPairs=new WeakMap<object,{registry:ToolRegistry;verifier:object}>()
+export function assertModelOriginPair(registry:ToolRegistry,driver:object,verifier:object){const original=originPairs.get(driver);if(!original||original.registry!==registry||original.verifier!==verifier)throw Error('Original model registry/driver pair required')}
+type RegistryOptions = { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; executionOwner?: ToolExecutionOwnerContext|ManagedToolExecutionOwnerContext; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; instructionCellRetainer?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined }
 export function createToolRegistry(ctx: PluginContext, options: RegistryOptions = {}): ToolRegistry { return buildRegistry(ctx, options).registry }
-export function createToolRegistryWithModelOrigin(ctx: PluginContext, options: RegistryOptions, verifier: import('./model-origin.ts').ConstructorModelOriginVerifier) {
-  const method = verifier?.take
+export function createToolRegistryWithModelOrigin(ctx: PluginContext, options: RegistryOptions, verifier: import('./model-origin.ts').ConstructorModelOriginVerifier|import('./model-origin.ts').ConstructorManagedModelOriginVerifier) {
+  const managed=Object.getOwnPropertyDescriptor(verifier,'kind')?.value==='managed-model-origin'
+  const method = managed?Object.getOwnPropertyDescriptor(verifier,'take')?.value:verifier?.take
   if (typeof method !== 'function') throw new TypeError('Original verifier required')
-  return buildRegistry(ctx, options, method.bind(verifier))
+  if(managed&&(!options.executionOwner||!('kind'in options.executionOwner)||options.executionOwner.domain!==Object.getOwnPropertyDescriptor(verifier,'domain')?.value))throw Error('Original managed verifier/domain required')
+  const pair=buildRegistry(ctx, options, managed?{managed:method.bind(verifier)}:{public:method.bind(verifier)});originPairs.set(pair.driver,{registry:pair.registry,verifier});return pair
 }
-function buildRegistry(ctx: PluginContext, options: RegistryOptions, take?: import('./model-origin.ts').ConstructorModelOriginVerifier['take']) {
+function buildRegistry(ctx: PluginContext, options: RegistryOptions, take?: import('./model-origin.ts').ModelOriginTake) {
   const ownerDescriptor = Object.getOwnPropertyDescriptor(options,'executionOwner')
   if (ownerDescriptor && !('value' in ownerDescriptor)) throw new TypeError('Execution owner must be own data')
   const executionOwner = captureExecutionOwnerContext(ctx, ownerDescriptor?.value)
@@ -60,7 +65,8 @@ function buildRegistry(ctx: PluginContext, options: RegistryOptions, take?: impo
   const preparer = createPreparer(ctx, catalog, () => registry, required, verify, retainCell, executionOwner)
   const prepareCaptured: ToolRegistry['prepareCaptured'] = async (...args) => {
     const prepared = await preparer.prepareCaptured(...args)
-    await retention?.prepare?.(prepared, preparedExecutionOwnerContext(prepared))
+    const domain=preparedManagedExecutionDomain(prepared)
+    if(domain&&retention){if(!retention.prepareManaged)throw Error('Managed result retention requires its original private adapter');await retention.prepareManaged(prepared,domain)}else await retention?.prepare?.(prepared, preparedExecutionOwnerContext(prepared))
     return prepared
   }
   const prepare: ToolRegistry['prepare'] = async (...args) => {
@@ -100,6 +106,7 @@ function buildRegistry(ctx: PluginContext, options: RegistryOptions, take?: impo
       assertSyntheticResult(context)
       return bindSyntheticFinalization(context, retention.captureSynthetic(context, output, execution))
     },
+    captureManagedSyntheticResult(context,output,execution){assertManagedSyntheticResult(context);if(!retention)return undefined;if(!retention.captureManagedSynthetic)throw Error('Managed synthetic result retention requires original private adapter');return bindSyntheticFinalization(context,retention.captureManagedSynthetic(context,output,execution))},
     execute,
     genToolCatalog: catalog.genToolCatalog,
     verifyToolCatalog: catalog.verifyToolCatalog,

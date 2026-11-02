@@ -14,7 +14,7 @@ function inheritedBindingCurrent(current: ModelContextBindingDescriptor | undefi
   return !current || !!inherited && current.identity === inherited.identity && scalarIdentity(current) === scalars
 }
 
-function validateBudget(budget: AgentBudgetConfig | undefined): void {
+export function validateBudget(budget: AgentBudgetConfig | undefined): void {
   if (budget !== undefined) {
     const { contextWindow, resetRetainLast, overheadTokens, reserveRatio } = budget
     if (!(Number.isSafeInteger(contextWindow) && contextWindow > 0)) {

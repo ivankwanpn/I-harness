@@ -10,16 +10,17 @@ interface OwnedListener {
 /** Only the waterfall operations needed by emit; its registries stay private. */
 interface WaterfallDispatch {
   snapshot(event: string): WaterfallHandler[]
-  run(event: string, handlers: WaterfallHandler[], payload: unknown): Promise<unknown>
+  run(event: string, handlers: WaterfallHandler[], payload: unknown,current?:()=>void): Promise<unknown>
 }
 
 export function createListeners(
   getMountingPlugin: () => string | null,
   getScope: () => InternalScope,
-  parentEmit: (event: string, payload: unknown) => Promise<unknown>,
+  parentEmit: (event: string, payload: unknown,current?:()=>void) => Promise<unknown>,
   waterfall: WaterfallDispatch,
 ) {
-  const listeners = new Map<string, Listener[]>()
+  const listeners = new Map<string, {handler:Listener;executionAware:boolean}[]>()
+  const revisions=new Map<string,number>()
   const pluginListeners = new Map<string, OwnedListener[]>()
   const guards = new Map<string, GuardFn[]>()
   // I3: a scope's own decision per event for the CURRENT emit, written by
@@ -28,9 +29,9 @@ export function createListeners(
   // across repeated emits for the same event.
   const decisions = new Map<string, unknown>()
 
-  function registerListener(event: string, handler: Listener): void {
+  function registerListener(event: string, handler: Listener,executionAware=false): void {
     const list = listeners.get(event) ?? []
-    list.push(handler)
+    list.push({handler,executionAware});revisions.set(event,(revisions.get(event)??0)+1)
     listeners.set(event, list)
     const mountingPlugin = getMountingPlugin()
     if (mountingPlugin !== null) {
@@ -76,15 +77,18 @@ export function createListeners(
   // cleared at the start of every emit so a scope's decision never leaks
   // across repeated emits: a pass-through emit reads the parent's FRESH
   // decision recorded during the same emit's propagation, not a stale one.
-  async function emitFn(event: string, payload: unknown): Promise<unknown> {
+  async function emitFn(event: string, payload: unknown,current?:()=>void): Promise<unknown> {
+    current?.()
     decisions.delete(event)
     const plainListeners = [...(listeners.get(event) ?? [])]
     const waterfallHandlers = waterfall.snapshot(event)
     let chainPayload = payload
     let seeded = false
-    for (const handler of plainListeners) {
+    for (const {handler} of plainListeners) {
+      current?.()
       const res = handler(payload)
       const resolved = isPromiseLike(res) ? await res : res
+      current?.()
       if (waterfallHandlers.length > 0 && resolved !== undefined) {
         chainPayload = resolved
         seeded = true
@@ -92,10 +96,10 @@ export function createListeners(
     }
     let resolvedPayload = chainPayload
     if (waterfallHandlers.length > 0) {
-      resolvedPayload = (await waterfall.run(event, waterfallHandlers, chainPayload)) ?? chainPayload
+      resolvedPayload = (await waterfall.run(event, waterfallHandlers, chainPayload,current)) ?? chainPayload
     }
     if (seeded) decisions.set(event, chainPayload)
-    await parentEmit(event, resolvedPayload)
+    current?.();await parentEmit(event, resolvedPayload,current);current?.()
     return resolvedPayload
   }
 
@@ -148,8 +152,8 @@ export function createListeners(
     for (const { event, handler } of pluginListeners.get(name) ?? []) {
       const list = listeners.get(event)
       if (list) {
-        const index = list.indexOf(handler)
-        if (index !== -1) list.splice(index, 1)
+        const index = list.findIndex(entry=>entry.handler===handler)
+        if (index !== -1) {list.splice(index, 1);revisions.set(event,(revisions.get(event)??0)+1)}
       }
     }
     pluginListeners.delete(name)
@@ -171,5 +175,6 @@ export function createListeners(
     resolveDecision,
     resolveAncestorDecision,
     reclaim,
+    surface:(event:string)=>({version:revisions.get(event)??0,compatible:(listeners.get(event)??[]).every(entry=>entry.executionAware)}),
   }
 }

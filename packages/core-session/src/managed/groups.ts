@@ -192,10 +192,15 @@ export function captureFactGroup(draft: FactGroupDraft):
 }
 
 /** Explicit structural slots only: user args/output containing $ref are data. */
+export function isOriginalCapturedFactGroup(group:object):group is CapturedFactGroup{return owned.has(group)}
 export function resolveFactGroup(group: CapturedFactGroup, view: SessionView, firstSeq: number): SessionEvent[] {
+  return resolveFactGroupWithDependencies(group,{eventCount:view.events.length,readEvent:seq=>view.events[seq]},firstSeq)
+}
+/** Same original structural resolver; no partial Session or event facade. */
+export function resolveFactGroupWithDependencies(group:CapturedFactGroup,source:{readonly eventCount:number;readEvent(seq:number):import('./types.ts').SessionEventView|undefined},firstSeq:number):SessionEvent[] {
   if (!owned.has(group)) throw new TypeError('Unowned fact group')
   if (group.kind === 'seed-import') {
-    if (firstSeq !== 0 || view.events.length) throw new TypeError('Seed requires an empty owned document')
+    if (firstSeq !== 0 || source.eventCount) throw new TypeError('Seed requires an empty owned document')
     for (const event of group.events) {
       if (isDeliveryEventType(event.type)) throw new TypeError('Seed cannot import delivery authority')
       if (event.type === 'runtime/context' || isContextEventType(event.type) || event.type === 'agent/input/preparation' || event.type === 'model/exchange-accepted' && event.version !== 1) throw new TypeError('Seed cannot import operational authority')
@@ -203,17 +208,17 @@ export function resolveFactGroup(group: CapturedFactGroup, view: SessionView, fi
       if ((event.type === 'user/message' || event.type === 'agent/input/admitted' || event.type === 'subagent/inbox') && event.provenance?.kind !== 'inherited') throw new TypeError('Seed input must carry inherited provenance')
     }
   }
-  const source = groupEvents(group) as readonly SessionEvent[]
+  const members = groupEvents(group) as readonly SessionEvent[]
   const events: SessionEvent[] = []
   const reference = (value: unknown, expectedType: SessionEvent['type'], position: number): number => {
     const ref = value as SeqRef<SessionEvent['type']>
     if (!ref || ref.expectedType !== expectedType) throw new TypeError('Invalid fact reference')
-    const target = ref.kind === 'prior' ? view.events[ref.seq] : ref.kind === 'group' && ref.position < position ? events[ref.position] : undefined
+    const target = ref.kind === 'prior' ? source.readEvent(ref.seq) : ref.kind === 'group' && ref.position < position ? events[ref.position] : undefined
     const seq = ref.kind === 'prior' ? ref.seq : ref.kind === 'group' ? firstSeq + ref.position : -1
     if (!Number.isSafeInteger(seq) || seq < 0 || !target || target.type !== expectedType || target.seq !== seq) throw new TypeError('Invalid fact reference')
     return seq
   }
-  for (const [position, event] of source.entries()) {
+  for (const [position, event] of members.entries()) {
     let resolved = { ...event, seq: firstSeq + position } as SessionEvent
     if ((group.kind === 'input-start' || group.kind === 'steer-claim') && group.preparation) {
       const rawMessageSeq = firstSeq + (group.promoted ? 1 : 0) + (group.kind === 'input-start' ? 1 : 0)

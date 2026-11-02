@@ -1,5 +1,7 @@
-import { isCascadeRedispatch, type PluginContext } from "@i-harness/core-plugin"
-import type { ToolCall } from "@i-harness/core-tools"
+import { isCascadeRedispatch,onExecutionEvent,waterfallExecutionEvent,onExecutionCascade,type ExecutionHookStopInput,type PluginContext } from "@i-harness/core-plugin"
+import {readToolInvocationDomain,type ToolCall} from "@i-harness/core-tools"
+import type {ClaudeStopInput} from '../claude-runtime.ts'
+import {assertHookExecutionDomain,isOwnedClaudeRuntime} from '../claude-runtime.ts'
 import type { ClaudeHookSession, HookContext } from "../types.ts"
 import { HookOwnerAbortError } from "../types.ts"
 import type { InternalRegistry, HookRuntimeInput } from "../registry-types.ts"
@@ -11,11 +13,11 @@ export function registerRuntimeStop(
   registry: InternalRegistry,
   runtimeService: ReturnType<typeof claudeRuntimeService>,
   isDisposed: () => boolean,
+  mode:'owned'|'complete'='complete',
 ): () => void {
-  return runtimeService.registerStop(async (input) => {
+  const run=async (input:ClaudeStopInput|ExecutionHookStopInput,origin:string|undefined) => {
     if (isDisposed()) return undefined
-    const header = (input.session as ClaudeHookSession & { header?: { origin?: string } }).header
-    const event = header?.origin === "subagent" ? "subagent/stop" : "stop"
+    const event = origin === "subagent" ? "subagent/stop" : "stop"
     const context: HookContext = event === "stop" ? { event, sessionId: input.sessionId ?? "", finalText: input.finalText, turns: input.turns }
       : { event, sessionId: input.sessionId ?? "" }
     const outputs = await runHandlers(registry, event, context, undefined, false, {
@@ -24,23 +26,34 @@ export function registerRuntimeStop(
     })
     if (input.signal?.aborted) throw new Error("agent aborted")
     return outputs.filter(output => output.continue !== false).map(output => output.continuation).filter(Boolean).join("\n\n") || undefined
-  })
+  }
+  const session=(input:ClaudeStopInput)=>run(input,(input.session as ClaudeHookSession & {header?:{origin?:string}}).header?.origin)
+  if(mode==='owned'){
+    if(!isOwnedClaudeRuntime(runtimeService))throw Error('Original owned runtime required')
+    return runtimeService.registerStopAdapter({session,execution:input=>run(input,input.origin)})
+  }
+  return runtimeService.registerStop(session)
 
 }
 
 /** Preserve mount/listener order and one pre/post pair per logical tool call. */
-export function mountHookListeners(ctx: PluginContext, registry: InternalRegistry, mountName: string): void {
+export function mountHookListeners(ctx: PluginContext, registry: InternalRegistry, mountName: string,mode:'owned'|'complete'='complete'): void {
+  const on:PluginContext['on']=(event,handler)=>mode==='owned'?onExecutionEvent(ctx,event,handler):ctx.on(event,handler)
+  const waterfall:PluginContext['waterfall']=(event,handler)=>mode==='owned'?waterfallExecutionEvent(ctx,event,handler):ctx.waterfall(event,handler)
+  const cascade:PluginContext['onCascade']=(event,handler)=>mode==='owned'?onExecutionCascade(ctx,event,handler):ctx.onCascade(event,handler)
+  const invocation=(input:unknown)=>{if(!input||typeof input!=='object')throw TypeError('Original hook invocation required');return readToolInvocationDomain(input)}
   ctx.mount({ name: mountName, mount() {
     // 1+2. pre-tool / post-tool around the real tool body (tools/execute cascade).
-    ctx.onCascade("tools/execute", async (input, next) => {
+    cascade("tools/execute", async (input, next) => {
       const call = input as { name: string; args: unknown; commandDialect?: HookRuntimeInput["dialect"]; exec?: { session?: ClaudeHookSession; sessionId?: string; callId?: string; abortSignal?: AbortSignal } }
-      const runtime: HookRuntimeInput = { session: call.exec?.session, sessionId: call.exec?.sessionId, callId: call.exec?.callId, signal: call.exec?.abortSignal, dialect: call.commandDialect }
+      if(isCascadeRedispatch(input))return next()
+      const domain=mode==='owned'?invocation(call.exec):undefined
+      const runtime: HookRuntimeInput = { ...(domain?{domain}:{}),session: call.exec?.session, sessionId: call.exec?.sessionId, callId: call.exec?.callId, signal: call.exec?.abortSignal, dialect: call.commandDialect }
       // M51 B1: a guard-retry RE-DISPATCH frame already had its pre-tool run
       // (approval/args are unchanged) and the frame that ran the pair owns the
       // single post-tool — skip this frame's pair so one logical call sees
       // exactly one pre-tool and one post-tool regardless of retry count and
       // mount order. The re-dispatch still enters the cascade (timeout re-arms).
-      if (isCascadeRedispatch(input)) return next()
       await runHandlers(
         registry,
         "pre-tool",
@@ -65,28 +78,31 @@ export function mountHookListeners(ctx: PluginContext, registry: InternalRegistr
     })
 
     // 3. permission: seed the pre-execute chain with a ToolDecision.
-    ctx.on("tools/pre-execute", async (payload) => {
-      return permissionDecision(registry, payload as ToolCall)
+    on("tools/pre-execute", async (payload) => {
+      const domain=mode==='owned'?invocation(payload):undefined
+      return permissionDecision(registry, domain?{...payload as ToolCall,domain}:payload as ToolCall)
     })
 
     // 4. prompt/submit: waterfall on agent/pre-step (block ⇔ throw).
-    ctx.waterfall("agent/pre-step", async (payload, next) => {
+    waterfall("agent/pre-step", async (payload, next) => {
       const resolved = await next(payload)
-      const p = resolved as { task?: string; session?: ClaudeHookSession; sessionId?: string; promptSubmission?: boolean; signal?: AbortSignal }
+      const p = resolved as { task?: string; domain?:object;session?: ClaudeHookSession; sessionId?: string; promptSubmission?: boolean; signal?: AbortSignal }
+      if(mode==='owned'&&p.domain)assertHookExecutionDomain(p.domain)
       await runHandlers(
         registry,
         "prompt/submit",
         { event: "prompt/submit", prompt: typeof p.task === "string" ? p.task : "" },
         undefined,
         true,
-        { session: p.session, sessionId: p.sessionId, signal: p.signal, promptSubmission: p.promptSubmission },
+        { ...(mode==='owned'&&p.domain?{domain:p.domain}:{}),session: p.session, sessionId: p.sessionId, signal: p.signal, promptSubmission: p.promptSubmission },
       )
       return resolved
     })
 
     // 5. stop: plain listener on agent/stop (block ⇔ throw).
-    ctx.on("agent/stop", async (payload) => {
-      const p = payload as { sessionId?: string; finalText?: string; turns?: number }
+    on("agent/stop", async (payload) => {
+      const p = payload as { domain?:object;sessionId?: string; finalText?: string; turns?: number }
+      if(mode==='owned'&&p.domain)assertHookExecutionDomain(p.domain)
       await runHandlers(
         registry,
         "stop",
@@ -98,7 +114,7 @@ export function mountHookListeners(ctx: PluginContext, registry: InternalRegistr
         },
         undefined,
         true,
-        { nativeOnly: true },
+        { ...(mode==='owned'&&p.domain?{domain:p.domain}:{}),nativeOnly: true },
       )
     })
 

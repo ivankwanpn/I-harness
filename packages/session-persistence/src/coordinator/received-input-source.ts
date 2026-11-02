@@ -1,5 +1,5 @@
 import { validDeliveryEvent, isStrictFactData, type FactGroupDraft, type ReceivedInputSource } from '@i-harness/core-session';
-import { captureSettlementFact, retainSettlementCapture } from './settlement-fact.ts';
+import { captureSettlementFact, retainSettlementCapture,forwardSettlementCapture } from './settlement-fact.ts';
 import { createSourceFacts } from './source-facts.ts';
 import type { cancellationRetirementFor } from './received-input-cancellation.ts';
 /** The trusted input composition acquires this before accepting requests. Its
@@ -37,7 +37,7 @@ export function createReceivedInputSource(drain: () => Promise<void>, operations
             const captured = captureSettlementFact({kind:"delivery-generation",event},{...operations,assertHeld});
             const confirmed=operations.deliveryControl.revoke();
             const run=(method:keyof typeof captured)=>async()=>{const outcome=await captured[method]();if(outcome.kind==="committed")confirmed();return outcome};
-            return records.retain({admit:run("admit"),observe:run("observe"),reconcile:run("reconcile"),retryAbsent:run("retryAbsent")});
+            return records.retain(forwardSettlementCapture(captured,{admit:run("admit"),observe:run("observe"),reconcile:run("reconcile"),retryAbsent:run("retryAbsent")}));
         },
         revoke() { accepting = false; },
         captureAdmitted(event) {

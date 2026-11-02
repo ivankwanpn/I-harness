@@ -49,7 +49,13 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
       const nextConsumed = new Set<string>(), nextAdmissions = new Map<string, number | undefined>()
       const baseCount = count
       let stagedLength = 0
-      return { advance(event: SessionEventView) {
+      return { dependencies(event:SessionEventView):readonly number[]{
+        if(event.type!=='compaction/replacement')return []
+        validateShape(event,formatVersion)
+        const position=baseCount+stagedLength,fact=historyFact(event,position,inheritedBoundary)
+        const required=validateHistoricalReplacement({length:position,get:index=>nextFacts.get(index)??facts.get(index)!},fact)
+        return [...facts.values()].filter(prior=>prior.seq!==undefined&&required.has(prior.seq)).map(prior=>prior.index)
+      },advance(event: SessionEventView) {
         validateShape(event, formatVersion)
         const position = baseCount + stagedLength++, fact = freezeJsonData(historyFact(event, position, inheritedBoundary)) as HistoryFact
         if (event.type === 'agent/input/admitted') nextAdmissions.set(event.inputId, event.seq)

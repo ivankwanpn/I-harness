@@ -11,6 +11,8 @@ type LLMRequest = Parameters<ModelClient["stream"]>[0]
 import { createDesktopInput } from "../src/input.ts"
 import { describeHttpError, type ModelFailureFacts } from "@i-harness/llm-seam"
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+import {composeJsonlTaskTransitionCoordinator} from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import {taskDocumentStorageContract} from '../../subagent/src/task/storage-contract.ts'
 
 it('actual Gateway input reports bounded local final-schema refusal without transport, effect or context recovery', async () => {
   const root = await mkdtemp(join(tmpdir(), 'gateway-final-validation-'))
@@ -173,7 +175,7 @@ it("admits a second input durably before the first provider response and preserv
 
 it("recovers cold queued answers once and refuses changed recovery retries", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-input-cold-"))
-  let coordinator = createSessionCoordinator(createJsonlBackend(root))
+  let coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s" })
   let service = createSessionService({ workspace: root, coordinator, modelPolicy: "required" })
   let input = createDesktopInput(coordinator, service)
@@ -182,7 +184,7 @@ it("recovers cold queued answers once and refuses changed recovery retries", asy
     await input.admit("s", { inputId: "recovery-one", text: "saved answer", delivery: "queue", start: false })
     await expect(input.admit("s", { inputId: "recovery-one", text: "changed answer", delivery: "queue", start: false })).rejects.toThrow("does not match")
     await service.close(); await input.close(); await coordinator.close()
-    coordinator = createSessionCoordinator(createJsonlBackend(root))
+    coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
     const model: ModelClient = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
     service = createSessionService({ workspace: root, model, coordinator, sessionFor: createDurableSessionLoader(coordinator) })
     input = createDesktopInput(coordinator, service)
@@ -196,7 +198,7 @@ it("recovers cold queued answers once and refuses changed recovery retries", asy
 
 it("revives a canceled recovery admission with a fresh exactly-once generation", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-input-retry-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s" })
   const service = createSessionService({ workspace: root, coordinator, modelPolicy: "required" })
   const input = createDesktopInput(coordinator, service)

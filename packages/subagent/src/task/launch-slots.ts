@@ -4,7 +4,7 @@ import type { SubagentRole } from '../roles.ts'
 import type { OwnedTaskSave } from './persistence.ts'
 import { captureTaskSnapshot } from '@i-harness/session-persistence/internal/task-document-operations'
 import {canonicalJsonData} from '@i-harness/core-session'
-import {captureTaskChildHistory,type OriginalTaskChildHistory} from '../child/task-history.ts'
+import {captureTaskChildHistory,parseTaskHistorySelection,type OriginalTaskChildHistory} from '../child/task-history.ts'
 export interface TaskLaunchSlot {
  readonly history?:OriginalTaskChildHistory
  readonly task: Readonly<TaskRecord>; readonly caller: OriginalTaskCaller; readonly role: Readonly<SubagentRole>; readonly flight: Promise<TaskLaunchResult>
@@ -40,7 +40,8 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
   admit(caller,role){
    if(this!==port)throw TypeError('Foreign task launch port');checkCaller(caller)
    const args=caller.call.args as {task_name:string;message:string;agent_type?:string;fork_turns?:unknown;background?:boolean}
-   if(args.fork_turns!==undefined&&args.fork_turns!=='none'&&args.fork_turns!=='all'||role.name==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)throw Error('Unsupported task launch population')
+   parseTaskHistorySelection(args.fork_turns)
+   if(role.name==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)throw Error('Unsupported task launch population')
    if(role.name!==(args.agent_type??'general'))throw Error('Original task role mismatch')
    for(const old of slots.values())if(canonicalJsonData(old.caller.identity)===canonicalJsonData(caller.identity)){
     if(canonicalJsonData(old.caller.call)!==canonicalJsonData(caller.call))throw Error('Original caller identity conflict')

@@ -20,6 +20,7 @@ import { rowCommitment, transferDirectory } from './legacy/observed-read.ts'
 import { LegacyFundingBatchOwner, fundingPass, describeApplicationFunding, fundApplicationInBatch, sum, type FundingBatchContext, type FundingBatchScope } from './legacy/funding-batch.ts'
 import type { LegacyCommitment, LegacyPage, LegacyRoot, LegacyRow } from './legacy/fork-types.ts'
 import { assertOriginalRevocationCoverage, type OriginalRevocationCoverage } from '../../session-persistence/src/coordinator/result-revocation.ts'
+import { originalDeletionSelectionIds, type OriginalDeletionSelection } from '../../session-persistence/src/coordinator/deletion-preparation.ts'
 
 interface Artifact { ref: ContextResultRef; source?: ContextCapture['source'] }
 export interface LegacyStoreInventory { readonly identity: string; readonly targets: readonly string[]; readonly expired: readonly string[]; readonly recoveryRequired: boolean }
@@ -66,7 +67,7 @@ export class ContextStore {
   private currency: object = Object.freeze({})
   private quiescing?: { cleanups: WorkspaceMutationCleanup[]; indexClosed: boolean; described: boolean; failed: boolean }
   private quiesceFlight?: Promise<void>
-  private readonly inventories = new WeakMap<LegacyStoreInventory, { artifacts: Map<string, Artifact>; owners: Map<string, Set<string>>; roots: Map<string, LegacyRoot>; expiry: Map<string, LegacyCommitment>; cutoff: number; sessionId?: string }>()
+  private readonly inventories = new WeakMap<LegacyStoreInventory, { artifacts: Map<string, Artifact>; owners: Map<string, Set<string>>; roots: Map<string, LegacyRoot>; expiry: Map<string, LegacyCommitment>; cutoff: number; sessionId?: string; selection?: readonly string[] }>()
   private readonly coveredClears = new WeakMap<OriginalCoveredClear, { inventory: LegacyStoreInventory; coverage: OriginalRevocationCoverage; steps: Map<string, 'issued' | 'done'>; failed?: { cause: unknown }; complete: boolean }>()
   private readonly fundingBatch: LegacyFundingBatchOwner
   private readonly indexLeases = new WeakMap<IndexUse, LegacyUseLease>()
@@ -119,11 +120,14 @@ export class ContextStore {
     try { this.lifetime.assertSettled(); return true } catch { return false }
   }
   /** Read-only original authority. No open/recovery/body/index/cache effects. */
-  async passiveInventory(turn: WorkspaceMutationTurn, sessionId?: string, cutoff = Date.now()): Promise<LegacyStoreInventory> {
+  passiveInventory(turn: WorkspaceMutationTurn, sessionId?: string, cutoff = Date.now()): Promise<LegacyStoreInventory> { return this.inventoryFor(turn, sessionId, cutoff) }
+  passiveDeletionInventory(turn: WorkspaceMutationTurn, selection: OriginalDeletionSelection, cutoff: number): Promise<LegacyStoreInventory> { return this.inventoryFor(turn, undefined, cutoff, originalDeletionSelectionIds(selection)) }
+  private async inventoryFor(turn: WorkspaceMutationTurn, sessionId: string | undefined, cutoff: number, selection?: readonly string[]): Promise<LegacyStoreInventory> {
     this.assertTurn(turn)
     if (!Number.isSafeInteger(cutoff) || cutoff < 0) throw Error('Invalid original expiry frontier')
     const guard = () => this.assertTurn(turn), artifacts = new Map<string, Artifact>(), owners = new Map<string, Set<string>>(), roots = new Map<string, LegacyRoot>(), expiry = new Map<string, LegacyCommitment>()
-    const targets = new Set<string>(sessionId === undefined ? [] : [sessionId]), expired: string[] = []
+    const requested = selection ? Object.freeze([...new Set(selection)].sort()) : sessionId === undefined ? undefined : [sessionId]
+    const targets = new Set<string>(requested), expired: string[] = []
     let recoveryRequired = false
     const directory = resolve(this.directory, 'artifacts')
     if (await exists(directory)) for (const name of (await readdir(directory)).sort()) {
@@ -137,7 +141,7 @@ export class ContextStore {
       artifacts.set(id, artifact); owners.set(id, membership)
       // clear(session) also performs the original global expiry sweep.
       if (artifact.ref.expiresAt <= cutoff) { expired.push(id); for (const target of membership) targets.add(target) }
-      if (sessionId === undefined || membership.has(sessionId)) for (const target of membership) targets.add(target)
+      if (!requested || requested.some(id => membership.has(id))) for (const target of membership) targets.add(target)
     }
     const expiredSet = new Set(expired)
     for await (const row of this.legacyAuthorityRows(turn, true)) {
@@ -151,12 +155,12 @@ export class ContextStore {
       const root = checkRoot(await boundedJson(path, 65536, this.retireLegacyFile)); guard()
       roots.set(resolve(namespace, name), root)
       if (!await exists(resolve(namespace, name, 'applied.json'))) recoveryRequired = true
-      if (sessionId === undefined || root.binding.targetSessionId === sessionId) targets.add(root.binding.targetSessionId)
+      if (!requested || requested.includes(root.binding.targetSessionId)) targets.add(root.binding.targetSessionId)
     }
     const identity = await originalNamespaceWitness(this, ['artifacts', 'owners', 'legacy-fork-v1', 'legacy-expiry-v1'], guard)
     await this.joinLegacyFiles(); guard()
     const inventory = Object.freeze({ identity, targets: Object.freeze([...targets].sort()), expired: Object.freeze(expired.sort()), recoveryRequired })
-    this.inventories.set(inventory, { artifacts, owners, roots, expiry, cutoff, sessionId }); return inventory
+    this.inventories.set(inventory, { artifacts, owners, roots, expiry, cutoff, sessionId, selection: requested }); return inventory
   }
   /** Reacquire/requalify this original store; unchanged bodies are verified on use. */
   async resume(lease: LegacyUseLease, quota: number, signal?: AbortSignal): Promise<void> {
@@ -761,9 +765,9 @@ export class ContextStore {
       else await this.open(turn, lease, quota, 'cleanup')
       this.suspended = false
     })
-    this.beforeAuthorityChange?.(snapshot.sessionId === undefined ? undefined : [snapshot.sessionId])
+    this.beforeAuthorityChange?.(snapshot.selection)
     try { await this.cleanupIndex(turn, lease, async () => {
-    for (const [directory, root] of snapshot.roots) if (snapshot.sessionId === undefined || root.binding.targetSessionId === snapshot.sessionId) {
+    for (const [directory, root] of snapshot.roots) if (!snapshot.selection || snapshot.selection.includes(root.binding.targetSessionId)) {
       await step('revoke:' + directory, () => terminalSlots(this.directory, resolve(directory, 'revoke'), revokedTuple(root), check, this.retireLegacyFile))
     }
     for (const [id, tuple] of snapshot.expiry) {
@@ -772,15 +776,15 @@ export class ContextStore {
     const expired = new Set(progress.inventory.expired)
     for (const id of snapshot.artifacts.keys()) {
       const prior = snapshot.owners.get(id)!, survivors = new Set(prior)
-      if (snapshot.sessionId !== undefined) survivors.delete(snapshot.sessionId)
-      const remove = snapshot.sessionId === undefined || expired.has(id) || !survivors.size
-      if (!remove && !prior.has(snapshot.sessionId!)) continue
+      if (snapshot.selection) for (const target of snapshot.selection) survivors.delete(target)
+      const remove = !snapshot.selection || expired.has(id) || !survivors.size
+      if (!remove && survivors.size === prior.size) continue
       const path = this.path('owners', id), next = remove ? new Set<string>() : survivors
       await step('ledger:' + id, async () => {
         check()
         if (remove) { this.beforeAuthorityChange?.([...prior]); this.index.invalidate(Error('Canonical context removal')); this.owners.delete(id) }
         else this.owners.delete(id)
-        if (await this.ledger.tracked(path)) await this.ledger.replace(path, next, remove ? 'remove' : 'clear:' + snapshot.sessionId, check)
+        if (await this.ledger.tracked(path)) await this.ledger.replace(path, next, remove ? 'remove' : 'clear:' + (snapshot.sessionId ?? digest(JSON.stringify(snapshot.selection))), check)
         else await atomicJson(path, [...next])
         check(); const confirmed = (await readLedger(path, this.retireLegacyFile)).owners
         if (!same([...confirmed], [...next])) throw Error('Original covered owner membership not confirmed')

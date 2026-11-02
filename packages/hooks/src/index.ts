@@ -1,7 +1,7 @@
 export * from "./types.ts"
 export type { HookRegistryOptions, LoadedHandler, HookRegistry } from "./registry-types.ts"
 export { resolveHooksConfigPath, loadHooksConfig } from "./configuration/load.ts"
-export { createHookRegistry } from "./registry.ts"
+export { createHookRegistry,createExecutionHookRegistry } from "./registry.ts"
 
 // The last two are the user-layer grant surface. They are exported because the
 // rule `loadHooksConfig` enforces is UNSATISFIABLE without them — a non-home

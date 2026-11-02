@@ -5,7 +5,7 @@ import { agentFacts, committedFactSeqs } from './facts.ts'
 import { randomUUID } from "node:crypto"
 import type { LLMRequest } from "@i-harness/llm-seam"
 import type { RequestEvidence } from "./request-snapshot.ts"
-import type { AgentDeps, AgentConfig, TurnLifecycle } from "./types.ts"
+import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import { buildContextRequest } from "./request-input.ts"
 import { openStepBoundary } from './boundaries.ts'
@@ -41,7 +41,7 @@ export async function drainHookContext(ctx: PluginContext, deps: Pick<AgentDeps,
   return hookContext
 }
 
-export function createStepInput(deps: AgentDeps & AgentConfig, _context: AgentContext) {
+export function createStepInput(deps: Pick<AgentDeps,'sessionId'|'telemetry'> & ({session:Session;rewriteObservation?:never}|{session?:never;rewriteObservation():ReturnType<typeof deriveProjectionRewrite>}), _context?: AgentContext) {
   // M5/D3: how many rewrite markers the log carried at the PREVIOUS request. A
   // bigger count next time means a rewrite landed in between, which is what
   // breaks the cached prefix — the absolute count is not a break, since it stays
@@ -71,7 +71,7 @@ export function createStepInput(deps: AgentDeps & AgentConfig, _context: AgentCo
     // whoever rewrote it, so a rewrite path that forgets to announce itself
     // still shows up. Read beside T2-1's `reported:` numbers, which say
     // whether the provider actually charged full price.
-    const rewrite = deriveProjectionRewrite(deps.session)
+    const rewrite = deps.rewriteObservation?deps.rewriteObservation():deriveProjectionRewrite(deps.session)
     const prefixRewritten = rewriteMarkers !== undefined && rewrite.markers > rewriteMarkers
     rewriteMarkers = rewrite.markers
     // M5 T2 (second half): the same question asked of our OWN bytes — this

@@ -815,6 +815,9 @@ importers:
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
@@ -831,9 +834,6 @@ importers:
       '@i-harness/core-agent':
         specifier: workspace:*
         version: link:../core-agent
-      '@i-harness/core-session':
-        specifier: workspace:*
-        version: link:../core-session
       '@i-harness/guard-retry':
         specifier: workspace:*
         version: link:../guard-retry
