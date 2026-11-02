@@ -90,7 +90,7 @@ export interface TaskTerminalizeInput {
   recoveryReason?: RecoveryReason
 }
 export interface TaskRegistryOptions {
-  launchContext?: import('@i-harness/core-tools/internal/task-caller').ToolExecutionOwnerContext
+  launchContext?: Parameters<typeof import('./launch-slots.ts').createTaskLaunchPort>[1]
   /** Internal original-parent save capability; never supplied by a tool. */
   ownedTask?: import('./persistence.ts').OwnedTaskContext
   results?: TaskResultStore

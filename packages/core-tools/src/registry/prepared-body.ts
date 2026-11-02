@@ -245,7 +245,8 @@ export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness
  });return claim
 }
 
-export interface OriginalTaskCaller extends PreparedBodyClaim {
+export interface OriginalTaskCaller extends Omit<PreparedBodyClaim,'context'> {
+  readonly context: ToolExecutionOwnerConfiguration
   readonly call: Readonly<PreparedCall['call']>
   readonly identity: Readonly<{ parentSessionId: string; callEventSeq?: number; toolCallId?: string }>
 }
@@ -264,12 +265,14 @@ export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
   check(body,frame)
   if(body.foreignContext)throw Error('Foreign prepared execution context')
   if(body.claimed)throw Error('Prepared task body already claimed')
-  if(!body.context||!body.source||frame.domain!==body.context.view)return
+  const context=body.managed??body.context
+  if(!context||!body.source||frame.domain!==(body.managed?.domain.owner??body.context?.view))return
+  if(body.managed&&(!body.permit&&!body.codeInvocation||body.permit&&body.codeInvocation))throw Error('Original private Task invocation required')
   const id=own(exec,'sessionId'),seq=own(exec,'callEventSeq'),callId=own(exec,'callId')
   if(typeof id!=='string'||!id||seq!==undefined&&(!Number.isSafeInteger(seq)||(seq as number)<0)||callId!==undefined&&(typeof callId!=='string'||!callId))throw Error('Original task call identity unavailable')
   const identity=Object.freeze({parentSessionId:id,...seq!==undefined?{callEventSeq:seq as number}:{},...callId!==undefined?{toolCallId:callId as string}:{}})
   body.claimed=true;let consumed=false
-  const claim:OriginalTaskCaller=Object.freeze({context:body.context,source:body.source,exec,call:body.call,identity,
+  const claim:OriginalTaskCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
    assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign task caller');check(body,frame)},
    consume(){if(this!==claim)throw TypeError('Foreign task caller');check(body,frame);if(consumed)throw Error('Task caller consumed');consumed=true},
   });taskCallers.add(claim);return claim
