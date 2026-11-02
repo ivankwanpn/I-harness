@@ -104,6 +104,14 @@ export interface OriginalManagedTeamParent {
  assertCurrent():void
  close():Promise<void>
 }
+export interface OriginalManagedReviewerContext {
+ readonly identity:ManagedExecutionIdentity
+ readonly ready:Promise<void>
+ readonly events:readonly SessionEventView[]
+ readonly latestUser:Extract<SessionEventView,{type:'user/message'}>|undefined
+ assertCurrent():void
+ close():Promise<void>
+}
 
 /** A readonly fold over the validated original stream; it owns no writer. */
 export interface OriginalExecutionFoldSink {

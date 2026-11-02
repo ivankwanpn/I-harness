@@ -200,6 +200,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         }};
     }
     return {
+        reviewerOrdinals(){check();const facts=owned.index.resultFacts(),count=owned.index.eventCount;let latestUser:number|undefined;for(let i=facts.length-1;i>=0;i--)if(facts[i]!.type==='user/message'){latestUser=facts[i]!.index;break}return {tail:Array.from({length:Math.min(12,count)},(_,index)=>count-Math.min(12,count)+index),latestUser}},
         teamLedgerOrdinals() {
             check();const header=owned.source.header,fork=Boolean(header?.parentSession&&header.origin!=='subagent'&&header.origin!=='approval-review')
             const floor=fork?(header?.seedLength??owned.index.eventCount):0
