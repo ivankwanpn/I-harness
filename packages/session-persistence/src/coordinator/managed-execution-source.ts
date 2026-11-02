@@ -43,7 +43,7 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
   async readEvent(ordinal){assertCurrent();scope??=openExecutionDependencies(ports.backend,ports.id,held,prefix!);const event=await scope.readEvent(ordinal);assertCurrent();return event},
   async settle(){if(proof){await proof.assertCurrent();assertCurrent()}if(scope){await scope.close();scope=undefined}assertCurrent()},
   async close(){if(scope){await scope.close();scope=undefined}retired=true;initial=undefined;proof=undefined},
-  appendCommitted(batch,receipt){assertCurrent();if(!prefix||batch.key.firstSeq!==prefix.eventCount||batch.key.previousPrefixDigest!==prefix.prefixDigest||receipt.key!==batch.key)throw new FactRecoveryRequiredError();prefix={eventCount:prefix.eventCount+batch.key.count,bodyBytes:prefix.bodyBytes+batch.bytes.length,prefixDigest:receipt.prefixDigest}},
+  appendCommitted(batch,receipt){assertCurrent();if(!prefix||batch.key.firstSeq!==prefix.eventCount||batch.key.previousPrefixDigest!==prefix.prefixDigest||receipt.key!==batch.key)throw new FactRecoveryRequiredError();prefix=Object.freeze({eventCount:prefix.eventCount+batch.key.count,bodyBytes:prefix.bodyBytes+batch.bytes.length,prefixDigest:receipt.prefixDigest})},
  }
  return {
   held,assertCurrent,get prefix(){return source.prefix},
@@ -53,7 +53,7 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
     let transient:Session|undefined=(await ports.loadOwned(ports.id)).session;assertCurrent()
     await ports.transitions.existing(ports.id,async before=>{await before(transient!.formatVersion,transient!.events,transient!.header?.seedLength??0);transient=undefined},undefined,async history=>{
      initial=history.initial;proof=history;formatVersion=initial.formatVersion;header=initial.header;await history.assertCurrent();assertCurrent()
-     const read=readArchiveHistoryPrefix(ports.backend,history);if(read.kind!=='available')throw new FactRecoveryRequiredError();prefix={...read.prefix}
+     const read=readArchiveHistoryPrefix(ports.backend,history);if(read.kind!=='available')throw new FactRecoveryRequiredError();prefix=Object.freeze({...read.prefix})
      state=await restoreManagedExecutionState(source,{token,assertHeld:held.assertHeld,openDependencies(expected){assertCurrent();return openExecutionDependencies(ports.backend,ports.id,held,expected)}},ports.foldFactory)
      await history.assertCurrent();assertCurrent()
     })

@@ -307,3 +307,21 @@ it('keeps unknown registered-source callbacks immediate before an original sourc
   try{expect(()=>withArtifactCurrentChecks(()=>{guard();readManagedSourceAcknowledgedMembers(domain,source!,capture,outcome);effects++})).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);changed=true}finally{armed=false;Object.assign(node,before)}
  }finally{probe.sourceHeld=undefined;if(changed){await expect(source!.close()).rejects.toThrow();action?.finish();await expect(coordinator.close()).rejects.toThrow()}else{await source?.close();action?.finish();await coordinator.close()}await rm(root,{recursive:true,force:true})}
 })
+it('measures one original full metadata observation without skipping fold callbacks',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createOwnedMetadataFold}=await import('../../session-executor/src/lifecycle/owned-metadata-fold.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'observe-interval-'));let snapshots=0
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true},originalExecutionFoldFactory:input=>{const fold=createOwnedMetadataFold(input),original=fold.views.todo.snapshot;fold.views.todo.snapshot=prefix=>{snapshots++;return original(prefix)};return fold}},taskDocumentStorageContract)
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent');snapshots=0
+  let observation:ReturnType<typeof execution.observe>|undefined
+  const count=measure(()=>{observation=execution.observe()});console.info('ACTUAL_OBSERVE_COUNT',count);expect(count.captures).toBe(0);expect(snapshots).toBe(1);expect(observation!.metadata.todo.kind).toBe('available');expect(Object.hasOwn(execution.owner,'view')).toBe(false)
+ }finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+
+it('flushes around an opaque original fold snapshot and rejects native retarget before returning observation',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createOwnedMetadataFold}=await import('../../session-executor/src/lifecycle/owned-metadata-fold.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'observe-retarget-'));let armed=false,callbacks=0,effects=0,changed=false
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true},originalExecutionFoldFactory:input=>{const fold=createOwnedMetadataFold(input),original=fold.views.todo.snapshot;fold.views.todo.snapshot=prefix=>{if(armed){callbacks++;probe.nodes.get(root)!.id+=1000}return original(prefix)};return fold}},taskDocumentStorageContract)
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),node=probe.nodes.get(root)!,before={...node};armed=true
+  try{expect(()=>{execution.observe();effects++}).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);changed=true}finally{armed=false;Object.assign(node,before)}
+ }finally{if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
+})

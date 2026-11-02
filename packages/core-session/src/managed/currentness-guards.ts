@@ -13,6 +13,7 @@ export type OriginalCurrentnessExecutor = Readonly<{
   compose(guards: readonly Guard[]): Guard
   immediate(check: Guard): void
   bindDescriptors?(recipe: OriginalCurrentnessDescriptorRecipe): Guard
+  read?<T>(operation:()=>T):T
 }>
 const guards = new WeakMap<Guard, OriginalCurrentnessExecutor>()
 const functionPrototype=Function.prototype,originalBind=Object.getOwnPropertyDescriptor(functionPrototype,'bind')?.value
@@ -61,4 +62,14 @@ export function runUnassociatedCurrentnessChecks(...checks: readonly Guard[]): v
   const run = () => { for (const check of checks) check() }
   if (executor) executor.immediate(run)
   else run()
+}
+/** Internal original read construction, never an enrollment of the callback.
+ * Callers must suspend accumulation around every opaque operation. */
+export function runOriginalCurrentnessRead<T>(guard:Guard,operation:()=>T):T {
+  const executor=guards.get(guard)
+  return executor?.read?executor.read(operation):operation()
+}
+export function runOpaqueCurrentnessRead<T>(guard:Guard,operation:()=>T):T {
+  const executor=guards.get(guard);if(!executor)return operation()
+  let result:T;executor.immediate(()=>{result=operation()});return result!
 }

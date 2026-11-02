@@ -17,6 +17,12 @@ const pureGuards = new WeakSet<Function>()
 const currentnessExecutor:OriginalCurrentnessExecutor=Object.freeze({
   compose(guards:readonly (()=>void)[]){return composeOriginalArtifactGuards(...guards)},
   immediate:withImmediateArtifactCurrentChecks,
+  read<T>(operation:()=>T):T{
+    if(types.isProxy(operation)||types.isAsyncFunction(operation))throw TypeError('Original synchronous read required')
+    let result:T
+    withArtifactCurrentChecks(()=>{result=operation();if(types.isPromise(result))throw TypeError('Original synchronous read required')})
+    return result!
+  },
   bindDescriptors(recipe:OriginalCurrentnessDescriptorRecipe){
     if(!pureGuards.has(recipe.method)||types.isProxy(recipe.receiver))throw TypeError('Original artifact descriptor guard required')
     const check=(fields:typeof recipe.before)=>{for(const [key,value,message]of fields){const field=Object.getOwnPropertyDescriptor(recipe.receiver,key);if(!field||!('value'in field)||field.value!==value)throw TypeError(message??recipe.message)}}
