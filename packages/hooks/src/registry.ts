@@ -78,6 +78,8 @@ async function createHookRegistryEngine(ctx:PluginContext,opts:HookRegistryOptio
   const assertMode=(loaded:LoadedHandler[])=>{if(mode==='owned'&&(!isOwnedClaudeRuntime(runtimeService)||loaded.some(row=>row.spec.claude!==undefined))){requireCompleteClaudeRuntime(runtimeService);throw new HookConfigError('Owned hooks require complete compatibility for this runtime/configuration')}}
   assertMode(registry.loaded)
   let disposed = false
+  let disposeFlight: Promise<void> | undefined
+  let stopRemoved = false, startupCleared = false, unmounted = false, projectionDisposed = false
   let trustRevision = 0
   let activeApprovals: Pick<HookTrustStore, "isApproved"> | undefined = opts.approvals
   const lifecycle = createSessionLifecycle(registry, () => disposed, () => trustRevision,
@@ -99,7 +101,25 @@ async function createHookRegistryEngine(ctx:PluginContext,opts:HookRegistryOptio
       lifecycle.restoreStartup(previous, loaded)
     },
 
-    async dispose() { if (disposed) return; disposed = true; removeStop(); lifecycle.clearStartup(); await ctx.unmount(mountName); registry.loaded = []; await projection.dispose() },
+    dispose() {
+      // Preserve the established public/complete disposal contract. Owned
+      // execution must retain cleanup debt until each original owner acks.
+      if (mode === 'complete') return (async () => { if (disposed) return; disposed = true; removeStop(); lifecycle.clearStartup(); await ctx.unmount(mountName); registry.loaded = []; await projection.dispose() })()
+      if (disposeFlight) return disposeFlight
+      // Close admission immediately, but keep every cleanup obligation until
+      // its own acknowledgement so the same registry can retry a failure.
+      disposed = true
+      const flight = (async () => {
+        if (!stopRemoved) { removeStop(); stopRemoved = true }
+        if (!startupCleared) { lifecycle.clearStartup(); startupCleared = true }
+        if (!unmounted) { await ctx.unmount(mountName); unmounted = true }
+        registry.loaded = []
+        if (!projectionDisposed) { await projection.dispose(); projectionDisposed = true }
+      })()
+      disposeFlight = flight
+      void flight.catch(() => { if (disposeFlight === flight) disposeFlight = undefined })
+      return flight
+    },
     fire: lifecycle.fire,
     beginSession: lifecycle.beginSession,
     endSession: lifecycle.endSession,

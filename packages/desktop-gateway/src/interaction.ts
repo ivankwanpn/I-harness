@@ -4,7 +4,8 @@ import { makeNotification } from "@i-harness/sdk"
 import type { SessionAssembly } from "@i-harness/session-executor"
 import type { RpcNotification } from "@i-harness/sdk"
 import type { SettingsApprovalMode } from "@i-harness/settings"
-import type { ApprovalRulesAdapter, RememberApprovalOptions } from "./approval-rules.ts"
+import type { ApprovalRulesAdapter, OwnedApprovalOwner, RememberApprovalOptions } from "./approval-rules.ts"
+import type { PluginContext } from "@i-harness/core-plugin"
 
 export type InteractionDecision =
   | { kind: "approval"; approved: boolean; remember?: RememberApprovalOptions }
@@ -51,6 +52,9 @@ export interface InteractionBridgeOptions {
 
 export interface InteractionBridge {
   attach(assembly: SessionAssembly): void
+  /** Attach to the original managed context; remembered rules require their
+   * own authority adapter and cannot be silently omitted. */
+  attachOwned(owner: { ctx: PluginContext; sessionId: string; tools?: OwnedApprovalOwner["tools"] }): void
   pending(sessionId?: string): PendingInteraction[]
   reply(input: { requestId: string; sessionId: string; decision: InteractionDecision }): { accepted: true } | Promise<{ accepted: true }>
   /** Call exclusively from authenticated Desktop human UI ingress. */
@@ -217,6 +221,15 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
       options.approvalRules?.attach(assembly)
       registerApprovalAnswerer(assembly.ctx, (request) => waitForApproval(sessionId, request))
       registerQuestionProvider(assembly.ctx, { ask: (question) => waitForAnswer(sessionId, question) })
+    },
+    attachOwned(owner) {
+      if (closed) return
+      if (options.approvalRules) {
+        if (!owner.tools) throw new Error("owned approval registry is unavailable")
+        options.approvalRules.attachOwned(owner as OwnedApprovalOwner)
+      }
+      registerApprovalAnswerer(owner.ctx, (request) => waitForApproval(owner.sessionId, request))
+      registerQuestionProvider(owner.ctx, { ask: (question) => waitForAnswer(owner.sessionId, question) })
     },
     pending(sessionId) {
       return [...waiting.values()]

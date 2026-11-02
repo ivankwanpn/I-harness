@@ -11,6 +11,7 @@ import { createAuthoredHookApprovals, isAuthoredHookPath } from "./hook-authorin
 import { installedPluginHookRoot } from "./plugin-hook-root.ts"
 import { fingerprintHookArtifacts } from "./plugin-hook-authority.ts"
 import { derivePlanMode, type Session } from "@i-harness/core-session"
+import type { PluginContext } from "@i-harness/core-plugin"
 
 interface Mounted {
   startSource: "startup" | "resume"
@@ -131,11 +132,12 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
   }
 }
 
-export const expandPluginPrompt: NonNullable<SessionServiceOptions["transformPrompt"]> = async (assembly, prompt) => {
+export async function expandPluginPromptOnContext(ctx: PluginContext, prompt: string): Promise<string> {
   if (!prompt.startsWith("/")) return prompt
   const parsed = parseCommandLine(prompt)
   if (!parsed) return prompt
-  const result = await runCommand(assembly.ctx, parsed.name, parsed.input)
+  const result = await runCommand(ctx, parsed.name, parsed.input)
   if (result.kind !== "prompt") throw new Error("Only prompt commands can be sent as a model task")
   return result.text
 }
+export const expandPluginPrompt: NonNullable<SessionServiceOptions["transformPrompt"]> = (assembly, prompt) => expandPluginPromptOnContext(assembly.ctx, prompt)
