@@ -1112,7 +1112,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const published=runtime,originalRecipient=recipient
         privateDrain=createDeliveryDrain({
           current:()=>!retired&&!closed&&!closing.has(sessionId)&&!failedClose.has(sessionId)&&managedRuntimes.get(sessionId)===published,
-          reconcile:async()=>{await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates()},
+          reconcile:async()=>{await taskMount?.drainParentNotifications();await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates()},
           pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
           schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,settled);return true},
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
