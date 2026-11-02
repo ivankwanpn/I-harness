@@ -72,7 +72,9 @@ import type { ManagedDocument } from '@i-harness/session-persistence'
 import { captureOwnedTaskContext } from './task/owned-context.ts'
 import { isColdBoundChild } from './task/cold-bindings.ts'
 import { createTaskStartupFacade } from './task/startup-facade.ts'
-import {createManagedTeamBirthFactory,createManagedColdTeamBirthFactory} from './child/team-birth.ts'
+import {createManagedTeamBirthFactory,createManagedColdTeamBirthFactory,isOriginalTeamChildEntry} from './child/team-birth.ts'
+import {associateOriginalTeamCleanup,readOriginalTeamCleanup,retainOriginalResidentTeamCleanup,bindOriginalTeamCleanupParent,createOriginalTeamCleanup,type OriginalTeamChildCleanup} from './team-cleanup.ts'
+import {isOriginalManagedTeamParentIdentity} from '@i-harness/core-session/internal/execution'
 export type {CommittedTeamChildBirth,TeamChildBirthAttempt} from './child/team-birth.ts'
 import {isManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 import {isManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
@@ -126,6 +128,7 @@ export interface RegisterSubagentOptions extends RoleModelHost {
 }
 
 export interface RegisterSubagentResult {
+  retainTeamChildCleanup?(parent:import('@i-harness/core-session/internal/execution').OriginalManagedTeamParent,path:string,entry:ChildAgentEntry):OriginalTeamChildCleanup
   reserveManagedTeamChild?(caller:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller,provisioning:import('@i-harness/core-session/internal/execution').OriginalTeamProvisioning):import('./child/team-birth.ts').TeamChildBirthAttempt
   reserveManagedColdTeamChild?(owner:import('@i-harness/core-session/internal/execution').OriginalTeamProvisioningOwner,parent:import('@i-harness/core-session/internal/execution').OriginalManagedTeamParent,binding:import('../../session-persistence/src/team-child-recovery-internal.ts').OriginalTeamColdBinding,target:import('../../session-persistence/src/team-child-recovery-internal.ts').OriginalTeamTargetDiscovery):import('./child/team-birth.ts').TeamChildBirthAttempt
   /** Restored roles and original persistence are ready for catalog mounting. */
@@ -303,6 +306,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     table = guarded('table', table, ['add', 'update', 'remove'])
     roles = guarded('roles', roles, ['register', 'remove'])
   }
+  const makeTeamCleanup=(path:string,entry:ChildAgentEntry)=>createOriginalTeamCleanup(path,entry,stagedRuntime,()=>{try{assertRuntimeWork();return mountedRuntime}catch(error){const code=(error as {code?:unknown})?.code;if(runtimeRetiring||code==='FACT_RECOVERY_REQUIRED'||code==='FACT_CLOSED')return stagedRuntime;throw error}})
+  if(managed&&ownedTask)associateOriginalTeamCleanup(table,{
+    birth(path,entry){if(!isOriginalTeamChildEntry(entry,ctx,parentRegistry,path))throw TypeError('Original Team child birth required');return makeTeamCleanup(path,entry)},
+    resident(parent,path,entry){if(!isOriginalManagedTeamParentIdentity(managed.domain,parent))throw TypeError('Original Team parent required');assertRuntimeWork();parent.assertInitialPrefix();const name=path.startsWith('lead/')?path.slice(5):'';if(!name||name.includes('/'))throw TypeError('Original Team child path required');const member=parent.ledger.filter(event=>event.type==='team/member'&&event.member.name===name).at(-1);if(!member||member.type!=='team/member'||member.member.sessionId!==entry.sessionId||!entry.sessionId||!['active','provisioning'].includes(member.member.phase))throw TypeError('Original Team ledger child required');return makeTeamCleanup(path,entry)},
+  })
+  const retainTeamChildCleanup=managed&&ownedTask?(parent:import('@i-harness/core-session/internal/execution').OriginalManagedTeamParent,path:string,entry:ChildAgentEntry):OriginalTeamChildCleanup=>{if(!isOriginalManagedTeamParentIdentity(managed.domain,parent))throw TypeError('Original Team parent required');const port=readOriginalTeamCleanup(table,path,entry)??retainOriginalResidentTeamCleanup(table,parent,path,entry);return bindOriginalTeamCleanupParent(table,parent,path,entry,port)}:undefined
   const teamBirthOptions=managed&&opts.persist&&opts.prepareTaskChild?{domain:managed.domain,execution:managed.execution,coordinator:opts.persist.coordinator,prepare:opts.prepareTaskChild,roles,model:opts,parentRegistry,parentModel:()=>{const value=modelAccessor?modelAccessor():parentModel;if(!value)throw TypeError('Original parent model unavailable');return value},assertOwnerCurrent:assertRuntimeWork,timeoutMs:opts.modelActionTimeoutMs,maxAttempts:opts.modelActionMaxAttempts}:undefined
   const reserveManagedTeamChild=teamBirthOptions&&createManagedTeamBirthFactory(teamBirthOptions),reserveManagedColdTeamChild=teamBirthOptions&&createManagedColdTeamBirthFactory(teamBirthOptions)
   // M23 (Minor 4): the deps object is kept in a named variable so the
@@ -514,6 +523,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     return attempt.promise
   }
   return {
+    retainTeamChildCleanup,
     reserveManagedTeamChild,
     reserveManagedColdTeamChild,
     catalogReady,activateRestoredWork,

@@ -12,6 +12,7 @@ import type { CodeModeMount } from "@i-harness/code-mode"
 import type { ChildAgentEntry } from "../agent-table.ts"
 import type { SpawnOptions } from "./types.ts"
 import { retainInitialInput } from './initial-input.ts'
+import {readOriginalTeamCleanup} from '../team-cleanup.ts'
 import type { InitialChildInput } from './generation.ts'
 
 function originalMethod<T extends (...args: any[]) => any>(owner: object | undefined, name: string): T | undefined {
@@ -90,7 +91,8 @@ export async function publishChild(
     ...(codeModeMount ? { cancel: (reason?: string) => cancelMount!(reason) } : {}),
     dispose: () => {
       if (disposal) return disposal
-      opts.table.update(childPath, entry, { closing: true })
+      const teamCleanup=readOriginalTeamCleanup(opts.table,childPath,entry)
+      if(teamCleanup)teamCleanup.markClosing();else opts.table.update(childPath, entry, { closing: true })
       let retirementFailure: unknown, retirementFailed = false
       try { retireInstruction?.(); instruction?.retire() } catch (error) { retirementFailure = error; retirementFailed = true }
       revokeDocument?.()

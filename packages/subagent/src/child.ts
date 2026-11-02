@@ -10,7 +10,8 @@ import { openInitialChildGeneration, type InitialChildInput } from './child/gene
 import { captureChildInstructionContext } from './child/instruction-context.ts'
 import { invokeOriginal } from './followup/resident-lifetime.ts'
 import {claimTaskChildBirth,markTaskChildAdopted} from './child/task-birth.ts'
-import {claimTeamChildBirth,markTeamChildAdopted} from './child/team-birth.ts'
+import {claimTeamChildBirth,markTeamChildAdopted,bindOriginalTeamChildEntry} from './child/team-birth.ts'
+import {bindOriginalTeamCleanup} from './team-cleanup.ts'
 
 export { SUBAGENT_PROMPT_CONTRACT, composeSubagentPrompt, estimateChildOverhead } from "./child/prompt.ts"
 export { resolveRoleTools } from "./child/role-tools.ts"
@@ -169,7 +170,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     if (failures.length) throw failures[0]
   })
   controller.signal.throwIfAborted()
-  const published = await publishChild(opts, childCtx, childSession, factOwner, document, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel, initial, () => model, instruction, () => { instructionAvailable = false }, entry => { publishedEntry = entry; transferred = true; releaseSetup?.(); releaseSetup = undefined; setupExit.resolve() }, () => { if (!instructionAvailable) throw Object.assign(new Error('Child setup retired'), { code: 'FACT_CLOSED' }) }, { unmount: unmountContext, revokeDocument, closeDocument, closeInitial, cancelMount: cancelRuntime, disposeMount: disposeRuntime })
+  const published = await publishChild(opts, childCtx, childSession, factOwner, document, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel, initial, () => model, instruction, () => { instructionAvailable = false }, entry => { publishedEntry = entry;if(opts.childStart?.kind==='committed-team-child-birth'){bindOriginalTeamChildEntry(opts.childStart.birth,entry,opts);bindOriginalTeamCleanup(opts.table,childPath,entry)}transferred = true; releaseSetup?.(); releaseSetup = undefined; setupExit.resolve() }, () => { if (!instructionAvailable) throw Object.assign(new Error('Child setup retired'), { code: 'FACT_CLOSED' }) }, { unmount: unmountContext, revokeDocument, closeDocument, closeInitial, cancelMount: cancelRuntime, disposeMount: disposeRuntime })
   // Existing background-child lifetime begins at publication. The launching
   // turn's temporary cancellation fence applies to preparation only.
   opts.signal?.removeEventListener('abort', abort)
