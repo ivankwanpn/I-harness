@@ -6,7 +6,7 @@ import type {ExecutionHookChannel} from '@i-harness/core-plugin'
 import type { PreparedCall, Tool, ToolExec, ToolRegistry } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
 import {registerToolInvocation} from './invocation-domain.ts'
-import {isManagedExecutionDomain,isManagedExecutionSource,readManagedAcknowledgedMembers,readManagedActionSourceMembers,readManagedSourceCodeDelivery,getManagedExecutionAdmissionWait,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {isManagedExecutionDomain,isManagedExecutionSource,readManagedAcknowledgedMembers,readManagedActionSourceMembers,readManagedSourceCodeDelivery,getManagedExecutionAdmissionWait,assertManagedWorkflowDeliveryCurrent,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
 export interface ManagedToolExecutionOwnerContext {readonly kind:'managed-execution';readonly domain:ManagedExecutionDomain;readonly context:PluginContext;readonly sessionId:string}
@@ -43,7 +43,7 @@ export function captureExecutionOwnerContext(ctx: PluginContext, value: unknown)
   return Object.freeze({ view,factOwner,context:ctx,...sessionId !== undefined ? {sessionId:sessionId as string} : {} })
 }
 const identityFields = ['session','sessionId','callId','callEventSeq','resultConsumer','modelGeneration'] as const
-type Body = { registry: ToolRegistry; prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; managed?:ManagedToolExecutionOwnerContext;hooks?:PreparedExecutionHooks;foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; admissionSignal?:AbortSignal; claimed: boolean; permit?: { assertCurrent(): void; getAdmissionWait?(signal:AbortSignal):Promise<void>|undefined }; codeInvocation?: { assertCurrent():void;getAdmissionWait(signal:AbortSignal):Promise<void>|undefined;takeExecSourceIssuer?():import('../model-origin.ts').OriginalExecSourceIssuer }; attaching?: boolean; entered?: boolean }
+type Body = { registry: ToolRegistry; prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; managed?:ManagedToolExecutionOwnerContext;hooks?:PreparedExecutionHooks;foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; admissionSignal?:AbortSignal; claimed: boolean; permit?: { assertCurrent(): void; getAdmissionWait?(signal:AbortSignal):Promise<void>|undefined }; codeInvocation?: { assertCurrent():void;getAdmissionWait(signal:AbortSignal):Promise<void>|undefined;takeExecSourceIssuer?():import('../model-origin.ts').OriginalExecSourceIssuer;takeWorkflowSourceIssuer?():import('../model-origin.ts').OriginalWorkflowSourceIssuer }; attaching?: boolean; entered?: boolean }
 type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal; domain?: object }
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
@@ -240,7 +240,14 @@ export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness
        registerCompletion(drain:()=>Promise<void>){if(this!==issuer||registered)throw TypeError('Original nested Exec completion required');currentNested();registered=true;return action.registerSettlementSource(drain)},
        captureSource(binding:Readonly<import('../model-origin.ts').ExecSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||binding.recipientSessionId!==domain.sessionId||binding.callSeq!==event.seq||binding.sourceNamespace!=='exec')throw TypeError('Original nested Exec binding required');currentNested();captured=true;return action.captureExecDeliverySource({type:'agent/delivery-source',version:1,kind:'exec',...binding},()=>{try{currentNested();return recipientCurrent()}catch{return false}})},
       });return issuer}
-     nested.codeInvocation=Object.freeze({assertCurrent:currentNested,getAdmissionWait,...['shell','bash','pwsh'].includes(event.name)?{takeExecSourceIssuer}:{}})},
+     const takeWorkflowSourceIssuer=()=>{if(issued||event.name!=='workflow_run')throw Error('Original nested Workflow issuer required');currentNested();issued=true;let registered=false,captured=false,preparing=false,preparedBinding:string|undefined
+      const issuer:import('../model-origin.ts').OriginalWorkflowSourceIssuer=Object.freeze({
+       assertAdmissionCurrent(){if(this!==issuer)throw TypeError('Original nested Workflow issuer receiver required');currentNested()},
+       registerCompletion(drain:()=>Promise<void>){if(this!==issuer||registered)throw TypeError('Original nested Workflow completion required');currentNested();registered=true;return action.registerSettlementSource(drain)},
+       async prepareLaunch(sourceId:string,prepareOriginal?:()=>Promise<{binding:Readonly<import('../model-origin.ts').WorkflowSourceBinding>;isCurrent():boolean}>){if(this!==issuer||!registered||preparing||!prepareOriginal)throw TypeError('Original nested Workflow preparation required');currentNested();preparing=true;const prepared=await prepareOriginal();currentNested();const binding=prepared.binding;if(binding.recipientSessionId!==domain.sessionId||binding.callSeq!==event.seq||binding.sourceNamespace!=='workflow'||binding.sourceId!==sourceId||binding.delivery!=='tool')throw TypeError('Original nested Workflow binding required');assertManagedWorkflowDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery});if(!prepared.isCurrent())throw Error('Original nested Workflow recipient retired');preparedBinding=canonicalJsonData(binding);return prepared},
+       captureSource(binding:Readonly<import('../model-origin.ts').WorkflowSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||!preparedBinding||canonicalJsonData(binding)!==preparedBinding)throw TypeError('Original nested Workflow source required');currentNested();captured=true;return action.captureWorkflowDeliverySource({type:'agent/delivery-source',version:1,kind:'workflow',...binding},()=>{try{currentNested();return recipientCurrent()}catch{return false}})},
+      });return issuer}
+     nested.codeInvocation=Object.freeze({assertCurrent:currentNested,getAdmissionWait,...['shell','bash','pwsh'].includes(event.name)?{takeExecSourceIssuer}:{},...event.name==='workflow_run'?{takeWorkflowSourceIssuer}:{}})},
     revoke(){if(this!==delegation)throw Error('Original Code delegation receiver required');revoked=true},
    });return delegation
   },  hasCodeSourceIssuer(){if(this!==claim)throw Error('Foreign Code claim');current();return !!(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer},
@@ -338,14 +345,14 @@ export function bindPreparedWorkflowLeaf(tool:Tool,leaf:Tool['execute']){
   if(!frame?.active||frame.body!==body||body.tool!==tool||body.leaf!==leaf||body.call.name!=='workflow_run')throw Error('Not the original Workflow body')
   check(body,frame);if(body.foreignContext||body.claimed)throw Error('Original Workflow body unavailable')
   const context=body.managed;if(!context||!body.source||frame.domain!==context.domain.owner)return
-  if(!body.permit||body.codeInvocation||body.exec.resultConsumer==='code')throw Error('Original private Workflow model member required')
+  if(!body.permit&&!body.codeInvocation?.takeWorkflowSourceIssuer||body.permit&&body.codeInvocation)throw Error('Original private Workflow member required')
   const id=own(exec,'sessionId'),seq=own(exec,'callEventSeq'),callId=own(exec,'callId')
   if(id!==context.sessionId||!Number.isSafeInteger(seq)||(seq as number)<0||typeof callId!=='string'||!callId)throw Error('Original Workflow call identity unavailable')
   const identity=Object.freeze({parentSessionId:context.sessionId,callEventSeq:seq as number,toolCallId:callId});body.claimed=true;let consumed=false,taken=false
   const claim:OriginalManagedWorkflowCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
    assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign Workflow caller');check(body,frame)},
    consume(){if(this!==claim)throw TypeError('Foreign Workflow caller');check(body,frame);if(consumed)throw Error('Workflow caller consumed');consumed=true},
-   takeWorkflowSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Workflow caller required');check(body,frame);taken=true;const issuer=(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeWorkflowSourceIssuer?.();if(!issuer)throw Error('Original Workflow issuer unavailable');return issuer},
+   takeWorkflowSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Workflow caller required');check(body,frame);taken=true;const issuer=((body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)??body.codeInvocation)?.takeWorkflowSourceIssuer?.();if(!issuer)throw Error('Original Workflow issuer unavailable');return issuer},
   });workflowCallers.add(claim);return claim
  }});return entry
 }

@@ -16,7 +16,7 @@ export interface OriginalCodeSourceIssuer {
 }
 export interface WorkflowSourceBinding {recipientSessionId:string;generationId:string;sourceNamespace:'workflow';sourceId:string;callSeq:number;delivery:'tool'}
 export interface OriginalWorkflowSourceIssuer {
- prepareLaunch(sourceId:string):Promise<{binding:Readonly<WorkflowSourceBinding>;isCurrent():boolean}>
+ prepareLaunch(sourceId:string, prepareOriginal?:()=>Promise<{binding:Readonly<WorkflowSourceBinding>;isCurrent():boolean}>):Promise<{binding:Readonly<WorkflowSourceBinding>;isCurrent():boolean}>
  assertAdmissionCurrent():void
  captureSource(binding:Readonly<WorkflowSourceBinding>,recipientCurrent:()=>boolean):import('@i-harness/core-session').CapturedActionFact<ProducerFactOutcome>
  registerCompletion(drain:()=>Promise<void>):SettlementFacts<ProducerFactOutcome>
