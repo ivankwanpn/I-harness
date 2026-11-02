@@ -4,16 +4,27 @@ import { derivePlanMode } from "@i-harness/core-session"
 import type { SessionAssembly, SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
 
-/** Current host authority, synchronously reassessed both at prepare and dispatch. */
-export function approvalPolicyIdentity(assembly: SessionAssembly, options: {
+export interface ApprovalIdentitySources {
+  plan: unknown; roles: unknown; catalog: unknown; deferred: unknown; modelTools: unknown
+  mcp: unknown; agents: unknown
+}
+export interface ApprovalIdentityOptions {
   workspace: string; sandbox: string; approval: string
   project: () => SessionProjectContext | undefined
   executionAuthority?: () => AuthorityState
   hookConfigs: readonly string[]; grantPaths: readonly string[]
   pluginAuthority: unknown
-  /** Snapshot from the mounted HookRegistry's normalized handlers and artifacts. */
   hookAuthority?: () => unknown | undefined
-}): { workspaceId: string; revision: string } | undefined {
+}
+/** Current host authority, synchronously reassessed both at prepare and dispatch. */
+export function approvalPolicyIdentity(assembly: SessionAssembly, options: ApprovalIdentityOptions): { workspaceId: string; revision: string } | undefined {
+  return approvalPolicyIdentityFromSources(() => ({ plan: derivePlanMode(assembly.session), roles: assembly.subagentState().roles,
+    catalog: assembly.tools.genToolCatalog(), deferred: assembly.tools.deferredSearchIndex(), modelTools: assembly.executionState?.(),
+    mcp: [...assembly.pluginMcpResults], agents: [...assembly.pluginAgentResults] }), options)
+}
+
+/** Values must come from the live original registry and metadata owners. */
+export function approvalPolicyIdentityFromSources(sources: () => ApprovalIdentitySources, options: ApprovalIdentityOptions): { workspaceId: string; revision: string } | undefined {
   try {
     const optional = (path: string) => {
       try { return readFileSync(path, "utf8") }
@@ -26,15 +37,15 @@ export function approvalPolicyIdentity(assembly: SessionAssembly, options: {
     if (executionAuthority?.kind === "revoked" || executionAuthority?.kind === "unavailable") return undefined
     // Model-facing schema projection is a read; its live presentation metadata
     // is separate from the owned registry catalog fingerprinted below.
-    const modelTools = assembly.executionState?.()
+    const source = sources()
     const authority = {
-      sandbox: options.sandbox, approval: options.approval, plan: derivePlanMode(assembly.session),
+      sandbox: options.sandbox, approval: options.approval, plan: source.plan,
       caller: { role: "main" },
       project: project ?? { roots: [options.workspace], primaryRoot: options.workspace },
       executionAuthority,
-      roles: assembly.subagentState().roles, catalog: assembly.tools.genToolCatalog(), deferred: assembly.tools.deferredSearchIndex(),
-      modelTools, plugins: options.pluginAuthority,
-      mcp: [...assembly.pluginMcpResults], agents: [...assembly.pluginAgentResults],
+      roles: source.roles, catalog: source.catalog, deferred: source.deferred,
+      modelTools: source.modelTools, plugins: options.pluginAuthority,
+      mcp: source.mcp, agents: source.agents,
       hooks, grants: options.grantPaths.map(path => [path, optional(path)]),
     }
     return { workspaceId: options.workspace, revision: createHash("sha256").update(JSON.stringify(authority)).digest("hex") }

@@ -159,3 +159,27 @@ it('refuses copied/proxy owners and effectful array inputs without invoking them
   expect(compareOriginalExclusionScopes(owner,['left-a'],[],ids,[])).toBeUndefined();expect(calls).toBe(0)
  })
 })
+
+it('deduplicates the shared original lock proof in synchronous live and held bundle predicates',async()=>{
+ await methodContexts(({owner,measure})=>{
+  const bundle=measure(()=>owner.assertHeld('left-a'))
+  const live=measure(()=>expect(owner.hasLiveOwnership('left-a')).toBe(true))
+  expect(bundle).toEqual({captures:0,opens:8})
+  expect(live).toEqual({captures:0,opens:8})
+ })
+})
+it.each(['identity','case-policy','reparse'] as const)('rechecks held predicates after await and rejects original native %s changes',async mode=>{
+ let refused=false
+ await expect(methodContexts(async({owner,root})=>{
+  owner.assertHeld('left-a');expect(owner.hasLiveOwnership('left-a')).toBe(true)
+  await Promise.resolve()
+  const node=probe.nodes.get(root)!,before={...node};let effects=0
+  if(mode==='identity')node.id+=1000;else if(mode==='case-policy')node.sensitive=1;else node.attributes=0x410
+  try{
+   expect(()=>{owner.assertHeld('left-a');effects++}).toThrow()
+   expect(()=>{owner.hasLiveOwnership('left-a');effects++}).toThrow()
+   expect(effects).toBe(0);refused=true
+  }finally{Object.assign(node,before)}
+ })).rejects.toThrow('Original query control and cleanup failed')
+ expect(refused).toBe(true)
+})
