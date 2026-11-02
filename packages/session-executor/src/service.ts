@@ -513,9 +513,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const deliveryDrains = new Map<string, ReturnType<typeof createDeliveryDrain>>()
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
   function stopTeamRecovery(id:string){
-    const state=creating.get(id)?.teamRecovery;if(!state||!state.pending||state.stopped)return false
-    state.stopped=true;state.pending=false;state.gate.reject(new Error('agent aborted'))
-    const flight=Promise.resolve().then(()=>Reflect.apply(state.close,state.port,[]));state.stop=flight;void flight.catch(error=>d.warn('[i-harness] Team recovery close requires cleanup: '+String(error)));return true
+    const state=creating.get(id)?.teamRecovery;if(!state||!state.pending&&!state.stopped)return false
+    if(!state.stopped){state.stopped=true;state.pending=false;state.gate.reject(new Error('agent aborted'))}
+    if(!state.stop){const flight=Promise.resolve().then(()=>Reflect.apply(state.close,state.port,[]));state.stop=flight;void flight.catch(error=>{if(state.stop===flight)state.stop=undefined;d.warn('[i-harness] Team recovery close requires cleanup: '+String(error))})}return true
   }
   async function retryTeamRecovery(id:string):Promise<boolean>{
     const row=creating.get(id),state=row?.teamRecovery;if(!row||!state?.pending)return false

@@ -209,10 +209,8 @@ export async function createManagedExecutionRuntimeWithRegistry(options:Omit<Man
  const original:ManagedRegistryConstruction={ctx:prepared.ctx,tools:prepared.pair.registry,domain:prepared.origin.domain,execution:prepared.execution,
   ...(prepared.manager&&prepared.instructionRuntime&&prepared.instructionBinding?{instructions:{manager:prepared.manager,runtime:prepared.instructionRuntime,environment:prepared.instructionBinding.environment,cwd:prepared.instructionBinding.cwd,authority:prepared.instructionBinding.authority,available:prepared.instructionBinding.available}}:{}),assertCurrent,
   retain(cleanup){if(!retaining)throw Error('Original construction retention expired');assertCurrent();if(typeof cleanup!=='function')throw TypeError('Original mount cleanup required');options.retainConstructionCleanup(async()=>{await cleanup()})}}
- assertCurrent()
- if(options.prepareFilesystem){if(!options.originalFilesystem)throw TypeError('Original filesystem required for rewind');const rewind=await options.prepareFilesystem(original);assertCurrent();prepared.mountFilesystem(rewind);assertCurrent()}
  let defaultSurface:void|OwnedDefaultSurface
- try{defaultSurface=await options.configureRegistry(original)}finally{retaining=false}
+ try{assertCurrent();if(options.prepareFilesystem){if(!options.originalFilesystem)throw TypeError('Original filesystem required for rewind');const rewind=await options.prepareFilesystem(original);assertCurrent();prepared.mountFilesystem(rewind);assertCurrent()}defaultSurface=await options.configureRegistry(original)}finally{retaining=false}
  if(defaultSurface){
   const originalSurface=defaultSurface,names=['systemPrompt','modelToolSchemas','modelOverheadTokens','prepareInput','reconcileAuthority'] as const
   if(types.isProxy(originalSurface))throw TypeError('Original default surface required')
