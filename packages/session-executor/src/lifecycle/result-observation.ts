@@ -1,17 +1,23 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { canonicalJsonData, createLegacyReadVisibility, freezeJsonData, isStrictFactData, type SessionView } from '@i-harness/core-session'
 import { captureLegacyRefCommitment, type ContextCapture, type LegacyCommitment, type LegacyReadObservation, type LegacyReadObservationRunner } from '@i-harness/context-output'
+import {assertOriginalManagedTaskSourceRead, type ManagedTaskSourceRead} from '@i-harness/session-persistence/internal/selected-source-owner'
 import type { ExistingSessionBindingObservation, SessionBindingObservation, SessionCoordinator, SessionMeta, ManagedDocument } from '@i-harness/session-persistence'
 
 const originalResultDocuments=new WeakMap<ResultSourceObservation,ManagedDocument>()
-export interface ResultSourceObservation { sessionId: string; metadata: Readonly<SessionMeta>; view: SessionView; source: NonNullable<ContextCapture['source']>; assertCurrent(): void }
+type ResultObservationBase = { sessionId:string; metadata:Readonly<SessionMeta>; source:NonNullable<ContextCapture['source']>; assertCurrent():void }
+export type PublicResultSourceObservation = ResultObservationBase & {kind:'public';view:SessionView}
+export type ManagedTaskResultSourceObservation = ResultObservationBase & {kind:'managed-task';artifacts:ManagedTaskSourceRead['artifacts'];header:ManagedTaskSourceRead['header']}
+export type ResultSourceObservation = PublicResultSourceObservation | ManagedTaskResultSourceObservation
 export interface ResultObservationCapture {
   sessionId: string; sessionIds: readonly string[]; observation: ExistingSessionBindingObservation | SessionBindingObservation; document: ManagedDocument
   currentSource(): NonNullable<ContextCapture['source']>; assertHostCurrent(): void
 }
+export interface ManagedTaskResultObservationCapture {sessionId:string;sessionIds:readonly string[];observation:ExistingSessionBindingObservation|SessionBindingObservation;witness:ManagedTaskSourceRead;currentSource():NonNullable<ContextCapture['source']>;assertHostCurrent():void}
 export interface ResultObservationScope {
   run<T>(capture: ResultObservationCapture, use: () => Promise<T>): Promise<T>
-  retainSelected(capture:ResultObservationCapture): {readonly observation:ResultSourceObservation;assertCurrent():void;revoke():void;use<T>(work:()=>Promise<T>):Promise<T>;close():Promise<void>}
+  retainManagedTask(capture:ManagedTaskResultObservationCapture): {readonly observation:ManagedTaskResultSourceObservation;assertCurrent():void;revoke():void;use<T>(work:()=>Promise<T>):Promise<T>;close():Promise<void>}
+  retainSelected(capture:ResultObservationCapture): {readonly observation:PublicResultSourceObservation;assertCurrent():void;revoke():void;use<T>(work:()=>Promise<T>):Promise<T>;close():Promise<void>}
   current(sessionId: string): ResultSourceObservation | undefined
 }
 /** Derived held data only. An escaped ALS context remains revoked, never fallback. */
@@ -19,6 +25,20 @@ export function createResultObservationScope(): ResultObservationScope {
   type Scope = { active: boolean; ids: Set<string>; primary: ResultSourceObservation }
   const contexts = new AsyncLocalStorage<Scope[]>()
   return {
+    retainManagedTask(capture) {
+      const observation=capture.observation,witness=capture.witness,sessionId=capture.sessionId,sessionIds=[...capture.sessionIds],hostCheck=capture.assertHostCurrent,sourceGetter=capture.currentSource
+      const host=()=>Reflect.apply(hostCheck,capture,[]), checkOwner=()=>assertOriginalManagedTaskSourceRead(witness)
+      observation.assertCurrent();host();checkOwner();if(witness.sessionId!==sessionId||!sessionIds.includes(sessionId))throw Error('Result observation actor is not held')
+      for(const id of sessionIds)observation.metadata(id)
+      const metadata=observation.metadata(sessionId);if(metadata.sessionId!==sessionId||metadata.archived)throw Error('Result observation session unavailable')
+      if(canonicalJsonData(metadata.semanticSeed??null)!==canonicalJsonData(witness.header?.semanticSeed??null)||metadata.seedLength!==witness.header?.seedLength)throw Error('Original Task READY header changed')
+      const rawSource=Reflect.apply(sourceGetter,capture,[]);if(!isStrictFactData(rawSource))throw Error('Invalid result source')
+      const source=freezeJsonData(JSON.parse(canonicalJsonData(rawSource))) as NonNullable<ContextCapture['source']>;let closed=false,active=0,drain=Promise.withResolvers<void>()
+      const assertCurrent=()=>{if(closed)throw Error('Result observation expired');observation.assertCurrent();host();checkOwner();if(observation.metadata(sessionId)!==metadata||metadata.archived)throw Error('Result observation metadata changed')}
+      const primary:ManagedTaskResultSourceObservation=Object.freeze({kind:'managed-task',sessionId,metadata,artifacts:witness.artifacts,header:witness.header,source,assertCurrent}),ids=new Set(sessionIds)
+      originalResultDocuments.set(primary,witness.document);assertCurrent()
+      return Object.freeze({observation:primary,assertCurrent,revoke(){closed=true},async use<T>(work:()=>Promise<T>){assertCurrent();active++;const scope:Scope={active:true,ids,primary};try{return await contexts.run([...(contexts.getStore()??[]),scope],async()=>{assertCurrent();const result=await work();assertCurrent();return result})}finally{scope.active=false;if(!--active){drain.resolve();drain=Promise.withResolvers<void>()}}},async close(){if(contexts.getStore()?.some(scope=>scope.primary===primary&&scope.active))throw Error('Result observation self-close');closed=true;if(active)await drain.promise}})
+    },
     retainSelected(capture) {
       const observation=capture.observation,document=capture.document,sessionId=capture.sessionId,sessionIds=[...capture.sessionIds],hostCheck=capture.assertHostCurrent,sourceGetter=capture.currentSource
       const host=()=>Reflect.apply(hostCheck,capture,[])
@@ -31,7 +51,7 @@ export function createResultObservationScope(): ResultObservationScope {
       const source=freezeJsonData(JSON.parse(canonicalJsonData(rawSource))) as NonNullable<ContextCapture['source']>
       let closed=false,active=0,drain=Promise.withResolvers<void>()
       const assertCurrent=()=>{if(closed)throw Error('Result observation expired');observation.assertCurrent();host();document.assertReady();if(document.view!==view||view.events!==events||events.length!==count)throw Error('Result observation view changed');if(observation.metadata(sessionId)!==metadata||metadata.archived)throw Error('Result observation metadata changed')}
-      const primary:ResultSourceObservation=Object.freeze({sessionId,metadata,view,source,assertCurrent}),ids=new Set(sessionIds)
+      const primary:PublicResultSourceObservation=Object.freeze({kind:'public',sessionId,metadata,view,source,assertCurrent}),ids=new Set(sessionIds)
       originalResultDocuments.set(primary,document);assertCurrent()
       return Object.freeze({observation:primary,assertCurrent,revoke(){closed=true},async use<T>(work:()=>Promise<T>){assertCurrent();active++;const scope:Scope={active:true,ids,primary};try{return await contexts.run([...(contexts.getStore()??[]),scope],async()=>{assertCurrent();const result=await work();assertCurrent();return result})}finally{scope.active=false;if(!--active){drain.resolve();drain=Promise.withResolvers<void>()}}},async close(){if(contexts.getStore()?.some(scope=>scope.primary===primary&&scope.active))throw Error('Result observation self-close');closed=true;if(active)await drain.promise}})
     },
@@ -49,7 +69,7 @@ export function createResultObservationScope(): ResultObservationScope {
         if (capture.document.view !== view || view.events !== events || events.length !== count) throw new Error('Result observation view changed')
         if (capture.observation.metadata(capture.sessionId) !== metadata || metadata.archived) throw new Error('Result observation metadata changed')
       }
-      const primary: ResultSourceObservation = { sessionId: capture.sessionId, metadata, view,
+      const primary: PublicResultSourceObservation = { kind:'public', sessionId: capture.sessionId, metadata, view,
         get source() { assertCurrent(); const value = capture.currentSource(); assertCurrent(); return value }, assertCurrent }
       originalResultDocuments.set(primary,capture.document)
       const scope: Scope = { active: true, ids: new Set(capture.sessionIds), primary }
@@ -99,6 +119,13 @@ const commitmentKey = (c: LegacyCommitment) => JSON.stringify([c.refId, c.revisi
 /** Predicates are synchronous inside L1; failures survive caught-denial paths. */
 export function legacyObservationFor(source: ResultSourceObservation): LegacyReadObservation {
   source.assertCurrent()
+  if(source.kind==='managed-task') {
+    const seed=source.metadata.semanticSeed,header=source.header
+    if(!seed||seed.version===3||canonicalJsonData(seed)!==canonicalJsonData(header?.semanticSeed??null)||source.metadata.seedLength!==header?.seedLength)throw Error('Managed Task inherited legacy membership unavailable')
+    const bootstrap={invocation:{version:1 as const,operationId:seed.operationId,targetSessionId:source.sessionId,createdAt:source.metadata.createdAt,requestDigest:seed.requestDigest},manifestDigest:seed.manifestDigest,seedDigest:seed.seedDigest}
+    const unavailable=()=>{throw Error('Managed Task legacy visibility unavailable')}
+    return Object.freeze({sessionId:source.sessionId,sourceId:source.source.sourceId,bootstrap,assertCurrent:source.assertCurrent,localVisible:unavailable,anchorVisible:unavailable})
+  }
   const visibility = createLegacyReadVisibility(source.view)
   if (visibility.kind !== 'visible') throw new Error('Legacy visibility ' + visibility.reason)
   const local = new Set([...visibility.local()].map(value => commitmentKey(captureLegacyRefCommitment(value.ref))))

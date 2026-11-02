@@ -1,4 +1,4 @@
-import {inspectTaskChildSource} from '@i-harness/subagent'
+import {inspectTaskChildSource,inspectManagedTaskChildSource,isManagedTaskChildHistory} from '@i-harness/subagent'
 import {join} from 'node:path'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {types} from 'node:util'
@@ -105,7 +105,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     genericVisible:async(sessionId,visibleRef)=>{
         const observed=observations.current(sessionId)
         if(observed){
-          observed.assertCurrent();const view=observed.view,cuts=rewindCuts(view)
+          observed.assertCurrent();if(observed.kind==='managed-task')return observed.artifacts.some(artifact=>sameManagedArtifactRef(artifact.ref,visibleRef));const view=observed.view,cuts=rewindCuts(view)
           return semanticSeedResultRefs(view).some(ref=>sameManagedArtifactRef(ref,visibleRef))
             ||view.events.some(event=>!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)&&managedResultRefs(event).some(ref=>sameManagedArtifactRef(ref,visibleRef)))
         }
@@ -218,7 +218,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
           const targetView=freezeJsonData({formatVersion:inspection.stage.headerBase.formatVersion,header:JSON.parse(inspection.stage.headerBytes),events:inspection.seed.records}) as import('@i-harness/core-session').SessionView
           legacyTransfer=bridge.acquireSelectedLegacyTransfer(options.coordinator as SessionCoordinator,target,{invocation:operation.invocation,sourceSessionId:operation.prepared.core.sourceSessionId,facts:inspection.facts,targetView,
             target:{available:()=>{try{assertTargetCurrent();return true}catch{return false}},assertCurrent:assertTargetCurrent,sourceId:()=>{assertTargetCurrent();return contextSourceIdentity(workspaceKey,canonical,projectPreparation!.targetScope().scope)}},
-            source:{view:slot.source.view,assertCurrent:assertSourceCurrent,read(){assertSourceCurrent();const observation=observations.current(operation.prepared.core.sourceSessionId);if(!observation||observation.view!==slot.source.view)throw Error('Original result observation unavailable');return legacyObservationFor(observation)}}})
+            source:{view:slot.source.view,assertCurrent:assertSourceCurrent,read(){assertSourceCurrent();const observation=observations.current(operation.prepared.core.sourceSessionId);if(!observation||observation.kind!=='public'||observation.view!==slot.source.view)throw Error('Original result observation unavailable');return legacyObservationFor(observation)}}})
         }
         const result=await legacyTransfer.confirm();slot.assertCurrent();assertTargetCurrent();return result
       },
@@ -369,16 +369,16 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
   const prepareTaskChild:import('@i-harness/subagent').PrepareTaskChild=async input=>{
     if(input.coordinator!==options.coordinator||closed||!options.resultReadScopeFor||!options.prepareTaskChildInheritance)throw Error('Original Gateway task host unavailable')
     input.assertCurrent()
-    const association=input.history?inspectTaskChildSource(input.history,input.parentSessionId):undefined
+    const association=input.history?(isManagedTaskChildHistory(input.history)?inspectManagedTaskChildSource(input.history,input.parentSessionId):inspectTaskChildSource(input.history,input.parentSessionId)):undefined
     let source:{artifacts:ReturnType<typeof inspectTaskChildSource>['artifacts'];assertCurrent():void;access():ContextAccess;release():Promise<void>;use<T>(work:()=>Promise<T>):Promise<T>}|undefined
-    if(association?.hasLegacy)throw Error('Unsupported task legacy result membership')
+    if(association?.hasLegacy || association?.kind==='managed' && association.legacy==='unavailable')throw Error('Unsupported task legacy result membership')
 
     if(association&&(association.hasDependencies||association.inheritedLegacyUnknown)){
       if(!options.retainSelectedProjectRead)throw Error('Original task result source unavailable')
       const original=selectedSourceFor(options.coordinator as SessionCoordinator)
       let binding:Awaited<ReturnType<typeof original.acquire>>|undefined,project:Awaited<ReturnType<NonNullable<typeof options.retainSelectedProjectRead>>>|undefined
       let retired=false,flight:Promise<void>|undefined,cleanup:ReturnType<typeof original.cleanupForError>
-      let witness:ReturnType<typeof original.retainTask>|undefined
+      let witness:ReturnType<typeof original.retainTask>|ReturnType<typeof original.retainManagedTask>|undefined
       const current=()=>{if(retired||closed)throw Error('Original task source retired');input.assertCurrent();association.assertCurrent();if(witness){input.assertSourceCut();witness.assertCurrent()}binding?.assertCurrent();project?.assertCurrent()}
       let sourceClosed=false,closeFlight:Promise<void>|undefined
       const closeSource=()=>{
@@ -389,16 +389,16 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       }
       input.retain({close:closeSource})
       const acquire=()=>flight??=(async()=>{
-        input.assertSourceCut();witness=original.retainTask(association.owner,association.view,()=>binding?.revoke());current();
+        input.assertSourceCut();witness=association.kind==='managed'?original.retainManagedTask(association.domain,association.reservation,()=>binding?.revoke()):original.retainTask(association.owner,association.view,()=>binding?.revoke());if('kind' in witness&&witness.kind==='managed-task-source'&&canonicalJsonData(witness.artifacts)!==canonicalJsonData(association.artifacts))throw Error('Original Task seed artifacts changed');current();
         const ids=await discoverResultLineage(options.coordinator,input.parentSessionId,current);current();
         binding=await original.acquire({sessionIds:ids});current();assertResultLineage(binding.observation,ids,input.parentSessionId);
         project=await options.retainSelectedProjectRead!(ids,binding,input.parentSessionId);current();
-        const heldProject=project,result=observations.retainSelected({sessionId:input.parentSessionId,sessionIds:ids,observation:binding.observation,document:witness!.document,currentSource(){return canonicalSource(heldProject.sourceGetter)},assertHostCurrent:current})
+        const heldProject=project, capture={sessionId:input.parentSessionId,sessionIds:ids,observation:binding.observation,currentSource(){return canonicalSource(heldProject.sourceGetter)},assertHostCurrent:current};const result='kind' in witness! && witness.kind==='managed-task-source'?observations.retainManagedTask({...capture,witness}):observations.retainSelected({...capture,document:witness!.document})
         let metadata:Awaited<ReturnType<typeof bridge.acquireSelectedMetadata>>|undefined,metadataCleanup:ReturnType<typeof bridge.selectedMetadataCleanupFor>
         heldProject.attachResult({revoke(){result.revoke();metadata?.revoke()},async close(){if(metadataCleanup){await metadataCleanup.retry();metadataCleanup=undefined}if(metadata)await metadata.close();await result.close()}})
         if(association.inheritedLegacyUnknown){
           await heldProject.use(()=>result.use(async()=>{
-            const originalRead=legacyObservationFor(result.observation);originalLegacyReads.set(originalRead,{document:witness!.document,view:result.observation.view})
+            const observation=result.observation,originalRead=legacyObservationFor(observation);if(observation.kind==='public')originalLegacyReads.set(originalRead,{document:witness!.document,view:observation.view})
             try{metadata=await bridge.acquireSelectedMetadata(originalRead)}catch(error){metadataCleanup=bridge.selectedMetadataCleanupFor(error);throw Object.assign(Error('Original inherited legacy membership unavailable',{cause:error}),{code:'TASK_LEGACY_MEMBERSHIP_UNAVAILABLE'})}
             const iterator=metadata.reader.legacy()[Symbol.asyncIterator](),row=await iterator.next()
             if(!row.done){await iterator.return?.();throw Error('Unsupported task inherited legacy result membership')}
