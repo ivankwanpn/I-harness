@@ -50,7 +50,7 @@ export function resultFactMetadata(event: SessionEventView): ResultFactMetadata 
   if (type === 'subagent/start' || type === 'subagent/end') {
     copy('taskId', event, 'taskId'); copy('taskOutcome', event, 'outcome'); copy('resultRevision', event, 'resultRevision')
   }
-  if(type==='subagent/inbox')copy('inboxMessageId',event,'messageId')
+  if(type==='subagent/inbox'){const id=data(event,'messageId');if(typeof id==='string')result.inboxMessageId=id}
   const job = type === 'job/status' ? data(event, 'job') : undefined
   if (job) {
     copy('jobId', job, 'jobId'); copy('jobStatus', job, 'status'); copy('resultRevision', data(job, 'result'), 'revision')

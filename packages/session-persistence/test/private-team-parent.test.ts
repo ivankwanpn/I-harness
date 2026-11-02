@@ -19,6 +19,7 @@ it('retains the original Team ledger and live inbox membership without a parent 
   const parent=captureManagedTeamParent(domain)
   try{expect(()=>parent.ledger).toThrow();await parent.ready;assertOriginalManagedTeamParent(domain,parent);expect(parent.ledger).toEqual([expect.objectContaining(event)]);expect(parent.hasInbox('msg')).toBe(false)
    committedFactSeqs(await source.delivery.capture({type:'subagent/inbox',messageId:'msg',message:'hello'}).admit());expect(parent.hasInbox('msg')).toBe(true);expect(parent.ledger).toHaveLength(1)
+   committedFactSeqs(await source.delivery.capture({type:'subagent/inbox',messageId:'',message:'legacy empty id'}).admit());expect(parent.hasInbox('')).toBe(true)
    committedFactSeqs(await action.captureTeamTransaction([{...event,task:{...event.task,revision:2,subject:'updated'}}]).admit());assertOriginalManagedTeamParent(domain,parent);expect(parent.ledger).toHaveLength(1)
    expect(()=>assertOriginalManagedTeamParent(domain,{...parent})).toThrow()
   }finally{await parent.close()}
