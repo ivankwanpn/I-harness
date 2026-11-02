@@ -200,6 +200,12 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         }};
     }
     return {
+        teamLedgerOrdinals() {
+            check();const header=owned.source.header,fork=Boolean(header?.parentSession&&header.origin!=='subagent'&&header.origin!=='approval-review')
+            const floor=fork?(header?.seedLength??owned.index.eventCount):0
+            return owned.index.resultFacts().filter(fact=>fact.index>=floor&&fact.type.startsWith('team/')).map(fact=>fact.index)
+        },
+        hasTeamInbox(messageId:string) {check();return owned.index.resultFacts().some(fact=>fact.type==='subagent/inbox'&&fact.inboxMessageId===messageId)},
         /** Structural selection only; payload remains in the held writer. */
         taskResultOrdinal(taskId:string) {
             check();const facts=owned.index.resultFacts(),visibility=historyVisibility(facts)

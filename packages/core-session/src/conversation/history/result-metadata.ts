@@ -19,6 +19,7 @@ export interface ResultFactMetadata {
   readonly resultRevision?: string
   readonly jobId?: string
   readonly jobStatus?: string
+  readonly inboxMessageId?: string
 }
 export function legacyResultMetadata(raw: unknown): LegacyRef {
   const keys = ['id', 'workspaceId', 'sessionId', 'callId', 'label', 'revision', 'bytes', 'originalBytes', 'complete', 'expiresAt']
@@ -49,6 +50,7 @@ export function resultFactMetadata(event: SessionEventView): ResultFactMetadata 
   if (type === 'subagent/start' || type === 'subagent/end') {
     copy('taskId', event, 'taskId'); copy('taskOutcome', event, 'outcome'); copy('resultRevision', event, 'resultRevision')
   }
+  if(type==='subagent/inbox')copy('inboxMessageId',event,'messageId')
   const job = type === 'job/status' ? data(event, 'job') : undefined
   if (job) {
     copy('jobId', job, 'jobId'); copy('jobStatus', job, 'status'); copy('resultRevision', data(job, 'result'), 'revision')

@@ -95,6 +95,15 @@ export interface PreparedExecutionRequest {
  assertCurrent():void
  settle():Promise<void>
 }
+export type ManagedTeamLedgerEvent=Extract<SessionEventView,{type:'team/member'|'team/task'|'team/message/queued'|'team/message/delivered'}>
+export interface OriginalManagedTeamParent {
+ readonly domain:ManagedExecutionDomain
+ readonly ready:Promise<void>
+ readonly ledger:readonly ManagedTeamLedgerEvent[]
+ hasInbox(messageId:string):boolean
+ assertCurrent():void
+ close():Promise<void>
+}
 
 /** A readonly fold over the validated original stream; it owns no writer. */
 export interface OriginalExecutionFoldSink {
