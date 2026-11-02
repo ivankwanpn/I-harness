@@ -63,6 +63,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
     get inputSchema() { return roleMetadata().inputSchema },
     isReadOnly: false,
     execute: async (args, exec) => {
+      if(deps.managedParent && args.background!==false)throw Error('Managed background Task delivery unavailable')
       const role = deps.roles.get(args.agent_type ?? "general")
       if (!role) throw new Error(`unknown role: ${args.agent_type}; register a capability definition with a system prompt and allowed tools. A model selection alone does not define a role.`)
       // M24a (B2): max_depth guard — reject spawning once the caller is already
@@ -85,7 +86,9 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       // tools, so no subagent can reach this guard until a custom role adds
       // it — exactly the configuration a host must pair with a maxDepth
       // review.
-      const callerDepth = deps.parentSession.header?.delegationDepth ?? 0
+      const observation=deps.managedParent?.execution.observe()
+      if(observation){if(observation.identity!==deps.managedParent!.domain.identity)throw Error('Foreign parent observation');observation.assertCurrent()}
+      const callerDepth = (observation?.header ?? deps.parentSession?.header)?.delegationDepth ?? 0
       const maxDepth = deps.maxDepth ?? 1
       if (callerDepth >= maxDepth) {
         throw new Error(`subagent nesting depth limit reached (max ${maxDepth}) — cannot spawn from depth ${callerDepth}`)
@@ -120,8 +123,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       let cleanupSource:ReturnType<typeof createSpawnSource>|undefined,retainedClosed=false
       const closeRetained=()=>{if(!retainedClosed){if(!cleanupSource?.hasPublished())retained?.unavailable();retainedClosed=true}}
       originalSlot?.keep({async close(){closeRetained()}})
-      const source = createSpawnSource(subagentFactOwner(deps.parentSession, deps.factOwner), exec.abortSignal, retained, args.background !== false,
-        () => { unregisterDelivery?.(); deps.onTaskTerminalCommitted?.() }, deps.onTaskTerminalRecovery,originalSlot?cleanup=>originalSlot.keep(cleanup):undefined)
+      const source = createSpawnSource(deps.managedParent?.domain.owner ?? subagentFactOwner(deps.parentSession!, deps.factOwner), exec.abortSignal, retained, args.background !== false,
+        () => { unregisterDelivery?.(); deps.onTaskTerminalCommitted?.() }, deps.onTaskTerminalRecovery,originalSlot?cleanup=>originalSlot.keep(cleanup):undefined,deps.managedParent?.domain)
       cleanupSource=source
       let task: TaskRecord
       try {

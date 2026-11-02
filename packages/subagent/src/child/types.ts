@@ -20,7 +20,8 @@ export interface SpawnOptions extends RoleModelHost {
   message: string
   parentPath: string
   parentRegistry: ToolRegistry
-  parentSession: SessionView
+  /** Required for legacy admission. A committed birth carries its own lineage. */
+  parentSession?: SessionView
   parentCtx: PluginContext
   role: SubagentRole
   parentModel: ModelClient

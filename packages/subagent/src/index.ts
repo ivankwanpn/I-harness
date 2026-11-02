@@ -71,6 +71,8 @@ import type { ManagedDocument } from '@i-harness/session-persistence'
 import { captureOwnedTaskContext } from './task/owned-context.ts'
 import { isColdBoundChild } from './task/cold-bindings.ts'
 import { createTaskStartupFacade } from './task/startup-facade.ts'
+import {isManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
+import {isManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
   prepareTaskChild?: import('./child/task-host.ts').PrepareTaskChild
@@ -90,7 +92,8 @@ export interface RegisterSubagentOptions extends RoleModelHost {
   resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
   exec: ExecService
   parentModel: ModelClient
-  parentSession: SessionView
+  parentSession?: SessionView
+  managedParent?: {domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment}
   factOwner?: FactOwner
   // M6 state persistence: when set, every registry mutation persists the full
   // snapshot through the coordinator document API.
@@ -163,9 +166,13 @@ export interface RegisterSubagentResult {
 // four built-in roles, creates the job registry + agent table, builds the 11
 // subagent/job tools, and registers them on the parent registry.
 export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistry, opts: RegisterSubagentOptions): RegisterSubagentResult {
-  const factOwner = subagentFactOwner(opts.parentSession, opts.factOwner)
+  const managed=opts.managedParent
+  if(managed&&(!isManagedExecutionAttachment(managed.execution)||!isManagedExecutionDomain(managed.domain,ctx)||managed.execution.identity!==managed.domain.identity||managed.execution.owner!==managed.domain.owner||opts.parentSession||opts.factOwner))throw TypeError('Original managed subagent parent required')
+  if(!managed&&!opts.parentSession)throw TypeError('Original subagent parent required')
+  const factOwner = opts.parentSession ? subagentFactOwner(opts.parentSession, opts.factOwner) : undefined
   let ownedTask: import('./task/persistence.ts').OwnedTaskContext | undefined
-  if (opts.factOwner && opts.persist) ownedTask = captureOwnedTaskContext(opts.persist.coordinator, opts.factOwner as ManagedDocument, opts.parentSession, opts.persist.stateId)
+  if (opts.persist && (managed || opts.factOwner)) ownedTask = captureOwnedTaskContext(opts.persist.coordinator, managed?.domain.owner ?? opts.factOwner as ManagedDocument, managed?.domain ?? opts.parentSession!, opts.persist.stateId)
+  if(managed&&(!ownedTask||!opts.persist||opts.persist.parentSessionId!==managed.domain.sessionId||!opts.prepareTaskChild))throw TypeError('Original managed Task host required')
 
   // M24a (G1a/G4): resolved to the real post-restore step below when BOTH a
   // restored state and persistence are present; otherwise a no-op.
@@ -225,7 +232,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   let launchEntry: ReturnType<typeof bindPreparedTaskLaunchLeaf> | undefined
   let launchTool: import('@i-harness/core-tools').Tool | undefined
   const taskOwner = createTaskRegistry({
-    ...(ownedTask ? { launchContext: { view: opts.parentSession, factOwner, context: ctx, sessionId: ownedTask.stateId } } : {}),
+    ...(ownedTask ? { launchContext: managed ? {kind:'managed-execution' as const,domain:managed.domain,context:ctx,sessionId:ownedTask.stateId} : { view: opts.parentSession!, factOwner:factOwner!, context: ctx, sessionId: ownedTask.stateId } } : {}),
     results: opts.results,
     reportPolicy: opts.reportPolicy,
     ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
@@ -288,7 +295,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       parseTaskHistorySelection(args.fork_turns)
       if(args.agent_type==='reviewer'||caller.identity.callEventSeq===undefined&&!caller.identity.toolCallId)return
       if(!opts.prepareTaskChild||!opts.persist?.coordinator.bootstrapChildTargetWithCapture||!opts.persist.coordinator.resumeChildTarget)throw Error('Original task child host unavailable')
-      if(caller.context.view!==opts.parentSession||caller.context.factOwner!==factOwner||caller.context.context!==ctx||caller.identity.parentSessionId!==ownedTask.stateId)throw Error('Foreign original task caller')
+      const same=managed?'kind'in caller.context&&caller.context.domain===managed.domain:!('kind'in caller.context)&&caller.context.view===opts.parentSession&&caller.context.factOwner===factOwner
+      if(!same||caller.context.context!==ctx||caller.identity.parentSessionId!==ownedTask.stateId)throw Error('Foreign original task caller')
       ownedTask.operations.assertTaskV3Parent(ownedTask.parent,ownedTask.stateId)
       const role=roles.get(args.agent_type??'general');if(!role)throw Error('Original role unavailable')
       return taskLaunchPortFor(taskOwner).admit(caller,role)
@@ -300,7 +308,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     summaryFactory: opts.summaryFactory,
     results: opts.results,
     reportPolicy: opts.reportPolicy,
-    table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
+    table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, managedParent:managed, parentCtx: ctx,
     parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
     codeMode: opts.codeMode, codeModeFactory: opts.codeModeFactory,
@@ -371,6 +379,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       // barriers succeed. The notifier cannot retry a failed task save or
       // treat committed terminal bytes alone as completed handoff ownership.
       if (deliverySources.has(taskId)) return
+      if(!opts.parentSession)return
       const source = (readOwnedDeliveryState(opts.parentSession) ?? readDeliveries(opts.parentSession)).source(subagentDeps.notificationNamespace!, taskId)
       if (source?.type !== 'agent/delivery-source') return
       const terminal = opts.parentSession.events.findLast(e => e.type === 'subagent/end' && e.taskId === taskId && !!e.resultRevision && !!e.envelope && e.envelope.retention.kind !== 'unavailable' && (e.outcome === 'completed' || e.outcome === 'error'))

@@ -28,7 +28,8 @@ export interface SubagentToolDeps extends RoleModelHost {
   jobs: JobRegistry
   roles: RoleRegistry
   parentRegistry: ToolRegistry
-  parentSession: SessionView
+  parentSession?: SessionView
+  managedParent?: {domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;execution:import('../../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment}
   factOwner?: FactOwner
   parentCtx: PluginContext
   parentModel: ModelClient
