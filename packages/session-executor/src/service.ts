@@ -1,3 +1,4 @@
+import {associateOriginalHostAssemblyObserver} from './host-assembly-observer.ts'
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {createExecutorExecutionCache} from './durable-session.ts'
 import {createManagedExecutionRuntime,createManagedExecutionRuntimeWithRegistry} from './managed-assembly.ts'
@@ -350,6 +351,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const extensionRefreshes = new Map<string, Promise<void>>()
   const extensionCleanups = new Map<string, () => void | Promise<void>>()
   const hooks = new Set<(assembly: SessionAssembly) => void>()
+  const hostAssemblyHooks = new Set<(assembly: SessionAssembly) => void>()
   const completeSelections=new Set<string>()
   const managedCompatible=(id:string)=>!completeSelections.has(id)&&supportsManagedServiceOptions(opts)&&hooks.size===0
   const selectComplete=(id:string)=>{if(privateEntries.has(id))throw Error('Private entry requires explicit complete compatibility adapter');completeSelections.add(id)}
@@ -1028,7 +1030,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if (surfaceKind(sessionId, assembly) === 'retiring') {
           assembly.revokeNewWork(); retireSurface(sessionId, assembly)
         } else notifySurface({ sessionId, assembly, kind: 'published' })
-        for (const hook of [...hooks]) hook(assembly)
+        for (const hook of [...hooks,...hostAssemblyHooks]) hook(assembly)
         if (creating.get(sessionId) === row) row.residentActivation.activate()
         // Recovery admission needs the exact published parent and its lane.
         // Waking schedules through submit without awaiting that turn here.
@@ -1625,7 +1627,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  return {
+  const service:SessionService = {
     async refreshExtensions() {
       if (closed || !opts.extensionsFor) return
       await Promise.allSettled([...creating.values()].map(row => row.work))
@@ -1767,4 +1769,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     closeSession,
     close,
   }
+  associateOriginalHostAssemblyObserver(service,(listener,options)=>{if(closed)return()=>{};hostAssemblyHooks.add(listener);try{if(options?.includeExisting)for(const [id,assembly] of [...assemblies])if(assemblies.get(id)===assembly)listener(assembly)}catch(error){hostAssemblyHooks.delete(listener);throw error}return()=>{hostAssemblyHooks.delete(listener)}})
+  return service
 }

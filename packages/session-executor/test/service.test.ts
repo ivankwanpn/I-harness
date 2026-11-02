@@ -1314,3 +1314,9 @@ describe("createSessionService — close lifecycle with a queue in flight (Task 
     }
   }, 60_000)
 })
+
+it('internal dual-route observer receives original complete assemblies without public hook enrollment',async()=>{
+ const {onOriginalHostAssembly}=await import('../src/host-assembly-observer.ts')
+ const service=createSessionService({workspace:process.cwd(),modelPolicy:'test-mock'})
+ try{const first=await service.assemblyFor('host-existing'),seen:unknown[]=[];const off=onOriginalHostAssembly(service,value=>seen.push(value),{includeExisting:true});expect(seen).toEqual([first]);const next=await service.assemblyFor('host-next');expect(seen).toEqual([first,next]);off();await service.assemblyFor('host-after');expect(seen).toEqual([first,next])}finally{await service.close()}
+},60000)
