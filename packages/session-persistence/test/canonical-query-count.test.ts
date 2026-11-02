@@ -271,3 +271,14 @@ it('keeps an unknown private parent source callback outside the native batching 
   try{expect(()=>withArtifactCurrentChecks(()=>{guard();proof.assertCurrent();effects++})).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);changed=true}finally{armed=false;Object.assign(node,before)}
  }finally{probe.sourceCurrent=undefined;if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
+it('preserves original held-binding and owner descriptor provenance through genuine ACK reads',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createManagedExecutionDomain,readManagedAcknowledgedMembers}=await import('../../core-session/src/managed/execution-state.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'private-core-guard-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ let action:ReturnType<Awaited<ReturnType<typeof acquireManagedExecution>>['owner']['beginAction']>|undefined
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,{},'parent');action=execution.owner.beginAction()
+  const capture=action.captureMetadata!({type:'plan/mode',mode:'off'}),outcome=await capture.admit();expect(outcome.kind).toBe('committed')
+  expect(measure(()=>expect(readManagedAcknowledgedMembers(domain,capture,outcome)).toHaveLength(1))).toEqual({captures:0,opens:16})
+  const document=execution.owner as unknown as import('../src/coordinator/fact-types.ts').ManagedDocument,ready=document.assertReady;let replacements=0;document.assertReady=()=>{replacements++}
+  try{expect(()=>readManagedAcknowledgedMembers(domain,capture,outcome)).toThrow('Original owner readiness changed');expect(replacements).toBe(0)}finally{document.assertReady=ready}
+ }finally{action?.finish();await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
