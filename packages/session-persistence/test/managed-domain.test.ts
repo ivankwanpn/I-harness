@@ -148,3 +148,9 @@ it('keeps an issued unknown Code handoff as the same source debt until reconcili
 },20000)
 
 
+
+it('authenticates exact original execution identity, owner and session without constructing a domain',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'execution-session-')),c=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await c.create({sessionId:'a'});await c.create({sessionId:'b'})
+ const a=await acquireManagedExecution(c,'a'),b=await acquireManagedExecution(c,'b'),assert=(executionCore as any).assertManagedExecutionSession
+ try{expect(assert).toBeTypeOf('function');expect(()=>assert(a.identity,a.owner,'a')).not.toThrow();expect(()=>assert(a.identity,b.owner,'a')).toThrow();expect(()=>assert(a.identity,a.owner,'b')).toThrow();expect(()=>assert({...a.identity},a.owner,'a')).toThrow();expect(()=>assert(a.identity,{...a.owner},'a')).toThrow();await a.close();expect(()=>assert(a.identity,a.owner,'a')).toThrow()}finally{await a.close().catch(()=>{});await b.close();await c.close()}
+},20000)
