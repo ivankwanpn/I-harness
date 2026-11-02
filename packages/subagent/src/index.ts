@@ -94,6 +94,8 @@ export interface RegisterSubagentOptions extends RoleModelHost {
   parentModel?: ModelClient
   /** Constructor-bound live parent model, read only by actual child work. */
   getParentModel?: () => ModelClient
+  /** Internal managed construction: publish catalog before starting restored work. */
+  deferRestoredWork?: boolean
   parentSession?: SessionView
   managedParent?: {domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment}
   factOwner?: FactOwner
@@ -121,6 +123,10 @@ export interface RegisterSubagentOptions extends RoleModelHost {
 }
 
 export interface RegisterSubagentResult {
+  /** Restored roles and original persistence are ready for catalog mounting. */
+  catalogReady: Promise<void>
+  /** Release the original restored-work barrier after the real model is bound. */
+  activateRestoredWork(): void
   retainInitialSetup(setup: import('./child/instruction-context.ts').InitialChildSetup): () => void
   /** Strict barrier over the existing complete job/table state document. */
   retainResults(): Promise<"durable" | "memory">
@@ -171,6 +177,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   const parentModel=opts.parentModel,modelAccessor=opts.getParentModel?.bind(opts)
   if(!parentModel&&!modelAccessor)throw TypeError('Original parent model required')
   const managed=opts.managedParent
+  if(opts.deferRestoredWork&&!managed)throw TypeError('Managed staged subagent construction required')
   if(managed&&(!isManagedExecutionAttachment(managed.execution)||!isManagedExecutionDomain(managed.domain,ctx)||managed.execution.identity!==managed.domain.identity||managed.execution.owner!==managed.domain.owner||opts.parentSession||opts.factOwner))throw TypeError('Original managed subagent parent required')
   if(!managed&&!opts.parentSession)throw TypeError('Original subagent parent required')
   const factOwner = opts.parentSession ? subagentFactOwner(opts.parentSession, opts.factOwner) : undefined
@@ -249,8 +256,14 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   const stagedRuntime = { jobs, table, roles }
   let mountedRuntime = stagedRuntime
   let runtimeWorkReady = !ownedTask
+  let catalogWorkReady = !ownedTask
   let runtimeRetiring = false
   let startupFailure: { cause: unknown } | undefined
+  const activationRetired=Error('Owned runtime retired before activation')
+  const activation=Promise.withResolvers<void>();void activation.promise.catch(()=>{});let activated=!opts.deferRestoredWork
+  if(activated)activation.resolve()
+  function activateRestoredWork():void{if(runtimeRetiring)throw Error('Owned runtime retired');if(!activated){activated=true;activation.resolve()}}
+  function assertCatalogWork():void{taskOwner.assertReady();if(startupFailure)throw new Error('Owned runtime restoration failed',{cause:startupFailure.cause});if(!catalogWorkReady||runtimeRetiring)throw Error('Owned catalog restoration pending or retired')}
   function assertRuntimeWork(): void {
     taskOwner.assertReady()
     if (startupFailure) throw new Error('Owned runtime restoration failed', { cause: startupFailure.cause })
@@ -268,11 +281,11 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
           if (runtimeRetiring && kind === 'table' && name === 'update' && patch?.closing === true && Reflect.ownKeys(patch).length === 1) {
             return stagedRuntime.table.update(args[0] as string, args[1] as ChildAgentEntry, { closing: true })
           }
-          assertRuntimeWork()
+          if(kind==='roles')assertCatalogWork();else assertRuntimeWork()
           const target = mountedRuntime[kind] as T
           if (kind === 'roles' && name === 'register' && typeof args[1] === 'function') {
             const retain = args[1] as (cleanup: import('./roles.ts').RoleCleanup) => void
-            args[1] = (cleanup: import('./roles.ts').RoleCleanup) => { retain(cleanup); assertRuntimeWork() }
+            args[1] = (cleanup: import('./roles.ts').RoleCleanup) => { retain(cleanup); assertCatalogWork() }
           }
           return Reflect.apply(target[name] as (...args: unknown[]) => unknown, target, args)
         }
@@ -407,8 +420,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       try { opts.parentNotify?.wake(opts.persist?.parentSessionId ?? '') } catch { /* A host hint cannot replace the retained drain failure. */ }
     }).finally(() => { notificationDrains.delete(job) })
   }
+  let catalogReady:Promise<void>=Promise.resolve()
   if (ownedTask) {
-    ready = (async () => {
+    catalogReady = (async () => {
       await taskOwner.ready
       taskOwner.assertReady()
       const wired = wireSubagentPersistence(stagedRuntime, { ...opts.persist!, factOwner: opts.persist!.factOwner ?? opts.factOwner })
@@ -417,7 +431,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       if (opts.restoredState) emitRestoredJobTransitions(opts.persist!, opts.restoredState, jobs, wired.observe)
       await taskOwner.qualifyRestoredResults()
       await classifyRestoredTasks(taskOwner, opts.persist!.coordinator)
-      await restoreMirrorsAndSweep(subagentDeps, wired.table, () => { runtimeWorkReady = true })
+      if(runtimeRetiring)throw activationRetired
+      catalogWorkReady=true
+    })()
+    ready = (async()=>{
+      await catalogReady;await activation.promise;if(runtimeRetiring)throw activationRetired;managed?.domain.assertCurrent()
+      await restoreMirrorsAndSweep(subagentDeps, mountedRuntime.table, () => { runtimeWorkReady = true })
     })().catch(cause => {
       runtimeWorkReady = false
       startupFailure = { cause }
@@ -426,6 +445,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   } else {
     if (opts.restoredState && opts.persist) emitRestoredJobTransitions(opts.persist, opts.restoredState, jobs, factPersistence?.observe)
     if (opts.persist) ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks)
+    catalogReady=ready
   }
   void ready.catch(() => {})
   let disposeFlight: Promise<void> | undefined
@@ -434,6 +454,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   function dispose(): Promise<void> {
     notificationsRetired = true
     runtimeRetiring = true
+    if(!activated){activated=true;activation.reject(activationRetired)}
     taskOwner.retireOwnedLoad()
     const owner = residentOwnerFor(subagentDeps)
     if (owner.inInvocation()) { owner.retire(); return refusedReentry() }
@@ -458,7 +479,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     fenceEntries()
     void (async () => {
       const errors: unknown[] = []
-      try { await ready } catch (error) { if (!readyFailureReported) { errors.push(error); readyFailureReported = true } }
+      try { await ready } catch (error) { if (!readyFailureReported) { if(error!==activationRetired)errors.push(error); readyFailureReported = true } }
       fenceEntries()
       // Begin the private owner's attempt before entry aliases can join it;
       // a failed phase is attempted once by this external close, not twice.
@@ -486,6 +507,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     return attempt.promise
   }
   return {
+    catalogReady,activateRestoredWork,
     async retainResults() {
       await ready
       tasks.assertReady()
