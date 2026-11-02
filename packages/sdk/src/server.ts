@@ -80,6 +80,8 @@ import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
 export { parseResultPageQuery } from '@i-harness/session-executor'
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
+import { createManagedEventBridge } from "./managed-event-bridge.ts"
+import { onOriginalHostAssembly } from "../../session-executor/src/host-assembly-observer.ts"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import {
@@ -217,7 +219,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const inflight = new Map<string, Set<Inflight>>()
   const requestFlights = new Set<Promise<RpcMessage>>(), requestContext = new AsyncLocalStorage<{ active: boolean }>(), forkAbort = new AbortController()
   let closing: Promise<void> | undefined
-  let executionDetached = false, assemblyDetached = false
+  let executionDetached = false, assemblyDetached = false, managedDetached = false
   let closed = false
   const forkAvailable = () => typeof opts.prepareForkSession === 'function' && typeof opts.executeForkSession === 'function'
   function requestFlight(use: () => Promise<RpcMessage>): Promise<RpcMessage> {
@@ -285,7 +287,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   // Session event bridge: one subscription per live assembly — every appended
   // session/event flows to the client. Detached on close.
   const assemblyUnsubscribes = new Map<string, () => void>()
-  const offAssembly = service.onAssembly((assembly) => {
+  const attachAssembly = (assembly: Parameters<Parameters<SessionService["onAssembly"]>[0]>[0]) => {
     if (assembly.sessionId === undefined) return
     // The map holds AT MOST ONE closure per session, so a second assembly for
     // the same id (the service rebuilds one per closeSession → getOrCreate)
@@ -310,7 +312,16 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       }
     })
     assemblyUnsubscribes.set(assembly.sessionId, unsubscribe)
-  })
+  }
+  let offAssembly: () => void
+  try { offAssembly = onOriginalHostAssembly(service, attachAssembly) }
+  catch { offAssembly = service.onAssembly(attachAssembly) }
+
+  const managedEvents = createManagedEventBridge(emitMessage)
+  const offManaged = service.onManagedRuntimeLifecycle?.(event => {
+    if (event.kind === 'published') managedEvents.attach(event.sessionId, event.owner)
+    else if (event.kind === 'retiring') managedEvents.retire(event.sessionId,event.owner)
+  }, {includeExisting:true})
 
   const statusNotify = (sessionId: string, status: string, error?: string, modelFailure?: ModelFailureFacts): void => {
     emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) }))
@@ -948,6 +959,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           try { offExecutionState?.(); executionDetached = true } catch (cause) { errors.push(cause) }
         }
         await Promise.allSettled([...preparingSessions.values(), ...preparingHistorySessions.values(), ...requestFlights])
+        if (!managedDetached) { try { offManaged?.(); await managedEvents.close(); managedDetached = true } catch (cause) { errors.push(cause) } }
         if (!assemblyDetached) { try { offAssembly(); assemblyDetached = true } catch (cause) { errors.push(cause) } }
         for (const [sessionId, unsub] of assemblyUnsubscribes) {
           try { unsub(); if (assemblyUnsubscribes.get(sessionId) === unsub) assemblyUnsubscribes.delete(sessionId) } catch (cause) { errors.push(cause) }
