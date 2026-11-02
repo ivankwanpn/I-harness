@@ -315,7 +315,7 @@ export function checkpointControls(fixture: () => Promise<CheckpointFixture>, co
     source = f.action.registerSettlementSource(async () => { nestedClose = source.close(); if (closeReentry === 'reject') rejectedClose = expect(nestedClose).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' }) }, undefined, owner)
     try {
       first = source.checkpoint(); expect(source.checkpoint()).toBe(first); await first; expect(reentered).toBe(first)
-      closing = source.close(); await closing; if (closeReentry === 'reject') { expect(nestedClose).not.toBe(closing); await rejectedClose } else expect(nestedClose).toBe(closing)
+      closing = source.close(); await closing; if (closeReentry === 'reject') { expect(nestedClose).toBeDefined(); expect(rejectedClose).toBeDefined(); expect(nestedClose).not.toBe(closing); await rejectedClose } else expect(nestedClose).toBe(closing)
       expect(() => source.assertHeld()).toThrow()
     } finally { f.action.finish(); await f.cleanup() }
   })
