@@ -134,16 +134,25 @@ export function readManagedSourceAcknowledgedMembers(domain:ManagedExecutionDoma
 /** Passive evidence tied to the actual registering action and held source. */
 export function readManagedActionSourceMembers(domain:ManagedExecutionDomain,action:object,source:object,capture:object,outcome:FactOutcome){const original=domains.get(domain),registered=sources.get(source),relation=actionSources.get(source);if(!original||registered?.identity!==original.identity||relation?.identity!==original.identity||relation.action!==action||actionCaptureSources.get(capture)!==source)throw TypeError('Original action source required');original.current();registered.current();const members=readManagedActionMembers(domain,action,capture,outcome);registered.current();original.current();return members}
 export function readManagedActionMembers(domain:ManagedExecutionDomain,action:object,capture:object,outcome:FactOutcome){const original=domains.get(domain);if(!original||!original.owner.ownsAction(action)||!isExecutionCaptureSource(capture,action))throw TypeError('Original same-action capture required');return readManagedAcknowledgedMembers(domain,capture,outcome)}
+const managedTaskHistories = new WeakMap<object, { domain: ManagedExecutionDomain; inspect(): readonly import('../conversation/seed-types.ts').SeedArtifact[] }>()
+/** Authenticate a verified retained cut for an original native source constructor. */
+export function assertOriginalManagedTaskHistory(domain: ManagedExecutionDomain, history: object): readonly import('../conversation/seed-types.ts').SeedArtifact[] {
+ const original=managedTaskHistories.get(history)
+ if(!original || original.domain!==domain)throw TypeError('Original managed Task history required')
+ return original.inspect()
+}
 /** Reserve against the original action/source relation before the first await. */
 export function reserveManagedTaskHistory(domain:ManagedExecutionDomain, source:object) {
  const original=domains.get(domain), owner=original&&owners.get(original.identity), registered=sources.get(source), relation=actionSources.get(source)
  if(!original||!owner||owner.owner!==original.owner||registered?.identity!==original.identity||relation?.identity!==original.identity||!owner.owner.ownsAction(relation.action))throw TypeError('Original Task action source required')
  original.current(); registered.current(); const retained=owner.reserveTaskHistory(source)
- return Object.freeze({count:retained.count,legacy:retained.legacy,inheritedLegacyUnknown:retained.inheritedLegacyUnknown,export:retained.export,close:retained.close,assertCurrent:retained.assertCurrent,
+ let verified: (()=>void)|undefined, artifacts: readonly import('../conversation/seed-types.ts').SeedArtifact[]|undefined
+ const history=Object.freeze({count:retained.count,legacy:retained.legacy,inheritedLegacyUnknown:retained.inheritedLegacyUnknown,async export(selection: Extract<import('../conversation/seed-types.ts').SeedSelection,{kind:'all'|'last-turns'}>){const result=await retained.export(selection);if(result.kind==='seed')artifacts=freezeJsonData(structuredClone(result.seed.artifacts));return result},close:retained.close,assertCurrent:retained.assertCurrent,
   assertSourceCut(input:{taskId:string;agentPath:string;role:string;parentSessionId:string;callSeq:number;sourceNamespace:string;open?:{source:object;capture:object;outcome:FactOutcome};start:{action:object;capture:object;outcome:FactOutcome}}){
    retained.assertCurrent(); if(input.parentSessionId!==owner.sessionId)throw TypeError('Original Task parent mismatch')
-   const opened=input.open?readManagedSourceAcknowledgedMembers(domain,input.open.source,input.open.capture,input.open.outcome):[]
-   const started=readManagedActionMembers(domain,input.start.action,input.start.capture,input.start.outcome)
+   const open=input.open&&{source:input.open.source,capture:input.open.capture,outcome:input.open.outcome},start={action:input.start.action,capture:input.start.capture,outcome:input.start.outcome}
+   const opened=open?readManagedSourceAcknowledgedMembers(domain,open.source,open.capture,open.outcome):[]
+   const started=readManagedActionMembers(domain,start.action,start.capture,start.outcome)
    if(opened.length>1||!started.length)throw TypeError('Original Task suffix members required')
    const members=[...opened,...started];if(members.some((event,index)=>event.seq!==retained.count+index))throw TypeError('Original Task suffix ordinals changed')
    const openEvent=opened[0], startEvent=started[0]
@@ -152,7 +161,10 @@ export function reserveManagedTaskHistory(domain:ManagedExecutionDomain, source:
    const delivery=started[1]
    if(started.length>2||openEvent&&!delivery||delivery&&(delivery.type!=='agent/delivery-source'||delivery.kind!=='subagent'||delivery.recipientSessionId!==input.parentSessionId||delivery.sourceId!==input.taskId||delivery.sourceNamespace!==input.sourceNamespace||delivery.callSeq!==input.callSeq||openEvent&&delivery.generationId!==openEvent.generationId||delivery.startSeq!==startEvent.seq))throw TypeError('Original Task delivery binding mismatch')
    retained.assertCount(retained.count+members.length);retained.assertCurrent()
+   verified=()=>{retained.assertCurrent();const againOpen=open?readManagedSourceAcknowledgedMembers(domain,open.source,open.capture,open.outcome):[];const againStart=readManagedActionMembers(domain,start.action,start.capture,start.outcome);if(againOpen.length!==opened.length||againStart.length!==started.length||againOpen.some((event,index)=>event!==opened[index])||againStart.some((event,index)=>event!==started[index]))throw TypeError('Original Task suffix evidence changed');retained.assertCount(retained.count+members.length)}
   }})
+ managedTaskHistories.set(history,{domain,inspect(){if(!artifacts||!verified)throw TypeError('Original Task export and cut required');verified();return artifacts}})
+ return history
 }
 export function isManagedExecutionOwner(identity:ManagedExecutionIdentity,owner:object):boolean{
   const original=owners.get(identity)
@@ -176,7 +188,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   if(!token.sessionId||!token.incarnation)throw new TypeError('Original writer incarnation required')
   const candidateOwner=Object.freeze({}),candidate=await restoreManagedConversation(originalSource,candidateOwner,token.sessionId,foldFactory)
   assertHeld()
-  const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>(),activeDependencyScopes=new Set<OriginalWriterDependencyScope>()
+  const original=installRestoredManagedConversation(candidate,candidateOwner),identity=Object.freeze({}) as ManagedExecutionIdentity,members=createExecutionMemberOwner(assertHeld,identity),debt=new Set<OriginalWriterDependencyScope>(),activeDependencyScopes=new Set<OriginalWriterDependencyScope>(),taskHistoryScopes=new Set<OriginalWriterDependencyScope>()
   let stopped=false,ownerBound=false,closed=false,pendingWrite:object|undefined
   let pendingWriteActive=false
   let readinessWasReady=false,readinessEpoch=0,readinessQueued=false,ownerRecoveryBlocked=false
@@ -216,8 +228,8 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     owner.newWork();observe();return false
   },subscribe(listener,onUnavailable){assertHeld();const owner=owners.get(identity);if(stopped||closed||!owner)throw TypeError('Original readiness owner retired');owner.current();const item={listener,onUnavailable,delivered:-1};readinessListeners.add(item);try{if(!pendingWrite&&!debt.size&&!ownerRecoveryBlocked){if(!owner.newWork)throw TypeError('Original readiness unavailable');owner.newWork();observe();readinessFailure=undefined;if(!readinessWasReady){readinessWasReady=true;readinessEpoch++}queueReadiness()}else if(readinessFailure){const failure=readinessFailure;queueMicrotask(()=>{if(!readinessListeners.has(item))return;try{item.onUnavailable?.(failure.error,failure.terminal)}catch{}if(failure.terminal)readinessListeners.delete(item)})}}catch(error){readinessListeners.delete(item);throw error}let active=true;return()=>{if(active){active=false;readinessListeners.delete(item)}}}})
   let dependencyFailure:{cause:unknown}|undefined
-  const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();activeDependencyScopes.delete(scope);debt.delete(scope)}catch(error){errors.push(error)}if(errors.length){const error=new AggregateError(errors,'Exact writer dependency cleanup unresolved');signalUnavailable(error,!sameHeldOwner());throw error};dependencyFailure=undefined;readinessFailure=undefined;signalReady()}
-  const assertFresh=(reading?:OriginalWriterDependencyScope)=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if(debt.size>(reading&&debt.has(reading)?1:0))throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
+  const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);debt.delete(scope)}catch(error){errors.push(error)}if(errors.length){const error=new AggregateError(errors,'Exact writer dependency cleanup unresolved');signalUnavailable(error,!sameHeldOwner());throw error};dependencyFailure=undefined;readinessFailure=undefined;signalReady()}
+  const assertFresh=(reading?:OriginalWriterDependencyScope)=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if([...debt].some(scope=>scope!==reading&&!taskHistoryScopes.has(scope)))throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
   const assertNewWork=()=>assertFresh()
   const requestActions=new WeakMap<object,()=>void>()
   function observe():ExecutionObservation{
@@ -282,15 +294,15 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     });current();observations.add(observation);return observation
   }
   function reserveTaskHistory(source:object){
-    assertNewWork(); const registered=sources.get(source), relation=actionSources.get(source), bound=owners.get(identity)
+    assertNewWork(); if(taskHistoryScopes.size)throw TypeError('Original Task history reservation already active');const registered=sources.get(source), relation=actionSources.get(source), bound=owners.get(identity)
     if(!bound||registered?.identity!==identity||relation?.identity!==identity||!bound.owner.ownsAction(relation.action))throw TypeError('Original Task action source required')
-    bound.current(); registered.current(); const prefix=original.prefix, scope=captureWriterDependencies(open(prefix)); debt.add(scope);activeDependencyScopes.add(scope);markBusy()
+    bound.current(); registered.current(); const prefix=original.prefix, scope=captureWriterDependencies(open(prefix)); debt.add(scope);activeDependencyScopes.add(scope);taskHistoryScopes.add(scope);markBusy()
     let active=true, closedScope=false, closing:Promise<void>|undefined, exported=false
     const passive=()=>{if(!active)throw TypeError('Original Task history expired');assertHeld();if(stopped||closed)throw TypeError('Original execution retired');bound.current();registered.current();const action=actions.get(relation.action);if(!action||action.identity!==identity||!bound.owner.ownsAction(relation.action))throw TypeError('Original Task action retired');action.current()}
     const current=()=>{passive();if(closedScope)throw TypeError('Original Task history archive closed');scope.assertCurrent()}
-    const settle=()=>{if(closedScope)return Promise.resolve();if(closing)return closing;const flight=scope.close().then(()=>{closedScope=true;activeDependencyScopes.delete(scope);debt.delete(scope);signalReady()},error=>{activeDependencyScopes.delete(scope);dependencyFailure={cause:error};signalUnavailable(error,!sameHeldOwner());throw error});closing=flight;void flight.finally(()=>{if(closing===flight)closing=undefined}).catch(()=>{});return flight}
+    const settle=()=>{if(closedScope)return Promise.resolve();if(closing)return closing;const flight=scope.close().then(()=>{closedScope=true;activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);debt.delete(scope);signalReady()},error=>{activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);dependencyFailure={cause:error};signalUnavailable(error,!sameHeldOwner());throw error});closing=flight;void flight.finally(()=>{if(closing===flight)closing=undefined}).catch(()=>{});return flight}
     let archive: ReturnType<typeof original.reserveTaskHistory>
-    try{current();archive=original.reserveTaskHistory(index=>scope.readEvent(index),current)}catch(error){active=false;activeDependencyScopes.delete(scope);dependencyFailure={cause:error};throw error}
+    try{current();archive=original.reserveTaskHistory(index=>scope.readEvent(index),current)}catch(error){active=false;activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);dependencyFailure={cause:error};throw error}
     return Object.freeze({count:prefix.eventCount,legacy:archive.legacy,inheritedLegacyUnknown:archive.inheritedLegacyUnknown,assertCurrent(){passive()},assertCount(count:number){passive();if(original.eventCount!==count)throw TypeError('Original Task history suffix changed')},async export(selection:Extract<import('../conversation/seed-types.ts').SeedSelection,{kind:'all'|'last-turns'}>){if(exported)throw TypeError('Original Task history already exported');exported=true;let result:Awaited<ReturnType<typeof exportManagedTaskConversationSeed>>|undefined,primary:unknown,failed=false;try{current();result=await exportManagedTaskConversationSeed(archive.source,selection);current()}catch(error){failed=true;primary=error}try{await settle()}catch(cleanup){throw failed?new AggregateError([primary,cleanup],'Task history capture and cleanup failed'):cleanup}if(failed)throw primary;passive();return result!},async close(){active=false;await settle()}})
   }
   async function prepareRequest(action:import('./ports.ts').ManagedAction<FactOutcome>):Promise<PreparedExecutionRequest>{
