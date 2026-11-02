@@ -308,3 +308,28 @@ it('reserves Task archive synchronously, rejects fabricated authority, and settl
  expect(()=>cut.assertSourceCut(witness)).toThrow()
  live=false;expect(()=>cut.assertCurrent()).toThrow();await cut.close()
 })
+
+it('retains failed Task archive cleanup for an explicit retry',async()=>{
+ const core=await import('../src/managed/execution-state.ts');let attempts=0
+ const f=await fixture([{type:'user/message',text:'task',seq:0}],{async close(){if(++attempts===1)throw Error('cleanup failed')}})
+ const action={assertOpen(){}},source={assertHeld(){}}
+ const owner={ownsAction(value:object){return value===action},beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+ f.state.bindOwner(owner);f.state.captureHooks(action,()=>{});f.state.captureHooks(source,()=>{});f.state.associateActionSource(action,source)
+ const domain=core.createManagedExecutionDomain(f.state.identity,owner,{},'owned'),cut=core.reserveManagedTaskHistory(domain,source)
+ await expect(cut.export({kind:'all'})).rejects.toThrow('cleanup failed')
+ expect(()=>f.state.assertNewWork()).toThrow()
+ await cut.close();expect(attempts).toBe(2);expect(()=>f.state.assertNewWork()).not.toThrow()
+})
+
+it('accepts only the original delivery open and matching Task start members',async()=>{
+ const core=await import('../src/managed/execution-state.ts')
+ const f=await fixture([{type:'agent/input/admitted',version:1,inputId:'human',text:'work',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'session.prompt'},seq:0},{type:'tool/call',name:'spawn_agent',callId:'call',args:{},seq:1},{type:'tool/dispatch',callId:'call',eventSeq:1,seq:2}])
+ const action={assertOpen(){}},source={assertHeld(){}},owner={ownsAction(value:object){return value===action},beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+ f.state.bindOwner(owner);f.state.captureHooks(action,()=>{});f.state.captureHooks(source,()=>{});f.state.associateActionSource(action,source)
+ const domain=core.createManagedExecutionDomain(f.state.identity,owner,{},'owned'),cut=core.reserveManagedTaskHistory(domain,source);await cut.export({kind:'all'})
+ async function commit(captured:any,authority:object,key:string){const capture=memberCapture(f,captured,authority),stage=await f.state.prepareWrite([captured]),batch=encodeFactBatch(key,f.source.prefix.prefixDigest,stage.events),receipt=f.receipt(batch);stage.beforeIssue(batch);stage.install(batch,receipt);const outcome=Object.freeze({kind:'committed',receipt,seqs:Object.freeze(stage.events.map((event:any)=>event.seq))}) as FactOutcome;f.state.acknowledge(captured,outcome);return {capture,outcome}}
+ const open=await commit(group({kind:'delivery-generation',event:{type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:'owned',generationId:'g',originInputSeq:0}}),source,'open')
+ const start=await commit(group({kind:'subagent-delivery-start',start:{type:'subagent/start',version:1,taskId:'t',agentPath:'root/t',role:'general',description:'T',parentSessionId:'owned'},binding:{recipientSessionId:'owned',generationId:'g',sourceNamespace:'task',sourceId:'t',callSeq:1}}),action,'start')
+ const witness={parentSessionId:'owned',taskId:'t',agentPath:'root/t',role:'general',sourceNamespace:'task',callSeq:1,open:{source,...open},start:{action,...start}}
+ expect(()=>cut.assertSourceCut(witness)).not.toThrow();expect(()=>cut.assertSourceCut({...witness,callSeq:2})).toThrow();expect(()=>cut.assertSourceCut({...witness,open:{...witness.open,source:{}}})).toThrow();await cut.close()
+})

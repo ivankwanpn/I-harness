@@ -46,7 +46,8 @@ type Candidate = {
 };
 const candidates = new WeakMap<object, Candidate>();
 type TaskSelection = Extract<import('../conversation/seed-types.ts').SeedSelection, {kind: 'all' | 'last-turns'}>;
-const taskHistorySources = new WeakMap<object, { sessionId: string; select: (selection: TaskSelection) => Promise<any> }>();
+type TaskHistoryPrepared = {kind:'refused'; reason: import('../conversation/seed-types.ts').SeedRefusal} | {kind:'selected'; selected: Extract<ReturnType<typeof selectSeedHistoryFromStructure>, {kind:'selected'}>; archive: import('../conversation/archive.ts').ConversationEventArchive; manifest: Extract<SessionEventView,{type:'conversation/seed-manifest'}> | undefined; header: import('./types.ts').SessionView['header']; formatVersion: number; coordinates: import('../conversation/restoration-types.ts').ConversationSourceCoordinateView; substitutes: Awaited<ReturnType<typeof preparePruneSubstitutes>>};
+const taskHistorySources = new WeakMap<object, { sessionId: string; select: (selection: TaskSelection) => Promise<TaskHistoryPrepared> }>();
 export function readOriginalRestoredTaskHistory(source: object) {
     const entry = taskHistorySources.get(source);
     if (!entry) failure('CONVERSATION_TASK_HISTORY_INVALID');
@@ -204,6 +205,8 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             check(); assertCurrent();
             const facts = owned.index.resultFacts().slice(), history = owned.index.history(), count = owned.index.eventCount;
             const turns = historyTurns({length: facts.length, get: index => facts[index]!});
+            const visibility = historyVisibility(facts);
+            const legacy = turns.ambiguous ? 'unavailable' as const : facts.some(fact => fact.type === 'context/result-ref' && visibility.content(fact)) ? 'visible' as const : 'absent' as const;
             const header = owned.source.header, formatVersion = owned.source.formatVersion;
             const manifestIndex = facts.findIndex(fact => fact.type === 'conversation/seed-manifest');
             const current = () => { sourceCurrent(); assertCurrent(); };
@@ -239,7 +242,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             };
             const source = Object.freeze({});
             taskHistorySources.set(source, {sessionId: owned.sessionId, select});
-            return source;
+            return {source, legacy, inheritedLegacyUnknown: header?.semanticSeed !== undefined};
         },
         codeState(){check();return owned.code.snapshot()},
         foldSnapshot(prefix:Readonly<import('./types.ts').JournalPrefix>){check();return owned.fold?.snapshot(prefix)},
