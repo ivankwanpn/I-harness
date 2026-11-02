@@ -110,9 +110,30 @@ it('refuses a nonboolean unknown held result before any guarded effect',async()=
  finally{input.heldResult=undefined;await claim.release();await first.release();await Promise.all(f.owner.releaseHeldLocks())}
 })
 
-it('keeps fresh session and document native traversal counts unchanged',async()=>{
+it('returned fresh session claims reuse the same synchronous native frame as an explicit outer guard',async()=>{
+ const f=fixture(true),claim=await f.owner.pinOwnership('source')
+ try{
+  let before=f.snapshot();claim.assertHeld();const direct=f.delta(before)
+  before=f.snapshot();withArtifactCurrentChecks(()=>claim.assertHeld());const outer=f.delta(before)
+  expect(outer.open).toBe(8);expect(direct.open).toBe(8)
+  expect(direct.callbacks).toBe(outer.callbacks);expect(f.handles.size).toBe(0)
+  console.info('FRESH_ORIGINAL_FRAME_COUNTS',JSON.stringify({direct,outer}))
+ }finally{await claim.release();await Promise.all(f.owner.releaseHeldLocks())}
+})
+
+it.each(['namespace-after-await','unknown-getter','lost-native'] as const)('fresh returned claims reject original native mutation before effects: %s',async mode=>{
+ const f=fixture(true,mode!=='unknown-getter'),claim=await f.owner.pinOwnership('source');let effects=0
+ try{
+  if(mode==='namespace-after-await'){await Promise.resolve();f.directories.get('C:\\store')!.id=9}
+  else if(mode==='unknown-getter')input.heldHook=()=>{f.directories.get('C:\\store')!.id=9}
+  else await input.originals.at(-1)!.release()
+  expect(()=>{claim.assertHeld();effects++}).toThrow();expect(effects).toBe(0)
+ }finally{input.heldHook=undefined;await claim.release();await Promise.all(f.owner.releaseHeldLocks())}
+})
+
+it('frames completed fresh session claims while retaining document native traversal',async()=>{
  const f=fixture(true),session=await f.owner.pinOwnership('source'),document=await f.owner.pinDocumentOwnership('other')
- try{let before=f.snapshot();session.assertHeld();expect(f.delta(before).open).toBe(12);before=f.snapshot();document.assertHeld();expect(f.delta(before).open).toBe(6)}
+ try{let before=f.snapshot();session.assertHeld();expect(f.delta(before).open).toBe(8);before=f.snapshot();document.assertHeld();expect(f.delta(before).open).toBe(6)}
  finally{await document.release();await session.release();await Promise.all(f.owner.releaseHeldLocks())}
 })
 it('uses the genuine JSONL descriptor-only constructor guard and refuses its method mutation',async()=>{

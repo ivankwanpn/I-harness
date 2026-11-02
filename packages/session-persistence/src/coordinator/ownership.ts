@@ -381,7 +381,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
       return { ...entry, bundle, bundles }
     })
     result = {
-      assertHeld() { if (retired) throw Error('Ownership claim retired'); if (descriptions.every(entry => entry.reuse)) withArtifactCurrentChecks(checkHeld); else checkHeld(); if (retired) throw Error('Ownership claim retired') },
+      assertHeld() { if (retired) throw Error('Ownership claim retired'); withArtifactCurrentChecks(checkHeld); if (retired) throw Error('Ownership claim retired') },
       retainLive() { if (document) throw Error('Document pin cannot retain session ownership'); if (batchIds.length !== 1) throw Error('Single session pin required for live ownership'); this.assertHeld(); if (!live.has(id)) { for (const resource of held) resource.retainLive(id); live.set(id, published[0]!.bundle) } },
       async release() { if (!retired) { retired = true; for (const entry of published) if (entry.bundles) { entry.bundles.delete(entry.bundle); if (!entry.bundles.size && activeBundles.get(entry.id) === entry.bundles) activeBundles.delete(entry.id) } }; const errors: unknown[] = []; for (const resource of [...held].reverse()) try { await resource.release() } catch (e) { errors.push(e) }; if (errors.length === 1) throw errors[0]; if (errors.length) throw new AggregateError(errors, 'Ownership bundle cleanup failed') },
     }
