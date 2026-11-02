@@ -167,3 +167,22 @@ it('refuses a mid-step hook replacement before the original tool body',async()=>
   await expect(runtime.agent.runAdmitted('held',undefined,undefined,'held')).rejects.toThrow();expect(effects).toBe(0);expect(server.requests).toHaveLength(1)
  }finally{await runtime.close();for(const cleanup of cleanups.reverse())await cleanup();await cache.closeAll();await coordinator.close();await server.close()}
 },30000)
+
+it('uses the original live default surface for input, prompt and schema after each tool step',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'registry-live-surface-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
+ let version=1,reconciles=0,transforms=0,mounted=false;const overheads:number[]=[]
+ const wire=(delta:unknown,finish_reason:string)=>`data: ${JSON.stringify({choices:[{delta,finish_reason}]})}\n\ndata: [DONE]\n\n`
+ const server=await createLoopbackProvider('/v1/chat/completions',[async r=>{r.end(wire({tool_calls:[{index:0,id:'change',function:{name:'change_surface',arguments:'{}'}}]},'tool_calls'))},async r=>{r.end(wire({content:'done'},'stop'))}])
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'fallback',tools:[{name:'change_surface',description:'change live surface',inputSchema:{type:'object'},async execute(){version=2;return 'changed'}}],async mountDefaultSurface(original,live){original.assertCurrent();mounted=true;return {systemPrompt:()=>`SURFACE_${version}`,modelToolSchemas:()=>live.modelToolSchemas().filter(schema=>version===1||schema.name!=='change_surface'),modelOverheadTokens:()=>{overheads.push(version*10);return version*10},async prepareInput(text){transforms++;return `expanded ${text}`},async reconcileAuthority(){reconciles++}}}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ try{await service.submit('main','hello',new AbortController().signal);expect(mounted).toBe(true);expect(server.requests).toHaveLength(2);expect(JSON.stringify(server.requests[0]!.body)).toContain('SURFACE_1');expect(JSON.stringify(server.requests[0]!.body)).toContain('expanded hello');expect(JSON.stringify(server.requests[0]!.body)).toContain('change_surface');expect(JSON.stringify(server.requests[1]!.body)).toContain('SURFACE_2');const schemas=server.requests[1]!.body.tools as {function:{name:string}}[];expect(schemas.some(item=>item.function.name==='change_surface')).toBe(false);expect(transforms).toBe(1);expect(reconciles).toBeGreaterThan(0);expect(overheads).toContain(10);expect(overheads).toContain(20)}finally{await service.close();await coordinator.close();await server.close()}
+},90000)
+
+it('retains asynchronous original Shell acquisition before model construction and closes it',async()=>{
+ const {createContextOutputService}=await import('@i-harness/context-output')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'registry-async-shell-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
+ const output=createContextOutputService({root:join(root,'results'),workspaceId:'fixture'}),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let disposed=0,modelCalls=0
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],ownedShell:{async acquireExecution(id,retain){retain(()=>{disposed++});entered.resolve();await release.promise;return {defaultOwner:{sessionId:id}} as import('@i-harness/exec').ExecExecutionHost},async acquireOutput(_id,retain){retain(()=>output.close());return {service:output}},agentShell:()=>({id:'fixture',label:'fixture',command:'fixture',dialect:'posix'})}},modelBuilder:async()=>{modelCalls++;throw Error('model stop')}})
+ const turn=service.submit('main','hello',new AbortController().signal)
+ try{await entered.promise;expect(modelCalls).toBe(0);release.resolve();await expect(turn).rejects.toThrow('model stop');expect(modelCalls).toBe(1);await service.closeSession('main');expect(disposed).toBe(1)}finally{release.resolve();await turn.catch(()=>{});await service.close();await coordinator.close()}
+},60000)

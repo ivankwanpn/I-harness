@@ -150,7 +150,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 return { kind: 'unavailable', reason: 'Original context observation is unavailable' };
             }
         },
-        get budgetConfig() { return config.budget; }, get compactConfig() { return config.compact; }, get outputCap() { return surface().maxOutputTokens; },
+        get budgetConfig() { if(!config.budget||!host.modelOverheadTokens)return config.budget;const overheadTokens=host.modelOverheadTokens();if(!Number.isSafeInteger(overheadTokens)||overheadTokens<0)throw RangeError('Invalid live model overhead');return {...config.budget,overheadTokens}; }, get compactConfig() { if(!config.compact||!host.modelOverheadTokens)return config.compact;const overheadTokens=host.modelOverheadTokens();if(!Number.isSafeInteger(overheadTokens)||overheadTokens<0)throw RangeError('Invalid live model overhead');return {...config.compact,overheadTokens}; }, get outputCap() { return surface().maxOutputTokens; },
         get pressurePolicy() { return config.compact ? resolveCompactSpec(config.compact, metadata()?.providerId, metadata()?.modelId) : undefined; },
         get archive() {
             if (!active || !current(active.evidence))

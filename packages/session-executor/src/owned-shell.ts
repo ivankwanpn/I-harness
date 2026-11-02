@@ -9,14 +9,16 @@ import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 
 /** Trusted original resources supplied by the concrete host, with their exact retained cleanup. */
 export interface OwnedShellOptions {
- executionFor(sessionId:string):ExecExecutionHost
+ executionFor?(sessionId:string):ExecExecutionHost
+ acquireExecution?(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<ExecExecutionHost>
  acquireOutput(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void):OwnedShellOutput|Promise<OwnedShellOutput>
  agentShell:NonNullable<ShellToolDeps['agentShell']>
 }
 export interface OwnedShellOutput {readonly service:ContextOutputService;readonly sourceFor?:(sessionId:string)=>Promise<ContextCapture['source']>}
-export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean):void{
+export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean,acquiredExecution?:ExecExecutionHost):void{
  original.assertCurrent()
- const execution=options.executionFor(original.domain.sessionId)
+ const execution=acquiredExecution??options.executionFor?.(original.domain.sessionId)
+ if(!execution)throw TypeError('Original Shell execution unavailable')
  if(execution.defaultOwner?.sessionId!==original.domain.sessionId)throw TypeError('Original Shell execution owner required')
  original.assertCurrent()
  const pair=registerExecWithReservation(original.ctx,{workspaceRoot:workspace,execution,resultRetention:createExecResultRetention(output.service)})
