@@ -23,7 +23,7 @@ it('uses actual held metadata/view, revokes escaped context and rejects an appen
       await scope.run({ sessionId: 'source', sessionIds: ['source'], observation, document,
         currentSource: () => ({ sourceId: contextSourceIdentity('w', root), readonly: true }), assertHostCurrent() {} }, async () => {
         expect(scope.current('source')?.metadata.title).toBe('real')
-        expect(scope.current('source')?.view).toBe(document.view)
+        const held=scope.current('source');expect(held?.kind).toBe('public');if(held?.kind!=='public')throw Error('public observation required');expect(held.view).toBe(document.view)
         escapedRead = (async () => { await resume.promise; return scope.current('source') })()
         escaped.resolve(() => {})
       })

@@ -1,6 +1,8 @@
 import { createExecutionCodeState } from '../projection/execution-code-state.ts';
 import type { OriginalExecutionFoldFactory, OriginalExecutionFoldSink } from './execution-types.ts';
 import { types } from 'node:util';
+import { historyTurns } from '../conversation/history/turns.ts';
+import { selectSeedHistoryFromStructure } from '../conversation/seed-selection.ts';
 import { captureRewrites,type ConversationRewriteDraft,type ConversationCandidate } from '../conversation/candidate.ts';
 import {extendConversationSourceCoordinates} from '../conversation/sources.ts';
 import {extendPruneDependencyView} from '../projection/pruning.ts';
@@ -17,10 +19,10 @@ import { prepareSessionEventWithDependencies } from '../events/intake.ts';
 import { freezeJsonData, isStrictFactData } from './capture.ts';
 import { resolveFactGroupWithDependencies,type CapturedFactGroup } from './groups.ts';
 import { validateDeliveryFrame } from '../conversation/delivery.ts';
-import { createConversationSourceCoordinates, archiveConversationSources } from '../conversation/sources.ts';
+import { createConversationSourceCoordinates, archiveConversationSources, retainConversationSourceCoordinates } from '../conversation/sources.ts';
 import { createConversationStateIndex, readIndexedConversationState, type ConversationStateRead } from '../conversation/state.ts';
 import { createContextStateIndex } from '../projection/context.ts';
-import { createPruneDependencyIndex, preparePruneSubstitutes, selectPruneDependencies } from '../projection/pruning.ts';
+import { createPruneDependencyIndex, preparePruneSubstitutes, selectPruneDependencies, retainPruneDependencyView } from '../projection/pruning.ts';
 import { historyVisibility } from '../conversation/history/visibility.ts';
 import { renderConversationItems } from '../conversation/render-items.ts';
 import {createManagedIndexedView} from './view.ts';
@@ -43,6 +45,14 @@ type Candidate = {
     retired: boolean;
 };
 const candidates = new WeakMap<object, Candidate>();
+type TaskSelection = Extract<import('../conversation/seed-types.ts').SeedSelection, {kind: 'all' | 'last-turns'}>;
+type TaskHistoryPrepared = {kind:'refused'; reason: import('../conversation/seed-types.ts').SeedRefusal} | {kind:'selected'; selected: Extract<ReturnType<typeof selectSeedHistoryFromStructure>, {kind:'selected'}>; archive: import('../conversation/archive.ts').ConversationEventArchive; manifest: Extract<SessionEventView,{type:'conversation/seed-manifest'}> | undefined; header: import('./types.ts').SessionView['header']; formatVersion: number; coordinates: import('../conversation/restoration-types.ts').ConversationSourceCoordinateView; substitutes: Awaited<ReturnType<typeof preparePruneSubstitutes>>};
+const taskHistorySources = new WeakMap<object, { sessionId: string; select: (selection: TaskSelection) => Promise<TaskHistoryPrepared> }>();
+export function readOriginalRestoredTaskHistory(source: object) {
+    const entry = taskHistorySources.get(source);
+    if (!entry) failure('CONVERSATION_TASK_HISTORY_INVALID');
+    return entry;
+}
 type Preparation = {
     candidate: Candidate;
     current(): void;
@@ -190,6 +200,50 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         }};
     }
     return {
+        /** Capture structural facts synchronously under the original held writer. */
+        reserveTaskHistory(read: (index: number) => Promise<SessionEventView>, assertCurrent: () => void) {
+            check(); assertCurrent();
+            const facts = owned.index.resultFacts().slice(), history = owned.index.history(), count = owned.index.eventCount;
+            const turns = historyTurns({length: facts.length, get: index => facts[index]!});
+            const visibility = historyVisibility(facts);
+            const legacy = turns.ambiguous ? 'unavailable' as const : facts.some(fact => fact.type === 'context/result-ref' && visibility.content(fact)) ? 'visible' as const : 'absent' as const;
+            const header = owned.source.header, formatVersion = owned.source.formatVersion;
+            const manifestIndex = facts.findIndex(fact => fact.type === 'conversation/seed-manifest');
+            const current = () => { sourceCurrent(); assertCurrent(); };
+            const coordinates = retainConversationSourceCoordinates(owned.sources.read(), current), prune = retainPruneDependencyView(owned.prune.read(), current);
+            const select = async (selection: TaskSelection) => {
+                current();
+                const manifestEvent = manifestIndex < 0 ? undefined : await read(manifestIndex);
+                current();
+                if (manifestEvent && manifestEvent.type !== 'conversation/seed-manifest') failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH');
+                if (turns.ambiguous) return {kind: 'refused' as const, reason: 'ambiguous-boundary' as const};
+                const selected = selectSeedHistoryFromStructure({history, turns}, selection, {last: turns.total}, index => facts[index]!.type, manifestEvent);
+                if (selected.kind === 'refused') return selected;
+                const wanted = new Set<number>();
+                for (const item of selected.groups.flatMap(group => group.items)) {
+                    wanted.add(item.establishmentIndex);
+                    if (item.admissionIndex !== undefined) wanted.add(item.admissionIndex);
+                    if (item.imageAdmissionIndex !== undefined) wanted.add(item.imageAdmissionIndex);
+                    for (const recipe of item.recipes) { if (recipe.index !== undefined) wanted.add(recipe.index); for (const index of recipe.calls ?? []) wanted.add(index); }
+                    for (const call of item.calls) if (call.result) wanted.add(call.result.eventIndex);
+                }
+                const calls = new Set([...wanted].flatMap(index => facts[index]?.type === 'tool/result' && facts[index]?.callId ? [facts[index]!.callId!] : []));
+                const substitutes = await preparePruneSubstitutes(prune, selectPruneDependencies(prune, calls), async index => { current(); const event = await read(index); current(); return event; });
+                current();
+                const full = new Map<number, SessionEventView>();
+                if (manifestEvent) full.set(manifestIndex, manifestEvent);
+                for (const index of wanted) { current(); const event = await read(index); current(); if (event.seq !== index) failure('CONVERSATION_RESTORATION_DEPENDENCY_MISMATCH'); full.set(index, event); }
+                for (const event of [...full.values()]) if (event.type === 'user/message' && event.inputPreparation) {
+                    const index = event.inputPreparation.resultSeq, result = full.get(index) ?? await read(index); current(); full.set(index, result);
+                    if (result.type === 'agent/input/preparation' && !full.has(result.admissionSeq)) { full.set(result.admissionSeq, await read(result.admissionSeq)); current(); }
+                }
+                const archive = {length: count, get(index: number) { current(); const event = full.get(index); if (!event) failure('CONVERSATION_PAYLOAD_NOT_PREPARED'); return event; }};
+                return {kind: 'selected' as const, selected, archive, manifest: manifestEvent, header, formatVersion, coordinates, substitutes};
+            };
+            const source = Object.freeze({});
+            taskHistorySources.set(source, {sessionId: owned.sessionId, select});
+            return {source, legacy, inheritedLegacyUnknown: header?.semanticSeed !== undefined};
+        },
         codeState(){check();return owned.code.snapshot()},
         foldSnapshot(prefix:Readonly<import('./types.ts').JournalPrefix>){check();return owned.fold?.snapshot(prefix)},
         foldView(name:import('./execution-types.ts').ExecutionFoldName,prefix:Readonly<import('./types.ts').JournalPrefix>){check();return owned.fold?.views?.[name]?.(prefix)},

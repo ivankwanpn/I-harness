@@ -15,6 +15,7 @@ import { originalTaskSaveDependency, originalTaskAcknowledgmentRecovery } from '
  * 未注入（undefined）= durable-only 交付（fail-closed，通知停 pending 不回退）。
  */
 export interface ParentInputAdmission {
+  taskEvidence?(namespace:string,taskId:string):{evidence:SubagentDeliveryEvidence;expectedInputId:string}|undefined
   prepareTaskDelivery?(input: { sessionId: string; namespace: string; taskId: string; callSeq: number }): Promise<DeliveryLaunchPreparation>
   admitTaskDelivery?(input: { sessionId: string; evidence: SubagentDeliveryEvidence; text: string; description: string; display: InputDisplay }): Promise<DeliveryAdmissionReceipt>
   admit(input: { sessionId: string; text: string; description: string; display?: InputDisplay }): Promise<void>

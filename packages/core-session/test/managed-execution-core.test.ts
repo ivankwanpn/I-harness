@@ -286,3 +286,52 @@ it('restored private Code store honors the original rewind window',async()=>{
   createOwnerDeliveryControl(f.state.delivery,()=>f.state.eventCount)
   expect(f.state.observe().codeState().store).toEqual({kind:'value',entries:[['x',1]]})
 })
+
+it('reserves Task archive synchronously, rejects fabricated authority, and settles before later work',async()=>{
+ const core=await import('../src/managed/execution-state.ts')
+ const f=await fixture([{type:'turn/start',seq:0},{type:'user/message',text:'task',seq:1},{type:'assistant/message',text:'answer',seq:2},{type:'turn/end',seq:3}])
+ let live=true;const action={assertOpen(){if(!live)throw Error('action retired')}}, source={assertHeld(){if(!live)throw Error('source retired')}}
+ const owner={ownsAction(value:object){return value===action&&live},beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+ f.state.bindOwner(owner);f.state.captureHooks(action,()=>action.assertOpen());f.state.captureHooks(source,()=>source.assertHeld());f.state.associateActionSource(action,source)
+ const domain=core.createManagedExecutionDomain(f.state.identity,owner,{},'owned')
+ expect(()=>core.reserveManagedTaskHistory(domain,{})).toThrow()
+ const cut=core.reserveManagedTaskHistory(domain,source);expect(f.opened).toBe(1)
+ expect(()=>f.state.assertNewWork()).not.toThrow();await expect(f.state.prepareWrite([group({kind:'metadata',event:{type:'plan/mode',mode:'on'}})])).rejects.toThrow();expect(()=>core.reserveManagedTaskHistory(domain,source)).toThrow()
+ expect(()=>core.assertOriginalManagedTaskHistory(domain,cut)).toThrow();expect(()=>core.assertOriginalManagedTaskHistory(domain,{})).toThrow()
+ const seed=await cut.export({kind:'all'});expect(seed.kind).toBe('seed');expect(f.closed).toBe(1)
+ expect(()=>cut.assertSourceCut({parentSessionId:'owned',taskId:'t',agentPath:'root/t',role:'general',sourceNamespace:'task',callSeq:1,start:{action,capture:{},outcome:{kind:'not-issued',code:'FACT_CANCELLED'}}})).toThrow()
+ const startGroup=group({kind:'delivery',event:{type:'subagent/start',version:1,taskId:'t',agentPath:'root/t',role:'general',description:'T',parentSessionId:'owned'}})
+ const capture=memberCapture(f,startGroup,action), staged=await f.state.prepareWrite([startGroup]), batch=encodeFactBatch('task-start',f.source.prefix.prefixDigest,staged.events),receipt=f.receipt(batch)
+ staged.beforeIssue(batch);staged.install(batch,receipt);const outcome=Object.freeze({kind:'committed',receipt,seqs:Object.freeze([4])}) as FactOutcome;f.state.acknowledge(startGroup,outcome)
+ const witness={parentSessionId:'owned',taskId:'t',agentPath:'root/t',role:'general',sourceNamespace:'task',callSeq:1,start:{action,capture,outcome}}
+ expect(()=>cut.assertSourceCut(witness)).not.toThrow();expect(()=>core.assertOriginalManagedTaskHistory(domain,cut)).not.toThrow()
+ expect(()=>cut.assertSourceCut({...witness,start:{...witness.start,outcome:{...outcome}}})).toThrow()
+ const unrelated=group({kind:'metadata',event:{type:'plan/mode',mode:'on'}}),extra=await f.state.prepareWrite([unrelated]),extraBatch=encodeFactBatch('unrelated',f.source.prefix.prefixDigest,extra.events),extraReceipt=f.receipt(extraBatch);extra.beforeIssue(extraBatch);extra.install(extraBatch,extraReceipt)
+ expect(()=>cut.assertSourceCut(witness)).toThrow();expect(()=>core.assertOriginalManagedTaskHistory(domain,cut)).toThrow()
+ live=false;expect(()=>cut.assertCurrent()).toThrow();await cut.close()
+})
+
+it('retains failed Task archive cleanup for an explicit retry',async()=>{
+ const core=await import('../src/managed/execution-state.ts');let attempts=0
+ const f=await fixture([{type:'user/message',text:'task',seq:0}],{async close(){if(++attempts===1)throw Error('cleanup failed')}})
+ const action={assertOpen(){}},source={assertHeld(){}}
+ const owner={ownsAction(value:object){return value===action},beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+ f.state.bindOwner(owner);f.state.captureHooks(action,()=>{});f.state.captureHooks(source,()=>{});f.state.associateActionSource(action,source)
+ const domain=core.createManagedExecutionDomain(f.state.identity,owner,{},'owned'),cut=core.reserveManagedTaskHistory(domain,source)
+ await expect(cut.export({kind:'all'})).rejects.toThrow('cleanup failed')
+ expect(()=>f.state.assertNewWork()).toThrow()
+ await cut.close();expect(attempts).toBe(2);expect(()=>f.state.assertNewWork()).not.toThrow()
+})
+
+it('accepts only the original delivery open and matching Task start members',async()=>{
+ const core=await import('../src/managed/execution-state.ts')
+ const f=await fixture([{type:'agent/input/admitted',version:1,inputId:'human',text:'work',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'session.prompt'},seq:0},{type:'tool/call',name:'spawn_agent',callId:'call',args:{},seq:1},{type:'tool/dispatch',callId:'call',eventSeq:1,seq:2}])
+ const action={assertOpen(){}},source={assertHeld(){}},owner={ownsAction(value:object){return value===action},beginAction(){throw Error('unused')},registerReceivedInputSource(){throw Error('unused')},async drain(){},assertReady(){}}
+ f.state.bindOwner(owner);f.state.captureHooks(action,()=>{});f.state.captureHooks(source,()=>{});f.state.associateActionSource(action,source)
+ const domain=core.createManagedExecutionDomain(f.state.identity,owner,{},'owned'),cut=core.reserveManagedTaskHistory(domain,source);await cut.export({kind:'all'})
+ async function commit(captured:any,authority:object,key:string){const capture=memberCapture(f,captured,authority),stage=await f.state.prepareWrite([captured]),batch=encodeFactBatch(key,f.source.prefix.prefixDigest,stage.events),receipt=f.receipt(batch);stage.beforeIssue(batch);stage.install(batch,receipt);const outcome=Object.freeze({kind:'committed',receipt,seqs:Object.freeze(stage.events.map((event:any)=>event.seq))}) as FactOutcome;f.state.acknowledge(captured,outcome);return {capture,outcome}}
+ const open=await commit(group({kind:'delivery-generation',event:{type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:'owned',generationId:'g',originInputSeq:0}}),source,'open')
+ const start=await commit(group({kind:'subagent-delivery-start',start:{type:'subagent/start',version:1,taskId:'t',agentPath:'root/t',role:'general',description:'T',parentSessionId:'owned'},binding:{recipientSessionId:'owned',generationId:'g',sourceNamespace:'task',sourceId:'t',callSeq:1}}),action,'start')
+ const witness={parentSessionId:'owned',taskId:'t',agentPath:'root/t',role:'general',sourceNamespace:'task',callSeq:1,open:{source,...open},start:{action,...start}}
+ expect(()=>cut.assertSourceCut(witness)).not.toThrow();expect(()=>cut.assertSourceCut({...witness,callSeq:2})).toThrow();expect(()=>cut.assertSourceCut({...witness,open:{...witness.open,source:{}}})).toThrow();await cut.close()
+})

@@ -10,9 +10,18 @@ import type { TaskRegistry } from '../task/types.ts'
 import {isManagedExecutionDomain,readManagedActionMembers,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface OriginalSpawnStart {readonly kind:'original-spawn-start'}
-const spawnStarts=new WeakMap<OriginalSpawnStart,{owner:object;seqs:readonly number[];events:readonly object[];event:Extract<SessionEvent,{type:'subagent/start'}>}>()
+type ManagedSpawnStart={domain:ManagedExecutionDomain;action:object;source:import('@i-harness/core-session').SettlementFacts<ProducerFactOutcome>;capture:object;outcome:import('@i-harness/core-session').FactOutcome}
+const spawnStarts=new WeakMap<OriginalSpawnStart,{owner:object;seqs:readonly number[];events:readonly object[];event:Extract<SessionEvent,{type:'subagent/start'}>;managed?:ManagedSpawnStart}>()
 export function inspectOriginalSpawnStart(receipt:OriginalSpawnStart,owner:object) {
  const original=spawnStarts.get(receipt);if(!original||original.owner!==owner)throw Error('Original spawn start required');return original
+}
+/** Original managed ACK retained by the actual spawn source; data copies are not receipts. */
+export function inspectManagedSpawnStart(receipt:OriginalSpawnStart,domain:ManagedExecutionDomain){
+ const original=spawnStarts.get(receipt),managed=original?.managed
+ if(!original||!managed||managed.domain!==domain||domain.owner!==original.owner)throw TypeError('Original managed spawn receipt required')
+ managed.source.assertHeld();const members=readManagedActionMembers(domain,managed.action,managed.capture,managed.outcome)
+ if(members.length!==original.events.length||members.some((member,index)=>member!==original.events[index]))throw Error('Original managed spawn members changed')
+ return Object.freeze({action:managed.action,source:managed.source,capture:managed.capture,outcome:managed.outcome,members})
 }
 export interface PublishedChild { path: string; jobId: string; sessionId?: string; modelLabel?: string }
 type SpawnIdentity = Readonly<{ agent_path: string; job_id: string; task_id: string }>
@@ -281,7 +290,7 @@ export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['own
       if(domain && outcome.kind!=='committed')throw Error('Original managed spawn acknowledgment required')
       const events=domain?readManagedActionMembers(domain,action,start,outcome as import('@i-harness/core-session').FactOutcome):seqs.map(seq=>(owner as FactOwner).view.events[seq]!)
       if(events.length!==seqs.length || events.some((member,index)=>member.seq!==seqs[index]))throw Error('Original spawn start members unavailable')
-      const receipt=Object.freeze({kind:'original-spawn-start' as const});spawnStarts.set(receipt,Object.freeze({owner,seqs:Object.freeze([...seqs]),events:Object.freeze([...events]),event:Object.freeze({...event})}));return receipt
+      const receipt=Object.freeze({kind:'original-spawn-start' as const});spawnStarts.set(receipt,Object.freeze({owner,seqs:Object.freeze([...seqs]),events:Object.freeze([...events]),event:Object.freeze({...event}),...domain?{managed:{domain,action,source,capture:start,outcome:outcome as import('@i-harness/core-session').FactOutcome}}:{}}));return receipt
     },
     async end(event: Extract<SessionEvent, { type: 'subagent/end' }>, output?: ReturnType<typeof spawnObservation>) {
       await projectRequiredTerminal()

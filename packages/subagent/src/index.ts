@@ -11,7 +11,7 @@ export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkfl
 export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"
 export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { PrepareTaskChild, TaskChildHostInput, TaskChildHostPreparation } from './child/task-host.ts'
-export {inspectTaskChildHistory,inspectTaskChildSource} from './child/task-history.ts'
+export {inspectTaskChildHistory,inspectTaskChildSource,inspectManagedTaskChildHistory,inspectManagedTaskChildSource,isManagedTaskChildHistory} from './child/task-history.ts'
 export type { SubagentRole, RoleRegistry, RoleCleanup } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"
@@ -379,7 +379,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       // barriers succeed. The notifier cannot retry a failed task save or
       // treat committed terminal bytes alone as completed handoff ownership.
       if (deliverySources.has(taskId)) return
-      if(!opts.parentSession)return
+      if(!opts.parentSession)return opts.parentNotify?.taskEvidence?.(subagentDeps.notificationNamespace!,taskId)
       const source = (readOwnedDeliveryState(opts.parentSession) ?? readDeliveries(opts.parentSession)).source(subagentDeps.notificationNamespace!, taskId)
       if (source?.type !== 'agent/delivery-source') return
       const terminal = opts.parentSession.events.findLast(e => e.type === 'subagent/end' && e.taskId === taskId && !!e.resultRevision && !!e.envelope && e.envelope.retention.kind !== 'unavailable' && (e.outcome === 'completed' || e.outcome === 'error'))

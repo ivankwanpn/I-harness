@@ -1,12 +1,12 @@
-import {inspectOriginalTaskDeliveryOpen} from '@i-harness/session-persistence/internal/retained-inspection'
-import {inspectOriginalSpawnStart,type OriginalSpawnStart} from '../tools/spawn-source.ts'
+import {inspectOriginalTaskDeliveryOpen,inspectManagedTaskDeliveryOpen} from '@i-harness/session-persistence/internal/retained-inspection'
+import {inspectOriginalSpawnStart,inspectManagedSpawnStart,type OriginalSpawnStart} from '../tools/spawn-source.ts'
 import { assertOriginalTaskCaller, type OriginalTaskCaller, type ToolExecutionOwnerContext } from '@i-harness/core-tools/internal/task-caller'
 import type { TaskRecord, TaskRegistry, TaskSubmissionInput, TaskChildBirthBinding } from './types.ts'
 import type { SubagentRole } from '../roles.ts'
 import type { OwnedTaskSave } from './persistence.ts'
 import { captureTaskSnapshot } from '@i-harness/session-persistence/internal/task-document-operations'
 import {canonicalJsonData} from '@i-harness/core-session'
-import {captureTaskChildHistory,inspectTaskChildSource,parseTaskHistorySelection,type OriginalTaskChildHistory} from '../child/task-history.ts'
+import {captureTaskChildHistory,inspectTaskChildSource,managedTaskHistoryFor,parseTaskHistorySelection,type OriginalTaskChildHistory} from '../child/task-history.ts'
 export interface TaskLaunchSlot {
  readonly history?:OriginalTaskChildHistory
  readonly task: Readonly<TaskRecord>; readonly caller: OriginalTaskCaller; readonly role: Readonly<SubagentRole>; readonly flight: Promise<TaskLaunchResult>
@@ -39,6 +39,7 @@ function freeze<T>(value:T):T {if(value&&typeof value==='object'){for(const chil
 export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecutionOwnerContext|{readonly kind:'managed-execution';readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;readonly context:import('@i-harness/core-plugin').PluginContext;readonly sessionId:string},hooks:{current(record?:TaskRecord):void;insert(input:TaskSubmissionInput):{record:TaskRecord;inserted:boolean};protect(record:TaskRecord):void;accept(record:TaskRecord):Promise<void>;bind(record:TaskRecord,birth:TaskChildBirthBinding):OwnedTaskSave;beforeResultIssue(record:TaskRecord,before:()=>Promise<void>):void;retainResult(record:TaskRecord):Promise<void>}):TaskLaunchPort {
  let stopped: {cause:unknown}|undefined
  const slots=new Map<TaskRecord,TaskLaunchSlot>(),states=new Map<TaskLaunchSlot,{retire(cause:unknown):void;close():Promise<void>;snapshot():void}>()
+ const orphanHistories=new Set<NonNullable<ReturnType<typeof managedTaskHistoryFor>>['reservation']>()
  const checkCaller=(caller:OriginalTaskCaller)=>{if(stopped)throw stopped.cause;assertOriginalTaskCaller(caller);hooks.current();const actual=caller.context;const same='kind'in context?'kind'in actual&&actual.domain===context.domain:!('kind'in actual)&&actual.view===context.view&&actual.factOwner===context.factOwner;if(!same||actual.context!==context.context||caller.identity.parentSessionId!==context.sessionId)throw Error('Foreign original task mount')}
  const port:TaskLaunchPort={
   inspect(id){for(const [task,slot]of slots)if(task.id===id)return Object.freeze({flight:slot.flight,task});return undefined},
@@ -52,11 +53,12 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
     if(canonicalJsonData(old.caller.call)!==canonicalJsonData(caller.call))throw Error('Original caller identity conflict')
     caller.consume();return {kind:'same',slot:old}
    }
-   const history=captureTaskChildHistory(caller)
    const intent=freeze(captureTaskSnapshot({identity:caller.identity,agentPath:'root/'+args.task_name,description:args.task_name,prompt:args.message,agent:role.name,delivery:args.background===false?'tool':'parent'}) as TaskSubmissionInput)
    const roleIntent=freeze(captureTaskSnapshot(role) as SubagentRole),completion=Promise.withResolvers<TaskLaunchResult>()
    void completion.promise.catch(()=>{})
    const setup:{close():Promise<void>;closed:boolean}[]=[]
+   const history=captureTaskChildHistory(caller),managedHistory=history&&managedTaskHistoryFor(history)
+   if(managedHistory)setup.push({close:managedHistory.reservation.close.bind(managedHistory.reservation),closed:false})
    const recovery:{close():Promise<void>;closed:boolean}[]=[]
    const publication=new Map<string,object>()
    let selection:{value:unknown}|{cause:unknown}|undefined
@@ -76,7 +78,7 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
    const slot:TaskLaunchSlot={get task(){return task},caller,...history?{history}:{},role:roleIntent,flight:completion.promise,get accepted(){return accepted},
     acknowledgeDelivery(value){if(this!==slot||deliveryPreparation)throw Error('Original delivery already acknowledged');current();deliveryPreparation=value},
     acknowledgeStart(receipt){if(this!==slot||startReceipt)throw Error('Original start already acknowledged');current();inspectOriginalSpawnStart(receipt,'kind'in caller.context?caller.context.domain.owner:caller.context.factOwner);startReceipt=receipt},
-    assertSourceCut(){if(this!==slot||!history||!startReceipt)throw Error('Original task start unavailable');current();const captured=inspectTaskChildSource(history,caller.identity.parentSessionId),start=inspectOriginalSpawnStart(startReceipt,captured.owner),open=deliveryPreparation?inspectOriginalTaskDeliveryOpen(deliveryPreparation,captured.owner):undefined,event=captured.view.events[start.seqs[0]!];if(open&&(open.view!==captured.view||open.seq!==captured.count||captured.view.events[open.seq]!==open.event||canonicalJsonData(open.event)!==open.eventData||open.binding.recipientSessionId!==caller.identity.parentSessionId||open.binding.sourceId!==task.id||open.binding.callSeq!==caller.identity.callEventSeq||canonicalJsonData(deliveryPreparation)!==canonicalJsonData({kind:'bound',binding:open.binding})))throw Error('Original delivery preparation changed');const offset=open?1:0;if(!start.seqs.length||captured.view.events.length!==captured.count+offset+start.seqs.length||start.seqs.some((seq,index)=>seq!==captured.count+offset+index||captured.view.events[seq]!==start.events[index])||!event||canonicalJsonData(event)!==canonicalJsonData({...start.event,seq:start.seqs[0]})||event.type!=='subagent/start'||event.taskId!==task.id||event.agentPath!==task.agentPath||event.role!==roleIntent.name||event.parentSessionId!==caller.identity.parentSessionId)throw Error('Original task history suffix changed')},
+    assertSourceCut(){if(this!==slot||!history||!startReceipt)throw Error('Original task start unavailable');current();if(managedHistory){if(!('kind'in caller.context)||caller.identity.callEventSeq===undefined)throw Error('Original managed Task caller unavailable');const domain=caller.context.domain,start=inspectManagedSpawnStart(startReceipt,domain),open=deliveryPreparation?inspectManagedTaskDeliveryOpen(deliveryPreparation,domain):undefined;managedHistory.reservation.assertSourceCut({parentSessionId:caller.identity.parentSessionId,taskId:task.id,agentPath:task.agentPath,role:roleIntent.name,sourceNamespace:context.sessionId!,callSeq:caller.identity.callEventSeq,...open?{open}:{},start});return}const captured=inspectTaskChildSource(history,caller.identity.parentSessionId),start=inspectOriginalSpawnStart(startReceipt,captured.owner),open=deliveryPreparation?inspectOriginalTaskDeliveryOpen(deliveryPreparation,captured.owner):undefined,event=captured.view.events[start.seqs[0]!];if(open&&(open.view!==captured.view||open.seq!==captured.count||captured.view.events[open.seq]!==open.event||canonicalJsonData(open.event)!==open.eventData||open.binding.recipientSessionId!==caller.identity.parentSessionId||open.binding.sourceId!==task.id||open.binding.callSeq!==caller.identity.callEventSeq||canonicalJsonData(deliveryPreparation)!==canonicalJsonData({kind:'bound',binding:open.binding})))throw Error('Original delivery preparation changed');const offset=open?1:0;if(!start.seqs.length||captured.view.events.length!==captured.count+offset+start.seqs.length||start.seqs.some((seq,index)=>seq!==captured.count+offset+index||captured.view.events[seq]!==start.events[index])||!event||canonicalJsonData(event)!==canonicalJsonData({...start.event,seq:start.seqs[0]})||event.type!=='subagent/start'||event.taskId!==task.id||event.agentPath!==task.agentPath||event.role!==roleIntent.name||event.parentSessionId!==caller.identity.parentSessionId)throw Error('Original task history suffix changed')},
     captureSelection<T>(read:()=>T):T {if(this!==slot)throw TypeError('Foreign slot');current();if(!selection){try{const value=read();selection={value:value===undefined?undefined:freeze(captureTaskSnapshot(value))};current()}catch(cause){selection={cause};throw cause}}if('cause'in selection)throw selection.cause;return selection.value as T},
     keep(cleanup){if(this!==slot)throw TypeError('Foreign slot');const close=cleanup.close.bind(cleanup);setup.push({close,closed:false});try{current()}catch(cause){retire(cause);throw cause}},
     keepRecovery(cleanup){if(this!==slot)throw TypeError('Foreign slot');recovery.push({close:cleanup.close.bind(cleanup),closed:false});current()},
@@ -92,9 +94,9 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
     consumeBinding(){if(this!==slot)throw TypeError('Foreign slot');slot.assertBinding();binding!.release();consumed=true},
     retire(cause){if(this!==slot)throw TypeError('Foreign slot');retire(cause)},
    };Object.freeze(slot);issued.add(slot)
-   caller.consume()
-   const result=hooks.insert(intent);task=result.record
-   if(!result.inserted){const old=slots.get(task);if(!old)throw Object.assign(Error('Existing cold task has no original warm slot'),{code:'TASK_COLD_BINDING_UNAVAILABLE'});if(old.caller.identity.parentSessionId!==caller.identity.parentSessionId||old.caller.identity.callEventSeq!==caller.identity.callEventSeq||old.caller.identity.toolCallId!==caller.identity.toolCallId)throw Error('Original caller identity conflict');return {kind:'same',slot:old}}
+   let result:ReturnType<typeof hooks.insert>
+   try{caller.consume();result=hooks.insert(intent);task=result.record}catch(cause){if(managedHistory)orphanHistories.add(managedHistory.reservation);throw cause}
+   if(!result.inserted){if(managedHistory)orphanHistories.add(managedHistory.reservation);const old=slots.get(task);if(!old)throw Object.assign(Error('Existing cold task has no original warm slot'),{code:'TASK_COLD_BINDING_UNAVAILABLE'});if(old.caller.identity.parentSessionId!==caller.identity.parentSessionId||old.caller.identity.callEventSeq!==caller.identity.callEventSeq||old.caller.identity.toolCallId!==caller.identity.toolCallId)throw Error('Original caller identity conflict');return {kind:'same',slot:old}}
    slots.set(task,slot);states.set(slot,{retire,close,snapshot(){const field=Object.getOwnPropertyDescriptor(task,'childBirth');if(field&&(!bindingIntent||!('value'in field)||field.value!==bindingIntent||!field.enumerable||field.configurable||field.writable))throw Error('Foreign prebinding task birth')}})
    const signal=caller.exec.abortSignal
    if(signal){const abort=()=>retire(signal.reason);removeAbort=()=>EventTarget.prototype.removeEventListener.call(signal,'abort',abort);EventTarget.prototype.addEventListener.call(signal,'abort',abort,{once:true});if(signal.aborted)abort()}
@@ -104,7 +106,7 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
   },
   retireTask(id,cause){for(const [task,slot]of slots)if(task.id===id)states.get(slot)!.retire(cause)},
   retireAll(cause){stopped??={cause};for(const state of states.values())state.retire(cause)},
-  async close(){const results=await Promise.allSettled([...states.values()].map(state=>state.close()));const errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Original task slots require cleanup')},
+  async close(){const results=await Promise.allSettled([...states.values()].map(state=>state.close()).concat([...orphanHistories].map(async history=>{await history.close();orphanHistories.delete(history)})));const errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Original task slots require cleanup')},
   assertSnapshot(){for(const state of states.values())state.snapshot()},
  };Object.freeze(port);ports.set(registry,port);return port
 }

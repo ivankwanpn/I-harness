@@ -127,3 +127,13 @@ export function extendConversationSourceCoordinates(view:ConversationSourceCoord
  const offset=events.findIndex(e=>e.type==='conversation/semantics'),result=Object.freeze({eventCount:view.eventCount+events.length}) as ConversationSourceCoordinateView
  coordinateViews.set(result,{seqs:original.seqs.concat(events.map(e=>e.seq)),fenceIndex:original.fenceIndex>=0?original.fenceIndex:offset<0?-1:view.eventCount+offset,current:()=>original.current()});return result
 }
+
+/** Retain original prefix coordinates under the original writer's lifetime guard. */
+export function retainConversationSourceCoordinates(view: ConversationSourceCoordinateView, assertCurrent: () => void): ConversationSourceCoordinateView {
+  const original = coordinateViews.get(view)
+  if (!original || !original.current()) throw new TypeError('Invalid or stale source coordinates')
+  assertCurrent()
+  const retained = Object.freeze({eventCount: view.eventCount}) as ConversationSourceCoordinateView
+  coordinateViews.set(retained, {seqs: original.seqs, fenceIndex: original.fenceIndex, current: () => { assertCurrent(); return true }})
+  return retained
+}

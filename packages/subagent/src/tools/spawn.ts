@@ -63,7 +63,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
     get inputSchema() { return roleMetadata().inputSchema },
     isReadOnly: false,
     execute: async (args, exec) => {
-      if(deps.managedParent && args.background!==false)throw Error('Managed background Task delivery unavailable')
+      if(deps.managedParent && args.background!==false && (!deps.parentNotify?.prepareTaskDelivery||!deps.parentNotify.admitTaskDelivery||!deps.parentNotify.taskEvidence))throw Error('Managed background Task delivery unavailable')
       const role = deps.roles.get(args.agent_type ?? "general")
       if (!role) throw new Error(`unknown role: ${args.agent_type}; register a capability definition with a system prompt and allowed tools. A model selection alone does not define a role.`)
       // M24a (B2): max_depth guard — reject spawning once the caller is already

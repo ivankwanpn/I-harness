@@ -100,3 +100,10 @@ export function extendPruneDependencyView(view:ConversationPruneDependencyView,e
  const positions=new Map(original.positions);events.forEach((event,offset)=>{if(event.type==='compaction/prune')event.pruned?.forEach((record,recordIndex)=>positions.set(record.callId,{eventIndex:view.eventCount+offset,recordIndex,seq:event.seq}))})
  const result=Object.freeze({eventCount:view.eventCount+events.length}) as ConversationPruneDependencyView;pruneViews.set(result,{positions,current:()=>original.current()});return result
 }
+
+/** Retain a prefix under the original writer's lifetime guard. */
+export function retainPruneDependencyView(view: ConversationPruneDependencyView, assertCurrent: () => void): ConversationPruneDependencyView {
+ const original=pruneViews.get(view); if(!original || !original.current()) throw new TypeError('Invalid or stale prune dependency view')
+ assertCurrent(); const retained=Object.freeze({eventCount:view.eventCount}) as ConversationPruneDependencyView
+ pruneViews.set(retained,{positions:original.positions,current:()=>{assertCurrent();return true}}); return retained
+}

@@ -6,7 +6,7 @@ import { canonicalJsonData } from '../serialization/json-data.ts'
 import { seedHash } from './seed-digest.ts'
 import { seedInvalid } from './seed-codec.ts'
 import { renderConversationItems } from './render-items.ts'
-import { eventArchive } from './archive.ts'
+import { eventArchive, type ConversationEventArchive } from './archive.ts'
 import { copyConversationData } from './render.ts'
 import type { selectSeedHistory } from './seed-selection.ts'
 import { createSeedOriginNormalizer, consumeSelectedOriginPlan, type SeedOriginNormalizer } from './seed-origins.ts'
@@ -16,18 +16,22 @@ import type { HeldSelectedResults } from './selected-results-types.ts'
 /** One selected payload capture. Origin and dependency normalization subsequently
  * traverses these captured data only, never the source archive bodies again. */
 export function captureSeedSelection(view: SessionView, selected: Extract<ReturnType<typeof selectSeedHistory>, { kind: 'selected' }>) {
-  return captureSelection(view, selected)
+  return captureSeedSelectionFromArchive(eventArchive(view.events), view.header, view.events.find(event => event.type === 'conversation/seed-manifest'), selected)
 }
 export function captureSeedSelectionForResults(context: CompletedPassiveContext, results: HeldSelectedResults) {
   const plan = consumeSelectedOriginPlan(context, results)
   results.assertCurrent()
-  const captured = captureSelection(context.source.view, context.selected, plan)
+  const view = context.source.view
+  const captured = captureSelection(eventArchive(view.events), view.header, view.events.find(event => event.type === 'conversation/seed-manifest'), context.selected, plan)
   results.assertCurrent()
   return captured
 }
-function captureSelection(view: SessionView, selected: Extract<ReturnType<typeof selectSeedHistory>, { kind: 'selected' }>, fixed?: SeedOriginNormalizer) {
+export function captureSeedSelectionFromArchive(archive: ConversationEventArchive, header: SessionView['header'], manifest: Extract<import('../managed/types.ts').SessionEventView, { type: 'conversation/seed-manifest' }> | undefined, selected: Extract<ReturnType<typeof selectSeedHistory>, { kind: 'selected' }>, options?: { sourceCoordinates: import('./restoration-types.ts').ConversationSourceCoordinateView; pruneSubstitutes: ReadonlyMap<string, import('../projection/pruning.ts').PruneRecord> }) {
+  return captureSelection(archive, header, manifest, selected, undefined, options)
+}
+function captureSelection(archive: ConversationEventArchive, header: SessionView['header'], manifest: Extract<import('../managed/types.ts').SessionEventView, { type: 'conversation/seed-manifest' }> | undefined, selected: Extract<ReturnType<typeof selectSeedHistory>, { kind: 'selected' }>, fixed?: SeedOriginNormalizer, options?: { sourceCoordinates: import('./restoration-types.ts').ConversationSourceCoordinateView; pruneSubstitutes: ReadonlyMap<string, import('../projection/pruning.ts').PruneRecord> }) {
   const descriptors = selected.groups.flatMap(group => group.items)
-  const projection = renderConversationItems(eventArchive(view.events), { items: descriptors, diagnostics: selected.diagnostics }, { header: view.header, capturePayload: captureSelectedData })
+  const projection = renderConversationItems(archive, { items: descriptors, diagnostics: selected.diagnostics }, { header, capturePayload: captureSelectedData, ...options })
   const artifacts: SeedArtifact[] = [], omissions: SeedOmission[] = []
   const normalizer = fixed ?? createSeedOriginNormalizer(), origin = normalizer.origin
   const artifactSlots = new Map<string, number>()
@@ -48,7 +52,6 @@ function captureSelection(view: SessionView, selected: Extract<ReturnType<typeof
   const localRefs = (item: HistoryItem) => [...new Map([...item.sources, ...item.provenance.evidence].map(ref => [ref.id, ref])).values()].map(localAddress)
   const images = (messages: SeedItem['messages']) => messages.flatMap((message, index) => Array.isArray(message.content) ? message.content.flatMap((part, partIndex) => part.type === 'image' ? [{ message: index, part: partIndex }] : []) : [])
   const inheritedOmissions = new Map<number, number>()
-  const manifest = view.events.find(event => event.type === 'conversation/seed-manifest')
   for (const { ordinal, omission } of selected.inheritedOmissions) {
     if (manifest?.type !== 'conversation/seed-manifest') seedInvalid()
     inheritedOmissions.set(ordinal, omissions.length)
@@ -63,9 +66,8 @@ function captureSelection(view: SessionView, selected: Extract<ReturnType<typeof
   let position = 0
   const groups = selected.groups.map(group => ({ extent: selected.rebase(group.extent), items: group.items.map((descriptor): SeedItem => {
     const rendered = projection.items[position++]!, recipe = descriptor.recipes.find(recipe => recipe.kind === 'seed-item')
-    const record = view.events[descriptor.establishmentIndex]
+    const record = archive.get(descriptor.establishmentIndex)
     if (record?.type === 'conversation/seed-group' && recipe) {
-      const manifest = view.events.find(event => event.type === 'conversation/seed-manifest')
       if (manifest?.type !== 'conversation/seed-manifest') seedInvalid()
       const { messages: _messages, ...metadata } = record.group.items[recipe.item!]!
       const item = { ...copyConversationData(metadata), messages: rendered.messages } as SeedItem
@@ -99,13 +101,13 @@ function captureSelection(view: SessionView, selected: Extract<ReturnType<typeof
     if (descriptor.kind === 'input') {
       const omittedWork = inputOmissions.get(descriptor)
       return { ...base, kind: 'input', input: { raw: base.origins.filter(ref => ['message', 'admission', 'image'].includes(ref.part)),
-        derivedContext: descriptor.recipes.some(recipe => view.events[recipe.index!]?.type === 'user/message' && ('seedInputContext' in view.events[recipe.index!]! || 'inputPreparation' in view.events[recipe.index!]!)) ? base.origins : [],
+        derivedContext: descriptor.recipes.some(recipe => archive.get(recipe.index!)?.type === 'user/message' && ('seedInputContext' in archive.get(recipe.index!)! || 'inputPreparation' in archive.get(recipe.index!)!)) ? base.origins : [],
         media: images(base.messages), ...(omittedWork === undefined ? {} : { omittedWork }) } }
     }
     const results: SeedResult[] = [], resultById = new Map<string, number>()
     for (const [messageIndex, message] of base.messages.entries()) if (message.role === 'tool') {
       const ref = descriptor.calls.find(call => call.callId === message.toolCallId)?.result
-      const event = ref && view.events[ref.eventIndex]
+      const event = ref && archive.get(ref.eventIndex)
       if (event?.type !== 'tool/result') seedInvalid()
       const source = [localAddress(ref!)]
       const media = images(base.messages).filter(image => descriptor.recipes[image.message]?.index === ref!.eventIndex)

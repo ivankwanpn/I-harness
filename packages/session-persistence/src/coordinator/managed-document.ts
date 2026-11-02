@@ -2,7 +2,7 @@ import {taskParentMetadataProjection} from './task-parent-metadata.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts';
 import { canJoinOriginalNativePrewrite } from '../native-fact-writer-internal.ts';
 import { createDeliveryControl,createOwnerDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
-import type {restoreManagedExecutionState,OriginalExecutionCaptureHooks} from '@i-harness/core-session/internal/execution';
+import {assertOriginalManagedTaskHistory,isManagedExecutionDomain,type ManagedExecutionDomain,type restoreManagedExecutionState,type OriginalExecutionCaptureHooks} from '@i-harness/core-session/internal/execution';
 import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
 import type { BootstrapDocumentControl } from './bootstrap-types.ts';
 import { randomUUID } from 'node:crypto';
@@ -71,11 +71,14 @@ export interface ManagedReadyObservation {
     assertCurrent(): void;
 }
 export type SelectedSourceRead = ManagedReadyObservation & { readonly header: SessionView['header']; unsubscribe():void };
+export type ManagedTaskSourceRead = Readonly<{kind:'managed-task-source';sessionId:string;document:ManagedDocument;held:HeldFactOwner;header:SessionView['header'];artifacts:ReturnType<typeof assertOriginalManagedTaskHistory>;prefix:Readonly<JournalPrefix>;assertCurrent():void;unsubscribe():void}>;
+const managedTaskSourceReads=new WeakSet<object>();
+export function assertOriginalManagedTaskSourceRead(witness:ManagedTaskSourceRead):void {if(!managedTaskSourceReads.has(witness))throw new FactRecoveryRequiredError();witness.assertCurrent()}
 type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'; from: number; to: number; events: SessionView['events'] };
 type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
 const executionStatuses = new WeakMap<ManagedDocument, () => 'available' | 'unavailable' | 'retired'>();
 type ExecutionState=Awaited<ReturnType<typeof restoreManagedExecutionState>>;
-const privateExecutionOwners=new WeakMap<ManagedDocument,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
+const privateExecutionOwners=new WeakMap<ManagedDocument,{core:ExecutionState;held:HeldFactOwner;ownership:Ownership;assertCurrent():void;retainTask(domain:ManagedExecutionDomain,history:object,onRevoke:()=>void):ManagedTaskSourceRead;materialize(events:readonly import('@i-harness/core-session').SessionEventView[]):ManagedDocument&{assertObservable():void};invalidateMetadata(revision:object):void;beginTaskMetadata():TaskMetadataUpdate;captureTaskParent():Omit<TaskParentReadiness,'view'>;captureRequiredParent(source:import('@i-harness/core-session').SettlementFacts):RequiredTaskParentReadiness;parent():{assertOriginal():void;assertCurrent():void;assertTask14Ready():void}}>();
 export function originalManagedExecution(document:ManagedDocument,ownership:Ownership){const original=privateExecutionOwners.get(document);if(!original||original.ownership!==ownership)throw TypeError('Original private execution owner required');return original}
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
@@ -120,6 +123,13 @@ export function retainTaskSourceRead(owner:object,view:SessionView,ownership:Own
  const witness=original.retainSelected(onRevoke)
  try { if(witness.document!==owner||witness.view!==view)throw new FactRecoveryRequiredError();witness.assertCurrent();return witness }
  catch(error){witness.unsubscribe();throw error}
+}
+/** Only a verified retained cut on this coordinator's original private owner can issue native Task observation authority. */
+export function retainManagedTaskSourceRead(domain:ManagedExecutionDomain,history:object,ownership:Ownership,onRevoke:()=>void):ManagedTaskSourceRead {
+ if(!isManagedExecutionDomain(domain)||typeof onRevoke!=='function')throw new FactRecoveryRequiredError()
+ const owner=domain.owner, original=privateExecutionOwners.get(owner as ManagedDocument)
+ if(!original||original.ownership!==ownership||original.core.identity!==domain.identity)throw new FactRecoveryRequiredError()
+ assertOriginalManagedTaskHistory(domain,history);return original.retainTask(domain,history,onRevoke)
 }
 /** Original owner invalidation; no caller can install a replacement witness. */
 export function invalidateManagedMetadataWitness(document:ManagedDocument,ownership:Ownership,revision:object) {
@@ -772,7 +782,15 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     executionStatuses.set(document, executionStatus);
     if(core){
       const originalReady=document.assertReady;
-      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,materialize(events){
+      core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,retainTask(domain,history,onRevoke){
+        if(selectedAdmissions||queue.length||scheduled)throw new FactRecoveryRequiredError();
+        const revision=metadataRevision, capturedPrefix=prefix, header=core.header, artifacts=assertOriginalManagedTaskHistory(domain,history);let revoked=false
+        const listener=()=>{if(revoked)return;revoked=true;onRevoke()}
+        const current=()=>{if(revoked||closed||closing||metadataStale||metadataRevision!==revision||pending||quarantined||sourceFault||recoveryHolds.size||prefix!==capturedPrefix)throw new FactRecoveryRequiredError();execution!.assertCurrent();held.assertHeld();assertOriginalManagedTaskHistory(domain,history)}
+        current();selectedListeners.add(listener)
+        const witness:ManagedTaskSourceRead=Object.freeze({kind:'managed-task-source',sessionId:id,document,held,header,artifacts,prefix:Object.freeze({...capturedPrefix}),assertCurrent(){if(this!==witness)throw new TypeError('Original Task source receiver required');current()},unsubscribe(){if(this!==witness)throw new TypeError('Original Task source receiver required');revoked=true;selectedListeners.delete(listener)}})
+        managedTaskSourceReads.add(witness);return witness
+      },materialize(events){
         if(!Object.hasOwn(document,'view')){const compatibility=core.materialize(events,document);originalDelivery!.bindView(compatibility.view);bindPublicState(compatibility);publicObservation=compatibility}return document;
       },beginTaskMetadata:beginTaskMetadataUpdate,captureTaskParent:()=>privateTaskParent(),captureRequiredParent:source=>privateTaskParent(source),invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected();try{execution!.assertCurrent()}catch(error){core.readinessUnavailable(error,true)}},parent(){
         Reflect.apply(originalReady,document,[]);const revision=metadataRevision;

@@ -211,6 +211,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
       const observed=nativeContext.observations.current(id)
+      if (observed?.kind === 'managed-task') { observed.assertCurrent(); return observed.artifacts.map(artifact => artifact.ref) }
       const snapshot=observed?.view ?? service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
       observed?.assertCurrent()
       const cuts=rewindCuts(snapshot)

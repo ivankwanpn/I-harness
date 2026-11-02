@@ -132,6 +132,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
             const observed = observations.current(sessionId)
             const coordinator = [...registrations].at(-1)?.coordinator
             if (!coordinator?.snapshot) return false
+            if(observed?.kind==='managed-task'){observed.assertCurrent();return observed.artifacts.some(artifact=>sameManagedArtifactRef(artifact.ref,expected))}
             const snapshot = observed?.view ?? (await coordinator.snapshot(sessionId)).session, cuts = rewindCuts(snapshot)
             observed?.assertCurrent()
             return semanticSeedResultRefs(snapshot).some(ref => sameManagedArtifactRef(ref, expected)) || snapshot.events.some(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq)
