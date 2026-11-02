@@ -322,7 +322,7 @@ export async function mountAgentTeams(
         binding=captureOriginalTeamColdBinding(coordinator,{domain:managed.domain,owner,parent,teamId,memberId:member.id});await binding.ready;const inspected=binding.inspect()
         if(inspected.kind!=='confirmed'||inspected.binding.request.core.history.selection.kind!=='none')throw Object.assign(Error('Original Team birth recovery required'),{code:'FACT_RECOVERY_REQUIRED'})
         target=captureOriginalTeamColdTarget(coordinator,binding);await target.ready
-        if(target.result.kind!=='materialized')throw Object.assign(Error('Original Team birth recovery required'),{code:'FACT_RECOVERY_REQUIRED'})
+        if(!['absent','reserved','materialized'].includes(target.result.kind))throw Object.assign(Error('Original Team birth recovery required'),{code:'FACT_RECOVERY_REQUIRED'})
         assertColdIssuer();attempt=Reflect.apply(coldIssuer!,sub,[owner,parent,binding,target]);const birth=await attempt!.run();assertColdIssuer()
         const out=await realSpawnChild(member.name,inspected.binding.initial.text,'fresh',{coldBirth:birth})
         if(out.sessionId!==member.id)throw TypeError('Original Team target changed')
