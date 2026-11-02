@@ -1,6 +1,7 @@
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {createExecutorExecutionCache} from './durable-session.ts'
 import {createManagedExecutionRuntime} from './managed-assembly.ts'
+import {subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
 import {supportsManagedServiceOptions} from './service/execution-mode.ts'
 import {createContext,captureExecutionHookChannel,type PluginContext} from '@i-harness/core-plugin'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
@@ -127,7 +128,7 @@ type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'asser
 
 export interface SessionServiceOptions extends AssemblyOptions {
   /** Internal explicit-tool managed composition; not the default feature builder. */
-  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'> & {
+  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'|'originalFilesystem'|'originalSchedule'> & {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
   }
@@ -558,14 +559,26 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return { running: items.some(item => item.state === "running"), queued: items.filter(item => item.state === "queued").length }
   }
 
+  const pendingExecutionNotifications = new Map<string, () => void>()
   function notifyExecutionState(sessionId: string): void {
-    const state = Object.freeze({ sessionId, ...queueState(sessionId), revision: ++executionRevision })
+    if (!executionListeners.size) { executionRevision++; return }
+    let state: SessionExecutionState
+    try { state = Object.freeze({ sessionId, ...queueState(sessionId), revision: ++executionRevision }) }
+    catch {
+      const runtime=managedRuntimes.get(sessionId)
+      if (runtime && !closed && !closing.has(sessionId) && !pendingExecutionNotifications.has(sessionId)) {
+        try {
+          const off=subscribeManagedExecutionReadiness(runtime.domain,()=>{if(pendingExecutionNotifications.get(sessionId)!==off)return;pendingExecutionNotifications.delete(sessionId);off();notifyExecutionState(sessionId)},(error,terminal)=>{if(pendingExecutionNotifications.get(sessionId)!==off)return;if(terminal){pendingExecutionNotifications.delete(sessionId);off()}try{d.warn('[i-harness] execution-state observation unavailable: '+String(error))}catch{}})
+          pendingExecutionNotifications.set(sessionId,off)
+        } catch { try { d.warn('[i-harness] execution-state observation unavailable') } catch {} }
+      }
+      return
+    }
     for (const listener of [...executionListeners]) {
       try { listener(state) }
-      catch { d.warn("[i-harness] execution-state listener failed") }
+      catch { try { d.warn('[i-harness] execution-state listener failed') } catch {} }
     }
   }
-
   function sessionQueueState(sessionId: string): SessionQueueState {
     let st = queues.get(sessionId)
     if (st === undefined) {
@@ -996,16 +1009,30 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const reasoningEffort=binding?.status==='ready'?binding.binding.reasoningEffort:opts.reasoningEffortFor===undefined?opts.reasoningEffort:opts.reasoningEffortFor(sessionId,meta)
       assertWritableOpen(sessionId)
       if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
-      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,context,execution:entry.execution,model,contextWindow,workspace:opts.workspace,retainConstructionCleanup:cleanup=>mounted.add(cleanup),maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
+      runtime=createManagedExecutionRuntime({...opts.managedRuntime!,context,execution:entry.execution,model,contextWindow,workspace:opts.workspace,retainConstructionCleanup:cleanup=>mounted.add(cleanup),scheduleWake:(inputId,text)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         reasoningEffort,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})})
+      await runtime.startSchedule?.()
       assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime)
       return runtime
     })().then(work.resolve,error=>{row.failed=true;failedClose.add(sessionId);work.reject(error)})
     return work.promise
   }
 
+  /** Wait only for the same original owner's observable edge; no producer is opened or retried. */
+  function waitForManagedInputObservation(sessionId:string,signal:AbortSignal):Promise<number> {
+    const runtime=managedRuntimes.get(sessionId)
+    if(!runtime)return Promise.reject(Error('Original managed input owner unavailable'))
+    return new Promise<number>((resolve,reject)=>{
+      let off:(()=>void)|undefined,settled=false
+      const finish=(failed:boolean,value?:unknown)=>{if(settled)return;settled=true;signal.removeEventListener('abort',aborted);off?.();if(failed)reject(value);else resolve(value as number)}
+      const aborted=()=>finish(true,signal.reason)
+      signal.addEventListener('abort',aborted,{once:true})
+      if(signal.aborted){aborted();return}
+      try{off=subscribeManagedExecutionReadiness(runtime.domain,epoch=>finish(false,epoch),error=>finish(true,error));if(settled)off()}catch(error){finish(true,error)}
+    })
+  }
   function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
     return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)) : submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)
   }
@@ -1079,11 +1106,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     // handler — the cleanup promise must never surface one (a bare
     // `turn.finally` would propagate it).
     void turn.then(cleanup, cleanup)
-    notifyExecutionState(sessionId)
-    telemetry?.emit({ type: "session/request", ts: Date.now(), data: { sessionId } })
-    if (hasQueued) {
-      telemetry?.emit({ type: "session/queued", ts: Date.now(), data: { sessionId } })
-    }
     const startTurn = (): void => {
       if (closed || controller.signal.aborted) {
         settle() // the queued turn never starts; the chain keeps moving
@@ -1099,8 +1121,17 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if(managedCompatible(sessionId)){
           if(options?.prepareInput||deliveryOwner)throw Error('Session-shaped input preparation requires complete compatibility before private acquisition')
           const inbox=await receivedInputFor(sessionId)
-          if(options?.admittedInputId){const original=inbox.pending().find(p=>p.inputId===id);if(!original)return;if(original.text!==prompt)throw Error('Admitted input does not match submitted text')}
-          else await inbox.admit(input,controller.signal)
+          if(options?.admittedInputId){
+            let lastEpoch:number|undefined
+            for(;;){
+              let original:import('@i-harness/core-session').PendingInput|undefined
+              try{original=inbox.pending().find(p=>p.inputId===id)}
+              catch(error){if(!managedRuntimes.has(sessionId))throw error;const epoch=await waitForManagedInputObservation(sessionId,controller.signal);if(epoch===lastEpoch)throw error;lastEpoch=epoch;continue}
+              if(!original)return
+              if(original.text!==prompt)throw Error('Admitted input does not match submitted text')
+              break
+            }
+          }else await inbox.admit(input,controller.signal)
           controller.signal.throwIfAborted();assertWritableOpen(sessionId)
           const entry=await privateCache!.get(sessionId)
           let runtime:ManagedRuntime | undefined
@@ -1184,7 +1215,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       })
 
     }
-    void prev.then(startTurn, startTurn)
+    const startOwnedTurn=()=>{try{startTurn()}catch(error){settleError(error)}}
+    void prev.then(startOwnedTurn, startOwnedTurn)
+    notifyExecutionState(sessionId)
+    try { telemetry?.emit({ type: 'session/request', ts: Date.now(), data: { sessionId } }); if(hasQueued)telemetry?.emit({ type: 'session/queued', ts: Date.now(), data: { sessionId } }) } catch { try { d.warn('[i-harness] session telemetry failed') } catch {} }
     return turn
   }
 
@@ -1322,6 +1356,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
   const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
+    pendingExecutionNotifications.get(sessionId)?.();pendingExecutionNotifications.delete(sessionId)
     creating.get(sessionId)?.residentActivation.retire()
     deliveryDrains.get(sessionId)?.retire()
     const assembly = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)

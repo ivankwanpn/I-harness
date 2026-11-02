@@ -13,6 +13,7 @@ import {createSessionService} from '../src/service.ts'
 import {createMainInstructionManager} from '../src/context/instructions/manager.ts'
 import {createProjectInstructionEnvironment} from '../src/context/instructions/index.ts'
 import {createExecutionRuntimeContext} from '../src/lifecycle/execution-runtime-context.ts'
+import {registerApprovalAnswerer} from '@i-harness/interaction'
 
 it('original private runtime consumes the cache admission on the genuine lane through tool body and continuation',async()=>{
  const create=Reflect.get(assembly,'createManagedExecutionRuntime')
@@ -254,3 +255,155 @@ it('direct managed constructor uses the supplied genuine request context with wo
   expect(JSON.stringify(server.requests[0]!.body)).toContain('SUPPLIED_CONTEXT_RULE')
  }finally{await runtime.close();for(const cleanup of retained)await cleanup();await manager.close();await context.close();await environment.close();await cache.closeAll();await coordinator.close();await server.close()}
 },30000)
+
+it('owned filesystem composition runs the original read body and continues the physical request',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-fs-read-'))
+ await writeFile(join(root,'input.txt'),'ORIGINAL_FS_CONTENT')
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'fs-read',function:{name:'read',arguments:JSON.stringify({path:'input.txt'})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const server=await createLoopbackProvider('/v1/chat/completions',[async(response,request)=>{expect(JSON.stringify(request.body.tools)).toContain('"name":"read"');response.end(wire(true))},async(response,request)=>{expect(JSON.stringify(request.body.messages)).toContain('ORIGINAL_FS_CONTENT');response.end(wire(false))}])
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],originalFilesystem:true},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ try{await service.submit('main','read the file',new AbortController().signal);expect(server.requests).toHaveLength(2)}finally{await service.close();await coordinator.close();await server.close()}
+},30000)
+
+it('owned filesystem denies an unapproved original write before the body',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-fs-deny-'))
+ const target=join(root,'denied.txt')
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'fs-write',function:{name:'apply_patch',arguments:JSON.stringify({patch_content:'*** Begin Patch\n*** Add File: denied.txt\n+SHOULD_NOT_EXIST\n*** End Patch'})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire(true))},async response=>{response.end(wire(false))}])
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],originalFilesystem:true},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ try{
+  await expect(service.submit('main','write the file',new AbortController().signal)).rejects.toThrow('approval required but no answerer registered')
+  expect(server.requests).toHaveLength(1)
+  await expect(import('node:fs/promises').then(fs=>fs.stat(target))).rejects.toMatchObject({code:'ENOENT'})
+ }finally{await service.close();await coordinator.close();await server.close()}
+},30000)
+
+it('owned original workspace write changes instructions before the model continuation',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-fs-write-'))
+ await writeFile(join(root,'AGENTS.md'),'OLD_NATIVE_RULE')
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'fs-write',function:{name:'write',arguments:JSON.stringify({path:'AGENTS.md',text:'NEW_NATIVE_RULE'})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire(true))},async response=>{response.end(wire(false))}])
+ let approvals=0
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],originalFilesystem:true,async mount(ctx){registerApprovalAnswerer(ctx,async()=>{approvals++;return {approved:true}})}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ try{
+  await service.submit('main','update instructions',new AbortController().signal)
+  expect(approvals).toBe(0);expect(server.requests).toHaveLength(2)
+  expect(await import('node:fs/promises').then(fs=>fs.readFile(join(root,'AGENTS.md'),'utf8'))).toBe('NEW_NATIVE_RULE')
+  expect(JSON.stringify(server.requests[1]!.body.messages)).toContain('NEW_NATIVE_RULE')
+ }finally{await service.close();await coordinator.close();await server.close()}
+},30000)
+
+it('owned schedule dispatches an original timer input through the managed service lane',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-schedule-timer-'))
+ const {createScheduleFoldSink}=await import('@i-harness/schedule')
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createScheduleFoldSink},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'schedule-create',function:{name:'schedule_create',arguments:JSON.stringify({prompt:'TIMER_ORIGINAL_INPUT',after_seconds:1})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const delivered=Promise.withResolvers<void>()
+ const hasReminder=(body:unknown)=>((body as {messages?:{role:string;content:unknown}[]}).messages??[]).some(message=>message.role==='user'&&typeof message.content==='string'&&message.content.includes('[SCHEDULE REMINDER]')&&message.content.includes('TIMER_ORIGINAL_INPUT'))
+ const finish=async(response:import('node:http').ServerResponse,request:{body:unknown})=>{if(hasReminder(request.body))delivered.resolve();response.end(wire(false))}
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire(true))},finish,finish])
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:({systemPrompt:'system',tools:[],originalSchedule:true,async mount(ctx){registerApprovalAnswerer(ctx,async()=>({approved:true}))}} as NonNullable<import('../src/service.ts').SessionServiceOptions['managedRuntime']> & {originalSchedule:boolean}),model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ let notifications=0;const off=service.onExecutionState!(()=>{notifications++})
+ try{
+  await service.submit('main','schedule a reminder',new AbortController().signal)
+  await Promise.race([delivered.promise,new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('Scheduled original input did not reach model')),10000))])
+  expect(server.requests.some(request=>hasReminder(request.body))).toBe(true)
+  await service.closeSession('main')
+  const events=(await backend.read('main')).events;const dispatch=events.find(event=>event.type==='schedule/change'&&event.operation==='dispatch')
+  expect(dispatch).toBeDefined();expect(events[dispatch!.seq!+1]).toMatchObject({type:'agent/input/admitted',intent:'system',provenance:{producer:'session.schedule'}});expect(notifications).toBeGreaterThan(0)
+ }finally{off();await service.close();await coordinator.close();await server.close()}
+},30000)
+
+it('stopping during the original filesystem approval await prevents the native write',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-fs-stop-approval-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const wire=`data: ${JSON.stringify({choices:[{delta:{tool_calls:[{index:0,id:'patch',function:{name:'apply_patch',arguments:JSON.stringify({patch_content:'*** Begin Patch\n*** Add File: held.txt\n+MUST_NOT_WRITE\n*** End Patch'})}}]},finish_reason:'tool_calls'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire)}])
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),controller=new AbortController()
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],originalFilesystem:true,async mount(ctx){registerApprovalAnswerer(ctx,async()=>{entered.resolve();await release.promise;return {approved:true}})}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ const turn=service.submit('main','patch',controller.signal).catch(error=>error)
+ try{await entered.promise;controller.abort();release.resolve();await turn;await expect(import('node:fs/promises').then(fs=>fs.stat(join(root,'held.txt')))).rejects.toMatchObject({code:'ENOENT'});expect(server.requests).toHaveLength(1)}
+ finally{release.resolve();await turn;await service.close();await coordinator.close();await server.close()}
+},30000)
+
+it('reentrant execution-state close joins the original queued turn without model work',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-queue-close-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
+ let requests=0,closing:Promise<void>|undefined
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[]},model:{async *stream(){requests++;throw Error('Unexpected request')}},contextWindow:4096,maxOutputTokens:128})
+ const off=service.onExecutionState!(state=>{if(state.sessionId==='main'&&!closing)closing=service.closeSession('main')})
+ try{await service.submit('main','close now',new AbortController().signal);expect(closing).toBeDefined();await closing;expect(requests).toBe(0)}finally{off();await service.close();await coordinator.close()}
+},30000)
+
+it('a throwing request telemetry observer does not orphan or hide the original turn',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-queue-telemetry-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
+ const wire=`data: ${JSON.stringify({choices:[{delta:{content:'done'},finish_reason:'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire)}])
+ const telemetry:import('@i-harness/telemetry').Telemetry={emit(event){if(event.type==='session/request')throw Error('observer failed')},close(){}}
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[]},telemetry,model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ try{await service.submit('main','run',new AbortController().signal);expect(server.requests).toHaveLength(1);await service.closeSession('main')}finally{await service.close();await coordinator.close();await server.close()}
+},30000)
+
+it('owned schedule timer wakes an idle service with the original system input',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-schedule-idle-'))
+ const {createScheduleFoldSink}=await import('@i-harness/schedule')
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createScheduleFoldSink},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'schedule-idle',function:{name:'schedule_create',arguments:JSON.stringify({prompt:'IDLE_TIMER_ORIGINAL',after_seconds:25})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const delivered=Promise.withResolvers<void>(),settled=Promise.withResolvers<void>();let idle=false,firstAt=0,received=false
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{firstAt=Date.now();response.end(wire(true))},async response=>{response.end(wire(false))},async(response,request)=>{expect(idle).toBe(true);const messages=request.body.messages as {role:string;content:unknown}[];expect(messages.some(message=>message.role==='user'&&typeof message.content==='string'&&message.content.includes('[SCHEDULE REMINDER]')&&message.content.includes('IDLE_TIMER_ORIGINAL'))).toBe(true);received=true;delivered.resolve();response.end(wire(false))}])
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],originalSchedule:true,async mount(ctx){registerApprovalAnswerer(ctx,async()=>({approved:true}))}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ const off=service.onExecutionState!(state=>{if(received&&!state.running&&state.queued===0)settled.resolve()})
+ try{
+  await service.submit('main','schedule an idle reminder',new AbortController().signal);idle=true
+  expect(Date.now()-firstAt).toBeLessThan(25000)
+  await Promise.race([delivered.promise,new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('Idle timer did not reach model')),45000))])
+  expect(server.requests).toHaveLength(3);await settled.promise
+  await service.closeSession('main')
+  const events=(await backend.read('main')).events,dispatch=events.find(event=>event.type==='schedule/change'&&event.operation==='dispatch')
+  expect(dispatch).toBeDefined();const admitted=events[dispatch!.seq!+1];expect(admitted).toMatchObject({type:'agent/input/admitted',intent:'system',provenance:{producer:'session.schedule'}})
+  if(!admitted||admitted.type!=='agent/input/admitted')throw Error('Original scheduled admission missing')
+  expect(events.some(event=>event.type==='agent/input/promoted'&&event.inputId===admitted.inputId)).toBe(true)
+ }finally{off();await service.close();await coordinator.close();await server.close()}
+},75000)
+
+it('deleting an owned schedule cancels its original deadline timer',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-schedule-cancel-')),{createScheduleFoldSink}=await import('@i-harness/schedule')
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createScheduleFoldSink},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
+ const wire=(name?:string,args?:unknown)=>`data: ${JSON.stringify({choices:[{delta:name?{tool_calls:[{index:0,id:name,function:{name,arguments:JSON.stringify(args)}}]}:{content:'done'},finish_reason:name?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ let deadline=0
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire('schedule_create',{prompt:'CANCELLED_TIMER',after_seconds:25}))},async(response,request)=>{const messages=request.body.messages as {role:string;content:string}[];const result=messages.find(message=>message.role==='tool'&&message.content.includes('schedule-1'));if(!result)throw Error('Original schedule creation result missing');deadline=Date.parse(JSON.parse(result.content).scheduledAt);response.end(wire('schedule_delete',{id:'schedule-1'}))},async response=>{response.end(wire())}])
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],originalSchedule:true,async mount(ctx){registerApprovalAnswerer(ctx,async()=>({approved:true}))}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ try{
+  await service.submit('main','create then delete reminder',new AbortController().signal)
+  expect(deadline).toBeGreaterThan(Date.now())
+  await new Promise(resolve=>setTimeout(resolve,Math.max(0,deadline-Date.now()+1000)))
+  expect(server.requests).toHaveLength(3)
+  await service.closeSession('main');const events=(await backend.read('main')).events
+  expect(events.some(event=>event.type==='schedule/change'&&event.operation==='delete')).toBe(true)
+  expect(events.some(event=>event.type==='schedule/change'&&event.operation==='dispatch')).toBe(false)
+ }finally{await service.close();await coordinator.close();await server.close()}
+},75000)
+
+it('closing an owned schedule stops its original deadline timer',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-schedule-stop-')),{createScheduleFoldSink}=await import('@i-harness/schedule')
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createScheduleFoldSink},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'schedule-stop',function:{name:'schedule_create',arguments:JSON.stringify({prompt:'STOPPED_TIMER',after_seconds:25})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ let deadline=0
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(wire(true))},async(response,request)=>{const messages=request.body.messages as {role:string;content:string}[];const result=messages.find(message=>message.role==='tool'&&message.content.includes('schedule-1'));if(!result)throw Error('Original schedule creation result missing');deadline=Date.parse(JSON.parse(result.content).scheduledAt);response.end(wire(false))}])
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],originalSchedule:true,async mount(ctx){registerApprovalAnswerer(ctx,async()=>({approved:true}))}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
+ try{
+  await service.submit('main','schedule then stop',new AbortController().signal);expect(deadline).toBeGreaterThan(Date.now())
+  await service.closeSession('main');await new Promise(resolve=>setTimeout(resolve,Math.max(0,deadline-Date.now()+1000)))
+  expect(server.requests).toHaveLength(2);const events=(await backend.read('main')).events
+  expect(events.some(event=>event.type==='schedule/change'&&event.operation==='dispatch')).toBe(false)
+ }finally{await service.close();await coordinator.close();await server.close()}
+},75000)

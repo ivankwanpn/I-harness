@@ -170,7 +170,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         try { held.assertHeld(); return 'available'; } catch { return 'unavailable'; }
     };
     let publishedStatus = executionStatus();
-    const publishExecutionStatus = () => { const next = executionStatus(); if (next !== publishedStatus) { publishedStatus = next; executionChanges?.invalidated(id); } };
+    const publishExecutionStatus = () => { const next = executionStatus(); if (next !== publishedStatus) { publishedStatus = next; executionChanges?.invalidated(id); } core?.readinessChanged(!sourceFault && (quarantined || recoveryHolds.size > 0)); };
     type SelectedScope=Readonly<{kind:'selected-lane'}>
     const selectedJournal=(backend as PersistenceBackend & {selectedJournal?:{
       resolveCheckedBirth(id:string,owner:typeof held):Promise<unknown>;bindCheckedBirthLane(id:string,owner:typeof held,birth:unknown):SelectedScope;
@@ -758,7 +758,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
       const originalReady=document.assertReady;
       core.bindOwner(document);privateExecutionOwners.set(document,{core,held,ownership,assertCurrent:execution!.assertCurrent,materialize(events){
         if(!Object.hasOwn(document,'view')){const compatibility=core.materialize(events,document);originalDelivery!.bindView(compatibility.view);bindPublicState(compatibility);publicObservation=compatibility}return document;
-      },beginTaskMetadata:beginTaskMetadataUpdate,captureTaskParent:()=>privateTaskParent(),captureRequiredParent:source=>privateTaskParent(source),invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected()},parent(){
+      },beginTaskMetadata:beginTaskMetadataUpdate,captureTaskParent:()=>privateTaskParent(),captureRequiredParent:source=>privateTaskParent(source),invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected();try{execution!.assertCurrent()}catch(error){core.readinessUnavailable(error,true)}},parent(){
         Reflect.apply(originalReady,document,[]);const revision=metadataRevision;
         const check=()=>{
           if(closed||metadataStale||metadataRevision!==revision||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||pending||quarantined)throw new FactRecoveryRequiredError();

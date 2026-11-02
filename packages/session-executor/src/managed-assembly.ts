@@ -11,12 +11,18 @@ import {createExecutionSteerPreparationFactory} from './lifecycle/steer-preparat
 import {createExecutionRuntimeContext} from './lifecycle/execution-runtime-context.ts'
 import {createMainInstructionManager} from './context/instructions/manager.ts'
 import {createProjectInstructionEnvironment} from './context/instructions/index.ts'
+import {mountOwnedFilesystem} from './owned-filesystem.ts'
+import {mountOwnedSchedule} from './owned-schedule.ts'
+import {createExecutionApprovalPolicy} from '@i-harness/guard-approval'
 
 /** Internal explicit-tool construction. The public default assembly keeps its
  * complete compatibility contract until its feature adapters are composed. */
 export interface ManagedExecutionRuntimeOptions extends Pick<ManagedAgentHost,'modelActionTimeoutMs'|'modelActionMaxAttempts'|'reasoningEffort'|'maxParallelToolCalls'|'budgetBinding'|'contextMetadata'|'telemetry'> {
  execution:ManagedExecutionAttachment
  workspace?:string
+ originalFilesystem?:boolean
+ originalSchedule?:boolean
+ scheduleWake?:(inputId:string,text:string)=>void
  prepareInput?:(text:string)=>Promise<string>
  retainConstructionCleanup?:(cleanup:()=>Promise<void>)=>void
  /** Original constructor-created context; CORE authenticates its real hook scope. */
@@ -34,11 +40,12 @@ export function createManagedExecutionRuntime(options:ManagedExecutionRuntimeOpt
  if(!isManagedExecutionAttachment(execution))throw TypeError('Original execution attachment required')
  const ctx=options.context??createContext(),origin=createManagedAgentModelOriginOwner(ctx,execution),model=options.model
  let requestContext=options.requestContext
+ let manager:ReturnType<typeof createMainInstructionManager>|undefined
  if(options.workspace!==undefined&&requestContext===undefined){
   if(!options.retainConstructionCleanup)throw TypeError('Original instruction cleanup retention required')
   const environment=createProjectInstructionEnvironment()
   let runtime:ReturnType<typeof createExecutionRuntimeContext>|undefined
-  let manager:ReturnType<typeof createMainInstructionManager>|undefined
+
   let retired=false
   const cleanup=async()=>{retired=true;await manager?.close();await runtime?.close();await environment.close()}
   options.retainConstructionCleanup(cleanup)
@@ -50,7 +57,11 @@ export function createManagedExecutionRuntime(options:ManagedExecutionRuntimeOpt
   requestContext=manager
  }
  const pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:origin.domain.sessionId}},origin.verifier)
+ if(options.originalFilesystem){if(options.workspace===undefined||!manager)throw TypeError('Original filesystem instruction manager and workspace required');mountOwnedFilesystem({ctx,tools:pair.registry,workspace:options.workspace,domain:origin.domain,manager})}
+ let startSchedule:(()=>Promise<void>)|undefined
+ if(options.originalSchedule){if(!options.retainConstructionCleanup||!options.scheduleWake)throw TypeError('Original schedule retention and wake required');startSchedule=mountOwnedSchedule({execution,domain:origin.domain,ctx,tools:pair.registry,wake:options.scheduleWake,retain:options.retainConstructionCleanup})}
  for(const tool of options.tools)pair.registry.register(tool)
+ if(options.originalFilesystem||options.originalSchedule){if(options.workspace===undefined)throw TypeError('Original policy workspace required');createExecutionApprovalPolicy(ctx,pair.registry,{workspace:options.workspace,workspaceRoots:()=>[options.workspace!]})}
  const inputs=receivedExecutionInputsFor(execution)
  const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,model,systemPrompt:options.systemPrompt,
   ...(options.contextWindow!==undefined?{budget:{contextWindow:options.contextWindow}}:{}),maxOutputTokens:options.maxOutputTokens,requestContext,
@@ -63,7 +74,7 @@ export function createManagedExecutionRuntime(options:ManagedExecutionRuntimeOpt
   inputPreparationFactory:createExecutionSteerPreparationFactory(execution,inputs.inbox,options.prepareInput)})
  const lane=createManagedSessionExecutor({execution,agent})
  let closeFlight:Promise<void>|undefined,closed=false
- const runtime=Object.freeze({execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane,inbox:inputs.inbox,
+ const runtime=Object.freeze({startSchedule,execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane,inbox:inputs.inbox,
   close(){if(this!==runtime)return Promise.reject(TypeError('Original managed runtime required'));if(closed)return Promise.resolve();if(closeFlight)return closeFlight;lane.dispose();const flight=Promise.allSettled([lane.drain()]).then(()=>{closed=true});closeFlight=flight;return flight}})
  return runtime
 }
