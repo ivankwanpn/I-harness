@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest'
 import {createNondurableFactOwner,createSession} from '@i-harness/core-session'
-import {createSpawnSource,inspectOriginalSpawnStart} from '../src/tools/spawn-source.ts'
+import {createSpawnSource,inspectOriginalSpawnStart,inspectManagedSpawnStart} from '../src/tools/spawn-source.ts'
 import {mkdtemp} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createContext} from '@i-harness/core-plugin'
@@ -31,6 +31,8 @@ it('retains the acknowledged private spawn start without a parent view',async()=
  try{
   const receipt=await source.start({type:'subagent/start',version:1,taskId:'private-task',parentSessionId:id,agentPath:'root/a',role:'general',description:'work'})
   const original=inspectOriginalSpawnStart(receipt,execution.owner)
+  expect(inspectManagedSpawnStart(receipt,domain).members).toEqual(original.events)
+  expect(()=>inspectManagedSpawnStart({...receipt},domain)).toThrow()
   expect(original.events).toEqual([expect.objectContaining({type:'subagent/start',taskId:'private-task',seq:original.seqs[0]})])
   expect(()=>inspectOriginalSpawnStart({...receipt},execution.owner)).toThrow()
  }finally{await source.releaseUnused();source.finish();await coordinator.close()}

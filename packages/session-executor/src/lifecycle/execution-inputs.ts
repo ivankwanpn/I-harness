@@ -31,6 +31,7 @@ export interface PrivateTaskRecipient extends PrivateCodeRecipient {
 type PrivateExecPreparation=Extract<import('@i-harness/core-session').DeliveryLaunchPreparation,{kind:'unavailable'}>|(Extract<import('@i-harness/core-session').DeliveryLaunchPreparation,{kind:'bound'}>&{isCurrent():boolean})
 export function isOriginalPrivateExecRecipient(value:object,execution:ManagedExecutionAttachment,domain:ManagedExecutionDomain){const original=privateRecipients.get(value);return !!original&&original.execution===execution&&original.domain===domain}
 export const isOriginalPrivateCodeRecipient=isOriginalPrivateExecRecipient
+export const isOriginalPrivateTaskRecipient=isOriginalPrivateExecRecipient
 export function receivedExecutionInputsFor(execution: ManagedExecutionAttachment) {
   if (!isManagedExecutionAttachment(execution)||!isManagedExecutionOwner(execution.identity, execution.owner)) throw new TypeError('Original execution owner required')
   let inputs = owners.get(execution.owner)
