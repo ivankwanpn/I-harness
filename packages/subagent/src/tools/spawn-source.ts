@@ -7,9 +7,10 @@ import type { RetainedOutcomeSink } from '@i-harness/core-tools'
 import type { TaskRecord } from '../task-protocol.ts'
 import { OriginalTerminalRecoveryError } from '../task-notification.ts'
 import type { TaskRegistry } from '../task/types.ts'
+import {isManagedExecutionDomain,readManagedActionMembers,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 
 export interface OriginalSpawnStart {readonly kind:'original-spawn-start'}
-const spawnStarts=new WeakMap<OriginalSpawnStart,{owner:FactOwner;seqs:readonly number[];events:readonly object[];event:Extract<SessionEvent,{type:'subagent/start'}>}>()
+const spawnStarts=new WeakMap<OriginalSpawnStart,{owner:object;seqs:readonly number[];events:readonly object[];event:Extract<SessionEvent,{type:'subagent/start'}>}>()
 export function inspectOriginalSpawnStart(receipt:OriginalSpawnStart,owner:object) {
  const original=spawnStarts.get(receipt);if(!original||original.owner!==owner)throw Error('Original spawn start required');return original
 }
@@ -29,7 +30,9 @@ export function spawnObservation(base: SpawnIdentity, task: TaskRecord) {
 
 /** Retains the original start disposition, publication identity and real end.
  * Passive outcome reads never join a still-running child. */
-export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void, retainUnused?: (cleanup: { close(): Promise<void> }) => void) {
+export function createSpawnSource(owner: FactOwner | ManagedExecutionDomain['owner'], signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void, retainUnused?: (cleanup: { close(): Promise<void> }) => void, domain?: ManagedExecutionDomain) {
+  if(domain && (!isManagedExecutionDomain(domain) || domain.owner !== owner)) throw new TypeError('Original spawn execution domain required')
+  if(!domain && !('view' in owner)) throw new TypeError('Original spawn fact owner required')
   let requiredTask:RequiredTaskSettlement|undefined,requiredRun:{project:import('../runtime-projection.ts').TerminalProjection;entry:import('../agent-table.ts').ChildAgentEntry;run:Promise<unknown>}|undefined
   const producer=Promise.withResolvers<TaskTerminalizeInput>();let producerInput:TaskTerminalizeInput|undefined;
   const action = owner.beginAction(signal)
@@ -272,10 +275,13 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     async releaseUnused() { unused = true; await closeSource() },
     async start(event: Extract<SessionEvent, { type: 'subagent/start' }>, binding?: SubagentDeliveryLaunchDraft) {
       start ??= action.captureSubagentStart(event, binding)
-      const seqs=committedFactSeqs(await start.admit())
+      const outcome=await start.admit(),seqs=committedFactSeqs(outcome)
       action.assertOpen()
       if(!seqs.length)throw Error('Missing spawn start fact')
-      const receipt=Object.freeze({kind:'original-spawn-start' as const});spawnStarts.set(receipt,Object.freeze({owner,seqs:Object.freeze([...seqs]),events:Object.freeze(seqs.map(seq=>owner.view.events[seq]!)),event:Object.freeze({...event})}));return receipt
+      if(domain && outcome.kind!=='committed')throw Error('Original managed spawn acknowledgment required')
+      const events=domain?readManagedActionMembers(domain,action,start,outcome as import('@i-harness/core-session').FactOutcome):seqs.map(seq=>(owner as FactOwner).view.events[seq]!)
+      if(events.length!==seqs.length || events.some((member,index)=>member.seq!==seqs[index]))throw Error('Original spawn start members unavailable')
+      const receipt=Object.freeze({kind:'original-spawn-start' as const});spawnStarts.set(receipt,Object.freeze({owner,seqs:Object.freeze([...seqs]),events:Object.freeze([...events]),event:Object.freeze({...event})}));return receipt
     },
     async end(event: Extract<SessionEvent, { type: 'subagent/end' }>, output?: ReturnType<typeof spawnObservation>) {
       await projectRequiredTerminal()

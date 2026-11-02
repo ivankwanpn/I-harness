@@ -18,12 +18,14 @@ export function captureTaskChildHistory(caller:OriginalTaskCaller):OriginalTaskC
   assertOriginalTaskCaller(caller)
   const turns=parseTaskHistorySelection((caller.call.args as {fork_turns?:unknown}).fork_turns)
   if(turns==='none')return
+  if('kind' in caller.context)throw Error('Managed task history export unavailable')
   const selection=turns==='all'?{kind:'all' as const}:{kind:'last-turns' as const,count:turns}
-  const view=caller.context.view,parentSessionId=caller.identity.parentSessionId
-  const owner=caller.context.factOwner,cut=captureManagedHistoryCut(view,owner,parentSessionId)
+  const context=caller.context,view=context.view,parentSessionId=caller.identity.parentSessionId
+  const owner=context.factOwner,cut=captureManagedHistoryCut(view,owner,parentSessionId)
   const assertCurrent=()=>{
     assertOriginalTaskCaller(caller)
-    assertManagedHistoryCut(cut,caller.context.view,caller.context.factOwner,parentSessionId)
+    if(caller.context!==context)throw Error('Original task caller context changed')
+    assertManagedHistoryCut(cut,context.view,context.factOwner,parentSessionId)
   }
   assertCurrent()
   const exported=exportConversationSeed(view,{kind:'session',sessionId:parentSessionId},selection)

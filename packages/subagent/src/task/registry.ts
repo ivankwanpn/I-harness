@@ -22,10 +22,11 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const ownedTask = opts.ownedTask
   if(opts.launchContext){
     if(!ownedTask||!isOwnedTaskContext(ownedTask))throw Error('Original task launch parent required')
-    const document=opts.launchContext.factOwner as import('@i-harness/session-persistence').ManagedDocument
+    const context=opts.launchContext
+    const document='kind'in context?context.domain.owner:context.factOwner as import('@i-harness/session-persistence').ManagedDocument
     ownedTask.operations.assertParentSession(ownedTask.operations.parent(document),ownedTask.stateId)
-    const view=Object.getOwnPropertyDescriptor(document,'view')
-    if(!view||!('value'in view)||view.value!==opts.launchContext.view||opts.launchContext.sessionId!==ownedTask.stateId)throw Error('Foreign task launch parent')
+    if('kind'in context){if(context.domain.owner!==document||context.domain.sessionId!==ownedTask.stateId||context.domain.context!==context.context)throw Error('Foreign task launch parent');context.domain.assertCurrent()}
+    else {const view=Object.getOwnPropertyDescriptor(document,'view');if(!view||!('value'in view)||view.value!==context.view||context.sessionId!==ownedTask.stateId)throw Error('Foreign task launch parent')}
   }
   type State = { records: TaskRecords; notifications: TaskNotifications; version: 1 | 2 | 3; phase: 'pending' | 'ready' | 'poisoned' | 'retired'; failure?: { cause: unknown } }
   let currentState: State = { records: new TaskRecords(), notifications: new TaskNotifications(), version: opts.results ? 2 : 1, phase: ownedTask ? 'pending' : 'ready' }
@@ -499,7 +500,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     },
   })
   if(ownedTask&&opts.launchContext)stopObserving=observeColdExecutionWrites(ownedTask.coordinator,id=>{
-    if(id===ownedTask.stateId&&managedExecutionStatus(opts.launchContext!.factOwner as import('@i-harness/session-persistence').ManagedDocument)==='retired')launchPort?.retireAll(new Error('Original task parent retired'))
+    const context=opts.launchContext!;const owner='kind'in context?context.domain.owner:context.factOwner
+    if(id===ownedTask.stateId&&managedExecutionStatus(owner as import('@i-harness/session-persistence').ManagedDocument)==='retired')launchPort?.retireAll(new Error('Original task parent retired'))
   })
   associateTaskSaveOwner(registry, persistence)
   associateColdBindings(registry, () => coldBindings)

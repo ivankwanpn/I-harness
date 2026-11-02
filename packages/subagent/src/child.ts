@@ -44,10 +44,11 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   // Allocate inherited seed and read depth before resolving the model.
   const turns = opts.forkTurns ?? "none"
-  const seedEvents = committed || turns === "none" ? [] : forkTurns(opts.parentSession.events, turns === "all" ? Infinity : turns, opts.parentSession.formatVersion, opts.parentSession.header)
+  if (!committed && !opts.parentSession) throw new TypeError('Original parent session or committed child birth required')
+  const seedEvents = committed || turns === "none" ? [] : forkTurns(opts.parentSession!.events, turns === "all" ? Infinity : turns, opts.parentSession!.formatVersion, opts.parentSession!.header)
 
   let sessionId: string | undefined
-  const childDepth = (opts.parentSession.header?.delegationDepth ?? 0) + 1
+  const childDepth = committed ? committed.request.core.lineage.delegationDepth : (opts.parentSession!.header?.delegationDepth ?? 0) + 1
   const start = committed?.start??{ wall: Date.now(), monotonic: performance.now() }
   const controller = new AbortController()
   const abort = () => controller.abort(opts.signal?.reason)
