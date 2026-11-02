@@ -10,7 +10,7 @@ import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 /** Trusted original resources supplied by the concrete host, with their exact retained cleanup. */
 export interface OwnedShellOptions {
  executionFor?(sessionId:string):ExecExecutionHost
- acquireExecution?(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<ExecExecutionHost>
+ acquireExecution?(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void,execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment):Promise<ExecExecutionHost>
  acquireOutput(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void):OwnedShellOutput|Promise<OwnedShellOutput>
  agentShell:NonNullable<ShellToolDeps['agentShell']>
 }
