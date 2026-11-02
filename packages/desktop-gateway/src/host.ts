@@ -80,6 +80,7 @@ import { resolveWslAgentShell,agentShellPrompt } from '@i-harness/shell'
 import { createOwnedIndexJobBindings } from "./owned-index-jobs.ts"
 import { onOriginalHostAssembly } from "../../session-executor/src/host-assembly-observer.ts"
 import { originalManagedExecutionFor, originalManagedRuntimeFor, prepareOriginalManagedRuntime, retainManagedExecutionCleanup } from '../../session-executor/src/host-managed-execution.ts'
+import { enrollFirstPartySelection } from '../../session-executor/src/first-party-selection.ts'
 import { createManagedWorkflowUi } from './managed-workflow-ui.ts'
 import { approvalPolicyIdentity } from "./approval-policy-identity.ts"
 import { createAutoTitleSettings } from "./auto-title.ts"
@@ -414,6 +415,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       },
     },
   }
+  enrollFirstPartySelection(Object.freeze({options:serviceOptions,prepare:ownedSelection.prepare,refresh:ownedSelection.refresh,release:ownedSelection.release}))
   const service: SessionService = createSessionService(serviceOptions)
   const codeSettings = createCodeModeSettings(settingsPath, service)
   const rawInput = createDesktopInput(coordinator, service, {
