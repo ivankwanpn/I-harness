@@ -340,7 +340,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
-  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>}
+  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>;projectTasks():AgentTaskView[];cancelTask(id:string):'cancellation-requested'|'already-finished'}
   const managedTaskOwners=new Map<string,TaskLifecycle>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
   const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
@@ -1109,8 +1109,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const notify:ParentInputAdmission={taskEvidence(namespace,id){current();return originalRecipient.taskEvidence(namespace,id)},async prepareTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.prepareTaskLaunch(input);current();return result},async admitTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.admitTask(input.evidence,{text:input.text,description:input.description,display:input.display});current();privateDrain?.signal();return result},async admit(){throw new ParentNotificationStoppedError('Original Task delivery evidence required')},wake(id){if(id!==sessionId)return;try{current();privateDrain?.signal()}catch{/* Retired original parent cannot be woken. */}}}
         const taskOptions=await opts.managedRuntime!.ownedTask.options(original,{...taskShell?{shell:taskShell}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()
         taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify,deferRestoredWork:true,getParentModel:()=>{const model=taskOptions.parentModel??(runtime?runtime.selectedModelBinding().model:initialTaskModel);if(!model)throw Error('Original parent model not bound');return model}})
-        const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt,activate=mounted.activateRestoredWork,catalogReady=mounted.catalogReady,ready=mounted.ready
-        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready})
+        const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt,activate=mounted.activateRestoredWork,catalogReady=mounted.catalogReady,ready=mounted.ready,projectTasks=mounted.projectTasks.bind(mounted),tableGet=mounted.table.get.bind(mounted.table),kill=mounted.jobs.kill.bind(mounted.jobs)
+        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready,projectTasks,cancelTask(id:string){const entry=tableGet(id);if(entry!==undefined){if(entry.status!=='running')return 'already-finished';entry.controller.abort();return entry.jobId!==undefined?kill(entry.jobId):'cancellation-requested'}return kill(id)}})
         original.retain(taskLifecycle.dispose);await catalogReady;original.assertCurrent()
        }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},opts.managedRuntime!.ownedCode.config)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),...taskMount?{task:taskMount}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
@@ -1731,11 +1731,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     // M49 Task 12: the sessions' task rows — the assembly owns the truth; a
     // session whose assembly does not exist (or was closed) has NO tasks
     // (honest empty, never a fabricated row).
-    tasks: (sessionId) => assemblies.get(sessionId)?.tasks() ?? [],
+    tasks: (sessionId) => assemblies.get(sessionId)?.tasks() ?? managedTaskOwners.get(sessionId)?.projectTasks() ?? [],
     cancelTask: (sessionId, id) => {
       const assembly = assemblies.get(sessionId)
-      if (assembly === undefined) throw new Error(`unknown task: ${id}`)
-      return assembly.cancelTask(id)
+      if (assembly !== undefined) return assembly.cancelTask(id)
+      const managed=managedTaskOwners.get(sessionId);if(managed)return managed.cancelTask(id)
+      throw new Error(`unknown task: ${id}`)
     },
     onAssembly: (hook, options) => {
       if(privateEntries.size)throw Error('Session-shaped callback requires complete compatibility before private acquisition')
