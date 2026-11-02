@@ -1,10 +1,13 @@
 import { types } from 'node:util'
 import type { PersistenceBackend } from './types.ts'
 import {createArtifactPathOwner,type ArtifactPathCapture} from '@i-harness/fs-lock/internal/artifact-path'
+import {isOriginalCanonicalPathOwner} from './canonical-path-resolution.ts'
 export interface OriginalArtifactPaths {root():string;session(id:string):string;document(key:string):string;taskForParent(id:string):string;prepareRoot():Promise<void>;prepareDocumentParents(key:string):Promise<void>;assertOriginal():void}
 export type ArtifactCapture=ArtifactPathCapture & {readonly provisionalKey?:string}
 export interface OriginalArtifactExclusion {session(id:string):ArtifactCapture;document(key:string):ArtifactCapture;taskForParent(id:string):ArtifactCapture;prepareSession(id:string):Promise<void>;prepareDocument(key:string):Promise<void>;assertOriginal():void;settleResources():void}
 const associations=new WeakMap<object,OriginalArtifactExclusion>()
+const canonicalBindings=new WeakSet<object>()
+export function isOriginalCanonicalExclusion(binding:OriginalArtifactExclusion|undefined):boolean{return !!binding&&canonicalBindings.has(binding)}
 // One pure synchronous owner guard can request the same original proof repeatedly.
 // Validate each distinct proof before returning; never retain work across an await.
 type ArtifactAssertion = { capture: ArtifactPathCapture; method: () => void }
@@ -65,6 +68,7 @@ export function associateArtifactPaths(backend:PersistenceBackend,owner:Original
   const ensureRoot=async(c:ArtifactCapture)=>{if(c.kind==='needs-root'){c.assertCurrent();await Reflect.apply(captured.prepareRoot,owner,[]);check()}}
   const binding:OriginalArtifactExclusion=Object.freeze({session(id:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');return capture('session',id)},document(key:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');return capture('document',key)},taskForParent(id:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');return capture('taskForParent',id)},async prepareSession(id:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');await ensureRoot(capture('session',id));const session=capture('session',id);if(session.kind!=='ready')throw Error('Original session parent unavailable');let task=capture('taskForParent',id);if(task.kind!=='ready'){await Reflect.apply(captured.prepareDocumentParents,owner,['task-'+id]);check();session.assertCurrent();task=capture('taskForParent',id)}if(task.kind!=='ready')throw Error('Original task artifact parent unavailable');task.assertCurrent()},async prepareDocument(key:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');await ensureRoot(capture('document',key));let c=capture('document',key);if(c.kind!=='ready'){await Reflect.apply(captured.prepareDocumentParents,owner,[key]);check();c=capture('document',key)}if(c.kind!=='ready')throw Error('Original document parent unavailable');c.assertCurrent()},assertOriginal(){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');check()},settleResources(){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');platform.settleResources()}})
   associations.set(backend,binding)
+  if(isOriginalCanonicalPathOwner(owner))canonicalBindings.add(binding)
 }
 export function artifactPathsFor(backend:PersistenceBackend){const binding=associations.get(backend);binding?.assertOriginal();return binding}
 export type ArtifactExclusionScope = {keys:string[];ready?:boolean;assertCurrent():void}

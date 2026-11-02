@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
 import type { Ownership } from './ownership.ts'
+import {compareOriginalExclusionScopes} from './ownership.ts'
 import type {ManagedExecutionOwner} from '@i-harness/core-session/internal/execution'
 import type { OpenTaskDocumentSession, TaskDocumentWitness, TaskObservation, Confirmation } from './task-document-types.ts'
 import { originalTaskWriteLifetime, type OriginalTaskWriteLifetime } from './task-write-lifetime.ts'
@@ -20,10 +21,10 @@ const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'ab
 const signalAddListener = EventTarget.prototype.addEventListener
 const signalRemoveListener = EventTarget.prototype.removeEventListener
 export function assertOutsideTaskDocumentSessionOperation(ownership: Ownership, id: string) {
-  for (let context = methodContext.getStore(); context; context = context.parent) if (context.ownership === ownership && ownership.exclusionScope([context.id], [context.key]).keys.some(key => ownership.exclusionScope([id], []).keys.includes(key))) throw new Error('TASK_DOCUMENT_CONFLICT')
+  for (let context = methodContext.getStore(); context; context = context.parent) if (context.ownership === ownership && (compareOriginalExclusionScopes(ownership,[context.id],[context.key],[id],[]) ?? ownership.exclusionScope([context.id], [context.key]).keys.some(key => ownership.exclusionScope([id], []).keys.includes(key)))) throw new Error('TASK_DOCUMENT_CONFLICT')
 }
 export function assertOutsideTaskDocumentOperation(owner: object, ids: readonly string[], keys: readonly string[], all = false) {
-  for (let context = methodContext.getStore(); context; context = context.parent) if (context.owner === owner && (all || context.ownership.exclusionScope([context.id], [context.key]).keys.some(key => context.ownership.exclusionScope(ids, keys).keys.includes(key)))) throw new Error('TASK_DOCUMENT_CONFLICT')
+  for (let context = methodContext.getStore(); context; context = context.parent) if (context.owner === owner && (all || (compareOriginalExclusionScopes(context.ownership,[context.id],[context.key],ids,keys) ?? context.ownership.exclusionScope([context.id], [context.key]).keys.some(key => context.ownership.exclusionScope(ids, keys).keys.includes(key))))) throw new Error('TASK_DOCUMENT_CONFLICT')
 }
 export function createTaskDocumentOperations(ownership: Ownership, admission: ReturnType<typeof createBindingObservations>, config: TaskDocumentConfiguration, enqueue: <T>(run: () => Promise<T>) => Promise<T>, processLatches?: ReturnType<typeof createProcessReadLatches>) {
   const parents = new WeakMap<object, Parent>(), parentEligibility = new WeakMap<object, () => void>(), failures = new WeakMap<object, { retry(): Promise<void> }>()

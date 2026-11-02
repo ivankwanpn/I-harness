@@ -1,13 +1,13 @@
 import { associateArchiveReadResources, associateArchiveHistoryPrefixReader } from '@i-harness/session-persistence/internal/archive-read'
 import { createArchiveReadOwner } from './backend/archive-read-owner.ts'
 import { readSessionArchive } from './backend/archive-reader.ts'
-import { associateArtifactPaths, createArtifactCurrentGuard } from '@i-harness/session-persistence/internal/artifact-path'
+import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-harness/session-persistence/internal/artifact-path'
 import { createOriginalNativePrewriteOwner } from '@i-harness/session-persistence/internal/native-fact-writer'
 import { createOriginalTaskNativeStage } from '@i-harness/session-persistence/internal/task-document-operations'
 import {associateOwnedExecutionReader} from './backend/owned-execution-read.ts'
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
-import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
+import { basename, dirname } from "node:path"
 import { canonicalJsonData, validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, validateSubagentHeader, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMetadataUpdate } from "./format.ts"
@@ -134,24 +134,12 @@ const BLANK_PROBE_MAX_BYTES = 1024
 
 export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const nativePrewrite = createOriginalNativePrewriteOwner()
-  const rootPath = resolve(root)
+  const pathResolution = createOriginalJsonlPathResolution(root)
+  const rootPath = pathResolution.rootPath
+  const artifactPath = pathResolution.artifactPath
   const captureIO = createBootstrapCaptureIO()
   const archiveReads = createArchiveReadOwner()
-  const artifactPath = (id: string, suffix: string): string => {
-    const portableId = id.replace(/\\/g, "/")
-    const candidate = resolve(rootPath, `${portableId}${suffix}`)
-    const fromRoot = relative(rootPath, candidate)
-    const outside = posix.isAbsolute(portableId)
-      || win32.parse(id).root !== ""
-      || fromRoot === ".."
-      || fromRoot.startsWith(`..${sep}`)
-      || isAbsolute(fromRoot)
-    if (outside) {
-      throw new Error(`artifact ${JSON.stringify(id)} is outside the JSONL store root`)
-    }
-    return candidate
-  }
-  const filePath = (id: string) => artifactPath(id, ".jsonl")
+  const filePath = pathResolution.session
   async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}, stageIO?:import('./backend/bootstrap-stage.ts').StageLookupIO) {
     const path = filePath(sessionId)
     const namespace=await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
@@ -176,7 +164,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     const birth=raw.subarray(0,boundary+1),decoded=readFactJournal(birth.subarray(end+1),meta.journal!,meta.formatVersion,meta)
     await preserveBootstrapBirth(path,birth,meta,decoded.events,stageIO)
   }
-  const docPath = (key: string) => artifactPath(key, ".doc.jsonl")
+  const docPath = pathResolution.document
   const tombPath = (kind: string, id: string) => artifactPath(`desktop-deleted-${kind}-${createHash("sha256").update(id).digest("hex")}`, ".tombstone")
   async function assertNotDeleted(kind: string, id: string) {
     if (kind === "document") {
@@ -504,32 +492,22 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       for (const path of paths) await unlink(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error })
     },
   }
-  const originalDescriptors = Object.getOwnPropertyDescriptors(backend)
-  const assertOriginal = createArtifactCurrentGuard(() => {
-    for (const key of Object.keys(originalDescriptors)) {
-      const current = Object.getOwnPropertyDescriptor(backend, key), original = originalDescriptors[key]!
-      if (!current || !('value' in current) || current.value !== original.value) throw new Error('PROCESS_READ_UNAVAILABLE')
-    }
+  const artifactOwner = pathResolution.bindBackend(backend, {
+    async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
+    async prepareDocumentParents(key: string) {
+      assertOriginal(); await assertNotDeleted('document', key); assertOriginal()
+      await mkdir(rootPath, { recursive: true }); assertOriginal()
+      await mkdir(dirname(docPath(key)), { recursive: true }); assertOriginal()
+    },
   })
+  const assertOriginal = artifactOwner.assertOriginal
   associateArchiveReadResources(backend,archiveReads.association)
   nativePrewrite.associate(backend, assertOriginal)
   associateOwnedExecutionReader(backend,{assertOriginal,filePath,assertNotDeleted,archive:archiveReads,
     register(id,held){trackHeaderOwner(id,held);if(hasTrackedHeaderDebt(id,held))throw Error('Owned dependency birth cleanup unresolved')},
     qualify:(id,held,prefix)=>assertPublicBootstrap(id,false,prefix,trackedStageIO(id,held)),
     settleBirth:(id,held)=>settleTrackedHeaderIO(id,held)})
-  associateArtifactPaths(backend, Object.freeze({
-    root() { assertOriginal(); return rootPath },
-    async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
-    session(id: string) { assertOriginal(); return filePath(id) },
-    document(key: string) { assertOriginal(); return docPath(key) },
-    taskForParent(id: string) { assertOriginal(); return docPath('task-' + id) },
-    async prepareDocumentParents(key: string) {
-      assertOriginal(); await assertNotDeleted('document', key); assertOriginal()
-      await mkdir(rootPath, { recursive: true }); assertOriginal()
-      await mkdir(dirname(docPath(key)), { recursive: true }); assertOriginal()
-    },
-    assertOriginal,
-  }))
+  associateArtifactPaths(backend, artifactOwner)
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
     async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
   associateArchiveHistoryPrefixReader(backend,proof=>{assertOriginal();return capability.qualifiedHistoryPrefix(proof)})
