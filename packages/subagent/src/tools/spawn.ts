@@ -149,8 +149,10 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         const preparation = exec.resultConsumer !== 'code' && exec.session === deps.parentSession
           && exec.sessionId === deps.childSessions?.parentSessionId && deps.notificationNamespace && exec.callEventSeq !== undefined
           ? await deps.parentNotify?.prepareTaskDelivery?.({ sessionId: exec.sessionId!, namespace: deps.notificationNamespace, taskId: task.id, callSeq: exec.callEventSeq }) : undefined
+        if (preparation?.kind === 'bound') originalSlot?.acknowledgeDelivery(preparation)
         if (preparation?.kind === 'bound') unregisterDelivery = deps.registerDeliverySource?.(task.id, source)
-        await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) }, preparation?.kind === 'bound' ? preparation.binding : undefined)
+        const startReceipt=await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) }, preparation?.kind === 'bound' ? preparation.binding : undefined)
+        originalSlot?.acknowledgeStart(startReceipt)
         if (preparation?.kind === 'bound' && delivery === 'tool') source.bindHandoff(deps.tasks.bindForegroundHandoff(task.id))
         const birth=originalSlot?await bootstrapTaskChild(originalSlot,deps,declared,host!):undefined
         const executed = await spawnChild({
@@ -202,6 +204,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           validateBeforeLaunch: source.assertLaunch,
           onPublished: source.published,
           onSettled: async (info) => {
+
             source.settling()
             // M26-D1: settle → terminalize（interrupt 中止的初始 turn 視為 cancelled——
             // 被等待的回答不會到來；後續 followup 沿用 M9 job 流，不再入本 task）。

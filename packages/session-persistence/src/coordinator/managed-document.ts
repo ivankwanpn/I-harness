@@ -80,7 +80,7 @@ export function originalManagedExecution(document:ManagedDocument,ownership:Owne
 export function managedExecutionStatus(document: ManagedDocument): 'available' | 'unavailable' | 'retired' {
     return executionStatuses.get(document)?.() ?? 'unavailable';
 }
-const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
+const readyOwners = new WeakMap<object, { ownership: Ownership; invalidateMetadata(revision:object):void; captureTaskParent():TaskParentReadiness;beginTaskMetadata():TaskMetadataUpdate; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead; captureRequiredParent(source: import('@i-harness/core-session').SettlementFacts): Readonly<{view:SessionView;assertCurrent():void;assertOriginal():void;assertTask14Ready():void;joinIssuedWriter():Promise<void>;acquireWriter():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>>}>; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void; assertOriginal():void; assertTask14Ready(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
 type RestoredStage = (events: readonly import('@i-harness/core-session').SessionEventView[], readCurrentEvent:(index:number)=>import('@i-harness/core-session').SessionEventView|undefined)=>{install(batch:ReturnType<typeof encodeFactBatch>,receipt:FactReceipt):void}
 const restoredStages = new WeakMap<ManagedDocument, RestoredStage>()
 /** Only the actual managed constructor/ownership association may bind its read fold. */
@@ -112,6 +112,14 @@ export function retainSelectedSourceRead(document:ManagedDocument,ownership:Owne
     const original=readyOwners.get(document);
     if(!original||original.ownership!==ownership||typeof onRevoke!=='function')throw new FactRecoveryRequiredError();
     return original.retainSelected(onRevoke);
+}
+/** Resolve the captured caller owner through this coordinator's original factory. */
+export function retainTaskSourceRead(owner:object,view:SessionView,ownership:Ownership,onRevoke:()=>void):SelectedSourceRead {
+ const original=readyOwners.get(owner)
+ if(!original||original.ownership!==ownership)throw new FactRecoveryRequiredError()
+ const witness=original.retainSelected(onRevoke)
+ try { if(witness.document!==owner||witness.view!==view)throw new FactRecoveryRequiredError();witness.assertCurrent();return witness }
+ catch(error){witness.unsubscribe();throw error}
 }
 /** Original owner invalidation; no caller can install a replacement witness. */
 export function invalidateManagedMetadataWitness(document:ManagedDocument,ownership:Ownership,revision:object) {
@@ -474,7 +482,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             const inputMembers:OriginalExecutionCaptureHooks={capture:(group,commands)=>inputHooks!.capture(group,commands),forward:(original,commands)=>inputHooks!.forward(original,commands)};
             const source = createReceivedInputSource(drain, {
                 ...(core?{captureMembers:inputMembers}:{}),
-                owner, deliveryControl,
+                owner, deliveryControl, document, view:state?.view,
                 guarded(checkCurrent) {
                     const guarded = {...required,source:{},assertSource() {source.assertHeld();if(!checkCurrent())throw Object.assign(new Error("FACT_PRECONDITION_STALE"),{code:"FACT_PRECONDITION_STALE"})}};
                     return {...(core?{captureMembers:inputMembers}:{}),assertHeld:held.assertHeld,admit:group=>{sourceDispositions.delete(group);return admit(group,guarded,true)},reconcile:key=>document.reconcile(key),status:group=>sourceDispositions.get(group),quarantineCapture:failSource};

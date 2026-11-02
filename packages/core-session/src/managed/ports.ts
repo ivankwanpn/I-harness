@@ -93,6 +93,7 @@ export interface CapturedSettlementFact<Outcome = FactOutcome> extends CapturedA
 export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
   readonly owner?: Readonly<import("./types.ts").OwnerToken>
   captureDeliveryOpen(event:Extract<import("../events/delivery.ts").DeliveryGenerationEvent,{op:"open"}>,checkCurrent:()=>boolean):CapturedSettlementFact<Outcome>
+  captureTaskDeliveryOpen?(event:Extract<import("../events/delivery.ts").DeliveryGenerationEvent,{op:"open"}>,checkCurrent:()=>boolean,binding:{recipientSessionId:string;sourceNamespace:string;sourceId:string;callSeq:number}):CapturedSettlementFact<Outcome> & { preparation(): import('../events/delivery.ts').DeliveryLaunchPreparation }
   captureDeliveryAdmission(receipt:Omit<import("../events/delivery.ts").DeliveryReceivedEvent,"seq">,admitted:Event<"agent/input/admitted">,checkCurrent:()=>boolean):CapturedSettlementFact<Outcome>
   captureDeliveryClose(event:Extract<import("../events/delivery.ts").DeliveryGenerationEvent,{op:"close"}>):CapturedSettlementFact<Outcome>
   close(): Promise<void>

@@ -1,3 +1,4 @@
+import {inspectTaskChildSource} from '@i-harness/subagent'
 import type { PrepareTaskChild } from '@i-harness/subagent'
 import type { SessionCoordinator,ExistingSessionBindingObservation,ChildBootstrapCaptureRequest,BootstrapGuards } from '@i-harness/session-persistence'
 import {observationCleanupFor} from '@i-harness/session-persistence/internal/retained-inspection'
@@ -10,6 +11,7 @@ export function createUnmanagedTaskChildHost(options: {coordinator: SessionCoord
  return async input=>{
   if(input.coordinator!==coordinator)throw Error('Foreign task host coordinator')
   input.assertCurrent()
+  if(input.history&&(inspectTaskChildSource(input.history,input.parentSessionId).hasDependencies||inspectTaskChildSource(input.history,input.parentSessionId).hasLegacy||inspectTaskChildSource(input.history,input.parentSessionId).inheritedLegacyUnknown))throw Error('Unsupported unmanaged task semantic history dependencies')
   let debt:ReturnType<typeof observationCleanupFor>,scopeFailure:{cause:unknown}|undefined,running=false,scopeExit:Promise<void>|undefined
   input.retain({async close(){await scopeExit;if(debt){await debt.retry();debt=undefined}}})
   const ids:string[]=[],seen=new Set<string>();let id:string|undefined=input.parentSessionId
@@ -18,8 +20,10 @@ export function createUnmanagedTaskChildHost(options: {coordinator: SessionCoord
   const preflightExit=Promise.withResolvers<void>();scopeExit=preflightExit.promise
   try{await existing({sessionIds:ids,signal:input.signal},async observation=>{check(observation)})}catch(cause){debt=observationCleanupFor(coordinator,cause);scopeFailure={cause};throw cause}finally{preflightExit.resolve()}
   input.assertCurrent()
+  if(input.history&&(inspectTaskChildSource(input.history,input.parentSessionId).hasDependencies||inspectTaskChildSource(input.history,input.parentSessionId).hasLegacy||inspectTaskChildSource(input.history,input.parentSessionId).inheritedLegacyUnknown))throw Error('Unsupported unmanaged task semantic history dependencies')
   return Object.freeze({project:Object.freeze({kind:'unmanaged' as const}),metadata:Object.freeze({}),async beforeResultIssue(){if(running)throw Error('Original task host scope unacknowledged');if(debt)throw scopeFailure?.cause},prepare(request:ChildBootstrapCaptureRequest){
    input.assertCurrent()
+  if(input.history&&(inspectTaskChildSource(input.history,input.parentSessionId).hasDependencies||inspectTaskChildSource(input.history,input.parentSessionId).hasLegacy||inspectTaskChildSource(input.history,input.parentSessionId).inheritedLegacyUnknown))throw Error('Unsupported unmanaged task semantic history dependencies')
    if(request.core.caller.kind!=='task'||request.core.caller.parentSessionId!==input.parentSessionId||request.requestIntent.project.kind!=='unmanaged')throw Error('Foreign unmanaged task request')
    let closed=false
    return {async run<T>(work:(guards:BootstrapGuards)=>Promise<T>):Promise<T>{

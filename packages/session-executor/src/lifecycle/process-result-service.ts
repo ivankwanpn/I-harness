@@ -1,3 +1,4 @@
+import {registerOriginalZeroSourceVerifier} from '../../../context-output/src/legacy/observed-read.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createContextOutputService, type ContextCapture, type ContextOutputService } from '@i-harness/context-output'
 import type { ManagedArtifactRef } from '@i-harness/core-session'
@@ -16,6 +17,7 @@ type Policy = Omit<ServiceOptions, 'authorizeResult'> & {
   sourceFor(sessionId: string): Promise<NonNullable<ContextCapture['source']>>
   genericVisible(sessionId: string, ref: ManagedArtifactRef): Promise<boolean>
   guardedRead?<T>(sessionId: string, run: () => Promise<T>): Promise<T>
+  originalLegacySourceFor?(observation:import('@i-harness/context-output').LegacyReadObservation):{document:import('@i-harness/session-persistence').ManagedDocument;view:import('@i-harness/core-session').SessionView}|undefined
 }
 type Page = { coordinator: SessionCoordinator; id: string; available(): boolean }
 const pages = new AsyncLocalStorage<Page>()
@@ -59,6 +61,7 @@ export function createProcessAwareResultService(policy: Policy) {
     }),
   }); if (policy.orderingCoordinators) requireOriginalLegacyOrdering(service); for (const { coordinator, registration } of registrations) commitOriginalLegacyOrdering(service, registration, coordinator) }
   catch (failure) { for (const { registration } of registrations) registration.cancel(); throw failure }
+  registerOriginalZeroSourceVerifier(service,policy.originalLegacySourceFor??(()=>undefined))
   {
     const read = service.readResult.bind(service), exec = service.readExecResult.bind(service)
     const admitted = <T>(id: string, run: () => Promise<T>) => {

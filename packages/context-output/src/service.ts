@@ -1,3 +1,4 @@
+import {qualifyOriginalZeroSource,registerOriginalZeroSourceService} from './legacy/observed-read.ts'
 import { associateManagedResultRefusal } from './artifact/result-capabilities.ts'
 import { captureResultTargetIds } from '../../session-persistence/src/coordinator/result-revocation-data.ts'
 import { fields, captureTarget } from './artifact/transfer-codec.ts'
@@ -260,7 +261,7 @@ export function revokeColdSelectedQualifications(service: ContextOutputService, 
 }
 /** Private core-service association; wrappers must forward this original closure. */
 export function acquireSelectedMetadata(service:ContextOutputService,observation:LegacyReadObservation) {
-  const owner=selectedMetadataOwners.get(service);if(!owner)throw Error('Original context service required');return owner.acquire(observation)
+  const owner=selectedMetadataOwners.get(service);if(!owner)throw Error('Original context service required');qualifyOriginalZeroSource(service,observation);return owner.acquire(observation)
 }
 export function selectedMetadataCleanupFor(service:ContextOutputService,error:unknown) {return selectedMetadataOwners.get(service)?.cleanupForError(error)}
 
@@ -1064,7 +1065,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     let selected!:SelectedMetadataRecord
     const settle=(original:ContextStore,stillOwed:()=>boolean=()=>true)=>gate.exclusive(undefined,async lease=>{gate.assertLease(lease,'exclusive');if(!stillOwed())return;if(closedSelectedStore===original){acknowledgeSelectedAcquisitions(original);return}if((store??candidate)!==original)throw Error('Original metadata store changed');await original.joinLegacyFiles();acknowledgeSelectedAcquisitions(original)})
     let originalReader:SelectedMetadataOwner
-    try { originalReader=await createSelectedMetadata(observation,withRead,settle,assertOpen,()=>selectedReaders.delete(selected)) }
+    try { originalReader=await createSelectedMetadata(observation,withRead,settle,assertOpen,()=>selectedReaders.delete(selected),service) }
     catch(error) {
       const original=acquisitionStore??store??candidate
       if(original)try{await settle(original)}catch(cleanup){const debt:SelectedAcquisitionDebt={store:original,settled:false,failure:new AggregateError([error,cleanup],'Original selected metadata cleanup unresolved'),cleanup:Object.freeze({async retry(){if(debt.settled)return;await settle(original,()=>!debt.settled)}})};selectedAcquisitionDebts.add(debt);throw debt.failure}
@@ -1097,5 +1098,6 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     assertManifestService();querying=true
     try{artifacts.assertOriginalManifestScope(scope);assertManifestService()}finally{querying=false}
   })
+  registerOriginalZeroSourceService(service,assertOpen)
   return service
 }
