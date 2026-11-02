@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/owned-plan.ts","src/owned-default-surface.ts","test/owned-default-surface.test.ts","test/owned-plan-recovery.test.ts"]}

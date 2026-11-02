@@ -1,6 +1,5 @@
 import { receivedExecutionInputsFor } from '../../../session-executor/src/lifecycle/execution-inputs.ts';
 import { isStrictFactData } from '@i-harness/core-session';
-import { registryRequiresInstructionOrigin } from '@i-harness/core-tools';
 import { createManagedExecutionDomain, isManagedExecutionSource, assertManagedActionCurrent, getManagedExecutionAdmissionWait, readManagedActionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
 import { canonicalJsonData, type FactOutcome, type CapturedActionFact, type ManagedAction, type SettlementFacts } from '@i-harness/core-session';
 import { assertModelOriginPair, type ConstructorManagedModelOriginVerifier, type ManagedModelOriginExpectation, type PreparedModelOriginDriver } from '@i-harness/core-tools/model-origin';
@@ -84,12 +83,12 @@ export function createManagedAgentModelOriginOwner(context: PluginContext, execu
                 }, takeCodeSourceIssuer() {
                     if(this!==permit||codeIssued)throw TypeError('Original Code source issuer required');
                     member.check(expected);
-                    if(expected.name!=='code_exec'||registryRequiresInstructionOrigin(expected.registry))throw TypeError('Original supported Code member required');
+                    if(expected.name!=='code_exec')throw TypeError('Original supported Code member required');
                     codeIssued=true;
                     const recipient=receivedExecutionInputsFor(execution).codeDelivery(domain);
                     let registered=false,captured=false,preparing=false,preparedBinding:string|undefined;
                     const issuer:import('@i-harness/core-tools/model-origin').OriginalCodeSourceIssuer=Object.freeze({
-                        assertAdmissionCurrent(){if(this!==issuer)throw TypeError('Original Code issuer receiver required');member.check(expected);if(registryRequiresInstructionOrigin(expected.registry))throw TypeError('Private instruction-backed Code unsupported')},
+                        assertAdmissionCurrent(){if(this!==issuer)throw TypeError('Original Code issuer receiver required');member.check(expected)},
                         registerCompletion(drain:()=>Promise<void>){if(this!==issuer||registered)throw TypeError('Original Code completion required');issuer.assertAdmissionCurrent();registered=true;return member.action!.registerSettlementSource(drain)},
                         async prepareLaunch(cellId:string,sourceId:string){if(this!==issuer||!registered||preparing)throw TypeError('Original Code launch preparation required');issuer.assertAdmissionCurrent();preparing=true;const prepared=await recipient.prepareCodeLaunch({sessionId:domain.sessionId,callId:expected.callId,callSeq:expected.callEventSeq,cellId,sourceId});issuer.assertAdmissionCurrent();if(prepared.kind!=='bound')throw Object.assign(Error('Private Code launch unavailable'),{reason:prepared.reason});if(prepared.binding.cellId!==cellId||prepared.binding.sourceId!==sourceId||!isStrictFactData(prepared.binding))throw TypeError('Original Code launch binding required');preparedBinding=canonicalJsonData(prepared.binding);return prepared},
                         captureSource(binding:Readonly<import('@i-harness/core-tools/model-origin').CodeSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||!preparedBinding||!isStrictFactData(binding)||canonicalJsonData(binding)!==preparedBinding||binding.recipientSessionId!==domain.sessionId||binding.callSeq!==expected.callEventSeq||binding.sourceNamespace!=='code'||binding.delivery!=='tool')throw TypeError('Original Code source binding required');issuer.assertAdmissionCurrent();captured=true;return member.action!.captureCodeDeliverySource({type:'agent/delivery-source',version:1,kind:'code',...binding},()=>{try{issuer.assertAdmissionCurrent();return recipientCurrent()}catch{return false}})},

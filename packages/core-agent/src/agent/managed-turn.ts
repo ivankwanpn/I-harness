@@ -193,6 +193,7 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                         const stream = createModelStep({ facts: action.facts, sourceFacts: source, telemetry: host.telemetry, streamSource: { eventCount: () => host.execution.observe().eventCount, publish: event => publishManagedExecutionTransient(host.domain, source, event) } }, reasoning, async (event: Extract<LLMStreamEvent, {
                             type: 'tool_call';
                         }>) => {
+                            for (;;) { const wait=getManagedExecutionAdmissionWait(host.domain,action,signal); if(!wait)break; await wait }
                             let callId = event.call.id ?? `call_${++callOrdinal}`;
                             if (event.call.id && host.execution.observe().hasToolCallId(callId))
                                 throw Error(`duplicate provider tool call id: ${callId}`);

@@ -80,6 +80,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
         bindAction(originalFacts: FactPorts<FactOutcome>, originalSource: SettlementFacts<FactOutcome>) { facts = originalFacts; source = originalSource; },
         acknowledge(event: ExchangeAcceptedEventV2) { accepted.add(event); },
         async capture(action: ManagedAction<FactOutcome>, signal: AbortSignal = action.signal) {
+          for (;;) {
             for (;;) {
                 signal.throwIfAborted();
                 const wait = getManagedExecutionAdmissionWait(host.domain, action, signal);
@@ -90,6 +91,13 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
             const hooks = host.hooks.capture(), lease = await host.execution.prepareRequest(action);
             leases.add(lease);
             try {
+                const afterPrepare = getManagedExecutionAdmissionWait(host.domain, action, signal);
+                if (afterPrepare) {
+                    await lease.settle();
+                    leases.delete(lease);
+                    await afterPrepare;
+                    continue;
+                }
                 lease.assertCurrent();
                 host.hooks.assertCurrent(hooks);
                 const result = captureRestoredContextSnapshot(lease.archive, { ownerSessionId: host.domain.sessionId, surface: surface() });
@@ -119,6 +127,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 }
                 throw primary;
             }
+          }
         },
         async refresh(action: ManagedAction<FactOutcome>, expected: RequestEvidence, signal: AbortSignal = action.signal) {
             if (!capturedEvidence.has(expected))
@@ -141,7 +150,7 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                 return { kind: 'unavailable', reason: 'Original context observation is unavailable' };
             }
         },
-        get budgetConfig() { return config.budget; }, get compactConfig() { return config.compact; }, get outputCap() { return surface().maxOutputTokens; },
+        get budgetConfig() { if(!config.budget||!host.modelOverheadTokens)return config.budget;const overheadTokens=host.modelOverheadTokens();if(!Number.isSafeInteger(overheadTokens)||overheadTokens<0)throw RangeError('Invalid live model overhead');return {...config.budget,overheadTokens}; }, get compactConfig() { if(!config.compact||!host.modelOverheadTokens)return config.compact;const overheadTokens=host.modelOverheadTokens();if(!Number.isSafeInteger(overheadTokens)||overheadTokens<0)throw RangeError('Invalid live model overhead');return {...config.compact,overheadTokens}; }, get outputCap() { return surface().maxOutputTokens; },
         get pressurePolicy() { return config.compact ? resolveCompactSpec(config.compact, metadata()?.providerId, metadata()?.modelId) : undefined; },
         get archive() {
             if (!active || !current(active.evidence))

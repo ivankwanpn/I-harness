@@ -9,7 +9,7 @@ import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 import {createExecutionGenerationLifecycle} from './lifecycle/generation-actions.ts'
 import {createExecutionSteerPreparationFactory} from './lifecycle/steer-preparation.ts'
 import {createExecutionRuntimeContext} from './lifecycle/execution-runtime-context.ts'
-import {createMainInstructionManager} from './context/instructions/manager.ts'
+import {createMainInstructionManager,isOriginalAcceptedInstructionOrigin,retainOriginalInstructionCell} from './context/instructions/manager.ts'
 import {createProjectInstructionEnvironment} from './context/instructions/index.ts'
 import {mountOwnedFilesystem} from './owned-filesystem.ts'
 import {mountOwnedSchedule} from './owned-schedule.ts'
@@ -61,6 +61,7 @@ export interface ManagedExecutionRuntimeOptions extends Pick<ManagedAgentHost,'m
  autoCompactionEnabled?:ManagedAgentHost['autoCompactionEnabled']
  maxOutputTokens?:number
  requestContext?:ManagedAgentHost['requestContext']
+ defaultSurface?:OwnedDefaultSurface
  passiveGeneration?:import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
 }
 export interface ManagedExecutionModelBinding {
@@ -80,7 +81,14 @@ export interface ManagedRegistryConstruction {
  assertCurrent():void
  retain(cleanup:()=>void|Promise<void>):void
 }
-export type ManagedRegistryFactory=(original:ManagedRegistryConstruction)=>void|Promise<void>
+export interface OwnedDefaultSurface {
+ systemPrompt():string
+ modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[]
+ modelOverheadTokens():number
+ prepareInput(text:string):Promise<string>
+ reconcileAuthority():Promise<void>
+}
+export type ManagedRegistryFactory=(original:ManagedRegistryConstruction)=>void|OwnedDefaultSurface|Promise<void|OwnedDefaultSurface>
 type ResolvedManagedModel=Pick<ManagedExecutionRuntimeOptions,'model'|'contextWindow'|'maxOutputTokens'|'reasoningEffort'|'budgetBinding'|'contextMetadata'>
 function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManagedModel>){
  const {execution}=options
@@ -103,7 +111,7 @@ function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManag
   instructionRuntime.registerSection('instructions',()=>manager!.text())
   requestContext=manager
  }
- const pair=createToolRegistryWithModelOrigin(ctx,{resultRetention:options.resultRetention,executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:origin.domain.sessionId}},origin.verifier)
+ const pair=createToolRegistryWithModelOrigin(ctx,{resultRetention:options.resultRetention,executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:origin.domain.sessionId},...(manager?{instructionsRequired:true,instructionOriginVerifier:isOriginalAcceptedInstructionOrigin,instructionCellRetainer:retainOriginalInstructionCell}:{})},origin.verifier)
  if(options.originalFilesystem){if(options.workspace===undefined||!manager)throw TypeError('Original filesystem instruction manager and workspace required');mountOwnedFilesystem({ctx,tools:pair.registry,workspace:options.workspace,domain:origin.domain,manager})}
  let startSchedule:(()=>Promise<void>)|undefined
  if(options.originalSchedule){if(!options.retainConstructionCleanup||!options.scheduleWake)throw TypeError('Original schedule retention and wake required');startSchedule=mountOwnedSchedule({execution,domain:origin.domain,ctx,tools:pair.registry,wake:options.scheduleWake,retain:options.retainConstructionCleanup})}
@@ -119,10 +127,11 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
  let closeFlight:Promise<void>|undefined,closed=false
  const close=()=>{onClose?.();if(closed)return Promise.resolve();if(closeFlight)return closeFlight;lane?.dispose();const flight=Promise.allSettled(lane?[lane.drain()]:[]).then(()=>{closed=true});closeFlight=flight;return flight}
  registerClose?.(close)
- const overhead=options.contextWindow===undefined?undefined:approxTokens(typeof options.systemPrompt==='function'?options.systemPrompt():options.systemPrompt)+approxTokens(JSON.stringify(pair.registry.schemas()))
+ const surface=options.defaultSurface
+ const overhead=options.contextWindow===undefined?undefined:surface?surface.modelOverheadTokens():approxTokens(typeof options.systemPrompt==='function'?options.systemPrompt():options.systemPrompt)+approxTokens(JSON.stringify(pair.registry.schemas()))
  const compact=composeCompactConfig(options.compact,options.contextWindow,overhead,diagnosticsFor('mount'))
  const inputs=receivedExecutionInputsFor(execution)
- const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:options.systemPrompt,
+ const agent=createManagedAgent(ctx,{execution,domain:origin.domain,hooks:captureExecutionHookChannel(ctx),modelCallOrigin:origin.bind(pair.registry,pair.driver),tools:pair.registry,get model(){return model},systemPrompt:surface?()=>surface.systemPrompt():options.systemPrompt,...surface?{modelToolSchemas:()=>surface.modelToolSchemas(),modelOverheadTokens:()=>surface.modelOverheadTokens()}:{},
   ...(options.contextWindow!==undefined?{budget:{contextWindow:options.contextWindow,overheadTokens:overhead}}:{}),...(compact?{compact}:{}),summaryFactory,...(options.autoCompactionEnabled!==undefined?{autoCompactionEnabled:options.autoCompactionEnabled}:{}),maxOutputTokens:options.maxOutputTokens,requestContext,
   modelActionTimeoutMs:options.modelActionTimeoutMs,modelActionMaxAttempts:options.modelActionMaxAttempts,get reasoningEffort(){return reasoningEffort},maxParallelToolCalls:options.maxParallelToolCalls,budgetBinding:options.budgetBinding,contextMetadata:options.contextMetadata,telemetry:options.telemetry,modelBindingIdentity:()=>model,
   stepInputs:{claimAtStepBoundary:(facts,prepare,claim)=>inputs.inbox.claimAtStepBoundary(facts,prepare,claim)},
@@ -130,10 +139,10 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
    if(options.passiveGeneration&&!dependencies)throw TypeError('Original generation drain required for passive observation')
    return createExecutionGenerationLifecycle(execution,origin.domain.sessionId,action,undefined,dependencies&&options.passiveGeneration?{...dependencies,passiveGeneration:options.passiveGeneration}:dependencies)
   },
-  inputPreparationFactory:createExecutionSteerPreparationFactory(execution,inputs.inbox,options.prepareInput)})
+  inputPreparationFactory:createExecutionSteerPreparationFactory(execution,inputs.inbox,surface?async text=>{await surface.reconcileAuthority();return surface.prepareInput(text)}:options.prepareInput)})
  lane=createManagedSessionExecutor({execution,agent})
  const originalLane=lane
- const runtime=Object.freeze({startSchedule,execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane:originalLane,inbox:inputs.inbox,
+ const runtime=Object.freeze({startSchedule,prepareInput:surface?async(text:string)=>{await surface.reconcileAuthority();return surface.prepareInput(text)}:options.prepareInput,reconcileAuthority:surface?()=>surface.reconcileAuthority():undefined,execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane:originalLane,inbox:inputs.inbox,
   selectedModelBinding(){if(this!==runtime||closed||closeFlight)throw TypeError('Original open managed runtime required');origin.domain.assertCurrent();const budgetBinding=typeof selectedBinding.budgetBinding==='function'?selectedBinding.budgetBinding():selectedBinding.budgetBinding,contextMetadata=typeof selectedBinding.contextMetadata==='function'?selectedBinding.contextMetadata():selectedBinding.contextMetadata;if(closed||closeFlight)throw TypeError('Original open managed runtime required');origin.domain.assertCurrent();return {...selectedBinding,budgetBinding,contextMetadata}},
   setModelBinding(binding:ManagedExecutionModelBinding,compactRequest?:CompactionRequest){
    if(this!==runtime||closed||closeFlight)throw TypeError('Original open managed runtime required')
@@ -147,7 +156,7 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
    const budgetBinding=captureBindingData(fields.budgetBinding?.value as ManagedExecutionModelBinding['budgetBinding'])
    const contextMetadata=captureBindingData(fields.contextMetadata?.value as ManagedExecutionModelBinding['contextMetadata'])
    const compactData=captureBindingData(compactRequest,true)
-   const overhead=approxTokens(typeof options.systemPrompt==='function'?options.systemPrompt():options.systemPrompt)+approxTokens(JSON.stringify(pair.registry.schemas()))
+   const overhead=surface?surface.modelOverheadTokens():approxTokens(typeof options.systemPrompt==='function'?options.systemPrompt():options.systemPrompt)+approxTokens(JSON.stringify(pair.registry.schemas()))
    const update={budgetBinding,contextMetadata,...(window===undefined?{}:{budget:{contextWindow:window,overheadTokens:overhead},...(compactData===undefined?{}:{compact:{...compactData,contextWindow:window,overheadTokens:compactData.overheadTokens??overhead}})}),...(output===undefined?{}:{maxOutputTokens:output})}
    if(closed||closeFlight)throw TypeError('Original open managed runtime required')
    if(originalLane.isRunning())throw Error('session is busy')
@@ -175,9 +184,19 @@ export async function createManagedExecutionRuntimeWithRegistry(options:Omit<Man
   ...(prepared.manager&&prepared.instructionRuntime?{instructions:{manager:prepared.manager,runtime:prepared.instructionRuntime}}:{}),assertCurrent,
   retain(cleanup){if(!retaining)throw Error('Original construction retention expired');assertCurrent();if(typeof cleanup!=='function')throw TypeError('Original mount cleanup required');options.retainConstructionCleanup(async()=>{await cleanup()})}}
  assertCurrent()
- try{await options.configureRegistry(original)}finally{retaining=false}
+ let defaultSurface:void|OwnedDefaultSurface
+ try{defaultSurface=await options.configureRegistry(original)}finally{retaining=false}
+ if(defaultSurface){
+  const originalSurface=defaultSurface,names=['systemPrompt','modelToolSchemas','modelOverheadTokens','prepareInput','reconcileAuthority'] as const
+  if(types.isProxy(originalSurface))throw TypeError('Original default surface required')
+  const methods=names.map(name=>Object.getOwnPropertyDescriptor(originalSurface,name))
+  if(methods.some(field=>!field||!('value' in field)||typeof field.value!=='function'||types.isProxy(field.value)))throw TypeError('Original default surface methods required')
+  const check=()=>{assertCurrent();for(let i=0;i<names.length;i++)if(Object.getOwnPropertyDescriptor(originalSurface,names[i]!)?.value!==methods[i]!.value)throw Error('Original default surface changed')}
+  const call=(index:number,...args:unknown[])=>{check();return Reflect.apply(methods[index]!.value,originalSurface,args)}
+  defaultSurface=Object.freeze({systemPrompt:()=>call(0) as string,modelToolSchemas:()=>call(1) as import('@i-harness/llm-seam').ToolSchema[],modelOverheadTokens:()=>call(2) as number,async prepareInput(text:string){const value=await call(3,text);check();return value as string},async reconcileAuthority(){await call(4);check()}})
+ }
  assertCurrent();captureExecutionHookChannel(prepared.ctx).capture()
  const resolved=await options.resolveModel()
  assertCurrent();captureExecutionHookChannel(prepared.ctx).capture()
- return finish({...options,...resolved},prepared,options.retainConstructionCleanup,()=>{retired=true})
+ return finish({...options,...resolved,...defaultSurface?{defaultSurface}:{}},prepared,options.retainConstructionCleanup,()=>{retired=true})
 }
