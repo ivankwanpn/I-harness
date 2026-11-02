@@ -239,23 +239,22 @@ export function persistentJobRegistry(
   return {
     ...jobs,
     registerJob(owner, kind, label, id, startedAt, cancel, identity, acquired) {
+      let wrapped: ReturnType<JobRegistry['registerJob']> | undefined
       const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity, registration=>{
         const original=originalJobProjectionFor(registration)
-        if(original)associateJobProjection(registration,persistProjection(original,async()=>{assertJobProjectionCurrent(registration);observe?.(jobs.read(registration.id));await save()},()=>assertJobProjectionCurrent(registration),settleRequiredFacts,()=>waitJobProjectionCurrent(registration)),retainRequiredProjection)
-        acquired?.(registration)
+        const finish=registration.finish
+        wrapped=finish?{...registration,finish(status,output){
+          const previous=jobs.read(registration.id),updated=finish(status,output)
+          if(updated){const next=jobs.read(registration.id);if(previous.status!==next.status||previous.output!==next.output){observe?.(next);void save()}}
+          return updated
+        }}:registration
+        const receipt=wrapped
+        if(original)associateJobProjection(receipt,persistProjection(original,async()=>{assertJobProjectionCurrent(receipt);observe?.(jobs.read(receipt.id));await save()},()=>assertJobProjectionCurrent(receipt),settleRequiredFacts,()=>waitJobProjectionCurrent(receipt)),retainRequiredProjection)
+        acquired?.(receipt)
       })
       observe?.(jobs.read(result.id))
       void save()
-      if(!result.finish)return result
-      const finish=result.finish
-      return {...result,finish(status,output){
-        const previous=jobs.read(result.id),updated=finish(status,output)
-        if(updated) {
-          const next=jobs.read(result.id)
-          if(previous.status!==next.status || previous.output!==next.output){observe?.(next);void save()}
-        }
-        return updated
-      }}
+      return wrapped ?? result
     },
     updateJob(id, patch) {
       // Task 4.4: emit ONLY on an observable change — the wrapper compares the

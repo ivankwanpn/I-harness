@@ -29,6 +29,14 @@ it('retains the exact acquired receipt before a throwing publication callback an
  const project=captureJobProjection(captured!),first=project(terminal('error'));await expect(first).rejects.toBe(cause);expect(project(terminal('error'))).toBe(first);expect(saves).toBe(1);expect(original.read(captured!.id).status).toBe('error')
 })
 
+it('retains the persistent producer before a post-acquire observer failure',()=>{
+ const original=createJobRegistry(),cause=new Error('publication failed');let captured:JobRegistration|undefined,saves=0,observations=0
+ const jobs=persistentJobRegistry(original,async()=>{saves++},()=>{if(++observations===1)throw cause})
+ expect(()=>jobs.registerJob('root','code','one',undefined,undefined,()=>{},undefined,receipt=>{captured=receipt})).toThrow(cause)
+ expect(captured?.finish).toBeTypeOf('function');expect(captured!.finish!('error','failed')).toBe(true)
+ expect(original.read(captured!.id).status).toBe('error');expect(observations).toBe(2);expect(saves).toBe(1)
+})
+
 it('refuses changed original registration fields before terminal mutation or a save',async()=>{
  const original=createJobRegistry();let saves=0,receipt:JobRegistration|undefined;const jobs=persistentJobRegistry(original,async()=>{saves++});jobs.registerJob('root','subagent','one',undefined,undefined,undefined,{agentPath:'root/one'},registration=>{receipt=registration});const project=captureJobProjection(receipt!),id=receipt!.id,before=saves;receipt!.id='foreign'
  expect(()=>project(terminal())).toThrow('registration changed');expect(original.read(id).status).toBe('running');expect(saves).toBe(before);receipt!.id=id
