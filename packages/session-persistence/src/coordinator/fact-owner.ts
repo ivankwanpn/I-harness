@@ -1,4 +1,4 @@
-import { isArtifactCurrentGuard, withArtifactCurrentChecks, withImmediateArtifactCurrentChecks } from './artifact-path-association.ts'
+import { composeOriginalArtifactGuards, isArtifactCurrentGuard, withImmediateArtifactCurrentChecks } from './artifact-path-association.ts'
 import type { OwnerToken } from '@i-harness/core-session'
 import type { HeldFactOwner, IssuingFactOwner } from './fact-types.ts'
 import type { Ownership } from './ownership.ts'
@@ -11,11 +11,10 @@ export function isHeldFactOwner(value: unknown): value is HeldFactOwner {
 }
 export function heldFactOwner(owner: OwnerToken, ownership: Ownership, assertLive: () => void): HeldFactOwner {
   const originalOwnership = originalOwnershipArtifactGuard(ownership, owner.sessionId)
-  const context = Object.freeze({ owner: Object.freeze({ ...owner }), assertHeld() {
-    const check = () => { assertLive(); ownership.assertHeld(owner.sessionId) }
-    if (isArtifactCurrentGuard(assertLive) && originalOwnership) withArtifactCurrentChecks(() => { assertLive(); originalOwnership() })
-    else withImmediateArtifactCurrentChecks(check)
-  } })
+  const assertHeld = isArtifactCurrentGuard(assertLive) && originalOwnership
+    ? composeOriginalArtifactGuards(assertLive, originalOwnership)
+    : () => withImmediateArtifactCurrentChecks(() => { assertLive(); ownership.assertHeld(owner.sessionId) })
+  const context = Object.freeze({ owner: Object.freeze({ ...owner }), assertHeld })
   contexts.add(context)
   return context
 }

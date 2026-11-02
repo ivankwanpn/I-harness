@@ -2,6 +2,8 @@ import { validSettlementEvent, validGenerationEvent, validInputPreparationEvent,
 import { retainSettlementCapture } from './settlement-fact.ts'
 import { createSourceFacts } from './source-facts.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import {types} from 'node:util'
+import {composeOriginalArtifactGuards,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 
 type CloseContext = { source: object; active: boolean; parent?: CloseContext }
 const closeContext = new AsyncLocalStorage<CloseContext>()
@@ -49,10 +51,13 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
     stages = pending.then(() => {}, () => {})
     return pending
   }
-  const assertHeld = () => {
-    operations.assertHeld()
-    if (!active) throw Object.assign(new Error('Settlement source is closed'), { code: 'FACT_CLOSED' })
-  }
+  const heldField=types.isProxy(operations)?undefined:Object.getOwnPropertyDescriptor(operations,'assertHeld')
+  const heldMethod=heldField&&'value'in heldField&&typeof heldField.value==='function'&&isArtifactCurrentGuard(heldField.value)?heldField.value as ()=>void:undefined
+  const assertActive=()=>{if (!active) throw Object.assign(new Error('Settlement source is closed'), { code: 'FACT_CLOSED' })}
+  const assertHeld = heldMethod ? composeOriginalArtifactGuards(
+    createArtifactCurrentGuard(()=>{if(Object.getOwnPropertyDescriptor(operations,'assertHeld')?.value!==heldMethod)throw TypeError('Original settlement ownership assertion changed')}),
+    heldMethod,createArtifactCurrentGuard(assertActive),
+  ) : () => withImmediateArtifactCurrentChecks(()=>{operations.assertHeld();assertActive()})
   const quarantineCapture = () => { failed = true; operations.quarantineCapture() }
   const retained:Parameters<typeof import('./settlement-fact.ts').captureSettlementFact>[1] = { assertHeld, admit: operations.admitCaptured, reconcile: operations.reconcile, status: operations.status, quarantineCapture }
   const records = createSourceFacts(retained)

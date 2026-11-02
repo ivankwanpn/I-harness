@@ -60,3 +60,11 @@ it.each(['accessors','proxy'] as const)('preserves original source constructor f
  createManagedExecutionSource(ports as unknown as Parameters<typeof createManagedExecutionSource>[0])
  expect(calls).toEqual(['entry','id','ownership'])
 })
+
+it('keeps an unclassified settlement ownership getter immediate and flushes before it',async()=>{
+ const {createSettlementSource}=await import('../src/coordinator/settlement-source.ts');let gets=0,effects=0
+ const capture=proof(),operations={get assertHeld(){gets++;expect(capture.calls()).toBe(1);return ()=>{effects++}},async admitCaptured(){throw Error('unused')},async reconcile(){throw Error('unused')},status(){return undefined},quarantineCapture(){},holdRecovery(){},releaseRecovery(){},onCloseRequested(){}}
+ const source=createSettlementSource(async()=>{},operations,()=>{})
+ expect(gets).toBe(0);withArtifactCurrentChecks(()=>{assertArtifactCurrent(capture.capture);source.assertHeld()});expect(gets).toBe(1);expect(effects).toBe(1)
+ await source.close()
+})

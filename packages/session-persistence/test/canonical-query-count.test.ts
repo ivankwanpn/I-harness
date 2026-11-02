@@ -206,3 +206,26 @@ it('flushes original ownership before an unknown liveness callback retargets a n
  })).rejects.toThrow('Original query control and cleanup failed')
  expect(refused).toBe(true)
 })
+it('propagates genuine held ownership through original settlement source guards',async()=>{
+ const {originalOwnershipArtifactGuard}=await import('../src/coordinator/ownership.ts'),{composeOriginalArtifactGuards,isArtifactCurrentGuard}=await import('../src/coordinator/artifact-path-association.ts'),{heldFactOwner}=await import('../src/coordinator/fact-owner.ts'),{createSettlementSource}=await import('../src/coordinator/settlement-source.ts')
+ await methodContexts(async({owner,measure})=>{
+  const original=originalOwnershipArtifactGuard(owner,'left-a')!,held=heldFactOwner({sessionId:'left-a',incarnation:'fixture'},owner,composeOriginalArtifactGuards(original))
+  expect(isArtifactCurrentGuard(held.assertHeld)).toBe(true)
+  const operations={assertHeld:held.assertHeld,async admitCaptured(){throw Error('unused')},async reconcile(){throw Error('unused')},status(){return undefined},quarantineCapture(){},holdRecovery(){},releaseRecovery(){},onCloseRequested(){}}
+  const source=createSettlementSource(async()=>{},operations,()=>{})
+  expect(isArtifactCurrentGuard(source.assertHeld)).toBe(true)
+  expect(measure(()=>{source.assertHeld();source.assertHeld()})).toEqual({captures:0,opens:16})
+  expect(measure(()=>composeOriginalArtifactGuards(source.assertHeld,source.assertHeld)())).toEqual({captures:0,opens:8})
+  const method=operations.assertHeld;let replacements=0;operations.assertHeld=()=>{replacements++}
+  try{expect(()=>source.assertHeld()).toThrow('Original settlement ownership assertion changed');expect(replacements).toBe(0)}finally{operations.assertHeld=method}
+  await source.close();expect(()=>source.assertHeld()).toThrow('Settlement source is closed')
+ })
+})
+it('flushes before an unknown settlement guard retargets the original native path',async()=>{
+ const {originalOwnershipArtifactGuard}=await import('../src/coordinator/ownership.ts'),{withArtifactCurrentChecks}=await import('../src/coordinator/artifact-path-association.ts'),{createSettlementSource}=await import('../src/coordinator/settlement-source.ts');let refused=false
+ await expect(methodContexts(async({owner,root})=>{
+  const guard=originalOwnershipArtifactGuard(owner,'left-a')!,node=probe.nodes.get(root)!,before={...node};let effects=0,callbacks=0
+  const source=createSettlementSource(async()=>{},{assertHeld(){callbacks++;node.id+=1000;guard()},async admitCaptured(){throw Error('unused')},async reconcile(){throw Error('unused')},status(){return undefined},quarantineCapture(){},holdRecovery(){},releaseRecovery(){},onCloseRequested(){}},()=>{})
+  try{expect(()=>withArtifactCurrentChecks(()=>{guard();source.assertHeld();effects++})).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);refused=true}finally{Object.assign(node,before);await source.close().catch(()=>{});Object.assign(node,before)}
+ })).rejects.toThrow('Original query control and cleanup failed');expect(refused).toBe(true)
+})
