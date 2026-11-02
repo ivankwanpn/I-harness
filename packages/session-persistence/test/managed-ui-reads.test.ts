@@ -16,7 +16,7 @@ it('reads physical UI counts and all nonrewound original refs under the held pre
   for(let i=0;i<16;i++)await c.append('a',[{type:'context/result-ref',ref:ref(i)}])
   await c.append('a',[{type:'rewind/point',version:1,targetTurn:0,anchorSeq:18,mode:'all',fileOps:[]}])
   await c.append('a',[{type:'context/result-ref',ref:ref(16)},{type:'todo/write',version:1,items:[]}])
-  const digest='a'.repeat(64),artifact={version:1 as const,id:'ctxv1_'+digest,revision:digest,codec:'text-utf8-v1',encodedBytes:1,contentDigest:digest,completeness:'complete' as const}
+  const digest='a'.repeat(64),artifact={version:1 as const,id:'ctxv1_'+digest,revision:digest,codec:'text-utf8-v1' as const,encodedBytes:1,contentDigest:digest,completeness:'complete' as const}
   await c.append('a',[{type:'tool/call',callId:'artifact-call',name:'read',args:{}},{type:'tool/result',callId:'artifact-call',name:'read',envelope:{version:1,execution:{outcome:'succeeded',dispatch:'dispatched'},preview:'',media:[],retention:{kind:'artifact',ref:artifact}}}])
   execution=await acquireManagedExecution(c,'a');const observation=execution.observe()
   expect([observation.hasConversationMessages,observation.turnCount,observation.todosRevision]).toEqual([true,1,2])
