@@ -1,3 +1,4 @@
+import {createManagedTeamLeadDeliveries} from '../managed-team-delivery.ts'
 import { createTeamDeliveryFacts, teamFactOwner, managedTeamFactOwner } from '../facts.ts'
 import { driveFollowups, ParentNotificationStoppedError, type FollowupDeps, type JobRegistry } from "@i-harness/subagent"
 import type { TeamDeps, TeamSubagentDeps } from "../scheduler.ts"
@@ -17,8 +18,10 @@ export function createTaskDelivery(
   activity: Pick<ReturnType<typeof createActivity>, "notify">,
   isUnmounted: () => boolean,
   originalOwner?: Pick<import('@i-harness/core-session').FactOwner,'beginAction'>,
+  managedTeamOwner?:import('@i-harness/core-session/internal/execution').OriginalTeamProvisioningOwner,
 ) {
   const recordDelivery=createTeamDeliveryFacts()
+  const managedDeliveries=deps.managedParent&&managedTeamOwner?createManagedTeamLeadDeliveries(deps.managedParent.domain,managedTeamOwner,teamId,id=>deps.managedParent!.parent.hasInbox(id)):undefined
   const ensureResident = sub.ensureResident?.bind(sub)
   const openGeneration = sub.followupGeneration?.bind(sub)
   const captureGeneration = sub.captureFollowupGeneration?.bind(sub)
@@ -28,9 +31,19 @@ export function createTaskDelivery(
   const realDeliver = async (targetId: string, messageId: string, content: string, delivery: "quiet" | "wakeup", _signal?: AbortSignal): Promise<DeliveryOutcome> => {
     if (targetId === teamId) {
       const managed=deps.managedParent
-      const hasMessage=()=>managed ? (managed.parent.assertCurrent(),managed.parent.hasInbox(messageId)) : deps.parentSession!.events.some(event=>event.type==='subagent/inbox'&&event.messageId===messageId)
+      const inbox={type:'subagent/inbox' as const,messageId,message:content,provenance:{kind:'child-report' as const,authority:'observation' as const,scope:'turn' as const,producer:'team.delivery'}}
+      if(managed){
+        if(!deps.parentNotify){if(!managed.parent.hasInbox(messageId))try{await recordDelivery(originalOwner??managedTeamFactOwner(managed.domain),inbox)}catch{return queued('target-owned')}try{activity.notify()}catch(error){return consumed('target',{occurred:true,error})}return consumed()}
+        const notify=deps.parentNotify as typeof deps.parentNotify & {admitTeamDelivery?:(evidence:Parameters<Parameters<NonNullable<typeof managedDeliveries>['deliver']>[1]>[0])=>Promise<unknown>}
+        if(!managedDeliveries||!notify?.admitTeamDelivery)return queued('target-owned')
+        try{await managedDeliveries.deliver(inbox,evidence=>notify.admitTeamDelivery!(evidence))}
+        catch{return queued('target-owned')}
+        try{activity.notify()}catch(error){return consumed('target',{occurred:true,error})}
+        return consumed()
+      }
+      const hasMessage=()=>deps.parentSession!.events.some(event=>event.type==='subagent/inbox'&&event.messageId===messageId)
       if (!hasMessage()) {
-        try { await recordDelivery(originalOwner ?? (managed ? managedTeamFactOwner(managed.domain) : teamFactOwner(deps.parentSession!,deps.factOwner)), { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } }) }
+        try { await recordDelivery(originalOwner ?? teamFactOwner(deps.parentSession!,deps.factOwner), inbox) }
         catch { return queued('target-owned') }
       }
       if (deps.parentNotify) {
@@ -98,5 +111,5 @@ export function createTaskDelivery(
     } } catch (error) { return consumed('target', { occurred: true, error }) }
     return consumed()
   }
-  return realDeliver
+  return Object.assign(realDeliver,{close:()=>managedDeliveries?.close()??Promise.resolve()})
 }

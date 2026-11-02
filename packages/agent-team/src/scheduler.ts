@@ -180,6 +180,7 @@ export async function mountAgentTeams(
   let activity: ReturnType<typeof createActivity> | undefined
   let lead: ReturnType<typeof createTeamFacts> | undefined
   let factsCleanup: (() => Promise<void>) | undefined
+  let deliveryCleanup:(()=>Promise<void>)|undefined,deliveryClosed=false
   let factsClosed = false, toolsClosed = false, roleClosed = false, parentClosed = !managed
   const teamBirths=new Set<import('@i-harness/subagent').TeamChildBirthAttempt>()
   const coldResources=new Set<{close():Promise<void>}>()
@@ -208,9 +209,10 @@ export async function mountAgentTeams(
         await recoveryFlight?.catch(()=>{})
         try { await completions?.joinCompletions() }
         catch (error) { failures.push(...(error instanceof AggregateError ? error.errors : [error])) }
+        try{if(!deliveryClosed){await deliveryCleanup?.();deliveryClosed=true}}catch(error){failures.push(error)}
         for(const resource of coldResources)try{await resource.close();coldResources.delete(resource)}catch(error){failures.push(error)}
         for(const birth of teamBirths)try{await birth.close();teamBirths.delete(birth)}catch(error){failures.push(error)}
-        try { if (!factsClosed && teamBirths.size===0 && coldResources.size===0) { await factsCleanup?.(); factsClosed = true } } catch (error) { failures.push(error) }
+        try { if (!factsClosed && deliveryClosed && teamBirths.size===0 && coldResources.size===0) { await factsCleanup?.(); factsClosed = true } } catch (error) { failures.push(error) }
         // Sealed accepted acquisitions have now finished publication or failed.
         // Freeze membership once, retaining exact entries and phase bits on retry.
         children ??= [...deps.subagents.table.entries()].filter(([path]) => path.startsWith('lead/')).map(([path, entry]) => ({
@@ -240,7 +242,7 @@ export async function mountAgentTeams(
         }
         try { if (!toolsClosed) { await toolMount?.close(); toolsClosed = true } } catch (error) { failures.push(error) }
         try { if (!roleClosed) { await removeGeneratedRole(); roleClosed = true } } catch (error) { failures.push(error) }
-        try { if (!parentClosed && coldResources.size===0) { await managed!.parent.close(); parentClosed=true } } catch(error) { failures.push(error) }
+        try { if (!parentClosed && deliveryClosed && coldResources.size===0) { await managed!.parent.close(); parentClosed=true } } catch(error) { failures.push(error) }
         if (factsClosed && children!.length === 0 && toolsClosed && roleClosed && parentClosed) { releaseTeam(teamId); phase = 'closed' }
         else phase = 'recovery'
         if (failures.length) throw Object.assign(new AggregateError(failures, 'Team cleanup incomplete'), { resourcesClosed: phase === 'closed' })
@@ -290,11 +292,12 @@ export async function mountAgentTeams(
     const realMemberStatus = createMemberStatus(teamId, state, sub)
     const memberStatus = deps.memberStatus ?? realMemberStatus
 
-    const realDeliver = createTaskDelivery(teamId, state, deps, sub, teamJobs, activity, isRetired, originalOwner)
+    const realDeliver = createTaskDelivery(teamId, state, deps, sub, teamJobs, activity, isRetired, originalOwner, provisioningOwner)
+    deliveryCleanup=realDeliver.close
     // Boolean overrides confer only their returned disposition; rejection keeps
     // its original value and grants no Team acknowledgement authority.
     const booleanDeliver = deps.deliver
-    const deliver: typeof realDeliver = booleanDeliver
+    const deliver: Parameters<typeof createMailbox>[0]['deliver'] = booleanDeliver
       ? async (...args) => await booleanDeliver(...args)
         ? { kind: 'consumed', via: 'target', sendFailure: { occurred: false } }
         : { kind: 'queued', via: 'bridge-false', sendFailure: { occurred: false } }
