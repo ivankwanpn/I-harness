@@ -1,10 +1,11 @@
 import {expect,it,vi} from 'vitest'
-const journalProbe=vi.hoisted(()=>({unknown:false,unknownReconcile:false,appends:0,reconciles:0}))
+const journalProbe=vi.hoisted(()=>({unknown:false,unknownReconcile:false,appends:0,reconciles:0,titleUnknown:false,titleHold:0}))
 const captureProbe=vi.hoisted(()=>({gate:undefined as undefined|{entered:()=>void;wait:Promise<void>}}))
 const sourceProbe=vi.hoisted(()=>({failClose:false}))
+const titleGuardProbe=vi.hoisted(()=>({active:false}))
 vi.mock('../../session-persistence/src/coordinator/settlement-source.ts',async original=>{const module=await original<typeof import('../../session-persistence/src/coordinator/settlement-source.ts')>();return {...module,createSettlementSource(...args:Parameters<typeof module.createSettlementSource>){const source=module.createSettlementSource(...args),close=source.close.bind(source);source.close=()=>{if(sourceProbe.failClose){sourceProbe.failClose=false;return Promise.reject(false)}return close()};return source}}})
-vi.mock('../../session-persistence/src/coordinator/action-captures.ts',async original=>{const module=await original<typeof import('../../session-persistence/src/coordinator/action-captures.ts')>();return {...module,createActionCaptures(...args:Parameters<typeof module.createActionCaptures>){const captures=module.createActionCaptures(...args);return {...captures,captureMetadata(event:Parameters<NonNullable<typeof captures.captureMetadata>>[0],check?:()=>boolean){const fact=captures.captureMetadata!(event,check);if(event.type!=='goal/change'||event.operation!=='complete'||!captureProbe.gate)return fact;const gate=captureProbe.gate;captureProbe.gate=undefined;return {...fact,async admit(){gate.entered();await gate.wait;return fact.admit()}}}}}}})
-vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async original=>{const module=await original<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...module,createFactJournalBackend(...args:Parameters<typeof module.createFactJournalBackend>){const backend=module.createFactJournalBackend(...args);return {...backend,async appendOwnedBatch(...values:Parameters<typeof backend.appendOwnedBatch>){const result=await backend.appendOwnedBatch(...values);if(journalProbe.unknown&&result.kind==='committed'){journalProbe.unknown=false;journalProbe.appends++;return {kind:'unknown' as const,key:values[3].key}}return result},async reconcileOwnedBatch(...values:Parameters<typeof backend.reconcileOwnedBatch>){journalProbe.reconciles++;if(journalProbe.unknownReconcile){journalProbe.unknownReconcile=false;return {kind:'unknown' as const,key:values[3].key}}return backend.reconcileOwnedBatch(...values)}}}}})
+vi.mock('../../session-persistence/src/coordinator/action-captures.ts',async original=>{const module=await original<typeof import('../../session-persistence/src/coordinator/action-captures.ts')>();return {...module,createActionCaptures(...args:Parameters<typeof module.createActionCaptures>){const captures=module.createActionCaptures(...args);return {...captures,captureMetadata(event:Parameters<NonNullable<typeof captures.captureMetadata>>[0],check?:()=>boolean){const guarded=event.type==='session/title'&&check?()=>{titleGuardProbe.active=true;try{return check()}finally{titleGuardProbe.active=false}}:check;const fact=captures.captureMetadata!(event,guarded);if(event.type==='session/title'&&journalProbe.titleUnknown){journalProbe.titleUnknown=false;return {async admit(){journalProbe.unknown=true;return fact.admit()},reconcile:()=>fact.reconcile(),observe:()=>fact.observe()}}if(event.type!=='goal/change'||event.operation!=='complete'||!captureProbe.gate)return fact;const gate=captureProbe.gate;captureProbe.gate=undefined;return {...fact,async admit(){gate.entered();await gate.wait;return fact.admit()}}}}}}})
+vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async original=>{const module=await original<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();return {...module,createFactJournalBackend(...args:Parameters<typeof module.createFactJournalBackend>){const backend=module.createFactJournalBackend(...args);return {...backend,async appendOwnedBatch(...values:Parameters<typeof backend.appendOwnedBatch>){const result=await backend.appendOwnedBatch(...values);if(journalProbe.unknown&&result.kind==='committed'){journalProbe.unknown=false;journalProbe.appends++;return {kind:'unknown' as const,key:values[3].key}}return result},async reconcileOwnedBatch(...values:Parameters<typeof backend.reconcileOwnedBatch>){journalProbe.reconciles++;if(journalProbe.titleHold>0){journalProbe.titleHold--;return {kind:'unknown' as const,key:values[3].key}}if(journalProbe.unknownReconcile){journalProbe.unknownReconcile=false;return {kind:'unknown' as const,key:values[3].key}}return backend.reconcileOwnedBatch(...values)}}}}})
 vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,open:vi.fn(fs.open)}})
 import {mkdtemp} from 'node:fs/promises'
 import {open} from 'node:fs/promises'
@@ -179,4 +180,197 @@ it('projects a real Todo tool write into the next actual request',async()=>{
   await metadata.close()
   await runtime.close()
  }finally{await cache.closeAll();await coordinator.close();await server.close()}
+},30000)
+
+it('runs owned title through an original action and persists its generation and title',async()=>{
+ const {runOwnedPostTurn}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-real-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const input=entry.execution.owner.beginAction()
+ try{committedFactSeqs(await input.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'Build a queue',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{input.finish()}
+ let requestBody:unknown
+ const server=await createLoopbackProvider('/v1/chat/completions',[async (response,request)=>{requestBody=request.body;response.end(`data: ${JSON.stringify({choices:[{delta:{content:'Queue builder'},finish_reason:'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}`+`\n\ndata: [DONE]\n\n`)}])
+ try{
+  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
+  await runOwnedPostTurn({execution:entry.execution,sessionId:'main',signal:new AbortController().signal,model,selectedClient:()=>model,localTestEnabled:true,titleMaxOutputTokens:32,assertCurrent(){},retainCleanup(){return ()=>{}}})
+  const events=(await backend.read('main')).events
+  expect(entry.execution.observe().metadata.title).toMatchObject({kind:'available',snapshot:{candidate:expect.anything()}})
+  expect(events).toContainEqual(expect.objectContaining({type:'context/action',op:'open',purpose:'title',origin:{kind:'input',seq:1}}))
+  expect(requestBody).toMatchObject({model:'fixture',max_tokens:32})
+  expect(events.filter(e=>e.type==='session/title')).toMatchObject([{title:'Queue builder',source:'provider'}])
+ }finally{await server.close();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title rejects a competing eligible source during held transport',async()=>{
+ const {runOwnedPostTurn}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-stale-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const add=async(text:string)=>{const action=entry.execution.owner.beginAction();try{return committedFactSeqs(await action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text,provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{action.finish()}}
+ await add('first')
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{entered.resolve();await release.promise;response.end(`data: ${JSON.stringify({choices:[{delta:{content:'Old title'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`)}])
+ try{
+  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
+  const running=runOwnedPostTurn({execution:entry.execution,sessionId:'main',signal:new AbortController().signal,model,selectedClient:()=>model,assertCurrent(){},retainCleanup(){return ()=>{}}}).then(()=>null,error=>error)
+  await entered.promise;await add('competing');release.resolve()
+  expect(await running).toBeTruthy()
+  expect((await backend.read('main')).events.filter(e=>e.type==='session/title')).toHaveLength(0)
+ }finally{release.resolve();await server.close();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title issues no request for no message or an explicit empty title',async()=>{
+ const {runOwnedPostTurn}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-empty-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ let calls=0
+ const model={async *stream(){calls++;yield {type:'end' as const}}}
+ const options={execution:entry.execution,sessionId:'main',signal:new AbortController().signal,model,selectedClient:()=>model,assertCurrent(){},retainCleanup(){return ()=>{}}}
+ try{
+  await runOwnedPostTurn(options)
+  const action=entry.execution.owner.beginAction()
+  try{committedFactSeqs(await action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'work',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{action.finish()}
+  committedFactSeqs(await actionMetadataFacts(entry.execution.owner).admit({type:'session/title',title:'',source:'user',messageSeqs:[]}))
+  await runOwnedPostTurn(options)
+  expect(calls).toBe(0)
+  expect((await backend.read('main')).events.filter(e=>e.type==='session/title')).toHaveLength(1)
+ }finally{await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title reconciles the same guarded metadata capture after an unknown acknowledgement',async()=>{
+ const {runOwnedPostTurn}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-ack-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const action=entry.execution.owner.beginAction()
+ try{committedFactSeqs(await action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'work',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{action.finish()}
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(`data: ${JSON.stringify({choices:[{delta:{content:'Work'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`)}])
+ try{
+  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
+  journalProbe.appends=0;journalProbe.reconciles=0;journalProbe.titleUnknown=true
+  await runOwnedPostTurn({execution:entry.execution,sessionId:'main',signal:new AbortController().signal,model,selectedClient:()=>model,assertCurrent(){},retainCleanup(){return ()=>{}}})
+  expect(journalProbe.appends).toBe(1);expect(journalProbe.reconciles).toBe(1)
+  expect((await backend.read('main')).events.filter(e=>e.type==='session/title')).toHaveLength(1)
+ }finally{journalProbe.titleUnknown=false;journalProbe.unknown=false;await server.close();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title retains unresolved metadata cleanup until the same capture reconciles',async()=>{
+ const {createOwnedPostTurnLifetime}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-debt-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const action=entry.execution.owner.beginAction()
+ try{committedFactSeqs(await action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'work',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{action.finish()}
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(`data: ${JSON.stringify({choices:[{delta:{content:'Work'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`)}])
+ const lifetime=createOwnedPostTurnLifetime()
+ try{
+  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
+  journalProbe.appends=0;journalProbe.reconciles=0;journalProbe.titleUnknown=true;journalProbe.titleHold=2
+  await expect(lifetime.run({execution:entry.execution,sessionId:'main',signal:new AbortController().signal,model,selectedClient:()=>model,assertCurrent(){}})).rejects.toBeDefined()
+  await lifetime.close()
+  expect(journalProbe.appends).toBe(1);expect(journalProbe.reconciles).toBeGreaterThanOrEqual(2)
+  expect((await backend.read('main')).events.filter(e=>e.type==='session/title')).toHaveLength(1)
+ }finally{journalProbe.titleUnknown=false;journalProbe.unknown=false;journalProbe.unknownReconcile=false;journalProbe.titleHold=0;await server.close();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title denies publication when its original task is stopped during transport',async()=>{
+ const {runOwnedPostTurn}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-stop-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const action=entry.execution.owner.beginAction()
+ try{committedFactSeqs(await action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'work',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{action.finish()}
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),controller=new AbortController()
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{entered.resolve();await release.promise;response.end(`data: ${JSON.stringify({choices:[{delta:{content:'old'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`)}])
+ try{
+  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
+  const running=runOwnedPostTurn({execution:entry.execution,sessionId:'main',signal:controller.signal,model,selectedClient:()=>model,assertCurrent(){},retainCleanup(){return ()=>{}}}).then(()=>null,error=>error)
+  await entered.promise;controller.abort();release.resolve()
+  expect(await running).toBeTruthy();expect((await backend.read('main')).events.filter(e=>e.type==='session/title')).toHaveLength(0)
+ }finally{release.resolve();await server.close();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title preserves a falsey primary when required generation cleanup fails',async()=>{
+ const {runOwnedPostTurn}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-cleanup-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const action=entry.execution.owner.beginAction()
+ try{committedFactSeqs(await action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'work',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{action.finish()}
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{entered.resolve();await release.promise;response.end(`data: ${JSON.stringify({choices:[{delta:{content:'old'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`)}])
+ let active=true,retained:(()=>Promise<void>)|undefined
+ try{
+  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
+  const running=runOwnedPostTurn({execution:entry.execution,sessionId:'main',signal:new AbortController().signal,model,selectedClient:()=>model,assertCurrent(){if(!active)throw false},retainCleanup(fn){retained=fn;return ()=>{retained=undefined}}}).then(()=>null,error=>error)
+  await entered.promise;active=false;sourceProbe.failClose=true;release.resolve()
+  const error=await running;expect(error).toBeInstanceOf(AggregateError);expect(error.errors[0]).toBe(false);expect(error.errors[1]).toBe(false)
+  await retained!()
+ }finally{sourceProbe.failClose=false;release.resolve();await server.close();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title lifetime close fences publication while transport is held',async()=>{
+ const {createOwnedPostTurnLifetime}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-close-race-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const action=entry.execution.owner.beginAction()
+ try{committedFactSeqs(await action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'work',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{action.finish()}
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),lifetime=createOwnedPostTurnLifetime(),controller=new AbortController()
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{entered.resolve();await release.promise;response.end(`data: ${JSON.stringify({choices:[{delta:{content:'Late title'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`)}])
+ try{
+  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
+  const running=lifetime.run({execution:entry.execution,sessionId:'main',signal:controller.signal,model,selectedClient:()=>model,assertCurrent(){}}).then(()=>null,error=>error)
+  await entered.promise
+  const closing=lifetime.close();release.resolve()
+  await closing
+  expect(controller.signal.aborted).toBe(false)
+  expect(await running).toBeTruthy()
+  expect((await backend.read('main')).events.filter(e=>e.type==='session/title')).toHaveLength(0)
+ }finally{release.resolve();await server.close();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title denies its final metadata capture when currency callback closes lifetime reentrantly',async()=>{
+ const {createOwnedPostTurnLifetime}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-reentrant-close-'))
+ const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main')
+ const action=entry.execution.owner.beginAction()
+ try{committedFactSeqs(await action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'work',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}},()=>true).admit())}finally{action.finish()}
+ const lifetime=createOwnedPostTurnLifetime(),controller=new AbortController()
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{response.end(`data: ${JSON.stringify({choices:[{delta:{content:'Late'},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`)}])
+ let closing:Promise<void>|undefined,guardCalls=0
+ try{
+  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
+  const error=await lifetime.run({execution:entry.execution,sessionId:'main',signal:controller.signal,model,selectedClient:()=>model,assertCurrent(){if(titleGuardProbe.active&&++guardCalls===3)closing=lifetime.close()}}).then(()=>null,error=>error)
+  expect(guardCalls).toBe(3);expect(closing).toBeDefined();await closing
+  expect(controller.signal.aborted).toBe(false)
+  expect(error).toBeTruthy()
+  expect((await backend.read('main')).events.filter(e=>e.type==='session/title')).toHaveLength(0)
+ }finally{await server.close();await cache.closeAll();await coordinator.close()}
+},30000)
+
+it('owned title lifetime preserves a falsey callback error when callback also closes it',async()=>{
+ const {createOwnedPostTurnLifetime}=await import('../src/service/owned-post-turn.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'title-reentrant-falsey-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const cache=createExecutorExecutionCache({coordinator}),entry=await cache.get('main'),lifetime=createOwnedPostTurnLifetime()
+ const model={async *stream(){yield {type:'end' as const}}}
+ let closing:Promise<void>|undefined
+ try{
+  const error=await lifetime.run({execution:entry.execution,sessionId:'main',signal:new AbortController().signal,model,selectedClient:()=>model,assertCurrent(){closing=lifetime.close();throw false}}).then(()=>null,error=>error)
+  expect(error).toBe(false);await closing
+ }finally{await cache.closeAll();await coordinator.close()}
 },30000)

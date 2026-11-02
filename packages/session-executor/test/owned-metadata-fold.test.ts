@@ -70,3 +70,25 @@ it('retains the validated Todo snapshot independently of the input object',()=>{
  const prefix={eventCount:1,bodyBytes:1,prefixDigest:'a'};fold.finishRestore(prefix)
  expect(fold.views.todo.snapshot(prefix)).toEqual({kind:'present',items:[{content:'original',status:'pending'}]})
 })
+
+it('captures only physical eligible title inputs and latest title',()=>{
+ const fold=createOwnedMetadataFold({sessionId:'s',seedLength:0,formatVersion:14})
+ fold.appendValidated([{type:'user/message',text:'first'}, {type:'user/message',text:'hidden',internal:true}, {type:'user/message',text:'second'}, {type:'session/title',title:'',messageSeqs:[],source:'user'}] as any,0)
+ const prefix={eventCount:4,bodyBytes:4,prefixDigest:'title'};fold.finishRestore(prefix)
+ expect(fold.views.title.snapshot(prefix)).toEqual({revision:3,title:{title:'',messageSeqs:[],source:'user',eventSeq:3},candidate:{firstSeq:0,messageSeqs:[0,2],promptText:'first\n\nsecond',fallback:'first'}})
+})
+
+it('bounds prompt with exact separators, keeps all input sequences, and ignores sourced messages',()=>{
+ const fold=createOwnedMetadataFold({sessionId:'s',seedLength:0,formatVersion:14})
+ const text='x'.repeat(3999)
+ fold.appendValidated([{type:'user/message',text}, {type:'user/message',text:''}, {type:'user/message',text:'source',source:'plugin'}, {type:'user/message',text:'tail'}] as any,0)
+ const prefix={eventCount:4,bodyBytes:4,prefixDigest:'bounded'};fold.finishRestore(prefix)
+ expect(fold.views.title.snapshot(prefix)).toEqual({revision:3,title:null,candidate:{firstSeq:0,messageSeqs:[0,1,3],promptText:text+'\n',fallback:'x'.repeat(120)+'...'}})
+})
+
+it('retains no candidate for an empty title source and validates a closed snapshot',()=>{
+ const fold=createOwnedMetadataFold({sessionId:'s',seedLength:0,formatVersion:14})
+ const prefix={eventCount:0,bodyBytes:0,prefixDigest:'empty'};fold.finishRestore(prefix)
+ expect(fold.views.title.snapshot(prefix)).toEqual({revision:0,title:null,candidate:null})
+ expect(fold.views.title.validateSnapshot({revision:0,title:null,candidate:null,extra:true})).toBe(false)
+})

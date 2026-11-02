@@ -60,7 +60,7 @@ export type { ConversationSourceRef, ConversationProvenance, ConversationCall, C
 export { deriveSearchText } from "./projection/search.ts"
 export { derivePlanMode } from "./projection/plan.ts"
 export type { PlanModeView } from "./projection/plan.ts"
-export { deriveSessionTitle } from "./projection/title.ts"
+export { deriveSessionTitle, applySessionTitleProjection } from "./projection/title.ts"
 export type { SessionTitleView } from "./projection/title.ts"
 
 export { toJSONL, assertVersion, fromJSONL, migrate } from "./serialization/jsonl.ts"
