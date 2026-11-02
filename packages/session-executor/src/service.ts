@@ -27,9 +27,10 @@ import { createResidentActivation, type ResidentActivationController } from './l
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { subscribe, validateImages, contextStateFromBudget, isBoundDeliveryInput, isDeliveryExecutable, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
+import { subscribe, validateImages, contextStateFromBudget, isBoundDeliveryInput, isDeliveryExecutable, isManagedFactOwner, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import { receivedInputsFor } from './lifecycle/received-inputs.ts'
+import { createCodeFinalOutputRetention } from './lifecycle/code-final-output-retention.ts'
 import { createDeliveryDrain, isRetryableDeliveryError } from './service/delivery-drain.ts'
 import { readOwnedDeliveryState } from '../../core-session/src/managed/view.ts'
 import { readDeliveryIndex } from '../../core-session/src/conversation/delivery.ts'
@@ -458,6 +459,19 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       return result.kind==='bound'?{...result,isCurrent:()=>current()&&result.isCurrent()}:result
     }
   }
+  function codeFinalOutputFor(id: string, owner: () => SessionAssembly | undefined): NonNullable<AssemblyOptions['codeFinalOutputFor']> {
+    return (factOwner, sessionId, service, sourceFor) => {
+      if (sessionId !== id || factOwner.view.formatVersion !== 14 || !isManagedFactOwner(factOwner.view, factOwner)) return undefined
+      const original = createCodeFinalOutputRetention({ service, sourceFor })
+      return input => {
+        const assembly = owner()
+        if (!assembly || assembly.factOwner !== factOwner || assembly.session !== factOwner.view || assemblies.get(id) !== assembly || closed || closing.has(id) || input.sessionId !== id)
+          throw new ParentNotificationStoppedError()
+        opts.sessionOperation?.assertOpen(id)
+        return original(input)
+      }
+    }
+  }
   function parentNotifyFor(id: string, owner: () => SessionAssembly | undefined): NonNullable<AssemblyOptions["parentNotify"]> {
     if (opts.parentNotify) return opts.parentNotify
     return {
@@ -787,6 +801,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
             prepareExecDelivery: execDeliveryFor(sessionId, () => assembly),
+            codeFinalOutputFor: codeFinalOutputFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
             model: binding.model,
@@ -833,6 +848,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
             prepareExecDelivery: execDeliveryFor(sessionId, () => assembly),
+            codeFinalOutputFor: codeFinalOutputFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
             ...(model !== undefined ? { model } : {}),
@@ -909,6 +925,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             try { await published.drainParentNotifications?.(true) } catch (error) { failures.push(error) }
             try { await delivery.settle() } catch (error) { failures.push(error) }
             try { await delivery.reconcileExecCandidates() } catch (error) { failures.push(error) }
+            try { await delivery.reconcileCodeCandidates() } catch (error) { failures.push(error) }
             if (failures.length) {
               for (const error of failures) d.warn(`[i-harness] original delivery settlement: ${String(error)}`)
               // Select a nominal actual-owner classification directly, never
@@ -916,7 +933,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
               throw failures.find(isRetryableDeliveryError) ?? failures[0]
             }
           },
-          pending: () => published.inbox.pending().filter(input => ['session.delivery.subagent', 'session.delivery.exec'].includes(input.provenance?.producer ?? '')
+          pending: () => published.inbox.pending().filter(input => ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.code'].includes(input.provenance?.producer ?? '')
             && isBoundDeliveryInput(published.session, input.inputId) && isDeliveryExecutable(published.session, input.inputId)).map(input => input.inputId),
           schedule(inputId, settled) {
             if (assemblies.get(sessionId) !== published || closed || closing.has(sessionId) || !published.inbox.isPending(inputId)) return false
@@ -937,7 +954,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (event.type === "agent/input/admitted" || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") {
             notifyExecutionState(sessionId)
           }
-          if (event.type === 'agent/delivery-received' || event.type === 'agent/delivery-generation' || event.type === 'agent/delivery-source' || event.type === 'subagent/end' || event.type === 'exec/end' || event.type === 'agent/delivery-handoff' || event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') deliveryDrain.signal()
+          if (event.type === 'agent/delivery-received' || event.type === 'agent/delivery-generation' || event.type === 'agent/delivery-source' || event.type === 'subagent/end' || event.type === 'exec/end' || event.type === 'code/end' || event.type === 'agent/delivery-handoff' || event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') deliveryDrain.signal()
         }))
         // Hooks fire ONCE per assembly, after registration, inside the shared
         // pending — concurrent racers never double-attach (ApprovalMuxBridge

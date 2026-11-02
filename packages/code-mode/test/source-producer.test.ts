@@ -6,7 +6,7 @@ vi.mock('node:worker_threads', async (load) => {
             constructor(...args: ConstructorParameters<typeof real.Worker>) { worker.calls++; super(...args); }
         } };
 });
-const journal = vi.hoisted(() => ({ hold: false, holdGeneration: false, entered: undefined as (() => void) | undefined, gate: undefined as Promise<void> | undefined, sources: 0, captures: 0, starts: 0, startedKey: undefined as import('@i-harness/core-session').BatchKey | undefined, mode: 'none' as 'none' | 'unknown' | 'refused' | 'temporary' | 'started-unknown', holdUnknown: false, key: '', failedAdmission: undefined as (() => void) | undefined }));
+const journal = vi.hoisted(() => ({ hold: false, holdGeneration: false, entered: undefined as (() => void) | undefined, gate: undefined as Promise<void> | undefined, sources: 0, captures: 0, starts: 0, startedKey: undefined as import('@i-harness/core-session').BatchKey | undefined, mode: 'none' as 'none' | 'unknown' | 'refused' | 'temporary' | 'started-unknown' | 'terminal-unknown' | 'receipt-unknown', holdUnknown: false, key: '', failedAdmission: undefined as (() => void) | undefined }));
 vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts', async (load) => {
     const real = await load<typeof import('../../session-persistence-jsonl/src/backend/fact-journal.ts')>();
     return { ...real, createFactJournalBackend(...args: Parameters<typeof real.createFactJournalBackend>) {
@@ -21,6 +21,17 @@ vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts', async (lo
                             return { kind: 'not-issued' as const, code: 'FACT_PRECONDITION_STALE' as const };
                     }
                     const result = await append(...input);
+                    if (journal.mode === 'receipt-unknown' && Buffer.from(input[3].bytes).toString('utf8').includes('"type":"agent/delivery-received"') && result.kind === 'committed') {
+                        journal.startedKey = input[3].key;
+                        journal.key = input[3].key.batchId;
+                        return { kind: 'unknown' as const, key: input[3].key };
+                    }
+                    if (journal.mode === 'terminal-unknown' && Buffer.from(input[3].bytes).toString('utf8').includes('"type":"code/cell"') && Buffer.from(input[3].bytes).toString('utf8').includes('"state":"completed"') && result.kind === 'committed') {
+                        journal.startedKey = input[3].key;
+                        journal.key = input[3].key.batchId;
+                        journal.entered?.();
+                        return { kind: 'unknown' as const, key: input[3].key };
+                    }
                     if (journal.mode === 'started-unknown' && Buffer.from(input[3].bytes).toString('utf8').includes('"type":"code/cell"') && Buffer.from(input[3].bytes).toString('utf8').includes('"state":"started"') && result.kind === 'committed') {
                         journal.starts++;
                         journal.startedKey = input[3].key;
@@ -87,7 +98,7 @@ vi.mock('../../core-tools/src/code-origin.ts', async (load) => {
             return claim;
         } };
 });
-import { mkdtemp, mkdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, cp, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createContext } from '@i-harness/core-plugin';
 import { createToolRegistry } from '@i-harness/core-tools';
@@ -129,7 +140,7 @@ async function fixture(code = 'text("actual original output")', yieldMs = 60000)
     const mount = registerCodeMode(ctx, pair.registry, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' }, retainText: createCodeTextRetention({ service: output, sessionId: id, sourceFor: async () => ({ sourceId: 'actual-native-source' }) }), finalOutput: createCodeFinalOutputRetention({ service: output, sourceFor: async () => ({ sourceId: 'actual-native-source' }) }) });
     const server = await createLoopbackProvider('/v1/chat/completions', [async (r) => { r.end(wire(true, code, yieldMs)); }, async (r) => { r.end(wire(false)); }]);
     const agent = createAgent(ctx, { session: document.view, sessionId: id, factOwner: document, tools: pair.registry, modelCallOrigin: origin.bind(pair.registry, pair.driver), model: createOpenAICompatibleClient({ apiKey: 'loopback', model: 'fixture', baseUrl: server.baseUrl }), systemPrompt: 'original', generationFactory: (action, deps) => createGenerationLifecycle(document.view, id, action, undefined, deps) });
-    return { id, document, server, mount, tools: pair.registry, run: (signal?: AbortSignal) => agent.run('Execute actual Code once', signal, undefined, undefined, { provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } }), async close() { journal.hold = false; await mount.dispose(); await coordinator.close(); await output.close(); await server.close(); } };
+    return { root, id, document, server, mount, tools: pair.registry, run: (signal?: AbortSignal) => agent.run('Execute actual Code once', signal, undefined, undefined, { provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } }), async close() { journal.hold = false; await mount.dispose(); await coordinator.close(); await output.close(); await server.close(); } };
 }
 it('genuine Code constructor admits one original source and terminal without foreground handoff', async () => {
     worker.calls = journal.sources = 0;
@@ -522,4 +533,95 @@ it.each(['pending', 'settled'] as const)('retains a falsey %s original interrupt
     finally {
         await f.close();
     }
+}, 30000);
+
+it('original yielded Code completion admits one reference-only recipient input', async () => {
+    const f = await fixture('await tools.pause({});text("after yield")', 0), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    f.tools.register({ name: 'pause', description: 'hold the original nested body', inputSchema: { type: 'object' }, async execute() { entered.resolve(); await release.promise; return 'released'; } });
+    try {
+        const running = f.run();
+        await entered.promise;
+        await running;
+        release.resolve();
+        await vi.waitFor(() => expect(f.document.view.events.filter(e => e.type === 'code/end')).toHaveLength(1), { timeout: 5000 });
+        const adapter = (await import('../../session-executor/src/lifecycle/received-inputs.ts')).receivedInputsFor(f.document, f.id).delivery;
+        await adapter.reconcileCodeCandidates();
+        const receipt = f.document.view.events.find(e => e.type === 'agent/delivery-received' && e.key.kind === 'code');
+        expect(receipt).toBeDefined();
+        if (!receipt || receipt.type !== 'agent/delivery-received') throw Error('Missing Code receipt');
+        expect(await adapter.admitCode({ kind: 'code', sourceSeq: receipt.sourceSeq, terminalSeq: receipt.terminalSeq })).toMatchObject({ inputId: receipt.inputId, disposition: 'pending' });
+        await expect(adapter.admitCode({ kind: 'code', sourceSeq: receipt.sourceSeq, terminalSeq: receipt.terminalSeq + 1 })).rejects.toThrow();
+        expect(f.document.view.events.filter(e => e.type === 'agent/delivery-received' && e.key.kind === 'code')).toHaveLength(1);
+        const input = f.document.view.events.find(e => e.type === 'agent/input/admitted' && e.inputId === receipt.inputId);
+        expect(input?.type === 'agent/input/admitted' && Buffer.byteLength(input.text, 'utf8')).toBeLessThanOrEqual(8192);
+        expect(input?.type === 'agent/input/admitted' && input.text).not.toContain('after yield');
+        await (await import('../../session-executor/src/lifecycle/received-inputs.ts')).receivedInputsFor(f.document, f.id).inbox.cancel(receipt.inputId, 'original cancellation');
+        expect(await adapter.admitCode({ kind: 'code', sourceSeq: receipt.sourceSeq, terminalSeq: receipt.terminalSeq })).toMatchObject({ inputId: receipt.inputId, disposition: 'cancelled' });
+        expect(f.document.view.events.filter(e => e.type === 'agent/delivery-received' && e.key.kind === 'code')).toHaveLength(1);
+    } finally { release.resolve(); await f.close(); }
+}, 30000);
+
+it('background terminal UNKNOWN fences original owner and resumes the same capture after native reconciliation', async () => {
+    const f = await fixture('await tools.pause({});text("after unknown")', 0), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), unknown = Promise.withResolvers<void>();
+    f.tools.register({ name: 'pause', description: 'hold original Worker', inputSchema: { type: 'object' }, async execute() { entered.resolve(); await release.promise; return 'released'; } });
+    journal.mode = 'terminal-unknown'; journal.holdUnknown = true; journal.entered = unknown.resolve;
+    try {
+        const running = f.run(); await entered.promise; await running; release.resolve(); await unknown.promise;
+        expect(journal.startedKey).toBeDefined();
+        await vi.waitFor(() => expect(() => f.document.assertReady()).toThrow(), { timeout: 3000 });
+        expect((await f.document.reconcile(journal.startedKey!)).kind).toBe('unknown');
+        journal.holdUnknown = false;
+        expect((await f.document.reconcile(journal.startedKey!)).kind).toBe('committed');
+        await vi.waitFor(() => expect(f.document.view.events.filter(e => e.type === 'code/end')).toHaveLength(1), { timeout: 5000 });
+        expect(f.document.view.events.filter(e => e.type === 'code/cell' && e.state === 'completed')).toHaveLength(1);
+        expect(f.document.view.events.filter(e => e.type === 'agent/delivery-handoff' && e.kind === 'code')).toHaveLength(1);
+    } finally { release.resolve(); journal.holdUnknown = false; journal.mode = 'none'; journal.entered = undefined; await f.close(); }
+}, 30000);
+
+it('Code receipt UNKNOWN reconciles the same original capture and input without replay', async () => {
+    const f = await fixture('await tools.pause({});text("original once")', 0), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    f.tools.register({ name: 'pause', description: 'hold original Worker', inputSchema: { type: 'object' }, async execute() { entered.resolve(); await release.promise; return 'released'; } });
+    try {
+        const running = f.run(); await entered.promise; await running; release.resolve();
+        await vi.waitFor(() => expect(f.document.view.events.filter(e => e.type === 'code/end')).toHaveLength(1), { timeout: 5000 });
+        const adapter = (await import('../../session-executor/src/lifecycle/received-inputs.ts')).receivedInputsFor(f.document, f.id).delivery;
+        journal.mode = 'receipt-unknown'; journal.holdUnknown = true;
+        await expect(adapter.reconcileCodeCandidates()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' });
+        expect(journal.startedKey).toBeDefined();
+        const originalKey = journal.startedKey!.batchId;
+        journal.holdUnknown = false;
+        await adapter.reconcileCodeCandidates();
+        expect(journal.startedKey!.batchId).toBe(originalKey);
+        const receipts = f.document.view.events.filter(e => e.type === 'agent/delivery-received' && e.key.kind === 'code');
+        expect(receipts).toHaveLength(1);
+        expect(f.document.view.events.filter(e => e.type === 'code/end')).toHaveLength(1);
+    } finally { release.resolve(); journal.mode = 'none'; journal.holdUnknown = false; await f.close(); }
+}, 30000);
+
+it('cold service consumes a completed original Code candidate once without starting another Worker', async () => {
+    worker.calls = 0;
+    const f = await fixture('await tools.pause({});text("cold original")', 0), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    f.tools.register({ name: 'pause', description: 'hold original Worker', inputSchema: { type: 'object' }, async execute() { entered.resolve(); await release.promise; return 'released'; } });
+    let closed = false;
+    try {
+        const running = f.run(); await entered.promise; await running; release.resolve();
+        await vi.waitFor(() => expect(f.document.view.events.filter(e => e.type === 'code/end')).toHaveLength(1), { timeout: 5000 });
+        expect(f.document.view.events.filter(e => e.type === 'agent/delivery-received')).toHaveLength(0);
+        const coldRoot = join(f.root, 'cold-sessions');
+        const originalJournal = await readFile(join(f.root, 'sessions', f.id + '.jsonl'));
+        await f.close(); closed = true;
+        await cp(join(f.root, 'sessions'), coldRoot, { recursive: true });
+        await writeFile(join(coldRoot, f.id + '.jsonl'), originalJournal);
+        const coordinator = createJsonlTaskTransitionCoordinator(coldRoot, { lock: { enabled: true } }, taskDocumentStorageContract);
+        const server = await createLoopbackProvider('/v1/chat/completions', [async r => { r.end(wire(false)); }]);
+        const { createSessionService, createDurableSessionLoader } = await import('../../session-executor/src/index.ts');
+        const service = createSessionService({ workspace: f.root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: createOpenAICompatibleClient({ apiKey: 'loopback', model: 'fixture', baseUrl: server.baseUrl }), modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access', codeMode: { mode: 'off' }, contextWindow: 100000 });
+        try {
+            const assembly = await service.assemblyFor(f.id);
+            await vi.waitFor(() => expect(assembly.session.events.filter(e => e.type === 'agent/delivery-received' && e.key.kind === 'code')).toHaveLength(1), { timeout: 5000 });
+            await vi.waitFor(() => expect(server.requests).toHaveLength(1), { timeout: 5000 });
+            expect(worker.calls).toBe(1);
+            expect(assembly.session.events.filter(e => e.type === 'agent/delivery-source' && e.kind === 'code')).toHaveLength(1);
+        } finally { await service.close(); await coordinator.close(); await server.close(); }
+    } finally { release.resolve(); if (!closed) await f.close(); }
 }, 30000);

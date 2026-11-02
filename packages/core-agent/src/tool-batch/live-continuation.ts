@@ -163,6 +163,9 @@ export function takeModelMember(origin:ModelOriginState,proof:object,expected:Mo
     if(expected.name!=='code_exec')throw new Error('Original Code member required')
     const action=member!.state.invocation.action
     if(origin.factOwner.view!==origin.view||origin.factOwner.ownsAction?.(action)===false)throw new Error('Original model action required')
+    const recipient=expected.prepared.exec.sessionId
+    if(!recipient||expected.callEventSeq===undefined)throw Error('Original Code recipient required')
+    if(!receivedInputsFor(origin.factOwner,recipient).delivery.supportsCodeLaunch({view:origin.view,sessionId:recipient,callId:expected.callId,callSeq:expected.callEventSeq}))return undefined
     let captured=false,registered=false,preparing=false,preparedBinding:string|undefined
     const issuer:import('@i-harness/core-tools/model-origin').OriginalCodeSourceIssuer=Object.freeze({
       assertAdmissionCurrent(){if(this!==issuer)throw new Error('Foreign Code issuer receiver');check()},

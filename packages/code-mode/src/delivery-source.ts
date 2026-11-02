@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { committedFactSeqs, FactRecoveryRequiredError, readDeliveries, type CapturedActionFact, type CapturedSettlementFact, type ProducerFactOutcome, type SessionView, type SettlementFacts, type CodeTerminalEvent } from '@i-harness/core-session';
 import type { OriginalCodeSourceIssuer } from '@i-harness/core-tools/model-origin';
-import type { CompletionHandle, CompletionObservation } from './register.ts';
+import { waitOriginalCompletionFinalization, type CompletionHandle, type CompletionObservation } from './register.ts';
 /** One actual Code execute owns this state; neither observation DTOs nor callers enroll it. */
 export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, view: SessionView, drive: () => Promise<void>, cancel: (cellId: string) => Promise<void>, released: () => void) {
     const sourceId = randomUUID(), returned = Promise.withResolvers<void>();
@@ -69,6 +69,12 @@ export function createCodeDeliveryProducer(issuer: OriginalCodeSourceIssuer, vie
             await drive();
             if (!completion)
                 throw new FactRecoveryRequiredError();
+            // Acknowledged background handoff retains the same original cell
+            // until its finalization, without requesting the output source's
+            // close while the Worker is still running. Stop/host close still
+            // enter this original source drain and cancel the cell first.
+            if (wantsHandoff && handoffDone)
+                await waitOriginalCompletionFinalization(completion);
             const observed = await completion.settle();
             await settleHandoff();
             terminal ??= source.delivery.capture(captureTerminal(observed));

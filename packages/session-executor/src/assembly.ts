@@ -239,6 +239,8 @@ export interface AssemblyOptions {
   contextOutput?: ContextOutputService
   contextOutputSettingsPath?: string
   contextOutputSourceFor?: (sessionId: string) => Promise<ContextCapture['source']>
+  /** Internal service-owned publication gate for the original Code mount. */
+  codeFinalOutputFor?: (owner: FactOwner, sessionId: string, service: ContextOutputService, sourceFor: (sessionId: string) => Promise<ContextCapture['source']>) => import('../../code-mode/src/final-output.ts').CodeFinalOutputFactory | undefined
   contextOutputLegacyReadObservation?: LegacyReadObservationRunner
   // M11: the window is NOT part of the host contract — the assembly resolves it
   // (see `CompactionRequest`) and fills it in before handing the engine a config.
@@ -1613,6 +1615,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     })
     if (codeMode.mode !== "off") codeModeMount = mountCodeMode(ctx, tools, {
       ...(opts.contextOutput ? {retainText:createCodeTextRetention({service:opts.contextOutput,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor})}:{}),
+      ...(opts.contextOutput && opts.contextOutputSourceFor && opts.sessionId && opts.codeFinalOutputFor ? { finalOutput: opts.codeFinalOutputFor(factOwner, opts.sessionId, opts.contextOutput, opts.contextOutputSourceFor) } : {}),
       session, factOwner, sessionId: opts.sessionId, config: codeMode,
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
     })

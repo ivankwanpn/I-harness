@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { committedFactSeqs, deliveryInputId, FactRecoveryRequiredError, isManagedFactOwner, isNondurableSession, isStrictFactData, readDeliveries,
   type CapturedSettlementFact, type DeliveryAdmissionReceipt, type DeliveryCloseReceipt, type DeliveryLaunchPreparation,
   type FactOwner, type InputDisplay, type ProducerFactOutcome, type ReceivedInputSource, type SubagentDeliveryEvidence,
-  type SubagentDeliveryKey, type ExecDeliveryEvidence, type ExecDeliveryKey, type DeliverySourceEvent, type DeliveryKey } from '@i-harness/core-session'
+  type SubagentDeliveryKey, type ExecDeliveryEvidence, type ExecDeliveryKey, type CodeDeliveryEvidence, type CodeDeliveryKey, type DeliverySourceEvent, type DeliveryKey } from '@i-harness/core-session'
 import { eligibleExecTerminal } from '../../../core-session/src/events/exec-delivery.ts'
+import { eligibleCodeTerminal, codeTerminalRef } from '../../../core-session/src/events/code-delivery.ts'
 import { readOwnedDeliveryState } from '../../../core-session/src/managed/view.ts'
 import { assertDeliveryIssue } from '../../../core-session/src/managed/delivery-control.ts'
 import { DeliverySuppressedError } from '@i-harness/subagent'
@@ -63,6 +64,20 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
     return pending
   }
   const settleCloses = async () => { for (const record of closes.values()) await settle(record) }
+  const ownHuman = () => {
+    const fence = state().lastFenceSeq() ?? -1
+    const human = owner.view.events.findLast(e => e.type === 'agent/input/admitted' && e.intent === 'user' && !e.synthetic
+      && e.provenance?.kind === 'human' && e.provenance.authority === 'request'
+      && (e.provenance.originSessionId === undefined || e.provenance.originSessionId === recipient)
+      && e.seq! >= (owner.view.header?.seedLength ?? 0) && e.seq! > fence)
+    return { human, fence }
+  }
+  const certifiedCall = (callSeq: number, execCall?: { callId: string; kind?: 'code' }) => {
+    const view = owner.view, call = view.events[callSeq]
+    return !!(call?.type === 'tool/call' && (execCall ? (execCall.kind === 'code' ? ['code_exec'] : ['bash','pwsh','shell']).includes(call.name) && call.callId === execCall.callId : call.name === 'spawn_agent')
+      && call.seq === callSeq && callSeq >= (view.header?.seedLength ?? 0)
+      && view.events.some(e => e.type === 'tool/dispatch' && e.callId === call.callId && e.seq! > callSeq && (!execCall || e.eventSeq === undefined || e.eventSeq === callSeq)))
+  }
   async function admitOriginal(binding: Readonly<DeliverySourceEvent>, key: DeliveryKey, evidence: SubagentDeliveryEvidence,
     presentation: { text: string; description: string; display: InputDisplay }, candidate: () => boolean = () => true): Promise<DeliveryAdmissionReceipt> {
     const inputId = deliveryInputId(key), original = state().receipt(key)
@@ -109,23 +124,34 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
     return admitOriginal(binding, key, evidence, { text, description: `Exec ${binding.sourceId} ${terminal.execution.outcome}`, display: { kind: 'task', title: `Exec ${terminal.execution.outcome}`, body: text } },
       () => state().execPending().some(candidate => candidate.source.seq === binding.seq && candidate.terminal.seq === terminal.seq))
   }
+  async function admitCode(evidence: CodeDeliveryEvidence): Promise<DeliveryAdmissionReceipt> {
+    if (!isStrictFactData(evidence) || evidence.kind !== 'code' || Reflect.ownKeys(evidence).some(key => !['kind', 'sourceSeq', 'terminalSeq'].includes(String(key)))
+      || !Number.isSafeInteger(evidence.sourceSeq) || evidence.sourceSeq < 0 || !Number.isSafeInteger(evidence.terminalSeq) || evidence.terminalSeq <= evidence.sourceSeq)
+      throw failed({ kind: 'blocked', reason: 'invalid', debt: 'none' })
+    await settleCloses()
+    const binding = owner.view.events[evidence.sourceSeq], terminal = owner.view.events[evidence.terminalSeq]
+    if (binding?.type !== 'agent/delivery-source' || binding.kind !== 'code' || binding.seq !== evidence.sourceSeq || binding.recipientSessionId !== recipient
+      || state().source('code', binding.sourceId)?.seq !== binding.seq || terminal?.type !== 'code/end' || terminal.seq !== evidence.terminalSeq
+      || terminal.sourceSeq !== binding.seq || terminal.cellId !== binding.cellId || !eligibleCodeTerminal(terminal)) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'none' })
+    const ref = codeTerminalRef(terminal)
+    if (!ref) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'none' })
+    const key: CodeDeliveryKey = { kind: 'code', recipientSessionId: binding.recipientSessionId, sourceNamespace: 'code', sourceId: binding.sourceId, resultRevision: ref.revision }
+    const text = `<code_result>\n${JSON.stringify({ cellId: binding.cellId, execution: terminal.execution, ref })}\nReference only. Read using the authorized context_output_read result reader.\n</code_result>`
+    if (Buffer.byteLength(text, 'utf8') > 8192) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'none' })
+    return admitOriginal(binding, key, evidence, { text, description: `Code ${terminal.execution.outcome}`, display: { kind: 'task', title: `Code ${terminal.execution.outcome}`, body: text } },
+      () => state().codePending().some(candidate => candidate.source.seq === binding.seq && candidate.terminal.seq === terminal.seq))
+  }
   async function prepareLaunch(namespace: string, sourceId: string, callSeq: number, execCall?: { callId: string; kind?:'code' }): Promise<DeliveryLaunchPreparation> {
       assertCurrent(); await settleCloses(); assertCurrent()
       if (opening) { await settle(opening); opening = undefined; assertCurrent() }
       if (isManagedFactOwner(owner.view, owner)) (owner as import('@i-harness/session-persistence').ManagedDocument).assertReady()
       if (!recipient) return { kind: 'unavailable', reason: 'recipient-not-bound' }
-      const view = owner.view, call = view.events[callSeq]
-      if (call?.type !== 'tool/call' || (execCall ? !(execCall.kind==='code'?['code_exec']:['bash','pwsh','shell']).includes(call.name) || call.callId !== execCall.callId : call.name !== 'spawn_agent') || call.seq !== callSeq || callSeq < (view.header?.seedLength ?? 0)
-        || !view.events.some(e => e.type === 'tool/dispatch' && e.callId === call.callId && e.seq! > callSeq && (!execCall || e.eventSeq === undefined || e.eventSeq === callSeq))) return { kind: 'unavailable', reason: 'uncertified-call' }
+      if (!certifiedCall(callSeq, execCall)) return { kind: 'unavailable', reason: 'uncertified-call' }
       const original = state().source(namespace, sourceId)
       if (original) throw failed({ kind: 'blocked', reason: 'conflict', debt: 'none' })
       let generation = state().activeGeneration()
       if (!generation) {
-        const fence = state().lastFenceSeq() ?? -1
-        const human = view.events.findLast(e => e.type === 'agent/input/admitted' && e.intent === 'user' && !e.synthetic
-          && e.provenance?.kind === 'human' && e.provenance.authority === 'request'
-          && (e.provenance.originSessionId === undefined || e.provenance.originSessionId === recipient)
-          && e.seq! >= (view.header?.seedLength ?? 0) && e.seq! > fence)
+        const { human, fence } = ownHuman()
         if (!human) {
           if (fence >= 0) throw failed({ kind: 'blocked', reason: 'out-of-scope', debt: 'none' })
           return { kind: 'unavailable', reason: 'no-own-human-origin' }
@@ -143,6 +169,15 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
     bind,
     revoke() { retired = true },
     prepareLaunch(namespace: string, sourceId: string, callSeq: number) { return prepareLaunch(namespace,sourceId,callSeq) },
+    supportsCodeLaunch(input: { view: import('@i-harness/core-session').SessionView; sessionId: string; callId: string; callSeq: number }): boolean {
+      assertCurrent()
+      if (input.view !== owner.view || input.sessionId !== recipient) throw TypeError('Original Code recipient required')
+      if (!certifiedCall(input.callSeq, { callId: input.callId, kind: 'code' })) throw TypeError('Uncertified Code call')
+      if (state().activeGeneration()) return true
+      const { human, fence } = ownHuman()
+      if (!human && fence >= 0) throw failed({ kind: 'blocked', reason: 'out-of-scope', debt: 'none' })
+      return !!human
+    },
     async prepareCodeLaunch(input:{view:import('@i-harness/core-session').SessionView;sessionId:string;callId:string;sourceId:string;callSeq:number;cellId:string}){
       if(input.view!==owner.view||input.sessionId!==recipient)throw TypeError('Original Code recipient required')
       const result=await prepareLaunch('code',input.sourceId,input.callSeq,{callId:input.callId,kind:'code'})
@@ -172,6 +207,16 @@ export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputS
       return admitOriginal(binding, key, evidence, presentation)
     },
     admitExec,
+    admitCode,
+    async reconcileCodeCandidates() {
+      const failures: unknown[] = []
+      for (const candidate of state().codePending()) {
+        try { await admitCode({ kind: 'code', sourceSeq: candidate.source.seq!, terminalSeq: candidate.terminal.seq! }) }
+        catch (cause) { if (!(cause instanceof DeliverySuppressedError)) failures.push(cause) }
+      }
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) throw new DeliverySourcesError(failures)
+    },
     /** Discovery belongs only to the already published service drain. The
      * receiver source's own settlement/close callback remains join-only. */
     async reconcileExecCandidates() {

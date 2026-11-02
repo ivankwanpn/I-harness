@@ -80,6 +80,8 @@ export interface ExecDeliveryEvidence {
   sourceSeq: number;
   terminalSeq: number;
 }
+/** Original persisted source and terminal lookup only. */
+export interface CodeDeliveryEvidence { kind: 'code'; sourceSeq: number; terminalSeq: number }
 export interface DeliveryAdmissionReceipt {
   inputId: string;
   disposition: 'pending' | 'claimed' | 'cancelled' | 'suppressed';

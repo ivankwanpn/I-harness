@@ -46,6 +46,13 @@ function enterOriginalCode(mount:CodeModeMount,exec:ToolExec):PreparedCodeBodyCl
 }
 
 const completionMounts=new WeakMap<object,Map<string,CompletionHandle>>()
+const completionFinalizations = new WeakMap<CompletionHandle, OriginalCellFinalization>()
+/** Join only the constructor-captured original associated with this handle. */
+export function waitOriginalCompletionFinalization(handle: CompletionHandle): Promise<void> {
+  const original = completionFinalizations.get(handle)
+  if (!original) throw new Error('Original Code completion handle required')
+  return original.settle()
+}
 export function captureOriginalCodeCompletion(mount:object,cellId:string):CompletionHandle {
   const handle=completionMounts.get(mount)?.get(cellId)
   if(!handle)throw new Error('Original Code completion unavailable')
@@ -152,6 +159,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
                 if(completionHandles.get(event.cellId)===handle)completionHandles.delete(event.cellId)
                 return settled
               }})
+              completionFinalizations.set(handle, finalization)
               completionHandles.set(event.cellId,handle)
             }
             finalOutputs.reserve(event.cellId, sessionId ?? event.origin.sessionId, finalization, runtimeOwner, !!event.origin.instructionOrigin)
