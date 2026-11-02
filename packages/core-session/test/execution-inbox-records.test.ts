@@ -22,6 +22,22 @@ async function fixture(controls:{read?():Promise<void>;close?():Promise<void>;fo
  return {state,owner,action:action as unknown as import('../src/managed/ports.ts').ManagedAction<import('../src/managed/types.ts').FactOutcome>,deliveryControl,events,reads,get opened(){return opened},get closed(){return closed},get lastScope(){return lastScope},change(){epoch++},lose(){held=false}}
 }
 
+it('hydrates at most the final 200 merged document and original job statuses in original UI order',async()=>{
+ const events:SessionEventView[]=Array.from({length:250},(_,seq)=>({type:'job/status',version:1,seq,job:{jobId:`job-${seq}`,kind:'shell',label:`label-${seq}`,status:'completed',outputAvailable:false}}))
+ events.push({type:'job/status',version:1,seq:250,job:{jobId:'job-60',kind:'shell',label:'updated',status:'completed',outputAvailable:false}})
+ const f=await fixture({events}),observation=f.state.observe(),documentIds=['job-249','doc-only','job-2']
+ try{
+  const selected=await observation.jobStatusEvents(documentIds)
+  const expected=new Map(documentIds.map(id=>[id,'document']))
+  for(const event of events)if(event.type==='job/status')expected.set(event.job.jobId,event.job.label)
+  const actual=new Map(documentIds.map(id=>[id,'document']))
+  for(const event of selected)actual.set(event.job.jobId,event.job.label)
+  expect([...actual].slice(-200)).toEqual([...expected].slice(-200))
+  expect(f.reads).toHaveLength(selected.length);expect(f.reads.length).toBeLessThanOrEqual(200)
+  expect(f.reads).not.toContain(60);expect(f.reads).toContain(250)
+ }finally{await f.state.close()}
+})
+
 it('hydrates the indexed actual matching dispatch and no missing or mismatched dispatch',async()=>{
  const events:SessionEventView[]=[{type:'tool/call',callId:'one',name:'shell',args:{command:'x'},seq:0},{type:'tool/dispatch',callId:'other',eventSeq:0,seq:1},{type:'tool/dispatch',callId:'one',eventSeq:0,seq:2},{type:'tool/call',callId:'two',name:'shell',args:{command:'y'},seq:3}]
  const f=await fixture({events}),observed=f.state.observe()
