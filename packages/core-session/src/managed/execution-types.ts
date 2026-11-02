@@ -77,6 +77,7 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  admitted(inputId:string):Promise<DeepReadonly<Extract<SessionEventView,{type:'agent/input/admitted'}>>|undefined>;
  lastCancellationSeq(inputId:string):number|undefined}>
  assertCurrent():void
+ recentNativeRecoveryRefs():Promise<DeepReadonly<readonly Extract<SessionEventView,{type:'context/result-ref'}>['ref'][]>>
  plan():Readonly<PlanModeView>
  sandboxMode(fromSeq?:number):Extract<SessionEventView,{type:'sandbox/mode'}>['mode']|undefined
  sandboxPolicy(fromSeq?:number):Readonly<{mode:Extract<SessionEventView,{type:'sandbox/mode'}>['mode'];seq:number}>|undefined

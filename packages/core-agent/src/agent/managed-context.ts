@@ -99,6 +99,8 @@ export function createManagedAgentContext(host: ManagedAgentHost) {
                     continue;
                 }
                 lease.assertCurrent();
+                if(host.prepareModelSurface)await host.prepareModelSurface(signal);
+                lease.assertCurrent();
                 host.hooks.assertCurrent(hooks);
                 const result = captureRestoredContextSnapshot(lease.archive, { ownerSessionId: host.domain.sessionId, surface: surface() });
                 if (result.kind !== 'captured')

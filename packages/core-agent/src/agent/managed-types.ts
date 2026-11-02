@@ -35,6 +35,7 @@ export interface ManagedAgentDeps extends Omit<AgentDeps,'session'|'factOwner'|'
  readonly execution:ManagedExecutionAttachment
  readonly domain:ManagedExecutionDomain
  readonly hooks:ExecutionHookChannel
+ prepareModelSurface?:(signal:AbortSignal)=>Promise<void>
  modelCallOrigin:object
  generationFactory:ManagedGenerationFactory
  inputPreparationFactory?:(action:ManagedAction<FactOutcome>)=>ManagedInputPreparation

@@ -200,6 +200,8 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         }};
     }
     return {
+        /** Structural selection matches native recovery: local ref facts, rewind only. */
+        recentNativeRecoverySelection(){check();const facts=owned.index.resultFacts(),visibility=historyVisibility(facts),selected: {ordinal:number;ref:import('../conversation/selected-results-types.ts').LegacyRef}[]=[];for(let i=facts.length-1;i>=0&&selected.length<12;i--){const fact=facts[i]!;if(fact.type==='context/result-ref'&&fact.legacyResult&&visibility.branch(fact))selected.push({ordinal:fact.index,ref:fact.legacyResult})}selected.reverse();return selected},
         reviewerOrdinals(){check();const facts=owned.index.resultFacts(),count=owned.index.eventCount;let latestUser:number|undefined;for(let i=facts.length-1;i>=0;i--)if(facts[i]!.type==='user/message'){latestUser=facts[i]!.index;break}return {tail:Array.from({length:Math.min(12,count)},(_,index)=>count-Math.min(12,count)+index),latestUser}},
         teamLedgerOrdinals() {
             check();const header=owned.source.header,fork=Boolean(header?.parentSession&&header.origin!=='subagent'&&header.origin!=='approval-review')

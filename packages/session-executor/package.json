@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./internal/managed-native-recovery": "./src/lifecycle/managed-native-recovery.ts",
     "./internal/process-result-service": "./src/lifecycle/process-result-service.ts"
   },
   "scripts": {
