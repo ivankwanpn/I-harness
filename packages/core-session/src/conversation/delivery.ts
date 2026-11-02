@@ -26,8 +26,10 @@ export interface DeliveryActionOrigin {
   }>;
 }
 export interface DeliveryOriginLookup {
-  lookupActionOrigin(open: Readonly<MainActionOpen>): Readonly<DeliveryActionOrigin> | undefined;
+  lookupActionOrigin(open: Readonly<MainActionOpen>): Readonly<DeliveryActionOrigin|TeamDeliveryActionOrigin> | undefined;
 }
+export interface TeamDeliveryActionOrigin {kind:'team';admissionSeq:number;inputId:string;actionId:string;openedSeq:number;inputStart?:DeliveryActionOrigin['inputStart']}
+type TeamAdmission={admissionSeq:number;generationId:string;disposition:'pending'|'claimed'|'cancelled';promotionSeq?:number;inputStart?:DeliveryActionOrigin['inputStart'];origin?:TeamDeliveryActionOrigin}
 type Receipt = {
   event: DeliveryReceivedEvent;
   disposition: DeliveryAdmissionReceipt['disposition'];
@@ -127,7 +129,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
   // Source selection owns excluded payload opacity; journal/writer replay keeps
   // the strict validator. The fold still reads the same terminal scalar proof.
   const validateTerminal = profile === semanticSourceStructure ? validateResultSourceMetadata : validateResultFact;
-  const refs = new Map<number, Ref>(), sources = new Map<string, DeliverySourceEvent>(), receipts = new Map<string, Receipt>(), inputs = new Map<string, string>();
+  const refs = new Map<number, Ref>(), sources = new Map<string, DeliverySourceEvent>(), receipts = new Map<string, Receipt>(), inputs = new Map<string, string>(),teamAdmissions=new Map<string,TeamAdmission>();
   const execTerminals = new Map<number, ExecTerminalEvent>(), parentHandoffs = new Set<number>(), execPending = new Map<number, ExecDeliveryCandidate>();
   const workflows = createWorkflowDeliveryIndex();
   const codes = createCodeDeliveryIndex(), codeCells=new Set<string>(), codeCalls=new Set<number>();
@@ -143,6 +145,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
       return value && Object.freeze({ event: Object.freeze({ ...value.event, key: Object.freeze({ ...value.event.key }) }), disposition: disposition(value, active) });
     },
     isEligible: id => {
+      const team=teamAdmissions.get(id);if(team)return team.disposition==='pending'&&team.generationId===active?.generationId;
       const r = receipts.get(inputs.get(id) ?? '');
       return !!r && r.disposition === 'pending' && r.generationId === active?.generationId;
     },
@@ -150,7 +153,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
   });
   return {
     read: state,
-    readIndex: (): DeliveryReadIndex => Object.freeze({ ...state(), input: (id: string) => admissions.get(id), isBound: (id: string) => inputs.has(id), inputIdAt: (seq: number) => refs.get(seq)?.inputId,
+    readIndex: (): DeliveryReadIndex => Object.freeze({ ...state(), input: (id: string) => admissions.get(id), isBound: (id: string) => inputs.has(id)||teamAdmissions.has(id), inputIdAt: (seq: number) => refs.get(seq)?.inputId,
       ownHumanAdmissionSeq(recipientSessionId:string,fromSeq:number,afterSeq:number){for(let i=humanAdmissions.length-1;i>=0;i--){const seq=humanAdmissions[i]!;if(seq<fromSeq||seq<=afterSeq)break;const ref=refs.get(seq)!;if(ref.originSessionId===undefined||ref.originSessionId===recipientSessionId)return seq}return undefined},
       dispatchForCall(callSeq:number){const found=dispatches.get(callSeq);return found&&Object.freeze({...found})},
       taskCandidate(namespace:string,id:string){const binding=sources.get(sourceKey(namespace,id));if(!binding||binding.kind!=='subagent'||binding.seq===undefined)return undefined;let seq:number|undefined;for(const [ordinal,ref] of refs)if(ref.type==='subagent/end'&&ref.taskId===id&&ref.qualified&&ordinal>binding.seq&&(seq===undefined||ordinal>seq))seq=ordinal;return seq===undefined?undefined:{sourceSeq:binding.seq,terminalSeq:seq}},
@@ -175,7 +178,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
     stage() {
       const stagedRefs = new Map<number, Ref>(), stagedSources = new Map<string, DeliverySourceEvent>(), stagedInputs = new Map<string, string>(), stagedReceipts = new Map<string, Receipt>();
       const stagedExecTerminals = new Map<number, ExecTerminalEvent>(), stagedHandoffs = new Set<number>(), stagedExecPending = new Map<number, ExecDeliveryCandidate | undefined>();
-      const stagedDispatches = new Map<number, Dispatch>(), stagedAdmissions = new Map<string, InputClass>(), stagedGenerations = new Set<string>(), stagedFences = new Set<string>();
+      const stagedDispatches = new Map<number, Dispatch>(), stagedAdmissions = new Map<string, InputClass>(),stagedTeamAdmissions=new Map<string,TeamAdmission>(), stagedGenerations = new Set<string>(), stagedFences = new Set<string>();
       const stagedCodeCells=new Set<string>(), stagedCodeCalls=new Set<number>();
       let stagedActive = active, stagedFence = fence, stagedOwner = owner, stagedTurn = turn, stagedTurnAction = turnAction, previous: SessionEventView | undefined, awaiting: DeliveryReceivedEvent | undefined;
       const reference = (seq: number) => stagedRefs.get(seq) ?? refs.get(seq);
@@ -212,13 +215,15 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
         stagedOwner = id;
       };
       const receiptFor = (id: string) => receipt(stagedInputs.get(id) ?? inputs.get(id) ?? '');
+      const teamFor=(id:string)=>stagedTeamAdmissions.get(id)??teamAdmissions.get(id)
+      const writableTeam=(id:string,value:TeamAdmission)=>{let changed=stagedTeamAdmissions.get(id);if(!changed){changed={...value};stagedTeamAdmissions.set(id,changed)}return changed}
       const writableReceipt = (value: Receipt): Receipt => {
         const key = identity(value.event.key);
         let changed = stagedReceipts.get(key);
         if (!changed) { changed = { ...value }; stagedReceipts.set(key, changed); }
         return changed;
       };
-      const lookupActionOrigin = (open: Readonly<MainActionOpen>): Readonly<DeliveryActionOrigin> | undefined => {
+      const lookupActionOrigin = (open: Readonly<MainActionOpen>): Readonly<DeliveryActionOrigin|TeamDeliveryActionOrigin> | undefined => {
         if (open.purpose !== 'main')
           return;
         let r: Receipt | undefined;
@@ -233,8 +238,16 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
           if (r && r.inputStart?.rawMessageSeq !== open.origin.seq)
             fail('delivery steer or nonraw input cannot open an action');
         }
-        if (!r)
-          return;
+        if (!r) {
+          const inputId=open.origin.kind==='observation-input'?open.origin.inputId:open.origin.kind==='input'?reference(open.origin.seq)?.inputId:undefined,team=inputId?teamFor(inputId):undefined
+          if(!team||!inputId)return
+          if(open.origin.kind==='observation-input'&&open.origin.seq!==team.admissionSeq||open.origin.kind==='input'&&team.inputStart?.rawMessageSeq!==open.origin.seq)fail('Team delivery origin changed')
+          if(team.origin){if(team.origin.actionId===open.actionId&&team.origin.openedSeq===open.seq&&open.ownerSessionId===stagedOwner)return team.origin;fail('Team delivery already owns its original action')}
+          if(open.origin.kind==='input'&&stagedTurnAction!==undefined)fail('Team delivery turn already owns a main action')
+          if(open.ownerSessionId!==stagedOwner||team.generationId!==stagedActive?.generationId||stagedFence!==undefined&&open.seq!<=stagedFence)fail('fenced Team delivery action origin')
+          if(open.origin.kind==='observation-input'?team.disposition!=='pending':!team.inputStart||team.disposition!=='claimed'||team.inputStart.turnStartSeq!==stagedTurn)fail('consumed Team delivery cannot open a new action')
+          const changed=writableTeam(inputId,team);changed.origin=Object.freeze({kind:'team',admissionSeq:team.admissionSeq,inputId,actionId:open.actionId,openedSeq:open.seq!,...team.inputStart?{inputStart:team.inputStart}:{}});return changed.origin
+        }
         if (r.origin) {
           if (r.origin.actionId === open.actionId && r.origin.openedSeq === open.seq && open.ownerSessionId === r.event.key.recipientSessionId)
             return r.origin;
@@ -332,7 +345,11 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
               awaiting = event;
             }
           }
-          if (event.type === 'agent/input/admitted' && receiptFor(event.inputId) && receiptFor(event.inputId)!.admissionSeq !== event.seq) fail('delivery input identity cannot be reused');
+          if (event.type === 'agent/input/admitted' && (receiptFor(event.inputId)&&receiptFor(event.inputId)!.admissionSeq!==event.seq||teamFor(event.inputId))) fail('delivery input identity cannot be reused');
+          if(event.type==='agent/input/admitted'&&event.provenance?.producer==='session.delivery.team'){
+            if(!stagedActive||event.seq===undefined||event.seq<(scope.seedLength??0)||event.delivery!=='steer'||event.intent!=='system'||event.provenance.kind!=='child-report'||event.provenance.authority!=='observation'||event.provenance.scope!=='turn'||event.provenance.originSessionId!==undefined||!/^team-delivery-[0-9a-f]{64}$/.test(event.inputId)||!event.synthetic||event.synthetic.scope!=='turn'||!event.synthetic.description||event.synthetic.display?.kind!=='team-message')fail('invalid Team delivery admission')
+            stagedTeamAdmissions.set(event.inputId,{admissionSeq:event.seq,generationId:stagedActive.generationId,disposition:'pending'})
+          }
           if (event.type === 'rewind/point') {
             stagedFence = event.seq;
             stagedActive = undefined;
@@ -340,13 +357,15 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
           }
           if (event.type === 'turn/start') {
             stagedTurn = event.seq;
-            stagedTurnAction = previous?.type === 'agent/input/promoted' ? receiptFor(previous.inputId)?.origin?.actionId : undefined;
+            stagedTurnAction = previous?.type === 'agent/input/promoted' ? receiptFor(previous.inputId)?.origin?.actionId??teamFor(previous.inputId)?.origin?.actionId : undefined;
           }
           if (event.type === 'turn/end') {
             stagedTurn = undefined;
             stagedTurnAction = undefined;
           }
           if (event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') {
+            const team=teamFor(event.inputId)
+            if(team){const pending=team.disposition==='pending'&&team.generationId===stagedActive?.generationId;if(!pending&&!(event.type==='agent/input/cancelled'&&team.disposition==='pending'))fail('ineligible Team delivery consumption');const changed=writableTeam(event.inputId,team);changed.disposition=event.type==='agent/input/promoted'?'claimed':'cancelled';if(event.type==='agent/input/promoted')changed.promotionSeq=event.seq}
             const r = receiptFor(event.inputId);
             if (r) {
               const current = disposition(r, stagedActive);
@@ -359,6 +378,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
             }
           }
           if (event.type === 'user/message' && event.input) {
+            const team=teamFor(event.input.inputId);if(team&&team.promotionSeq!==undefined&&previous?.type==='turn/start'&&previous.seq===team.promotionSeq+1&&event.seq===previous.seq!+1)writableTeam(event.input.inputId,team).inputStart=Object.freeze({promotionSeq:team.promotionSeq,turnStartSeq:previous.seq!,rawMessageSeq:event.seq!})
             const r = receiptFor(event.input.inputId);
             if (r && r.promotionSeq !== undefined && previous?.type === 'turn/start' && previous.seq === r.promotionSeq + 1 && event.seq === previous.seq! + 1)
               writableReceipt(r).inputStart = Object.freeze({ promotionSeq: r.promotionSeq, turnStartSeq: previous.seq!, rawMessageSeq: event.seq! });
@@ -377,7 +397,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
               stagedDispatches.set(event.eventSeq, { callId: event.callId, seq: event.seq });
           }
           if (event.type === 'agent/input/admitted' && event.seq !== undefined)
-            stagedAdmissions.set(event.inputId, Object.freeze({ admissionSeq: event.seq, kind: ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow','session.delivery.code'].includes(event.provenance?.producer ?? '') ? 'delivery' : event.provenance?.producer === 'session.notification' && event.synthetic?.display?.kind === 'task' ? 'legacy-task' : 'ordinary' }));
+            stagedAdmissions.set(event.inputId, Object.freeze({ admissionSeq: event.seq, kind: ['session.delivery.subagent', 'session.delivery.exec', 'session.delivery.workflow','session.delivery.code','session.delivery.team'].includes(event.provenance?.producer ?? '') ? 'delivery' : event.provenance?.producer === 'session.notification' && event.synthetic?.display?.kind === 'task' ? 'legacy-task' : 'ordinary' }));
           if (event.seq !== undefined && (['agent/input/admitted', 'tool/call', 'code/call', 'subagent/start', 'subagent/end', 'exec/end', 'workflow/end','code/end','code/cell','code/store'].includes(event.type) || event.type === 'agent/delivery-source' && event.kind !== 'subagent' || event.type === 'user/message' && event.input)) {
             const ref: Ref = { type: event.type };
             if (event.type === 'agent/input/admitted')
@@ -415,6 +435,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
           for (const [key, value] of stagedInputs) inputs.set(key, value);
           for (const [key, value] of stagedDispatches) dispatches.set(key, value);
           for (const [key, value] of stagedAdmissions) admissions.set(key, value);
+          for (const [key, value] of stagedTeamAdmissions) teamAdmissions.set(key,value);
           for (const [key, value] of stagedExecTerminals) execTerminals.set(key, value);
           for (const value of stagedHandoffs) parentHandoffs.add(value);
           const generationChanged = active?.generationId !== stagedActive?.generationId;

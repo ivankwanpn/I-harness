@@ -107,6 +107,8 @@ export interface OriginalManagedTeamParent {
  readonly ready:Promise<void>
  readonly ledger:readonly ManagedTeamLedgerEvent[]
  assertInitialPrefix():void
+ authorizeTeamDeliveryOpen(source:object,capture:object,outcome:import('./types.ts').FactOutcome):void
+ assertTeamDeliveryCut():void
  hasInbox(messageId:string):boolean
  assertCurrent():void
  close():Promise<void>

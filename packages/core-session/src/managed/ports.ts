@@ -98,6 +98,7 @@ export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
   captureDeliveryClose(event:Extract<import("../events/delivery.ts").DeliveryGenerationEvent,{op:"close"}>):CapturedSettlementFact<Outcome>
   close(): Promise<void>
   captureAdmitted(event: Event<'agent/input/admitted'>): CapturedSettlementFact<Outcome>
+  captureTeamAdmission?(domain:import('./execution-types.ts').ManagedExecutionDomain,evidence:import('./team-provisioning.ts').OriginalTeamDeliveryEvidence,generationId:string):CapturedSettlementFact<Outcome>
   captureCancellation(event: Event<'agent/input/cancelled'>): CapturedSettlementFact<Outcome>
 }
 export interface ManagedAction<Outcome = FactOutcome> {
@@ -105,6 +106,7 @@ export interface ManagedAction<Outcome = FactOutcome> {
   captureToolCall?(event:Event<'tool/call'>):CapturedActionFact<Outcome>
   captureLifecycle?(event:LifecycleFact):CapturedActionFact<Outcome>
   captureMetadata?(event:MetadataFact,checkCurrent?:()=>boolean):CapturedActionFact<Outcome>
+  capturePlanProposal?(proposal:string,checkCurrent?:()=>boolean):CapturedActionFact<Outcome>
   captureToolDispatch?(callId:string,reference:SeqRef<'tool/call'>):CapturedActionFact<Outcome>
   captureModelExchange(...args: Parameters<AgentFacts<Outcome>['accept']>): CapturedActionFact<Outcome>
   captureRuntimeContext(record: import('../events/runtime-context.ts').RuntimeContextRecordV1, checkCurrent: () => boolean): CapturedActionFact<Outcome>

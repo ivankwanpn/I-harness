@@ -83,6 +83,7 @@ export function createOwnerDeliveryControl(readIndex:()=>DeliveryReadIndex,event
           stale();
         if (event.type === 'agent/delivery-source' || event.type === 'agent/delivery-received' || event.type === 'agent/delivery-handoff')
           current();
+        if(event.type==='agent/input/admitted'&&event.provenance?.producer==='session.delivery.team')current();
         if (event.type === 'agent/input/promoted' && read().isBound(event.inputId) && !executable(read(), event.inputId, control))
           stale();
         if (event.type === 'context/action' && event.op === 'open' && event.purpose === 'main') {

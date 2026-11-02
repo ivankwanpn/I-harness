@@ -2,7 +2,7 @@ import { validDeliveryEvent, isStrictFactData, committedFactSeqs, canonicalJsonD
 import { captureSettlementFact, retainSettlementCapture,forwardSettlementCapture } from './settlement-fact.ts';
 import { createSourceFacts } from './source-facts.ts';
 import type { cancellationRetirementFor } from './received-input-cancellation.ts';
-import {readAcknowledgedExecutionMembers,readManagedSourceAcknowledgedMembers,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import {readAcknowledgedExecutionMembers,readManagedSourceAcknowledgedMembers,originalTeamAdmission,assertOriginalTeamDeliveryCurrent,associateOriginalTeamAdmission,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 type TaskOpen = Readonly<{ document:object; view:import('@i-harness/core-session').SessionView|undefined; seq:number; event:object; eventData:string; binding:Readonly<{recipientSessionId:string;generationId:string;sourceNamespace:string;sourceId:string;callSeq:number}>;managed?:{source:ReceivedInputSource<FactOutcome>;capture:object;outcome:FactOutcome} }>
 const taskOpens = new WeakMap<object,TaskOpen>()
 export function inspectOriginalTaskDeliveryOpen(preparation:object, document:object) {
@@ -79,6 +79,7 @@ export function createReceivedInputSource(drain: () => Promise<void>, operations
                 throw Object.assign(new Error('Received input source is closed'), { code: 'FACT_CLOSED' });
             return retain({ kind: 'input-admission', admitted: event });
         },
+        captureTeamAdmission(domain,evidence,generationId){assertHeld();if(!accepting||domain.owner!==operations.document||domain.sessionId!==operations.owner.sessionId)throw TypeError('Original Team received source required');const admitted=originalTeamAdmission(domain,evidence,generationId),check=()=>{try{assertOriginalTeamDeliveryCurrent(domain,evidence,generationId);return true}catch{return false}};const captured=records.capture({kind:'team-input-admission',admitted},undefined,{...operations.guarded(check),assertHeld});associateOriginalTeamAdmission(domain,evidence,result,captured,generationId);return captured},
         captureCancellation(event) { return retain({ kind: 'input-cancellation', cancelled: event }); },
         close() {
             accepting = false;

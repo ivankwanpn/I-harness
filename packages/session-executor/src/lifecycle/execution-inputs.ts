@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
 import { canonicalJsonData, committedFactSeqs, deliveryInputId,FactRecoveryRequiredError, isStrictFactData, SYSTEM_INPUT_PLUGIN,
   type AdmittedInput, type PendingInput, type SessionEvent, type InputFacts, type ProducerFactOutcome, type CapturedSettlementFact } from '@i-harness/core-session'
-import { isManagedExecutionOwner,isManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,assertManagedWorkflowDeliveryCurrent,readManagedSourceCodeEvidence,readManagedSourceTaskEvidence,readManagedSourceTaskCandidate,type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
+import { isManagedExecutionOwner,isManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,assertManagedWorkflowDeliveryCurrent,readManagedSourceCodeEvidence,readManagedSourceTaskEvidence,readManagedSourceTaskCandidate,inspectOriginalTeamDelivery,authorizeOriginalTeamDeliveryOpen,originalTeamDeliveryInputId,createOriginalTeamDeliveryReceipt,createOriginalTeamDeliveryArchiveReceipt,createOriginalTeamSuppressedReceipt,type OriginalTeamDeliveryEvidence,type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
 import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../../session-persistence/src/execution-internal.ts'
 import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
 import {eligibleCodeTerminal,codeTerminalRef} from '../../../core-session/src/events/code-delivery.ts'
@@ -32,6 +32,7 @@ export interface PrivateTaskRecipient extends PrivateWorkflowRecipient {
  prepareTaskLaunch(input:{sessionId:string;namespace:string;taskId:string;callSeq:number}):Promise<import('@i-harness/core-session').DeliveryLaunchPreparation>
  taskEvidence(namespace:string,taskId:string):{evidence:import('@i-harness/core-session').SubagentDeliveryEvidence;expectedInputId:string}|undefined
  admitTask(evidence:import('@i-harness/core-session').SubagentDeliveryEvidence,presentation:{text:string;description:string;display:import('@i-harness/core-session').InputDisplay}):Promise<import('@i-harness/core-session').DeliveryAdmissionReceipt>
+ admitTeam(evidence:OriginalTeamDeliveryEvidence):Promise<import('@i-harness/core-session').DeliveryAdmissionReceipt>
 }
 type PrivateExecPreparation=Extract<import('@i-harness/core-session').DeliveryLaunchPreparation,{kind:'unavailable'}>|(Extract<import('@i-harness/core-session').DeliveryLaunchPreparation,{kind:'bound'}>&{isCurrent():boolean})
 export function isOriginalPrivateExecRecipient(value:object,execution:ManagedExecutionAttachment,domain:ManagedExecutionDomain){const original=privateRecipients.get(value);return !!original&&original.execution===execution&&original.domain===domain}
@@ -64,6 +65,7 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
     let retired=false,opening:CapturedSettlementFact<ProducerFactOutcome>|undefined
     const closes=new Map<string,CapturedSettlementFact<ProducerFactOutcome>>()
     const admissions=new Map<string,CapturedSettlementFact<ProducerFactOutcome>>()
+    const teamOpens=new WeakMap<OriginalTeamDeliveryEvidence,CapturedSettlementFact<ProducerFactOutcome>>(),teamFlights=new WeakMap<OriginalTeamDeliveryEvidence,Promise<import('@i-harness/core-session').DeliveryAdmissionReceipt>>()
     const attempts=new WeakSet<object>(),everIssued=new WeakSet<object>()
     const flights=new WeakMap<object,Promise<readonly number[]|undefined>>()
     const settleCapture=(fact:CapturedSettlementFact<ProducerFactOutcome>)=>{
@@ -84,6 +86,17 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
       for(const [key,fact] of admissions){await settleCapture(fact);if(admissions.get(key)===fact)admissions.delete(key)}
     }
     const adapter={
+      async admitTeam(evidence:OriginalTeamDeliveryEvidence):Promise<import('@i-harness/core-session').DeliveryAdmissionReceipt>{
+        if(this!==adapter)throw TypeError('Original Team recipient required');const existingFlight=teamFlights.get(evidence);if(existingFlight)return existingFlight
+        const flight=(async()=>{const priorOpen=teamOpens.get(evidence);if(priorOpen){if(!await settleCapture(priorOpen))throw new FactRecoveryRequiredError();const outcome=await priorOpen.observe();if(outcome.kind!=='committed')throw new FactRecoveryRequiredError();authorizeOriginalTeamDeliveryOpen(domain,evidence,source,priorOpen,outcome);teamOpens.delete(evidence);if(opening===priorOpen)opening=undefined}
+        await adapter.settle();current();const read=inspectOriginalTeamDelivery(domain,evidence),inputId=originalTeamDeliveryInputId(read)
+        let observation=execution.observe(),existing=await observation.inbox.admitted(inputId);observation.assertCurrent();if(existing)return createOriginalTeamDeliveryArchiveReceipt(domain,evidence,existing)
+        if((observation.delivery.lastFenceSeq()??-1)>=read.queuedSeq)return createOriginalTeamSuppressedReceipt(domain,evidence,observation)
+        let generation=observation.delivery.activeGeneration()
+        if(!generation){const human=await observation.delivery.ownHuman();observation.assertCurrent();if(!human)throw new FactRecoveryRequiredError();const capturedObservation=observation,open=source.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId:randomUUID(),originInputSeq:human.seq!},()=>{try{current();inspectOriginalTeamDelivery(domain,evidence);capturedObservation.assertCurrent();return true}catch{return false}});opening=open;teamOpens.set(evidence,open);if(!await settleCapture(open))throw new FactRecoveryRequiredError();const outcome=await open.observe();if(outcome.kind!=='committed')throw new FactRecoveryRequiredError();authorizeOriginalTeamDeliveryOpen(domain,evidence,source,open,outcome);teamOpens.delete(evidence);if(opening===open)opening=undefined;observation=execution.observe();generation=observation.delivery.activeGeneration();if(!generation)throw new FactRecoveryRequiredError()}
+        let fact=admissions.get(inputId);if(!fact){if(!source.captureTeamAdmission)throw new FactRecoveryRequiredError();fact=source.captureTeamAdmission(domain,evidence,generation.generationId);admissions.set(inputId,fact)}
+        if(!await settleCapture(fact)){admissions.delete(inputId);throw new FactRecoveryRequiredError()}const outcome=await fact.observe();if(outcome.kind!=='committed')throw new FactRecoveryRequiredError();const receipt=createOriginalTeamDeliveryReceipt(domain,evidence,source,fact,outcome);admissions.delete(inputId);return receipt})();teamFlights.set(evidence,flight);void flight.finally(()=>{if(teamFlights.get(evidence)===flight)teamFlights.delete(evidence)}).catch(()=>{});return flight
+      },
       taskEvidence(namespace:string,taskId:string){if(this!==adapter)throw TypeError('Original Task recipient required');current();const evidence=readManagedSourceTaskCandidate(execution.identity,source,namespace,taskId);if(!evidence)return;const original=readManagedSourceTaskEvidence(execution.identity,source,evidence);if(!original)return;return {evidence,expectedInputId:deliveryInputId(original.key)}},
       async prepareTaskLaunch(input:{sessionId:string;namespace:string;taskId:string;callSeq:number}):Promise<import('@i-harness/core-session').DeliveryLaunchPreparation>{
         if(this!==adapter)throw TypeError('Original Task recipient required')

@@ -52,7 +52,7 @@ export function createSourceFacts(operations: Parameters<typeof captureSettlemen
     snapshot: () => [...pending.keys()],
     empty: () => pending.size === 0,
     capture(group: FactGroupDraft, accepts?: (outcome: InvalidNotIssued) => boolean, captureOperations=operations) {
-      const owned = retain(captureSettlementFact(group, captureOperations, false, accepts ? { accepts, retired: () => { remove(owned) } } : undefined, group.kind === "delivery-admission" || group.kind === "delivery-generation" && group.event.op === "open" || group.kind === "delivery" && group.event.type === "agent/delivery-handoff" && (group.event.kind === "code" || group.event.kind === "workflow") ? ()=>{remove(owned)} : undefined))
+      const owned = retain(captureSettlementFact(group, captureOperations, false, accepts ? { accepts, retired: () => { remove(owned) } } : undefined, group.kind === "delivery-admission" || group.kind === "team-input-admission" || group.kind === "delivery-generation" && group.event.op === "open" || group.kind === "delivery" && group.event.type === "agent/delivery-handoff" && (group.event.kind === "code" || group.event.kind === "workflow") ? ()=>{remove(owned)} : undefined))
       return owned
     },
     drain: () => drainSnapshot([...pending.keys()]),
