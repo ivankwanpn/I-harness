@@ -30,7 +30,7 @@ it('combines the captured held proof only with original pure guards; other callb
 it('keeps arbitrary fact liveness callbacks outside grouping and revalidates after them',async()=>{
  const {heldFactOwner}=await import('../src/coordinator/fact-owner.ts');let current=true;const a=proof(()=>{if(!current)throw Error('changed')});const ownership={assertHeld(){assertArtifactCurrent(a.capture)}} as unknown as import('../src/coordinator/ownership.ts').Ownership
  const held=heldFactOwner({sessionId:'s',incarnation:'i'},ownership,()=>{assertArtifactCurrent(a.capture);current=false});expect(()=>held.assertHeld()).toThrow('changed');expect(a.calls()).toBe(2)
- current=true;const pure=heldFactOwner({sessionId:'s',incarnation:'i'},ownership,createArtifactCurrentGuard(()=>assertArtifactCurrent(a.capture)));pure.assertHeld();expect(a.calls()).toBe(3);await Promise.resolve();current=false;expect(()=>pure.assertHeld()).toThrow('changed');expect(a.calls()).toBe(4)
+ current=true;const pure=heldFactOwner({sessionId:'s',incarnation:'i'},ownership,createArtifactCurrentGuard(()=>assertArtifactCurrent(a.capture)));pure.assertHeld();expect(a.calls()).toBe(4);await Promise.resolve();current=false;expect(()=>pure.assertHeld()).toThrow('changed');expect(a.calls()).toBe(5)
 })
 it('flushes pending proofs and keeps an unknown nested admission callback immediate',()=>{
  let current=false,effects=0;const a=proof(()=>{if(!current)throw Error('changed')});expect(()=>withArtifactCurrentChecks(()=>{assertArtifactCurrent(a.capture);assertHeldWithArtifactGuard(()=>assertArtifactCurrent(a.capture),()=>{effects++},{})})).toThrow('changed');expect(effects).toBe(0)
@@ -39,4 +39,32 @@ it('flushes pending proofs and keeps an unknown nested admission callback immedi
 it('does not defer user liveness assertions nested under an existing pure guard',async()=>{
  const {heldFactOwner}=await import('../src/coordinator/fact-owner.ts');let effects=0;const a=proof(()=>{throw Error('changed')});const ownership={assertHeld(){}} as unknown as import('../src/coordinator/ownership.ts').Ownership
  const held=heldFactOwner({sessionId:'s',incarnation:'i'},ownership,()=>{assertArtifactCurrent(a.capture);effects++});expect(()=>withArtifactCurrentChecks(()=>held.assertHeld())).toThrow('changed');expect(effects).toBe(0)
+})
+
+it('keeps custom source entry accessors on the original immediate fallback',async()=>{
+ const {createManagedExecutionSource}=await import('../src/coordinator/managed-execution-source.ts');let reads=0,checks=0,held=0
+ const ports={id:'custom',entry:{},ownership:{assertHeld(){held++}},backend:{},transitions:{},loadOwned:async()=>{throw Error('unused')},get assertEntry(){reads++;return ()=>{checks++}}}
+ const source=createManagedExecutionSource(ports as unknown as Parameters<typeof createManagedExecutionSource>[0])
+ expect(reads).toBe(0);source.assertCurrent();expect({reads,checks,held}).toEqual({reads:1,checks:1,held:1})
+})
+
+it.each(['accessors','proxy'] as const)('preserves original source constructor field order for custom %s',async mode=>{
+ const {createManagedExecutionSource}=await import('../src/coordinator/managed-execution-source.ts')
+ const calls:string[]=[],entry={},ownership={assertHeld(){}}
+ const data={id:'custom',entry,ownership,backend:{},transitions:{},loadOwned:async()=>{throw Error('unused')},assertEntry(){}}
+ let ports:typeof data
+ if(mode==='accessors'){
+  ports={...data}
+  for(const key of ['entry','id','ownership'] as const)Object.defineProperty(ports,key,{get(){calls.push(key);return data[key]}})
+ }else ports=new Proxy(data,{get(target,key,receiver){calls.push(String(key));return Reflect.get(target,key,receiver)},getOwnPropertyDescriptor(target,key){calls.push('descriptor:'+String(key));return Reflect.getOwnPropertyDescriptor(target,key)},ownKeys(target){calls.push('ownKeys');return Reflect.ownKeys(target)}})
+ createManagedExecutionSource(ports as unknown as Parameters<typeof createManagedExecutionSource>[0])
+ expect(calls).toEqual(['entry','id','ownership'])
+})
+
+it('keeps an unclassified settlement ownership getter immediate and flushes before it',async()=>{
+ const {createSettlementSource}=await import('../src/coordinator/settlement-source.ts');let gets=0,effects=0
+ const capture=proof(),operations={get assertHeld(){gets++;expect(capture.calls()).toBe(1);return ()=>{effects++}},async admitCaptured(){throw Error('unused')},async reconcile(){throw Error('unused')},status(){return undefined},quarantineCapture(){},holdRecovery(){},releaseRecovery(){},onCloseRequested(){}}
+ const source=createSettlementSource(async()=>{},operations,()=>{})
+ expect(gets).toBe(0);withArtifactCurrentChecks(()=>{assertArtifactCurrent(capture.capture);source.assertHeld()});expect(gets).toBe(1);expect(effects).toBe(1)
+ await source.close()
 })

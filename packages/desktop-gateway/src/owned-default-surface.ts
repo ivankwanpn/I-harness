@@ -1,3 +1,4 @@
+import type { ToolSchema } from '@i-harness/llm-seam'
 import { approxTokens } from '../../compaction/src/index.ts'
 import { DEFAULT_AGENT_PRESET, parsePreset } from '../../preset/src/index.ts'
 import type { ManagedRegistryConstruction } from '../../session-executor/src/managed-assembly.ts'
@@ -7,7 +8,7 @@ import { createDesktopOwnedGoalTools } from './workflow.ts'
 
 export interface OwnedDefaultSurface {
  systemPrompt(): string
- modelToolSchemas(): ReturnType<ManagedRegistryConstruction['tools']['schemas']>
+ modelToolSchemas(): ToolSchema[]
  modelOverheadTokens(): number
  prepareInput(text:string): Promise<string>
  reconcileAuthority(): Promise<void>
@@ -19,7 +20,7 @@ export async function createOwnedDefaultSurface(original:ManagedRegistryConstruc
  preset?: Parameters<typeof parsePreset>[0]
  policyPrompt():string; shellPrompt():string; projectPrompt():string; hookPrompt():string; recoveryPrompt():string
  skillsPrompt():string; rolesPrompt():string
- schemas():ReturnType<ManagedRegistryConstruction['tools']['schemas']>
+ schemas():ToolSchema[]
  prepareInput(text:string):Promise<string>; reconcileAuthority():Promise<void>
  goalChanged():void
  overheadTokens?:number

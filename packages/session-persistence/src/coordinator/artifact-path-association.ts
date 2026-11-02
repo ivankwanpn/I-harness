@@ -2,6 +2,7 @@ import { types } from 'node:util'
 import type { PersistenceBackend } from './types.ts'
 import {createArtifactPathOwner,type ArtifactPathCapture} from '@i-harness/fs-lock/internal/artifact-path'
 import {isOriginalCanonicalPathOwner} from './canonical-path-resolution.ts'
+import {associateOriginalCurrentnessGuard,type OriginalCurrentnessExecutor} from '../../../core-session/src/managed/currentness-guards.ts'
 export interface OriginalArtifactPaths {root():string;session(id:string):string;document(key:string):string;taskForParent(id:string):string;prepareRoot():Promise<void>;prepareDocumentParents(key:string):Promise<void>;assertOriginal():void}
 export type ArtifactCapture=ArtifactPathCapture & {readonly provisionalKey?:string}
 export interface OriginalArtifactExclusion {session(id:string):ArtifactCapture;document(key:string):ArtifactCapture;taskForParent(id:string):ArtifactCapture;prepareSession(id:string):Promise<void>;prepareDocument(key:string):Promise<void>;assertOriginal():void;settleResources():void}
@@ -13,13 +14,23 @@ export function isOriginalCanonicalExclusion(binding:OriginalArtifactExclusion|u
 type ArtifactAssertion = { capture: ArtifactPathCapture; method: () => void }
 let assertionWork: Map<ArtifactPathCapture, ArtifactAssertion> | undefined
 const pureGuards = new WeakSet<Function>()
+const currentnessExecutor:OriginalCurrentnessExecutor=Object.freeze({
+  compose(guards:readonly (()=>void)[]){return composeOriginalArtifactGuards(...guards)},
+  immediate:withImmediateArtifactCurrentChecks,
+})
 export function createArtifactCurrentGuard(check: () => void): () => void {
   if (typeof check !== 'function' || types.isProxy(check) || types.isAsyncFunction(check)) throw new TypeError('Artifact checks must be synchronous')
   const guard = () => withArtifactCurrentChecks(check)
   pureGuards.add(guard)
+  associateOriginalCurrentnessGuard(guard,currentnessExecutor)
   return guard
 }
 export function isArtifactCurrentGuard(guard: Function): boolean { return pureGuards.has(guard) }
+/** Composition accepts exact constructor-enrolled guards, never an unclassified callback. */
+export function composeOriginalArtifactGuards(...guards: readonly (() => void)[]): () => void {
+  if (guards.some(guard => !pureGuards.has(guard))) throw TypeError('Original artifact guard required')
+  return createArtifactCurrentGuard(() => { for (const guard of guards) guard() })
+}
 export function assertHeldWithArtifactGuard(held: () => void, guard: Function, receiver: object): void {
   const run = () => { held(); Reflect.apply(guard, receiver, []) }
   if (pureGuards.has(guard)) withArtifactCurrentChecks(run)
