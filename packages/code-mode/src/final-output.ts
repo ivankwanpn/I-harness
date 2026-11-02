@@ -12,7 +12,8 @@ export interface CodeFinalOutputPort {
   finish(): Promise<FinalCodeOutputDisposition>
 }
 export type CodeFinalOutputFactory = (input: { cellId:string;sessionId:string;sourceId:string;assertHeld():void }) => CodeFinalOutputPort
-type CompletionEvidence = Readonly<{header:ReturnType<typeof headerFor>;footer:CodeOutputFooter;unavailableTextCount:number;ref:ManagedArtifactRef;source:{sourceId:string}}>
+type DeepReadonly<T> = T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T
+export type CompletionEvidence = DeepReadonly<{header:ReturnType<typeof headerFor>;footer:CodeOutputFooter;unavailableTextCount:number;ref:ManagedArtifactRef;source:{sourceId:string}}>
 const headerFor=(sessionId:string,cellId:string,sourceId:string)=>({version:1 as const,kind:'code-output' as const,sessionId,cellId,sourceId})
 const mounts = new WeakMap<object, ReturnType<typeof createFinalCodeOutputs>>()
 export function captureOriginalCodeFinalOutput(mount: object, cellId: string) {

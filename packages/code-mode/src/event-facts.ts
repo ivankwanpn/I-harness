@@ -7,7 +7,31 @@ import { createOutputQueue, recoveryError } from './event-facts/queue.ts'
 export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () => Promise<void>, onObservationChange?: () => void, committedDescriptor?: { retains(cellId:string):boolean; commit(record:object):Promise<void> }) {
   const cells = new Map<string, CellFacts>(), pending = new Set<Pending>()
   const admissionHolds = new Map<string, { action?: ManagedAction<ProducerFactOutcome> }>()
-  const held = new Set<CellFacts>(), failedAdmissions = new Set<string>()
+  type Notification = { state: 'running' | 'succeeded' | 'failed'; reason?: unknown }
+  const held = new Set<CellFacts>(), failedAdmissions = new Map<string, WeakMap<() => void, Notification>>()
+  // Only unresolved joins retain listeners. Settled admissions keep the existing
+  // scalar deduplication marker; weak callback bookkeeping retains no payload.
+  type Notice = { settled: boolean; listeners: Set<() => void>; failure?: { reason: unknown } }
+  const admissionNotices = new Map<string, Notice>()
+  const notify = (cellId: string, listener: () => void) => {
+    const calls = failedAdmissions.get(cellId)!
+    const prior = calls.get(listener)
+    if (prior?.state === 'failed') throw prior.reason
+    if (prior?.state === 'succeeded') return
+    if (prior) throw new FactRecoveryRequiredError()
+    const call: Notification = { state: 'running' }
+    calls.set(listener, call)
+    try { listener(); call.state = 'succeeded' }
+    catch (reason) { call.state = 'failed'; call.reason = reason; throw reason }
+  }
+  const settleNotice = (cellId: string, notice: Notice) => {
+    if (notice.failure) throw notice.failure.reason
+    notice.settled = true
+    try {
+      for (const listener of notice.listeners) { notify(cellId, listener); notice.listeners.delete(listener) }
+      if (admissionNotices.get(cellId) === notice) admissionNotices.delete(cellId)
+    } catch (reason) { notice.failure = { reason }; throw reason }
+  }
   let retired = false, stickyRecovery = false, admitting = 0, driveSerial = Promise.resolve()
   const changed = () => { try { onObservationChange?.() } catch { /* Passive observers cannot fail producers. */ } }
   const requireRecovery = () => { stickyRecovery = true; changed(); source.requireRecovery() }
@@ -77,7 +101,10 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
         }
         if (released) continue
         if (result.kind === 'blocked') throw recoveryError([result.reason])
-        if (!queue.hasPending()) return
+        if (!queue.hasPending()) {
+          for (const notice of admissionNotices.values()) if (notice.failure) throw recoveryError([notice.failure.reason])
+          return
+        }
       }
     })
     driveSerial = run.catch(() => {})
@@ -102,7 +129,27 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
     const captured = original.value, cell = captured.type === 'code/cell' ? cells.get(captured.cellId) : undefined
     // The existing admission handler may report the same original failure.
     // Keep its already-enqueued interrupted fact instead of allocating another.
-    if (!failedAdmission && captured.type === 'code/cell' && captured.state === 'interrupted' && failedAdmissions.has(captured.cellId)) return refresh()
+    if (!failedAdmission && captured.type === 'code/cell' && captured.state === 'interrupted' && failedAdmissions.has(captured.cellId)) {
+      let notice = admissionNotices.get(captured.cellId)
+      if (notice?.failure) throw recoveryError([notice.failure.reason])
+      if (onSettled) {
+        if (!notice) {
+          notice = { settled: true, listeners: new Set() }
+          admissionNotices.set(captured.cellId, notice)
+        }
+        notice.listeners.add(onSettled)
+        if (notice.settled) {
+          try { settleNotice(captured.cellId, notice) }
+          catch (reason) {
+            // A late join has no queued record left to quarantine for it. Keep
+            // that notification debt, preserving even a falsey primary reason.
+            try { requireRecovery() } catch { /* Already closed; retain the original callback failure. */ }
+            throw recoveryError([reason])
+          }
+        }
+      }
+      return refresh()
+    }
     if (cell?.terminal) throw new FactRecoveryRequiredError()
     const admission = captured.type === 'code/cell' ? admissionHolds.get(captured.cellId) : undefined
     const record = enroll({ kind: captured.type === 'code/cell' ? 'terminal' : 'required', cell, source, expectedMember:Object.freeze({type:captured.type,cellId:captured.cellId}),
@@ -114,6 +161,10 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
           if (admissionHolds.get(captured.cellId) === admission) admissionHolds.delete(captured.cellId)
         }
         onSettled?.()
+        if (captured.type === 'code/cell') {
+          const notice = admissionNotices.get(captured.cellId)
+          if (notice) settleNotice(captured.cellId, notice)
+        }
       }),
     })
     if (cell) { cell.terminal = record; seal(cell) }
@@ -161,7 +212,9 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
         committedFactSeqs(await action.facts.code.record(event))
       } catch (error) {
         admissionHolds.set(event.cellId, admission)
-        failedAdmissions.add(event.cellId)
+        failedAdmissions.set(event.cellId, new WeakMap())
+        admissionNotices.set(event.cellId, { settled: cell?.terminal?.settled ?? false, listeners: new Set() })
+        if (cell?.terminal?.settled) admissionNotices.delete(event.cellId)
         if (!cell?.terminal) void required({ ...event, state: 'interrupted', error: 'Code Mode admission did not complete' }, undefined, true).catch(() => {})
         throw error
       } finally { admitting--; changed() }
@@ -174,7 +227,7 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
       try { await refresh() } catch (reason) { if (!record.settled) throw record.failure ? record.failure.reason : reason }
     },
     stopOptional() { for (const cell of cells.values()) cell.action.stop() },
-    assertObserved() { if (pending.size) throw new FactRecoveryRequiredError() },
+    assertObserved() { if (pending.size || admissionNotices.size) throw new FactRecoveryRequiredError() },
     async close() { if (!retired) { retired = true; changed() }; await source.close(); off() },
   }
 }

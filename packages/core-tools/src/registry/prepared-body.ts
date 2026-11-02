@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { types } from 'node:util'
 import { isManagedFactOwner, isNondurableFactOwner, isOwnedSettlementSource, type FactOwner, type SessionView, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
 import type { PluginContext } from '@i-harness/core-plugin'
-import type { PreparedCall, Tool, ToolExec } from '../types.ts'
+import type { PreparedCall, Tool, ToolExec, ToolRegistry } from '../types.ts'
 import { assertResultPrepared } from './result-finalization.ts'
 
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
@@ -32,7 +32,7 @@ export function captureExecutionOwnerContext(ctx: PluginContext, value: unknown)
   return Object.freeze({ view,factOwner,context:ctx,...sessionId !== undefined ? {sessionId:sessionId as string} : {} })
 }
 const identityFields = ['session','sessionId','callId','callEventSeq','resultConsumer','modelGeneration'] as const
-type Body = { prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; claimed: boolean; permit?: { assertCurrent(): void }; attaching?: boolean; entered?: boolean }
+type Body = { registry: ToolRegistry; prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; claimed: boolean; permit?: { assertCurrent(): void }; attaching?: boolean; entered?: boolean }
 type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal; domain?: SessionView }
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
@@ -68,10 +68,10 @@ export function attachPreparedModelOrigin(prepared: PreparedCall, registry: impo
     if (!permit || typeof permit.assertCurrent !== 'function') throw new Error('Invalid model origin permit')
     const assertCurrent = permit.assertCurrent.bind(permit)
     assertCurrent()
-    body.permit = Object.freeze({assertCurrent,...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{}})
+    body.permit = Object.freeze({assertCurrent,...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{}})
   } finally { body.attaching = false }
 }
-export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerContext | undefined, signal?: AbortSignal): () => Promise<unknown> {
+export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerContext | undefined, signal: AbortSignal | undefined, registry: ToolRegistry): () => Promise<unknown> {
   if (records.has(prepared) || byExec.has(prepared.exec)) throw new Error('Prepared body already registered')
   const original = assertResultPrepared(prepared)
   let context: ToolExecutionOwnerContext | undefined
@@ -83,7 +83,7 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
     // Shell privilege is unavailable without proof and refuses a foreign view.
     if (!foreignContext && original.source && (configured.sessionId === undefined || configured.sessionId === prepared.exec.sessionId)) context = configured
   }
-  const body: Body = {prepared,tool:prepared.tool,leaf,exec:prepared.exec,call:prepared.call,context,foreignContext,source:original.source,view:original.view,
+  const body: Body = {registry,prepared,tool:prepared.tool,leaf,exec:prepared.exec,call:prepared.call,context,foreignContext,source:original.source,view:original.view,
     snapshots:new Map(identityFields.map(key=>[key,Object.getOwnPropertyDescriptor(prepared.exec,key)])),validations:{bindingValidation:prepared.bindingValidation,authorityValidation:prepared.authorityValidation,approvalValidation:prepared.approvalValidation},signal,claimed:false}
   records.set(prepared,body);byExec.set(body.exec,body)
   return async () => {
@@ -138,6 +138,59 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
     return claim
   } })
   return entry
+}
+
+export interface PreparedCodeBodyClaim extends PreparedBodyClaim {
+  takeCodeSourceIssuer(): import('../model-origin.ts').OriginalCodeSourceIssuer | undefined
+  hasCodeSourceIssuer(): boolean
+}
+type CodeRegistration = {registry:ToolRegistry;tool:Tool;leaf:Tool['execute'];current():boolean}
+const codeCatalogs=new WeakMap<ToolRegistry,(tool:Tool)=>{tool:Tool;executeBinding:Tool['execute'];bindingGeneration:number;bindingValidation():boolean}>()
+const codeRegistrations=new WeakMap<object,CodeRegistration>()
+/** Installed only by buildRegistry over its original catalog, never by callers. */
+export function associateOriginalCodeCatalog(registry:ToolRegistry,read:(tool:Tool)=>{tool:Tool;executeBinding:Tool['execute'];bindingGeneration:number;bindingValidation():boolean}){if(codeCatalogs.has(registry))throw Error('Original catalog already associated');codeCatalogs.set(registry,read)}
+export interface CodeRegistrationWitness {readonly kind:'original-code-registration'}
+/** Read existing registration identity; this does not certify a Code constructor. */
+export function captureCodeRegistration(registry:ToolRegistry,tool:Tool,leaf:Tool['execute']):CodeRegistrationWitness{
+ if(types.isProxy(registry)||types.isProxy(tool)||types.isProxy(leaf))throw TypeError('Original Code registration required')
+ const read=codeCatalogs.get(registry);if(!read)throw TypeError('Original registry required')
+ const name=Object.getOwnPropertyDescriptor(tool,'name'),execute=Object.getOwnPropertyDescriptor(tool,'execute')
+ if(!name||!('value'in name)||typeof name.value!=='string'||!execute||!('value'in execute)||execute.value!==leaf)throw TypeError('Original own-data Code registration required')
+ const binding=read(tool)
+ if(binding.tool!==tool||binding.executeBinding!==leaf||!binding.bindingValidation())throw Error('Original Code registration mismatch')
+ const witness=Object.freeze({kind:'original-code-registration' as const})
+ codeRegistrations.set(witness,{registry,tool,leaf,current:binding.bindingValidation});return witness
+}
+/** Trusted constructor primitive. Code mount provenance stays private in code-mode. */
+export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness,exec:ToolExec,owner:Readonly<{context:PluginContext;view:SessionView;factOwner:FactOwner;sessionId:string}>):PreparedCodeBodyClaim|undefined{
+ if(!registration||types.isProxy(registration)||types.isProxy(exec)||!owner||types.isProxy(owner))throw TypeError('Original Code invocation required')
+ const original=codeRegistrations.get(registration);if(!original||!original.current())throw Error('Original Code registration expired')
+ const fields=Object.getOwnPropertyDescriptors(owner)
+ if(Reflect.ownKeys(fields).length!==4||!['context','view','factOwner','sessionId'].every(key=>fields[key]&&'value'in fields[key]!&&fields[key]!.enumerable))throw TypeError('Closed original Code owner required')
+ const body=byExec.get(exec),frame=active.getStore()
+ if(!body){if(frame?.active)throw Error('Foreign prepared exec');return}
+ if(!frame?.active||frame.body!==body||body.registry!==original.registry||body.tool!==original.tool||body.leaf!==original.leaf||body.call.name!=='code_exec')throw Error('Not the original registered Code body')
+ const current=()=>{if(!original.current())throw Error('Original Code registration expired');check(body,frame);if(body.foreignContext||body.context?.context!==owner.context||body.context?.view!==owner.view||body.context?.factOwner!==owner.factOwner||body.context?.sessionId!==owner.sessionId||body.exec.session!==owner.view||body.exec.sessionId!==owner.sessionId)throw Error('Foreign original Code owner')}
+ check(body,frame)
+ if(body.foreignContext)throw Error('Foreign prepared Code owner')
+ if(!body.source||!body.context||!frame.domain||!body.permit||body.exec.resultConsumer==='code')return
+ current()
+ if(body.claimed)throw Error('Prepared Code body already claimed')
+ for(let parent=frame.parent;parent;parent=parent.parent)if(parent.domain===frame.domain)return
+ body.claimed=true;let consumed=false,taken=false
+ const claim:PreparedCodeBodyClaim=Object.freeze({context:body.context,source:body.source,exec,
+  assertCurrent(){if(this!==claim)throw Error('Foreign Code claim');current()},
+  consume(){if(this!==claim||consumed)throw Error('Original Code claim already consumed');current();consumed=true},
+  hasCodeSourceIssuer(){if(this!==claim)throw Error('Foreign Code claim');current();return !!(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer},
+  takeCodeSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Code claim required');current();taken=true;const issuer=(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer?.();if(!issuer)return
+   const wrapped:import('../model-origin.ts').OriginalCodeSourceIssuer=Object.freeze({
+    assertAdmissionCurrent(){if(this!==wrapped)throw Error('Foreign Code issuer');current();issuer.assertAdmissionCurrent()},
+    async prepareLaunch(cellId:string,sourceId:string){if(this!==wrapped)throw Error('Foreign Code issuer');current();const prepared=await issuer.prepareLaunch(cellId,sourceId);current();return prepared},
+    registerCompletion(drain:()=>Promise<void>){if(this!==wrapped)throw Error('Foreign Code issuer');current();return issuer.registerCompletion(drain)},
+    captureSource(binding:Readonly<import('../model-origin.ts').CodeSourceBinding>,recipientCurrent:()=>boolean){if(this!==wrapped)throw Error('Foreign Code issuer');current();return issuer.captureSource(binding,()=>{try{current();return recipientCurrent()}catch{return false}})},
+   });return wrapped
+  },
+ });return claim
 }
 
 export interface OriginalTaskCaller extends PreparedBodyClaim {

@@ -189,7 +189,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     registerInstructionExec(exec)
     // The callback stays private to this registry; hooks cannot replace the
     // executable, receiver, frozen arguments or exec through prepared metadata.
-    executions.set(prepared, createPreparedBodyInvoker(prepared, executeBinding, executionOwner, signal))
+    executions.set(prepared, createPreparedBodyInvoker(prepared, executeBinding, executionOwner, signal, getRegistry()))
     return prepared
   }
 

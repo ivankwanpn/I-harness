@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto"
+import {AsyncLocalStorage} from "node:async_hooks"
+import {captureCodeRegistration,claimPreparedCodeInvocation,type CodeRegistrationWitness,type PreparedCodeBodyClaim} from "@i-harness/core-tools/internal/code-origin"
+import {createCodeDeliveryProducer} from "./delivery-source.ts"
+import type {OriginalCodeSourceIssuer,CodeSourceBinding} from "@i-harness/core-tools/model-origin"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { FactRecoveryRequiredError, isNondurableSession } from "@i-harness/core-session"
 import { declareToolResultOutcome, declareInstructionReplan, retainInstructionCell, backgroundEventForTool, userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
@@ -13,10 +17,34 @@ import { createCodeOutputPublisher } from './output-facts.ts'
 import { observationOutput } from './observation-output.ts'
 import { originalObservationReplan } from './runtime/replan-observation.ts'
 import { captureOriginalCellFinalization, createCellFinalizations, readOriginalWorkerAcquisition, type OriginalCellFinalization } from './finalization.ts'
-import { createFinalCodeOutputs } from './final-output.ts'
+import { createFinalCodeOutputs, type CompletionEvidence } from './final-output.ts'
 
-type CompletionObservation = {kind:'unqualified'|'qualified';cellId:string;worker:'unknown'|'not-acquired'|'acquired';eligible:boolean;evidence?:object}
-type CompletionHandle = Readonly<{settle():Promise<CompletionObservation>}>
+export type CompletionObservation = Readonly<{disposition?:import('./final-output.ts').FinalCodeOutputDisposition;kind:'unqualified'|'qualified';cellId:string;worker:'unknown'|'not-acquired'|'acquired';eligible:boolean;evidence?:CompletionEvidence}>
+export type CompletionHandle = Readonly<{settle():Promise<CompletionObservation>}>
+type CodeMountRecord={tools:ToolRegistry;ctx:PluginContext;view:CodeModeMountOptions['session'];factOwner:ReturnType<typeof codeModeFactOwner>;sessionId:string|undefined;tool:Tool;leaf:Tool['execute'];registration?:CodeRegistrationWitness;retired:boolean}
+const codeMounts=new WeakMap<CodeModeMount,CodeMountRecord>()
+function enterOriginalCode(mount:CodeModeMount,exec:ToolExec):PreparedCodeBodyClaim|undefined{
+ const original=codeMounts.get(mount)
+ const currentMount=()=>{if(!original||codeMounts.get(mount)!==original||original.retired)throw Error('Original Code mount unavailable')}
+ currentMount();if(!original!.registration||!original!.sessionId)return
+ const claim=claimPreparedCodeInvocation(original!.registration,exec,Object.freeze({context:original!.ctx,view:original!.view,factOwner:original!.factOwner,sessionId:original!.sessionId}))
+ if(!claim)return
+ const current=()=>{currentMount();claim.assertCurrent()}
+ const wrapped:PreparedCodeBodyClaim=Object.freeze({context:claim.context,source:claim.source,exec:claim.exec,
+  assertCurrent(){if(this!==wrapped)throw Error('Foreign Code claim');current()},
+  consume(){if(this!==wrapped)throw Error('Foreign Code claim');current();claim.consume()},
+  hasCodeSourceIssuer(){if(this!==wrapped)throw Error('Foreign Code claim');current();return claim.hasCodeSourceIssuer()},
+  takeCodeSourceIssuer(){if(this!==wrapped)throw Error('Foreign Code claim');current();const issuer=claim.takeCodeSourceIssuer();if(!issuer)return
+   const checked:OriginalCodeSourceIssuer=Object.freeze({
+    assertAdmissionCurrent(){if(this!==checked)throw Error('Foreign Code issuer');current();issuer.assertAdmissionCurrent()},
+    async prepareLaunch(cellId:string,sourceId:string){if(this!==checked)throw Error('Foreign Code issuer');current();const prepared=await issuer.prepareLaunch(cellId,sourceId);current();return prepared},
+    registerCompletion(drain:()=>Promise<void>){if(this!==checked)throw Error('Foreign Code issuer');current();return issuer.registerCompletion(drain)},
+    captureSource(binding:Readonly<CodeSourceBinding>,recipientCurrent:()=>boolean){if(this!==checked)throw Error('Foreign Code issuer');current();return issuer.captureSource(binding,()=>{try{current();return recipientCurrent()}catch{return false}})},
+   });return checked
+  },
+ });return wrapped
+}
+
 const completionMounts=new WeakMap<object,Map<string,CompletionHandle>>()
 export function captureOriginalCodeCompletion(mount:object,cellId:string):CompletionHandle {
   const handle=completionMounts.get(mount)?.get(cellId)
@@ -38,8 +66,8 @@ function retainedObservation(exec: ToolExec, refresh: () => Promise<void>): impo
 /** Assembly-owned orchestration capability. Nested authority is registry-owned. */
 export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions): CodeModeMount {
   const mode = options.config?.mode ?? "off"
-  const factOwner = codeModeFactOwner(options)
-  const nondurable = isNondurableSession(options.session)
+  const factOwner = codeModeFactOwner(options), session=options.session, sessionId=options.sessionId
+  const nondurable = isNondurableSession(session)
   if (!["off", "mixed", "only"].includes(mode)) throw new Error("Invalid Code Mode mode")
   let disposed = false, closed = false, disposing: Promise<void> | undefined
   let initialized = false, localTransitions = 0, installationFailed = false
@@ -48,6 +76,8 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const broker = createCodeModeBroker(ctx, tools, options, (cellId, detail) => runtime.replan(cellId, detail))
   const finalizations = createCellFinalizations('cell-finalization',factOwner)
   const completionHandles=new Map<string,CompletionHandle>()
+  type Producer=ReturnType<typeof createCodeDeliveryProducer>
+  const producers=new Set<Producer>(),admission=new AsyncLocalStorage<Producer|undefined>()
   const originalCells = new Map<string, { terminal: ReturnType<typeof Promise.withResolvers<void>>; fence: ReturnType<typeof Promise.withResolvers<void>>; broker?: Pick<OriginalCellFinalization, 'settle'> }>()
   const finalOutputFactory=options.finalOutput
   const finalOutputs = createFinalCodeOutputs(factOwner, finalOutputFactory, () => facts.refresh(), id=>{completionHandles.delete(id)})
@@ -58,11 +88,11 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const refreshObservation = async () => { await facts.refresh(); for (const settle of admissionDebts.values()) await settle(); for (const finish of pendingFinishes.values()) await finish(); await runtime.drainRetainedObservations?.() }
   const liveCells = new Set<string>()
   const open = new Map<string, string | undefined>()
-  for (const event of options.session.events) if (event.type === "code/cell" && event.sessionId === options.sessionId) {
+  for (const event of session.events) if (event.type === "code/cell" && event.sessionId === sessionId) {
     if (event.state === "started" || event.state === "running") open.set(event.cellId, event.parentCallId)
     else open.delete(event.cellId)
   }
-  const ready = Promise.all([...open].map(([cellId, parentCallId]) => facts.required({ type: "code/cell", cellId, sessionId: options.sessionId, parentCallId, state: "interrupted", error: "Code Mode execution was interrupted; restart does not restore its continuation" }))).then(() => { initialized = true; surfaceChanged() })
+  const ready = Promise.all([...open].map(([cellId, parentCallId]) => facts.required({ type: "code/cell", cellId, sessionId: sessionId, parentCallId, state: "interrupted", error: "Code Mode execution was interrupted; restart does not restore its continuation" }))).then(() => { initialized = true; surfaceChanged() })
   void ready.catch(() => {})
   const runtime = createCodeModeRuntime({
     config: options.config,
@@ -71,13 +101,13 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     tools: () => broker.definitions(),
     invoke: call => broker.invoke(call),
     drainInstructionCell: cellId => broker.drainCell(cellId),
-    restoreStore: origin => replayCodeModeStore(options.session, options.sessionId ?? origin.sessionId),
+    restoreStore: origin => replayCodeModeStore(session, sessionId ?? origin.sessionId),
     async commitStore({ cellId, origin, writes, signal, committed, cancelled, retainOutcome }) {
       localTransitions++; surfaceChanged()
       try {
         if (signal.aborted) throw new Error("Code Mode store commit aborted")
         if (!nondurable) retainOutcome?.()
-        await facts.store({ type: "code/store", version: 1, cellId, sessionId: options.sessionId ?? origin.sessionId, writes }, () => { if (!nondurable) committed?.() }, () => cancelled?.())
+        await facts.store({ type: "code/store", version: 1, cellId, sessionId: sessionId ?? origin.sessionId, writes }, () => { if (!nondurable) committed?.() }, () => cancelled?.())
         if (nondurable) {
           try { await options.flush?.(); if (signal.aborted) throw new Error('Code Mode store commit aborted'); committed?.() }
           catch (error) { installationFailed = true; throw error }
@@ -107,37 +137,40 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
           const outputReady=Promise.withResolvers<NonNullable<ReturnType<typeof finalOutputs.captureCompletion>>>()
           void outputReady.promise.catch(()=>{})
           try {
-            if(finalOutputFactory && (options.sessionId ?? event.origin.sessionId) && !event.origin.instructionOrigin && !nondurable && options.session.formatVersion===14) {
+            if(finalOutputFactory && (sessionId ?? event.origin.sessionId) && !event.origin.instructionOrigin && !nondurable && session.formatVersion===14) {
               let settled:CompletionObservation|undefined
               const handle:CompletionHandle=Object.freeze({async settle(){
                 if(this!==handle)throw new Error('Original Code completion handle required')
                 if(settled)return settled
                 const output=await outputReady.promise
-                await output.settle()
+                const originalDisposition=await output.settle()
+                const disposition=originalDisposition.kind==='ready'?Object.freeze({kind:'ready' as const,ref:Object.freeze({...originalDisposition.ref})}):Object.freeze({kind:'unavailable' as const,reason:originalDisposition.reason})
                 if(settled)return settled
                 const evidence=output.evidence(),worker=readOriginalWorkerAcquisition(runtimeOwner)
                 const eligible=!!evidence && worker==='acquired' && (evidence.footer.status==='completed'||evidence.footer.status==='failed') && !evidence.footer.truncated && !evidence.footer.omitted && evidence.unavailableTextCount===0 && evidence.ref.completeness==='complete'
-                settled=Object.freeze({kind:evidence?'qualified':'unqualified',cellId:event.cellId,worker,eligible,...(evidence?{evidence}:{})})
+                settled=Object.freeze({kind:evidence?'qualified':'unqualified',disposition,cellId:event.cellId,worker,eligible,...(evidence?{evidence}:{})})
                 if(completionHandles.get(event.cellId)===handle)completionHandles.delete(event.cellId)
                 return settled
               }})
               completionHandles.set(event.cellId,handle)
             }
-            finalOutputs.reserve(event.cellId, options.sessionId ?? event.origin.sessionId, finalization, runtimeOwner, !!event.origin.instructionOrigin)
+            finalOutputs.reserve(event.cellId, sessionId ?? event.origin.sessionId, finalization, runtimeOwner, !!event.origin.instructionOrigin)
             const output=finalOutputs.captureCompletion(event.cellId)
             if(output)outputReady.resolve(output)
             else outputReady.reject(new Error('Original Code output unavailable'))
-            await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
+            const producer=admission.getStore()
+            if(producer){if(event.origin.instructionOrigin)producer.unsupported();else{const handle=completionHandles.get(event.cellId);if(!handle)throw Error('Original Code completion prerequisite unavailable');await producer.started(event.cellId,handle)}}
+            await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
             try { cell.broker = broker.startCell(event.cellId, event.origin.instructionOrigin); liveCells.add(event.cellId); event.instructionInstalled?.() }
             catch (error) { installationFailed = true; throw error }
             surfaceChanged()
           } catch (error) {
             outputReady.reject(error)
-            const terminal = { type: 'code/cell' as const, cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: 'interrupted' as const, error: 'Code Mode admission did not complete' }
-            let terminalDone = false, flight: Promise<void> | undefined
+            const terminal = { type: 'code/cell' as const, cellId: event.cellId, sessionId: sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: 'interrupted' as const, error: 'Code Mode admission did not complete' }
+            let terminalDone = false, terminalCaptured = false, flight: Promise<void> | undefined
             const settle = () => {
               if (flight) return flight
-              const pending = (async () => { if (!terminalDone) { await facts.required(terminal, undefined, () => cell.terminal.resolve()); terminalDone = true }; await event.instructionAdmissionFailed?.(); cell.fence.resolve(); admissionDebts.delete(event.cellId) })()
+              const pending = (async () => { if (!terminalCaptured) { terminalCaptured=true; await facts.required(terminal, undefined, () => { terminalDone=true; cell.terminal.resolve() }) }; if(!terminalDone){await facts.refresh();if(!terminalDone)throw new FactRecoveryRequiredError()}; await event.instructionAdmissionFailed?.(); cell.fence.resolve(); admissionDebts.delete(event.cellId) })()
               flight = pending; void pending.catch(() => { if (flight === pending) flight = undefined }); return pending
             }
             admissionDebts.set(event.cellId, settle)
@@ -173,7 +206,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
             surfaceChanged()
           }
           if (!nondurable) event.retainOutcome?.()
-          await facts.required({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}), ...(event.instructionReplan ? { instructionReplan: event.instructionReplan } : {}) }, () => {
+          await facts.required({ type: "code/cell", cellId: event.cellId, sessionId: sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}), ...(event.instructionReplan ? { instructionReplan: event.instructionReplan } : {}) }, () => {
             if (!nondurable) committed()
           }, () => { const cell = originalCells.get(event.cellId); cell?.terminal.resolve(); if (!nondurable) cell?.fence.resolve() })
           if (nondurable) {
@@ -187,17 +220,24 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       } finally { localTransitions--; surfaceChanged() }
     },
   })
+  let registration:CodeRegistrationWitness|undefined
   const execTool: Tool = {
     name: "code_exec", description: "Execute isolated JavaScript to compose the session's tools.", isReadOnly: true,
     inputSchema: { type: "object", properties: { code: { type: "string" }, yield_time_ms: { type: "integer", minimum: 0, maximum: 60_000 }, max_output_tokens: { type: "integer", minimum: 0, maximum: 4096 } }, required: ["code"], additionalProperties: false },
     async execute(args, exec) {
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
+      const claim=enterOriginalCode(mount,exec)
+      let producer:Producer|undefined
+      if(claim && finalOutputFactory && !nondurable && session.formatVersion===14){claim.consume();const issuer=claim.takeCodeSourceIssuer();if(issuer){producer=createCodeDeliveryProducer(issuer,session,refreshObservation,async id=>{if(liveCells.has(id))await runtime.terminate(id,"Original Code source closing")},()=>{if(producer)producers.delete(producer)});producers.add(producer)}}
+      try {
       const retained = retainedObservation(exec, refreshObservation)
       await ready
-      const out = await runtime.exec(args as CodeModeExecInput, { sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage, bindInstructionCell: cellId => retainInstructionCell(exec, cellId) }, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained })
+      const out = await admission.run(producer,()=>runtime.exec(args as CodeModeExecInput, { sessionId: sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage, bindInstructionCell: cellId => retainInstructionCell(exec, cellId) }, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained }))
+      await producer?.observed(out.status==='running')
       declareObservationReplan(exec, out)
       declareToolResultOutcome(exec, out.status === 'failed' ? 'failed' : out.status === 'terminated' ? 'canceled' : 'succeeded')
       return observationOutput(out)
+      }catch(error){producer?.failed();throw error}
     },
   }
   const waitTool: Tool = {
@@ -223,7 +263,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   }
   if (mode !== "off") {
     if (tools.get("code_exec") || tools.get("code_wait") || tools.get("code_status")) throw new Error("Code Mode tool names are already registered")
-    tools.register(execTool); tools.register(waitTool); tools.register(statusTool)
+    tools.register(execTool); if(finalOutputFactory&&!nondurable&&session.formatVersion===14)registration=captureCodeRegistration(tools,execTool,execTool.execute); tools.register(waitTool); tools.register(statusTool)
   }
   const mount: CodeModeMount = {
     ready: () => ready,
@@ -245,7 +285,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     async dispose() {
       if (closed) return
       if (disposing) return disposing
-      if (!disposed) { disposed = true; surfaceChanged() }
+      if (!disposed) { disposed = true; const original=codeMounts.get(mount);if(original)original.retired=true; surfaceChanged() }
       facts.stopOptional()
       const pending = (async () => {
         const errors: unknown[] = []
@@ -256,6 +296,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
         for (const settle of admissionDebts.values()) try { await settle() } catch (error) { errors.push(error) }
         for (const finish of pendingFinishes.values()) try { await finish() } catch (error) { errors.push(error) }
         if (brokerFailed) try { await broker.dispose() } catch (error) { errors.push(error === brokerFailure ? error : new AggregateError([brokerFailure, error], 'Original broker cleanup failed')) }
+        for(const producer of [...producers])try{await producer.close()}catch(error){errors.push(error)}
         try { await facts.close() } catch (error) { errors.push(error) }
         try { await finalizations.drain() } catch (error) { errors.push(error) }
         try { await finalOutputs.drain() } catch (error) { errors.push(error) }
@@ -271,6 +312,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       return pending
     },
   }
+  codeMounts.set(mount,{tools,ctx,view:session,factOwner,sessionId:sessionId,tool:execTool,leaf:execTool.execute,registration,retired:false})
   finalizations.bind(mount)
   finalOutputs.bind(mount)
   completionMounts.set(mount,completionHandles)
