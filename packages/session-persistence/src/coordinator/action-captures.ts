@@ -4,7 +4,7 @@ import {types} from 'node:util'
 
 /** Optional action captures retain their original disposition after Stop.
  * Their read/reconcile handles never gain required-settlement admission. */
-export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureLifecycle' | 'captureMetadata' | 'captureToolDispatch' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeCall' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureCodeDeliverySource' | 'captureWorkflowDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
+export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureLifecycle' | 'captureMetadata' | 'capturePlanProposal' | 'captureToolDispatch' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeCall' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureCodeDeliverySource' | 'captureWorkflowDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
   const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => forwardSettlementCapture(retained,{
     admit: ()=>retained.admit(), reconcile: ()=>retained.reconcile(), observe: ()=>retained.observe(),
   })
@@ -20,6 +20,7 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
   return {
     captureLifecycle:event=>actionHandle(captureSettlementFact({kind:'lifecycle',event},operations,true)),
     captureMetadata:(event,checkCurrent)=>actionHandle(captureSettlementFact({kind:'metadata',event},checkCurrent===undefined?operations:guarded(checkCurrent),true)),
+    capturePlanProposal:(proposal,checkCurrent)=>actionHandle(captureSettlementFact({kind:'plan-proposal',mode:{type:'plan/mode',mode:'on',proposal},message:{type:'user/message',text:proposal}},checkCurrent===undefined?operations:guarded(checkCurrent),true)),
     captureToolDispatch:(callId,eventSeq)=>actionHandle(captureSettlementFact({kind:'tool',event:{type:'tool/dispatch',callId,eventSeq}},operations,true)),
     captureToolCall(event) {
       operations.assertHeld()

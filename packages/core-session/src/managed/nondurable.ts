@@ -89,6 +89,12 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         return { kind: 'memory-committed', durability: 'nondurable', seqs: [seq] }
       }
       return {
+        capturePlanProposal(proposal,checkCurrent) {
+          const retained=captureMemoryFact(session,{kind:'plan-proposal',mode:{type:'plan/mode',mode:'on',proposal},message:{type:'user/message',text:proposal}},()=>{assertOpen();if(checkCurrent&&!checkCurrent())throw Object.assign(new Error('FACT_PRECONDITION_STALE'),{code:'FACT_PRECONDITION_STALE'})},true)
+          let attempted:Promise<NondurableFactOutcome>|undefined
+          const admit=()=>attempted??=(async()=>{try{return await retained.admit()}catch(error){if((error as {code?:unknown})?.code==='FACT_PRECONDITION_STALE')return {kind:'not-issued',code:'FACT_PRECONDITION_STALE'};throw error}})()
+          return {admit,observe:()=>attempted??retained.observe(),reconcile:()=>attempted??retained.observe()}
+        },
         captureMetadata(event,checkCurrent) {
           const retained=captureMemoryFact(session,{kind:'metadata',event},()=>{assertOpen();if(checkCurrent&&!checkCurrent())throw Object.assign(new Error('FACT_PRECONDITION_STALE'),{code:'FACT_PRECONDITION_STALE'})},true)
           let attempted:Promise<NondurableFactOutcome>|undefined

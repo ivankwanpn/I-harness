@@ -83,6 +83,8 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  assertCurrent():void
  recentNativeRecoveryRefs():Promise<DeepReadonly<readonly Extract<SessionEventView,{type:'context/result-ref'}>['ref'][]>>
  hasVisibleResultRef(candidate:Readonly<{kind:'legacy';id:string}|{kind:'managed';ref:import('../results/types.ts').ManagedArtifactRef}>):boolean
+ jobStatusEvents():Promise<DeepReadonly<readonly Extract<SessionEventView,{type:'job/status'}>[]>>
+ lastStepEndSince(fromSeq:number):Promise<DeepReadonly<Extract<SessionEventView,{type:'step/end'}>>|undefined>
  plan():Readonly<PlanModeView>
  sandboxMode(fromSeq?:number):Extract<SessionEventView,{type:'sandbox/mode'}>['mode']|undefined
  sandboxPolicy(fromSeq?:number):Readonly<{mode:Extract<SessionEventView,{type:'sandbox/mode'}>['mode'];seq:number}>|undefined

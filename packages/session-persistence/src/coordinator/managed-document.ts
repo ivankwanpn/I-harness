@@ -603,7 +603,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             const captureCodeCall=capability.captureCodeCall!;
             capability.captureCodeCall=(event,source)=>{assertAuthorized(authorization);if(sourceDrains.get(source)?.action!==action)throw TypeError('Original action source required');const capture=captureCodeCall(event,source);core?.associateActionCaptureSource(capability,source,capture);return capture};
             Object.defineProperty(capability, 'owner', { value: owner, enumerable: true, writable: false, configurable: false });
-            for(const name of ['captureToolCall','captureLifecycle','captureMetadata','captureToolDispatch','captureCodeCall'] as const)Object.defineProperty(capability,name,{value:capability[name],enumerable:true,writable:false,configurable:false});
+            for(const name of ['captureToolCall','captureLifecycle','captureMetadata','capturePlanProposal','captureToolDispatch','captureCodeCall'] as const)Object.defineProperty(capability,name,{value:capability[name],enumerable:true,writable:false,configurable:false});
             ownedActions.add(capability);
             if(core){actionHooks=core.captureHooks(capability,held.assertHeld);actionMembers.add({source:capability,finished:()=>finished})}
             return capability;

@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/workflow.ts","src/managed-goal-ui.ts","src/managed-workflow-ui.ts","test/managed-workflow-ui.test.ts"]}
