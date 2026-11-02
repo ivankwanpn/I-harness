@@ -42,6 +42,16 @@ it('only acknowledged closure allows a fresh execution incarnation in the same c
  const next=await cache.get('owner');expect(next.execution.identity).not.toBe(first.execution.identity)
  expect(()=>first.execution.observe()).toThrow();await cache.close('owner')
 })
+it('retains the same private cleanup after a failed close and refuses a foreign attachment',async()=>{
+ const {cache}=await setup(),{execution}=await cache.get('owner'),attempts:string[]=[]
+ expect(cache.current('owner')).toBe(execution)
+ expect(()=>cache.retain('owner',{} as typeof execution,async()=>{})).toThrow('Current original execution')
+ cache.retain('owner',execution,async()=>{attempts.push('cleanup');if(attempts.length===1)throw Error('unsettled')})
+ await expect(cache.close('owner')).rejects.toThrow('retained cleanup')
+ expect(()=>cache.current('owner')).toThrow('unavailable')
+ await cache.close('owner');expect(attempts).toEqual(['cleanup','cleanup'])
+ cache.releaseClosed('owner');expect(cache.current('owner')).toBeUndefined()
+})
 it('private generation consumes original folds and emits original acknowledged R5 facts without a view',async()=>{
  const {cache}=await setup(),owned=await cache.get('owner'),seq=await owned.inputs.inbox.admit({inputId:'first',text:'original',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}})
  const action=owned.execution.owner.beginAction(),rows:PassiveProducerRecord[]=[],gaps:string[]=[]

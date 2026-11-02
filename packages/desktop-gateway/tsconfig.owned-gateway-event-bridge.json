@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/owned-gateway-event-bridge.ts","test/owned-gateway-event-bridge.test.ts"]}

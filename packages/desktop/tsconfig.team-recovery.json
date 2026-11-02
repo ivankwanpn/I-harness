@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/main/runtime-diagnostics.ts","src/renderer/session/RuntimeFeedback.tsx","test/runtime-feedback-ui.test.tsx","test/runtime-diagnostics.test.ts"]}

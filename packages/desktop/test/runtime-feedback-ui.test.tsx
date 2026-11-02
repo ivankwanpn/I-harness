@@ -223,3 +223,11 @@ it("does not clear a replacement retry from an older logical recovery", () => {
   f.entry({ id: "old-recovery", kind: "model/recovered", level: "info", requestId: "old-logical", retry: undefined })
   expect(screen.getByRole("status").textContent).toContain("重新連線中")
 })
+
+it('retries only the same session recovery through the existing queue resume action',async()=>{
+ const f=fixture();render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={()=>{}} />)
+ f.entry({id:'team-recovery',kind:'session/error',level:'error',code:'TEAM_RECOVERY_REQUIRED',message:'The task needs recovery.',retry:undefined})
+ const retry=screen.getByRole('button',{name:'重試'});await act(async()=>{fireEvent.click(retry);await Promise.resolve()})
+ expect(f.bridge.request).toHaveBeenCalledWith({kind:'desktop/session/input/resume',workspaceId:'w',sessionId:'a'})
+ expect(screen.queryByRole('alert')).toBeNull()
+})

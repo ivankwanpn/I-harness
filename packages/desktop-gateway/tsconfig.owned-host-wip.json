@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/host.ts","src/owned-index-jobs.ts","src/owned-gateway-native.ts","src/owned-gateway-instructions.ts","src/owned-gateway-task.ts"]}

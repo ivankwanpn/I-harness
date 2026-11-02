@@ -307,3 +307,8 @@ describe("diagnostic request identity and metadata", () => {
     expect((await stat(output)).size).toBeLessThanOrEqual(20 * 1024 * 1024)
   })
 })
+
+it('retains the explicit managed Team recovery code in session diagnostics',async()=>{
+ const service=createRuntimeDiagnostics(await root());service.observe({kind:'sdk/notification',workspaceId:'ws',method:'session/status',params:{sessionId:'s',status:'failed',code:'TEAM_RECOVERY_REQUIRED'}})
+ const entries=(await service.list()).entries;expect(entries).toHaveLength(1);expect(entries[0]).toMatchObject({kind:'session/error',code:'TEAM_RECOVERY_REQUIRED',workspaceId:'ws',sessionId:'s'});await service.flush()
+})
