@@ -1,3 +1,4 @@
+import { receivedInputsFor } from '../../../session-executor/src/lifecycle/received-inputs.ts'
 import { canonicalJsonData, isStrictFactData, committedFactSeqs, isOwnedSettlementSource } from '@i-harness/core-session'
 import type { ModelOriginState } from './model-origin.ts'
 import type { ModelOriginExpectation } from '@i-harness/core-tools/model-origin'
@@ -138,7 +139,7 @@ export function takeModelMember(origin:ModelOriginState,proof:object,expected:Mo
     if(state.phase!=='prepared'||expected.registry!==origin.registry||expected.prepared!==prepared||expected.view!==origin.view||expected.source!==state.source||state.members?.[index]!==memberData({callId:expected.callId,eventSeq:expected.callEventSeq,name:expected.name,args:expected.args})||state.members[index]!==memberData(state.batch[index]!))throw new Error('Foreign model member')
   }
   check();if(member!.taken)throw new Error('Model member already taken');member!.taken=true
-  let issued=false
+  let issued=false, codeIssued=false
   const permit=Object.freeze({assertCurrent:check,takeExecSourceIssuer(){
     if(this!==permit)throw new Error('Foreign model permit receiver')
     check();if(issued)throw new Error('Exec source issuer already taken');issued=true
@@ -154,6 +155,25 @@ export function takeModelMember(origin:ModelOriginState,proof:object,expected:Mo
         return action.captureExecDeliverySource({type:'agent/delivery-source',version:1,kind:'exec',recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceNamespace:'exec',sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery},()=>{try{check();return recipientCurrent()}catch{return false}})
       },
       registerCompletion(drain:()=>Promise<void>){if(this!==issuer)throw new Error('Foreign Exec issuer receiver');check();if(registered)throw new Error('Exec completion already registered');registered=true;return action.registerSettlementSource(drain)},
+    })
+    return issuer
+  },takeCodeSourceIssuer(){
+    if(this!==permit)throw new Error('Foreign model permit receiver')
+    check();if(codeIssued)throw new Error('Code source issuer already taken');codeIssued=true
+    if(expected.name!=='code_exec')throw new Error('Original Code member required')
+    const action=member!.state.invocation.action
+    if(origin.factOwner.view!==origin.view||origin.factOwner.ownsAction?.(action)===false)throw new Error('Original model action required')
+    let captured=false,registered=false,preparing=false,preparedBinding:string|undefined
+    const issuer:import('@i-harness/core-tools/model-origin').OriginalCodeSourceIssuer=Object.freeze({
+      assertAdmissionCurrent(){if(this!==issuer)throw new Error('Foreign Code issuer receiver');check()},
+      async prepareLaunch(cellId:string,sourceId:string){if(this!==issuer||!registered||preparing)throw Error('Original Code launch preparation required');check();preparing=true;const recipient=expected.prepared.exec.sessionId;if(!recipient||expected.callEventSeq===undefined)throw Error('Original Code recipient required');const prepared=await receivedInputsFor(origin.factOwner,recipient).delivery.prepareCodeLaunch({view:origin.view,sessionId:recipient,callId:expected.callId,callSeq:expected.callEventSeq,cellId,sourceId});check();preparedBinding=canonicalJsonData(prepared.binding);return prepared},
+      captureSource(binding:import('@i-harness/core-tools/model-origin').CodeSourceBinding,recipientCurrent:()=>boolean){
+        if(this!==issuer)throw new Error('Foreign Code issuer receiver');check()
+        if(!isStrictFactData(binding)||!preparedBinding||canonicalJsonData(binding)!==preparedBinding||!registered||captured||binding.callSeq!==expected.callEventSeq||binding.recipientSessionId!==expected.prepared.exec.sessionId||binding.sourceNamespace!=='code'||binding.delivery!=='tool')throw new Error('Foreign Code source binding')
+        captured=true
+        return action.captureCodeDeliverySource({type:'agent/delivery-source',version:1,kind:'code',...binding},()=>{try{check();return recipientCurrent()}catch{return false}})
+      },
+      registerCompletion(drain:()=>Promise<void>){if(this!==issuer)throw new Error('Foreign Code issuer receiver');check();if(registered)throw new Error('Code completion already registered');registered=true;return action.registerSettlementSource(drain)},
     })
     return issuer
   }})

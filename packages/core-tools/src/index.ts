@@ -1,5 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import { captureExecutionOwnerContext, preparedExecutionOwnerContext,preparedManagedExecutionDomain, type ToolExecutionOwnerContext,type ManagedToolExecutionOwnerContext } from './registry/prepared-body.ts'
+import { associateOriginalCodeCatalog, captureExecutionOwnerContext, preparedExecutionOwnerContext,preparedManagedExecutionDomain, type ToolExecutionOwnerContext,type ManagedToolExecutionOwnerContext } from './registry/prepared-body.ts'
 export { bindPreparedShellLeaf, assertPreparedExecutionOwnerContext } from './registry/prepared-body.ts'
 export {readToolInvocationDomain} from './registry/invocation-domain.ts'
 export type { PreparedShellBodyClaim, ToolExecutionOwnerContext,ManagedToolExecutionOwnerContext } from './registry/prepared-body.ts'
@@ -116,6 +116,7 @@ function buildRegistry(ctx: PluginContext, options: RegistryOptions, take?: impo
     deferredSearchIndex: catalog.deferredSearchIndex,
     deferredToolCount: catalog.deferredToolCount,
   }
+  associateOriginalCodeCatalog(registry,tool=>catalog.captureBinding({name:tool.name,args:{}}))
   registryRetention.set(registry, retention)
   registryInstructions.set(registry, { required, verify, retainCell })
   const driver: import('./model-origin.ts').PreparedModelOriginDriver = Object.freeze({ attach(prepared: import('./types.ts').PreparedCall, proof: object) {

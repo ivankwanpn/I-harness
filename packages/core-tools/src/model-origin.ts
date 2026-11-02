@@ -7,7 +7,14 @@ export interface OriginalExecSourceIssuer {
   captureSource(binding: Readonly<ExecSourceBinding>, recipientCurrent: () => boolean): import('@i-harness/core-session').CapturedActionFact<ProducerFactOutcome>
   registerCompletion(drain: () => Promise<void>): SettlementFacts<ProducerFactOutcome>
 }
-export interface OriginalModelMemberPermit { assertCurrent(): void; takeExecSourceIssuer?(): OriginalExecSourceIssuer }
+export interface CodeSourceBinding { recipientSessionId: string; generationId: string; sourceNamespace: 'code'; sourceId: string; callSeq: number; cellId: string; delivery: 'tool' }
+export interface OriginalCodeSourceIssuer {
+  prepareLaunch(cellId:string,sourceId:string):Promise<{binding:Readonly<CodeSourceBinding>;isCurrent():boolean}>
+  assertAdmissionCurrent(): void
+  captureSource(binding: Readonly<CodeSourceBinding>, recipientCurrent: () => boolean): import('@i-harness/core-session').CapturedActionFact<ProducerFactOutcome>
+  registerCompletion(drain: () => Promise<void>): SettlementFacts<ProducerFactOutcome>
+}
+export interface OriginalModelMemberPermit { assertCurrent(): void; takeExecSourceIssuer?(): OriginalExecSourceIssuer; takeCodeSourceIssuer?(): OriginalCodeSourceIssuer }
 export interface ConstructorModelOriginVerifier { take(proof: object, expected: ModelOriginExpectation): OriginalModelMemberPermit }
 export interface ManagedModelOriginExpectation extends Omit<ModelOriginExpectation,'view'> {readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain}
 export interface ConstructorManagedModelOriginVerifier {readonly kind:'managed-model-origin';readonly domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;take(proof:object,expected:ManagedModelOriginExpectation):OriginalModelMemberPermit}
