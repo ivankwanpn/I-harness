@@ -32,7 +32,7 @@ export interface CodeFacts<Outcome = FactOutcome> {
   dispatch(cellId: string, callId: string, reference: SeqRef<'code/call'>): Promise<Outcome>
 }
 export interface DeliveryFacts<Outcome = FactOutcome> {
-  record(event: Event<'subagent/start' | 'subagent/end' | 'subagent/inbox' | 'job/status' | 'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered' | 'exec/end' | 'code/end' | 'agent/delivery-handoff'>): Promise<Outcome>
+  record(event: Event<'subagent/start' | 'subagent/end' | 'subagent/inbox' | 'job/status' | 'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered' | 'exec/end' | 'code/end' | 'workflow/end' | 'agent/delivery-handoff'>): Promise<Outcome>
 }
 export type DeliverySettlementFact = Exclude<Parameters<DeliveryFacts['record']>[0], Event<'subagent/start'>>
 export type RequiredLifecycleFact = Event<'step/end' | 'turn/end' | 'step/failed' | 'reasoning'>
@@ -122,6 +122,7 @@ export interface ManagedAction<Outcome = FactOutcome> {
   captureCodeStore(event: Event<'code/store'>): CapturedActionFact<Outcome>
   captureTeamTransaction(events: readonly TeamFact[]): CapturedActionFact<Outcome>
   captureSubagentStart(event: Event<'subagent/start'>, binding?:import('../events/delivery.ts').SubagentDeliveryLaunchDraft): CapturedActionFact<Outcome>
+  captureWorkflowDeliverySource(event: import('../events/workflow-delivery.ts').WorkflowDeliverySourceEvent, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureCodeDeliverySource(event: import('../events/code-delivery.ts').CodeDeliverySourceEvent, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureExecDeliverySource(event: import('../events/exec-delivery.ts').ExecDeliverySourceEvent, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   assertOpen(): void

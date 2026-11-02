@@ -41,7 +41,7 @@ export function createManagedAgentModelOriginOwner(context: PluginContext, execu
                 throw TypeError('Original private model member required');
             member.check(expected);
             member.taken = true;
-            let issued = false, codeIssued = false;
+            let issued = false, codeIssued = false, workflowIssued = false;
             const permit: import('@i-harness/core-tools/model-origin').OriginalManagedModelMemberPermit = Object.freeze({ getAdmissionWait(signal:AbortSignal){if(this!==permit)throw TypeError('Original model permit receiver required');member.schedule(expected);return getManagedExecutionAdmissionWait(domain,member.action!,signal)}, assertCurrent() {
                     if (this !== permit)
                         throw TypeError('Original model permit receiver required');
@@ -80,6 +80,15 @@ export function createManagedAgentModelOriginOwner(context: PluginContext, execu
                             });
                         } });
                     return issuer;
+                }, takeWorkflowSourceIssuer() {
+                    if(this!==permit||workflowIssued)throw TypeError('Original Workflow source issuer required');member.check(expected);if(expected.name!=='workflow_run')throw TypeError('Original Workflow member required');workflowIssued=true
+                    const recipient=receivedExecutionInputsFor(execution).workflowDelivery(domain);let registered=false,captured=false,preparing=false,preparedBinding:string|undefined
+                    const issuer:import('@i-harness/core-tools/model-origin').OriginalWorkflowSourceIssuer=Object.freeze({
+                        assertAdmissionCurrent(){if(this!==issuer)throw TypeError('Original Workflow issuer receiver required');member.check(expected)},
+                        registerCompletion(drain:()=>Promise<void>){if(this!==issuer||registered)throw TypeError('Original Workflow completion required');issuer.assertAdmissionCurrent();registered=true;return member.action!.registerSettlementSource(drain)},
+                        async prepareLaunch(sourceId:string){if(this!==issuer||!registered||preparing)throw TypeError('Original Workflow launch preparation required');issuer.assertAdmissionCurrent();preparing=true;const prepared=await recipient.prepareWorkflowLaunch({sessionId:domain.sessionId,callId:expected.callId,callSeq:expected.callEventSeq,sourceId});issuer.assertAdmissionCurrent();if(prepared.kind!=='bound')throw Object.assign(Error('Private Workflow launch unavailable'),{reason:prepared.reason});if(prepared.binding.sourceId!==sourceId||!isStrictFactData(prepared.binding))throw TypeError('Original Workflow launch binding required');preparedBinding=canonicalJsonData(prepared.binding);return prepared},
+                        captureSource(binding:Readonly<import('@i-harness/core-tools/model-origin').WorkflowSourceBinding>,recipientCurrent:()=>boolean){if(this!==issuer||!registered||captured||!preparedBinding||!isStrictFactData(binding)||canonicalJsonData(binding)!==preparedBinding||binding.recipientSessionId!==domain.sessionId||binding.callSeq!==expected.callEventSeq||binding.sourceNamespace!=='workflow'||binding.delivery!=='tool')throw TypeError('Original Workflow source binding required');issuer.assertAdmissionCurrent();captured=true;return member.action!.captureWorkflowDeliverySource({type:'agent/delivery-source',version:1,kind:'workflow',...binding},()=>{try{issuer.assertAdmissionCurrent();return recipientCurrent()}catch{return false}})},
+                    });return issuer
                 }, takeCodeSourceIssuer() {
                     if(this!==permit||codeIssued)throw TypeError('Original Code source issuer required');
                     member.check(expected);

@@ -102,3 +102,9 @@ it('live registry releases original recovered frame capture after acknowledgemen
   step.release();expect(isWorkflowStepPending(step)).toBe(false);expect(begins).toBe(1);expect(f.commits()).toBe(1)
  }finally{available=true;await f.pair.service.dispose()}
 })
+
+it('retains exact native attempt results in the original joined workflow completion',async()=>{
+ const f=setup(false,{output:async function*(){yield {channel:'stdout',data:Buffer.from('native-workflow-output')}}}),jobs=createWorkflowJobStore(),executor=createWorkflowExecutor({exec:f.pair.service,steps:createWorkflowStepFactory(f.pair,c=>c),jobs})
+ const run=executor.runWorkflow({name:'w',description:'w',steps:[{name:'a',command:'controlled'}]},undefined,'workflow')
+ try{f.root.resolve({exitCode:0});const completion=await run.join();expect(completion).toMatchObject({cleanup:'clean',dispatch:'dispatched',result:{version:1,kind:'workflow-run-result',invocationId:run.invocationId,steps:[{step:0,attempt:1,outcome:'succeeded',exitCode:0,timedOut:false,stdout:'native-workflow-output',stderr:''}]}});expect(completion.result?.stdout).toContain('native-workflow-output');const {isOriginalWorkflowCompletion}=await import('../src/runner.ts');expect(isOriginalWorkflowCompletion(run,completion)).toBe(true);expect(isOriginalWorkflowCompletion({...run},completion)).toBe(false);expect(isOriginalWorkflowCompletion(run,{...completion})).toBe(false);expect(await run.reconcile()).toBe(completion);expect(f.commits()).toBe(1)}finally{await f.pair.service.dispose()}
+})

@@ -4,7 +4,7 @@ import {types} from 'node:util'
 
 /** Optional action captures retain their original disposition after Stop.
  * Their read/reconcile handles never gain required-settlement admission. */
-export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureLifecycle' | 'captureMetadata' | 'captureToolDispatch' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeCall' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureCodeDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
+export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureToolCall' | 'captureLifecycle' | 'captureMetadata' | 'captureToolDispatch' | 'captureModelExchange' | 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeCall' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureExecDeliverySource' | 'captureCodeDeliverySource' | 'captureWorkflowDeliverySource' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
   const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => forwardSettlementCapture(retained,{
     admit: ()=>retained.admit(), reconcile: ()=>retained.reconcile(), observe: ()=>retained.observe(),
   })
@@ -73,6 +73,10 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
     captureSubagentStart(event, binding) {
       operations.assertHeld()
       return strictType(event, 'subagent/start') ? actionHandle(captureSettlementFact(binding !== undefined ? {kind:'subagent-delivery-start',start:event,binding} : { kind: 'delivery', event }, operations)) : invalid()
+    },
+    captureWorkflowDeliverySource(event, checkCurrent) {
+      operations.assertHeld()
+      return strictType(event, 'agent/delivery-source') ? actionHandle(captureSettlementFact({ kind: 'workflow-delivery-source', event }, guarded(checkCurrent), true)) : invalid()
     },
     captureCodeDeliverySource(event, checkCurrent) {
       operations.assertHeld()

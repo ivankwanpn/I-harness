@@ -4,16 +4,18 @@ import type { OriginalExecutionCaptureHooks } from '@i-harness/core-session/inte
 
 const memberFactories=new WeakMap<object,OriginalExecutionCaptureHooks>()
 const retiredCodeHandoffs=new WeakMap<object,()=>FactOutcome|undefined>()
+const retiredWorkflowHandoffs=new WeakMap<object,()=>FactOutcome|undefined>()
+export function isRetiredWorkflowHandoff(capture:object,outcome:import('@i-harness/core-session').ProducerFactOutcome):boolean{return !!outcome&&retiredWorkflowHandoffs.get(capture)?.()===outcome&&outcome.kind==='not-issued'&&outcome.code==='FACT_PRECONDITION_STALE'}
 /** Only the original retained Code handoff can prove a known never-issued retirement. */
 export function isRetiredCodeHandoff(capture:object,outcome:import('@i-harness/core-session').ProducerFactOutcome):boolean{return !!outcome&&retiredCodeHandoffs.get(capture)?.()===outcome&&outcome.kind==='not-issued'&&outcome.code==='FACT_PRECONDITION_STALE'}
 /** Actual factories construct their own wrapper. The incoming commands object
  * is never registered; ordinary captures without this private hook stay ordinary. */
 export function forwardSettlementCapture<T extends CapturedActionFact<FactOutcome>>(original:CapturedActionFact<FactOutcome>,commands:T):T{
-  const factory=memberFactories.get(original),retirement=retiredCodeHandoffs.get(original)
+  const factory=memberFactories.get(original),retirement=retiredCodeHandoffs.get(original),workflowRetirement=retiredWorkflowHandoffs.get(original)
   if(!factory)return commands
   const forwarded=factory.forward(original,commands)
   memberFactories.set(forwarded,factory)
-  if(retirement)retiredCodeHandoffs.set(forwarded,retirement)
+  if(retirement)retiredCodeHandoffs.set(forwarded,retirement);if(workflowRetirement)retiredWorkflowHandoffs.set(forwarded,workflowRetirement)
   return forwarded
 }
 
@@ -50,7 +52,7 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
       // latest is populated only by native status/admit/reconcile. A fresh
       // retryAbsent fallback is not an observed disposition to retire.
       observeIssued(outcome)
-      if (neverIssuedStale && !everIssued && outcome === latest && outcome.kind === 'not-issued' && outcome.code === 'FACT_PRECONDITION_STALE' && capture.kind === 'captured' && (capture.group.kind === 'delivery-admission' || capture.group.kind === 'delivery-generation' && capture.group.event.op === 'open' || capture.group.kind === 'delivery' && capture.group.event.type === 'agent/delivery-handoff' && capture.group.event.kind === 'code')) {
+      if (neverIssuedStale && !everIssued && outcome === latest && outcome.kind === 'not-issued' && outcome.code === 'FACT_PRECONDITION_STALE' && capture.kind === 'captured' && (capture.group.kind === 'delivery-admission' || capture.group.kind === 'delivery-generation' && capture.group.event.op === 'open' || capture.group.kind === 'delivery' && capture.group.event.type === 'agent/delivery-handoff' && (capture.group.event.kind === 'code'||capture.group.event.kind === 'workflow'))) {
         retired=Object.freeze(outcome);neverIssuedStale()
       }
       if (retirement && outcome === latest && capture.kind === 'captured' && capture.group.kind === 'input-cancellation' && outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP' && retirement.accepts(outcome as InvalidNotIssued)) {
@@ -100,10 +102,11 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
     }),
   }
   const codeHandoff=capture.kind==='captured'&&capture.group.kind==='delivery'&&capture.group.event.type==='agent/delivery-handoff'&&capture.group.event.kind==='code'
-  if(codeHandoff)retiredCodeHandoffs.set(commands,()=>retired)
+  const workflowHandoff=capture.kind==='captured'&&capture.group.kind==='delivery'&&capture.group.event.type==='agent/delivery-handoff'&&capture.group.event.kind==='workflow'
+  if(codeHandoff)retiredCodeHandoffs.set(commands,()=>retired);if(workflowHandoff)retiredWorkflowHandoffs.set(commands,()=>retired)
   if(capture.kind==='captured'&&operations.captureMembers){
     const factory=operations.captureMembers,owned=factory.capture(capture.group,commands)
-    memberFactories.set(owned,factory);if(codeHandoff)retiredCodeHandoffs.set(owned,()=>retired)
+    memberFactories.set(owned,factory);if(codeHandoff)retiredCodeHandoffs.set(owned,()=>retired);if(workflowHandoff)retiredWorkflowHandoffs.set(owned,()=>retired)
     return owned
   }
   return commands

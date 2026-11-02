@@ -154,3 +154,56 @@ it('authenticates exact original execution identity, owner and session without c
  const a=await acquireManagedExecution(c,'a'),b=await acquireManagedExecution(c,'b'),assert=(executionCore as any).assertManagedExecutionSession
  try{expect(assert).toBeTypeOf('function');expect(()=>assert(a.identity,a.owner,'a')).not.toThrow();expect(()=>assert(a.identity,b.owner,'a')).toThrow();expect(()=>assert(a.identity,a.owner,'b')).toThrow();expect(()=>assert({...a.identity},a.owner,'a')).toThrow();expect(()=>assert(a.identity,{...a.owner},'a')).toThrow();await a.close();expect(()=>assert(a.identity,a.owner,'a')).toThrow()}finally{await a.close().catch(()=>{});await b.close();await c.close()}
 },20000)
+
+it('binds Workflow delivery only to its original dispatched call and reconciles the exact receipt',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'workflow-recipient-')),c=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await c.create({sessionId:'a'})
+ const execution=await acquireManagedExecution(c,'a'),domain=executionCore.createManagedExecutionDomain(execution.identity,execution.owner,createContext()),{receivedExecutionInputsFor}=await import('../../session-executor/src/lifecycle/execution-inputs.ts'),inputs=receivedExecutionInputsFor(execution),action=execution.owner.beginAction(),source=action.registerSettlementSource(async()=>{}),{committedFactSeqs}=await import('@i-harness/core-session')
+ try{committedFactSeqs(await inputs.facts().admit({type:'agent/input/admitted',version:1,inputId:'human',text:'run',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}));const [callSeq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'workflow',name:'workflow_run',args:{name:'test'}}));const recipient=inputs.workflowDelivery(domain);expect((await recipient.prepareWorkflowLaunch({sessionId:'a',callId:'workflow',callSeq:callSeq!,sourceId:'invocation'})).kind).toBe('unavailable');committedFactSeqs(await action.facts.tools.dispatch('workflow',{kind:'prior',seq:callSeq!,expectedType:'tool/call'}));expect((await recipient.prepareWorkflowLaunch({sessionId:'a',callId:'foreign',callSeq:callSeq!,sourceId:'invocation'})).kind).toBe('unavailable');const prepared=await recipient.prepareWorkflowLaunch({sessionId:'a',callId:'workflow',callSeq:callSeq!,sourceId:'invocation'});if(prepared.kind!=='bound')throw Error('Original Workflow launch unavailable');const [sourceSeq]=committedFactSeqs(await action.captureWorkflowDeliverySource({type:'agent/delivery-source',version:1,kind:'workflow',...prepared.binding},prepared.isCurrent).admit());committedFactSeqs(await source.delivery.record({type:'agent/delivery-handoff',version:1,kind:'workflow',sourceSeq:sourceSeq!}));const ref={version:1 as const,id:'ctxv1_'+'a'.repeat(64),revision:'b'.repeat(64),codec:'json-utf8-v1' as const,encodedBytes:12,contentDigest:'c'.repeat(64),completeness:'complete' as const};committedFactSeqs(await source.delivery.record({type:'workflow/end',version:1,sourceSeq:sourceSeq!,invocationId:'invocation',execution:{dispatch:'dispatched',outcome:'succeeded'},result:{kind:'artifact',ref}}));await recipient.reconcileWorkflowCandidates();expect(inputs.inbox.pending()).toEqual(expect.arrayContaining([expect.objectContaining({provenance:expect.objectContaining({producer:'session.delivery.workflow'})})]));await recipient.reconcileWorkflowCandidates();expect(inputs.inbox.pending().filter(item=>item.provenance?.producer==='session.delivery.workflow')).toHaveLength(1)}finally{action.finish();await source.close();await inputs.close();await execution.close();await c.close()}
+},30000)
+
+it('retires only the never-issued stale original Workflow handoff on Stop',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'code-handoff-stale-')),backend=createJsonlBackend(root),c=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await c.create({sessionId:'a'});const a=await acquireManagedExecution(c,'a'),domain=executionCore.createManagedExecutionDomain(a.identity,a.owner,createContext()),{receivedExecutionInputsFor}=await import('../../session-executor/src/lifecycle/execution-inputs.ts'),inputs=receivedExecutionInputsFor(a),action=a.owner.beginAction(),source=action.registerSettlementSource(async()=>{})
+ try{
+  const {committedFactSeqs}=await import('@i-harness/core-session')
+  committedFactSeqs(await inputs.facts().admit({type:'agent/input/admitted',version:1,inputId:'human',text:'run',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}))
+  const [callSeq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'code',name:'workflow_run',args:{}}));committedFactSeqs(await action.facts.tools.dispatch('code',{kind:'prior',seq:callSeq!,expectedType:'tool/call'}))
+  const recipient=inputs.workflowDelivery(domain),prepared=await recipient.prepareWorkflowLaunch({sessionId:'a',callId:'code',callSeq:callSeq!,sourceId:'source'});if(prepared.kind!=='bound')throw Error('Code launch unavailable')
+  const captured=action.captureWorkflowDeliverySource({type:'agent/delivery-source',version:1,kind:'workflow',...prepared.binding},prepared.isCurrent),[sourceSeq]=committedFactSeqs(await captured.admit())
+  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();handoffGate.enabled=true;handoffGate.entered=entered.resolve;handoffGate.wait=release.promise
+  const handoff=source.delivery.capture({type:'agent/delivery-handoff',version:1,kind:'workflow',sourceSeq:sourceSeq!}),pending=handoff.admit();await entered.promise
+  const stop=recipient.requestClose('user-stop');handoffGate.enabled=false;release.resolve()
+  const stale=await pending;await stop.settled
+  expect(stale).toMatchObject({kind:'not-issued',code:'FACT_PRECONDITION_STALE'});expect(Object.isFrozen(stale)).toBe(true)
+  const witness=await import('../src/coordinator/settlement-fact.ts');expect((witness as any).isRetiredWorkflowHandoff(handoff,stale)).toBe(true);expect((witness as any).isRetiredWorkflowHandoff({...handoff},stale)).toBe(false);expect((witness as any).isRetiredWorkflowHandoff(handoff,{...stale})).toBe(false)
+  await expect(source.close()).resolves.toBeUndefined();expect((await a.observe().delivery.source('workflow','source'))?.seq).toBe(sourceSeq)
+ }finally{action.finish();await source.close().catch(()=>{});await inputs.close().catch(()=>{});await c.close().catch(()=>{})}
+},20000)
+
+
+
+
+
+
+
+it('keeps an issued unknown Workflow handoff as the same source debt until reconciliation',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'code-handoff-unknown-')),backend=createJsonlBackend(root),c=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ await c.create({sessionId:'a'});const a=await acquireManagedExecution(c,'a'),domain=executionCore.createManagedExecutionDomain(a.identity,a.owner,createContext()),{receivedExecutionInputsFor}=await import('../../session-executor/src/lifecycle/execution-inputs.ts'),inputs=receivedExecutionInputsFor(a),action=a.owner.beginAction(),source=action.registerSettlementSource(async()=>{})
+ try{
+  const {committedFactSeqs}=await import('@i-harness/core-session')
+  committedFactSeqs(await inputs.facts().admit({type:'agent/input/admitted',version:1,inputId:'human',text:'run',delivery:'queue',intent:'user',provenance:{kind:'human',authority:'request',scope:'turn',producer:'fixture'}}))
+  const [callSeq]=committedFactSeqs(await action.facts.tools.call({type:'tool/call',callId:'code',name:'workflow_run',args:{}}));committedFactSeqs(await action.facts.tools.dispatch('code',{kind:'prior',seq:callSeq!,expectedType:'tool/call'}))
+  const recipient=inputs.workflowDelivery(domain),prepared=await recipient.prepareWorkflowLaunch({sessionId:'a',callId:'code',callSeq:callSeq!,sourceId:'source'});if(prepared.kind!=='bound')throw Error('Code launch unavailable')
+  const captured=action.captureWorkflowDeliverySource({type:'agent/delivery-source',version:1,kind:'workflow',...prepared.binding},prepared.isCurrent),[sourceSeq]=committedFactSeqs(await captured.admit())
+  handoffGate.unknown=true;handoffGate.blockReconcile=true
+  const handoff=source.delivery.capture({type:'agent/delivery-handoff',version:1,kind:'workflow',sourceSeq:sourceSeq!})
+  expect((await handoff.admit()).kind).toBe('unknown');const key=handoffGate.key;expect(key).toBeTruthy()
+  await expect(source.close()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+  const stop=recipient.requestClose('user-stop');void stop.settled.catch(()=>{})
+  handoffGate.blockReconcile=false;handoffGate.unknown=false;await source.close();await recipient.settle();expect(await recipient.closeReceipt(stop.fenceId)).toMatchObject({fenceId:stop.fenceId,durability:'durable'})
+  expect(handoffGate.key).toBe(key);const events=(await backend.read('a')).events;expect(events.filter(e=>e.type==='agent/delivery-handoff'&&e.kind==='workflow')).toHaveLength(1)
+ }finally{handoffGate.unknown=false;handoffGate.blockReconcile=false;action.finish();await source.close().catch(()=>{});await inputs.close().catch(()=>{});await c.close().catch(()=>{})}
+},20000)
+
+
+

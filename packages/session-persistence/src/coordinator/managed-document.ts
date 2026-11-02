@@ -316,7 +316,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                         // Check the original delivery fence before staging a Code
                         // handoff. A closed generation otherwise looks like an
                         // invalid transition before the stale fence is consulted.
-                        if (entry.group?.kind === 'delivery' && entry.group.event.type === 'agent/delivery-handoff' && entry.group.event.kind === 'code')
+                        if (entry.group?.kind === 'delivery' && entry.group.event.type === 'agent/delivery-handoff' && (entry.group.event.kind === 'code' || entry.group.event.kind === 'workflow'))
                             deliveryControl.assert([entry.group.event]);
                         const suffix = core ? [] : entry.bootstrap ? [...entry.bootstrap.events] : resolveFactGroup(entry.group!, state!.view, prefix.eventCount + events.length);
                         if (entry.bootstrap && suffix.some((event, position) => event.seq !== prefix.eventCount + events.length + position)) throw new TypeError('Invalid bootstrap phase sequence');

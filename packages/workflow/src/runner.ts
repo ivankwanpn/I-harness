@@ -165,6 +165,8 @@ export interface WorkflowLoopCompletion {
   readonly kind: 'loop-finished'
   readonly cleanup: 'unqualified' | 'clean' | 'recovery-required'
   readonly status: BackgroundJobStatus
+  readonly dispatch: 'not-dispatched' | 'dispatched' | 'unknown'
+  readonly result: import('../../core-session/src/events/workflow-delivery.ts').WorkflowRunResult
   readonly failures: readonly WorkflowLoopFailure[]
 }
 export interface OwnedWorkflowRunHandle extends WorkflowRunHandle {
@@ -172,6 +174,9 @@ export interface OwnedWorkflowRunHandle extends WorkflowRunHandle {
   join(): Promise<WorkflowLoopCompletion>
   reconcile(): Promise<WorkflowLoopCompletion>
 }
+const originalWorkflowCompletions=new WeakMap<object,WeakSet<object>>()
+/** Only the original reserved run can qualify its own joined completion. */
+export function isOriginalWorkflowCompletion(run:object,value:object):value is WorkflowLoopCompletion{return !!run&&!!value&&originalWorkflowCompletions.get(run)?.has(value)===true}
 export interface WorkflowReservation {
   readonly invocationId: string
   start(): OwnedWorkflowRunHandle
@@ -198,19 +203,20 @@ export function reserveWorkflowIn(def: WorkflowDefinition, params: Record<string
       if (starting) throw new Error('Workflow reservation start in progress')
       starting = true
       try {
-        const job = startWorkflowLoop(captured, values, exec, store, owner, defaultCwd, completion.resolve, steps, ownedSteps)
+        const job = startWorkflowLoop(captured, values, exec, store, owner, defaultCwd, completion.resolve, steps, ownedSteps, invocationId)
         const original: OwnedWorkflowRunHandle = Object.freeze({ ...job, invocationId,
-          join() { if (this !== original) throw new Error('Foreign Workflow handle receiver'); return completion.promise },
+          join() { if (this !== original) throw new Error('Foreign Workflow handle receiver'); return completion.promise.then(value=>{originalWorkflowCompletions.get(original)!.add(value);return value}) },
           async reconcile() {
             if (this !== original) throw new Error('Foreign Workflow handle receiver')
             const prior = await completion.promise
-            let clean = true
-            for (const step of ownedSteps) { const result = await step.reconcile(); if (result.kind !== 'clean') clean = false }
+            if(!ownedSteps.length){originalWorkflowCompletions.get(original)!.add(prior);return prior}
+            let clean = true, dispatched = false, unknown = false
+            for (const step of ownedSteps) { const result = await step.reconcile(); if (result.kind !== 'clean') {clean = false;unknown = true} else if(result.execution==='dispatched')dispatched=true;else if(result.execution==='unknown')unknown=true }
             if (clean) { for (const step of ownedSteps) step.release(); ownedSteps.length = 0 }
-            return Object.freeze({ ...prior, cleanup: steps ? clean ? 'clean' as const : 'recovery-required' as const : 'unqualified' as const })
+            const observed=Object.freeze({ ...prior, cleanup: steps ? clean ? 'clean' as const : 'recovery-required' as const : 'unqualified' as const, dispatch:!steps||unknown?'unknown' as const:dispatched?'dispatched' as const:'not-dispatched' as const });originalWorkflowCompletions.get(original)!.add(observed);return observed
           },
         })
-        return handle = original
+        originalWorkflowCompletions.set(original,new WeakSet());return handle = original
       } catch (cause) { failed = true; failure = cause; completion.reject(cause); throw cause }
     },
     join() { if (this !== reservation) throw new Error('Foreign Workflow reservation receiver'); return completion.promise },
@@ -288,13 +294,14 @@ export function runWorkflowIn(
 
 function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, string>, exec: ExecService,
   store: WorkflowJobStore, owner: string | undefined, defaultCwd: string | undefined,
-  completed: (value: WorkflowLoopCompletion) => void, stepFactory?: WorkflowStepFactory, ownedSteps: OwnedWorkflowStep[] = []): WorkflowRunHandle {
+  completed: (value: WorkflowLoopCompletion) => void, stepFactory?: WorkflowStepFactory, ownedSteps: OwnedWorkflowStep[] = [], invocationId = ''): WorkflowRunHandle {
   const job = store.createJob(owner)
   const { controller } = job
   const steps = def.steps
   const total = steps.length
   const failures: WorkflowLoopFailure[] = []
-  let cleanup: WorkflowLoopCompletion['cleanup'] = stepFactory ? 'clean' : 'unqualified'
+  let cleanup: WorkflowLoopCompletion['cleanup'] = stepFactory ? 'clean' : 'unqualified', dispatched=false, unknown=!stepFactory
+  const stepResults:import('../../core-session/src/events/workflow-delivery.ts').WorkflowRunResult['steps']=[]
 
   function setStatus(status: BackgroundJobStatus, exitCode: number): void {
     if (job.status !== "running") return // killed runs stay killed
@@ -331,13 +338,15 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
           // ordinary step failure so the failure discipline applies uniformly.
           result = { stdout: "", stderr: e instanceof Error ? e.message : String(e), exitCode: -1, timedOut: false }
         }
+        stepResults.push({step:i,attempt,outcome:controller.signal.aborted?'canceled':result.exitCode===0?'succeeded':'failed',exitCode:result.exitCode,timedOut:result.timedOut,stdout:result.stdout,stderr:result.stderr})
         if (owned) {
           const ownership = await owned.join()
           if (ownership.kind !== 'clean') {
-            cleanup = 'recovery-required'
+            unknown=true;cleanup = 'recovery-required'
             failures.push(Object.freeze({ phase: 'loop', step: i, attempt, cause: ownership.cause }))
             setStatus('error', -1); skipRest(i + 1); return
           }
+          if(ownership.execution==='dispatched')dispatched=true;else if(ownership.execution==='unknown')unknown=true
         }
         if (controller.signal.aborted) {
           skipRest(i + 1)
@@ -386,7 +395,7 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
     // Original run-disposal boundary. No aggregate output proof is emitted.
     if (cleanup === 'clean') { for (const step of ownedSteps) step.release(); ownedSteps.length = 0 }
     completed(Object.freeze({ kind: 'loop-finished', cleanup,
-    status: job.status, failures: Object.freeze([...failures]),
+    status: job.status,dispatch:unknown?'unknown':dispatched?'dispatched':'not-dispatched',result:Object.freeze({version:1,kind:'workflow-run-result',invocationId,steps:Object.freeze(stepResults.map(value=>Object.freeze({...value}))) as unknown as typeof stepResults,stdout:job.stdout,stderr:job.stderr}), failures: Object.freeze([...failures]),
   })) })
 
   return { runId: job.id, jobId: job.id }

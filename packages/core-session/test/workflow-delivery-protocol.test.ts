@@ -107,14 +107,14 @@ it('rejects duplicate terminal and receipt and preserves existing receipts after
   expect(read(events).receipt(key)).toMatchObject({ disposition: 'suppressed' })
   expect(read(events).pending()).toEqual([])
 })
-it('refuses Workflow authority in legacy journal bodies and keeps original capture enrollment disconnected', () => {
+it('refuses Workflow authority in legacy journal bodies and admits only closed Workflow source and terminal captures', () => {
   for (const event of [source, { ...handoff, seq: 4 }, { ...terminal, seq: 4 }, history('background').at(-1)!]) {
     const legacy = Buffer.from(JSON.stringify(event) + '\n')
     const metadata = { version: 1 as const, legacyBodyBytes: legacy.length, legacyEventCount: 1, legacyPrefixDigest: legacyPrefixDigest(1, legacy), separatorBytes: 0 as const }
     expect(() => readFactJournal(legacy, metadata, 14)).toThrow()
   }
-  expect(captureFactGroup({ kind: 'workflow-delivery-source', event: source } as never)).toMatchObject({ kind: 'not-issued' })
-  expect(captureFactGroup({ kind: 'delivery', event: terminal } as never)).toMatchObject({ kind: 'not-issued' })
+  const {seq:_seq,...draftSource}=source;expect(captureFactGroup({ kind: 'workflow-delivery-source', event: draftSource } as never)).toMatchObject({ kind: 'captured' });for(const event of [source,{...draftSource,extra:true},{...draftSource,kind:'code'}])expect(captureFactGroup({kind:'workflow-delivery-source',event} as never)).toMatchObject({kind:'not-issued'})
+  expect(captureFactGroup({ kind: 'delivery', event: terminal } as never)).toMatchObject({ kind: 'captured' });expect(captureFactGroup({kind:'delivery',event:{...terminal,extra:true}} as never)).toMatchObject({kind:'not-issued'})
   // Existing generic handoff schema capture is not a Workflow source/terminal
   // issuer. Reserved settlement-port validation remains independently closed.
   expect(captureFactGroup({ kind: 'delivery', event: handoff } as never)).toMatchObject({ kind: 'captured' })

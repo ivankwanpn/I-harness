@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { randomUUID } from 'node:crypto'
 import { canonicalJsonData, committedFactSeqs, deliveryInputId,FactRecoveryRequiredError, isStrictFactData, SYSTEM_INPUT_PLUGIN,
   type AdmittedInput, type PendingInput, type SessionEvent, type InputFacts, type ProducerFactOutcome, type CapturedSettlementFact } from '@i-harness/core-session'
-import { isManagedExecutionOwner,isManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,readManagedSourceCodeEvidence,readManagedSourceTaskEvidence,readManagedSourceTaskCandidate,type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
+import { isManagedExecutionOwner,isManagedExecutionDomain,assertManagedExecDeliveryCurrent,assertManagedCodeDeliveryCurrent,assertManagedWorkflowDeliveryCurrent,readManagedSourceCodeEvidence,readManagedSourceTaskEvidence,readManagedSourceTaskCandidate,type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution'
 import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../../session-persistence/src/execution-internal.ts'
 import { copyConversationData } from '../../../core-session/src/conversation/render.ts'
 import {eligibleCodeTerminal,codeTerminalRef} from '../../../core-session/src/events/code-delivery.ts'
@@ -23,7 +23,12 @@ export interface PrivateCodeRecipient extends PrivateExecRecipient {
  reconcileCodeCandidates():Promise<void>
 }
 export type PrivateCodePreparation={kind:'unavailable';reason:'uncertified-call'|'no-own-human-origin'}|{kind:'bound';binding:Readonly<import('@i-harness/core-tools/model-origin').CodeSourceBinding>;isCurrent():boolean}
-export interface PrivateTaskRecipient extends PrivateCodeRecipient {
+export interface PrivateWorkflowRecipient extends PrivateCodeRecipient {
+ prepareWorkflowLaunch(input:{sessionId:string;callId:string;callSeq:number;sourceId:string}):Promise<PrivateWorkflowPreparation>
+ reconcileWorkflowCandidates():Promise<void>
+}
+export type PrivateWorkflowPreparation={kind:'unavailable';reason:'uncertified-call'|'no-own-human-origin'}|{kind:'bound';binding:Readonly<import('@i-harness/core-tools/model-origin').WorkflowSourceBinding>;isCurrent():boolean}
+export interface PrivateTaskRecipient extends PrivateWorkflowRecipient {
  prepareTaskLaunch(input:{sessionId:string;namespace:string;taskId:string;callSeq:number}):Promise<import('@i-harness/core-session').DeliveryLaunchPreparation>
  taskEvidence(namespace:string,taskId:string):{evidence:import('@i-harness/core-session').SubagentDeliveryEvidence;expectedInputId:string}|undefined
  admitTask(evidence:import('@i-harness/core-session').SubagentDeliveryEvidence,presentation:{text:string;description:string;display:import('@i-harness/core-session').InputDisplay}):Promise<import('@i-harness/core-session').DeliveryAdmissionReceipt>
@@ -134,6 +139,25 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         if(!isCurrent())throw new FactRecoveryRequiredError()
         return {kind:'bound',binding,isCurrent}
       },
+      async prepareWorkflowLaunch(input:{sessionId:string;callId:string;callSeq:number;sourceId:string}):Promise<PrivateWorkflowPreparation>{
+        current();if(!isStrictFactData(input)||Reflect.ownKeys(input).length!==4||!['sessionId','callId','callSeq','sourceId'].every(key=>{const field=Object.getOwnPropertyDescriptor(input,key);return !!field&&'value'in field&&field.enumerable}))throw TypeError('Closed original Workflow launch input required')
+        const captured=Object.freeze({...input});if(captured.sessionId!==domain.sessionId||typeof captured.callId!=='string'||!captured.callId||typeof captured.sourceId!=='string'||!captured.sourceId||!Number.isSafeInteger(captured.callSeq)||captured.callSeq<0)throw TypeError('Original Workflow launch identity required')
+        if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;current()}
+        let observed=execution.observe(),member=await observed.delivery.dispatchedCall(captured.callSeq);observed.assertCurrent()
+        if(!member||member.call.name!=='workflow_run'||member.call.callId!==captured.callId)return {kind:'unavailable',reason:'uncertified-call'}
+        observed=execution.observe();if(observed.delivery.source('workflow',captured.sourceId))throw new FactRecoveryRequiredError()
+        let generation=observed.delivery.activeGeneration()
+        if(!generation){const human=await observed.delivery.ownHuman();observed.assertCurrent();if(!human){if((observed.delivery.lastFenceSeq()??-1)>=0)throw new FactRecoveryRequiredError();return {kind:'unavailable',reason:'no-own-human-origin'}}
+          if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;return adapter.prepareWorkflowLaunch(captured)}
+          const generationId=randomUUID(),capturedObservation=observed
+          opening=source.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:domain.sessionId,generationId,originInputSeq:human.seq!},()=>{try{current();capturedObservation.assertCurrent();return true}catch{return false}})
+          if(!await settleCapture(opening))throw new FactRecoveryRequiredError();opening=undefined;current();generation=execution.observe().delivery.activeGeneration()
+        }
+        if(!generation)throw new FactRecoveryRequiredError()
+        const binding=Object.freeze({recipientSessionId:domain.sessionId,generationId:generation.generationId,sourceNamespace:'workflow' as const,sourceId:captured.sourceId,callSeq:captured.callSeq,delivery:'tool' as const})
+        const isCurrent=()=>{try{current();assertManagedWorkflowDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:binding.delivery});return true}catch{return false}}
+        if(!isCurrent())throw new FactRecoveryRequiredError();return {kind:'bound',binding,isCurrent}
+      },
       async prepareExecLaunch(input:{sessionId:string;callId:string;callSeq:number;sourceId:string}):Promise<PrivateExecPreparation>{
         current();if(input.sessionId!==domain.sessionId)throw TypeError('Original recipient identity required')
         if(opening){const pending=opening;if(!await settleCapture(pending))throw new FactRecoveryRequiredError();if(opening===pending)opening=undefined;current()}
@@ -212,6 +236,22 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         const receipt=execution.observe().delivery.receipt(key);if(!receipt)throw new FactRecoveryRequiredError()
         return {inputId:receipt.event.inputId,disposition:receipt.disposition,durability:'durable'}
       },
+      async reconcileWorkflowCandidates(){
+        await adapter.settle();current();const candidates=execution.observe().delivery.workflowPending(),failures:unknown[]=[]
+        for(const candidate of candidates)try{
+          const binding=candidate.source,terminal=candidate.terminal,ref='result'in terminal&&terminal.result.kind==='artifact'?terminal.result.ref:undefined
+          if(binding.recipientSessionId!==domain.sessionId||binding.sourceNamespace!=='workflow'||terminal.sourceSeq!==binding.seq||terminal.invocationId!==binding.sourceId||!ref)throw new FactRecoveryRequiredError()
+          const key={kind:'workflow' as const,recipientSessionId:domain.sessionId,sourceNamespace:'workflow' as const,sourceId:binding.sourceId,resultRevision:ref.revision},inputId=deliveryInputId(key)
+          if(execution.observe().delivery.receipt(key))continue
+          let fact=admissions.get(inputId)
+          if(!fact){const text=`<workflow_result>\n${JSON.stringify({invocationId:binding.sourceId,execution:terminal.execution,ref})}\nReference only. Read using the authorized context_output_read result reader.\n</workflow_result>`
+            const eligible=()=>{try{current();assertManagedWorkflowDeliveryCurrent(domain,{recipientSessionId:binding.recipientSessionId,generationId:binding.generationId,sourceId:binding.sourceId,callSeq:binding.callSeq,delivery:'tool'});return execution.observe().delivery.workflowPending().some(value=>value.source.seq===binding.seq&&value.terminal.seq===terminal.seq)}catch{return false}}
+            fact=source.captureDeliveryAdmission({type:'agent/delivery-received',version:1,key,sourceSeq:binding.seq!,terminalSeq:terminal.seq!,inputId},{type:'agent/input/admitted',version:1,inputId,text,delivery:'steer',intent:'system',provenance:{kind:'child-report',authority:'observation',scope:'turn',producer:'session.delivery.workflow'},synthetic:{description:`Workflow ${terminal.execution.outcome}`,scope:'turn',display:{kind:'task',title:`Workflow ${terminal.execution.outcome}`,body:text}}},eligible);admissions.set(inputId,fact)
+          }
+          if(!await settleCapture(fact))throw new FactRecoveryRequiredError();admissions.delete(inputId)
+        }catch(cause){failures.push(cause)}
+        if(failures.length)throw Object.assign(new FactRecoveryRequiredError(),{cause:new AggregateError(failures,'Original Workflow recipient requires recovery')})
+      },
       async reconcileCodeCandidates(){
         await adapter.settle();current();const candidates=execution.observe().delivery.codePending(),failures:unknown[]=[]
         for(const candidate of candidates)try{await adapter.admitCode({kind:'code',sourceSeq:candidate.source.seq!,terminalSeq:candidate.terminal.seq!})}catch(cause){failures.push(cause)}
@@ -262,5 +302,5 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
     },
   }
   const recipientFor=(domain:ManagedExecutionDomain)=>{if(delivery){if(domain!==deliveryDomain)throw TypeError('Original recipient already bound');return delivery}delivery=createExecDelivery(domain);deliveryDomain=domain;return delivery}
-  return Object.freeze({ inbox:Object.freeze(inbox), facts, execDelivery:recipientFor,codeDelivery:recipientFor,taskDelivery:recipientFor, close: ()=>source.close() })
+  return Object.freeze({ inbox:Object.freeze(inbox), facts, execDelivery:recipientFor,codeDelivery:recipientFor,workflowDelivery:recipientFor,taskDelivery:recipientFor, close: ()=>source.close() })
 }

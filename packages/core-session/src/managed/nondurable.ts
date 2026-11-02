@@ -113,6 +113,9 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         captureRuntimeContext(event, checkCurrent) {
           return captureMemoryFact(session, { kind: 'runtime-context', event }, () => { assertOpen(); if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' }) })
         },
+        captureWorkflowDeliverySource(event, checkCurrent) {
+          return captureMemoryFact(session, { kind: 'workflow-delivery-source', event }, () => { assertOpen(); if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' }) })
+        },
         captureCodeDeliverySource(event, checkCurrent) {
           return captureMemoryFact(session, { kind: 'code-delivery-source', event }, () => { assertOpen(); if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' }) })
         },

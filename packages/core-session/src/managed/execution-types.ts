@@ -19,6 +19,7 @@ export interface ExecutionDeliveryObservation {
  receipt(key:DeliveryKey):DeepReadonly<ReturnType<DeliveryState['receipt']>>
  execPending():DeepReadonly<ReturnType<DeliveryState['execPending']>>
  codePending():DeepReadonly<ReturnType<DeliveryState['codePending']>>
+ workflowPending():DeepReadonly<ReturnType<DeliveryState['workflowPending']>>
  ownHuman():Promise<DeepReadonly<Extract<SessionEventView,{type:'agent/input/admitted'}>>|undefined>
  dispatchedCall(callSeq:number):Promise<Readonly<{call:DeepReadonly<Extract<SessionEventView,{type:'tool/call'}>>;dispatch:DeepReadonly<Extract<SessionEventView,{type:'tool/dispatch'}>>}>|undefined>
 }

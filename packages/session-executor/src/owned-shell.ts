@@ -3,7 +3,7 @@ import {createShellTools,type ShellToolDeps} from '@i-harness/shell'
 import {createContextOutputTools,type ContextOutputService,type ContextCapture} from '@i-harness/context-output'
 import {createExecutionApprovalPolicy} from '@i-harness/guard-approval'
 import type {ManagedRegistryConstruction} from './managed-assembly.ts'
-import {createScopedPrivateExecWithReservation} from './scoped-exec.ts'
+import {createScopedPrivateExecWithReservation,createScopedWorkflowExec} from './scoped-exec.ts'
 import {createExecResultRetention} from './lifecycle/exec-result-retention.ts'
 import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
 
@@ -15,7 +15,8 @@ export interface OwnedShellOptions {
  agentShell:NonNullable<ShellToolDeps['agentShell']>
 }
 export interface OwnedShellOutput {readonly service:ContextOutputService;readonly sourceFor?:(sessionId:string)=>Promise<ContextCapture['source']>}
-export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean,acquiredExecution?:ExecExecutionHost):import('@i-harness/exec').ExecService{
+export interface OwnedShellMount {readonly service:import('@i-harness/exec').ExecService;readonly workflowSteps:import('@i-harness/exec/direct-reservation').WorkflowStepFactory}
+export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:string,options:OwnedShellOptions,output:OwnedShellOutput,approvalInstalled:boolean,acquiredExecution?:ExecExecutionHost):OwnedShellMount{
  original.assertCurrent()
  const execution=acquiredExecution??options.executionFor?.(original.domain.sessionId)
  if(!execution)throw TypeError('Original Shell execution unavailable')
@@ -30,5 +31,5 @@ export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:s
  original.tools.promote(['context_output_read'])
  if(!approvalInstalled)createExecutionApprovalPolicy(original.ctx,original.tools,{workspace,workspaceRoots:()=>[workspace]})
  original.assertCurrent()
- return scoped.service
+ return Object.freeze({service:scoped.service,workflowSteps:createScopedWorkflowExec(pair,workspace,()=>undefined)})
 }

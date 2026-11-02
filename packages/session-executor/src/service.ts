@@ -1,3 +1,4 @@
+import {mountOwnedWorkflow} from './owned-workflow.ts'
 import {associateOriginalHostAssemblyObserver} from './host-assembly-observer.ts'
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {createExecutorExecutionCache} from './durable-session.ts'
@@ -50,7 +51,7 @@ import { runPostSubmit } from './service/post-submit.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
-import { registerSubagent, ParentNotificationStoppedError, type AgentTaskView, type ParentInputAdmission, type RegisterSubagentOptions, type RegisterSubagentResult } from "@i-harness/subagent"
+import { registerSubagent, projectWorkflowRows, ParentNotificationStoppedError, type AgentTaskView, type ParentInputAdmission, type RegisterSubagentOptions, type RegisterSubagentResult } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -140,6 +141,7 @@ export interface SessionServiceOptions extends AssemblyOptions {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
     mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
+    ownedWorkflow?:boolean
     ownedTask?:{options(original:import('./managed-assembly.ts').ManagedRegistryConstruction,shared:{shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput}):Promise<Omit<RegisterSubagentOptions,'managedParent'|'parentNotify'|'parentSession'|'factOwner'|'getParentModel'|'deferRestoredWork'>>}
     mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[];task?:RegisterSubagentResult}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
     acquireInstructions?(sessionId:string,execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<import('./managed-assembly.ts').OwnedInstructionBinding>
@@ -342,6 +344,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
   type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>;projectTasks():AgentTaskView[];cancelTask(id:string):'cancellation-requested'|'already-finished'}
   const managedTaskOwners=new Map<string,TaskLifecycle>()
+  const managedWorkflowOwners=new Map<string,{list():import('@i-harness/exec').BackgroundJobView[];kill(id:string):'cancellation-requested'|'already-finished';journal():Promise<void>}>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
   const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
   const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>}>()
@@ -475,7 +478,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
   function requestDeliveryStop(id: string) {
     const recipient=managedRecipients.get(id)
-    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop');managedStopReceipts.set(id,{recipient,fenceId:request.fenceId,...managedTaskOwners.has(id)?{settleSources:managedTaskOwners.get(id)!.journal}:{}});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
+    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop'),workflow=managedWorkflowOwners.get(id),task=managedTaskOwners.get(id);managedStopReceipts.set(id,{recipient,fenceId:request.fenceId,...workflow||task?{settleSources:async()=>{await workflow?.journal();await task?.journal()}}:{}});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
     const assembly = liveAssembly(id)
     if (!assembly) return
     const delivery = receivedInputsFor(assembly.factOwner, id).delivery
@@ -1069,7 +1072,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const title=opts.managedRuntime.ownedTitle?.enabled?createOwnedPostTurnLifetime():undefined
     if(title)mounted.add(()=>title.close())
     let retired=false,recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>|undefined,privateDrain:ReturnType<typeof createDeliveryDrain>|undefined,unsubscribe:(()=>void)|undefined,unsubscribeReadiness:(()=>void)|undefined
-    row.cleanup=async()=>{retired=true;retireManaged(sessionId);privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);managedTaskOwners.delete(sessionId);removeManaged(sessionId);privateEntries.delete(sessionId)}
+    row.cleanup=async()=>{retired=true;retireManaged(sessionId);privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedStopReceipts.delete(sessionId);managedCodeMounts.delete(sessionId);managedCodeStops.delete(sessionId);managedTaskOwners.delete(sessionId);managedWorkflowOwners.delete(sessionId);removeManaged(sessionId);privateEntries.delete(sessionId)}
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
       const context=createContext()
@@ -1091,8 +1094,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       })()
       let instructionBinding:import('./managed-assembly.ts').OwnedInstructionBinding|undefined
       if(opts.managedRuntime!.acquireInstructions){let acquiring=true;try{instructionBinding=await opts.managedRuntime!.acquireInstructions(sessionId,entry.execution,cleanup=>{if(!acquiring||retired)throw Error('Original instruction retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original instruction cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
+      let workflowMount:ReturnType<typeof mountOwnedWorkflow>|undefined
       let taskMount:RegisterSubagentResult|undefined,taskLifecycle:TaskLifecycle|undefined,initialTaskModel:import('@i-harness/llm-seam').ModelClient|undefined
-      let taskShell:import('@i-harness/exec').ExecService|undefined
+      let shellMount:import('./owned-shell.ts').OwnedShellMount|undefined
       let codeMount:import('@i-harness/code-mode').CodeModeMount|undefined
       let shellExecution:import('@i-harness/exec').ExecExecutionHost|undefined
       if(opts.managedRuntime!.ownedShell?.acquireExecution){let acquiring=true;try{shellExecution=await opts.managedRuntime!.ownedShell.acquireExecution(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original execution retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original execution cleanup required');mounted.add(cleanup)},entry.execution)}finally{acquiring=false}assertWritableOpen(sessionId);if(shellExecution.defaultOwner?.sessionId!==sessionId)throw TypeError('Original Shell execution owner required')}
@@ -1102,13 +1106,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const common={...opts.managedRuntime!,context,execution:entry.execution,workspace:opts.workspace,...instructionBinding?{instructionBinding}:{},...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})}
-      if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.mountDefaultSurface){
-       runtime=await createManagedExecutionRuntimeWithRegistry({...common,async configureRegistry(original){const registrySurface=await opts.managedRuntime!.mountRegistry?.(original);original.assertCurrent();if(opts.managedRuntime!.ownedShell){if(opts.workspace===undefined)throw Error('Original Shell workspace required');taskShell=mountOwnedShell(original,opts.workspace,opts.managedRuntime!.ownedShell,shellOutput!,!!(opts.managedRuntime!.originalFilesystem||opts.managedRuntime!.originalSchedule),shellExecution)}if(opts.managedRuntime!.ownedTask){
+      if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.ownedWorkflow||opts.managedRuntime!.mountDefaultSurface){
+       runtime=await createManagedExecutionRuntimeWithRegistry({...common,async configureRegistry(original){const registrySurface=await opts.managedRuntime!.mountRegistry?.(original);original.assertCurrent();if(opts.managedRuntime!.ownedShell){if(opts.workspace===undefined)throw Error('Original Shell workspace required');shellMount=mountOwnedShell(original,opts.workspace,opts.managedRuntime!.ownedShell,shellOutput!,!!(opts.managedRuntime!.originalFilesystem||opts.managedRuntime!.originalSchedule),shellExecution)}if(opts.managedRuntime!.ownedWorkflow){if(!shellMount||!shellOutput||opts.workspace===undefined)throw Error('Original Workflow Shell and output owners required');workflowMount=mountOwnedWorkflow(original,opts.workspace,shellMount,shellOutput)}if(opts.managedRuntime!.ownedTask){
         recipient=receivedExecutionInputsFor(entry.execution).taskDelivery(original.domain)
         const originalRecipient=recipient,current=()=>{if(retired||closed||closing.has(sessionId)||!runtime||managedRuntimes.get(sessionId)!==runtime)throw new ParentNotificationStoppedError();assertWritableOpen(sessionId)}
         const notify:ParentInputAdmission={taskEvidence(namespace,id){current();return originalRecipient.taskEvidence(namespace,id)},async prepareTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.prepareTaskLaunch(input);current();return result},async admitTaskDelivery(input){current();if(input.sessionId!==sessionId)throw new ParentNotificationStoppedError();const result=await originalRecipient.admitTask(input.evidence,{text:input.text,description:input.description,display:input.display});current();privateDrain?.signal();return result},async admit(){throw new ParentNotificationStoppedError('Original Task delivery evidence required')},wake(id){if(id!==sessionId)return;try{current();privateDrain?.signal()}catch{/* Retired original parent cannot be woken. */}}}
-        const taskOptions=await opts.managedRuntime!.ownedTask.options(original,{...taskShell?{shell:taskShell}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()
-        taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify,deferRestoredWork:true,getParentModel:()=>{const model=taskOptions.parentModel??(runtime?runtime.selectedModelBinding().model:initialTaskModel);if(!model)throw Error('Original parent model not bound');return model}})
+        const taskOptions=await opts.managedRuntime!.ownedTask.options(original,{...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()
+        taskMount=registerSubagent(original.ctx,original.tools,{...taskOptions,...workflowMount?{workflow:workflowMount.executor}:{},managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify,deferRestoredWork:true,getParentModel:()=>{const model=taskOptions.parentModel??(runtime?runtime.selectedModelBinding().model:initialTaskModel);if(!model)throw Error('Original parent model not bound');return model}})
         const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt,activate=mounted.activateRestoredWork,catalogReady=mounted.catalogReady,ready=mounted.ready,project=mounted.projectTasks.bind(mounted),table=mounted.table,jobs=mounted.jobs,tasks=mounted.tasks,entriesMethod=table.entries,getMethod=table.get,listJobsMethod=jobs.listAll,listTasksMethod=tasks.list,tableGet=getMethod.bind(table),kill=jobs.kill.bind(jobs)
         taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready,projectTasks(){const check=()=>{if(table.entries!==entriesMethod||table.get!==getMethod||jobs.listAll!==listJobsMethod||tasks.list!==listTasksMethod)throw Error('Original Task projection changed')};check();const rows=project();check();return rows},cancelTask(id:string){const entry=tableGet(id);if(entry!==undefined){if(entry.status!=='running')return 'already-finished';entry.controller.abort();return entry.jobId!==undefined?kill(entry.jobId):'cancellation-requested'}return kill(id)}})
         original.retain(taskLifecycle.dispose);await catalogReady;original.assertCurrent()
@@ -1116,20 +1120,20 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
       assertWritableOpen(sessionId)
-      if(opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask){
+      if(opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.ownedWorkflow){
         recipient??=receivedExecutionInputsFor(entry.execution).taskDelivery(runtime.domain)
         const published=runtime,originalRecipient=recipient
         privateDrain=createDeliveryDrain({
           current:()=>!retired&&!closed&&!closing.has(sessionId)&&!failedClose.has(sessionId)&&managedRuntimes.get(sessionId)===published,
-          reconcile:async()=>{await taskLifecycle?.drain();await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates()},
-          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
+          reconcile:async()=>{await taskLifecycle?.drain();await originalRecipient.settle();await originalRecipient.reconcileExecCandidates();await originalRecipient.reconcileCodeCandidates();await originalRecipient.reconcileWorkflowCandidates()},
+          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>['session.delivery.exec','session.delivery.code','session.delivery.subagent','session.delivery.workflow'].includes(input.provenance?.producer??'')&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
           schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,settled);return true},
           report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
         })
-        const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled'].includes(event.type))drain.signal()})
+        const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','workflow/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled'].includes(event.type))drain.signal()})
         unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
       }
-      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle)
+      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
       publishManaged(sessionId,runtime)
       privateDrain?.signal()
       return runtime
@@ -1731,10 +1735,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     // M49 Task 12: the sessions' task rows — the assembly owns the truth; a
     // session whose assembly does not exist (or was closed) has NO tasks
     // (honest empty, never a fabricated row).
-    tasks: (sessionId) => assemblies.get(sessionId)?.tasks() ?? managedTaskOwners.get(sessionId)?.projectTasks() ?? [],
+    tasks: (sessionId) => assemblies.get(sessionId)?.tasks() ?? [...(managedTaskOwners.get(sessionId)?.projectTasks()??[]),...projectWorkflowRows(managedWorkflowOwners.get(sessionId)?.list()??[],sessionId)],
     cancelTask: (sessionId, id) => {
       const assembly = assemblies.get(sessionId)
       if (assembly !== undefined) return assembly.cancelTask(id)
+      const workflow=managedWorkflowOwners.get(sessionId);if(id.startsWith('workflow-')){if(!workflow?.list().some(job=>job.id===id&&job.owner===sessionId))throw new Error(`unknown task: ${id}`);return workflow.kill(id)}
       const managed=managedTaskOwners.get(sessionId);if(managed)return managed.cancelTask(id)
       throw new Error(`unknown task: ${id}`)
     },
