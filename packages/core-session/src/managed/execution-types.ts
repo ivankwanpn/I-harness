@@ -109,6 +109,7 @@ export interface OriginalManagedReviewerContext {
  readonly ready:Promise<void>
  readonly events:readonly SessionEventView[]
  readonly latestUser:Extract<SessionEventView,{type:'user/message'}>|undefined
+ authorizeAudit(audit:import('./approval-audit.ts').OriginalManagedApprovalAudit):void
  assertCurrent():void
  close():Promise<void>
 }

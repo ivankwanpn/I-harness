@@ -18,6 +18,7 @@ it('retains only the original reviewer tail and latest user for the same live ac
   assertOriginalManagedActionSource(domain,action,source);expect(()=>assertOriginalManagedActionSource(domain,foreign,source)).toThrow();expect(()=>assertOriginalManagedActionSource(domain,action,{...source})).toThrow()
   expect(review.events).toHaveLength(12);expect(review.latestUser).toMatchObject({type:'user/message',text:'original user intent',seq:1});expect(review.events[0]?.seq).toBe(execution.observe().eventCount-12);expect(review.identity).toBe(execution.identity)
   expect(()=>assertOriginalManagedReviewerContext(domain,{...review})).toThrow()
+  expect(()=>review.authorizeAudit({kind:'original-managed-approval-audit'})).toThrow()
   await action.facts.metadata.admit({type:'sandbox/mode',mode:'read-only'});expect(()=>review.assertCurrent()).toThrow();await review.close()
   fault.close=true;const failed=captureManagedReviewerContext(domain,action);await expect(failed.ready).rejects.toThrow('controlled reviewer scope close');expect(()=>domain.assertCurrent()).toThrow();fault.close=false;await failed.close();domain.assertCurrent()
   const stopped=captureManagedReviewerContext(domain,action);await stopped.ready;action.stop();expect(()=>stopped.assertCurrent()).toThrow();await stopped.close()
