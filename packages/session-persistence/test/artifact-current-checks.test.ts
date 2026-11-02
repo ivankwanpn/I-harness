@@ -68,3 +68,23 @@ it('keeps an unclassified settlement ownership getter immediate and flushes befo
  expect(gets).toBe(0);withArtifactCurrentChecks(()=>{assertArtifactCurrent(capture.capture);source.assertHeld()});expect(gets).toBe(1);expect(effects).toBe(1)
  await source.close()
 })
+it('keeps descriptor adapter checks in their original before and after order without invoking getters',async()=>{
+ const {bindOriginalCurrentnessDescriptors}=await import('../../core-session/src/managed/currentness-guards.ts'),{createArtifactCurrentGuard}=await import('../src/coordinator/artifact-path-association.ts');let checks=0,getters=0
+ const method=createArtifactCurrentGuard(()=>{checks++}),receiver={token:{},method,ready:'original'},token=receiver.token
+ const guard=bindOriginalCurrentnessDescriptors({receiver,method,before:[['token',token],['method',method]],after:[['ready','original','ready changed']],message:'binding changed'})!
+ guard();expect(checks).toBe(1)
+ receiver.ready='changed';expect(()=>guard()).toThrow('ready changed');expect(checks).toBe(2)
+ Object.defineProperty(receiver,'token',{get(){getters++;return token}});expect(()=>guard()).toThrow('binding changed');expect(checks).toBe(2);expect(getters).toBe(0)
+})
+
+it('declines descriptor recipe proxies and accessor fields without classifier callbacks',async()=>{
+ const {bindOriginalCurrentnessDescriptors}=await import('../../core-session/src/managed/currentness-guards.ts');let effects=0
+ const method=createArtifactCurrentGuard(()=>{}),receiver={method},recipe={receiver,method,before:[] as readonly (readonly [PropertyKey,unknown])[],after:[],message:'changed'}
+ const proxy=new Proxy(recipe,{get(){effects++;throw Error('proxy get')},ownKeys(){effects++;throw Error('proxy keys')},getOwnPropertyDescriptor(){effects++;throw Error('proxy descriptor')}})
+ expect(bindOriginalCurrentnessDescriptors(proxy)).toBeUndefined()
+ const accessor={...recipe,get method(){effects++;return method}};expect(bindOriginalCurrentnessDescriptors(accessor)).toBeUndefined()
+ const tuple=['method',method];Object.defineProperty(tuple,'0',{get(){effects++;return 'method'}})
+ expect(bindOriginalCurrentnessDescriptors({...recipe,before:[tuple as unknown as readonly [PropertyKey,unknown]]})).toBeUndefined();expect(effects).toBe(0)
+ const customBound=createArtifactCurrentGuard(()=>{});Object.defineProperty(customBound,'bind',{get(){effects++;return Function.prototype.bind}})
+ expect(bindOriginalCurrentnessDescriptors({...recipe,method:customBound})).toBeUndefined();expect(effects).toBe(0)
+})

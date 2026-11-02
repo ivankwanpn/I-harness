@@ -1,4 +1,6 @@
 import {taskParentMetadataProjection} from './task-parent-metadata.ts'
+import {types} from 'node:util'
+import {createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts';
 import { canJoinOriginalNativePrewrite } from '../native-fact-writer-internal.ts';
 import { createDeliveryControl,createOwnerDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
@@ -744,6 +746,18 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             } finally { selectedAdmissions--; }
         }
     });
+    // These are original constructor dependencies, classified without calling
+    // accessors. Custom inputs retain immediate checks and their old reads.
+    const executionField=core&&execution&&!types.isProxy(execution)?Object.getOwnPropertyDescriptor(execution,'assertCurrent'):undefined
+    const heldField=!types.isProxy(held)?Object.getOwnPropertyDescriptor(held,'assertHeld'):undefined
+    const executionGuard=executionField&&'value'in executionField&&typeof executionField.value==='function'&&isArtifactCurrentGuard(executionField.value)?executionField.value as ()=>void:undefined
+    const heldGuard=heldField&&'value'in heldField&&typeof heldField.value==='function'&&isArtifactCurrentGuard(heldField.value)?heldField.value as ()=>void:undefined
+    const originalGuardDependencies=executionGuard&&heldGuard
+    const assertGuardMethods=()=>{if(Object.getOwnPropertyDescriptor(execution!,'assertCurrent')?.value!==executionGuard||Object.getOwnPropertyDescriptor(held,'assertHeld')?.value!==heldGuard)throw new FactRecoveryRequiredError()}
+    if(originalGuardDependencies){
+      const originalReady=document.assertReady
+      document.assertReady=createArtifactCurrentGuard(()=>{assertGuardMethods();Reflect.apply(originalReady,document,[])})
+    }
     const originalPrivateReady=document.assertReady;
     function beginTaskMetadataUpdate() {
         held.assertHeld();if(closed||closing)throw new FactRecoveryRequiredError();
@@ -770,12 +784,17 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
       const original=source&&sourceDrains.get(source);
       if(source&&(!original?.action||original.action.stopped||original.closeRequested||!original.sourceMethods||!original.deliveryMethods||formatVersion!==14))throw new FactRecoveryRequiredError();
       const originalReady=originalPrivateReady,revision=taskRevision;
-      const checkIdentity=()=>{
+      const rawIdentity=()=>{
         if(closed||taskMetadataPending||taskMetadataStale||revision!==taskRevision||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||quarantined||sourceFault)throw new FactRecoveryRequiredError();
         execution!.assertCurrent();held.assertHeld();
         if(source){if(!sourceDrains.has(source))throw new FactRecoveryRequiredError();for(const [object,fields]of [[source,original!.sourceMethods!],[original!.sourceMethods!.delivery!.value as object,original!.deliveryMethods!]] as const)for(const key of Reflect.ownKeys(fields)){const field=Reflect.get(fields,key) as PropertyDescriptor,now=Object.getOwnPropertyDescriptor(object,key);if(!now||!('value'in now)||now.value!==field.value)throw new FactRecoveryRequiredError()}source.assertHeld()}
       };
-      const check=()=>{checkIdentity();if(source){if(pending)throw new FactRecoveryRequiredError()}else Reflect.apply(originalReady,document,[])};check();
+      const sourceField=source&&!types.isProxy(source)?Object.getOwnPropertyDescriptor(source,'assertHeld'):undefined
+      const sourceGuard=sourceField&&'value'in sourceField&&typeof sourceField.value==='function'&&isArtifactCurrentGuard(sourceField.value)?sourceField.value as ()=>void:undefined
+      const originalIdentity=originalGuardDependencies&&(!source||sourceGuard)
+      const checkIdentity=originalIdentity?createArtifactCurrentGuard(()=>{assertGuardMethods();if(source&&Object.getOwnPropertyDescriptor(source,'assertHeld')?.value!==sourceGuard)throw new FactRecoveryRequiredError();rawIdentity()}):()=>withImmediateArtifactCurrentChecks(rawIdentity)
+      const rawCheck=()=>{checkIdentity();if(source){if(pending)throw new FactRecoveryRequiredError()}else Reflect.apply(originalReady,document,[])}
+      const check=originalIdentity&&(source||isArtifactCurrentGuard(originalReady))?createArtifactCurrentGuard(rawCheck):()=>withImmediateArtifactCurrentChecks(rawCheck);check();
       if(source)return captureRequiredWriterProof(source,checkIdentity,check,{});
       const proof=Object.freeze({assertOriginal(){if(this!==proof)throw TypeError('Invalid original Task parent');checkIdentity()},assertCurrent(){if(this!==proof)throw TypeError('Invalid original Task parent');check()},assertTask14Ready(){if(this!==proof)throw TypeError('Invalid original Task parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return proof;
     }
