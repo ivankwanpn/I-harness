@@ -3,6 +3,9 @@ import { deriveTodoList, validateTodoItems } from "@i-harness/todo"
 import { committedFactSeqs, type SessionView as Session, type TodoItem } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { actionMetadataFacts, createDurableSessionLoader, type SessionService } from "@i-harness/session-executor"
+import {createOwnedWorkState,TodoRevisionConflictError} from './owned-work-state.ts'
+import type {ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
+export {TodoRevisionConflictError} from './owned-work-state.ts'
 
 export interface DesktopWorkStateView {
   todos: TodoItem[] | null
@@ -15,14 +18,6 @@ export interface DesktopWorkStateView {
 export interface DesktopTodoWriteInput {
   items: TodoItem[]
   expectedRevision: number
-}
-
-export class TodoRevisionConflictError extends Error {
-  readonly code = "TODO_REVISION_CONFLICT"
-  constructor(readonly expectedRevision: number, readonly actualRevision: number) {
-    super(`Todo list changed (revision ${actualRevision}). Reload it before saving your edit.`)
-    this.name = "TodoRevisionConflictError"
-  }
 }
 
 function view(session: Session): DesktopWorkStateView {
@@ -44,16 +39,35 @@ function validatedInput(input: DesktopTodoWriteInput): DesktopTodoWriteInput {
   return { items, expectedRevision: input.expectedRevision }
 }
 
-/** Session events own Todo and Goal state. Reads scan the full log. Human
- * replacements carry their displayed revision so a stale editor cannot erase
- * a newer human or model snapshot. Hosts should share sessionFor with their
- * SessionService to keep cold edits and simultaneous model startup on one log.
- * Read-only inspection never enters that writable loader. */
-export function createDesktopWorkState(coordinator: SessionCoordinator, service: SessionService, options: { sessionFor?: (sessionId: string) => Promise<Session> } = {}) {
+/** Public inspection keeps its original saved/live Session path; active private
+ * owners read original folds. Human replacements retain their displayed revision
+ * through admission so they cannot erase a newer accepted snapshot. Read-only
+ * inspection never enters the writable loader or constructs an assembly. */
+export function createDesktopWorkState(coordinator: SessionCoordinator, service: SessionService, options: { sessionFor?: (sessionId: string) => Promise<Session>;managed?:{
+  current(sessionId:string):ManagedExecutionAttachment|undefined
+  retain(sessionId:string,execution:ManagedExecutionAttachment,cleanup:()=>Promise<void>):void
+} } = {}) {
   const sessionFor = options.sessionFor ?? createDurableSessionLoader(coordinator)
   const writes = new Map<string, Promise<void>>()
+  let closed=false
+  const current=options.managed?.current.bind(options.managed),retain=options.managed?.retain.bind(options.managed)
+  const owned=new Map<string,{execution:ManagedExecutionAttachment;adapter:ReturnType<typeof createOwnedWorkState>;close():Promise<void>}>()
+  async function managedFor(id:string){
+    if(closed)throw Object.assign(new Error('Work-state is closed'),{code:'FACT_CLOSED'})
+    const execution=current?.(id),previous=owned.get(id)
+    if(previous){if(previous.execution!==execution)throw Object.assign(new Error('Original work-state owner retirement requires recovery'),{code:'FACT_RECOVERY_REQUIRED'});return previous.adapter}
+    if(!execution)return
+    if(!retain)throw TypeError('Original work-state cleanup retention required')
+    const adapter=createOwnedWorkState(execution,()=>current?.(id)===execution),closeAdapter=adapter.close.bind(adapter)
+    const row={execution,adapter,async close(){await closeAdapter();if(owned.get(id)===row)owned.delete(id)}}
+    owned.set(id,row)
+    try{retain(id,execution,row.close)}catch(error){try{await row.close()}catch(cleanup){throw new AggregateError([error,cleanup],'Work-state construction cleanup requires recovery',{cause:error})}throw error}
+    return adapter
+  }
   return {
     async read(sessionId: string): Promise<DesktopWorkStateView> {
+      const managed=await managedFor(sessionId)
+      if(managed)return managed.read()
       await coordinator.profile(sessionId)
       let session = service.liveSession(sessionId)
       if (!session) {
@@ -70,6 +84,8 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, service:
       writes.set(sessionId, gate.promise)
       await previous
       try {
+        const managed=await managedFor(sessionId)
+        if(managed)return await managed.writeTodos({items,expectedRevision})
         await coordinator.profile(sessionId)
         const restored = await service.writableSessionFor?.(sessionId, sessionFor) ?? service.liveSession(sessionId) ?? await sessionFor(sessionId)
         const session = await service.writableSessionFor?.(sessionId, sessionFor) ?? service.liveSession(sessionId) ?? restored
@@ -86,5 +102,6 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, service:
         if (writes.get(sessionId) === gate.promise) writes.delete(sessionId)
       }
     },
+    async close(){closed=true;for(const row of [...owned.values()].reverse())await row.close()},
   }
 }

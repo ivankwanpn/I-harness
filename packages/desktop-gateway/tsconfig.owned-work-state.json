@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/work-state.ts","src/owned-work-state.ts","test/owned-work-state.test.ts","test/work-state.test.ts"]}
