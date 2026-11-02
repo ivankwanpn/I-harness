@@ -177,6 +177,12 @@ export function isManagedExecutionOwner(identity:ManagedExecutionIdentity,owner:
   if(!original||original.owner!==owner)return false
   try{original.current();return true}catch{return false}
 }
+/** Validate the original owner/session binding without constructing a domain. */
+export function assertManagedExecutionSession(identity:ManagedExecutionIdentity,owner:object,sessionId:string):void{
+  const original=owners.get(identity)
+  if(!original||original.owner!==owner||original.sessionId!==sessionId)throw TypeError('Original execution session required')
+  original.current()
+}
 /** The original managed constructor supplies a separate held writer binding.
  * A readonly restored candidate alone cannot construct or authenticate an owner. */
 export async function restoreManagedExecutionState(input:OriginalConversationRestorationSource,binding:OriginalExecutionWriterBinding,foldFactory?:import('./execution-types.ts').OriginalExecutionFoldFactory){
