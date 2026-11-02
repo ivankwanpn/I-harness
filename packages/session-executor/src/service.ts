@@ -1,7 +1,11 @@
 import {managedExecutionStatus} from '@i-harness/session-persistence/internal/retained-inspection'
 import {createExecutorExecutionCache} from './durable-session.ts'
 import {createManagedExecutionRuntime,createManagedExecutionRuntimeWithRegistry} from './managed-assembly.ts'
-import {subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
+import {createOwnedPostTurnLifetime} from './service/owned-post-turn.ts'
+import {mountOwnedShell,type OwnedShellOptions} from './owned-shell.ts'
+import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
+import {createToolResultRetention} from './lifecycle/result-retention.ts'
+import {subscribeManagedExecution,subscribeManagedExecutionReadiness} from '@i-harness/core-session/internal/execution'
 import {supportsManagedServiceOptions} from './service/execution-mode.ts'
 import {createContext,captureExecutionHookChannel,type PluginContext} from '@i-harness/core-plugin'
 import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
@@ -129,10 +133,12 @@ type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'asser
 
 export interface SessionServiceOptions extends AssemblyOptions {
   /** Internal explicit-tool managed composition; not the default feature builder. */
-  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'|'originalFilesystem'|'originalSchedule'> & {
+  managedRuntime?: Pick<import('./managed-assembly.ts').ManagedExecutionRuntimeOptions,'tools'|'systemPrompt'|'prepareInput'|'originalFilesystem'|'originalSchedule'|'compact'|'autoCompactionEnabled'> & {
     /** Owned callback mount over the original ctx. Retain exact cleanup before startup awaits. */
     mount?(ctx:PluginContext,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<void>
     mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
+    ownedTitle?:{enabled:boolean;titleMaxOutputTokens?:number;timeoutMs?:number}
+    ownedShell?:OwnedShellOptions
   }
   /** Read-only host authority; never invokes execution project setup. */
   resultReadScopeFor?: import('./lifecycle/result-store.ts').ResultReadScopeResolver
@@ -299,6 +305,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const lanes = new Map<string, SessionTurnLane>()
   type ManagedRuntime=ReturnType<typeof createManagedExecutionRuntime>
   const managedRuntimes=new Map<string,ManagedRuntime>()
+  const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
+  const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
+  const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string}>()
   const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
   type CreatingAssembly = { work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
   const creating = new Map<string, CreatingAssembly>()
@@ -427,6 +436,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const deliveryDrains = new Map<string, ReturnType<typeof createDeliveryDrain>>()
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
   function requestDeliveryStop(id: string) {
+    const recipient=managedRecipients.get(id)
+    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop');managedStopReceipts.set(id,{recipient,fenceId:request.fenceId});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
     const assembly = liveAssembly(id)
     if (!assembly) return
     const delivery = receivedInputsFor(assembly.factOwner, id).delivery
@@ -435,6 +446,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     void request.settled.catch(error => d.warn(`[i-harness] delivery Stop requires reconciliation: ${String(error)}`))
   }
   async function awaitDeliveryStop(id: string) {
+    const pending=managedStopReceipts.get(id)
+    if(pending)return pending.recipient.closeReceipt(pending.fenceId)
     const request = deliveryStops.get(id)
     await request?.settleSources?.()
     return request?.delivery.closeReceipt(request.fenceId)
@@ -674,17 +687,20 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   function rebindModel(sessionId: string, binding: ReadyModelBinding): boolean {
     if (closed) throw new Error("session service closed")
-    if (chains.has(sessionId) || creating.has(sessionId) || closing.has(sessionId)) throw new Error("session is busy")
+    if (chains.has(sessionId) || creating.has(sessionId) && !managedRuntimes.has(sessionId) || closing.has(sessionId)) throw new Error("session is busy")
+    if (failedClose.has(sessionId)) throw new Error("Session process cleanup incomplete")
+    const managed = managedRuntimes.get(sessionId)
     const live = assemblies.get(sessionId)
     if (live?.tasks().some(task => task.group !== "job" && ["queued", "running", "waiting"].includes(task.status))) throw new Error("session has active agent tasks")
     if (live !== undefined) {
       if (!live.setModelBinding) throw new Error("assembly does not support atomic model binding")
       live.setModelBinding(binding, opts.compact)
     }
+    managed?.setModelBinding(binding, opts.managedRuntime?.compact ?? opts.compact)
     // Publish only after the live assembly accepted the complete binding.
     modelBindings.set(sessionId, Promise.resolve({ status: "ready", binding }))
     const assembly = assemblies.get(sessionId)
-    if (assembly === undefined) return false
+    if (assembly === undefined) return managed !== undefined
     assembly.modelLabel = binding.label
     return true
   }
@@ -1011,8 +1027,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     creating.set(sessionId,row);privateEntries.add(sessionId)
     let runtime:ManagedRuntime|undefined
     const mounted=new Set<()=>void|Promise<void>>()
-    let retired=false
-    row.cleanup=async()=>{retired=true;await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);privateEntries.delete(sessionId)}
+    const title=opts.managedRuntime.ownedTitle?.enabled?createOwnedPostTurnLifetime():undefined
+    if(title)mounted.add(()=>title.close())
+    let retired=false,recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>|undefined,privateDrain:ReturnType<typeof createDeliveryDrain>|undefined,unsubscribe:(()=>void)|undefined,unsubscribeReadiness:(()=>void)|undefined
+    row.cleanup=async()=>{retired=true;privateDrain?.retire();unsubscribe?.();unsubscribeReadiness?.();await privateDrain?.join();await runtime?.close();await drainManagedIngress(sessionId);for(const cleanup of [...mounted].reverse()){await cleanup();mounted.delete(cleanup)}await recipient?.settle();recipient?.revoke();await privateCache.close(sessionId);privateCache.releaseClosed(sessionId);managedRuntimes.delete(sessionId);managedTitles.delete(sessionId);managedRecipients.delete(sessionId);managedStopReceipts.delete(sessionId);privateEntries.delete(sessionId)}
     void(async()=>{
       const entry=await privateCache.get(sessionId);assertWritableOpen(sessionId)
       const context=createContext()
@@ -1031,14 +1049,31 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
        if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
        return {model,contextWindow,reasoningEffort,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata}
       }
-      const common={...opts.managedRuntime!,context,execution:entry.execution,workspace:opts.workspace,retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
+      let shellOutput:import('./owned-shell.ts').OwnedShellOutput|undefined
+      if(opts.managedRuntime!.ownedShell){let acquiring=true;try{shellOutput=await opts.managedRuntime!.ownedShell.acquireOutput(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original output retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original output cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
+      const common={...opts.managedRuntime!,context,execution:entry.execution,workspace:opts.workspace,...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})}
-      if(opts.managedRuntime!.mountRegistry){
-       runtime=await createManagedExecutionRuntimeWithRegistry({...common,configureRegistry:opts.managedRuntime!.mountRegistry,resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
+      if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell){
+       runtime=await createManagedExecutionRuntimeWithRegistry({...common,async configureRegistry(original){await opts.managedRuntime!.mountRegistry?.(original);original.assertCurrent();if(opts.managedRuntime!.ownedShell){if(opts.workspace===undefined)throw Error('Original Shell workspace required');mountOwnedShell(original,opts.workspace,opts.managedRuntime!.ownedShell,shellOutput!,!!(opts.managedRuntime!.originalFilesystem||opts.managedRuntime!.originalSchedule))}},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
       await runtime.startSchedule?.()
-      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime)
+      assertWritableOpen(sessionId)
+      if(opts.managedRuntime!.ownedShell){
+        recipient=receivedExecutionInputsFor(entry.execution).execDelivery(runtime.domain)
+        const published=runtime,originalRecipient=recipient
+        privateDrain=createDeliveryDrain({
+          current:()=>!retired&&!closed&&!closing.has(sessionId)&&!failedClose.has(sessionId)&&managedRuntimes.get(sessionId)===published,
+          reconcile:async()=>{await originalRecipient.settle();await originalRecipient.reconcileExecCandidates()},
+          pending:()=>{const observation=entry.execution.observe();return observation.inbox.pending().filter(input=>input.provenance?.producer==='session.delivery.exec'&&observation.inbox.isExecutable(input.inputId)).map(input=>input.inputId)},
+          schedule(inputId,settled){if(retired||managedRuntimes.get(sessionId)!==published)return false;const input=entry.execution.observe().inbox.pending().find(value=>value.inputId===inputId);if(!input)return false;if(queues.get(sessionId)?.byId.get(inputId)?.scheduled||published.lane.currentInput()?.inputId===inputId)return false;void submit(sessionId,input.text,new AbortController().signal,{admittedInputId:inputId}).then(settled,settled);return true},
+          report:error=>d.warn('[i-harness] private delivery reconciliation failed: '+String(error)),
+        })
+        const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','agent/input/promoted','agent/input/cancelled'].includes(event.type))drain.signal()})
+        unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
+      }
+      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient)
+      privateDrain?.signal()
       return runtime
     })().then(work.resolve,error=>{row.failed=true;failedClose.add(sessionId);work.reject(error)})
     return work.promise
@@ -1143,6 +1178,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const input: AdmittedInput = { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
           ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }
         if(managedCompatible(sessionId)){
+          const stop=managedStopReceipts.get(sessionId);await awaitDeliveryStop(sessionId);if(stop&&managedStopReceipts.get(sessionId)===stop)managedStopReceipts.delete(sessionId)
           if(options?.prepareInput||deliveryOwner)throw Error('Session-shaped input preparation requires complete compatibility before private acquisition')
           const inbox=await receivedInputFor(sessionId)
           if(options?.admittedInputId){
@@ -1166,6 +1202,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             cancel:inputId=>preparationReady&&!closed&&!closing.has(sessionId)?inbox.cancel(inputId,'input preparation did not reach promotion'):Promise.resolve(false),transform:opts.managedRuntime?.prepareInput,timeoutMs:opts.modelActionTimeoutMs,maxAttempts:opts.modelActionMaxAttempts,passiveGeneration:opts.passiveGeneration})
           try{controller.signal.throwIfAborted();assertWritableOpen(sessionId);record.state='queued';await runtime!.lane.runAdmitted(id,controller.signal,{generation:preparedManaged.generation,preparation:preparedManaged.preparation})}
           catch(error){if(!closed&&!closing.has(sessionId))try{await inbox.cancel(id,'generation ended before promotion')}catch(saving){throw new AggregateError([error,saving],'Private input cancellation requires recovery',{cause:error})}throw error}
+          const title=managedTitles.get(sessionId),policy=opts.managedRuntime?.ownedTitle
+          if(title&&policy?.enabled&&!controller.signal.aborted){
+            record.postTurn=true
+            try{
+              const selected=runtime!.selectedModelBinding()
+              await title.run({execution:entry.execution,sessionId,signal:controller.signal,model:selected.model,selectedClient:()=>runtime!.selectedModelBinding().model,localTestEnabled:opts.modelPolicy==='test-mock',assertCurrent(){controller.signal.throwIfAborted();assertWritableOpen(sessionId);if(managedRuntimes.get(sessionId)!==runtime)throw Error('Original managed runtime retired')},budgetBinding:selected.budgetBinding,contextWindow:selected.contextWindow,maxOutputTokens:selected.maxOutputTokens,titleMaxOutputTokens:policy.titleMaxOutputTokens,timeoutMs:policy.timeoutMs,coordinator:opts.coordinator,passiveGeneration:opts.passiveGeneration})
+            }finally{delete record.postTurn}
+          }
           return
         }
         const priorAssembly = liveAssembly(sessionId), priorDocument = priorAssembly?.managedDocument
@@ -1556,6 +1600,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     },
     submit,
     compact(sessionId, instructions, signal = new AbortController().signal) {
+      if(managedCompatible(sessionId)){
+        try{assertWritableOpen(sessionId);signal.throwIfAborted();const state=queueState(sessionId);if(state.running||state.queued>0||chains.has(sessionId))throw Error('session is busy')}catch(error){return Promise.reject(error)}
+        const work=(async()=>{const runtime=await getManagedRuntime(sessionId);assertWritableOpen(sessionId);signal.throwIfAborted();return runtime.agent.compact(instructions,{signal})})()
+        const barrier=work.then(()=>{},()=>{});chains.set(sessionId,barrier);active.add(barrier)
+        void barrier.then(()=>{if(chains.get(sessionId)===barrier)chains.delete(sessionId);active.delete(barrier)})
+        return work
+      }
       const run = async () => {
         assertWritableOpen(sessionId)
         signal.throwIfAborted()

@@ -44,6 +44,7 @@ function createOriginalOwner(issuer:OriginalExecSourceIssuer,input:PrivateExecPr
   }
   async function settleSource(){
     if(!sourceCapture)return
+    if(sourceSeq!==undefined){const indexed=readSource(source);if(!indexed||indexed.seq!==sourceSeq||indexed.kind!=='exec'||indexed.callSeq!==input.callSeq)throw new FactRecoveryRequiredError();return}
     const prior=sourceOutcome
     if(sourceAttempted)sourceOutcome=await sourceCapture.observe()
     else{sourceAttempted=true;sourceOutcome=await sourceCapture.admit()}
