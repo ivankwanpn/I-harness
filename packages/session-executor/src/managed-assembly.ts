@@ -2,7 +2,7 @@ import {createContext,captureExecutionHookChannel,type PluginContext} from '@i-h
 import {createManagedAgent,createManagedSessionExecutor,type ManagedAgentHost} from '@i-harness/core-agent'
 import {createManagedAgentModelOriginOwner} from '@i-harness/core-agent/model-origin'
 import {createToolRegistryWithModelOrigin} from '@i-harness/core-tools/model-origin'
-import type {Tool} from '@i-harness/core-tools'
+import type {Tool,ToolResultRetention} from '@i-harness/core-tools'
 import type {ModelClient} from '@i-harness/llm-seam'
 import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 import {receivedExecutionInputsFor} from './lifecycle/execution-inputs.ts'
@@ -44,6 +44,7 @@ function captureBindingData<T>(input:T,preserveSummaryModel=false):T {
  * complete compatibility contract until its feature adapters are composed. */
 export interface ManagedExecutionRuntimeOptions extends Pick<ManagedAgentHost,'modelActionTimeoutMs'|'modelActionMaxAttempts'|'reasoningEffort'|'maxParallelToolCalls'|'budgetBinding'|'contextMetadata'|'telemetry'> {
  execution:ManagedExecutionAttachment
+ resultRetention?:ToolResultRetention
  workspace?:string
  originalFilesystem?:boolean
  originalSchedule?:boolean
@@ -102,7 +103,7 @@ function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManag
   instructionRuntime.registerSection('instructions',()=>manager!.text())
   requestContext=manager
  }
- const pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:origin.domain.sessionId}},origin.verifier)
+ const pair=createToolRegistryWithModelOrigin(ctx,{resultRetention:options.resultRetention,executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:origin.domain.sessionId}},origin.verifier)
  if(options.originalFilesystem){if(options.workspace===undefined||!manager)throw TypeError('Original filesystem instruction manager and workspace required');mountOwnedFilesystem({ctx,tools:pair.registry,workspace:options.workspace,domain:origin.domain,manager})}
  let startSchedule:(()=>Promise<void>)|undefined
  if(options.originalSchedule){if(!options.retainConstructionCleanup||!options.scheduleWake)throw TypeError('Original schedule retention and wake required');startSchedule=mountOwnedSchedule({execution,domain:origin.domain,ctx,tools:pair.registry,wake:options.scheduleWake,retain:options.retainConstructionCleanup})}
@@ -113,6 +114,7 @@ function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManag
 function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeof prepare>,registerClose?:(close:()=>Promise<void>)=>void,onClose?:()=>void){
  const {execution,ctx,origin,pair,requestContext,startSchedule}=prepared
  let model=options.model,reasoningEffort=options.reasoningEffort
+ let selectedBinding:ResolvedManagedModel={model,contextWindow:options.contextWindow,maxOutputTokens:options.maxOutputTokens,reasoningEffort,budgetBinding:options.budgetBinding,contextMetadata:options.contextMetadata}
  let lane:ReturnType<typeof createManagedSessionExecutor>|undefined
  let closeFlight:Promise<void>|undefined,closed=false
  const close=()=>{onClose?.();if(closed)return Promise.resolve();if(closeFlight)return closeFlight;lane?.dispose();const flight=Promise.allSettled(lane?[lane.drain()]:[]).then(()=>{closed=true});closeFlight=flight;return flight}
@@ -132,6 +134,7 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
  lane=createManagedSessionExecutor({execution,agent})
  const originalLane=lane
  const runtime=Object.freeze({startSchedule,execution,domain:origin.domain,ctx,tools:pair.registry,agent,lane:originalLane,inbox:inputs.inbox,
+  selectedModelBinding(){if(this!==runtime||closed||closeFlight)throw TypeError('Original open managed runtime required');origin.domain.assertCurrent();const budgetBinding=typeof selectedBinding.budgetBinding==='function'?selectedBinding.budgetBinding():selectedBinding.budgetBinding,contextMetadata=typeof selectedBinding.contextMetadata==='function'?selectedBinding.contextMetadata():selectedBinding.contextMetadata;if(closed||closeFlight)throw TypeError('Original open managed runtime required');origin.domain.assertCurrent();return {...selectedBinding,budgetBinding,contextMetadata}},
   setModelBinding(binding:ManagedExecutionModelBinding,compactRequest?:CompactionRequest){
    if(this!==runtime||closed||closeFlight)throw TypeError('Original open managed runtime required')
    origin.domain.assertCurrent()
@@ -150,7 +153,7 @@ function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeo
    if(originalLane.isRunning())throw Error('session is busy')
    origin.domain.assertCurrent()
    agent.updateContext!(update)
-   model=nextModel;reasoningEffort=nextEffort
+   model=nextModel;reasoningEffort=nextEffort;selectedBinding={model:nextModel,reasoningEffort:nextEffort,contextWindow:window,maxOutputTokens:output,budgetBinding,contextMetadata}
   },
   close(){if(this!==runtime)return Promise.reject(TypeError('Original managed runtime required'));return close()}})
  return runtime
