@@ -229,7 +229,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
         let r: Receipt | undefined;
         if (open.origin.kind === 'observation-input') {
           r = receiptFor(open.origin.inputId);
-          if (r?.admissionSeq !== open.origin.seq)
+          if (r && r.admissionSeq !== open.origin.seq)
             return;
         }
         else if (open.origin.kind === 'input') {
