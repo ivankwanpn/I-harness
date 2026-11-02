@@ -72,6 +72,7 @@ import { mountOwnedGatewayGuardian } from './owned-gateway-guardian.ts'
 import { mountOwnedGatewayTeam } from './owned-gateway-team.ts'
 import { DEFAULT_AGENT_PRESET } from '../../preset/src/index.ts'
 import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts'
+import { createOwnedMetadataFold } from '../../session-executor/src/lifecycle/owned-metadata-fold.ts'
 import { summaryFactory } from '../../session-executor/src/context-composition.ts'
 import { createCodeTextRetention } from '../../session-executor/src/lifecycle/code-text-retention.ts'
 import { renderNativeContextRecovery } from '../../session-executor/src/context-output.ts'
@@ -157,6 +158,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await mkdir(options.sessionDir, { recursive: true })
   const coordinator = createJsonlTaskTransitionCoordinator(options.sessionDir, {
     lock: { enabled: true, lockRoot: options.sessionDir },
+    originalExecutionFoldFactory: createOwnedMetadataFold,
   }, taskDocumentStorageContract)
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
