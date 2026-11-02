@@ -40,12 +40,20 @@ function captureBindingData<T>(input:T,preserveSummaryModel=false):T {
  return copy(input) as T
 }
 
+export interface OwnedInstructionBinding {
+ readonly environment:import('./context/instructions/contracts.ts').InstructionEnvironment
+ readonly cwd:string
+ authority():import('@i-harness/sandbox').AuthorityState
+ available():boolean
+}
+
 /** Internal explicit-tool construction. The public default assembly keeps its
  * complete compatibility contract until its feature adapters are composed. */
 export interface ManagedExecutionRuntimeOptions extends Pick<ManagedAgentHost,'modelActionTimeoutMs'|'modelActionMaxAttempts'|'reasoningEffort'|'maxParallelToolCalls'|'budgetBinding'|'contextMetadata'|'telemetry'> {
  execution:ManagedExecutionAttachment
  resultRetention?:ToolResultRetention
  workspace?:string
+ instructionBinding?:OwnedInstructionBinding
  originalFilesystem?:boolean
  originalSchedule?:boolean
  scheduleWake?:(inputId:string,text:string)=>void
@@ -77,7 +85,7 @@ export interface ManagedRegistryConstruction {
  readonly tools:ReturnType<typeof createToolRegistryWithModelOrigin>['registry']
  readonly domain:ReturnType<typeof createManagedAgentModelOriginOwner>['domain']
  readonly execution:ManagedExecutionAttachment
- readonly instructions?:Readonly<{manager:ReturnType<typeof createMainInstructionManager>;runtime:ReturnType<typeof createExecutionRuntimeContext>}>
+ readonly instructions?:Readonly<{manager:ReturnType<typeof createMainInstructionManager>;runtime:ReturnType<typeof createExecutionRuntimeContext>;environment:OwnedInstructionBinding['environment'];cwd:string;authority:OwnedInstructionBinding['authority'];available:OwnedInstructionBinding['available']}>
  assertCurrent():void
  retain(cleanup:()=>void|Promise<void>):void
 }
@@ -97,16 +105,26 @@ function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManag
  let requestContext=options.requestContext
  let manager:ReturnType<typeof createMainInstructionManager>|undefined
  let instructionRuntime:ReturnType<typeof createExecutionRuntimeContext>|undefined
- if(options.workspace!==undefined&&requestContext===undefined){
+ let instructionBinding:OwnedInstructionBinding|undefined
+ if((options.workspace!==undefined||options.instructionBinding)&&requestContext===undefined){
   if(!options.retainConstructionCleanup)throw TypeError('Original instruction cleanup retention required')
-  const environment=createProjectInstructionEnvironment()
-
+  const supplied=options.instructionBinding
+  if(supplied&&types.isProxy(supplied))throw TypeError('Original instruction binding required')
+  const fields=supplied?Object.getOwnPropertyDescriptors(supplied):undefined
+  if(fields&&(Reflect.ownKeys(fields).some(key=>!['environment','cwd','authority','available'].includes(key as string))||!['environment','cwd','authority','available'].every(key=>fields[key]&&'value'in fields[key]!)))throw TypeError('Closed instruction binding required')
+  if(fields&&(!fields.environment!.value||typeof fields.cwd!.value!=='string'||!fields.cwd!.value))throw TypeError('Original instruction binding required')
+  const environment=fields?fields.environment!.value as OwnedInstructionBinding['environment']:createProjectInstructionEnvironment(),cwd=fields?fields.cwd!.value as string:options.workspace!
+  const authorityMethod=fields?.authority?.value,availableMethod=fields?.available?.value
+  if(!cwd||supplied&&(!environment||typeof authorityMethod!=='function'||types.isProxy(authorityMethod)||typeof availableMethod!=='function'||types.isProxy(availableMethod)))throw TypeError('Original instruction binding required')
+  const check=()=>{if(supplied)for(const key of ['environment','cwd','authority','available'] as const)if(Object.getOwnPropertyDescriptor(supplied,key)?.value!==fields![key]!.value)throw Error('Original instruction binding changed')}
+  const authority=supplied?()=>{check();return Reflect.apply(authorityMethod!,supplied,[]) as import('@i-harness/sandbox').AuthorityState}:()=>({kind:'unbound' as const,revision:'configured-workspace',workspaceRoot:cwd})
   let retired=false
-  const cleanup=async()=>{retired=true;await manager?.close();await instructionRuntime?.close();await environment.close()}
+  const cleanup=async()=>{retired=true;await manager?.close();await instructionRuntime?.close();if(!supplied)await environment.close()}
   options.retainConstructionCleanup(cleanup)
+  instructionBinding={environment,cwd,authority,available:()=>{if(retired)return false;if(!supplied)return true;check();return Reflect.apply(availableMethod!,supplied,[])===true}}
   instructionRuntime=createExecutionRuntimeContext(execution,origin.domain)
-  manager=createMainInstructionManager({domain:origin.domain,environment,cwd:options.workspace,
-   authority:()=>({kind:'unbound',revision:'configured-workspace',workspaceRoot:options.workspace!}),available:()=>!retired,
+  manager=createMainInstructionManager({domain:origin.domain,environment,cwd,
+   authority,available:instructionBinding.available,
    publish:(signal,retain)=>instructionRuntime!.render(signal,retain)})
   instructionRuntime.registerSection('instructions',()=>manager!.text())
   requestContext=manager
@@ -117,7 +135,7 @@ function prepare(options:Omit<ManagedExecutionRuntimeOptions,keyof ResolvedManag
  if(options.originalSchedule){if(!options.retainConstructionCleanup||!options.scheduleWake)throw TypeError('Original schedule retention and wake required');startSchedule=mountOwnedSchedule({execution,domain:origin.domain,ctx,tools:pair.registry,wake:options.scheduleWake,retain:options.retainConstructionCleanup})}
  for(const tool of options.tools)pair.registry.register(tool)
  if(options.originalFilesystem||options.originalSchedule){if(options.workspace===undefined)throw TypeError('Original policy workspace required');createExecutionApprovalPolicy(ctx,pair.registry,{workspace:options.workspace,workspaceRoots:()=>[options.workspace!]})}
- return {execution,ctx,origin,pair,requestContext,manager,instructionRuntime,startSchedule}
+ return {execution,ctx,origin,pair,requestContext,manager,instructionRuntime,instructionBinding,startSchedule}
 }
 function finish(options:ManagedExecutionRuntimeOptions,prepared:ReturnType<typeof prepare>,registerClose?:(close:()=>Promise<void>)=>void,onClose?:()=>void){
  const {execution,ctx,origin,pair,requestContext,startSchedule}=prepared
@@ -181,7 +199,7 @@ export async function createManagedExecutionRuntimeWithRegistry(options:Omit<Man
  const assertCurrent=()=>{if(retired)throw Error('Original construction retired');options.assertConstructionCurrent();prepared.origin.domain.assertCurrent()}
  options.retainConstructionCleanup(async()=>{retired=true})
  const original:ManagedRegistryConstruction={ctx:prepared.ctx,tools:prepared.pair.registry,domain:prepared.origin.domain,execution:prepared.execution,
-  ...(prepared.manager&&prepared.instructionRuntime?{instructions:{manager:prepared.manager,runtime:prepared.instructionRuntime}}:{}),assertCurrent,
+  ...(prepared.manager&&prepared.instructionRuntime&&prepared.instructionBinding?{instructions:{manager:prepared.manager,runtime:prepared.instructionRuntime,environment:prepared.instructionBinding.environment,cwd:prepared.instructionBinding.cwd,authority:prepared.instructionBinding.authority,available:prepared.instructionBinding.available}}:{}),assertCurrent,
   retain(cleanup){if(!retaining)throw Error('Original construction retention expired');assertCurrent();if(typeof cleanup!=='function')throw TypeError('Original mount cleanup required');options.retainConstructionCleanup(async()=>{await cleanup()})}}
  assertCurrent()
  let defaultSurface:void|OwnedDefaultSurface

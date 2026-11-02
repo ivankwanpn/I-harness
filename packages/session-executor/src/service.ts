@@ -141,6 +141,7 @@ export interface SessionServiceOptions extends AssemblyOptions {
     mountRegistry?:import('./managed-assembly.ts').ManagedRegistryFactory
     ownedTask?:{options(original:import('./managed-assembly.ts').ManagedRegistryConstruction,parentModel:import('@i-harness/llm-seam').ModelClient,shared:{shell?:import('@i-harness/exec').ExecService;output?:import('./owned-shell.ts').OwnedShellOutput}):Promise<Omit<RegisterSubagentOptions,'managedParent'|'parentNotify'|'parentSession'|'factOwner'>>}
     mountDefaultSurface?(original:import('./managed-assembly.ts').ManagedRegistryConstruction,live:{modelToolSchemas():import('@i-harness/llm-seam').ToolSchema[];task?:RegisterSubagentResult}):Promise<import('./managed-assembly.ts').OwnedDefaultSurface>
+    acquireInstructions?(sessionId:string,execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment,retain:(cleanup:()=>void|Promise<void>)=>void):Promise<import('./managed-assembly.ts').OwnedInstructionBinding>
     ownedTitle?:{enabled:boolean;titleMaxOutputTokens?:number;timeoutMs?:number}
     ownedShell?:OwnedShellOptions
     ownedCode?:{config:import('@i-harness/code-mode').CodeModeConfig;acquireOutput(sessionId:string,retain:(cleanup:()=>void|Promise<void>)=>void):OwnedCodeOutput|Promise<OwnedCodeOutput>}
@@ -1085,6 +1086,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
        if(!model)throw new ModelUnavailableError(binding&&binding.status!=='ready'?binding.reason:'Managed runtime requires original resolved model')
        return {model,contextWindow,reasoningEffort,maxOutputTokens:binding?.status==='ready'?binding.binding.maxOutputTokens:opts.maxOutputTokens,budgetBinding:binding?.status==='ready'?binding.binding.budgetBinding:opts.budgetBinding,contextMetadata:binding?.status==='ready'?binding.binding.contextMetadata:opts.contextMetadata}
       })()
+      let instructionBinding:import('./managed-assembly.ts').OwnedInstructionBinding|undefined
+      if(opts.managedRuntime!.acquireInstructions){let acquiring=true;try{instructionBinding=await opts.managedRuntime!.acquireInstructions(sessionId,entry.execution,cleanup=>{if(!acquiring||retired)throw Error('Original instruction retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original instruction cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
       let taskMount:RegisterSubagentResult|undefined
       let taskShell:import('@i-harness/exec').ExecService|undefined
       let codeMount:import('@i-harness/code-mode').CodeModeMount|undefined
@@ -1093,7 +1096,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       let shellOutput:import('./owned-shell.ts').OwnedShellOutput|undefined
       if(opts.managedRuntime!.ownedShell){let acquiring=true;try{shellOutput=await opts.managedRuntime!.ownedShell.acquireOutput(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original output retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original output cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
       if(opts.managedRuntime!.ownedCode&&!shellOutput){let acquiring=true;try{shellOutput=await opts.managedRuntime!.ownedCode.acquireOutput(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original output retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original output cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
-      const common={...opts.managedRuntime!,context,execution:entry.execution,workspace:opts.workspace,...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
+      const common={...opts.managedRuntime!,context,execution:entry.execution,workspace:opts.workspace,...instructionBinding?{instructionBinding}:{},...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})}
       if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.mountDefaultSurface){
