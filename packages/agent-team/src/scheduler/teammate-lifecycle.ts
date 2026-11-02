@@ -28,6 +28,7 @@ export function createTeammateSpawner(
   retainBirth:(birth:import('@i-harness/subagent').TeamChildBirthAttempt)=>void = ()=>{throw Error('Original Team birth retention unavailable')},
   releaseBirth:(birth:import('@i-harness/subagent').TeamChildBirthAttempt)=>void = ()=>{},
   releaseProvisioning:(witness:import('../../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning)=>Promise<void> = async()=>{throw Error('Original Team provisioning cleanup unavailable')},
+  retainChildCleanup:(path:string,entry:import('@i-harness/subagent').ChildAgentEntry)=>void = ()=>{throw Error('Original Team child cleanup unavailable')},
 ) {
   const birthField=Object.getOwnPropertyDescriptor(sub,'reserveManagedTeamChild')
   const reserveBirth=birthField&&'value'in birthField?birthField.value:undefined
@@ -74,6 +75,7 @@ export function createTeammateSpawner(
       forkTurns,
       childSessions: birth&&sub.childSessions?{...sub.childSessions,origin:'team' as const}:sub.childSessions,
     })
+    if(birth){const entry=sub.table.get(out.path);if(!entry)throw TypeError('Original Team child entry required');retainChildCleanup(out.path,entry)}
     if(attempt&&opts?.managed){await releaseProvisioning(opts.managed.provisioning);await attempt.close();releaseBirth(attempt)}
     {
       // M19 Ruling 26 (status edge): the child's INITIAL turn completing after

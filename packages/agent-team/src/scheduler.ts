@@ -1,3 +1,4 @@
+import {assertOriginalTeamChildCleanup} from '@i-harness/subagent/internal/team-cleanup'
 import {captureOriginalTeamColdBinding,captureOriginalTeamColdTarget} from '../../session-persistence/src/team-child-recovery-internal.ts'
 import {bindPreparedTeamLaunchLeaf,type OriginalManagedTeamCaller} from '@i-harness/core-tools/internal/team-caller'
 // M19 Task 10: mount/unmount lifecycle for the Team scope — the REAL subagent
@@ -34,6 +35,7 @@ import { createTeamTools } from "./tools.ts"
 import { AgentPath } from "./agent-path.ts"
 
 export interface TeamSubagentDeps {
+  retainTeamChildCleanup?: import('@i-harness/subagent').RegisterSubagentResult['retainTeamChildCleanup']
   reserveManagedColdTeamChild?: import('@i-harness/subagent').RegisterSubagentResult['reserveManagedColdTeamChild']
   reserveManagedTeamChild?: (caller:OriginalManagedTeamCaller,provisioning:import('../../core-session/src/managed/team-provisioning.ts').OriginalTeamProvisioning)=>import('@i-harness/subagent').TeamChildBirthAttempt
   createInstructionContext?: SpawnOptions['createInstructionContext']
@@ -182,12 +184,13 @@ export async function mountAgentTeams(
   let factsCleanup: (() => Promise<void>) | undefined
   let deliveryCleanup:(()=>Promise<void>)|undefined,deliveryClosed=false
   let factsClosed = false, toolsClosed = false, roleClosed = false, parentClosed = !managed
+  const teamChildCleanups=new Map<ChildAgentEntry,{path:string;port:ReturnType<NonNullable<TeamSubagentDeps['retainTeamChildCleanup']>>}>()
   const teamBirths=new Set<import('@i-harness/subagent').TeamChildBirthAttempt>()
   const coldResources=new Set<{close():Promise<void>}>()
   let toolMount: ReturnType<typeof mountTeamTools> | undefined
   let completions: ReturnType<typeof createCompletionJobs> | undefined
   let mailbox: ReturnType<typeof createMailbox> | undefined
-  let children: { path: string; entry: ChildAgentEntry; agent: ReturnType<AgentRegistry['get']>; disposed: boolean; jobClosed: boolean; detached: boolean; removeAgent: boolean }[] | undefined
+  let children: { path: string; entry: ChildAgentEntry; agent: ReturnType<AgentRegistry['get']>; cleanup?:ReturnType<NonNullable<TeamSubagentDeps['retainTeamChildCleanup']>>; disposed: boolean; jobClosed: boolean; detached: boolean; removeAgent: boolean }[] | undefined
   let generatedRole: SubagentRole | undefined
   let generatedRoleCleanup: RoleCleanup | undefined
   const removeGeneratedRole = async () => {
@@ -215,24 +218,24 @@ export async function mountAgentTeams(
         try { if (!factsClosed && deliveryClosed && teamBirths.size===0 && coldResources.size===0) { await factsCleanup?.(); factsClosed = true } } catch (error) { failures.push(error) }
         // Sealed accepted acquisitions have now finished publication or failed.
         // Freeze membership once, retaining exact entries and phase bits on retry.
-        children ??= [...deps.subagents.table.entries()].filter(([path]) => path.startsWith('lead/')).map(([path, entry]) => ({
-          path, entry, agent: entry.sessionId ? deps.subagents.agents.get(entry.sessionId) : undefined,
-          disposed: false, jobClosed: false, detached: false, removeAgent: false,
+        children ??= (managed?[...teamChildCleanups].map(([entry,held])=>({path:held.path,entry,cleanup:held.port})): [...deps.subagents.table.entries()].filter(([path])=>path.startsWith('lead/')).map(([path,entry])=>({path,entry}))).map(({path,entry,...held})=>({
+          path,entry,...held,agent:entry.sessionId?deps.subagents.agents.get(entry.sessionId):undefined,
+          disposed:false,jobClosed:false,detached:false,removeAgent:false,
         }))
         for (const child of [...children!]) {
           const { path, entry } = child, sub = deps.subagents
           try {
             if (!child.disposed) {
-              sub.table.update(path, entry, { closing: true })
+              if(child.cleanup)await child.cleanup.markClosing();else sub.table.update(path, entry, { closing: true })
               entry.controller.abort()
               if (entry.dispose) await entry.dispose()
               else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
               child.disposed = true
             }
-            if (!child.jobClosed) { if (entry.jobId) sub.jobs.kill(entry.jobId); child.jobClosed = true }
+            if (!child.jobClosed) { if(child.cleanup)await child.cleanup.killJob();else if (entry.jobId) sub.jobs.kill(entry.jobId); child.jobClosed = true }
             if (!child.detached) {
-              const ownsEntry = sub.table.get(path) === entry
-              if (ownsEntry) sub.table.remove(path)
+              const ownsEntry = child.cleanup?await child.cleanup.detach():sub.table.get(path) === entry
+              if (!child.cleanup&&ownsEntry) sub.table.remove(path)
               child.removeAgent = ownsEntry
               child.detached = true
             }
@@ -262,6 +265,10 @@ export async function mountAgentTeams(
     deps.retainMount?.(handle)
     assertConstructing()
     const sub = deps.subagents
+    const cleanupField=Object.getOwnPropertyDescriptor(sub,'retainTeamChildCleanup'),cleanupIssuer=cleanupField&&'value' in cleanupField?cleanupField.value:undefined
+    const retainChildCleanup=(path:string,entry:ChildAgentEntry)=>{if(!managed)return;const existing=teamChildCleanups.get(entry);if(existing){if(existing.path!==path)throw TypeError('Original Team child path changed');return}const field=Object.getOwnPropertyDescriptor(sub,'retainTeamChildCleanup');if(typeof cleanupIssuer!=='function'||!field||!('value' in field)||field.value!==cleanupIssuer||field.enumerable!==cleanupField!.enumerable||field.configurable!==cleanupField!.configurable||field.writable!==cleanupField!.writable)throw TypeError('Original Team child cleanup issuer changed');const port=Reflect.apply(cleanupIssuer,sub,[managed.parent,path,entry]) as ReturnType<NonNullable<TeamSubagentDeps['retainTeamChildCleanup']>>;assertOriginalTeamChildCleanup(port,managed.parent,path,entry);teamChildCleanups.set(entry,{path,port})}
+    if(managed)for(const member of state.members.values()){const path=AgentPath.parse(`lead/${member.name}`).toString(),entry=sub.table.get(path);if(entry)retainChildCleanup(path,entry)}
+
     completions = createCompletionJobs(sub, state, cfg, isRetired, () => mailbox!, () => activity!, work => lead!.withoutRun(work))
     const { teamJobs } = completions
     let teamToolNames: string[] = []
@@ -278,7 +285,7 @@ export async function mountAgentTeams(
 
     // ---- real bridge bindings (Ruling 18) ----
 
-    const realSpawnChild = createTeammateSpawner(ctx, deps, sub, teamJobs, () => teamRoleTools, activity, birth=>teamBirths.add(birth), birth=>teamBirths.delete(birth), async witness=>{if(!tx.releaseProvisioning)throw TypeError('Original Team provisioning cleanup unavailable');await tx.releaseProvisioning(witness)})
+    const realSpawnChild = createTeammateSpawner(ctx, deps, sub, teamJobs, () => teamRoleTools, activity, birth=>teamBirths.add(birth), birth=>teamBirths.delete(birth), async witness=>{if(!tx.releaseProvisioning)throw TypeError('Original Team provisioning cleanup unavailable');await tx.releaseProvisioning(witness)},retainChildCleanup)
     const spawnChildFn = deps.spawnChild ?? realSpawnChild
 
     const { realHoldsPrompt, realIsDurable } = createDurabilityProbes(sub)
