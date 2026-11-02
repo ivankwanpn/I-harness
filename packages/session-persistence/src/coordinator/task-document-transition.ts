@@ -10,6 +10,7 @@ import { heldFactOwner } from './fact-owner.ts'
 import { randomUUID } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, validateDeliveryFrame, type SessionEventView, type SessionView } from '@i-harness/core-session'
 import type { Ownership } from './ownership.ts'
+import {compareOriginalExclusionScopes} from './ownership.ts'
 import type { createBindingObservations } from './binding-observation.ts'
 import { issueHeldTaskDocumentScope } from './task-document-scope.ts'
 import { captureTaskSnapshot } from './task-document-snapshot.ts'
@@ -52,10 +53,10 @@ export function runTaskTransitionDrain<T>(ownership: Ownership, id: string, work
   return transitionContext.exit(() => ownership.withSessionOperation(id, () => transitionContext.run(context, work)))
 }
 export function assertOutsideTaskTransition(admission: object, ids: readonly string[], keys: readonly string[], all = false) {
-  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.admission === admission && (all || current.ownership.exclusionScope([current.id], [current.key]).keys.some(key => current.ownership.exclusionScope(ids, keys).keys.includes(key)))) throw new Error('TASK_TRANSITION_CONFLICT')
+  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.admission === admission && (all || (compareOriginalExclusionScopes(current.ownership,[current.id],[current.key],ids,keys) ?? current.ownership.exclusionScope([current.id], [current.key]).keys.some(key => current.ownership.exclusionScope(ids, keys).keys.includes(key))))) throw new Error('TASK_TRANSITION_CONFLICT')
 }
 export function assertOutsideTaskTransitionSession(ownership: Ownership, id: string) {
-  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.ownership === ownership && ownership.exclusionScope([current.id], [current.key]).keys.some(key => ownership.exclusionScope([id], []).keys.includes(key))) throw new Error('TASK_TRANSITION_CONFLICT')
+  for (let current = transitionContext.getStore(); current; current = current.parent) if (current.ownership === ownership && (compareOriginalExclusionScopes(ownership,[current.id],[current.key],[id],[]) ?? ownership.exclusionScope([current.id], [current.key]).keys.some(key => ownership.exclusionScope([id], []).keys.includes(key)))) throw new Error('TASK_TRANSITION_CONFLICT')
 }
 /** Original Documents owner, entered only from its finite creation operation. */
 export function createTaskDocumentTransitions(ownership: Ownership, admission: ReturnType<typeof createBindingObservations>, config: TaskTransitionConfiguration, priorDocuments: () => Promise<void>, latches?: ReturnType<typeof createProcessReadLatches>) {

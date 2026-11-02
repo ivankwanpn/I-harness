@@ -3,7 +3,7 @@ import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs
 import { originalHeldStateFor } from '@i-harness/fs-lock/internal/held-state'
 import { createArtifactPathOwner } from '@i-harness/fs-lock/internal/artifact-path'
 import { basename, dirname, resolve } from 'node:path'
-import { assertArtifactCurrent, artifactPathsFor, artifactScope, withArtifactCurrentChecks, withImmediateArtifactCurrentChecks, type ArtifactCapture } from './artifact-path-association.ts'
+import { assertArtifactCurrent, artifactPathsFor, artifactScope, isOriginalCanonicalExclusion, withArtifactCurrentChecks, withImmediateArtifactCurrentChecks, type ArtifactCapture, type OriginalArtifactExclusion } from './artifact-path-association.ts'
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types as utilTypes } from 'node:util'
@@ -558,6 +558,23 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   associateOriginalOrderingLedger(owner, finiteOrdering)
   orderedPins.set(owner, (id, retain, origin) => borrowBundle(id, false, retain, [id], () => {}, origin))
   ownerClaims.set(owner, claims)
+  originalQueries.set(owner,{method:owner.exclusionScope,binding:artifacts})
   return owner
+}
+const originalQueries=new WeakMap<object,{method:(ids:readonly string[],keys:readonly string[])=>ReturnType<typeof artifactScope>;binding:OriginalArtifactExclusion|undefined}>()
+function plainStrings(value:readonly string[]):boolean{
+  if(utilTypes.isProxy(value)||!Array.isArray(value)||Object.getPrototypeOf(value)!==Array.prototype)return false
+  const length=Object.getOwnPropertyDescriptor(value,'length')
+  if(!length||!('value'in length)||Reflect.ownKeys(value).length!==length.value+1)return false
+  for(let index=0;index<length.value;index++){const field=Object.getOwnPropertyDescriptor(value,String(index));if(!field||!('value'in field)||typeof field.value!=='string')return false}
+  return true
+}
+/** Only one callback-free original comparison; undefined preserves the old sequence. */
+export function compareOriginalExclusionScopes(owner:object,leftIds:readonly string[],leftKeys:readonly string[],rightIds:readonly string[],rightKeys:readonly string[]):boolean|undefined{
+  const original=originalQueries.get(owner);if(!original||!isOriginalCanonicalExclusion(original.binding))return
+  const field=Object.getOwnPropertyDescriptor(owner,'exclusionScope');if(!field||!('value'in field)||field.value!==original.method)return
+  if(![leftIds,leftKeys,rightIds,rightKeys].every(plainStrings))return
+  const left=Reflect.apply(original.method,owner,[leftIds,leftKeys]) as ReturnType<typeof artifactScope>;if(!left.keys.length)return false
+  const right=Reflect.apply(original.method,owner,[rightIds,rightKeys]) as ReturnType<typeof artifactScope>;return left.keys.some(key=>right.keys.includes(key))
 }
 export type Ownership = ReturnType<typeof createOwnership>
