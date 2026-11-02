@@ -22,7 +22,7 @@ import {createGenerationLifecycle} from '../src/lifecycle/generation-actions.ts'
 import {receivedInputsFor} from '../src/lifecycle/received-inputs.ts'
 import {receivedExecutionInputsFor} from '../src/lifecycle/execution-inputs.ts'
 
-it.each(['healthy','receipt-unknown'] as const)('retains the original Code receipt after private Stop without reopening admission (%s)',async mode=>{
+it.each(['healthy','receipt-unknown','receipt-unknown-stop'] as const)('retains the original Code receipt after private Stop without reopening admission (%s)',async mode=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'code-fence-recipient-')),sessions=join(root,'sessions')
  let coordinator=createJsonlTaskTransitionCoordinator(sessions,{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'parent'});const document=await coordinator.openManagedDocument('parent'),ctx=createContext(),origin=createAgentModelOriginOwner({view:document.view,factOwner:document}),pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{view:document.view,factOwner:document,context:ctx,sessionId:'parent'}},origin.verifier),ended=Promise.withResolvers<void>()
  const output=createContextOutputService({root:join(root,'results'),workspaceId:'private-code-fence'})
@@ -41,8 +41,20 @@ it.each(['healthy','receipt-unknown'] as const)('retains the original Code recei
  try{
   const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,createContext());inputs=receivedExecutionInputsFor(execution);const recipient=inputs.codeDelivery(domain)
   expect(execution.observe().delivery.codePending()).toHaveLength(1)
-  const unknown=Promise.withResolvers<void>();probe.enabled=mode==='receipt-unknown';probe.allow=false;probe.key='';probe.keys=[];probe.notify=unknown.resolve
-  if(mode==='receipt-unknown'){const first=recipient.admitCode(evidence!);void first.catch(()=>{});await unknown.promise;await expect(first).rejects.toThrow();expect(()=>execution.observe()).toThrow();probe.allow=true}
+  const unknown=Promise.withResolvers<void>();probe.enabled=mode!=='healthy';probe.allow=false;probe.key='';probe.keys=[];probe.notify=unknown.resolve
+  if(mode!=='healthy'){
+   const first=recipient.admitCode(evidence!);void first.catch(()=>{});await unknown.promise;await expect(first).rejects.toThrow();expect(()=>execution.observe()).toThrow()
+   if(mode==='receipt-unknown-stop'){
+    const stop=recipient.requestClose('user-stop');await expect(stop.settled).rejects.toThrow();probe.allow=true
+    const close=await recipient.closeReceipt(stop.fenceId)
+    expect(close).toMatchObject({fenceId:stop.fenceId,durability:'durable'})
+    const receipt=await recipient.admitCode(evidence!);expect(receipt.disposition).toBe('suppressed');expect(await recipient.admitCode(evidence!)).toEqual(receipt)
+    expect(inputs.inbox.pending().filter(input=>input.inputId===receipt.inputId)).toHaveLength(0)
+    expect(probe.keys.length).toBeGreaterThan(1);expect(new Set(probe.keys).size).toBe(1)
+    return
+   }
+   probe.allow=true
+  }
   const receipt=await recipient.admitCode(evidence!);expect(receipt.disposition).toBe('pending');expect(await recipient.admitCode(evidence!)).toEqual(receipt);expect(inputs.inbox.pending().filter(input=>input.inputId===receipt.inputId)).toHaveLength(1)
   if(mode==='receipt-unknown'){expect(probe.keys.length).toBeGreaterThan(1);expect(new Set(probe.keys).size).toBe(1)}
   const close=recipient.requestClose('user-stop');await close.settled;execution.revokeNewWork()

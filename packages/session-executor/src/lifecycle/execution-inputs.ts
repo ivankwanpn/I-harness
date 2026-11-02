@@ -13,6 +13,7 @@ export interface PrivateExecRecipient {
  prepareExecLaunch(input:{sessionId:string;callId:string;callSeq:number;sourceId:string}):Promise<PrivateExecPreparation>
  reconcileExecCandidates():Promise<void>
  requestClose(reason:'user-stop'|'rewind'):{fenceId:string;settled:Promise<readonly number[]>}
+ closeReceipt(fenceId:string):Promise<import('@i-harness/core-session').DeliveryCloseReceipt>
  settle():Promise<void>
  revoke():void
 }
@@ -64,6 +65,13 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
       flights.set(fact,flight);void flight.then(()=>flights.delete(fact),()=>flights.delete(fact));return flight
     }
     const current=()=>{domain.assertCurrent();if(retired)throw Error('Original recipient retired')}
+    const settleReceived=async()=>{
+      if(opening){const pending=opening;await settleCapture(pending);if(opening===pending)opening=undefined}
+      // An earlier admission on this same source may own the pending native
+      // writer. Reconcile its original capture before attempting the later
+      // close; Stop's live fence is already installed by close capture.
+      for(const [key,fact] of admissions){await settleCapture(fact);if(admissions.get(key)===fact)admissions.delete(key)}
+    }
     const adapter={
       async prepareCodeLaunch(input:{sessionId:string;callId:string;callSeq:number;cellId:string;sourceId:string}):Promise<PrivateCodePreparation>{
         current();if(!isStrictFactData(input)||Reflect.ownKeys(input).length!==5||!['sessionId','callId','callSeq','cellId','sourceId'].every(key=>{const field=Object.getOwnPropertyDescriptor(input,key);return !!field&&'value'in field&&field.enumerable}))throw TypeError('Closed original Code launch input required')
@@ -106,8 +114,26 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         return {kind:'bound' as const,binding,isCurrent}
       },
       requestClose(reason:'user-stop'|'rewind'){
-        current();const fenceId=randomUUID(),fact=source.captureDeliveryClose({type:'agent/delivery-generation',version:1,op:'close',recipientSessionId:domain.sessionId,fenceId,reason});closes.set(fenceId,fact)
+        if(this!==adapter)throw TypeError('Original recipient receiver required')
+        if(retired)throw Error('Original recipient retired')
+        if(reason!=='user-stop'&&reason!=='rewind')throw TypeError('Original delivery close reason required')
+        // Stop is settlement on this original held source, not admission of new
+        // model work. Its capture installs the live fence before any await,
+        // including while an older issued write still needs reconciliation.
+        const fenceId=randomUUID(),fact=source.captureDeliveryClose({type:'agent/delivery-generation',version:1,op:'close',recipientSessionId:domain.sessionId,fenceId,reason});closes.set(fenceId,fact)
         const settled=settleCapture(fact).then(seqs=>{if(!seqs)throw new FactRecoveryRequiredError();return seqs});void settled.catch(()=>{});return {fenceId,settled}
+      },
+      async closeReceipt(fenceId:string):Promise<import('@i-harness/core-session').DeliveryCloseReceipt>{
+        if(this!==adapter||typeof fenceId!=='string')throw TypeError('Original recipient close required')
+        const fact=closes.get(fenceId);if(!fact)throw TypeError('Unknown original delivery close')
+        await settleReceived()
+        await settleCapture(fact)
+        // Consult this exact capture even on repeated queries: source lifetime
+        // still applies, and only its real durable ACK can certify the receipt.
+        const outcome=await fact.observe()
+        if(outcome.kind!=='committed')throw new FactRecoveryRequiredError()
+        const seqs=committedFactSeqs(outcome);if(seqs.length!==1)throw new FactRecoveryRequiredError()
+        return Object.freeze({fenceId,closeSeq:seqs[0]!,durability:'durable'})
       },
       async reconcileExecCandidates(){
         await adapter.settle();current();const candidates=execution.observe().delivery.execPending(),failures:unknown[]=[]
@@ -151,7 +177,7 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
         for(const candidate of candidates)try{await adapter.admitCode({kind:'code',sourceSeq:candidate.source.seq!,terminalSeq:candidate.terminal.seq!})}catch(cause){failures.push(cause)}
         if(failures.length)throw Object.assign(new FactRecoveryRequiredError(),{cause:new AggregateError(failures,'Original Code recipient requires recovery')})
       },
-      async settle(){if(opening){await settleCapture(opening);opening=undefined}for(const [key,fact] of closes){await settleCapture(fact);closes.delete(key)}for(const [key,fact] of admissions){await settleCapture(fact);admissions.delete(key)}},
+      async settle(){await settleReceived();for(const fact of closes.values())await settleCapture(fact)},
       revoke(){retired=true},
     }
     const original=Object.freeze(adapter);privateRecipients.set(original,{execution,domain});return original
