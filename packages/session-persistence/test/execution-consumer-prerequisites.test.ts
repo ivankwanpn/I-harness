@@ -19,6 +19,19 @@ import {readRestoredConversation} from '@i-harness/core-session/internal/restora
 const coordinators:ReturnType<typeof composeJsonlTaskTransitionCoordinator>[]=[]
 afterEach(async()=>{probe.unknown=false;probe.readGate=undefined;for(const coordinator of coordinators.splice(0))await coordinator.close();probe.appends=0;probe.views=0;probe.captures=0;probe.intakes=[]})
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'consumer-prerequisites-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);coordinators.push(coordinator);await coordinator.create({sessionId:'owner'});const execution=await acquireManagedExecution(coordinator,'owner');probe.appends=0;return {root,backend,coordinator,execution}}
+it('binds sandbox identity to the last original mode event across away-and-back changes',async()=>{
+ const {execution}=await fixture(),action=execution.owner.beginAction()
+ try{
+  expect(execution.observe().sandboxPolicy()).toBeUndefined()
+  const first=await action.facts.metadata.admit({type:'sandbox/mode',mode:'workspace-write'});if(first.kind!=='committed')throw Error('Mode not committed')
+  const before=execution.observe();expect(before.sandboxPolicy()).toEqual({mode:'workspace-write',seq:first.seqs[0]})
+  await action.facts.metadata.admit({type:'sandbox/mode',mode:'read-only'});const last=await action.facts.metadata.admit({type:'sandbox/mode',mode:'workspace-write'});if(last.kind!=='committed')throw Error('Mode not committed')
+  const after=execution.observe();expect(()=>before.sandboxPolicy()).toThrow();expect(after.sandboxPolicy()).toEqual({mode:'workspace-write',seq:last.seqs[0]});expect(after.sandboxPolicy(last.seqs[0]!+1)).toBeUndefined()
+  expect((await action.facts.compaction.commit([{type:'rewind/point',version:1,targetTurn:0,anchorSeq:0,mode:'conversation',fileOps:[]}])).kind).toBe('committed')
+  expect(execution.observe().sandboxPolicy()).toEqual({mode:'workspace-write',seq:last.seqs[0]})
+  expect(()=>after.sandboxPolicy.call({...after})).toThrow();expect(probe.views).toBe(0)
+ }finally{action.finish()}
+},20000)
 it('observes original inbox and policy without a full view and keeps all-history admission identity after cancellation',async()=>{
  const {execution,coordinator}=await fixture();expect(execution.observe).toBeTypeOf('function')
  const before=execution.observe(),floor=before.eventCount,input=execution.owner.registerReceivedInputSource(async()=>{})

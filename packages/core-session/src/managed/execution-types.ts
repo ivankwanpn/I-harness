@@ -78,6 +78,7 @@ readonly schedules:Readonly<{kind:'unavailable';reason:'original-schedule-adapte
  assertCurrent():void
  plan():Readonly<PlanModeView>
  sandboxMode(fromSeq?:number):Extract<SessionEventView,{type:'sandbox/mode'}>['mode']|undefined
+ sandboxPolicy(fromSeq?:number):Readonly<{mode:Extract<SessionEventView,{type:'sandbox/mode'}>['mode'];seq:number}>|undefined
  rewrite():Readonly<ProjectionRewrite>
  budget():DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['budget']>>
  recovery(binding?:Parameters<ReturnType<typeof createContextStateIndex>['recovery']>[1]):DeepReadonly<ReturnType<ReturnType<typeof createContextStateIndex>['recovery']>>

@@ -108,6 +108,7 @@ export function createContextStateIndex() {
         projectionRevision(){return rewrite.read().markers+prunes},
         contextRevision(){return contextRevision},scheduleRevision(){return scheduleRevision},
         sandboxMode(fromSeq=0){if(!Number.isSafeInteger(fromSeq)||fromSeq<0||fromSeq>eventCount)throw RangeError('Invalid original policy floor');return sandbox&&sandbox.seq>=fromSeq?sandbox.mode:undefined},
+        sandboxPolicy(fromSeq=0){if(!Number.isSafeInteger(fromSeq)||fromSeq<0||fromSeq>eventCount)throw RangeError('Invalid original policy floor');return sandbox&&sandbox.seq>=fromSeq?sandbox:undefined},
         recovery(owner: string, binding?: {
             providerId?: string;
             modelId: string;
