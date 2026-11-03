@@ -52,7 +52,7 @@ type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
 const aborted = (signal: AbortSignal | undefined) => signal !== undefined && signalAborted.call(signal) === true
-function checkIdentity(body: Body,guard?:()=>void) {
+function checkIdentity(body: Body,guard:undefined|(()=>void)=managedReadGuard(body.managed?.domain)) {
   if (own(body.prepared,'exec') !== body.exec || own(body.prepared,'tool') !== body.tool || own(body.prepared,'call') !== body.call) throw new Error('Prepared body identity changed')
   for (const [key, expected] of body.snapshots) {
     const actual = Object.getOwnPropertyDescriptor(body.exec,key)
@@ -65,6 +65,7 @@ function checkIdentity(body: Body,guard?:()=>void) {
   if (original.view !== body.view || original.source !== body.source) throw new Error('Prepared result source changed')
   if(original.domain!==body.managed?.domain)throw Error('Prepared managed result domain changed')
 }
+function opaqueBody<T>(body:Body,operation:()=>T):T{const guard=managedReadGuard(body.managed?.domain);return guard?runOpaqueCurrentnessRead(guard,operation):operation()}
 function check(body: Body, frame?: Frame) {
   const guard=managedReadGuard(body.managed?.domain)
   const opaque=<T>(operation:()=>T):T=>guard?runOpaqueCurrentnessRead(guard,operation):operation()
@@ -89,7 +90,7 @@ export function attachPreparedModelOrigin(prepared: PreparedCall, registry: impo
   if ((!body.context&&!body.managed) || !body.source || typeof callId !== 'string' || typeof callEventSeq !== 'number') throw new Error('Original model call identity required')
   body.attaching = true
   try {
-    const permit = body.managed?take.managed?.(proof,Object.freeze({registry,prepared,domain:body.managed.domain,source:body.source,callId,callEventSeq,name:body.call.name,args:body.call.args})):take.public?.(proof, Object.freeze({registry,prepared,view:body.view!,source:body.source,callId,callEventSeq,name:body.call.name,args:body.call.args}))
+    const permit = opaqueBody(body,()=>body.managed?take.managed?.(proof,Object.freeze({registry,prepared,domain:body.managed.domain,source:body.source!,callId,callEventSeq,name:body.call.name,args:body.call.args})):take.public?.(proof, Object.freeze({registry,prepared,view:body.view!,source:body.source!,callId,callEventSeq,name:body.call.name,args:body.call.args})))
     if(!permit||body.managed&&types.isProxy(permit))throw new Error('Invalid model origin permit')
     const assertField=body.managed?Object.getOwnPropertyDescriptor(permit,'assertCurrent'):undefined
     if(body.managed&&(!assertField||!('value'in assertField)||!assertField.enumerable||typeof assertField.value!=='function'||types.isProxy(assertField.value)||types.isAsyncFunction(assertField.value)))throw Error('Original private permit assertion required')
@@ -99,7 +100,7 @@ export function attachPreparedModelOrigin(prepared: PreparedCall, registry: impo
     const field=body.managed?Object.getOwnPropertyDescriptor(permit,'getAdmissionWait'):undefined
     if(body.managed&&(!field||!('value'in field)||!field.enumerable||typeof field.value!=='function'||types.isProxy(field.value)||types.isAsyncFunction(field.value)))throw Error('Original private admission scheduler required')
     const getAdmissionWait=field&&'value'in field?field.value as (signal:AbortSignal)=>Promise<void>|undefined:undefined
-    assertCurrent()
+    opaqueBody(body,assertCurrent)
     body.permit = Object.freeze({assertCurrent,...getAdmissionWait?{getAdmissionWait(signal:AbortSignal){if(Object.getOwnPropertyDescriptor(permit,'getAdmissionWait')?.value!==getAdmissionWait)throw Error('Original private admission scheduler changed');const wait=Reflect.apply(getAdmissionWait,permit,[signal]);if(wait!==undefined&&!types.isPromise(wait))throw Error('Original private admission wait required');return wait}}:{},...permit.takeExecSourceIssuer?{takeExecSourceIssuer:permit.takeExecSourceIssuer.bind(permit)}:{},...permit.takeCodeSourceIssuer?{takeCodeSourceIssuer:permit.takeCodeSourceIssuer.bind(permit)}:{},...permit.takeWorkflowSourceIssuer?{takeWorkflowSourceIssuer:permit.takeWorkflowSourceIssuer.bind(permit)}:{},...permit.retainTeamBirth?{retainTeamBirth:permit.retainTeamBirth.bind(permit)}:{}})
   } finally { body.attaching = false }
 }
@@ -122,9 +123,9 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
   records.set(prepared,body);byExec.set(body.exec,body)
   registerToolInvocation(body.exec,body.managed?.context??body.context?.context,body.managed?.domain,body.source,()=>{check(body);if(aborted(own(body.exec,'abortSignal') as AbortSignal|undefined))throw Error('Original tool invocation aborted')},true)
   return async () => {
-    body.hooks?.channel.assertCurrent(body.hooks.surface)
+    if(body.hooks)opaqueBody(body,()=>body.hooks!.channel.assertCurrent(body.hooks!.surface))
     if(body.managed&&!body.permit&&!body.codeInvocation)throw new Error('Original private invocation required')
-    if (body.permit||body.codeInvocation) { checkIdentity(body); if (body.entered) throw new Error('Original body already entered'); (body.permit??body.codeInvocation)!.assertCurrent() }
+    if (body.permit||body.codeInvocation) { checkIdentity(body); if (body.entered) throw new Error('Original body already entered'); opaqueBody(body,()=>(body.permit??body.codeInvocation)!.assertCurrent()) }
     body.entered = true
     const frame:Frame={body,parent:body.permit||body.codeInvocation ? undefined : active.getStore(),active:true,signal:own(body.exec,'abortSignal') as AbortSignal | undefined,
       domain:body.managed?.domain.owner??(body.view && body.source && isOwnedSettlementSource(body.view,body.source)?body.view:undefined)}
@@ -140,9 +141,9 @@ export function preparedManagedExecutionDomain(prepared:PreparedCall){const body
 /** Original passive result bookkeeping can read its scope after hook admission
  * expired. Fresh callback/body entry still asserts the captured surface. */
 export function preparedExecutionHooks(prepared:PreparedCall){const body=records.get(prepared);if(body?.hooks)checkIdentity(body);return body?.hooks}
-export function assertPreparedModelOriginCurrent(prepared:PreparedCall){const body=records.get(prepared);if(!body?.managed)return;checkIdentity(body);body.hooks?.channel.assertCurrent(body.hooks.surface);if(!body.permit)throw Error('Original private model member required');body.permit.assertCurrent()}
-export function assertPreparedInvocationCurrent(prepared:PreparedCall){const body=records.get(prepared);if(!body?.managed)return;checkIdentity(body);body.hooks?.channel.assertCurrent(body.hooks.surface);if(body.permit)body.permit.assertCurrent();else if(body.codeInvocation)body.codeInvocation.assertCurrent();else throw Error('Original private invocation required')}
-export function getPreparedInvocationAdmissionWait(prepared:PreparedCall):Promise<void>|undefined{const body=records.get(prepared);if(!body)throw Error('Foreign prepared execution');if(!body.managed)return;checkIdentity(body);body.hooks?.channel.assertCurrent(body.hooks.surface);if(!body.permit&&!body.codeInvocation)throw Error('Original private model member required');if(body.entered||body.permit&&body.codeInvocation)throw Error('Original unentered private invocation required');const wait=body.permit?.getAdmissionWait??body.codeInvocation?.getAdmissionWait;if(!wait)throw Error('Original private admission scheduler required');return wait.call(body.permit??body.codeInvocation,body.admissionSignal!)}
+export function assertPreparedModelOriginCurrent(prepared:PreparedCall){const body=records.get(prepared);if(!body?.managed)return;checkIdentity(body);if(body.hooks)opaqueBody(body,()=>body.hooks!.channel.assertCurrent(body.hooks!.surface));if(!body.permit)throw Error('Original private model member required');opaqueBody(body,()=>body.permit!.assertCurrent())}
+export function assertPreparedInvocationCurrent(prepared:PreparedCall){const body=records.get(prepared);if(!body?.managed)return;checkIdentity(body);if(body.hooks)opaqueBody(body,()=>body.hooks!.channel.assertCurrent(body.hooks!.surface));if(body.permit)opaqueBody(body,()=>body.permit!.assertCurrent());else if(body.codeInvocation)opaqueBody(body,()=>body.codeInvocation!.assertCurrent());else throw Error('Original private invocation required')}
+export function getPreparedInvocationAdmissionWait(prepared:PreparedCall):Promise<void>|undefined{const body=records.get(prepared);if(!body)throw Error('Foreign prepared execution');if(!body.managed)return;checkIdentity(body);if(body.hooks)opaqueBody(body,()=>body.hooks!.channel.assertCurrent(body.hooks!.surface));if(!body.permit&&!body.codeInvocation)throw Error('Original private model member required');if(body.entered||body.permit&&body.codeInvocation)throw Error('Original unentered private invocation required');const wait=body.permit?.getAdmissionWait??body.codeInvocation?.getAdmissionWait;if(!wait)throw Error('Original private admission scheduler required');return opaqueBody(body,()=>wait.call(body.permit??body.codeInvocation,body.admissionSignal!))}
 export function assertPreparedExecutionOwnerContext(prepared: PreparedCall, context: ToolExecutionOwnerContext | undefined): void {
   if (preparedExecutionOwnerContext(prepared) !== context) throw new Error('Original prepared execution context required')
 }
@@ -166,7 +167,7 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
       takeExecSourceIssuer(){
         if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)
         if(!consumed)throw new Error('Consume original Shell claim first')
-        const original=((body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)??body.codeInvocation)?.takeExecSourceIssuer?.()
+        const original=opaqueBody(body,()=>((body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)??body.codeInvocation)?.takeExecSourceIssuer?.())
         if(!original)return
         const issuer:import('../model-origin.ts').OriginalExecSourceIssuer=Object.freeze({
           assertAdmissionCurrent(){if(this!==issuer)throw new Error('Foreign Body issuer receiver');check(body,frame);original.assertAdmissionCurrent()},
@@ -260,7 +261,7 @@ export function claimPreparedCodeInvocation(registration:CodeRegistrationWitness
     revoke(){if(this!==delegation)throw Error('Original Code delegation receiver required');revoked=true},
    });return delegation
   },  hasCodeSourceIssuer(){if(this!==claim)throw Error('Foreign Code claim');current();return !!(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer},
-  takeCodeSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Code claim required');current();taken=true;const issuer=(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer?.();if(!issuer)return
+  takeCodeSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Code claim required');current();taken=true;const issuer=opaqueBody(body,()=>(body.permit as import('../model-origin.ts').OriginalModelMemberPermit).takeCodeSourceIssuer?.());if(!issuer)return
    const wrapped:import('../model-origin.ts').OriginalCodeSourceIssuer=Object.freeze({
     assertAdmissionCurrent(){if(this!==wrapped)throw Error('Foreign Code issuer');current();issuer.assertAdmissionCurrent()},
     async prepareLaunch(cellId:string,sourceId:string){if(this!==wrapped)throw Error('Foreign Code issuer');current();const prepared=await issuer.prepareLaunch(cellId,sourceId);current();return prepared},
@@ -330,7 +331,7 @@ export function assertOriginalTeamBirthCapture(authority:OriginalManagedTeamBirt
 export function retainOriginalManagedTeamBirth(caller:OriginalManagedTeamCaller,witness:OriginalTeamProvisioning):OriginalManagedTeamBirthAuthority{
  assertOriginalTeamCallerProvisioning(caller,witness);const body=byExec.get(caller.exec),frame=active.getStore();if(!body||!frame?.active||frame.body!==body||body.managed!==caller.context||!body.permit||body.codeInvocation)throw TypeError('Original Team model birth member required')
  const permit=body.permit as import('../model-origin.ts').OriginalModelMemberPermit;if(!permit.retainTeamBirth)throw TypeError('Original Team birth issuer unavailable')
- const owner=teamCallers.get(caller)!,call=freezeJsonData(JSON.parse(canonicalJsonData(caller.call))) as Readonly<PreparedCall['call']>;caller.consume();const retained=permit.retainTeamBirth();let closed=false,closing:Promise<void>|undefined
+ const owner=teamCallers.get(caller)!,call=opaqueBody(body,()=>freezeJsonData(JSON.parse(canonicalJsonData(caller.call)))) as Readonly<PreparedCall['call']>;caller.consume();const retained=opaqueBody(body,()=>permit.retainTeamBirth!());let closed=false,closing:Promise<void>|undefined
  const authority:OriginalManagedTeamBirthAuthority=Object.freeze({context:caller.context,call,identity:caller.identity,source:retained.source,...caller.exec.abortSignal?{signal:caller.exec.abortSignal}:{},assertCurrent(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');retained.assertCurrent();const candidate=assertOriginalTeamProvisioningOwnerWitness(owner,witness);if(teamCandidates.get(candidate)!==caller)throw TypeError('Original Team birth candidate changed')},assertHeld(){if(this!==authority||closed)throw TypeError('Original held Team birth unavailable');retained.assertHeld();const candidate=assertOriginalTeamProvisioningHeld(owner,witness);if(teamCandidates.get(candidate)!==caller)throw TypeError('Original Team birth candidate changed')},async waitResult(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');try{caller.assertCurrent();authority.assertHeld();return}catch{}await retained.waitResult();authority.assertHeld()},async waitCurrent(){if(this!==authority||closed)throw TypeError('Original Team birth authority unavailable');await retained.waitCurrent();authority.assertCurrent()},async close(){if(this!==authority)throw TypeError('Original Team birth authority required');if(closed)return;if(closing)return closing;const pending=retained.close().then(()=>{closed=true;const record=teamBirths.get(authority);if(record)record.closed=true});closing=pending;void pending.finally(()=>{if(closing===pending)closing=undefined}).catch(()=>{});return pending}})
  teamBirths.set(authority,{caller,witness,owner,permit:retained,closed:false});return authority
 }
@@ -383,7 +384,7 @@ export function bindPreparedWorkflowLeaf(tool:Tool,leaf:Tool['execute']){
   const claim:OriginalManagedWorkflowCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
    assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign Workflow caller');check(body,frame)},
    consume(){if(this!==claim)throw TypeError('Foreign Workflow caller');check(body,frame);if(consumed)throw Error('Workflow caller consumed');consumed=true},
-   takeWorkflowSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Workflow caller required');check(body,frame);taken=true;const issuer=((body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)??body.codeInvocation)?.takeWorkflowSourceIssuer?.();if(!issuer)throw Error('Original Workflow issuer unavailable');return issuer},
+   takeWorkflowSourceIssuer(){if(this!==claim||!consumed||taken)throw Error('Original consumed Workflow caller required');check(body,frame);taken=true;const issuer=opaqueBody(body,()=>((body.permit as import('../model-origin.ts').OriginalModelMemberPermit|undefined)??body.codeInvocation)?.takeWorkflowSourceIssuer?.());if(!issuer)throw Error('Original Workflow issuer unavailable');return issuer},
   });workflowCallers.add(claim);return claim
  }});return entry
 }
