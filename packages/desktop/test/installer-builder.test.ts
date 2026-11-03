@@ -28,6 +28,7 @@ function fixture(version: unknown = sourceManifest.version) {
     "resources.pak", "v8_context_snapshot.bin", "snapshot_blob.bin", "vk_swiftshader.dll",
     "vulkan-1.dll", "LICENSE", "LICENSES.chromium.html", "locales/en-US.pak",
     "resources/app/out/main/index.js", "resources/app/out/preload/index.cjs",
+    "resources/app/out/model-catalog.json", "resources/app/out/main/model-catalog.json",
     "resources/app/out/renderer/index.html", "resources/app/out/main/attachment-reader-worker.mjs",
     "resources/app/out/main/pdf.worker.mjs", "resources/app/out/main/cmaps/fixture.bcmap",
     "resources/app/out/main/standard_fonts/fixture.pfb", "resources/app/out/main/wasm/fixture.wasm",
@@ -203,6 +204,14 @@ it("rejects a payload missing an Electron runtime library", () => {
   const result = validate(app)
   expect(result.status).not.toBe(0)
   expect(result.stderr).toContain("ffmpeg.dll")
+})
+
+it.each(["resources/app/out/model-catalog.json", "resources/app/out/main/model-catalog.json"])("rejects a payload missing the main-process model catalog: %s", path => {
+  const { app } = fixture()
+  unlinkSync(join(app, path))
+  const result = validate(app)
+  expect(result.status).not.toBe(0)
+  expect(result.stderr).toContain("model-catalog.json")
 })
 
 it("rejects a gateway whose declared required dependency was not shipped", () => {

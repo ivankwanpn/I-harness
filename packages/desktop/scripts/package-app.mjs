@@ -25,7 +25,7 @@ const appName = "I-harness"
 const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
 validateGatewayRuntime(gatewayDir, manifest.version)
 
-for (const required of [outDir, gatewayDir, ...["attachment-reader-worker.mjs", "pdf.worker.mjs", "cmaps", "standard_fonts", "wasm", "node_modules/@napi-rs/canvas"].map((part) => join(outDir, "main", part))]) {
+for (const required of [outDir, gatewayDir, join(outDir, "model-catalog.json"), ...["model-catalog.json", "attachment-reader-worker.mjs", "pdf.worker.mjs", "cmaps", "standard_fonts", "wasm", "node_modules/@napi-rs/canvas"].map((part) => join(outDir, "main", part))]) {
   if (!existsSync(required)) throw new Error(`missing ${required} — run the build steps first`)
 }
 

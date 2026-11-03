@@ -55,6 +55,7 @@ export function validatePayload(input) {
     "resources.pak", "v8_context_snapshot.bin", "snapshot_blob.bin", "vk_swiftshader.dll",
     "vulkan-1.dll", "LICENSE", "LICENSES.chromium.html", "locales/en-US.pak",
     "resources/app/out/main/index.js", "resources/app/out/preload/index.cjs", "resources/app/out/renderer/index.html",
+    "resources/app/out/model-catalog.json", "resources/app/out/main/model-catalog.json",
     "resources/app/out/main/attachment-reader-worker.mjs", "resources/app/out/main/pdf.worker.mjs",
     "resources/app/out/main/node_modules/@napi-rs/canvas/package.json",
     "resources/app/LICENSE", "resources/app/THIRD_PARTY_NOTICES",
