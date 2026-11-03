@@ -382,6 +382,23 @@ describe("Desktop scoped IPC", () => {
     expect(gated.request).not.toHaveBeenCalled()
   })
 
+  it("unregisters after Electron destroys the window without accessing its native webContents getter", async () => {
+    const f = fixture()
+    let destroyed = false
+    const sender = { id: 1, send: vi.fn() }
+    const window = {
+      get webContents() { if (destroyed) throw new TypeError("Object has been destroyed"); return sender },
+      isDestroyed: () => destroyed,
+    }
+    const ipc: IpcMainLike = { handle: vi.fn(), removeHandler: vi.fn() }
+    const unregister = registerDesktopIpc(window as unknown as BrowserWindow, f.dependencies, ipc)
+    destroyed = true
+    await expect(unregister()).resolves.toBeUndefined()
+    await expect(unregister()).resolves.toBeUndefined()
+    expect(ipc.removeHandler).toHaveBeenCalledTimes(1)
+    expect(f.offEvent).toHaveBeenCalledTimes(1)
+  })
+
   it("rejects a request from any other webContents and unregisters cleanly", async () => {
     const f = fixture()
     const send = vi.fn()

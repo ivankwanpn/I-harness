@@ -732,14 +732,17 @@ export function registerDesktopIpc(
   ipc: IpcMainLike,
 ): () => Promise<void> {
   if(windowCleanups.size>=32)throw Error('Desktop window cleanup capacity')
+  // Electron invalidates the BrowserWindow getter before its "closed" event.
+  // Retain the registration key while the native window is still alive.
+  const registeredWebContents = window.webContents
   const projectContentSearch = createDesktopProjectContentSearch(dependencies)
   const surfaceObservation=createNativeSurfaceObservation(id=>runtimeForKnownWorkspace(id,dependencies),id=>dependencies.runtimes.peek?.(id),event=>window.webContents.send(DESKTOP_EVENT_CHANNEL,event))
   const ownedDependencies = { ...dependencies, projectContentSearch, surfaceObservation }
   let removed = false
   let windows=ipcWindows.get(ipc)
   if(!windows){windows=new Map();ipcWindows.set(ipc,windows);ipc.handle(DESKTOP_REQUEST_CHANNEL,async(event,request)=>{const owned=windows!.get(event.sender);if(!owned)throw Error('untrusted IPC sender');return dispatchDesktopRequest(request,owned)})}
-  if(windows.has(window.webContents))throw Error('Desktop window already registered')
-  windows.set(window.webContents,ownedDependencies)
+  if(windows.has(registeredWebContents))throw Error('Desktop window already registered')
+  windows.set(registeredWebContents,ownedDependencies)
   const offEvent = dependencies.runtimes.onEvent((desktopEvent) => {
     if (window.isDestroyed()) return
     if(!surfaceObservation.event(desktopEvent))return
@@ -762,7 +765,7 @@ export function registerDesktopIpc(
   const unregister=():Promise<void> => {
     if (removed) return surfaceObservation.close().then(()=>{windowCleanups.delete(unregister)})
     removed = true
-    windows!.delete(window.webContents)
+    windows!.delete(registeredWebContents)
     if(!windows!.size){ipc.removeHandler(DESKTOP_REQUEST_CHANNEL);ipcWindows.delete(ipc)}
     offEvent()
     offWindowState?.()
