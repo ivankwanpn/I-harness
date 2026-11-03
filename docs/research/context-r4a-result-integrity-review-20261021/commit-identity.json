@@ -1,0 +1,136 @@
+{
+  "original": "96b0bae10f2017220c25e8c7e7d0e5058b9b1597",
+  "amended": "740c515399eebe1c4a27e7367b44ef353b212310",
+  "originalTree": "5e34d4b130396eca4a2bae7fa2c824a469abb2ae",
+  "amendedTree": "1f7547f05604184d37cacbf487c0191b4f53034e",
+  "diff": "diff --git a/packages/context-output/test/integrity-vectors.ts b/packages/context-output/test/integrity-vectors.ts\nindex c85107a2..2903277b 100644\n--- a/packages/context-output/test/integrity-vectors.ts\n+++ b/packages/context-output/test/integrity-vectors.ts\n@@ -61,4 +61,3 @@ export const literalVectors = [\n     \"revision\": \"92c8008f34b02c35abbff0e87f6c5e329e0ef15dd8427df6d7ba2467d87f47d3\"\n   }\n ] as const\n-\n",
+  "owners": [
+    {
+      "path": "packages/context-output/src/artifact/ownership.ts",
+      "originalBlob": "124c52af16d810d3a7a9f66fe19b2740012d5333",
+      "amendedBlob": "124c52af16d810d3a7a9f66fe19b2740012d5333"
+    },
+    {
+      "path": "packages/context-output/src/artifact/recovery.ts",
+      "originalBlob": "46481ff467bd29bdbe9a856bb3601cec93dcbdd0",
+      "amendedBlob": "46481ff467bd29bdbe9a856bb3601cec93dcbdd0"
+    },
+    {
+      "path": "packages/context-output/src/artifact/reader.ts",
+      "originalBlob": "01feead5558af7bd8ea1b0f20164ad21ae360932",
+      "amendedBlob": "01feead5558af7bd8ea1b0f20164ad21ae360932"
+    }
+  ],
+  "objects": [
+    {
+      "id": "96b0bae10f2017220c25e8c7e7d0e5058b9b1597",
+      "type": "commit",
+      "bytes": 335,
+      "sha256": "a03e1e475e7afc06c37c1e0dbc8bcfb1bc1ca48458c42d3fa96528dc72075bce"
+    },
+    {
+      "id": "5e34d4b130396eca4a2bae7fa2c824a469abb2ae",
+      "type": "tree",
+      "bytes": 650,
+      "sha256": "aba532734ab742642cf5c0c106bacdff997f8be84b84f2f047ec9255dcf6ca7f"
+    },
+    {
+      "id": "6793eda3142927f6323be50b5ba21afabea52e6f",
+      "type": "tree",
+      "bytes": 3037,
+      "sha256": "0bd6a4d1b6c6e43a51017a44a9265429d16708d14a5c1f9dd7800d63e1d0255e"
+    },
+    {
+      "id": "707773c96833b2c3913d45d28798cea5df7c973a",
+      "type": "tree",
+      "bytes": 142,
+      "sha256": "e13f2290166cfa9cfbc5bc28979fda0456df36a30f95a5a1de0c07a72cd7452d"
+    },
+    {
+      "id": "3826c346af47891fbad450085aef7f06f0bb9d49",
+      "type": "tree",
+      "bytes": 454,
+      "sha256": "2e48bae9220eefc26e78b89f03a586f27c25ef855aeccdeff1c696c082cceb36"
+    },
+    {
+      "id": "f790e7b5cf0de946c3572244b0f983cf1594b937",
+      "type": "tree",
+      "bytes": 511,
+      "sha256": "5f02d7c30d8aef06168370c9fb1e09c97cafc88931b0099b23a8a8208c3d05ad"
+    },
+    {
+      "id": "124c52af16d810d3a7a9f66fe19b2740012d5333",
+      "type": "blob",
+      "bytes": 15029,
+      "sha256": "6443c65533dd4cb02212f8f01f45b8b30f581272ed03f828353493bf4a52c84c"
+    },
+    {
+      "id": "01feead5558af7bd8ea1b0f20164ad21ae360932",
+      "type": "blob",
+      "bytes": 4908,
+      "sha256": "3fdada24bf9220253ab007f27e56a2cd2e0f2ec1603577522e7d7e4183d26781"
+    },
+    {
+      "id": "46481ff467bd29bdbe9a856bb3601cec93dcbdd0",
+      "type": "blob",
+      "bytes": 5355,
+      "sha256": "c8a3000881f54559d7b40cdc627728c53deeafa0c9f8687fd9d82fefb45977a7"
+    },
+    {
+      "id": "b3fda25e34141ee6edcbf8eeeb1c89a1da123de0",
+      "type": "tree",
+      "bytes": 968,
+      "sha256": "cdf70f007d6460d9776a3e18725bd6dfdf159187e2f87b8dc1d0e92264e36019"
+    },
+    {
+      "id": "0e276f59621e0b3d1f0b3c1ddb369688e4a26039",
+      "type": "blob",
+      "bytes": 13863,
+      "sha256": "ddb5348f9e144af1d4729ce261914a394335ab610481ef18ee818194739cf4f8"
+    },
+    {
+      "id": "bc86bc8a3db6c2127a76788b5207cf11fcd1a1d7",
+      "type": "blob",
+      "bytes": 3829,
+      "sha256": "2d46217c6d65cf5c98153603ffccd7620c9b32bd48e0916ae16bdf42190de2d5"
+    },
+    {
+      "id": "1947a9b93cbde2a40a2237dd7ee29a251b2ed5c3",
+      "type": "blob",
+      "bytes": 1893,
+      "sha256": "5c012b5eb19ab4b63c709f847fb6e34a59150503cb3ef12914c467bf5b33d635"
+    },
+    {
+      "id": "c85107a20f81055a282433e502207acdf7f7c3c4",
+      "type": "blob",
+      "bytes": 4609,
+      "sha256": "dd2161277e51b2d21437be10ea6c67724123c017b6f0a98aa8a9cd390f00e73f"
+    },
+    {
+      "id": "342c9cef3b39370272cf857864a258c780e7295f",
+      "type": "blob",
+      "bytes": 8591,
+      "sha256": "5b298be4c7d54839ed486730538a1a7761112e52891bc500b8d22f5d995bbbe6"
+    },
+    {
+      "id": "b3337d35718d6e837b13746b19b41cf8a0d3107b",
+      "type": "blob",
+      "bytes": 11694,
+      "sha256": "58aa6cd3453173d49ade9e6847df720e6231210f080b142520c8772b600bbfe2"
+    },
+    {
+      "id": "9dc965eb7b32a414e008a0f6a04993100084afa0",
+      "type": "blob",
+      "bytes": 5431,
+      "sha256": "d84414751a84fe65a66f8c8c6718a2d4184a072178979f78f9cb520e8a74e55a"
+    },
+    {
+      "id": "cd286485184170b995a5e2c65327f148feabf0a8",
+      "type": "blob",
+      "bytes": 7498,
+      "sha256": "5a4b27d476fbd12cd5cf2e2fd1bbd4af5f644f34390b65b94bd01c9d04fa5a1d"
+    }
+  ],
+  "gateHead": "96b0bae10f2017220c25e8c7e7d0e5058b9b1597",
+  "gateSource": "25/26 workspace manifests already contain cleaned constants; HEAD changed by amendment after gates; product source unchanged."
+}

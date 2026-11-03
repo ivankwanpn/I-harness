@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { acquireSessionLock } from "@i-harness/fs-lock"
 import { SettingsStore } from "@i-harness/settings"
@@ -16,6 +15,14 @@ export function validateExecutionSettings(policy: Record<string, unknown>): void
   }
 }
 
+/** Pure checks shared by startup and leased edits of the same saved bytes. */
+export function validateDesktopSettingsDocument(policy: Readonly<Record<string, unknown>>): void {
+  validateExecutionSettings(policy)
+  if (policy.sandboxMode !== undefined && (typeof policy.sandboxMode !== "string" || !["read-only", "workspace-write", "danger-full-access"].includes(policy.sandboxMode))) throw new Error("Invalid sandbox mode in settings document")
+  if (policy.approvalMode !== undefined && (typeof policy.approvalMode !== "string" || !["dangerous", "ask-all", "delegate", "full-access"].includes(policy.approvalMode))) throw new Error("Invalid approval mode in settings document")
+  if (policy.approvalMode === "full-access" && policy.sandboxMode !== "danger-full-access") throw new Error("Full access requires the full-access sandbox")
+}
+
 /** Cooperates with file-provider-runtime's lease; load after acquisition so a
  * settings edit cannot replace a concurrently saved provider snapshot. */
 export async function withDesktopSettings<T>(path: string, work: (store: SettingsStore) => Promise<T>): Promise<T> {
@@ -23,21 +30,9 @@ export async function withDesktopSettings<T>(path: string, work: (store: Setting
   const lockPath = `${process.platform === "win32" ? absolute.toLowerCase() : absolute}.provider.lock`
   const lock = await acquireSessionLock({ lockPath, deadlineMs: 10000 })
   try {
-    let raw: string | undefined
-    try { raw = await readFile(absolute, "utf8") }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot read settings document") }
-    if (raw !== undefined) {
-      let parsed: unknown
-      try { parsed = JSON.parse(raw) } catch { throw new Error("Invalid settings document") }
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid settings document")
-      const policy = parsed as Record<string, unknown>
-      validateExecutionSettings(policy)
-      if (policy.sandboxMode !== undefined && (typeof policy.sandboxMode !== "string" || !["read-only", "workspace-write", "danger-full-access"].includes(policy.sandboxMode))) throw new Error("Invalid sandbox mode in settings document")
-      if (policy.approvalMode !== undefined && (typeof policy.approvalMode !== "string" || !["dangerous", "ask-all", "delegate", "full-access"].includes(policy.approvalMode))) throw new Error("Invalid approval mode in settings document")
-      if (policy.approvalMode === "full-access" && policy.sandboxMode !== "danger-full-access") throw new Error("Full access requires the full-access sandbox")
-    }
     const store = new SettingsStore({ path: absolute })
-    await store.load()
+    // This fresh store explicitly initializes native defaults for first ENOENT.
+    await store.loadObserved({ validate: validateDesktopSettingsDocument })
     return await work(store)
   } finally { await lock.release() }
 }

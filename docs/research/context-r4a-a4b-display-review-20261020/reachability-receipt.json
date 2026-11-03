@@ -1,0 +1,11 @@
+{
+  "started": "2026-10-20T13:23:01.3874565Z",
+  "ended": "2026-10-20T13:23:11.5916303Z",
+  "args": [
+    "scripts/audit/check-reachability.mjs",
+    "--gate"
+  ],
+  "exit": 1,
+  "head": "a14d95d0f75d8425e796fdd402818db43823652d",
+  "executable": "C:/Program Files/nodejs/node.exe"
+}

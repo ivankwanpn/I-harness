@@ -1,0 +1,246 @@
+{
+  "base": "47066262b80247cc8d36e4a2d5e55bf901aa4922",
+  "head": "c1a31fb0a9c9488be482c3c86dc0a0e64456ac00",
+  "checkedAt": "2026-10-24T15:05:25.725Z",
+  "sourceEntries": 304,
+  "phaseChanges": [
+    "packages/session-executor/test/mixed-retention-quota.test.ts"
+  ],
+  "bindings": [
+    {
+      "path": "packages/context-output/src/artifact/ownership.ts",
+      "rawSha256": "7d564c20aa9a8eb73eb77f83aa814300bea0ef8026b28493ea9d4c668e733a26",
+      "gitSha256": "91ea61c8f39f99ae46e4074386f55550762903cc8c68646c64882e40a939d0f4",
+      "raw": false,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/src/legacy/capture.ts",
+      "rawSha256": "15a1372bae93f63570c66a6c478f502d559ef00e6646dc2dc5d7800bac2aef33",
+      "gitSha256": "ca7fa3029459947877d196a1c8fe99898ca9db420a577b7022c01be0c60d89ad",
+      "raw": false,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/src/service.ts",
+      "rawSha256": "e96cbf9fc2ba471177a3daa927d91a0c042896d3cbedd05b3f1ad2efdc50dc0e",
+      "gitSha256": "ffb457f7392196cd0d894b6511b9b17b292f2efaa72616160c26bf10c2ef7a5b",
+      "raw": false,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/src/store.ts",
+      "rawSha256": "8f780d9f9e9dfd58dc3ee3a77c74e3e27a626bd4989e583b3a712f92a2aca6c3",
+      "gitSha256": "778622584f1b9ff19075d909a20ea8ace003d24de7252971a1a81e1152bf7802",
+      "raw": false,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/src/workspace-mutation.ts",
+      "rawSha256": "7a3437757a1a0c8f8b540056941d94afe4614fb3019f3a49ac5ce0730fa02104",
+      "gitSha256": "7a3437757a1a0c8f8b540056941d94afe4614fb3019f3a49ac5ce0730fa02104",
+      "raw": true,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/test/close-ownership.test.ts",
+      "rawSha256": "398ad522f751353ddd5f7f05d28e2ce49f44abc9788b92b774b5c9a7b4958e46",
+      "gitSha256": "398ad522f751353ddd5f7f05d28e2ce49f44abc9788b92b774b5c9a7b4958e46",
+      "raw": true,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/test/cold-lookup-integrity.test.ts",
+      "rawSha256": "1c2fbbcb28ad7ded55614e5a6fa221cc2c96a39f5c00dbcb0f159d2870520f71",
+      "gitSha256": "0f70c6d2dbfce5be36cb806be8327ba453b952f4a8438bd615173b76c0f78d0b",
+      "raw": false,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/test/legacy-cleanup-ownership.test.ts",
+      "rawSha256": "4956706321b31733fd9864a8aa39f362b31509f465fda7a5603403f166329a91",
+      "gitSha256": "4956706321b31733fd9864a8aa39f362b31509f465fda7a5603403f166329a91",
+      "raw": true,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/test/legacy-owner-child.ts",
+      "rawSha256": "ebbf48b1d3a958869a47268d1dbb742caca0a173aa094040333b428533f64684",
+      "gitSha256": "ebbf48b1d3a958869a47268d1dbb742caca0a173aa094040333b428533f64684",
+      "raw": true,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/test/legacy-store-ownership.test.ts",
+      "rawSha256": "df29b12477105882db16bd6ec52e349b1b97e83c34c0073eaf438732b5497b91",
+      "gitSha256": "df29b12477105882db16bd6ec52e349b1b97e83c34c0073eaf438732b5497b91",
+      "raw": true,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/test/legacy-workspace-timing.test.ts",
+      "rawSha256": "c7ba726263f7f2df1df72dff45c94282e1389a4e6e60df2e63e3e508b3cb2de7",
+      "gitSha256": "00893ba01ceab53be0408afa50d48325e79b08352834560dc44e07adced619f0",
+      "raw": false,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/context-output/test/workspace-mutation.test.ts",
+      "rawSha256": "b5652edea4f718aae3b28cf826e6ec269248d31c807151985c0edf70d3d74d34",
+      "gitSha256": "b5652edea4f718aae3b28cf826e6ec269248d31c807151985c0edf70d3d74d34",
+      "raw": true,
+      "lfEquivalent": true
+    },
+    {
+      "path": "packages/session-executor/test/mixed-retention-quota.test.ts",
+      "rawSha256": "5ce319bb71acc9ada8236140b7767e7eb91cea2e90603615f7b17582e7409ba0",
+      "gitSha256": "467673c1c5130d8d75210f849a5a7f21f289244dcee56946e8dd5b8f5177d8b0",
+      "raw": false,
+      "lfEquivalent": true
+    }
+  ],
+  "receipts": [
+    {
+      "name": "base-to-head.patch",
+      "bytes": 80620,
+      "sha256": "3946fac8476fef950dbc642795d5933e5cd8fc9cf855bcd3488a8e76887fac79"
+    },
+    {
+      "name": "base-tree-identity.txt",
+      "bytes": 31941,
+      "sha256": "43ce69406fd4718958f3b83d30ae495a727ae162bd378e4676267909df2bf9b6"
+    },
+    {
+      "name": "changed-files.txt",
+      "bytes": 724,
+      "sha256": "64e6274295dc513a757f11cc39b753e31761b36b49cb2e1bbbacb871ba683427"
+    },
+    {
+      "name": "cleanup-final.log",
+      "bytes": 3030,
+      "sha256": "a61dd41a672e56fe06cd218a429e65b671157348723f2b53466dd0701f15f5cd"
+    },
+    {
+      "name": "cli-types-final.log",
+      "bytes": 146,
+      "sha256": "6208c3736b4d558dc595230d134c8cdfce1b96407113ab3cbe0dddc55ffab104"
+    },
+    {
+      "name": "commit.txt",
+      "bytes": 362,
+      "sha256": "b92e64a171f99c3c415fa117e65241aff4d06c79521a0d0e6ce66a345a86e9af"
+    },
+    {
+      "name": "consumer-dependency-resolution-corrected.log",
+      "bytes": 754,
+      "sha256": "1668e6b91d8098852d837b2b71882268b4bdc1b0ddd3ed92a05b1f74ac7103cc"
+    },
+    {
+      "name": "context-suite-final.log",
+      "bytes": 6674,
+      "sha256": "db0e72df2cf1c2db0a2f1aeae042f5183878184489f699086affbcd6814065ec"
+    },
+    {
+      "name": "context-suite-first.log",
+      "bytes": 15542,
+      "sha256": "c5d68c64e28fe5a933f4e749046a6cbfd3b9fc79897e8c4e4b3b19a143aeaf2a"
+    },
+    {
+      "name": "context-types-final.log",
+      "bytes": 161,
+      "sha256": "9be2d5a09200ee2594c32b0ca20fce70d18bf853faccc83cf96b06bd03e8e491"
+    },
+    {
+      "name": "dependency-resolution.json",
+      "bytes": 552,
+      "sha256": "a4f8ab08e1ca75361253c35aa7707a10c43c7071c5b724939467b042cb7ddd7d"
+    },
+    {
+      "name": "executor-green.log",
+      "bytes": 1214,
+      "sha256": "883ade47eded8d9ac105172860fb635c68b2cb0a07003e53a82302c312ccaf21"
+    },
+    {
+      "name": "executor-original.log",
+      "bytes": 3720,
+      "sha256": "123c43c8def1794c2049479c59b7cf95c8e1ad039531b7778e5efbe307fad94f"
+    },
+    {
+      "name": "executor-schedule-red.log",
+      "bytes": 1634,
+      "sha256": "3e487e4d41195727889efb16246b93365e630eef7410f0a4d48c2508d6ec0a1b"
+    },
+    {
+      "name": "executor-types-final.log",
+      "bytes": 163,
+      "sha256": "5a1abcf65b478a144a9e22f1f25f77f6fe0d059ace80f8d19b52e47e8d6bbff7"
+    },
+    {
+      "name": "green-cleanup-first.log",
+      "bytes": 843,
+      "sha256": "05d328a959e7a3b00622bc2b8b7bc2425ceab665488b01a88ba3025302c9b0ee"
+    },
+    {
+      "name": "green-core-first.log",
+      "bytes": 4481,
+      "sha256": "0549e2d7fdf5b96f43286d6053dce05f453836ae39d144ef19aa354ff1444918"
+    },
+    {
+      "name": "green-focused-2.log",
+      "bytes": 5031,
+      "sha256": "b71429d54052ffee0bb39e127b7c6b9b80dc99b5d7a44a089e7b05b2d691c545"
+    },
+    {
+      "name": "green-focused-3.log",
+      "bytes": 3582,
+      "sha256": "fd8ca91a35dbcc7a7ee04dd831705771ccc778812beb711ef1dd0407822ed686"
+    },
+    {
+      "name": "green-focused5.log",
+      "bytes": 70842,
+      "sha256": "19abd5c391a4426ac9a6caafdce8ac3dcd6bd7f0577b06768f1c12ad076838c6"
+    },
+    {
+      "name": "red-core.log",
+      "bytes": 1655,
+      "sha256": "11785113f9dfe418dda99a6c7917b51b6ce262e5f36190dda54e0f3d665c7839"
+    },
+    {
+      "name": "red-lifetime.log",
+      "bytes": 2565,
+      "sha256": "1ad58b66688a827d4e9b23caa9f18ef4ea1cf055a2bfe303323cdb2bc9989a26"
+    },
+    {
+      "name": "runtime-retirement.json",
+      "bytes": 164,
+      "sha256": "6e60a5b7b80129c079cf0d308d6305755fd275b74fb3932c90a5808249ad0314"
+    },
+    {
+      "name": "setup-dispositions.md",
+      "bytes": 3180,
+      "sha256": "e62a14df0554a599d0833b37a8826fa0154af03e5f91eb923c60f665e998d9ce"
+    },
+    {
+      "name": "source-after-final.sha256",
+      "bytes": 36442,
+      "sha256": "1decabbf05e11a3ad9ee507d882f4e8d87d71659c6c0055bddb353460b5e47f3"
+    },
+    {
+      "name": "source-base.txt",
+      "bytes": 42,
+      "sha256": "d12746a40c54a38cc59c61d0a78d090a4c791205f3b68d30da0b82fcf2a879c5"
+    },
+    {
+      "name": "source-before-final.sha256",
+      "bytes": 36442,
+      "sha256": "29aa69c56b7dfa53bab8372a971dd3965d8972ee4fc1d52e0099ed04d6be0b5b"
+    },
+    {
+      "name": "source-stability.txt",
+      "bytes": 552,
+      "sha256": "7b3c3046af836ef214696898d2e6aa05ca140735d32475ec393a6d4ddcd5447d"
+    }
+  ],
+  "failures": [],
+  "qualification": "Retrospective root verification of preserved raw receipts and source manifests. Context suite/types precede only the approved executor test schedule edit; executor integration/types follow it. Not an original per-command evidence seal or a platform/resource census."
+}

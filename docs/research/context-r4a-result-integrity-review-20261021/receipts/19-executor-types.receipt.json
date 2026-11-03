@@ -1,0 +1,18 @@
+{
+  "name": "19-executor-types",
+  "cwd": "D:\\I-harness-main\\packages\\session-executor",
+  "executable": "C:/Program Files/nodejs/node.exe",
+  "arguments": [
+    "../../node_modules/typescript/bin/tsc",
+    "--noEmit"
+  ],
+  "environment": {
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\shell-config",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:/I-harness-main/.tmp/r4ai-1021-01",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\native"
+  },
+  "startedUtc": "2026-10-20T20:08:33.8205574Z",
+  "finishedUtc": "2026-10-20T20:08:41.7906980Z",
+  "nativeExit": 0,
+  "head": "0df518e7042039ef0f312c53aa565abf314bef3a"
+}

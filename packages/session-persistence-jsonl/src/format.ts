@@ -1,11 +1,20 @@
 import type { SessionEvent } from "@i-harness/core-session"
+import { validJournalMetadata, validateSubagentHeader } from '@i-harness/core-session'
 import type { SessionMeta, SessionModelSelection } from "@i-harness/session-persistence"
 // The closed set is settings' — imported, never copied (a local list of the
 // five names would be a second place to edit one enum).
 import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 
 export function serializeHeader(meta: SessionMeta): string {
+  validateSubagentHeader(meta)
+  if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy header writer cannot install selected results')
   return JSON.stringify(meta)
+}
+
+import { captureMetadataUpdate } from './backend/metadata-snapshot.ts'
+
+export function snapshotMetadataUpdate(previous: SessionMeta, patch: Partial<SessionMeta>): { line: string; meta: SessionMeta } {
+  return captureMetadataUpdate(previous, patch, serializeHeader)
 }
 
 // C5: parseHeader passthrough — a repair/read rewrites the header line and
@@ -35,15 +44,20 @@ function parseModelSelection(raw: unknown): SessionModelSelection | undefined {
 
 export function parseHeader(line: string): SessionMeta {
   const h = JSON.parse(line) as Partial<SessionMeta>
+  validateSubagentHeader(h)
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
+  if ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
   const modelSelection = parseModelSelection(h.modelSelection)
   return {
     formatVersion: h.formatVersion,
     sessionId: h.sessionId,
     createdAt: typeof h.createdAt === "string" ? h.createdAt : "",
+    ...(h.journal !== undefined ? { journal: h.journal } : {}),
     ...(typeof h.parentSession === "string" ? { parentSession: h.parentSession } : {}),
     ...(typeof h.seedLength === "number" ? { seedLength: h.seedLength } : {}),
+    ...(h.semanticSeed !== undefined ? { semanticSeed: h.semanticSeed } : {}),
+    ...(h.subagentProtocolVersion === 1 ? { subagentProtocolVersion: 1 as const } : {}),
     ...(typeof h.delegationDepth === "number" ? { delegationDepth: h.delegationDepth } : {}),
     ...(typeof h.origin === "string" ? { origin: h.origin } : {}),
     // C5 workspace grouping: keep workspaceId through read AND repair — a

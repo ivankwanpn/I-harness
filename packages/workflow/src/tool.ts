@@ -5,8 +5,9 @@
 // registered as the "workflow/executor" service so hosts (and Task 3's
 // subagent job_* third layer) can consume getOutput/listJobs/killJob without
 // reaching into the tool layer.
+import {bindPreparedWorkflowLeaf,type OriginalManagedWorkflowCaller} from '@i-harness/core-tools/internal/workflow-origin'
 import type { PluginContext } from "@i-harness/core-plugin"
-import { userSteerForTool, waitForObservation, type Tool, type ToolRegistry } from "@i-harness/core-tools"
+import { backgroundEventForTool, userSteerForTool, waitForObservation, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import type { ExecService } from "@i-harness/exec"
 import type { WorkflowDefinition, WorkflowParamSpec } from "./definition.ts"
 import type { WorkflowExecutor } from "./runner.ts"
@@ -24,7 +25,7 @@ export interface WorkflowRunArgs {
   wait?: boolean
 }
 
-interface WorkflowRunOutput {
+export interface WorkflowRunOutput {
   run_id: string
   job_id: string
   // Background path (wait default false): "running" — the model collects with
@@ -36,7 +37,7 @@ interface WorkflowRunOutput {
   output?: string
   exit_code?: number
   yielded?: true
-  yield_reason?: "user-steer"
+  yield_reason?: "user-steer" | "background-event"
 }
 
 interface WorkflowListEntry {
@@ -61,8 +62,12 @@ function toListEntry(def: WorkflowDefinition): WorkflowListEntry {
   }
 }
 
-export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; executor: WorkflowExecutor }): Tool<WorkflowRunArgs, WorkflowRunOutput> {
-  return {
+export interface ManagedWorkflowLaunch {
+ start(claim:OriginalManagedWorkflowCaller,reservation:import('./runner.ts').WorkflowReservation,exec:import('@i-harness/core-tools').ToolExec):Promise<{run:import('./runner.ts').OwnedWorkflowRunHandle;observed(output:WorkflowRunOutput,running:boolean):Promise<void>;failed():void}>
+}
+export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; executor: WorkflowExecutor; reserve?:(def:WorkflowDefinition,params:Record<string,string>,owner?:string)=>import('./runner.ts').WorkflowReservation; managed?:ManagedWorkflowLaunch }): Tool<WorkflowRunArgs, WorkflowRunOutput> {
+  let entry:ReturnType<typeof bindPreparedWorkflowLeaf>|undefined
+  const tool:Tool<WorkflowRunArgs,WorkflowRunOutput> = {
     name: workflowRunName,
     description:
       "Run a named workflow (a static multi-step command sequence from the workspace's workflow/ directory) as ONE background job. Returns {run_id, job_id} immediately — collect with job_output(job_id, wait: true), cancel with job_kill. wait: true blocks until the run finishes (short workflows only). Step commands are TOKENIZED, NOT shell-interpreted: no &&, pipes, redirects, or globs — each command is split as POSIX shell-quote tokens (quotes group; backslash escapes are consumed, so write Windows paths with forward slashes like C:/src, never C:\\src).",
@@ -88,9 +93,13 @@ export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; execut
       }
       // M49 Task 12 review: attribute the run to the CALLING session so the
       // per-session task projection shows only a session's own workflow jobs.
-      const { runId, jobId } = deps.executor.runWorkflow(def, args.params ?? {}, exec?.sessionId)
+      let producer:Awaited<ReturnType<ManagedWorkflowLaunch['start']>>|undefined
+      try {
+      let runId:string,jobId:string
+      if(deps.managed){if(!deps.reserve||!entry)throw Error('Original Workflow reservation unavailable');const claim=entry.enter(exec);if(!claim)throw Error('Original Workflow model member required');const reservation=deps.reserve(def,args.params??{},exec.sessionId);producer=await deps.managed.start(claim,reservation,exec);({runId,jobId}=producer.run)}
+      else ({runId,jobId}=deps.executor.runWorkflow(def,args.params??{},exec?.sessionId))
       if (args.wait !== true) {
-        return { run_id: runId, job_id: jobId, status: "running" }
+        const output={ run_id: runId, job_id: jobId, status: 'running' };await producer?.observed(output,true);return output
       }
       // Observe the workflow job store until the run settles. The
       // tool's own abort (guard-timeout/session abort) stops WAITING — the
@@ -99,19 +108,19 @@ export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; execut
       const reason = await waitForObservation({
         ready: () => terminalSeen || deps.executor.getOutput(jobId).status !== "running",
         changes: { subscribe: wake => deps.executor.subscribeJob(jobId, view => { terminalSeen ||= view.status !== "running"; wake() }) },
-        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec),
       })
       const view = deps.executor.getOutput(jobId)
-      return {
-        run_id: runId,
-        job_id: jobId,
-        status: view.status,
-        output: view.stdout,
-        ...(reason === "user-steer" && !exec.abortSignal?.aborted && view.status === "running" ? { yielded: true as const, yield_reason: "user-steer" as const } : {}),
+      const output:WorkflowRunOutput={
+        run_id: runId,job_id: jobId,status: view.status,output: view.stdout,
+        ...((reason === "user-steer" || reason === "background-event") && !exec.abortSignal?.aborted && view.status === "running" ? { yielded: true as const, yield_reason: reason } : {}),
         ...(view.exitCode !== undefined ? { exit_code: view.exitCode } : {}),
-      }
+      };await producer?.observed(output,view.status==='running');return output
+      }catch(error){producer?.failed();throw error}
     },
   }
+  if(deps.managed)entry=bindPreparedWorkflowLeaf(tool,tool.execute)
+  return tool
 }
 
 export function createWorkflowListTool(deps: { registry: WorkflowRegistry }): Tool<Record<string, never>, WorkflowListOutput> {
@@ -139,6 +148,8 @@ export interface WorkflowMountConfig {
   // The ExecService workflow steps spawn through. run.ts passes its composed
   // exec service (spec §4: registerWorkflow(ctx, tools, { workspace, exec })).
   exec: ExecService
+  steps?: import('@i-harness/exec/direct-reservation').WorkflowStepFactory
+  managed?:ManagedWorkflowLaunch
 }
 
 // run.ts wiring: registers the "workflow/executor" service + the
@@ -150,9 +161,9 @@ export function registerWorkflow(ctx: PluginContext, tools: ToolRegistry, config
   // process cwd. Absent workspace → registry falls back to process.cwd() and
   // the executor leaves step cwd unset (exec's own contract).
   const registry = createWorkflowRegistry({ workspace: config.workspace ?? process.cwd() })
-  const executor = createWorkflowExecutor({ exec: config.exec, ...(config.workspace !== undefined ? { cwd: config.workspace } : {}) })
+  const executor = createWorkflowExecutor({ exec: config.exec, steps: config.steps, ...(config.workspace !== undefined ? { cwd: config.workspace } : {}) })
   ctx.services.register(workflowExecutorServiceName, executor)
-  const runTool = createWorkflowRunTool({ registry, executor })
+  const runTool = createWorkflowRunTool({ registry, executor,...config.managed?{managed:config.managed,reserve:executor.reserveWorkflow.bind(executor)}:{} })
   const listTool = createWorkflowListTool({ registry })
   tools.register(runTool)
   tools.register(listTool)

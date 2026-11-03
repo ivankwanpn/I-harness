@@ -1,0 +1,355 @@
+{
+  "base": "40b660c44a3e96248ae5ada6a3d2a0f7f54fbc7c",
+  "head": "abe50917788ec042682face5be89a5aff7d18bed",
+  "sourceCount": 2671,
+  "sourceMismatches": [],
+  "qualifiedSourceSha256": "f774de576f3b38e742726bf3f322b99240094f5d5dc9556ce34f540098139830",
+  "snapshots": [
+    {
+      "path": "packages/session-executor/test/helpers/mixed-retention-fixture.mts",
+      "bytes": 15156,
+      "sha256": "2674955f2f0d7673d0fa75bdef5d14f4a48777d3d943f9b5f506deace1dcdbd8",
+      "snapshot": "qualified-bytes/packages__session-executor__test__helpers__mixed-retention-fixture.mts"
+    },
+    {
+      "path": "packages/session-executor/test/helpers/mixed-retention-native-probe.mts",
+      "bytes": 2873,
+      "sha256": "0b7aa7d958396d33aeba3e0f10ce1e319a2c069210a8c09a4c943ce1c6b40d5d",
+      "snapshot": "qualified-bytes/packages__session-executor__test__helpers__mixed-retention-native-probe.mts"
+    },
+    {
+      "path": "packages/session-executor/test/mixed-retention-native.test.ts",
+      "bytes": 8964,
+      "sha256": "e932e68b802aa7987014904b0b572ff6c164074fca2a0a84babd75fd01292294",
+      "snapshot": "qualified-bytes/packages__session-executor__test__mixed-retention-native.test.ts"
+    },
+    {
+      "path": "packages/session-executor/test/mixed-retention-quota.test.ts",
+      "bytes": 10038,
+      "sha256": "cf5e7ceb1339f426d3908d7cda160d2ce803e35b77b683814dd5fdff93125523",
+      "snapshot": "qualified-bytes/packages__session-executor__test__mixed-retention-quota.test.ts"
+    },
+    {
+      "path": "packages/session-executor/tsconfig.mixed-retention.json",
+      "bytes": 137,
+      "sha256": "8fb3b20479d7562056d38a829d6b0d224f24ce38377f912db5f8afdb8df3bb44",
+      "snapshot": "qualified-bytes/packages__session-executor__tsconfig.mixed-retention.json"
+    },
+    {
+      "path": ".tmp/r4am-1021-01/gate.mjs",
+      "bytes": 4524,
+      "sha256": "36951ca930a45d0e08a0ff6cf2adde66c59a87d7e79bb6c862e46056d289c300",
+      "snapshot": "qualified-bytes/.tmp__r4am-1021-01__gate.mjs"
+    }
+  ],
+  "gitObjects": [
+    {
+      "commit": "da289034ca5a9503675dd19874722da6f7257425",
+      "bytes": 330,
+      "sha256": "6f3d220925bbb19efabbbe4fe27ba511c7ea416e2a19f8a80cc6f0e92897e7fa"
+    },
+    {
+      "commit": "abe50917788ec042682face5be89a5aff7d18bed",
+      "bytes": 324,
+      "sha256": "9f6eb0679607b7551025c1e97974fbf1991a7bf78fccc34b6365bc2dd2ee706e"
+    }
+  ],
+  "changedFiles": [
+    "docs/research/2026-10-21-context-r4a-mixed-retention-delivery.md",
+    "packages/session-executor/test/helpers/mixed-retention-fixture.mts",
+    "packages/session-executor/test/helpers/mixed-retention-native-probe.mts",
+    "packages/session-executor/test/mixed-retention-native.test.ts",
+    "packages/session-executor/test/mixed-retention-quota.test.ts",
+    "packages/session-executor/tsconfig.mixed-retention.json"
+  ],
+  "productDelta": [],
+  "gates": [
+    {
+      "label": "01",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:39:34.126Z",
+      "ended": "2026-10-20T20:40:04.039Z",
+      "sourceStable": true,
+      "beforeCount": 13601,
+      "afterCount": 13601
+    },
+    {
+      "label": "02",
+      "nativeExit": 1,
+      "started": "2026-10-20T20:41:37.477Z",
+      "ended": "2026-10-20T20:42:15.699Z",
+      "sourceStable": true,
+      "beforeCount": 13603,
+      "afterCount": 13603
+    },
+    {
+      "label": "03",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:42:47.225Z",
+      "ended": "2026-10-20T20:42:53.208Z",
+      "sourceStable": true,
+      "beforeCount": 2670,
+      "afterCount": 2670
+    },
+    {
+      "label": "04",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:43:57.495Z",
+      "ended": "2026-10-20T20:44:06.638Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "05",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:44:20.867Z",
+      "ended": "2026-10-20T20:44:26.839Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "06",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:45:10.727Z",
+      "ended": "2026-10-20T20:45:28.794Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "07",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:45:35.119Z",
+      "ended": "2026-10-20T20:45:38.819Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "08",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:45:39.730Z",
+      "ended": "2026-10-20T20:45:45.716Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "09",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:45:46.654Z",
+      "ended": "2026-10-20T20:45:54.649Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "10",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:46:54.706Z",
+      "ended": "2026-10-20T20:47:11.998Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "11",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:47:41.329Z",
+      "ended": "2026-10-20T20:47:45.110Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "12",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:47:46.063Z",
+      "ended": "2026-10-20T20:47:52.253Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "13",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:47:53.199Z",
+      "ended": "2026-10-20T20:48:01.353Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "14",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:48:35.826Z",
+      "ended": "2026-10-20T20:48:53.427Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "15",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:49:17.201Z",
+      "ended": "2026-10-20T20:49:20.910Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "16",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:49:21.827Z",
+      "ended": "2026-10-20T20:49:27.792Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    },
+    {
+      "label": "17",
+      "nativeExit": 0,
+      "started": "2026-10-20T20:49:28.730Z",
+      "ended": "2026-10-20T20:49:36.770Z",
+      "sourceStable": true,
+      "beforeCount": 2671,
+      "afterCount": 2671
+    }
+  ],
+  "actualCollectedFiles": [
+    {
+      "path": "D:/I-harness-main/packages/context-output/test/managed-artifacts.test.ts",
+      "tests": 6,
+      "status": "passed"
+    },
+    {
+      "path": "D:/I-harness-main/packages/context-output/test/quota-metadata-concurrency.test.ts",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "path": "D:/I-harness-main/packages/context-output/test/service.test.ts",
+      "tests": 39,
+      "status": "passed"
+    },
+    {
+      "path": "D:/I-harness-main/packages/desktop-gateway/test/context-runtime.test.ts",
+      "tests": 5,
+      "status": "passed"
+    },
+    {
+      "path": "D:/I-harness-main/packages/desktop-gateway/test/native-context-project-revocation.test.ts",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "path": "D:/I-harness-main/packages/session-executor/test/mixed-retention-native.test.ts",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "path": "D:/I-harness-main/packages/session-executor/test/mixed-retention-quota.test.ts",
+      "tests": 4,
+      "status": "passed"
+    },
+    {
+      "path": "D:/I-harness-main/packages/session-executor/test/result-store-read.test.ts",
+      "tests": 5,
+      "status": "passed"
+    }
+  ],
+  "tests": 62,
+  "newTests": 5,
+  "existingTests": 57,
+  "literals": [
+    {
+      "fixture": "c-utqOcR",
+      "label": "calibration",
+      "bytes": 70052,
+      "sha256": "d19abd2dcdf956fc7fb25e7ff2b8addb32efee3c8100443d7fb9520fcaa4beb5",
+      "phase": "committed",
+      "currentBodyExists": true,
+      "originalInventoryMatches": true
+    },
+    {
+      "fixture": "n-putnLJ",
+      "label": "complete",
+      "bytes": 140052,
+      "sha256": "7a0ef58e32705cd3e45c0d86b4d81137aa5838597d9bdc055306a4b16b59fbbc",
+      "phase": "committed",
+      "currentBodyExists": false,
+      "originalInventoryMatches": true
+    },
+    {
+      "fixture": "n-putnLJ",
+      "label": "staged",
+      "bytes": 90052,
+      "sha256": "e6b240fe5a9a735f6137f22d91dfa0034739ce31813658e345511bb0a4287232",
+      "phase": "staged",
+      "currentBodyExists": true,
+      "originalInventoryMatches": true
+    },
+    {
+      "fixture": "n-putnLJ",
+      "label": "other",
+      "bytes": 80052,
+      "sha256": "045222c2f9ca5b85f47c7233cae69ae4717f0d5bb5606f2e213dff8a5d559842",
+      "phase": "committed",
+      "currentBodyExists": true,
+      "originalInventoryMatches": true
+    },
+    {
+      "fixture": "q-fVpLkg",
+      "label": "quota-managed",
+      "bytes": 80052,
+      "sha256": "e682b3a6f6b5f5199c2aff44efaf2e642d4e4937d27570beefcf7c3033c48a1d",
+      "phase": "committed",
+      "currentBodyExists": true,
+      "originalInventoryMatches": true
+    },
+    {
+      "fixture": "q-fVpLkg",
+      "label": "quota-staged",
+      "bytes": 70052,
+      "sha256": "d19abd2dcdf956fc7fb25e7ff2b8addb32efee3c8100443d7fb9520fcaa4beb5",
+      "phase": "staged",
+      "currentBodyExists": true,
+      "originalInventoryMatches": true
+    },
+    {
+      "fixture": "q-fVpLkg",
+      "label": "legacy-partial",
+      "bytes": 1000,
+      "sha256": "b7f8821158e53596b600dacd64e47d70ad30be9319e625c305a12a69d87c39c8",
+      "truthfulOriginalBytes": 5015
+    },
+    {
+      "fixture": "r-I69UMv",
+      "label": "protected",
+      "bytes": 70052,
+      "sha256": "2e7e7832b4a62681ed51a3061e0021d1bee245ec23f8453ebc38eeda76f52a3d",
+      "phase": "committed",
+      "currentBodyExists": true,
+      "originalInventoryMatches": true
+    },
+    {
+      "fixture": "u-EMVZAi",
+      "label": "unopened",
+      "bytes": 90052,
+      "sha256": "e6b240fe5a9a735f6137f22d91dfa0034739ce31813658e345511bb0a4287232",
+      "phase": "committed",
+      "currentBodyExists": true,
+      "originalInventoryMatches": true
+    }
+  ],
+  "cleanupReceipts": [
+    "gates/14/fixtures/c-utqOcR/cleanup.json",
+    "gates/14/fixtures/n-putnLJ/cleanup.json",
+    "gates/14/fixtures/q-fVpLkg/cleanup.json",
+    "gates/14/fixtures/r-I69UMv/cleanup.json",
+    "gates/14/fixtures/u-EMVZAi/cleanup.json"
+  ],
+  "scope": "bounded mixed retention; no whole-R4A/scale/package acceptance"
+}

@@ -1,0 +1,57 @@
+{
+  "checkedAt": "2026-10-18T23:15:47.677Z",
+  "status": "UNACCEPTED_WIP_PRESERVATION_CHECK",
+  "sourceFiles": 2568,
+  "productFiles": 188,
+  "checkpointSha256": "302fe0b99067c50c8bf199b6027e6d935de7902bcd9dca6850d3037b381ee962",
+  "artifacts": [
+    {
+      "path": "D:/I-harness-main/.superpowers/sdd/2026-10-18-context-engine-r4a-retained-results/handoff-2026-10-19.md",
+      "bytes": 19274,
+      "sha256": "f0c16573ac6bc7d539a5da7b3fc8e652bb691b46b3281c6232e3b6c6f61e91a3"
+    },
+    {
+      "path": "D:/I-harness-main/.superpowers/sdd/2026-10-18-context-engine-r4a-retained-results/handoff-product-paths-2026-10-19.json",
+      "bytes": 34432,
+      "sha256": "9a1cdeae69ea34cd4b8b963ac715e173409cb762db4c5ae8307dfbe25faa6f19"
+    },
+    {
+      "path": "D:/I-harness-main/.superpowers/sdd/2026-10-18-context-engine-r4a-retained-results/handoff-product-paths-2026-10-19.txt",
+      "bytes": 8911,
+      "sha256": "60f5ef940980cf4e99208e6c19ba3ab716cda74e33fc0a20a7aa221f3691c240"
+    },
+    {
+      "path": "D:/I-harness-main/.superpowers/sdd/2026-10-18-context-engine-r4a-retained-results/handoff-tracked-product-2026-10-19.patch",
+      "bytes": 318072,
+      "sha256": "82de2506c04b9722390c20b12e228bfda739ff865b149add5560f0789780526a"
+    },
+    {
+      "path": "D:/I-harness-main/.superpowers/sdd/2026-10-18-context-engine-r4a-retained-results/task-1-report.md",
+      "bytes": 31703,
+      "sha256": "b85f21245784d961ed4db69904377fb46bc24ca367c55e5ae950573048ace330"
+    },
+    {
+      "path": "D:/I-harness-main/.superpowers/sdd/2026-10-18-context-engine-r4a-retained-results/implementer-state.md",
+      "bytes": 52912,
+      "sha256": "0bd1cafac8f385b7c98d7bc716c0c8e75b45687bd45de9680d4683ad4b81f98f"
+    }
+  ],
+  "receipts": [
+    {
+      "label": "226-safe-handoff-cold-reader-checkpoint",
+      "exitCode": 0,
+      "sourceFiles": 2568,
+      "sourceSha256": "7c50bd8806bcc1ac2eed94ce274690c073b5286ad91e1e5f11f979c36ea947f4",
+      "logSha256": "1206cebfd4e499aa19c5319161985927f957ba572d8996dbc6c0e9e15b98bf4a"
+    },
+    {
+      "label": "227-unaccepted-handoff-current-types",
+      "exitCode": 0,
+      "sourceFiles": 2568,
+      "sourceSha256": "7c50bd8806bcc1ac2eed94ce274690c073b5286ad91e1e5f11f979c36ea947f4",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "errors": [],
+  "qualification": "Independent live working bytes, complete final226/227 recorded source manifests, receipts/logs and188path inventory check. No tests rerun; focused checkpoint checks do not qualify whole R4A, copies, renderer or release. Process completion is the writer report, not a claim that every process on the machine was enumerated."
+}

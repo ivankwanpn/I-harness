@@ -13,6 +13,25 @@ const mount = (session: Session, sessionId = "owner", flush?: () => Promise<void
 }
 const run = async (tools: ReturnType<typeof createToolRegistry>, code: string) => (await tools.execute({ name: "code_exec", args: { code } })).output as { status: string; text: string; error?: string }
 
+it('checks a fault baseline at real admission and again before committing local writes', async () => {
+  let fault = true, committed = 0, started = 0, restores = 0
+  const r = runtime({
+    restoreStore() { restores++; if (fault) throw Error('Session store transfer limit exceeded'); return [['x', 7]] },
+    commitStore: async () => { committed++ },
+    tools: () => [{ name: 'switch', description: 'Switch the observed store baseline', inputSchema: { type: 'object' } }],
+    invoke: async () => { fault = true; return null },
+    onEvent(event) { if (event.type === 'started') started++ },
+  })
+  try {
+    await expect(r.exec({ code: 'store("x",0);' })).rejects.toThrow('Session store transfer limit exceeded')
+    expect(started).toBe(0); expect(committed).toBe(0)
+    fault = false
+    const result = await r.exec({ code: 'await tools.switch({});store("x",0);' })
+    expect(result).toMatchObject({ status: 'failed', error: 'Session store transfer limit exceeded' })
+    expect(started).toBe(1); expect(committed).toBe(0); expect(restores).toBeGreaterThanOrEqual(3)
+  } finally { await r.dispose() }
+})
+
 it("restores committed JSON after disposal and excludes failed, terminated and foreign writes", async () => {
   const session = createSession()
   let current = mount(session)

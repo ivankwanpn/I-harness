@@ -1,10 +1,20 @@
+import { createDesktopHost } from '../src/host.ts'
+import { encodeFrame, makeRequest, type RpcMessage } from '@i-harness/sdk'
+import { createProjectScopeBroker } from '../src/project-scope.ts'
+import { createAgentProcessReadRunner } from '../src/agent-process-read.ts'
+import { createConversationResultReader } from '../src/result-reader.ts'
+import { createSessionManagementFence } from '../src/session-management-fence.ts'
+import { withExecCallerScope, type NativeExecService } from '@i-harness/exec'
+import { acquireAssemblyResultStore } from '../../session-executor/src/lifecycle/result-store.ts'
+import { committedFactSeqs } from '@i-harness/core-session'
+import { createHash } from 'node:crypto'
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm, writeFile, readFile, readdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { append } from "@i-harness/core-session"
+import { recordFixture } from "./managed-fixture.ts"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createJsonlBackend, createJsonlSessionCoordinator } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import { createDesktopExecution, createCodeModeSettings } from "../src/execution.ts"
 import { createAgentProcesses } from "../src/agent-processes.ts"
@@ -12,70 +22,233 @@ import { createDesktopDiagnostics, probeExecutable } from "../src/environment-di
 
 it.each(["tool", "code"] as const)("restores actual registered job_output snapshots from saved %s records without duplication or cold execution", async kind => {
   const root = await mkdtemp(join(tmpdir(), "ih-saved-job-dto-")), sessionDir = join(root, "sessions"), script = join(root, "output.cjs")
-  let coordinator = createSessionCoordinator(createJsonlBackend(sessionDir))
+  let coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" }); await coordinator.create({ sessionId: "other" })
-  await writeFile(script, 'process.stdout.write(process.argv[2] === "large" ? "QA_LIMIT_" + "x".repeat(150000) : "QA_JOB_OUTPUT\\n")')
+  await writeFile(script, 'process.stdout.write(process.argv[2] === "large" ? "QA_LIMIT_" + "x".repeat(150000) : "QA_JOB_OUTPUT\\n");process.stderr.write("QA_ERR\\n")')
   const live = createSessionService({ workspace: root, modelPolicy: "test-mock", approveAll: true, sandbox: "danger-full-access", codeMode: { mode: "mixed" }, coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const assembly = await live.assemblyFor("s"), shell = process.platform === "win32" ? "pwsh" : "bash"
   let callNumber = 0
-  const execute = async (name: string, args: Record<string, unknown>) => {
-    if (kind === "tool") {
-      const callId = `actual-${++callNumber}`
-      append(assembly.session, { type: "tool/call", callId, name, args })
-      const result = await assembly.tools.execute({ name, args })
-      append(assembly.session, { type: "tool/result", callId, name, output: result.output })
-      return result.output as Record<string, unknown>
-    }
-    const result = await assembly.tools.execute({ name: "code_exec", args: { code: `await tools.${name}(${JSON.stringify(args)})`, yield_time_ms: 0 } })
-    const initial = result.output as { cell_id: string; status: string }
-    const observation = initial.status === "running" ? (await assembly.tools.execute({ name: "code_wait", args: { cell_id: initial.cell_id, yield_time_ms: 10000 } })).output as { status: string } : initial
-    expect(observation.status).toBe("completed")
-    const saved = assembly.session.events.findLast(event => event.type === "code/result" && event.cellId === initial.cell_id && event.name === name)
-    if (!saved || saved.type !== "code/result") throw new Error("Missing actual registry result")
-    return saved.output as Record<string, unknown>
+  const envelopes = new Map<string, import('@i-harness/core-session').ResultEnvelope>()
+  const direct = async (name: string, args: Record<string, unknown>, target = assembly, sessionId = "s") => {
+    const callId = `actual-${++callNumber}`, action = target.factOwner.beginAction()
+    let complete = false
+    const source = action.registerSettlementSource(async () => { if (!complete) throw new Error('Fixture result requires recovery') })
+    try {
+      const seq = committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name, args }))[0]
+      const prepared = await target.tools.prepare({ name, args }, undefined, { sessionId, session: target.session, callId, callEventSeq: seq, settlementSource: source })
+      const output = await target.tools.dispatch(prepared)
+      const result = await target.tools.finalize(prepared, output)
+      committedFactSeqs(await source.tools.captureResult({ type: 'tool/result', callId, name, ...(result.envelope ? { envelope: result.envelope } : { output: result.output }) }).admit())
+      complete = true
+      await source.close()
+      if (result.envelope) envelopes.set(name, result.envelope)
+      if (result.program?.kind !== 'value') throw new Error('Expected genuine program value')
+      return result.program.value as Record<string, any>
+    } finally { action.finish() }
+  }
+  const execute = async (name: string, args: Record<string, unknown>): Promise<Record<string, any>> => {
+    if (kind === 'tool') return direct(name, args)
+    const initial = await direct('code_exec', { code: `text(JSON.stringify(await tools.${name}(${JSON.stringify(args)})))`, yield_time_ms: 0 })
+    const observation = initial.status === 'running' ? await direct('code_wait', { cell_id: initial.cell_id, yield_time_ms: 10000 }) : initial
+    expect(observation.status).toBe('completed')
+    const saved = assembly.session.events.findLast(event => event.type === 'code/result' && event.cellId === initial.cell_id && event.name === name)
+    if (!saved || saved.type !== 'code/result' || saved.envelope?.retention.kind !== 'inline') throw new Error('Missing genuine inline Code Mode result envelope')
+    envelopes.set(name, saved.envelope)
+    expect(saved.output).toBeUndefined()
+    const emitted = String(initial.text ?? '') + String(initial === observation ? '' : observation.text ?? '')
+    expect(JSON.parse(emitted)).toEqual(saved.envelope.retention.value)
+    return saved.envelope.retention.value as Record<string, any>
   }
   const command = (mode: string) => process.platform === "win32" ? `& '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}' '${mode}'` : `'${process.execPath.replaceAll("'", "'\\''")}' '${script.replaceAll("'", "'\\''")}' '${mode}'`
   let cold: ReturnType<typeof createSessionService> | undefined
+  let coldBroker: ReturnType<typeof createProjectScopeBroker> | undefined
   try {
     const small = await execute(shell, { command: command("small"), background: true }), smallId = String(small.job_id)
     const snapshot = await execute("job_output", { job_id: smallId, wait: true, timeout_ms: 5000 })
-    expect(snapshot).toEqual({ text: "QA_JOB_OUTPUT\n\n[status: completed]", status: "completed" })
+    expect(snapshot).toMatchObject({ text: "QA_JOB_OUTPUT\n", status: "completed", truncated: false, offset_bytes: 0, next_offset_bytes: 14, total_bytes: 14,
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/), full_result: { tool: "context_output_read", access: "catalog-required" }, text_result: { tool: "job_output", args: { job_id: smallId, job_instance_id: small.native_job.instanceId, offset_bytes: 14 } } })
     expect(await execute("job_output", { job_id: smallId })).toEqual(snapshot)
     const large = await execute(shell, { command: command("large"), background: true }), largeId = String(large.job_id)
     const largeSnapshot = await execute("job_output", { job_id: largeId, wait: true, timeout_ms: 5000 })
-    expect(largeSnapshot.status).toBe("completed"); expect(String(largeSnapshot.text).length).toBeGreaterThan(131072)
-    append(assembly.session, { type: "tool/call", callId: "wrong-launch", name: "list_dir", args: {} })
-    append(assembly.session, { type: "tool/result", callId: "wrong-launch", name: shell, output: { ...small, job_id: "unmatched-job" } })
-    append(assembly.session, { type: "tool/call", callId: "wrong-output", name: "list_dir", args: { job_id: smallId } })
-    append(assembly.session, { type: "tool/result", callId: "wrong-output", name: "job_output", output: { ...snapshot, text: "unmatched output" } })
-    append(assembly.session, { type: "tool/call", callId: "failed-output", name: "job_output", args: { job_id: smallId } })
-    append(assembly.session, { type: "tool/result", callId: "failed-output", name: "job_output", output: { ...snapshot, text: "failed output" }, isError: true })
+    expect(largeSnapshot.status).toBe("completed"); expect(largeSnapshot.truncated).toBe(true)
+    expect(Number(largeSnapshot.total_bytes)).toBe(150009)
+    expect(largeSnapshot.digest).toBe(createHash("sha256").update("QA_LIMIT_" + "x".repeat(150000)).digest("hex"))
+    expect(snapshot.digest).toBe(createHash("sha256").update("QA_JOB_OUTPUT\n").digest("hex"))
+    expect(String(largeSnapshot.text).length).toBeGreaterThan(0)
+    expect(String(largeSnapshot.text).length).toBeLessThan(131072)
+    expect(largeSnapshot.full_result).toMatchObject({ tool: 'context_output_read', args: { ref: { codec: 'exec-frames-v1' } } })
+    expect(largeSnapshot.text_result).toMatchObject({ tool: 'job_output', args: { job_id: largeId, digest: largeSnapshot.digest, job_instance_id: large.native_job.instanceId } })
+    expect(largeSnapshot.full_result.args.viaCatalog).toBeUndefined()
+    expect(envelopes.get('job_output')?.dependencies?.kind).toBe('artifact-set')
+    const store = await acquireAssemblyResultStore({ workspace: root, coordinator, sessionId: 's' })
+    try {
+      if (!store.service) throw new Error('Expected original authenticated result store')
+      const native = assembly.ctx.services.get<NativeExecService>('exec/service')!
+      const original = native.getJobView(largeId).retained!
+      expect(original.retention).toEqual({ kind: 'artifact', ref: largeSnapshot.full_result.args.ref })
+      const recipient = await live.assemblyFor('other')
+      const originalTool = assembly.tools.get('job_output')!
+      recipient.tools.register({ name: 'j3_recipient', description: 'Trusted owner observation control', inputSchema: originalTool.inputSchema, isReadOnly: true,
+        execute: (args, exec) => withExecCallerScope({ sessionId: 's' }, () => originalTool.execute(args, exec)) })
+      const recipientValue = await direct('j3_recipient', { job_id: largeId }, recipient, 'other')
+      expect(recipientValue.full_result.args.viaCatalog).toBeUndefined()
+      const catalog = envelopes.get('j3_recipient')?.dependencies
+      if (catalog?.kind !== 'artifact-set') throw new Error('Expected finalized recipient membership catalog')
+      const catalogPage = await store.service.readResult({ sessionId: 'other' }, { ref: catalog.ref })
+      if (catalogPage.data.kind !== 'text' || !catalogPage.eof) throw new Error('Expected bounded actual catalog')
+      expect(JSON.parse(catalogPage.data.text).entries).toEqual([original])
+      const ref = largeSnapshot.full_result.args.ref
+      await expect(store.service.readExecResult({ sessionId: 'other' }, { ref })).rejects.toThrow()
+      await expect(store.service.readExecResult({ sessionId: 'foreign' }, { ref, viaCatalog: catalog.ref })).rejects.toThrow()
+      const decoded = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+      let cursor: import('@i-harness/core-session').ExecFrameCursor | undefined
+      for (let pageNumber = 0; ; pageNumber++) {
+        if (pageNumber > 30) throw new Error('finite raw fixture ceiling')
+        const page = await store.service.readExecResult({ sessionId: 'other' }, { ref, viaCatalog: catalog.ref, cursor, maxBytes: 32768 })
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(32768)
+        for (const part of page.frames) decoded[part.channel].push(Buffer.from(part.data, 'base64'))
+        if (page.eof) break
+        expect(page.nextCursor).not.toEqual(cursor); cursor = page.nextCursor!
+      }
+      const stdout = Buffer.concat(decoded.stdout), stderr = Buffer.concat(decoded.stderr)
+      expect(stdout).toEqual(Buffer.from('QA_LIMIT_' + 'x'.repeat(150000)))
+      expect(stderr).toEqual(Buffer.from('QA_ERR\n'))
+      expect(largeSnapshot.stderr_total_bytes).toBe(7)
+      expect(largeSnapshot.stderr_digest).toBe(createHash('sha256').update(stderr).digest('hex'))
+      expect(largeSnapshot.digest).toBe(createHash('sha256').update(stdout).digest('hex'))
+      expect(native.getJobView(largeId).retained).toEqual(original)
+      const archive: Buffer[] = []; let archiveOffset = 0
+      for (let n = 0; ; n++) {
+        if (n > 30) throw new Error('finite archive fixture ceiling')
+        const page = await store.service.readResult({ sessionId: 's' }, { ref, offset: archiveOffset })
+        archive.push(page.data.kind === 'text' ? Buffer.from(page.data.text) : Buffer.from(page.data.base64, 'base64'))
+        if (page.eof) break
+        expect(page.nextOffset).toBeGreaterThan(archiveOffset); archiveOffset = page.nextOffset!
+      }
+      expect(createHash('sha256').update(Buffer.concat(archive)).digest('hex')).toBe(ref.contentDigest)
+      let reconstructed = String(largeSnapshot.text), next = largeSnapshot.next_offset_bytes
+      for (let n = 0; next < 150009; n++) {
+        if (n > 30) throw new Error('finite text fixture ceiling')
+        const page = await execute('job_output', { ...largeSnapshot.text_result.args, offset_bytes: next })
+        expect(page.next_offset_bytes).toBeGreaterThan(next)
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(16384)
+        reconstructed += page.text; next = page.next_offset_bytes
+      }
+      expect(Buffer.from(reconstructed)).toEqual(stdout)
+    } finally { await store.release() }
+    await recordFixture(assembly.factOwner, { type: "tool/call", callId: "wrong-launch", name: "list_dir", args: {} })
+    await recordFixture(assembly.factOwner, { type: "tool/result", callId: "wrong-launch", name: shell, output: { ...small, job_id: "unmatched-job" } })
+    await recordFixture(assembly.factOwner, { type: "tool/call", callId: "wrong-output", name: "list_dir", args: { job_id: smallId } })
+    await recordFixture(assembly.factOwner, { type: "tool/result", callId: "wrong-output", name: "job_output", output: { ...snapshot, text: "unmatched output" } })
+    await recordFixture(assembly.factOwner, { type: "tool/call", callId: "failed-output", name: "job_output", args: { job_id: smallId } })
+    await recordFixture(assembly.factOwner, { type: "tool/result", callId: "failed-output", name: "job_output", output: { ...snapshot, text: "failed output" }, isError: true })
     await coordinator.flush("s"); await live.close(); await coordinator.close()
-    coordinator = createSessionCoordinator(createJsonlBackend(sessionDir)); cold = createSessionService({ workspace: root, modelPolicy: "required" })
+    coordinator = createJsonlSessionCoordinator(sessionDir, { lock: { enabled: true } }); coldBroker = createProjectScopeBroker(coordinator, root, undefined, { async assertIdle() { if (cold?.hasAssembly("s")) throw new Error("Fixture owner is live") } }); cold = createSessionService({ workspace: root, modelPolicy: "required", coordinator, resultReadScopeFor: id => coldBroker!.resultReadScopeFor(id) })
     const before = await readFile(join(sessionDir, "s.jsonl"), "utf8"), processes = createAgentProcesses(coordinator, cold)
     expect(await processes.jobOutput("s", smallId)).toEqual({ text: snapshot.text, truncated: false, ownerSessionId: "s", live: false })
-    expect(await processes.jobOutput("s", largeId)).toEqual({ text: String(largeSnapshot.text).slice(0, 131072), truncated: true, ownerSessionId: "s", live: false })
+    expect(await processes.jobOutput("s", largeId)).toEqual({ text: String(largeSnapshot.text), truncated: true, ownerSessionId: "s", live: false })
     expect((await processes.read("s")).jobs).toContainEqual(expect.objectContaining({ jobId: smallId, outputAvailable: true, status: "completed", live: false, canCancel: false }))
     await expect(processes.jobOutput("other", smallId)).rejects.toThrow(/unavailable.*owner/)
     await expect(processes.jobOutput("s", "unmatched-job")).rejects.toThrow(/unavailable.*owner/)
     await expect(processes.control("s", { action: "job/cancel", id: smallId })).rejects.toThrow(/live|cold/)
+    const fence = createSessionManagementFence()
+    let visible = true, revoke = false, pages = 0
+    let changeBinding: (() => Promise<unknown>) | undefined
+    const isConversation = async () => visible
+    const conversationRead = createConversationResultReader(coordinator, cold, isConversation, fence)!
+    const reader = async (id: string, query: import('@i-harness/session-executor').ResultPageQuery) => { pages++; const result = await conversationRead(id, query); if (revoke) visible = false; if (changeBinding) { const change = changeBinding; changeBinding = undefined; await change() }; return result }
+    const hosted = createAgentProcesses(coordinator, cold, { runRead: createAgentProcessReadRunner({ coordinator, service: cold, isConversation, fence, resultReadScopeFor: id => coldBroker!.resultReadScopeFor(id), readResultPage: reader }) })
+    const documentBeforeReads = JSON.stringify(await coordinator.getDocument('s'))
+    const passive = await hosted.read('s')
+    expect(passive.jobs).toContainEqual(expect.objectContaining({ jobId: smallId, outputAvailable: true, live: false, canCancel: false }))
+    expect(pages).toBe(0)
+    expect(await hosted.jobOutput('s', largeId)).toEqual({ text: String(largeSnapshot.text), truncated: true, ownerSessionId: 's', live: false })
+    expect(pages).toBe(0)
+    const collected = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+    let selectedCursor: import('@i-harness/core-session').ExecFrameCursor | undefined
+    for (let n = 0; ; n++) {
+      if (n > 30) throw new Error('finite cold frame ceiling')
+      const result = await hosted.jobOutput('s', largeId, { backend: 'shell', mode: 'frames', instanceId: large.native_job.instanceId, sourceId: large.native_job.sourceId, cursor: selectedCursor, expectedRef: largeSnapshot.full_result.args.ref })
+      if (result.kind !== 'frames') throw new Error('Cold frame output unavailable: ' + JSON.stringify(result))
+      for (const part of result.page.frames) collected[part.channel].push(Buffer.from(part.data, 'base64'))
+      if (result.page.eof) break
+      selectedCursor = result.page.nextCursor!
+    }
+    expect(pages).toBeGreaterThan(1)
+    expect(Buffer.concat(collected.stdout)).toEqual(Buffer.from('QA_LIMIT_' + 'x'.repeat(150000)))
+    expect(Buffer.concat(collected.stderr)).toEqual(Buffer.from('QA_ERR\n'))
+    expect(createHash('sha256').update(Buffer.concat(collected.stdout)).digest('hex')).toBe(largeSnapshot.digest)
+    expect(createHash('sha256').update(Buffer.concat(collected.stderr)).digest('hex')).toBe(largeSnapshot.stderr_digest)
+    const hostSettings = join(root, 'host-settings.json'); await writeFile(hostSettings, '{}')
+    const frames: RpcMessage[] = [], actualHost = await createDesktopHost({ workspace: root, sessionDir, settingsPath: hostSettings, onWrite: frame => frames.push(frame) })
+    let requestNumber = 0
+    const request = async (method: string, params: object) => { const n = ++requestNumber; await actualHost.handleLine(encodeFrame(makeRequest(n, method, params))); return frames.find(frame => 'id' in frame && frame.id === n) as any }
+    try {
+      await request('initialize', {})
+      expect(await request('desktop/session/processes/job-output', { sessionId: 's', id: smallId })).toMatchObject({ result: { text: 'QA_JOB_OUTPUT\n', live: false } })
+      const result = await request('desktop/session/processes/job-output', { sessionId: 's', id: smallId, backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId, sourceId: small.native_job.sourceId, expectedRef: snapshot.full_result.args.ref })
+      expect(result).toMatchObject({ result: { kind: 'frames', live: false, nativeJob: small.native_job, page: { ref: snapshot.full_result.args.ref } } })
+      expect(Buffer.concat(result.result.page.frames.filter((f: any) => f.channel === 'stdout').map((f: any) => Buffer.from(f.data, 'base64')))).toEqual(Buffer.from('QA_JOB_OUTPUT\n'))
+      const actualDecoded = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+      let actualCursor: import('@i-harness/core-session').ExecFrameCursor | undefined
+      for (let n = 0; ; n++) {
+        if (n > 30) throw new Error('finite actual host cold frame ceiling')
+        const response = await request('desktop/session/processes/job-output', { sessionId: 's', id: largeId, backend: 'shell', mode: 'frames', instanceId: large.native_job.instanceId, sourceId: large.native_job.sourceId, cursor: actualCursor, expectedRef: largeSnapshot.full_result.args.ref })
+        expect(response).toMatchObject({ result: { kind: 'frames', nativeJob: large.native_job, page: { ref: largeSnapshot.full_result.args.ref } } })
+        const page = response.result.page
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(32768)
+        for (const part of page.frames) actualDecoded[part.channel as 'stdout' | 'stderr'].push(Buffer.from(part.data, 'base64'))
+        if (page.eof) break
+        expect(page.nextCursor).not.toEqual(actualCursor); actualCursor = page.nextCursor
+      }
+      expect(Buffer.concat(actualDecoded.stdout)).toEqual(Buffer.from('QA_LIMIT_' + 'x'.repeat(150000)))
+      expect(Buffer.concat(actualDecoded.stderr)).toEqual(Buffer.from('QA_ERR\n'))
+      expect(createHash('sha256').update(Buffer.concat(actualDecoded.stdout)).digest('hex')).toBe(largeSnapshot.digest)
+      expect(createHash('sha256').update(Buffer.concat(actualDecoded.stderr)).digest('hex')).toBe(largeSnapshot.stderr_digest)
+      expect(await request('desktop/session/processes/job-output', { sessionId: 's', id: smallId, backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId, expectedRef: { ...snapshot.full_result.args.ref, revision: 'f'.repeat(64) } })).toMatchObject({ result: { kind: 'unavailable', reason: 'stale-ref' } })
+      expect(await request('desktop/session/processes/job-output', { sessionId: 'other', id: smallId, backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).toMatchObject({ result: { kind: 'unavailable' } })
+    } finally { await actualHost.close() }
+    expect(JSON.stringify(await coordinator.getDocument('s'))).toBe(documentBeforeReads)
+    expect(await coldBroker.resultReadScopeFor('s')).toBeUndefined()
+    changeBinding = () => coldBroker!.bind('s')
+    expect(await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    const boundGetter = await coldBroker.resultReadScopeFor('s')
+    expect(boundGetter).toBeTypeOf('function'); expect(boundGetter!().revision).toBeTruthy(); expect(boundGetter!().projectId).toBeUndefined()
+    expect((await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).kind).toBe('frames')
+    const freshGetter = (await coldBroker.resultReadScopeFor('s'))!
+    expect(freshGetter).not.toBe(boundGetter); expect(freshGetter().revision).toBe(boundGetter!().revision)
+    const revision = boundGetter!().revision
+    await coldBroker.configure({ id: 'cold-project', name: 'Cold project', roots: [root], primaryRoot: root })
+    changeBinding = () => coldBroker!.move('s', undefined, 'cold-project')
+    expect(await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    expect((await coldBroker.resultReadScopeFor('s'))!().revision).not.toBe(revision)
+    revoke = true
+    const denied = await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })
+    expect(denied).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    visible = true; revoke = false
+    const unsupported = createAgentProcesses(coordinator, cold, { runRead: createAgentProcessReadRunner({ coordinator, service: cold, isConversation, fence, readResultPage: reader }) })
+    await expect(unsupported.jobOutput('s', smallId)).rejects.toMatchObject({ code: 'observation-unsupported', message: 'Job output unavailable for this owner' })
+    await coldBroker.close()
+    const beforeFailedResolver = pages
+    expect(await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    expect(pages).toBe(beforeFailedResolver)
     expect(cold.hasAssembly("s")).toBe(false); expect(await readFile(join(sessionDir, "s.jsonl"), "utf8")).toBe(before)
-  } finally { await cold?.close(); await live.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-}, 15000)
+  } finally { await coldBroker?.close(); await cold?.close(); await live.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+}, 30000)
 
 it("projects saved tool/code PTYs and partial output after restart without an assembly or log writes", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-saved-pty-")), sessionDir = join(root, "sessions")
-  let coordinator = createSessionCoordinator(createJsonlBackend(sessionDir))
+  let coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "cold" }); await coordinator.create({ sessionId: "other" })
-  const session = await createDurableSessionLoader(coordinator)("cold")
-  append(session, { type: "tool/call", callId: "open", name: "terminal_open", args: { command: "node", cols: 90, rows: 25 } })
-  append(session, { type: "tool/result", callId: "open", name: "terminal_open", output: { id: "saved-pty", pid: 123, cols: 90, rows: 25 } })
-  append(session, { type: "code/call", cellId: "cell", callId: "read", name: "terminal_read", args: { id: "saved-pty", offset: 100 } })
-  append(session, { type: "code/result", cellId: "cell", callId: "read", name: "terminal_read", output: { id: "saved-pty", data: "saved output", nextOffset: 112, status: "running", truncated: false, dropped: true } })
-  append(session, { type: "code/call", cellId: "cell", callId: "spawn", name: "process_spawn", args: { command: "pwsh" } })
-  append(session, { type: "code/result", cellId: "cell", callId: "spawn", name: "process_spawn", output: { id: "no-output", pid: 456, cols: 80, rows: 24 } })
+  const document = await coordinator.openManagedDocument("cold")
+  await recordFixture(document, { type: "tool/call", callId: "open", name: "terminal_open", args: { command: "node", cols: 90, rows: 25 } })
+  await recordFixture(document, { type: "tool/result", callId: "open", name: "terminal_open", output: { id: "saved-pty", pid: 123, cols: 90, rows: 25 } })
+  await recordFixture(document, { type: "code/call", cellId: "cell", callId: "read", name: "terminal_read", args: { id: "saved-pty", offset: 100 } })
+  await recordFixture(document, { type: "code/result", cellId: "cell", callId: "read", name: "terminal_read", output: { id: "saved-pty", data: "saved output", nextOffset: 112, status: "running", truncated: false, dropped: true } })
+  await recordFixture(document, { type: "code/call", cellId: "cell", callId: "spawn", name: "process_spawn", args: { command: "pwsh" } })
+  await recordFixture(document, { type: "code/result", cellId: "cell", callId: "spawn", name: "process_spawn", output: { id: "no-output", pid: 456, cols: 80, rows: 24 } })
   await coordinator.flush("cold"); await coordinator.close()
-  coordinator = createSessionCoordinator(createJsonlBackend(sessionDir))
+  coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
   const service = createSessionService({ workspace: root, modelPolicy: "required" })
   const bytes = async () => { const files = (await readdir(sessionDir)).filter(name => name.endsWith(".jsonl")); return Promise.all(files.map(async name => [name, await readFile(join(sessionDir, name), "utf8")])) }
   const before = await bytes()
@@ -93,7 +266,7 @@ it("projects saved tool/code PTYs and partial output after restart without an as
 
 it("reads actual nested cell history and stops its live owner while a model observer is waiting", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-execution-ui-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "owned" }); await coordinator.create({ sessionId: "other" })
   let modelCalls = 0
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), codeMode: { mode: "mixed" }, sandbox: "danger-full-access", model: { async *stream() { modelCalls++; yield { type: "end" } } } })
@@ -102,7 +275,13 @@ it("reads actual nested cell history and stops its live owner while a model obse
     const assembly = await service.assemblyFor("owned")
     const result = await assembly.tools.execute({ name: "code_exec", args: { code: 'text(await tools.list_dir({path:"."})); await yield_control(); await new Promise(resolve => setTimeout(resolve, 20000));', yield_time_ms: 1000 } })
     const cellId = (result.output as { cell_id: string }).cell_id
-    const read = await view.read("owned")
+    // Yielded guest execution can precede the output fact's normal receipt.
+    // Keep inspection read-only and wait for the existing committed surface.
+    const read = await vi.waitFor(async () => {
+      const read = await view.read('owned')
+      expect(read.cells[0]!.output).not.toHaveLength(0)
+      return read
+    })
     expect(read.cells[0]).toMatchObject({ id: cellId, live: true, canTerminate: true })
     expect(read.cells[0]!.calls[0]).toMatchObject({ name: "list_dir", dispatched: true })
     expect(read.cells[0]!.output).not.toHaveLength(0)
@@ -122,11 +301,11 @@ it("reads actual nested cell history and stops its live owner while a model obse
 
 it("keeps saved running cells read only and bounds paginated cell content without mounting", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-cold-execution-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "cold" })
-  const session = await createDurableSessionLoader(coordinator)("cold")
-  append(session, { type: "code/cell", cellId: "old", sessionId: "cold", state: "started", source: "saved source" })
-  append(session, { type: "code/output", cellId: "old", content: { type: "text", text: "x".repeat(150000) } })
+  const document = await coordinator.openManagedDocument("cold")
+  await recordFixture(document, { type: "code/cell", cellId: "old", sessionId: "cold", state: "started", source: "saved source" })
+  await recordFixture(document, { type: "code/output", cellId: "old", content: { type: "text", text: "x".repeat(150000) } })
   await coordinator.flush("cold")
   const service = createSessionService({ workspace: root, modelPolicy: "required" })
   try {
@@ -147,7 +326,7 @@ it("saves mode under the settings lease, preserving provider fields and current 
   const root = await mkdtemp(join(tmpdir(), "ih-mode-settings-"))
   const path = join(root, "settings.json")
   await writeFile(path, JSON.stringify({ codeMode: { mode: "mixed", maxActiveCells: 2 }, agentShell: "auto", llm: { defaultModel: { provider: "fixture", model: "x" } } }))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", codeMode: { mode: "mixed" } })
   try {
@@ -165,7 +344,7 @@ it("saves mode under the settings lease, preserving provider fields and current 
 
 it("controls actual owner PTY through role/hooks/sandbox registry and rejects cold or unrelated IDs", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-owned-pty-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" }); await coordinator.create({ sessionId: "other" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", approveAll: true, sandbox: "danger-full-access", coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const processes = createAgentProcesses(coordinator, service)
@@ -211,7 +390,7 @@ it("reports actual executable versions and missing/unavailable probes without a 
 
 it("shows and cancels actual background shell jobs through the current execution registry", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-process-jobs-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" }); await coordinator.create({ sessionId: "other" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", approveAll: true, sandbox: "danger-full-access", coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const processes = createAgentProcesses(coordinator, service)
@@ -227,15 +406,15 @@ it("shows and cancels actual background shell jobs through the current execution
     const result = await assembly.tools.execute({ name: process.platform === "win32" ? "pwsh" : "bash", args: { command, background: true } })
     const id = (result.output as { job_id: string }).job_id
     expect(id).toBeTruthy()
-    append(assembly.session, { type: "tool/call", callId: "shell-fixture", name: process.platform === "win32" ? "pwsh" : "bash", args: { command, background: true } })
-    append(assembly.session, { type: "tool/result", callId: "shell-fixture", name: process.platform === "win32" ? "pwsh" : "bash", output: result.output })
+    await recordFixture(assembly.factOwner, { type: "tool/call", callId: "shell-fixture", name: process.platform === "win32" ? "pwsh" : "bash", args: { command, background: true } })
+    await recordFixture(assembly.factOwner, { type: "tool/result", callId: "shell-fixture", name: process.platform === "win32" ? "pwsh" : "bash", output: result.output })
     expect((await processes.read("s")).jobs).toContainEqual(expect.objectContaining({ jobId: id, ownerSessionId: "s", live: true, canCancel: true }))
     await vi.waitFor(async () => expect(await processes.jobOutput("s", id)).toMatchObject({ text: expect.stringContaining("fixture-output") }), { timeout: 5000, interval: 50 })
     const captured = await processes.jobOutput("s", id)
     expect(captured.text).not.toMatch(/ReferenceError|SyntaxError/)
     expect((await processes.read("s")).jobs).toContainEqual(expect.objectContaining({ jobId: id, live: true, canCancel: true }))
-    append(assembly.session, { type: "tool/call", callId: "job-output-fixture", name: "job_output", args: { job_id: id } })
-    append(assembly.session, { type: "tool/result", callId: "job-output-fixture", name: "job_output", output: { stdout: captured.text, stderr: "", status: "running" } })
+    await recordFixture(assembly.factOwner, { type: "tool/call", callId: "job-output-fixture", name: "job_output", args: { job_id: id } })
+    await recordFixture(assembly.factOwner, { type: "tool/result", callId: "job-output-fixture", name: "job_output", output: { stdout: captured.text, stderr: "", status: "running" } })
     await expect(processes.control("other", { action: "job/cancel", id })).rejects.toThrow(/live|owner/i)
     await processes.control("s", { action: "job/cancel", id })
     await vi.waitFor(async () => expect((await processes.read("s")).jobs.find(job => job.jobId === id)).toMatchObject({ status: "killed", canCancel: false }))

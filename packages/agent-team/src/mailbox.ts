@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto"
 import type { InputDisplay } from "@i-harness/core-session"
 import { TeamError, TEAM_CODES, type TeamCaller, type TeamMessageSnapshot } from "./types.ts"
 import type { TeamFoldState } from "./fold.ts"
-import type { TeamTransaction } from "./transact.ts"
+import type { DeliveryOutcome, TeamTransaction } from "./transact.ts"
+import { isDeepStrictEqual } from 'node:util'
 
 export interface MailboxDeps {
   teamId: string
@@ -11,10 +12,9 @@ export interface MailboxDeps {
   // transact observe the same object.
   state: TeamFoldState
   transact: TeamTransaction
-  // actual channel delivery (injected): returns true only after the target
-  // durably holds the message (at-least-once). Signified by the returned
-  // boolean — false keeps the message queued for recovery.
-  deliver: (targetId: string, messageId: string, content: string, delivery: "quiet" | "wakeup", signal?: AbortSignal) => Promise<boolean>
+  // The bound bridge names the actual consumption barrier and retains any
+  // original escaping failure separately from its disposition.
+  deliver: (targetId: string, messageId: string, content: string, delivery: "quiet" | "wakeup", signal?: AbortSignal) => Promise<DeliveryOutcome>
   // live target status (by targetId); "inactive" targets never receive quiet
   // messages (quiet never wakes inactive), wakeup is always attempted.
   memberStatus: (id: string) => "running" | "idle" | "inactive" | "provisioning" | "failed"
@@ -23,7 +23,7 @@ export interface MailboxDeps {
 }
 
 // Ruling 10(c): every fn passed to deps.transact is PURE-READ — it inspects the
-// state param (guards are actually pre-checks against the live state) and
+// state param and
 // returns { events, result }; it NEVER mutates the state. The transact runs the
 // fn against a clone, validates candidates via applyTeamEvent, then applies
 // them to the live state and appends to the log — so queue insertion and the
@@ -60,30 +60,20 @@ export function createMailbox(deps: MailboxDeps) {
     // fail; this in-fn check makes the limit atomic. The actual push is done
     // by the transact's applyTeamEvent against the live state (duplicate-id
     // guarded there).
-    await deps.transact.transact((state) => {
+    return deps.transact.deliverMessage({
+      queued: { type: "team/message/queued", version: 1, teamId: deps.teamId, message: snapshot }, mode: 'enqueue',
+      guard(state) {
       const pending = (state.queued.get(targetId) ?? []).filter((m) => !state.delivered.has(m.id)).length
       if (pending >= maxPending) throw new TeamError(TEAM_CODES.MAILBOX_FULL, `target queue full (${maxPending} pending)`)
-      return { events: [{ type: "team/message/queued", version: 1, teamId: deps.teamId, message: snapshot }], result: undefined }
+      },
+      deliver: () => deps.deliver(targetId, snapshot.id, message, delivery, signal),
     })
-    // Deliver on the actual channel; the ack is appended ONLY after the target
-    // holds the message (deliver resolved true) — a false keeps it queued and
-    // recoverRoot retries it.
-    const delivered = await deps.deliver(targetId, snapshot.id, message, delivery, signal)
-    if (delivered) {
-      // Ack: pure-read fn; validated/duplicate-guarded by the transact.
-      await deps.transact.transact(() => ({
-        events: [{ type: "team/message/delivered", version: 1, teamId: deps.teamId, messageId: snapshot.id, targetId }],
-        result: undefined,
-      }))
-      return { messageId: snapshot.id, status: "accepted" }
-    }
-    return { messageId: snapshot.id, status: "queued" }
   }
 
   // Recovery sweep (spec root-mount): iterate the live queued map in FIFO
   // order (Map keys in insertion order, arrays as queued), skip already
   // delivered, skip quiet-on-inactive (quiet never wakes inactive), attempt
-  // delivery to the rest; on success ack via a pure-read transact fn. A crash
+  // delivery to the rest through the original owned record. A crash
   // between deliver success and the ack replays the entry (at-least-once).
   async function recoverRoot(onlyTargetId?: string): Promise<void> {
     for (const [targetId, msgs] of [...deps.state.queued.entries()]) {
@@ -94,13 +84,14 @@ export function createMailbox(deps: MailboxDeps) {
       for (const m of [...msgs]) {
         if (deps.state.delivered.has(m.id)) continue
         if (m.delivery === "quiet" && deps.memberStatus(targetId) === "inactive") continue // quiet never wakes inactive
-        const ok = await deps.deliver(targetId, m.id, m.content, m.delivery)
-        if (ok) {
-          await deps.transact.transact(() => ({
-            events: [{ type: "team/message/delivered", version: 1, teamId: deps.teamId, messageId: m.id, targetId }],
-            result: undefined,
-          }))
-        }
+        await deps.transact.deliverMessage({
+          queued: { type: 'team/message/queued', version: 1, teamId: deps.teamId, message: m }, mode: 'existing',
+          guard(state) {
+            const original = (state.queued.get(targetId) ?? []).find(message => message.id === m.id)
+            if (!isDeepStrictEqual(original, m) || state.delivered.has(m.id)) throw new Error('Team recovery queue tuple mismatch')
+          },
+          deliver: () => deps.deliver(targetId, m.id, m.content, m.delivery),
+        })
       }
     }
   }

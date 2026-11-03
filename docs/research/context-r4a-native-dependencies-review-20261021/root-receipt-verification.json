@@ -1,0 +1,59 @@
+{
+  "head": "cfa3d5ee8b899e4b31f9870ff1cb1cb86eadd87a",
+  "failures": [],
+  "checks": [
+    {
+      "name": "Four-artifact lifecycle and independent primary digest",
+      "passed": true
+    },
+    {
+      "name": "Genuine observer exact identities and scoped lifecycle receipt",
+      "passed": true
+    },
+    {
+      "name": "Original source acknowledgement unknown and same-operation recovery",
+      "passed": true
+    },
+    {
+      "name": "Original catalog acknowledgement unknown and same-operation recovery",
+      "passed": true
+    },
+    {
+      "name": "Membership unknown actual boundary and retained original result",
+      "passed": true
+    },
+    {
+      "name": "Membership quota actual boundary and retained original result",
+      "passed": true
+    },
+    {
+      "name": "Known source, catalog refusal and independent completeness",
+      "passed": true
+    },
+    {
+      "name": "Original storage owner and current-policy seam receipts",
+      "passed": true
+    }
+  ],
+  "primary": {
+    "bytes": 70488,
+    "sha256": "092cebb96b2b210e519d8783cc6ea0da43e786a479b41f3c6a6ad6f3403a4f01",
+    "bodyAvailability": "Deletion intentionally removed all four bodies; root checks preserved identity against independent literal primary, not a new post-deletion read"
+  },
+  "observer": {
+    "receipt": "external-calibration-copies/short-route/observer-QIyLoz/observer-receipt.json",
+    "frame": "ctxv1_d95fe80dd7ec08951e511b714397e8bb4a78aa0093b1a5fd8caf8a24296f5d6a",
+    "catalogs": [
+      "ctxv1_fd8cb2f1b54012e4f51f81d9df134e3f54165f922c984aca8e6ed0c518add7bb",
+      "ctxv1_8d69d6ab37fd732f08dfd9030c7c8e952d853edafb1c858a6661b3d70a60a0d7"
+    ],
+    "nativeLaunches": 1,
+    "claims": "Preserved original source and test assertions, not a new runtime invocation or a claim of known-refused C2 coverage"
+  },
+  "policyScope": "Same-session actual native registration plus host-authored B catalog and real managed delivery; no full Agent source-switch/exploit claim",
+  "limitations": [
+    "Deleted lifecycle/observer bodies cannot be newly re-read; preserved refs, original assertions/logs and independent primary literal are used honestly.",
+    "This audit reads sealed evidence only. It neither reruns runtime controls nor closes the independent reviewer two P2 qualification gaps.",
+    "Native source IDs/ordinals and local host metadata are semantic records, not cryptographic defense against arbitrary coherent local rewriting."
+  ]
+}

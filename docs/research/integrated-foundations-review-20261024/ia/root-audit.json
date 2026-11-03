@@ -1,0 +1,21 @@
+{
+  "at": "2026-10-23T17:09:42.337Z",
+  "head": "82d4b7a7c19f2971d7b21afd37c38ab6982bd8d0",
+  "actualHead": "82d4b7a7c19f2971d7b21afd37c38ab6982bd8d0",
+  "checks": [
+    {
+      "name": "fix2-package-gate",
+      "files": 13,
+      "identityHash": "ac4551f220e7581f9bc97403639a4192502ac5aebe0660c4fdcac990e3900126",
+      "logHash": "45c314ca747abf34670af1172963cb0f1713b6e35755b8619740fb81f4e8adee"
+    },
+    {
+      "name": "fix2-typecheck-gate",
+      "files": 13,
+      "identityHash": "6664b64d120bb1299e186e9d09b5ca23930f110fbbc7ec081fcedc80c35e6367",
+      "logHash": "c3575212b5049b1eaa3fc0dd3ce47eefd35b6b0381e2f2dc62778d0716add309"
+    }
+  ],
+  "diagnosticHash": "9fb750a75ec847dc97dd95d16e7ec7668b65d919bcb8208805f9a34fb93cec68",
+  "errors": []
+}

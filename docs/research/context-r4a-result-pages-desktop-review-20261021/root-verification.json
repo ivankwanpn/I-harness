@@ -1,0 +1,147 @@
+{
+  "created": "2026-10-20T16:35:22.812Z",
+  "commit": "72e5cfd88635eefa83f440b52fb2a2539ff5f7f4",
+  "status": "PASS",
+  "sourceFiles": 3424,
+  "sealedFiles": 14645,
+  "recordedGates": 20,
+  "qualifiedGates": 10,
+  "copiedPackages": 341,
+  "copiedFiles": 14132,
+  "internalEdges": 326,
+  "desktopOutputs": 223,
+  "previewInputs": 1854,
+  "checks": [
+    "Immutable evidence and complete source identities",
+    "All recorded gate source boundaries and nonoverlap",
+    "Qualified source-time differences limited to documentation",
+    "Copied payloads/manifests and actual internal import resolution",
+    "Generated WSL and original native qualification",
+    "Compiled Desktop outputs and preview input/output/CSS identities",
+    "Original runtime fixture bytes and exact binary exec EOF"
+  ],
+  "failures": [],
+  "visualStatus": "v2 first-page fixture failure preserved; separate corrected candidate pending",
+  "receipts": [
+    {
+      "label": "red-desktop",
+      "started": "2026-10-20T16:10:32.598Z",
+      "ended": "2026-10-20T16:10:36.684Z",
+      "exitCode": 1
+    },
+    {
+      "label": "green-desktop",
+      "started": "2026-10-20T16:14:09.211Z",
+      "ended": "2026-10-20T16:14:15.262Z",
+      "exitCode": 0
+    },
+    {
+      "label": "desktop-controls",
+      "started": "2026-10-20T16:16:08.348Z",
+      "ended": "2026-10-20T16:16:16.497Z",
+      "exitCode": 0
+    },
+    {
+      "label": "desktop-types",
+      "started": "2026-10-20T16:16:22.422Z",
+      "ended": "2026-10-20T16:16:37.230Z",
+      "exitCode": 1
+    },
+    {
+      "label": "desktop-types-fixed",
+      "started": "2026-10-20T16:17:02.564Z",
+      "ended": "2026-10-20T16:17:16.790Z",
+      "exitCode": 0
+    },
+    {
+      "label": "sdk-controls",
+      "started": "2026-10-20T16:17:43.324Z",
+      "ended": "2026-10-20T16:17:49.111Z",
+      "exitCode": 0
+    },
+    {
+      "label": "gateway-controls",
+      "started": "2026-10-20T16:17:55.323Z",
+      "ended": "2026-10-20T16:18:01.956Z",
+      "exitCode": 0
+    },
+    {
+      "label": "context-controls",
+      "started": "2026-10-20T16:18:08.387Z",
+      "ended": "2026-10-20T16:18:12.008Z",
+      "exitCode": 0
+    },
+    {
+      "label": "sdk-types",
+      "started": "2026-10-20T16:18:18.549Z",
+      "ended": "2026-10-20T16:18:24.698Z",
+      "exitCode": 0
+    },
+    {
+      "label": "desktop-build",
+      "started": "2026-10-20T16:18:32.785Z",
+      "ended": "2026-10-20T16:18:41.200Z",
+      "exitCode": 0
+    },
+    {
+      "label": "runtime-build",
+      "started": "2026-10-20T16:18:46.881Z",
+      "ended": "2026-10-20T16:18:52.138Z",
+      "exitCode": 0
+    },
+    {
+      "label": "candidate-prepare",
+      "started": "2026-10-20T16:20:43.898Z",
+      "ended": "2026-10-20T16:20:50.735Z",
+      "exitCode": 1
+    },
+    {
+      "label": "preview-build",
+      "started": "2026-10-20T16:21:38.641Z",
+      "ended": "2026-10-20T16:21:39.579Z",
+      "exitCode": 0
+    },
+    {
+      "label": "copied-runtime-proof",
+      "started": "2026-10-20T16:22:50.492Z",
+      "ended": "2026-10-20T16:22:53.901Z",
+      "exitCode": 1
+    },
+    {
+      "label": "copied-runtime-proof-v2",
+      "started": "2026-10-20T16:23:02.621Z",
+      "ended": "2026-10-20T16:23:05.129Z",
+      "exitCode": 1
+    },
+    {
+      "label": "copied-runtime-proof-v3",
+      "started": "2026-10-20T16:23:32.498Z",
+      "ended": "2026-10-20T16:23:35.101Z",
+      "exitCode": 0
+    },
+    {
+      "label": "desktop-final-controls",
+      "started": "2026-10-20T16:24:28.535Z",
+      "ended": "2026-10-20T16:24:36.890Z",
+      "exitCode": 0
+    },
+    {
+      "label": "copied-runtime-proof-v4",
+      "started": "2026-10-20T16:26:21.775Z",
+      "ended": "2026-10-20T16:26:24.238Z",
+      "exitCode": 0
+    },
+    {
+      "label": "staged-whitespace",
+      "started": "2026-10-20T16:28:13.265Z",
+      "ended": "2026-10-20T16:28:13.793Z",
+      "exitCode": 0
+    },
+    {
+      "label": "code-commit",
+      "started": "2026-10-20T16:28:26.437Z",
+      "ended": "2026-10-20T16:28:27.052Z",
+      "exitCode": 0
+    }
+  ]
+}

@@ -6,6 +6,8 @@
   "exports": { ".": "./src/index.ts", "./file": "./src/file-runtime.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
+    "@i-harness/context-engine": "workspace:*",
+    "@i-harness/core-session": "workspace:*",
     "@i-harness/coding-plans": "workspace:*",
     "@i-harness/fs-lock": "workspace:*",
     "@i-harness/credentials": "workspace:*",

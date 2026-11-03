@@ -1,3 +1,7 @@
+import { readSessionContextState } from "@i-harness/core-session"
+import { randomUUID } from 'node:crypto'
+import { createForkOperation, readForkOperation, readForkPrepareRequest, readForkPrepareResult, readForkOutcome, readForkHostErrorData, ForkOperationError, ForkPreparationError,
+  type ForkClientAttempt, type ForkOperation, type ForkOutcome, type ForkPrepared, type ForkPrepareRequest, type ForkPrepareResult, type ForkSuccess } from './fork.ts'
 // M27 R-C4: SDK client — low-level JSON-RPC exchange over an NDJSON line
 // transport (in-process or a spawned `i-harness sdk` subprocess) plus the
 // high-level run(session) surface. Zero new dependencies (node:child_process
@@ -5,6 +9,8 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import type { Readable, Writable } from "node:stream"
 import type { SessionEvent } from "@i-harness/core-session"
+import type { ResultPageQuery, ResultPageResult } from './protocol.ts'
+import { safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 import {
   JsonRpcLineTransport,
   makeNotification,
@@ -63,6 +69,7 @@ export class SdkRunError extends Error {
   readonly code: number
   readonly data: unknown
   readonly events: SessionEvent[]
+  readonly modelFailure: ModelFailureFacts | undefined
 
   constructor(message: string, code: number, data: unknown, events: SessionEvent[]) {
     super(message)
@@ -70,6 +77,7 @@ export class SdkRunError extends Error {
     this.code = code
     this.data = data
     this.events = events
+    this.modelFailure = safeModelFailureFacts(data !== null && typeof data === "object" ? (data as { modelFailure?: unknown }).modelFailure : undefined)
   }
 }
 
@@ -118,6 +126,7 @@ export class HarnessClient {
   private nextId = 1
   private pending = new Map<string, Pending>()
   private notificationListeners = new Set<(notification: RpcNotification) => void>()
+  private notificationFailures = new WeakMap<(notification: RpcNotification) => void, (error: unknown) => void>()
   private exitError: Error | undefined
   private child: ChildProcess | undefined
   private closed = false
@@ -182,9 +191,10 @@ export class HarnessClient {
   }
 
   /** Server → client notifications (e.g. session/event, session/status). */
-  onNotification(listener: (notification: RpcNotification) => void): () => void {
+  onNotification(listener: (notification: RpcNotification) => void, failed?: (error: unknown) => void): () => void {
     this.notificationListeners.add(listener)
-    return () => { this.notificationListeners.delete(listener) }
+    if(failed)this.notificationFailures.set(listener,failed)
+    return () => { this.notificationListeners.delete(listener);this.notificationFailures.delete(listener) }
   }
 
   /** High-level per-session handle. */
@@ -202,8 +212,73 @@ export class HarnessClient {
     return await this.request("session/create", {}) as SessionIdResult
   }
 
-  async forkSession(sessionId: string): Promise<SessionIdResult> {
-    return await this.request("session/fork", { sessionId }) as SessionIdResult
+  async prepareForkSession(input: ForkPrepareRequest): Promise<ForkPrepareResult> {
+    const request = readForkPrepareRequest(input)
+    if (!this.hasForkCapability()) return { kind: 'unavailable', reason: 'unsupported' }
+    let reply: unknown
+    try { reply = await this.request('session/fork/prepare', request) }
+    catch (cause) { throw new ForkPreparationError('transport', undefined, { cause }) }
+    try { return readForkPrepareResult(reply) }
+    catch (cause) { throw new ForkPreparationError('protocol', undefined, { cause }) }
+  }
+
+  createForkAttempt(input: ForkPrepared): ForkClientAttempt {
+    const prepared = readForkPrepareResult({ kind: 'prepared', prepared: input })
+    if (prepared.kind !== 'prepared') throw new TypeError('Invalid prepared fork')
+    const operation = createForkOperation(prepared.prepared, { operationId: randomUUID(), targetSessionId: randomUUID(), createdAt: new Date().toISOString() })
+    let dispatched = false, flight: Promise<ForkOutcome> | undefined, lastOutcome: ForkOutcome | undefined
+    const client = this
+    return Object.freeze({ operation, get lastOutcome() { return lastOutcome }, run() {
+      if (flight) return flight
+      if (!client.hasForkCapability()) {
+        return Promise.resolve(lastOutcome = readForkOutcome({ version: 1, kind: 'not-issued', operation, capture: dispatched ? 'unknown' : 'uncaptured', reason: 'unsupported' }, operation))
+      }
+      const mode = dispatched ? 'retry' : 'begin'
+      dispatched = true
+      const pending = client.executeForkOperation(operation, mode).then(outcome => { lastOutcome = outcome; return outcome }, error => {
+        if (error instanceof ForkOperationError && error.hostError?.lastOutcome) lastOutcome = error.hostError.lastOutcome
+        throw error
+      })
+      flight = pending
+      pending.then(() => { if (flight === pending) flight = undefined }, () => { if (flight === pending) flight = undefined })
+      return pending
+    } })
+  }
+
+  retryForkSession(input: ForkOperation): Promise<ForkOutcome> {
+    return this.executeForkOperation(readForkOperation(input), 'retry')
+  }
+
+  private hasForkCapability(): boolean {
+    const versions = this.serverInfo?.capabilities?.['session-fork-bootstrap']
+    return Array.isArray(versions) && versions.includes('1')
+  }
+
+  private async executeForkOperation(operation: ForkOperation, mode: 'begin'|'retry'): Promise<ForkOutcome> {
+    if (!this.hasForkCapability()) return readForkOutcome({ version: 1, kind: 'not-issued', operation, capture: 'unknown', reason: 'unsupported' }, operation)
+    let reply: unknown
+    try { reply = await this.request('session/fork/' + mode, { operation }) }
+    catch (cause) {
+      if (cause instanceof RpcError) {
+        let data
+        try { data = readForkHostErrorData(cause.data, operation) }
+        catch { throw new ForkOperationError(operation, 'protocol', { cause }) }
+        throw new ForkOperationError(operation, data.reason === 'cleanup-incomplete' ? 'cleanup' : 'host', { cause, hostError: data })
+      }
+      throw new ForkOperationError(operation, 'transport', { cause })
+    }
+    try { return readForkOutcome(reply, operation) }
+    catch (cause) { throw new ForkOperationError(operation, 'protocol', { cause }) }
+  }
+
+  async forkSession(sessionId: string, options: { atSeq?: number; title?: string; workspaceId?: string } = {}): Promise<ForkSuccess> {
+    const prepared = await this.prepareForkSession({ version: 1, sourceSessionId: sessionId,
+      selection: { kind: 'completed', ...(options.atSeq === undefined ? {} : { atSeq: options.atSeq }) },
+      metadata: { ...(options.title === undefined ? {} : { title: options.title }), ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }) } })
+    if (prepared.kind !== 'prepared') throw new ForkPreparationError('unavailable', prepared)
+    const attempt = this.createForkAttempt(prepared.prepared), outcome = await attempt.run()
+    if (outcome.kind !== 'ready' && outcome.kind !== 'adopted') throw new ForkOperationError(attempt.operation, 'outcome', { outcome })
+    return outcome
   }
 
   async modelState(sessionId: string): Promise<SessionModelState> {
@@ -211,7 +286,11 @@ export class HarnessClient {
   }
 
   async contextState(sessionId: string): Promise<SessionContextState> {
-    return await this.request("session/context", { sessionId }) as SessionContextState
+    return readSessionContextState(await this.request("session/context", { sessionId }), sessionId)
+  }
+  async readResultPage(sessionId: string, query: ResultPageQuery): Promise<ResultPageResult> {
+    if (!this.serverInfo?.capabilities?.['session-result-read']?.includes(query.viaCatalog ? '2' : '1')) throw new Error('Result pages are not supported; initialize a capable server first')
+    return await this.request('session/result/read', { ...query, sessionId }) as ResultPageResult
   }
 
   async setSessionModel(
@@ -405,7 +484,15 @@ export class HarnessClient {
       return
     }
     // notification
-    for (const listener of [...this.notificationListeners]) listener(message as RpcNotification)
+    for (const listener of [...this.notificationListeners]) {
+      if(message.method!=='desktop/surface/changed'){listener(message as RpcNotification);continue}
+      try {listener(message as RpcNotification)} catch(error) {
+        this.notificationListeners.delete(listener)
+        const failed=this.notificationFailures.get(listener);this.notificationFailures.delete(listener)
+        if(failed){try{failed(error)}catch{}}
+        else {this.exitError=new SdkConnectionError('Surface notification delivery failed');this.rejectAll(this.exitError);this.transport.close()}
+      }
+    }
   }
 
   private rejectAll(error: Error): void {
@@ -418,6 +505,7 @@ export class HarnessClient {
 }
 
 export class HarnessSession {
+  readResultPage(query: ResultPageQuery): Promise<ResultPageResult> { return this.client.readResultPage(this.sessionId, query) }
   constructor(private readonly client: HarnessClient, readonly sessionId: string) {}
 
   run(prompt: string): Promise<RunResult> {
@@ -428,8 +516,8 @@ export class HarnessSession {
     return this.client.status(this.sessionId)
   }
 
-  fork(): Promise<SessionIdResult> {
-    return this.client.forkSession(this.sessionId)
+  fork(options?: { atSeq?: number; title?: string; workspaceId?: string }): Promise<ForkSuccess> {
+    return this.client.forkSession(this.sessionId, options)
   }
 
   modelState(): Promise<SessionModelState> {

@@ -1,8 +1,9 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it } from "vitest"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { append } from "@i-harness/core-session"
+import { recordFixture } from "./managed-fixture.ts"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
@@ -16,7 +17,7 @@ import { createHookTrustStore } from "@i-harness/hooks"
 import { mountedHookAuthority, pluginExtensions } from "../src/plugin-mount.ts"
 
 it("cold execution/process inspection refuses a recovering-only backend and leaves incomplete JSONL unchanged", async () => {
-  const root = await mkdtemp(join(tmpdir(), "desktop-cold-read-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const root = await mkdtemp(join(tmpdir(), "desktop-cold-read-")), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "interrupted" })
   await coordinator.append("interrupted", [{ type: "turn/start", seq: 0 }])
   const { readFile } = await import("node:fs/promises")
@@ -33,12 +34,12 @@ it("cold execution/process inspection refuses a recovering-only backend and leav
 })
 
 it("refuses busy management before draining a held model turn and fences actual cold assembly creation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "desktop-service-fence-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const root = await mkdtemp(join(tmpdir(), "desktop-service-fence-")), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "busy" }); await coordinator.create({ sessionId: "cold" })
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   const fence = createSessionManagementFence()
   const service = createSessionService({ workspace: root, sessionOperation: fence, coordinator, sessionFor: createDurableSessionLoader(coordinator),
-    model: { async *stream() { entered.resolve(); await release.promise; yield { type: "text/chunk" as const, text: "fixture" }; yield { type: "end" as const } } }, sandbox: "read-only" })
+    model: controlledModel(request => ({ async *stream() { entered.resolve(); await release.promise; yield { type: "text/chunk" as const, text: "fixture" }; yield { type: "end" as const } } } as import('@i-harness/llm-seam').ModelClient).stream(request)), sandbox: "read-only" })
   const manager = createSessionManagement(coordinator, service, undefined, { fence, workspace: root, sessionDir: root, pendingInteractions: async () => [], drainSession: id => service.closeSession(id) })
   const submit = service.submit("busy", "fixture", new AbortController().signal)
   try {
@@ -73,7 +74,7 @@ it("drains nested admitted producers without a stale context admitting later wri
 })
 
 it("derives policy evidence from actual Plan, registry, roles, membership, Hook content and grants", async () => {
-  const root = await mkdtemp(join(tmpdir(), "desktop-policy-identity-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const root = await mkdtemp(join(tmpdir(), "desktop-policy-identity-")), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "owner" })
   const hookPath = join(root, "hooks.json"), scriptPath = join(root, "hook.cjs"), grantPath = join(root, "hook-trust.json")
   const scriptText = "process.stdout.write('{}')"
@@ -92,7 +93,7 @@ it("derives policy evidence from actual Plan, registry, roles, membership, Hook 
       hookAuthority: () => mountedHookAuthority(assembly, [hookPath]), grantPaths: [grantPath], pluginAuthority: inputs }
     const identity = () => approvalPolicyIdentity(assembly, options)
     const initial = identity()!; expect(initial.workspaceId).toBe(root)
-    append(assembly.session, { type: "plan/mode", mode: "on" }); expect(identity()?.revision).not.toBe(initial.revision)
+    await recordFixture(assembly.factOwner, { type: "plan/mode", mode: "on" }); expect(identity()?.revision).not.toBe(initial.revision)
     const plan = identity()!
     roots = [root, join(root, "other")]; expect(identity()?.revision).not.toBe(plan.revision)
     const membership = identity()!

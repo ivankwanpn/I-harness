@@ -20,6 +20,41 @@ async function fixture(hybrid=false) {
 }
 const index=async(service:CodeRetrievalService,input?:Parameters<CodeRetrievalService['startIndex']>[1])=>service.wait((await service.startIndex({sessionId:'s'},input)).jobId)
 
+it('keeps option reads lazy and invokes replaced reader and registration methods with their owners',async()=>{
+  const root=await mkdtemp(resolve(tmpdir(),'code-options-'));roots.push(root)
+  const trace:string[]=[],receivers:unknown[]=[]
+  let currentReader:CodeRetrievalOptions['reader']={async *snapshots(){throw new Error('retired reader')},async revalidate(){throw new Error('retired reader')}}
+  let register:CodeRetrievalOptions['registerJob']=()=>{throw new Error('retired registration')}
+  const options:CodeRetrievalOptions={
+    get workspaceId(){trace.push('workspaceId');return 'lazy'},
+    get config(){trace.push('config');return {enabled:true}},
+    get root(){trace.push('root');return root},
+    get reader(){trace.push('reader');return currentReader},
+    get registerJob(){trace.push('registerJob');return register},
+  }
+  const service=createCodeRetrievalService(options);services.push(service)
+  expect(trace).toEqual(['workspaceId','config','root','workspaceId'])
+  const binding={finish(){receivers.push(this)}}
+  register=function(this:CodeRetrievalOptions){receivers.push(this);return binding}
+  currentReader={
+    indexSourceIds(){receivers.push(this);return ['A']},
+    async *snapshots(){receivers.push(this);yield {sourceId:'A',path:'lazy.ts',revision:'1',text:'const lazyNeedle = true',complete:true}},
+    status(){receivers.push(this);return {partial:false,reasons:[]}},
+    async revalidate(){receivers.push(this);return true},
+  }
+  await index(service)
+  expect((await service.search({sessionId:'s'},{query:'lazyNeedle'})).hits).toHaveLength(1)
+  expect(receivers).toEqual([currentReader,options,currentReader,currentReader,binding,currentReader,currentReader])
+})
+
+it('auto refresh dispatches the current public wait method with the service receiver',async()=>{
+  const {service}=await fixture();await service.configure({autoRefresh:true})
+  const original=service.wait,receivers:unknown[]=[]
+  service.wait=function(jobId){receivers.push(this);return original(jobId)}
+  expect((await service.search({sessionId:'s'},{query:'approveDeployment'})).generation).toBe(1)
+  expect(receivers).toEqual([service])
+})
+
 it.each([false,true])('keeps supplementary-character directory boundaries in hybrid=%s',async(hybrid)=>{
   const {service}=await fixture(hybrid);await index(service)
   const result=await service.search({sessionId:'s'},{query:'approveDeployment',pathPrefix:'src/😀'})

@@ -1,3 +1,5 @@
+import {assertOriginalManagedTeamCaller,assertOriginalTeamCallerProvisioning,type OriginalManagedTeamCaller} from '@i-harness/core-tools/internal/team-caller'
+import type {OriginalTeamProvisioning} from '../../core-session/src/managed/team-provisioning.ts'
 import { randomUUID } from "node:crypto"
 import { AgentPath } from "./agent-path.ts"
 import { TeamError, TEAM_CODES, type TeamCaller, type TeamMemberSnapshot, type TeamMemberView } from "./types.ts"
@@ -8,6 +10,7 @@ const NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 
 export interface RosterDeps {
   teamId: string
+  managedDomain?:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain
   // shared live folded state (created via createFoldState / foldTeam); both the
   // roster's readers and the transact observe the same object.
   state: TeamFoldState
@@ -16,7 +19,8 @@ export interface RosterDeps {
   // The 4th arg threads op-level spawn options to the bridge; the TEAM
   // scheduler derives the subagent forkTurns from context + opts.forkTurns
   // (M19 Ruling 27: fork_turns was previously dropped at this boundary).
-  spawnChild: (name: string, prompt: string, context: "fresh" | "fork", opts?: { forkTurns?: "none" | "all" | number }) => Promise<{ path: string; jobId: string; sessionId?: string }>
+  spawnChild: (name: string, prompt: string, context: "fresh" | "fork", opts?: { forkTurns?: "none" | "all" | number; managed?:{caller:OriginalManagedTeamCaller;provisioning:OriginalTeamProvisioning} }) => Promise<{ path: string; jobId: string; sessionId?: string }>
+  recoverManaged?: (member:TeamMemberSnapshot)=>Promise<void>
   childSessionHoldsPrompt: (sessionId: string, signal?: AbortSignal) => Promise<boolean>
   interruptChild: (path: string) => Promise<string>
   closeChild: (path: string) => Promise<void>
@@ -79,22 +83,29 @@ export function createRoster(deps: RosterDeps) {
   async function spawnTeammate(
     caller: TeamCaller,
     name: string,
-    opts: { description: string; prompt: string; context?: "fresh" | "fork"; forkTurns?: "none" | "all" | number },
+    opts: { description: string; prompt: string; context?: "fresh" | "fork"; forkTurns?: "none" | "all" | number; originalCaller?:OriginalManagedTeamCaller },
   ): Promise<TeamMemberView> {
+    if(opts.originalCaller){
+      assertOriginalManagedTeamCaller(opts.originalCaller)
+      const original=opts.originalCaller,args=original.call.args as {name?:unknown;description?:unknown;prompt?:unknown;context?:unknown;fork_turns?:unknown}
+      if(!deps.managedDomain||original.context.domain!==deps.managedDomain||original.identity.parentSessionId!==deps.managedDomain.sessionId||args.name!==name||args.description!==opts.description||args.prompt!==opts.prompt||(args.context??'fresh')!==(opts.context??'fresh')||normalizeForkTurns(args.fork_turns as never)!==normalizeForkTurns(opts.forkTurns))throw TypeError('Original Team invocation changed')
+    }else if(deps.managedDomain)throw TypeError('Original managed Team caller required')
     if (!callerIsLead(caller)) throw new TeamError(TEAM_CODES.LEAD_REQUIRED, "only the Team Lead may spawn teammates")
     if (!NAME_RE.test(name) || name.length > 64 || name === "lead") throw new TeamError(TEAM_CODES.INVALID_MEMBER_NAME, `invalid teammate name "${name}"`)
     // fast fail; the serialized transact re-checks both atomically (authoritative)
     if (deps.state.members.size >= maxMembers) throw new TeamError(TEAM_CODES.MEMBER_LIMIT, `maxMembers ${maxMembers} reached`)
 
     const id = `child-${randomUUID()}`
-    const provisioning: TeamMemberSnapshot = { id, name, description: opts.description, provider: "spawn", context: opts.context ?? "fresh", phase: "provisioning" }
+    const provisioning: TeamMemberSnapshot = { id, name, description: opts.description, provider: "spawn", context: opts.context ?? "fresh", phase: "provisioning", ...opts.originalCaller?{sessionId:id}:{} }
     // Provisioning event: pure-read fn — name-taken and limit checks against the
     // snapshot; nothing is mutated here.
-    await deps.transact.transact((state) => {
+    const provision=(state:TeamFoldState) => {
       if (state.members.has(name)) throw new TeamError(TEAM_CODES.MEMBER_NAME_TAKEN, `member name "${name}" already taken`)
       if (state.members.size >= maxMembers) throw new TeamError(TEAM_CODES.MEMBER_LIMIT, `maxMembers ${maxMembers} reached`)
-      return { events: [{ type: "team/member", version: 1, teamId: deps.teamId, member: provisioning }], result: undefined }
-    })
+      return { events: [{ type: 'team/member' as const, version: 1 as const, teamId: deps.teamId, member: provisioning }], result: undefined }
+    }
+    let witness:OriginalTeamProvisioning|undefined
+    if(opts.originalCaller){assertOriginalManagedTeamCaller(opts.originalCaller);if(!deps.transact.transactProvisioning)throw Error('Original Team provisioning unavailable');witness=(await deps.transact.transactProvisioning(provision,opts.originalCaller)).witness;assertOriginalManagedTeamCaller(opts.originalCaller);assertOriginalTeamCallerProvisioning(opts.originalCaller,witness)}else await deps.transact.transact(provision)
 
     // Spawn the durable child, then checkpoint that its session durably holds
     // the initial prompt within startupTimeoutMs.
@@ -105,7 +116,8 @@ export function createRoster(deps: RosterDeps) {
       // into the subagent SpawnOptions shape ("none"|"all"|N) so the bridge
       // receives forkTurns: N for fork_turns: "3".
       const forkTurns = normalizeForkTurns(opts.forkTurns)
-      spawned = await deps.spawnChild(name, opts.prompt, provisioning.context, forkTurns !== undefined ? { forkTurns } : undefined)
+      spawned = await deps.spawnChild(name, opts.prompt, provisioning.context, opts.originalCaller&&witness ? {...forkTurns!==undefined?{forkTurns}:{},managed:{caller:opts.originalCaller,provisioning:witness}} : forkTurns !== undefined ? { forkTurns } : undefined)
+      if(opts.originalCaller&&spawned.sessionId!==id)throw Error('Original managed Team target changed')
       if (!spawned.sessionId) throw new Error(`child session id missing for "${name}" (durable child sessions required)`)
       const timeout = new Promise<boolean>((resolve) => {
         const timer = setTimeout(() => resolve(false), startupTimeoutMs)
@@ -117,6 +129,9 @@ export function createRoster(deps: RosterDeps) {
       ])
       if (!holds) throw new Error("child session never durably held the initial prompt")
     } catch (e) {
+      // A managed birth may have issued an UNKNOWN durable operation. Preserve
+      // its original provisioning receipt and target for explicit recovery.
+      if(opts.originalCaller)throw e
       // Failed event (best-effort; keeps the roster authoritative for recovery)
       // — pure-read fn again: the transition guard is applied by the transact's
       // applyTeamEvent validation. Persist the sessionId when the child was
@@ -153,6 +168,10 @@ export function createRoster(deps: RosterDeps) {
   // swallowed here as best-effort — the member is never double-settled).
   async function reconcileProvisioning(): Promise<void> {
     const pending = [...deps.state.members.values()].filter((m) => m.phase === "provisioning")
+    // A snapshot miss cannot distinguish an unissued Team birth from a
+    // reserved or UNKNOWN one. Keep the original target until the owned
+    // binding/recovery operation can prove its disposition.
+    if(deps.managedDomain){for(const m of pending){if(!deps.recoverManaged)throw Object.assign(Error('Original Team birth recovery required'),{code:'FACT_RECOVERY_REQUIRED'});await deps.recoverManaged(m);const active:TeamMemberSnapshot={...m,phase:'active'};await deps.transact.transact(state=>{if(state.members.get(m.name)?.phase!=='provisioning')throw new TeamError(TEAM_CODES.PROVISIONING_CONFLICT,`member "${m.name}" already reconciled`);return {events:[{type:'team/member' as const,version:1 as const,teamId:deps.teamId,member:active}],result:undefined}})}return}
     for (const m of pending) {
       const durable = deps.childSessionIsDurable
         ? await deps.childSessionIsDurable(m.sessionId ?? m.id, new AbortController().signal).catch(() => false)

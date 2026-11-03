@@ -23,7 +23,9 @@ export interface SystemFetchOptions {
   now?: () => number
   proxyCacheTtlMs?: number
 }
-export interface SystemFetch { fetch: typeof globalThis.fetch; close(): Promise<void> }
+export type GenerationTransportGuard = () => Promise<() => void>
+export type SystemFetchFunction = (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit, beforeTransport?: GenerationTransportGuard) => Promise<Response>
+export interface SystemFetch { fetch: SystemFetchFunction; close(): Promise<void> }
 
 const execute = promisify(execFile)
 const INTERNET_SETTINGS = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
@@ -196,7 +198,7 @@ export function createSystemFetch(options: SystemFetchOptions = {}): SystemFetch
     return promise
   }
   const transport: SystemFetch = {
-    async fetch(input, init) {
+    async fetch(input, init, beforeTransport) {
       if (closed) throw new Error("System HTTP transport is closed.")
       const requestSignal = init && "signal" in init ? init.signal : input instanceof Request ? input.signal : undefined
       const signal = AbortSignal.any([closing.signal, ...(requestSignal ? [requestSignal] : [])])
@@ -205,15 +207,23 @@ export function createSystemFetch(options: SystemFetchOptions = {}): SystemFetch
       if (!["http:", "https:"].includes(url.protocol)) throw new Error("System HTTP transport supports HTTP and HTTPS only.")
       const uri = await interruptible(select(url), signal)
       if (signal.aborted) throw abortError()
-      if (!uri) return globalThis.fetch(input, { ...init, signal })
+      let dispatcher: Dispatcher | undefined
       try {
-        const dispatcher = await agent(uri)
+        if (uri) dispatcher = await agent(uri)
         if (signal.aborted) throw abortError()
-        return await globalThis.fetch(input, { ...init, signal, dispatcher } as RequestInit)
       } catch {
         if (signal.aborted) throw abortError()
-        // Undici exceptions can contain proxy URLs or credentials. Do not retain
-        // a cause or interpolate upstream text into diagnostics/renderer errors.
+        throw new Error("The selected proxy request failed. Check the proxy connection and configuration.")
+      }
+      // Owner failures deliberately remain outside transport redaction. The
+      // returned synchronous issue check follows every proxy/dispatcher await.
+      const issue = await beforeTransport?.()
+      if (signal.aborted) throw abortError()
+      issue?.()
+      if (!dispatcher) return globalThis.fetch(input, { ...init, signal })
+      try { return await globalThis.fetch(input, { ...init, signal, dispatcher } as RequestInit) }
+      catch {
+        if (signal.aborted) throw abortError()
         throw new Error("The selected proxy request failed. Check the proxy connection and configuration.")
       }
     },
@@ -231,6 +241,6 @@ export function createSystemFetch(options: SystemFetchOptions = {}): SystemFetch
 let shared: SystemFetch | undefined
 /** Lazy process singleton; direct requests consult the current global fetch so
  * trusted test stubs and ordinary API-key callers retain their existing seam. */
-export const systemFetch: typeof globalThis.fetch = (input, init) => (shared ??= createSystemFetch()).fetch(input, init)
+export const systemFetch: SystemFetchFunction = (input, init, beforeTransport) => (shared ??= createSystemFetch()).fetch(input, init, beforeTransport)
 /** Shutdown hook for hosts owning the process-wide transport. */
 export async function closeSystemFetch(): Promise<void> { const prior = shared; shared = undefined; await prior?.close() }

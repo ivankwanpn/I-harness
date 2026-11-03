@@ -4,14 +4,15 @@ import type {
   SandboxProvider, StopReason, TransportExecutionBackend, ExecutionSettlement,
 } from "@i-harness/sandbox"
 import type { ExecutionSupervisor, SupervisedExecution } from "./execution-supervisor.ts"
-import { createExecService } from "./service.ts"
+import { createExecServiceWithReservation } from "./service.ts"
 export { createExecService } from "./service.ts"
 
 export { launchExecution } from "./execution-admission.ts"
 export { createExecutionSupervisor } from "./execution-supervisor.ts"
 export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor, ExecutionReconciliationContext, ExecutionReconciler } from "./execution-supervisor.ts"
 export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
-export { registerRetainedOutput, retainedOutputReader } from "./retained-output.ts"
+export { registerRetainedOutput, retainedOutputReader, execResultOutcome } from "./retained-output.ts"
+export type { ExecOutputFramePage, ExecFrameRead, ExecFrameQuery, JobOutputSelectors, JobOutputFrameQuery, ExecFrameObservation, ExecFrameWriteOptions, ExecFramePart, ExecFrameCapture, ExecResultRetention, ExecRawSummary, ExecOutputSource } from './capture/frames.ts'
 
 export interface ExecCommand {
   /** Assigned by trusted tool registration, never exposed as model permission input. */
@@ -28,6 +29,9 @@ export interface ExecCommand {
   sandbox?: SandboxExecutionPolicy
 }
 export interface ExecResult {
+  /** Retention/availability of this foreground observation, separate from the
+   * original command outcome and a background job's stored disposition. */
+  retentionFailure?: 'recovery-required' | 'unavailable'
   stdout: string
   stderr: string
   exitCode: number
@@ -47,17 +51,25 @@ export interface ExecStreamRunOptions {
   stream: { maxBytes: number; onStdout(chunk: Buffer): void | "stop" }
   backgroundAfterMs?: never
   promotionWake?: never
+  backgroundEventWake?: never
 }
 export interface ExecSpillOptions { maxOutputBytes?: number; maxSpillBytes?: number; spillRoot?: string }
 interface ExecPromotionWake {
   pending(): boolean
   subscribe(listener: () => void): () => void
 }
-export interface ExecRunOptions { backgroundAfterMs?: number; promotionWake?: ExecPromotionWake }
-export interface PromotedRun { jobId: string; promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" }
+export interface ExecRunOptions { backgroundAfterMs?: number; promotionWake?: ExecPromotionWake; backgroundEventWake?: ExecPromotionWake }
+/** Original prelaunch provenance, never an authorization capability. */
+export type NativeJobIdentity = Readonly<{ version: 1; instanceId: string; jobId: string; ownerSessionId: string; sourceId: string }>
+export interface BackgroundRun { jobId: string; nativeJob?: NativeJobIdentity }
+export interface NativeBackgroundRun extends BackgroundRun { nativeJob: NativeJobIdentity }
+export interface PromotedRun extends BackgroundRun { promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" | "background-event" }
+export interface NativePromotedRun extends PromotedRun { nativeJob: NativeJobIdentity }
 /** Running also covers a retained handle whose cleanup is incomplete; inspect settlement. */
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"
 export interface BackgroundJobView {
+  /** Absent only for legacy/custom service implementations; never synthesized. */
+  nativeJob?: NativeJobIdentity
   /** WSL jobs end and clean descendants when their root command exits. */
   lifetime?: ExecutionLifetime
   id: string; status: BackgroundJobStatus; stdout: string; stderr: string; exitCode?: number
@@ -70,6 +82,11 @@ export interface BackgroundJobView {
   settlement?: ExecutionSettlement
   cleanupDetail?: string
   outputDiagnostics?: { outputAbandoned: boolean; discardedOutputBytes: number }
+  /** This job's exact settled native frame dependency; absent while unsettled.
+   * A later query returns the same source/ref revision once committed. */
+  retained?: import('@i-harness/core-session').ResultDependency
+  /** Explicit settlement refusal; never presented as a retained ref. */
+  retentionFailure?: 'recovery-required' | 'unavailable'
 }
 
 /** Host functions are trusted composition, never values from tool/model JSON. */
@@ -86,6 +103,7 @@ export interface ExecExecutionHost {
   dispose?(): Promise<void>
 }
 export interface ExecServiceOptions {
+  resultRetention?: import('./capture/frames.ts').ExecResultRetention
   execution?: ExecExecutionHost
   workspaceRoot?: string
   /** Trusted standalone composition only, for human Desktop's separate owner. */
@@ -105,22 +123,58 @@ export interface ExecTransportRequest {
   sandbox?: SandboxExecutionPolicy
   abortSignal?: AbortSignal
 }
+export type NativeJobKillSelector = Readonly<{ jobInstanceId: string; sourceId?: string }>
 export interface ExecService {
+  readonly supportsNativeJobKill?: true
   run(cmd: ExecCommand): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | PromotedRun>
-  runBackground(cmd: ExecCommand): Promise<{ jobId: string }>
+  runBackground(cmd: ExecCommand): Promise<BackgroundRun>
   getOutput(jobId: string): BackgroundJobView
+  readJobOutputFrames?(jobId: string, query: import('./capture/frames.ts').JobOutputFrameQuery): Promise<import('./capture/frames.ts').ExecFrameRead>
+  observeJobOutput?(jobId: string, options?: import('./capture/frames.ts').JobOutputSelectors): Promise<JobOutputObservation>
+  subscribeJobs?(listener: () => void): () => void
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
-  killJob(jobId: string): Promise<"cancellation-requested" | "already-finished">
+  /** Passive metadata only: no observer registration or storage settlement. */
+  getJobView?(jobId: string): BackgroundJobView
+  listJobViews?(): BackgroundJobView[]
+  killJob(jobId: string, expected?: NativeJobKillSelector): Promise<"cancellation-requested" | "already-finished">
   launchTransport(request: ExecTransportRequest): Promise<SupervisedExecution>
   cancelExecution(id: string, reason: StopReason): Promise<ExecutionSettlement>
   dispose(): Promise<void>
 }
 
-export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): ExecService {
-  const service = createExecService(deps)
-  ctx.services.register("exec/service", service)
-  return service
+/** The original registry guarantees provenance; structural compatibility ports
+ * above also accept legacy/custom implementations with no native identity. */
+export interface NativeBackgroundJobView extends BackgroundJobView { nativeJob: NativeJobIdentity }
+export interface JobOutputObservation {
+  view: NativeBackgroundJobView
+  nativeJob: NativeJobIdentity
+  source: import('./capture/frames.ts').ExecOutputSource
+}
+export interface NativeExecService extends ExecService {
+  readonly supportsNativeJobKill: true
+  killJob(jobId: string, expected?: NativeJobKillSelector): Promise<"cancellation-requested" | "already-finished">
+  readJobOutputFrames(jobId: string, query: import('./capture/frames.ts').JobOutputFrameQuery): Promise<import('./capture/frames.ts').ExecFrameRead>
+  observeJobOutput(jobId: string, options?: import('./capture/frames.ts').JobOutputSelectors): Promise<JobOutputObservation>
+  run(cmd: ExecCommand): Promise<ExecResult>
+  run(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
+  run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | NativePromotedRun>
+  runBackground(cmd: ExecCommand): Promise<NativeBackgroundRun>
+  getOutput(jobId: string): NativeBackgroundJobView
+  listJobs(): NativeBackgroundJobView[]
+  getJobView(jobId: string): NativeBackgroundJobView
+  listJobViews(): NativeBackgroundJobView[]
+}
+
+export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): NativeExecService {
+  return registerExecWithReservation(ctx, deps).service
+}
+
+/** Trusted construction retains the port paired with the registered service. */
+export function registerExecWithReservation(ctx: PluginContext, deps?: ExecServiceOptions) {
+  const pair = createExecServiceWithReservation(deps)
+  ctx.services.register("exec/service", pair.service)
+  return pair
 }

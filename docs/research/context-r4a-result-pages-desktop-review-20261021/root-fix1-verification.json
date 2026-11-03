@@ -1,0 +1,54 @@
+{
+  "status": "PASS",
+  "commit": "ae5fbf63863c5923885964664a88434ffef0254b",
+  "finalSourceFiles": 3425,
+  "initialSourceFiles": 3424,
+  "differences": [
+    "packages/desktop/src/renderer/session/result-page-view.ts",
+    "packages/desktop/test/result-page-view.test.ts",
+    "packages/desktop/test/result-pages.test.tsx"
+  ],
+  "sealedFilesVerified": 14783,
+  "fixEvidenceFiles": 106,
+  "recordedRuns": 10,
+  "qualifiedRuns": 5,
+  "previewInputs": 1855,
+  "images": [
+    {
+      "name": "final-zh-dark-code-page.jpg",
+      "sha256": "2942ae50c812565020aa547c3a4b8849e67edef6eb13671b43a200072d56bf30",
+      "bytes": 68703
+    },
+    {
+      "name": "final-zh-dark-history-body.jpg",
+      "sha256": "d4af7aa43da419433b38432ea877a30111cbbd603b02b9cd904c35b98f10faa5",
+      "bytes": 67759
+    },
+    {
+      "name": "final-zh-dark-history-page.jpg",
+      "sha256": "3bde618deecc96d4a0efab1178844e55c56ec378f5f84a5634c1bb42db4f9bc4",
+      "bytes": 70809
+    },
+    {
+      "name": "preview-v2-first-page-failure.jpg",
+      "sha256": "6f6416c2bc28a01c1ff872379f9083349a18a4066be753d544a9ab91d77e528e",
+      "bytes": 71381
+    },
+    {
+      "name": "visual-fix1-en-light-catalog.jpg",
+      "sha256": "e52f7bc09b1033c2f619f0a78b914407a38ba480b4e083b6af2226d9f5a12aa6",
+      "bytes": 68664
+    },
+    {
+      "name": "visual-fix1-en-light-exec-bytes.jpg",
+      "sha256": "9bac636ca4a51a244ccc611fc359ddad80c179b2d77c34d76485d6d6eba06671",
+      "bytes": 58586
+    },
+    {
+      "name": "visual-fix1-zh-dark-partial-eof.jpg",
+      "sha256": "e429d5e01f4810bf4f80f03eba3c654f15d3939537eed9abc9d50626ddda4040",
+      "bytes": 65553
+    }
+  ],
+  "failures": []
+}

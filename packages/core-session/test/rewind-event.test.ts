@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages, rewindCuts, deriveSearchText, toJSONL, fromJSONL, type RewindCut } from "../src/index.ts"
 
@@ -183,12 +184,12 @@ describe("rewind/point shadow projection", () => {
     expect(deriveMessages(s2)).toEqual([])
   })
 
-  it("round-trips through JSONL with the payload intact and keeps format version 1", () => {
+  it("round-trips through JSONL with the payload intact and uses current format version 11", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "pre-rewind" })
     append(s, { type: "rewind/point", version: 1, targetTurn: 3, anchorSeq: 0, mode: "all", fileOps: [{ path: "a/b.txt", op: "delete" }, { path: "c.ts", op: "restore" }] })
     append(s, { type: "user/message", text: "post-rewind" })
-    expect(s.formatVersion).toBe(1) // additive event type: no format bump
+    expect(s.formatVersion).toBe(CURRENT_FORMAT_VERSION) // rewind itself remains additive
     const restored = fromJSONL(toJSONL(s))
     expect(restored.events[1]).toMatchObject({
       type: "rewind/point",

@@ -4,7 +4,10 @@ import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
-import { createAgent, createAgentRegistry, type Agent } from "../src/index.ts"
+import { createAgentWithSummary } from './fixtures/agent.ts'
+import { checkpoint, seedSummaryHistory, summaryModel } from './fixtures/summary-model.ts'
+import type { LLMRequest } from '@i-harness/llm-seam'
+import { createAgent, createAgentRegistry, type Agent, type AgentDeps, type AgentConfig } from '../src/index.ts'
 
 function makeDeps(ctx: PluginContext) {
   const session = createSession()
@@ -26,6 +29,111 @@ function makeDeps(ctx: PluginContext) {
   return { session, tools, model: undefined as unknown as ReturnType<typeof createMockClient> }
 }
 
+it("resolves live dependency getters and step callbacks with their original receivers", async () => {
+  const ctx = createContext()
+  const session = createSession()
+  const tools = createToolRegistry(ctx)
+  const reads: string[] = []
+  const receivers: unknown[] = []
+  const requests: { systemPrompt: string; tools: { name: string }[] }[] = []
+  let prompt = "initial"
+  const initialModel = { async *stream() { throw new Error("stale model"); yield { type: "end" as const } } }
+  const currentModel = { async *stream(request: Parameters<AgentDeps["model"]["stream"]>[0]) {
+    receivers.push(this)
+    requests.push(request)
+    yield { type: "text/chunk" as const, text: "done" }
+    yield { type: "end" as const }
+  } }
+  const stepInputs = { claimAtStepBoundary() { receivers.push(this) } }
+  const deps: AgentDeps & AgentConfig = {
+    get sessionId() { receivers.push(this); reads.push("sessionId"); return undefined },
+    get maxTurns() { reads.push("maxTurns"); return undefined },
+    get maxParallelToolCalls() { reads.push("parallel"); return undefined },
+    get budget() { reads.push("budget"); return undefined },
+    get compact() { reads.push("compact"); return undefined },
+    get maxOutputTokens() { reads.push("output"); return undefined },
+    get session() { receivers.push(this); reads.push("session"); return session },
+    tools, model: initialModel, stepInputs,
+    systemPrompt() { receivers.push(this); return prompt },
+    modelToolSchemas() { receivers.push(this); return [{ name: prompt, description: "", inputSchema: {} }] },
+  }
+  const agent = createAgent(ctx, deps)
+  expect(reads).toContain('session')
+  expect(receivers.every(value => value === deps)).toBe(true)
+  ctx.on("agent/pre-step", async () => {
+    await Promise.resolve()
+    prompt = "current"
+    deps.model = currentModel
+  })
+  await agent.run("task")
+  await agent.followup("again")
+  expect(requests.map(request => [request.systemPrompt, request.tools[0]?.name])).toEqual([["current", "current"], ["current", "current"]])
+  expect(receivers.filter(value => value === stepInputs || value === currentModel)).toEqual([stepInputs, currentModel, stepInputs, currentModel])
+  expect(receivers.every(value => value === deps || value === stepInputs || value === currentModel)).toBe(true)
+})
+
+it.each(["truncated", "refused", "error"] as const)("retains cumulative telemetry after busy refusal and sequential provider %s reports", async (ending) => {
+  const ctx = createContext()
+  const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
+  const release = Promise.withResolvers<void>()
+  const emitted: TelemetryEvent[] = []
+  let streams = 0
+  const agent = createAgentWithSummary(ctx, {
+    session: createSession(), tools: createToolRegistry(ctx), systemPrompt: "p",
+    telemetry: { emit: event => { emitted.push(event) }, close() {} },
+    model: { async *stream() {
+      const index = streams++
+      entered[index]!.resolve()
+      await release.promise
+      if (ending === "error") yield { type: "error" as const, error: new Error(`provider ${index} failed`) }
+      else {
+        yield { type: "text/chunk" as const, text: `answer ${index}` }
+        yield { type: "end" as const, ...(ending === "truncated" ? { truncated: true } : { refused: true }) }
+      }
+    } },
+  })
+  const first = agent.run("first").catch(error => error)
+  await entered[0]!.promise
+  try {
+    await expect(agent.followup("busy")).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+    expect(streams).toBe(1)
+  } finally { release.resolve(); await first }
+  expect(await first).toBeInstanceOf(Error)
+  await expect(agent.followup('second')).rejects.toThrow()
+  expect(emitted.filter(event => event.type === `provider/${ending}`).map(event => event.data.step)).toEqual([1, 2])
+  expect(streams).toBe(2)
+})
+
+it.each(["stop", "flush"] as const)("retains cumulative steps after held %s refusal and sequential followup", async (boundary) => {
+  const ctx = createContext()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const stopCounts: number[] = []
+  const turnCounts: unknown[] = []
+  let stops = 0
+  let saves = 0
+  ctx.on("agent/stop", async payload => {
+    stopCounts.push((payload as { turns: number }).turns)
+    if (++stops === 1 && boundary === "stop") { entered.resolve(); await release.promise }
+  })
+  const agent = createAgentWithSummary(ctx, {
+    session: createSession(), tools: createToolRegistry(ctx), systemPrompt: "p",
+    model: createMockClient([{ role: "assistant", text: "first answer" }, { role: "assistant", text: "second answer" }]),
+    telemetry: { emit: event => { if (event.type === "turn/end") turnCounts.push(event.data.turns) }, close() {} },
+    flush: async () => { if (++saves === 2 && boundary === "flush") { entered.resolve(); await release.promise } },
+  })
+  const first = agent.run("first").then(value => ({ value }), error => ({ error }))
+  await entered.promise
+  try { await expect(agent.followup("busy")).rejects.toMatchObject({ code: 'AGENT_BUSY' }) }
+  finally { release.resolve(); await first }
+  const completedFirst = await first
+  expect(completedFirst).toMatchObject({ value: { turns: 1 } })
+  const second = await agent.followup("second")
+  expect(stopCounts).toEqual([1, 2])
+  expect(turnCounts).toEqual([1, 2])
+  expect(second.turns).toBe(2)
+})
+
 describe("agent loop", () => {
   it("runs a read → edit → report sequence", async () => {
     const ctx = createContext()
@@ -35,7 +143,7 @@ describe("agent loop", () => {
       { role: "assistant", toolCalls: [{ name: "edit", args: { path: "a.txt", text: "new" } }] },
       { role: "assistant", text: "Report: edited a.txt" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "You are a coding agent" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "You are a coding agent" })
     const result = await agent.run("edit a.txt")
     expect(result.finalText).toBe("Report: edited a.txt")
     expect(result.turns).toBeGreaterThanOrEqual(1)
@@ -49,7 +157,7 @@ describe("agent loop", () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
     deps.model = createMockClient([{ role: "assistant", text: "all done" }])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     const result = await agent.run("nothing")
     expect(result.finalText).toBe("all done")
     expect(result.turns).toBe(1)
@@ -63,7 +171,7 @@ describe("agent loop", () => {
     deps.model = createMockClient(
       Array.from({ length: 30 }, () => ({ role: "assistant" as const, toolCalls: [{ name: "read", args: { path: "a.txt" } }] })),
     )
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 5 })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 5 })
     await expect(agent.run("loop")).rejects.toThrow(/maxTurns|max turns/i)
   })
 
@@ -74,7 +182,7 @@ describe("agent loop", () => {
       ...Array.from({ length: 21 }, () => ({ role: "assistant" as const, toolCalls: [{ name: "read", args: { path: "a.txt" } }] })),
       { role: "assistant", text: "completed after the tool work" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     const result = await agent.run("inspect all files")
     expect(result.turns).toBe(22)
     expect(result.finalText).toBe("completed after the tool work")
@@ -92,7 +200,7 @@ describe("agent loop", () => {
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     const result = await agent.run("task")
     expect(result.reasoning).toEqual(["think about the file", "decide to edit"])
     expect(result.finalText).toBe("edited")
@@ -120,7 +228,7 @@ describe("agent loop", () => {
         yield { type: "end" }
       }
     } }
-    await createAgent(ctx, { ...deps, systemPrompt: "p" }).run("inspect")
+    await createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" }).run("inspect")
     const reasoningEvents = deps.session.events.filter((event) => event.type === "reasoning")
     expect(reasoningEvents).toEqual([expect.objectContaining({ type: "reasoning", text: "inspect the file" })])
     expect(deps.session.events.findIndex((event) => event.type === "reasoning"))
@@ -137,7 +245,7 @@ describe("agent loop", () => {
       yield { type: "text/chunk", text: "answer" }
       yield { type: "end" }
     } }
-    await createAgent(ctx, { ...deps, systemPrompt: "p" }).run("task")
+    await createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" }).run("task")
     expect(deps.session.events.filter((event) => event.type === "reasoning")).toEqual([
       expect.objectContaining({ type: "reasoning", blockId: "0", text: "first thought" }),
       expect.objectContaining({ type: "reasoning", blockId: "1", text: "second thought" }),
@@ -151,7 +259,7 @@ describe("agent loop", () => {
       yield { type: "reasoning", blockId: "0", text: "partial thought" }
       throw new Error("stream disconnected")
     } }
-    await expect(createAgent(ctx, { ...deps, systemPrompt: "p" }).run("task")).rejects.toThrow("stream disconnected")
+    await expect(createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" }).run("task")).rejects.toThrow("stream disconnected")
     expect(deps.session.events.filter((event) => event.type === "reasoning")).toEqual([
       expect.objectContaining({ type: "reasoning", blockId: "0", text: "partial thought" }),
     ])
@@ -172,7 +280,7 @@ describe("agent loop", () => {
         yield { type: "end" }
       }
     } }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     await expect(agent.run("read a.txt")).rejects.toThrow("provider disconnected")
     expect(deps.session.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "step/failed" })]))
     await agent.followup("continue")
@@ -198,7 +306,7 @@ describe("agent loop", () => {
         }
       },
     }
-    await createAgent(ctx, { ...deps, systemPrompt: "p" }).run("read")
+    await createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" }).run("read")
     expect(secondMessages).toContainEqual(expect.objectContaining({
       role: "assistant", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }],
       toolCalls: [expect.objectContaining({ id: "provider_tool_7", name: "read" })],
@@ -221,7 +329,7 @@ describe("agent loop", () => {
         yield { type: "end" }
       }
     } }
-    await createAgent(ctx, { ...deps, systemPrompt: "p" }).run("inspect")
+    await createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" }).run("inspect")
     expect(secondMessages).toContainEqual(expect.objectContaining({ role: "assistant", providerContinuation: { kind: "openai-compatible", reasoningContent: "inspect a.txt" } }))
     expect(deps.session.events.find((event) => event.type === "assistant/message")).toMatchObject({ providerContinuation: { reasoningContent: "inspect a.txt" } })
   })
@@ -232,7 +340,7 @@ describe("agent loop", () => {
       yield { type: "tool_call", call: { id: "tool-1", name: "read", args: { path: "a.txt" } } }
       yield { type: "end", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }] }
     } }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", flush: async () => { throw new Error("commit failed") } })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", flush: async () => { if (deps.session.events.some(event => event.type === "tool/dispatch")) throw new Error("commit failed") } })
     await expect(agent.run("inspect")).rejects.toThrow()
     expect(deps.session.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "assistant/message", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }] })]))
   })
@@ -244,7 +352,7 @@ describe("agent loop", () => {
       { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
       { role: "assistant", text: "done" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     await agent.run("read a.txt")
     const calls = deps.session.events.filter((e) => e.type === "tool/call")
     const results = deps.session.events.filter((e) => e.type === "tool/result")
@@ -270,7 +378,7 @@ describe("agent loop", () => {
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 5 })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 5 })
     const result = await agent.run("read a.txt")
     expect(result.finalText).toBe("final")
     // second turn's messages must contain the tool result from turn 1
@@ -292,7 +400,7 @@ describe("agent/post-tool observation", () => {
       { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
       { role: "assistant", text: "done" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     await agent.run("read a.txt")
     // one completed dispatch → one observation, carrying name/args/output/session
     expect(seen).toHaveLength(1)
@@ -311,7 +419,7 @@ describe("agent/post-tool observation", () => {
       { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
       { role: "assistant", text: "done" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     const result = await agent.run("read a.txt")
     expect(result.finalText).toBe("done")
   })
@@ -327,7 +435,7 @@ describe("agent/post-tool observation", () => {
       { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
       { role: "assistant", text: "done" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     await agent.run("read a.txt")
 
     const events = deps.session.events
@@ -346,11 +454,17 @@ describe("agent abort", () => {
   it("rejects immediately when the signal is already aborted", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
-    deps.model = createMockClient([{ role: "assistant", text: "x" }])
+    let transports = 0, effects = 0
+    deps.model = { async *stream() { transports++; yield { type: 'end' } } }
+    deps.tools.register({ name: 'effect', description: '', inputSchema: {}, async execute() { effects++; return {} } })
     const ac = new AbortController()
     ac.abort()
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
-    await expect(agent.run("do it")).rejects.toThrow(/aborted/i)
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
+    const before = deps.session.events.slice()
+    await expect(agent.run("do it")).rejects.toMatchObject({ code: 'FACT_CANCELLED' })
+    expect(transports).toBe(0)
+    expect(effects).toBe(0)
+    expect(deps.session.events).toEqual(before)
   })
 
   it("stops a mid-run loop when a tool aborts the signal", async () => {
@@ -359,7 +473,7 @@ describe("agent abort", () => {
     const ac = new AbortController()
     deps.tools.register({ name: "abort", description: "", inputSchema: {}, execute: async () => { ac.abort(); return {} } })
     deps.model = createMockClient([{ role: "assistant", toolCalls: [{ name: "abort", args: {} }] }])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
     await expect(agent.run("do it")).rejects.toThrow(/aborted/i)
   })
 })
@@ -377,7 +491,7 @@ describe("agent followup", () => {
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     const first = await agent.run("first task")
     expect(first.finalText).toBe("first")
     expect(first.turns).toBe(1)
@@ -413,7 +527,7 @@ describe("agent followup", () => {
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 3 })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 3 })
     // run consumes steps 1 + 2
     const result = await agent.run("do it")
     expect(result.turns).toBe(2)
@@ -438,7 +552,7 @@ describe("agent followup", () => {
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
     // per-call signal is aborted mid-turn by the tool → run throws
     await expect(agent.run("do it", ac.signal)).rejects.toThrow(/aborted/i)
     // a fresh per-call signal overrides the (now aborted) deps.signal
@@ -468,48 +582,149 @@ describe("agent compaction seam", () => {
   it("auto-compacts at a step boundary when under pressure", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
+    const groups = seedSummaryHistory(deps.session), archive = structuredClone(deps.session.events), summary = summaryModel()
+    const requests: LLMRequest[] = [], telemetry: TelemetryEvent[] = []
+    let effects = 0
+    deps.tools.unregister('read')
+    deps.tools.register({ name: 'read', description: '', inputSchema: {}, async execute() { effects++; return 'unexpected replay' } })
     deps.model = {
-      async *stream() {
-        yield { type: "text/chunk", text: "summary and reply ".repeat(40) }
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: 'reply' }
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       ...deps, systemPrompt: "p",
-      compact: { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0 },
+      telemetry: { emit: event => telemetry.push(event), close() {} },
+      compact: { contextWindow: 10000, thresholdRatio: 0.1, retainTokens: 0, prune: false,
+        summarizationModel: summary.model, summaryLimits: { contextWindow: 20000 } },
     })
-    const result = await agent.run("z".repeat(300)) // ~75 tokens ≥ 50 threshold → compacts at step 1's boundary
-    expect(deps.session.events.some((e) => e.type === "compaction/summary")).toBe(true)
-    const summary = deps.session.events.find((e) => e.type === "compaction/summary") as { text: string }
-    const msgs = deriveMessages(deps.session)
-    expect(msgs[0]).toEqual({ role: "user", content: summary.text })
-    expect(result.finalText).toContain("summary and reply")
+    const current = 'z'.repeat(300)
+    expect((await agent.run(current)).finalText).toBe('reply')
+    const replacements = deps.session.events.filter(event => event.type === 'compaction/replacement')
+    expect(replacements).toHaveLength(1)
+    expect(replacements[0]).toMatchObject({ text: checkpoint, insertBefore: groups[0]!.coverage[0]!.item,
+      coverage: groups.slice(0, 6).flatMap(group => group.coverage) })
+    expect(deps.session.events.slice(0, archive.length)).toEqual(archive)
+    expect(summary.requests).toHaveLength(1)
+    expect(JSON.stringify(summary.requests[0]!.messages)).not.toContain(current)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.messages).toEqual([{ role: 'user', content: checkpoint },
+      ...deriveMessages({ ...deps.session, events: archive }).slice(6 * 3), { role: 'user', content: current }])
+    expect(requests[0]!.messages.filter(message => message.content === current)).toHaveLength(1)
+    expect(requests[0]!.messages.filter(message => message.role === 'tool').map(message => message.toolCallId)).toEqual(['old-6'])
+    const attempt = telemetry.find(event => event.type === 'compaction/attempt' && event.data.outcome === 'success')
+    expect(attempt?.data).toMatchObject({ reason: 'auto', outcomeState: 'reduced-over-target', publication: 'nondurable', attempts: 1 })
+    expect(attempt!.data.tokensAfter).toBeLessThan(attempt!.data.tokensBefore as number)
+    expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { coverage: 'neutral-only', admission: 'unavailable', capSupport: 'unknown' } })
+    expect(effects).toBe(0)
   })
 
   it("no compact config → no engine, identical behavior", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
     deps.model = { async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     await agent.run("task")
     expect(deps.session.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+    expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { coverage: 'neutral-only', admission: 'unavailable', capSupport: 'unknown' } })
   })
 
-  it("explicit agent.compact() appends the compaction events", async () => {
+  it("explicit agent.compact() publishes complete replacement coverage and resumes the same session", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
-    deps.model = { async *stream() { yield { type: "text/chunk", text: "reply ".repeat(85) }; yield { type: "end" } } } // ≥ 500 chars (M34 ⑦c summary floor)
-    const agent = createAgent(ctx, {
+    const groups = seedSummaryHistory(deps.session), archive = structuredClone(deps.session.events), summary = summaryModel()
+    const requests: LLMRequest[] = []
+    let effects = 0
+    deps.tools.unregister('read')
+    deps.tools.register({ name: 'read', description: '', inputSchema: {}, async execute() { effects++; return 'unexpected replay' } })
+    deps.model = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text: requests.length === 1 ? 'reply' : 'continued' }; yield { type: "end" } } }
+    const agent = createAgentWithSummary(ctx, {
       ...deps, systemPrompt: "p",
-      compact: { contextWindow: 100000, retainTokens: 0 }, // window huge so auto never fires
+      compact: { contextWindow: 100000, retainTokens: 0, auto: false, prune: false,
+        summarizationModel: summary.model, summaryLimits: { contextWindow: 20000 } },
     })
-    await agent.run("task")
+    expect((await agent.run("task")).finalText).toBe('reply')
+    expect(summary.requests).toHaveLength(0)
+    const before = deps.session.events.slice()
+    const taskSeq = deps.session.events.findLast(event => event.type === 'user/message' && event.text === 'task')!.seq!
     // `compact?` is optional on the Agent interface (registry fakes may lack
     // it), but createAgent always returns one — assert it exists for the call.
-    const res = await agent.compact!()
-    expect(res.compacted).toBe(true)
-    expect(res.shadowedSeqs.length).toBeGreaterThan(0)
-    expect(deps.session.events.slice(-3).map((e) => e.type)).toEqual(["compaction/start", "compaction/summary", "compaction/end"])
+    // Active-turn inputs are protected automatically. After turn/end, callers
+    // explicitly retain a completed task through the public protectedSeqs API.
+    const res = await agent.compact!(undefined, { protectedSeqs: [taskSeq] })
+    expect(res).toMatchObject({ compacted: true, outcome: 'ready', publication: 'nondurable', summary: checkpoint })
+    const replacements = deps.session.events.filter(event => event.type === 'compaction/replacement')
+    expect(replacements).toHaveLength(1)
+    expect(replacements[0]!.coverage).toEqual(groups.flatMap(group => group.coverage))
+    expect(res.shadowedSeqs).toEqual([...new Set(groups.flatMap(group => group.coverage.flatMap(row => row.sources.map(source => source.seq))))])
+    expect(deps.session.events.slice(0, before.length)).toEqual(before)
+    expect(deps.session.events.slice(before.length).map(event => event.type)).toEqual(['compaction/replacement'])
+    expect(summary.requests).toHaveLength(1)
+    const selected = JSON.stringify(summary.requests[0]!.messages)
+    for (const group of groups) expect(selected).toContain(group.callId)
+    expect(selected).not.toContain('"content":"task"')
+    expect((await agent.followup('next task')).finalText).toBe('continued')
+    expect(requests).toHaveLength(2)
+    expect(requests[0]!.messages).toEqual([...deriveMessages({ ...deps.session, events: archive }), { role: 'user', content: 'task' }])
+    expect(requests[1]!.messages).toEqual([{ role: 'user', content: checkpoint }, { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'reply' }, { role: 'user', content: 'next task' }])
+    expect(effects).toBe(0)
+  })
+
+  it('keeps sole current human input protected without preparing or calling a summary', async () => {
+    const ctx = createContext(), deps = makeDeps(ctx), summary = summaryModel()
+    const requests: LLMRequest[] = []
+    deps.model = { async *stream(request) { requests.push(request); yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' } } }
+    const agent = createAgentWithSummary(ctx, { ...deps, tools: createToolRegistry(ctx), systemPrompt: '', compact: { contextWindow: 10000, thresholdRatio: 0.01,
+      retainTokens: 0, summarizationModel: summary.model, summaryLimits: { contextWindow: 20000 } } })
+    const current = 'protected current task '.repeat(80)
+    expect((await agent.run(current)).finalText).toBe('done')
+    expect(requests[0]!.messages).toEqual([{ role: 'user', content: current }])
+    expect(deps.session.events.some(event => event.type === 'compaction/replacement')).toBe(false)
+    const taskSeq = deps.session.events.find(event => event.type === 'user/message' && event.text === current)!.seq!
+    expect(await agent.compact!(undefined, { protectedSeqs: [taskSeq] })).toMatchObject({ compacted: false, outcome: 'blocked', publication: 'none', blockedReason: 'no-eligible-source' })
+    expect(summary.preparations).toHaveLength(0)
+    expect(summary.requests).toHaveLength(0)
+    expect(deriveMessages(deps.session)).toEqual([{ role: 'user', content: current }, { role: 'assistant', content: 'done' }])
+  })
+
+  it('refuses unknown summary output before transport while the neutral main client remains usable', async () => {
+    const ctx = createContext(), deps = makeDeps(ctx)
+    seedSummaryHistory(deps.session)
+    let summaries = 0
+    const requests: LLMRequest[] = []
+    deps.model = { async *stream(request) { requests.push(request); yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' } } }
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: '', compact: { contextWindow: 10000, auto: false,
+      summarizationModel: { async *stream() { summaries++; yield { type: 'text/chunk', text: checkpoint }; yield { type: 'end' } }, }, summaryLimits: { contextWindow: 20000 } } })
+    expect((await agent.run('current')).finalText).toBe('done')
+    const before = deps.session.events.slice()
+    expect(await agent.compact!()).toMatchObject({ compacted: false, outcome: 'blocked', publication: 'none', blockedReason: 'output-unknown' })
+    expect(summaries).toBe(0)
+    expect(deps.session.events).toEqual(before)
+    expect((await agent.followup('continue')).finalText).toBe('done')
+    expect(requests[1]!.messages).toEqual([...deriveMessages({ ...deps.session, events: before }), { role: 'user', content: 'continue' }])
+    expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { coverage: 'neutral-only', admission: 'unavailable', capSupport: 'unknown' } })
+  })
+
+  it('measures actual local summary input and preserves explicit text eligibility through cap derivation', async () => {
+    const summary = summaryModel()
+    const small = await summary.model.prepare!({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'small' }] })
+    const large = await summary.model.prepare!({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'large '.repeat(1000) }] })
+    expect(large.measurement.input.components.visibleText.heuristicTokens).toBeGreaterThan(small.measurement.input.components.visibleText.heuristicTokens)
+    expect(large.measurement.input.inputFingerprint).not.toBe(small.measurement.input.inputFingerprint)
+    const selected = large.withOutputCap(512)
+    expect(selected.textOutput).toEqual({ status: 'allowed', reason: 'ordinary-text' })
+    expect(selected.measurement.input).toEqual(large.measurement.input)
+    expect(selected.measurement.output).toMatchObject({ configuredCap: 512, capSupport: 'unknown' })
+    expect(selected.validation).toMatchObject({ status: 'partial', coverage: 'neutral-only', native: 'unverified' })
+    expect(summary.requests).toHaveLength(0)
+    const chunks = []
+    for await (const event of selected.stream()) chunks.push(event)
+    expect(chunks).toEqual([{ type: 'text/chunk', text: checkpoint }, { type: 'end' }])
+    expect(summary.requests).toHaveLength(1)
+    expect(summary.requests[0]).toMatchObject({ maxOutputTokens: 512, messages: [{ role: 'user', content: 'large '.repeat(1000) }] })
   })
 })
 
@@ -551,7 +766,7 @@ describe("M13 parallel tool calls", () => {
       ]},
       { role: "assistant", text: "done" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     const result = await agent.run("read two files")
     expect(result.finalText).toBe("done")
     expect(deps.maxConcurrent()).toBe(2)
@@ -577,7 +792,7 @@ describe("M13 parallel tool calls", () => {
       ]},
       { role: "assistant", text: "done" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     const result = await agent.run("read two files")
     expect(result.finalText).toBe("done")
     expect(deps.maxConcurrent()).toBe(2) // the two bodies really overlap
@@ -593,7 +808,7 @@ describe("M13 parallel tool calls", () => {
   it("rejects a non-integer maxParallelToolCalls", () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
-    expect(() => createAgent(ctx, { ...deps, systemPrompt: "p", maxParallelToolCalls: 2.5 })).toThrow(/maxParallelToolCalls/)
+    expect(() => createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxParallelToolCalls: 2.5 })).toThrow(/maxParallelToolCalls/)
   })
 })
 
@@ -612,7 +827,7 @@ describe("M72 II: the request's output cap", () => {
     // A window far larger than anything this test sends → nothing to clamp
     // against, so the value is the one that went in. (The arithmetic itself is
     // pinned exactly by Task 1's seam tests; this pins the WIRING.)
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 1_000_000 } })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 1_000_000 } })
     await agent.run("hi")
     expect(seen[0]!.maxOutputTokens).toBe(8_000)
   })
@@ -629,8 +844,8 @@ describe("M72 II: the request's output cap", () => {
     }
     // 10,000 − (estimated input + overhead) − 4096 < 8,000 for any non-empty
     // prompt → strictly less, and still a positive number.
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 10_000 } })
-    await agent.run("hi")
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 10_000 } })
+    await agent.run("near full ".repeat(500))
     expect(seen[0]!.maxOutputTokens).toBeLessThan(8_000)
     expect(seen[0]!.maxOutputTokens).toBeGreaterThan(0)
   })
@@ -645,7 +860,7 @@ describe("M72 II: the request's output cap", () => {
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1 })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1 })
     await agent.run("hi")
     expect("maxOutputTokens" in seen[0]!).toBe(false)
   })
@@ -675,8 +890,8 @@ describe("M72 II: a truncated ending reaches the durable log and telemetry", () 
         yield { type: "end", truncated: true }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    await agent.run("hi")
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_OUTPUT_TRUNCATED" })
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
     // The same fact on the host's independent stream. `toEqual` is deliberate:
     // the payload is exactly the step it happened on — a `step` field that were
@@ -696,7 +911,7 @@ describe("M72 II: a truncated ending reaches the durable log and telemetry", () 
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
     await agent.run("hi")
     expect(deps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("truncated")
     // Absent stays absent on the host stream too — never a `false` report.
@@ -735,8 +950,8 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
         yield { type: "end", refused: true }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    const result = await agent.run("hi")
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ refused: true })
     // The same fact on the host's independent stream. `toEqual` is deliberate
     // (the M72 Ⅱ block's reason): the payload is exactly the step it happened
@@ -750,7 +965,6 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
     const messages = deps.session.events.filter((e) => e.type === "assistant/message")
     expect(messages).toHaveLength(1)
     expect(messages[0]).toMatchObject({ text: "" })
-    expect(result.finalText).toBe("")
   })
 
   it("M77: a clean step writes no refused field", async () => {
@@ -763,7 +977,7 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
     await agent.run("hi")
     expect(deps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("refused")
     // Absent stays absent on the host stream too — never a `false` report.
@@ -780,8 +994,8 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
         yield { type: "end", truncated: true, refused: true }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    await agent.run("hi")
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     // Neither bit is the other's `else`: both land on the one `step/end`.
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true, refused: true })
     expect(emitted.filter((e) => e.type === "provider/truncated")).toHaveLength(1)
@@ -824,7 +1038,7 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
     const result = await agent.run("hi")
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ empty: true })
     // The same fact on the host's independent stream. `toEqual` is deliberate
@@ -852,7 +1066,7 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
         yield { type: "end" }
       },
     }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
     await agent.run("hi")
     expect(deps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
     // Absent stays absent on the host stream too — never a `false` report.
@@ -872,8 +1086,8 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
         yield { type: "end", refused: true }
       },
     }
-    const refusedAgent = createAgent(refused, { ...refusedDeps, systemPrompt: "p", maxTurns: 1, telemetry: refusedSpy.telemetry })
-    await refusedAgent.run("hi")
+    const refusedAgent = createAgentWithSummary(refused, { ...refusedDeps, systemPrompt: "p", maxTurns: 1, telemetry: refusedSpy.telemetry })
+    await expect(refusedAgent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     expect(refusedDeps.session.events.find((e) => e.type === "step/end")).toMatchObject({ refused: true })
     expect(refusedDeps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
     expect(refusedSpy.events.filter((e) => e.type === "provider/empty")).toHaveLength(0)
@@ -886,8 +1100,8 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
         yield { type: "end", truncated: true }
       },
     }
-    const truncatedAgent = createAgent(truncated, { ...truncatedDeps, systemPrompt: "p", maxTurns: 1, telemetry: truncatedSpy.telemetry })
-    await truncatedAgent.run("hi")
+    const truncatedAgent = createAgentWithSummary(truncated, { ...truncatedDeps, systemPrompt: "p", maxTurns: 1, telemetry: truncatedSpy.telemetry })
+    await expect(truncatedAgent.run("hi")).rejects.toMatchObject({ code: "MODEL_OUTPUT_TRUNCATED" })
     expect(truncatedDeps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
     expect(truncatedDeps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
     expect(truncatedSpy.events.filter((e) => e.type === "provider/empty")).toHaveLength(0)
@@ -904,7 +1118,7 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
       { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
       { role: "assistant", text: "done" },
     ])
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 2, telemetry })
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", maxTurns: 2, telemetry })
     await agent.run("hi")
     const ends = deps.session.events.filter((e) => e.type === "step/end")
     expect(ends).toHaveLength(2)

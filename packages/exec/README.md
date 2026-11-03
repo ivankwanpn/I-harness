@@ -67,6 +67,41 @@ The supervisor owns pending preparations, committed handles and retryable
 cleanup. Its `reconcile`, `closeOwner` and `dispose` fences are the authority
 and lifecycle operations used by host assemblies.
 
+The package `src/index.ts` remains the public entry. `service.ts` and
+`execution-supervisor.ts` are narrow factory entries. The internal modules
+divide responsibilities without duplicating authoritative collections:
+
+| Owner / module | Responsibility |
+|---|---|
+| `jobs/records.ts` | One job map, job ID counter, listener registration and service disposal flag; cleanup joins the supervisor before host disposal. |
+| `jobs/views.ts`, `jobs/contracts.ts` | Snapshot formatting, retained readers and job contracts. Each listener receives its own view; listener exceptions cannot interrupt transitions. |
+| `jobs/observation.ts` | Foreground return, deadline and user-steer observation. Promotion registers the original capture, with completion precedence and the same unsubscribe order. |
+| `capture/output.ts`, `capture/input.ts` | One capture starts the sole iterator consumer and bounded input writes, and owns cancellation, timeout, abort linkage, stopped presentation and observer failures. |
+| `capture/retention.ts` | The capture's stdout/stderr buffers, both spill collectors, snapshots and one finalization attempt. |
+| `capture/completion.ts`, `capture/contracts.ts` | Completion joins root exit, driver tree/I/O/resource settlement, output consumption and input; it queries the capture's live state after waits and releases capture resources in the same order. |
+| `transport-launch.ts`, `execution-host.ts` | Caller/access boundary, exact target/environment/spec selection, immutable policy dispatch and standalone backend composition. |
+| `supervision/ownership.ts`, `supervision/contracts.ts` | One entry set, owner-state map, execution receipt ID set, admission counter and disposal attempt. Helpers receive capabilities over this owner. |
+| `supervision/admission.ts` | Immutable admission snapshots, caller cancellation linkage, preparation/commit fences and receipt validation. |
+| `supervision/retirement.ts` | Deduplicated settlement observations, exact cancellation promises, rollback retries and cleanup aggregation. Failed cleanup retains ownership for retry. |
+| `supervision/reconciliation.ts` | Owner admission blocks, revisions, concurrent reconciliation and close attempts. |
+
+Root exit can update a job view before completion. Successful capture still
+requires output EOF plus tree, I/O and resource settlement. Failed native
+settlement stops presentation and finalizes spill ownership while the
+supervisor retains the native handle for explicit cleanup retries. Existing
+admission, caller-scope, spill, retained-output and backend modules keep their
+separate responsibilities.
+
+The verification map is `execution-supervisor.test.ts` for admission fences,
+concurrent owner operations and retryable cleanup;
+`capture-lifecycle.test.ts` for EOF, input/output failures, spill finalization,
+observation and callback receivers; `execution-contract-consumer.test.ts`
+for public handle contracts; and `exec.test.ts` / `stream.test.ts` for job,
+promotion and byte-limit behavior. Shell's `native-completed-command.test.ts`
+checks the controlled native command/closed-stdin race. Session executor's
+`scoped-exec.test.ts` and `event-driven-steering.test.ts` cover the caller and
+steering consumers.
+
 Trusted tool composition may assign `executionTarget: "wsl"`; omission means
 the native host. Selection receives the frozen process specification as an
 optional third argument, so existing two-argument hosts remain compatible.

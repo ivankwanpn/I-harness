@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -16,12 +17,41 @@ import { RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { sessionOwnedDocuments } from "../src/session-artifacts.ts"
 import { desktopInputReceiptDocumentKey } from "../src/input.ts"
 import { createSessionManagementFence } from "../src/session-management-fence.ts"
+import { deriveMessages, type SessionEvent } from '@i-harness/core-session'
+import { createGatewayForkFixture } from './helpers/fork-fixture.ts'
+
+it('forks actual managed replacement history through Gateway management with no model calls', async () => {
+  let sends = 0
+  const f = await createGatewayForkFixture({ model: controlledModel(async function* () { sends++; yield { type: 'end' } }) }), coordinator = f.coordinator
+  await f.coordinator.create({ sessionId: 'parent' }); await f.projects.bind('parent', 'p')
+  const document = await coordinator.openManagedDocument('parent')
+  const inherited = { kind: 'inherited' as const, authority: 'observation' as const, scope: 'turn' as const, producer: 'session.seed' }
+  const events: SessionEvent[] = [
+    { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H', provenance: inherited },
+    { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: 'E' }, { type: 'step/end', seq: 4 }, { type: 'turn/end', seq: 5 },
+    { type: 'compaction/replacement', version: 1, seq: 6, replacementId: 'management', text: 'S', coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }], insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } },
+  ]
+  try {
+    expect(await document.importSeed(events)).toMatchObject({ kind: 'committed' })
+    const original = await readFile(join(f.sessions, 'parent.jsonl'))
+    const operation = await f.prepare('parent', 'child', 'managed-replacement'), result = await f.execute(operation)
+    expect(result.kind).toBe('ready')
+    if (result.kind !== 'ready') throw new Error('Actual public Gateway fork refused')
+    const child = await coordinator.openManagedDocument(result.sessionId)
+    expect(deriveMessages(child.view).map(message => message.content)).toEqual(['H', 'S'])
+    expect(child.view.header).toMatchObject({ parentSession: 'parent', seedLength: child.view.header?.semanticSeed?.seedLength })
+    expect(child.view.events[child.view.header!.seedLength!]).toMatchObject({ type: 'session/bootstrap', operationId: operation.invocation.operationId, seedLength: result.seedLength, manifestDigest: result.receipt.manifestDigest })
+    expect(JSON.stringify(child.view.events)).not.toContain('"E"')
+    expect(await child.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', receipt: { owner: { sessionId: result.sessionId } } })
+    expect(sends).toBe(0); expect(await readFile(join(f.sessions, 'parent.jsonl'))).toEqual(original)
+  } finally { await f.close() }
+})
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
-async function setup() {
+async function setup(owned = false) {
   const root = await mkdtemp(join(tmpdir(), "session-management-")); roots.push(root)
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), owned ? { lock: { enabled: true } } : undefined)
   await coordinator.create({ sessionId: "s1", title: "First" })
   await coordinator.create({ sessionId: "s2", title: "Second" })
   const service = { queueState: () => ({ running: false, queued: 0 }), tasks: () => [] } as unknown as SessionService
@@ -46,7 +76,7 @@ describe("session navigation metadata", () => {
     await coordinator.close()
   })
   it("refuses an actual yielded cell or live owned PTY even with an idle runtime queue", async () => {
-    const { root, coordinator, service } = await setup()
+    const { root, coordinator, service } = await setup(true)
     const session = await createDurableSessionLoader(coordinator)("s1")
     const heldCell = Promise.withResolvers<void>()
     const assembly = await createSessionAssembly({ workspace: root, sessionId: "s1", coordinator, session, modelPolicy: "test-mock", sandbox: "danger-full-access", codeMode: { mode: "mixed" },
@@ -169,26 +199,28 @@ describe("session navigation metadata", () => {
     } finally { await coordinator.close() }
   })
   it("forks a completed conversation visibly and persists its project owner without cached SDK authority", async () => {
-    const { root, coordinator, service } = await setup()
-    const second = join(root, "second"); await mkdir(second)
-    const broker = createProjectScopeBroker(coordinator, root)
-    await broker.configure({ id: "p1", name: "Both folders", roots: [root, second], primaryRoot: root })
-    await broker.bind("s1", "p1")
-    const manager = createSessionManagement(coordinator, service, async () => true, { projectFor: broker.projectFor, onFork: broker.inherit })
+    const f = await createGatewayForkFixture(), coordinator = f.coordinator, broker = f.projects, manager = f.management
+    const second = join(f.workspace, "second"); await mkdir(second)
+    await broker.configure({ id: "p", name: "Both folders", roots: [f.workspace, second], primaryRoot: f.workspace })
     try {
-      await expect(manager.mutate("s1", "fork")).rejects.toThrow(/completed turn/)
+      const empty = await f.prepare('source', 'empty-child', 'no-completed-turn')
+      expect(await f.execute(empty)).toMatchObject({ kind: 'refused', reason: 'no-completed-boundary' })
       expect(await coordinator.list()).toHaveLength(2)
-      await coordinator.append("s1", [
+      await coordinator.closeManagedDocument('source')
+      await coordinator.releaseOwnership('source')
+      await coordinator.append("source", [
         { type: "turn/start", seq: 0 }, { type: "user/message", seq: 1, text: "first task" },
         { type: "assistant/message", seq: 2, text: "done" }, { type: "turn/end", seq: 3 },
       ])
-      const forked = await manager.mutate("s1", "fork")
+      const operation = await f.prepare('source', 'child', 'completed-project-owner'), forked = await f.execute(operation)
+      expect(forked.kind).toBe('ready')
+      if (forked.kind !== 'ready') throw new Error('Actual public Gateway fork refused')
       expect(await coordinator.list()).toContain(forked.sessionId)
-      expect((await manager.navigation())[forked.sessionId]).toEqual({ pinned: false, unread: false, projectId: "p1" })
-      expect((await broker.forSession(forked.sessionId))()?.roots).toEqual([root, second])
+      expect((await manager.navigation())[forked.sessionId]).toEqual({ pinned: false, unread: false, projectId: "p" })
+      expect((await broker.forSession(forked.sessionId))()?.roots).toEqual([f.workspace, second])
       await manager.mutate(forked.sessionId, "archive")
-      expect(await manager.archived()).toEqual([expect.objectContaining({ id: forked.sessionId, projectId: "p1" })])
-    } finally { await coordinator.close() }
+      expect(await manager.archived()).toEqual([expect.objectContaining({ id: forked.sessionId, projectId: "p" })])
+    } finally { await f.close() }
   })
   it("persists independent pin/read choices after coordinator restart without conversation events", async () => {
     const { root, coordinator, service } = await setup()
@@ -230,7 +262,7 @@ describe("session navigation metadata", () => {
       expect((await manager.navigation()).s1).toEqual({ pinned: true, unread: true })
       await expect(manager.mutate("s1", "archive")).rejects.toThrow("busy")
       await expect(manager.mutate("s1", "rename", "New")).rejects.toThrow("busy")
-      await expect(manager.mutate("s1", "fork")).rejects.toThrow("busy")
+      await expect(manager.withForkSource("s1", async () => { throw new Error('Busy source must not be admitted') })).rejects.toMatchObject({ name: 'ForkAdmissionError', reason: 'busy' })
     } finally { await coordinator.close() }
   })
 

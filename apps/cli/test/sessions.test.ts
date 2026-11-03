@@ -2,11 +2,11 @@
 // listing (a live store with blank rows, a corrupt file, a missing dir), the
 // transcript renderer (context snapshots stay out of it), and the argument
 // parsing (`--session-dir` / `--last` / `--json`).
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, copyFileSync, existsSync, readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, CURRENT_FORMAT_VERSION } from "@i-harness/core-session"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
@@ -31,9 +31,9 @@ afterEach(() => {
 
 /** Seed one session with `turns` user turns (+ a tool call in the first). */
 async function seed(root: string, id: string, turns: number, title?: string): Promise<void> {
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: false } })
-  try {
-    await coordinator.create({ sessionId: id, ...(title !== undefined ? { title } : {}) })
+  const backend = createJsonlBackend(root)
+  {
+    await backend.create(id, { sessionId: id, formatVersion: CURRENT_FORMAT_VERSION, createdAt: new Date().toISOString(), ...(title !== undefined ? { title } : {}) })
     const events = []
     for (let i = 0; i < turns; i++) {
       events.push({ type: "turn/start" as const }, { type: "user/message" as const, text: `prompt ${i}` })
@@ -43,10 +43,7 @@ async function seed(root: string, id: string, turns: number, title?: string): Pr
       }
       events.push({ type: "assistant/message" as const, text: `answer ${i}` }, { type: "turn/end" as const })
     }
-    await coordinator.append(id, events)
-    await coordinator.flush(id)
-  } finally {
-    await coordinator.close().catch(() => {})
+    await backend.append(id, events.map((event,seq)=>({...event,seq})))
   }
 }
 
@@ -233,11 +230,10 @@ describe("runSessionsCommand", () => {
 describe("sessions — the durable run-end record (M3 §3.4)", () => {
   it("list renders ok / failed / — and the transcript renders the run-end line", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ih-sessions-run-end-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
+    const backend = createJsonlBackend(dir), coordinator = createSessionCoordinator(backend, {})
     try {
-      const ok = await coordinator.create({})
-      const failed = await coordinator.create({})
-      const older = await coordinator.create({})
+      const ok = {id:'ok'}, failed = {id:'failed'}, older = {id:'older'}
+      for(const {id} of [ok,failed,older])await backend.create(id,{sessionId:id,formatVersion:CURRENT_FORMAT_VERSION,createdAt:new Date().toISOString()})
       const logOk = createSession()
       append(logOk, { type: "turn/start" })
       append(logOk, { type: "turn/end" })
@@ -249,12 +245,9 @@ describe("sessions — the durable run-end record (M3 §3.4)", () => {
       const logOlder = createSession()
       append(logOlder, { type: "turn/start" })
       append(logOlder, { type: "turn/end" })
-      coordinator.enqueue(ok.id, logOk.events)
-      coordinator.enqueue(failed.id, logFailed.events)
-      coordinator.enqueue(older.id, logOlder.events)
-      await coordinator.flush(ok.id)
-      await coordinator.flush(failed.id)
-      await coordinator.flush(older.id)
+      await backend.append(ok.id, logOk.events)
+      await backend.append(failed.id, logFailed.events)
+      await backend.append(older.id, logOlder.events)
 
       const rows = await listStoredSessions(coordinator, dir)
       const table = renderSessionTable(rows, Date.now())
@@ -263,7 +256,7 @@ describe("sessions — the durable run-end record (M3 §3.4)", () => {
       expect(table).toContain("failed exit 1 0.4s")
       expect(table.split("\n").find((line) => line.startsWith(older.id))).toContain("—")
 
-      const { session } = await coordinator.load(failed.id)
+      const { session } = await coordinator.snapshot!(failed.id)
       expect(renderTranscript(session, 20)).toContain("run end: exit 1 · 0.4s — boom")
     } finally {
       await coordinator.close()
@@ -277,24 +270,64 @@ describe("sessions — the durable run-end record (M3 §3.4)", () => {
     // the failed batch so close() drains both. The reader's contract is
     // **last wins** — the later record is the exit that actually happened.
     const dir = mkdtempSync(join(tmpdir(), "ih-sessions-run-end-twice-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
+    const backend = createJsonlBackend(dir), coordinator = createSessionCoordinator(backend, {})
     try {
-      const { id } = await coordinator.create({})
+      const id='twice';await backend.create(id,{sessionId:id,formatVersion:CURRENT_FORMAT_VERSION,createdAt:new Date().toISOString()})
       const log = createSession()
       append(log, { type: "turn/start" })
       append(log, { type: "operator/run-end", version: 1, runId: "r-twice", exitCode: 0, durationMs: 800, phase: "run" })
       append(log, { type: "operator/run-end", version: 1, runId: "r-twice", exitCode: 1, durationMs: 900, phase: "run", error: "durable write failed" })
-      coordinator.enqueue(id, log.events)
-      await coordinator.flush(id)
+      await backend.append(id, log.events)
 
       const rows = await listStoredSessions(coordinator, dir)
       expect(rows[0]!.lastRun).toMatchObject({ exitCode: 1, durationMs: 900 })
       expect(formatLastRun(rows[0]!.lastRun)).toBe("failed exit 1 0.9s")
-      const { session } = await coordinator.load(id)
+      const { session } = await coordinator.snapshot!(id)
       expect(renderTranscript(session, 20)).toContain("run end: exit 1 · 0.9s — durable write failed")
     } finally {
       await coordinator.close()
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+it("shows retained snapshot summaries and preserves full envelopes in structural JSON without source writes", async () => {
+  const root=storeRoot(), backend=createJsonlBackend(root)
+  const envelope = {version:1 as const,execution:{outcome:"succeeded" as const,dispatch:"not-dispatched" as const},preview:"stored preview",media:[{mediaType:"image/png" as const,dataBase64:"iVBORw0KGgo="}],retention:{kind:"artifact" as const,ref:{version:1 as const,id:"ctxv1_"+"b".repeat(64),revision:"c".repeat(64),codec:"json-utf8-v1" as const,encodedBytes:10000,contentDigest:"a".repeat(64),completeness:"producer-incomplete" as const}},dependencies:{kind:"unavailable" as const,reason:"quota" as const,count:2}}
+  const value={error:"ordinary payload",status:"failed"}; const inline={...envelope,preview:"",media:[],retention:{kind:"inline" as const,value,encodedBytes:Buffer.byteLength(JSON.stringify(value))}}
+  const unavailable={...envelope,media:[],retention:{kind:"unavailable" as const,reason:"quota" as const}}
+  const events=[{type:"tool/result" as const,callId:"one",name:"fixture",envelope},{type:"tool/result" as const,callId:"two",name:"fixture",envelope:inline},{type:"tool/result" as const,callId:"three",name:"fixture",envelope:unavailable}]
+  await backend.create('retained',{sessionId:'retained',formatVersion:CURRENT_FORMAT_VERSION,createdAt:new Date().toISOString()}); await backend.append('retained',events.map((event,seq)=>({...event,seq})))
+  const path=join(root,"retained.jsonl"), before=readFileSync(path)
+  const log=vi.spyOn(console,"log").mockImplementation(()=>{})
+  try {
+    expect(await runSessionsCommand(["sessions","show","retained","--session-dir",root])).toBe(0)
+    const text=String(log.mock.calls.at(-1)![0])
+    expect(text).toContain("stored preview")
+    expect(text).toContain("succeeded")
+    expect(text).toContain("artifact")
+    expect(text).toContain("ordinary payload")
+    expect(text).toContain("unavailable:quota")
+    expect(text).not.toContain("descriptor-only")
+    expect(text).not.toContain("iVBOR")
+    for(const line of text.split("\n")) expect(line.length).toBeLessThanOrEqual(204)
+    expect(await runSessionsCommand(["sessions","show","retained","--session-dir",root,"--json"])).toBe(0)
+    const exported=JSON.parse(String(log.mock.calls.at(-1)![0]))
+    expect(exported.events.map(({seq,...event}: any)=>event)).toEqual(events)
+    expect(readFileSync(path)).toEqual(before)
+  } finally {log.mockRestore()}
+})
+
+it("bounds the full retained disposition and one-line value to the original 200 characters", () => {
+  const value = "long captured value\n".repeat(100)
+  const session = createSession()
+  append(session, {type:"tool/result",callId:"long",name:"fixture",envelope:{version:1,execution:{outcome:"unknown",dispatch:"unknown"},preview:"",media:[],retention:{kind:"inline",value,encodedBytes:Buffer.byteLength(JSON.stringify(value))}}})
+  const text = renderTranscript(session, 20)
+  expect(text).toBe("  → " + ("[unknown · unknown · inline] " + value.replace(/\s+/g," ").trim()).slice(0,200))
+  expect(text).toHaveLength(204)
+})
+it('lists and shows an original13 session without initializing or upgrading it',async()=>{
+ const root=storeRoot(),path=join(root,'p.jsonl'),source=join(import.meta.dirname,'../../../packages/session-persistence-jsonl/test/fixtures/original13-empty.jsonl');copyFileSync(source,path)
+ const before=readFileSync(path),log=vi.spyOn(console,'log').mockImplementation(()=>{})
+ try{expect(await runSessionsCommand(['sessions','list','--session-dir',root])).toBe(0);expect(await runSessionsCommand(['sessions','show','p','--session-dir',root])).toBe(0);expect(readFileSync(path)).toEqual(before);expect(existsSync(join(root,'task-p.doc.jsonl'))).toBe(false)}finally{log.mockRestore()}
 })

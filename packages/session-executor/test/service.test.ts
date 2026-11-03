@@ -1,10 +1,15 @@
+import { controlledModel } from "./controlled-model.ts"
+import { afterEach as afterFixture } from "vitest"
+afterFixture(() => vi.unstubAllGlobals())
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { describe, expect, it, vi } from "vitest"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createDurableSessionLoader, ModelUnavailableError } from "../src/index.ts"
 import { createSessionService, type SessionService } from "../src/service.ts"
 import type { SessionQueueItem } from "../src/index.ts"
@@ -19,6 +24,30 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it.each(["success", "refusal"] as const)("fences the legacy model builder behind held writable acquisition (%s)", async outcome => {
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const builder = vi.fn(async () => createMockClient([]))
+    const service = createSessionService({ workspace: process.cwd(), modelBuilder: builder, sessionFor: async () => {
+      entered.resolve(); await release.promise
+      if (outcome === "refusal") throw new Error("writable format barrier refused")
+      return createSession()
+    } })
+    const pending = service.assemblyFor("legacy-barrier").then(value => ({ value }), error => ({ error }))
+    try {
+      await entered.promise
+      expect(builder).not.toHaveBeenCalled()
+      release.resolve()
+      const result = await pending
+      if (outcome === "success") {
+        expect(result).toHaveProperty("value.sessionId", "legacy-barrier")
+        expect(builder).toHaveBeenCalledTimes(1)
+      } else {
+        expect(result).toHaveProperty("error.message", "writable format barrier refused")
+        expect(builder).not.toHaveBeenCalled()
+      }
+    } finally { release.resolve(); await pending; await service.close() }
+  })
+
   it("optionally attaches existing assemblies, keeps default future-only, and detaches after unsubscribe", async () => {
     const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock" })
     try {
@@ -67,7 +96,7 @@ describe("createSessionService", () => {
     } finally { await service.close() }
   })
   it("runs a host completion hook with the live assembly and resolved limits before submit settles", async () => {
-    const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
+    const model: ModelClient = { prepare: prepareTextFixture,  async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
     const completed = vi.fn(async (_sessionId: string, assembly: unknown, limits: unknown) => {
       expect(assembly).toBe(await service.assemblyFor("title-session"))
       expect(limits).toEqual({ contextWindow: 100_000, maxOutputTokens: 512 })
@@ -85,7 +114,7 @@ describe("createSessionService", () => {
   })
 
   it("keeps a successful answer successful when a host completion hook fails", async () => {
-    const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
+    const model: ModelClient = { prepare: prepareTextFixture,  async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
     const completed = vi.fn(async () => { throw new Error("title service unavailable") })
     const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required",
       modelBindingFor: async () => ({ status: "ready", binding: { model, providerId: "p", modelId: "m", label: "p:m" } }),
@@ -102,7 +131,7 @@ describe("createSessionService", () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const requests: LLMRequest[] = []
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         requests.push(request)
         yield { type: "text/chunk", text: "real" }
@@ -186,7 +215,7 @@ describe("createSessionService", () => {
     // the next test closes on the service's public path.
     const recording = (text: string) => {
       const requests: LLMRequest[] = []
-      const model: ModelClient = {
+      const model: ModelClient = { prepare: prepareTextFixture,
         async *stream(request) {
           requests.push(request)
           yield { type: "text/chunk", text }
@@ -236,7 +265,7 @@ describe("createSessionService", () => {
     // doing (a live rebind must not tear the assembly down).
     const recording = (text: string) => {
       const requests: LLMRequest[] = []
-      const model: ModelClient = {
+      const model: ModelClient = { prepare: prepareTextFixture,
         async *stream(request) {
           requests.push(request)
           yield { type: "text/chunk", text }
@@ -356,7 +385,7 @@ describe("createSessionService", () => {
       const assembly = await service.assemblyFor("s1")
       await expect(assembly.compactNow()).resolves.toEqual({
         compacted: false,
-        shadowedSeqs: [],
+        shadowedSeqs: [],outcome:'unchanged',publication:'none',
       })
       expect(session.events.some((event) => event.type.startsWith("compaction/"))).toBe(false)
     } finally {
@@ -366,12 +395,12 @@ describe("createSessionService", () => {
 
   it("normalizes compaction to the ready binding contextWindow", async () => {
     const session = createSession()
-    append(session, { type: "user/message", text: "x".repeat(600) })
+    append(session, { type: "user/message", text: "x".repeat(4000) })
     const requests: LLMRequest[] = []
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         requests.push(request)
-        yield { type: "text/chunk", text: "ok" }
+        yield { type: 'text/chunk', text: String(request.messages.at(-1)?.content).includes('You are now acting as a compaction engine') ? checkpointOfLength(600) : 'ok' }
         yield { type: "end" }
       },
     }
@@ -402,7 +431,7 @@ describe("createSessionService", () => {
       expect(compacted.compacted).toBe(true)
       expect(compacted.shadowedSeqs.length).toBeGreaterThan(0)
       expect(requests).toHaveLength(2)
-      expect(session.events.some((event) => event.type === "compaction/end")).toBe(true)
+      expect(session.events.some((event) => event.type === "compaction/replacement")).toBe(true)
     } finally {
       await service.close()
     }
@@ -518,26 +547,19 @@ describe("createSessionService", () => {
     append(restored, { type: "user/message", text: "earlier question" })
     append(restored, { type: "assistant/message", text: "earlier answer" })
     append(restored, { type: "turn/end" })
-    const enqueue = vi.fn()
-    const flush = vi.fn(async () => {})
-    const coordinator = {
-      load: vi.fn(async () => ({ session: restored })),
-      loadOwned: vi.fn(async () => ({ session: restored })),
-      enqueue,
-      flush,
-    } as unknown as SessionCoordinator
+    const root=mkdtempSync(join(tmpdir(),'ih-f1-service-resume-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
+    await coordinator.create({sessionId:'durable'});await coordinator.append('durable',restored.events)
     const requests: LLMRequest[] = []
-    const model: ModelClient = {
-      async *stream(request) {
+    const model: ModelClient = controlledModel(async function* (request) {
         requests.push(request)
         yield { type: "text/chunk", text: "continued" }
         yield { type: "end" }
-      },
-    }
+      })
     const service = createSessionService({
       workspace: process.cwd(),
       approveAll: true,
       model,
+      coordinator,
       sessionFor: createDurableSessionLoader(coordinator),
     })
 
@@ -550,11 +572,11 @@ describe("createSessionService", () => {
       const live = service.liveSession("durable")!
       expect(live.events.slice(0, restored.events.length)).toEqual(restored.events)
       expect(live.events.map((event) => event.seq)).toEqual(live.events.map((_, index) => index))
-      const mirrored = enqueue.mock.calls.flatMap((call) => call[1] as Array<{ seq?: number }>)
-      expect(mirrored[0]?.seq).toBe(restored.events.length)
-      expect(flush).toHaveBeenCalledWith("durable")
+      const saved=(await backend.read('durable')).events
+      expect(saved).toEqual(live.events)
+      expect(saved[restored.events.length]?.seq).toBe(restored.events.length)
     } finally {
-      await service.close()
+      await service.close();await coordinator.close()
     }
   }, 60_000)
 
@@ -651,7 +673,7 @@ describe("createSessionService", () => {
     // spinning for minutes. The request now carries the turn's signal (the
     // adapters hand it to fetch), so cancel settles immediately.
     let sawSignal = false
-    const parked: ModelClient = {
+    const parked: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         sawSignal = request.signal !== undefined
         await new Promise<void>((_resolve, reject) => {
@@ -690,31 +712,72 @@ describe("createSessionService", () => {
     // turn/end — so the call sat in the scrollback with no answer ("it hung").
     // fs tools now RETURN the failure; the model reads it and carries on.
     const workspace = mkdtempSync(join(tmpdir(), "ih-fs-fail-"))
-    const service: SessionService = createSessionService({
-      workspace, approveAll: true,
-      modelPolicy: "test-mock",
-      mockScript: [
-        { role: "assistant", toolCalls: [{ name: "read", args: { path: "missing.txt" } }] },
-        { role: "assistant", text: "recovered" },
-      ],
+    const callId = "missing-file-read"
+    const requests: LLMRequest[] = []
+    const script = createMockClient([
+      { role: "assistant", toolCalls: [{ id: callId, name: "read", args: { path: "missing.txt" } }] },
+      { role: "assistant", text: "recovered" },
+    ])
+    const model = controlledModel(async function* (request) {
+      requests.push(request)
+      yield* script.stream(request)
     })
-    const assembly = await service.assemblyFor("s1")
-    await service.submit("s1", "read a missing file", new AbortController().signal)
+    const service: SessionService = createSessionService({
+      workspace, approveAll: true, model,
+    })
+    try {
+      const assembly = await service.assemblyFor("s1")
+      const read = vi.spyOn(assembly.tools.get("read")!, "execute")
+      await service.submit("s1", "read a missing file", new AbortController().signal)
 
-    const types = assembly.session.events.map((ev) => ev.type)
-    expect(types).toContain("tool/call")
-    expect(types).toContain("tool/result")
-    expect(types).toContain("turn/end") // the turn was NOT left dangling
-    const result = assembly.session.events.find((ev) => ev.type === "tool/result") as { output?: { error?: string; code?: string } }
-    expect(result.output?.error).toBeTypeOf("string")
-    expect(result.output?.code).toBe("ENOENT")
-    // model-visible: the failure text rides the tool result
-    const messages = deriveMessages(assembly.session)
-    const toolMsg = messages.find((m) => m.role === "tool")
-    expect(String(toolMsg?.content)).toContain("ENOENT")
-    // and the turn's assistant answer landed
-    expect(messages.some((m) => m.role === "assistant" && String(m.content).includes("recovered"))).toBe(true)
-    rmWorkspaceSync(workspace)
+      const calls = assembly.session.events.filter((ev) => ev.type === "tool/call")
+      const dispatches = assembly.session.events.filter((ev) => ev.type === "tool/dispatch")
+      const results = assembly.session.events.filter((ev) => ev.type === "tool/result")
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ callId, name: "read", args: { path: "missing.txt" } })
+      expect(dispatches).toHaveLength(1)
+      expect(dispatches[0]).toMatchObject({ callId, eventSeq: calls[0]!.seq })
+      expect(read).toHaveBeenCalledTimes(1)
+      expect(results).toHaveLength(1)
+      const result = results[0]!
+      expect(result).toMatchObject({ callId, name: "read" })
+      const envelope = result.envelope!
+      expect(envelope.version).toBe(1)
+      // The body returned normally; its domain failure remains in retained
+      // data. ResultExecution records dispatch/return, not payload heuristics.
+      expect(envelope.execution).toEqual({ outcome: "succeeded", dispatch: "dispatched" })
+      expect(envelope.retention.kind).toBe("inline")
+      if (envelope.retention.kind !== "inline") throw new Error("Missing inline filesystem failure")
+      const failure = envelope.retention.value
+      expect(failure).toMatchObject({ error: expect.stringContaining("missing.txt"), code: "ENOENT" })
+
+      // Inspect the request actually issued after the failed read, before the
+      // recovery script answers; the archive alone cannot prove visibility.
+      expect(requests).toHaveLength(2)
+      const secondRequest = requests[1]!
+      const actualToolMessages = secondRequest.messages.filter((message) => message.role === "tool")
+      expect(actualToolMessages).toHaveLength(1)
+      expect(actualToolMessages[0]).toMatchObject({ toolCallId: callId })
+      expect(secondRequest.messages.some((message) => message.role === "tool" && JSON.stringify(message.content).includes("ENOENT"))).toBe(true)
+      const actualContent = actualToolMessages[0]!.content
+      const actualText = typeof actualContent === "string" ? actualContent : actualContent.map((part) => {
+        expect(part.type).toBe("text")
+        return part.type === "text" ? part.text : ""
+      }).join("")
+      expect(JSON.parse(actualText)).toEqual(failure)
+
+      const messages = deriveMessages(assembly.session)
+      const toolMessages = messages.filter((message) => message.role === "tool")
+      expect(toolMessages).toHaveLength(1)
+      expect(toolMessages[0]).toMatchObject({ toolCallId: callId, content: actualContent })
+      expect(JSON.stringify(toolMessages[0]!.content)).toContain("ENOENT")
+      expect(messages.filter((message) => message.role === "assistant").at(-1)).toMatchObject({ content: "recovered" })
+      expect(assembly.session.events.filter((ev) => ev.type === "turn/end")).toHaveLength(1)
+      expect(assembly.session.events.at(-1)?.type).toBe("turn/end")
+    } finally {
+      await service.close()
+      rmWorkspaceSync(workspace)
+    }
   }, 60_000)
 
   it("settles a queued successor after a failed predecessor without an unhandled rejection", async () => {
@@ -774,10 +837,10 @@ describe("createSessionService", () => {
       approveAll: true,
       ...effortSeam,
       loadMeta: async () => ({
-        formatVersion: 1, sessionId: "s1", createdAt: "",
+        formatVersion: 2, sessionId: "s1", createdAt: "",
         modelSelection: { provider: "p", model: "m", reasoningEffort: "high" },
       }),
-      modelBuilder: async () => ({
+      modelBuilder: async () => ({ prepare: prepareTextFixture,
         async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
           captured.push((request as { reasoningEffort?: string }).reasoningEffort)
           yield* createMockClient([{ role: "assistant", text: "ok" }]).stream(request)
@@ -793,8 +856,8 @@ describe("createSessionService", () => {
     const service = createSessionService({
       workspace: process.cwd(),
       approveAll: true,
-      loadMeta: async () => ({ formatVersion: 1, sessionId: "s1", createdAt: "" }),
-      modelBuilder: async () => ({
+      loadMeta: async () => ({ formatVersion: 2, sessionId: "s1", createdAt: "" }),
+      modelBuilder: async () => ({ prepare: prepareTextFixture,
         async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
           captured.push((request as { reasoningEffort?: string }).reasoningEffort)
           yield* createMockClient([{ role: "assistant", text: "ok" }]).stream(request)
@@ -828,9 +891,10 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
 
 /** Real SessionService whose injected model waits on `gate` before yielding
  * end — the running turn blocks until the test releases it. */
-function serviceWithBlockingModel(gate: { promise: Promise<void> }): SessionService {
-  const model: ModelClient = {
-    async *stream() {
+function serviceWithBlockingModel(gate: { promise: Promise<void> }, requests?: LLMRequest[]): SessionService {
+  const model: ModelClient = { prepare: prepareTextFixture,
+    async *stream(request) {
+      requests?.push(request)
       await gate.promise
       yield { type: "text/chunk", text: "ok" }
       yield { type: "end" }
@@ -853,7 +917,7 @@ function blockingService(): { service: SessionService; seen: string[]; release()
   const seen: string[] = []
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
-  const model: ModelClient = {
+  const model: ModelClient = { prepare: prepareTextFixture,
     async *stream(request: LLMRequest) {
       // `seen` records the model tasks that ACTUALLY RAN, keyed by the last
       // authored user prompt — the engine's runtime-context bookkeeping
@@ -922,8 +986,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       const first = service.submit("s1", "first", new AbortController().signal)
       const second = service.submit("s1", "second", new AbortController().signal)
       const row = await waitForQueueText(service, "s1", "second")
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: true })
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: true })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
       release()
       await Promise.all([first, second])
       expect(seen).toEqual(["first"])
@@ -942,8 +1006,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       const row = await waitForQueueText(service, "s1", "second")
       release()
       await Promise.all([first, second])
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
-      expect(service.cancelQueued("s1", "never-existed")).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", "never-existed")).toEqual({ cancelled: false })
     } finally {
       release()
       await service.close()
@@ -961,7 +1025,7 @@ describe("createSessionService — real session queue projection (Task 11)", () 
     const bindingGate = new Promise<void>((resolve) => { releaseBinding = resolve })
     let releaseModel!: () => void
     const modelGate = new Promise<void>((resolve) => { releaseModel = resolve })
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request: LLMRequest) {
         const authored = request.messages
           .filter((m) => m.role === "user")
@@ -998,8 +1062,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       // deliberately stale while the lane is running this row.
       releaseBinding()
       await waitFor(() => seen.length === 1)
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
       // the running turn keeps executing to completion (no abort path taken);
       // the second row was never cancelled and runs after it.
       releaseModel()
@@ -1027,7 +1091,7 @@ function serviceWithSubagentFixture(): { service: SessionService; release(): voi
   let spawned = false
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
-  const model: ModelClient = {
+  const model: ModelClient = { prepare: prepareTextFixture,
     async *stream(request: LLMRequest) {
       // The child's requests end with ITS authored task message ("inspect
       // code"); the parent's continuation ends with the spawn tool result.
@@ -1118,7 +1182,7 @@ describe("createSessionService — real task projection (Task 12)", () => {
     mkdirSync(join(ws, "workflow"), { recursive: true })
     writeFileSync(join(ws, "workflow/echo.yml"), "name: echo\ndescription: one echo step\nsteps:\n  - name: say\n    command: echo hi\n")
     let started = false
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(_request: LLMRequest) {
         if (!started) {
           started = true
@@ -1197,21 +1261,51 @@ describe("process cleanup acknowledgement", () => {
 describe("createSessionService — close lifecycle with a queue in flight (Task 11 regression)", () => {
   it("closeSession() with a submit in flight settles the binding promise, clears queue rows, and never crashes", async () => {
     const gate = deferred<void>()
-    const service = serviceWithBlockingModel(gate)
+    const requests: LLMRequest[] = []
+    const service = serviceWithBlockingModel(gate, requests)
     const unhandled: unknown[] = []
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
     process.on("unhandledRejection", onUnhandled)
     try {
-      const submit = service.submit("s1", "in flight", new AbortController().signal)
+      // Own the rejection immediately, including when close wins before the
+      // queue barrier has reached model execution.
+      const submit = service.submit("s1", "in flight", new AbortController().signal).then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      )
       await waitFor(() => service.queue("s1").length === 1)
+      const requestsAtClose = requests.length
+      const assemblyAtClose = service.liveAssembly("s1")
+      const eventsAtClose = assemblyAtClose ? [...assemblyAtClose.session.events] : []
       const closing = service.closeSession("s1")
       gate.resolve()
-      await closing
-      await expect(submit).resolves.toBeUndefined()
+      await expect(closing).resolves.toBeUndefined()
+      const outcome = await submit
+      expect(outcome.status).toBe("rejected")
+      if (outcome.status !== "rejected") throw new Error("Closed submit did not cancel")
+      expect(outcome.error).toBeInstanceOf(DOMException)
+      expect(outcome.error).toMatchObject({ name: "AbortError", code: 20 })
+      for (const request of requests) {
+        expect(request.signal?.aborted).toBe(true)
+        expect(request.signal?.reason).toBe(outcome.error)
+      }
       expect(service.queue("s1")).toEqual([])
       expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
       expect(service.hasAssembly("s1")).toBe(false)
+      expect(service.liveAssembly("s1")).toBeUndefined()
       await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(requests).toHaveLength(requestsAtClose)
+      if (assemblyAtClose) {
+        // Cancellation still closes the open step/turn. It cannot admit any
+        // new model, assistant, or tool work beyond those terminal records.
+        expect(assemblyAtClose.session.events.slice(0, eventsAtClose.length)).toEqual(eventsAtClose)
+        const stepOpen = eventsAtClose.filter((event) => event.type === "step/start").length > eventsAtClose.filter((event) => event.type === "step/end").length
+        const turnOpen = eventsAtClose.filter((event) => event.type === "turn/start").length > eventsAtClose.filter((event) => event.type === "turn/end").length
+        expect(assemblyAtClose.session.events.slice(eventsAtClose.length).map((event) => event.type)).toEqual([
+          ...(stepOpen ? ["step/failed", "step/end"] : []),
+          ...(turnOpen ? ["turn/end"] : []),
+        ])
+      }
       expect(unhandled).toEqual([])
     } finally {
       gate.resolve()
@@ -1220,3 +1314,9 @@ describe("createSessionService — close lifecycle with a queue in flight (Task 
     }
   }, 60_000)
 })
+
+it('internal dual-route observer receives original complete assemblies without public hook enrollment',async()=>{
+ const {onOriginalHostAssembly}=await import('../src/host-assembly-observer.ts')
+ const service=createSessionService({workspace:process.cwd(),modelPolicy:'test-mock'})
+ try{const first=await service.assemblyFor('host-existing'),seen:unknown[]=[];const off=onOriginalHostAssembly(service,value=>seen.push(value),{includeExisting:true});expect(seen).toEqual([first]);const next=await service.assemblyFor('host-next');expect(seen).toEqual([first,next]);off();await service.assemblyFor('host-after');expect(seen).toEqual([first,next])}finally{await service.close()}
+},60000)

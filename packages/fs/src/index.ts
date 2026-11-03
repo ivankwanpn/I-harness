@@ -1,6 +1,7 @@
 import { readFile, writeFile, readdir, mkdir } from "node:fs/promises"
 import { filesystemApprovalIdentity } from "./approval-identity.ts"
 import { resolve, relative, isAbsolute, dirname } from "node:path"
+import { nativeMutation, nativeOperation, nativePlanValidationFailure, isInstructionReplan, declareInstructionReplan, declareToolResultOutcome, type InstructionReplanError } from "@i-harness/core-tools"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { FsToolFailure } from "./error.ts"
 import { createTextDiff, type TextDiff } from "@i-harness/text-diff"
@@ -8,9 +9,11 @@ import { FsToolError, softFail } from "./error.ts"
 import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
 import { normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit } from "./text.ts"
-import { parsePatch, applyPatch, type RewindCapture } from "./patch.ts"
+import { parsePatch, applyPatch, type RewindCapture, type PatchHunk } from "./patch.ts"
 import type { EscalationApprover, SandboxDenial, SandboxExecutionPolicy, SandboxMode } from "@i-harness/sandbox"
 import { ESCALATION_TARGETS, resolveCallPolicy } from "@i-harness/sandbox"
+import { fileReadPage, type FileReadArgs, type FileReadPage, type FileReadPolicy } from "./range-read.ts"
+export type { FileReadPolicy, InstructionReadScope } from "./range-read.ts"
 
 export { FsToolError, softFail, type FsToolErrorCode, type FsToolFailure } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
@@ -36,6 +39,13 @@ export function resolvePath(workspace: string, path: string): string {
     }
   }
   return resolved
+}
+
+function replanOutput(exec: ToolExec, error: InstructionReplanError, target: string, entered: boolean) {
+  const effects = entered ? { effectsUnknown: [target] } : { notApplied: [target] }
+  declareInstructionReplan(exec, error, effects)
+  declareToolResultOutcome(exec, entered ? 'unknown' : 'failed')
+  return { error: error.message, ...error.data, ...effects }
 }
 
 /**
@@ -115,6 +125,8 @@ function denialMessage(denial: SandboxDenial): string {
 }
 
 export interface FsToolDeps {
+  observeInstructionTarget?: (target: { path: string; kind: 'file' | 'directory' }, exec: ToolExec) => Promise<import('./range-read.ts').InstructionReadScope>
+  readPolicy?: FileReadPolicy
   workspace: string
   /** M16: WRITE confinement. The assembly builds this from the session's sandbox
    *  policy; absent means unconfined, which is the pre-M16 behavior a host that
@@ -238,15 +250,66 @@ function decodeUtf8Safely(bytes: Uint8Array): string | undefined {
 // declaration can move by editing another's.
 
 export function createFsTools(deps: FsToolDeps): Tool[] {
-  const implementation = [createFsTools, filesystemApprovalIdentity, resolvePath, resolveWriteCall, guardWrite, writeFileAtomic, assertSnapshotFresh, normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit, parsePatch, applyPatch, softFail].map((fn) => fn.toString()).join("\n")
-  const read: Tool<{ path: string }, { content: string } | FsToolFailure> = {
+  const implementation = [createFsTools, fileReadPage, filesystemApprovalIdentity, resolvePath, resolveWriteCall, guardWrite, writeFileAtomic, assertSnapshotFresh, normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit, parsePatch, applyPatch, softFail].map((fn) => fn.toString()).join("\n")
+  const read: Tool<FileReadArgs, FileReadPage | FsToolFailure> = {
     name: "read",
-    description: "read a file",
-    inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    description: deps.readPolicy ? "Read a file within a final JSON byte budget. Follow next_offset_bytes with the same digest to retrieve more; changed sources require restarting." : "read a file",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, ...(deps.readPolicy ? { offset_bytes: { type: "integer", minimum: 0 }, max_output_bytes: { type: "integer", minimum: 1024 }, digest: { type: "string" } } : {}) }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
     approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "read", implementation),
-    execute: async ({ path }) => softFail(async () => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") })),
+    captureNativePlan(args) {
+      try { const target = resolvePath(deps.workspace, args.path); return { targets: [{ path: target, kind: 'file', mode: 'read' }], operation: { kind: 'read', target, args: JSON.parse(JSON.stringify(args)) } } }
+      catch (error) {
+        if (!(error instanceof FsToolError)) throw error
+        let message = error.message
+        let truncated = false
+        if (deps.readPolicy) {
+          const requested = args.max_output_bytes
+          const cap = Math.min(deps.readPolicy.maxOutputBytes, Number.isSafeInteger(requested) && requested! >= 1024 ? requested! : deps.readPolicy.maxOutputBytes)
+          if (!Number.isSafeInteger(cap) || cap < 1024) throw new Error('Invalid file read policy')
+          const bytes = Buffer.from(message, 'utf8')
+          let end = bytes.length
+          while (Buffer.byteLength(JSON.stringify({ error: message, code: error.code, ...(truncated ? { reason_truncated: true } : {}) }), 'utf8') > cap && end > 0) {
+            truncated = true
+            end = Math.floor(end / 2)
+            while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--
+            message = bytes.subarray(0, end).toString('utf8') + ' [read failure reason truncated]'
+          }
+        }
+        throw nativePlanValidationFailure({ error: message, code: error.code, ...(truncated ? { reason_truncated: true } : {}) })
+      }
+    },
+    execute: async (_args, exec) => {
+      const { target, args } = nativeOperation<{ target: string; args: FileReadArgs }>(exec)
+      exec?.abortSignal?.throwIfAborted()
+      const result = await softFail(async () => {
+        const content = await readFile(target, { encoding: "utf8", signal: exec?.abortSignal })
+        // Page validation is part of a successful read. Invalid digest/offset
+        // requests must not produce a new incidental instruction selection.
+        if (deps.readPolicy) fileReadPage(content, args, deps.readPolicy)
+        const scope = exec && deps.observeInstructionTarget ? await deps.observeInstructionTarget({ path: target, kind: 'file' }, exec).catch(() => ({ status: 'unavailable' as const, reason: 'mapping-unavailable' as const })) : undefined
+        return deps.readPolicy ? fileReadPage(content, args, deps.readPolicy, scope) : { content, ...(scope ? { instruction_scope: scope } : {}) }
+      })
+      exec?.abortSignal?.throwIfAborted()
+      if (deps.readPolicy && "error" in result) {
+        const requested = args.max_output_bytes
+        const cap = Math.min(deps.readPolicy.maxOutputBytes, Number.isSafeInteger(requested) && requested! >= 1024 ? requested! : deps.readPolicy.maxOutputBytes)
+        if (!Number.isSafeInteger(cap) || cap < 1024) throw new Error("Invalid file read policy")
+        if (Buffer.byteLength(JSON.stringify(result), "utf8") > cap) {
+          const reason = Buffer.from(result.error, "utf8")
+          let end = reason.length
+          let bounded = { ...result, reason_truncated: true }
+          do {
+            end = Math.floor(end / 2)
+            while (end > 0 && (reason[end]! & 0xc0) === 0x80) end--
+            bounded = { ...result, error: reason.subarray(0, end).toString("utf8") + " [read failure reason truncated]", reason_truncated: true }
+          } while (Buffer.byteLength(JSON.stringify(bounded), "utf8") > cap && end > 0)
+          return bounded
+        }
+      }
+      return result
+    },
   }
   const write: Tool<{ path: string; text: string; sandbox_permissions?: string; justification?: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } | FsToolFailure> = {
     name: "write",
@@ -254,11 +317,23 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     inputSchema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" }, sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" }, justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" } }, required: ["path", "text"] },
     isReadOnly: false,
     approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "write", implementation),
-    execute: async ({ path, text, sandbox_permissions, justification }, exec: ToolExec) => softFail(async () => {
+    captureNativePlan(args) {
+      try {
+        const target = resolvePath(deps.workspace, args.path)
+        return { targets: [{ path: target, kind: 'file', mode: 'mutate' }], operation: { kind: 'write', target, args: JSON.parse(JSON.stringify(args)) } }
+      } catch (error) {
+        if (error instanceof FsToolError) throw nativePlanValidationFailure({ error: error.message, code: error.code })
+        throw error
+      }
+    },
+    execute: async (_args, exec: ToolExec) => softFail(async () => {
+      const { target, args: { path, text, sandbox_permissions, justification } } = nativeOperation<{ target: string; args: { path: string; text: string; sandbox_permissions?: string; justification?: string } }>(exec)
+      const mutation = nativeMutation(exec)
+      let entered = false
+      try {
       // M62: the ladder runs ONCE here, before any guard invocation — never
       // inside `guardWrite`, which apply_patch calls per hunk. The resolved
       // target names the operation in the approval prompt.
-      const target = resolvePath(deps.workspace, path)
       const ladder = await resolveWriteCall(deps, exec, "write", { sandbox_permissions, justification }, `write to ${target}`)
       if (ladder.kind === "refused") return ladder.failure
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
@@ -268,8 +343,11 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         ? await capturePreimage(deps.rewind, deps.workspace, target)
         : {}
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
+      mutation.before({ target, operation: 'mkdir' })
+      entered = true
       await mkdir(dirname(target), { recursive: true })
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
+      mutation.before({ target, operation: 'write' })
       await writeFile(target, text, "utf-8")
       const { beforeBytes, preImageRef, isNewFile } = captured
       const out: { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } = { ok: true }
@@ -281,16 +359,26 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         if (beforeText !== undefined) out.change = createTextDiff(path, beforeText, text)
       }
       return out
+      } catch (error) { if (isInstructionReplan(error)) return replanOutput(exec, error, target, entered); throw error
+      } finally { mutation.settle() }
     }),
   }
-  const list_dir: Tool<{ path: string }, { entries: string[] } | FsToolFailure> = {
+  const list_dir: Tool<{ path: string }, { entries: string[]; instruction_scope?: import('./range-read.ts').InstructionReadScope } | FsToolFailure> = {
     name: "list_dir",
     description: "list a directory",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
     approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "list_dir", implementation),
-    execute: async ({ path }) => softFail(async () => ({ entries: await readdir(resolvePath(deps.workspace, path)) })),
+    captureNativePlan(args) {
+      try { const target = resolvePath(deps.workspace, args.path); return { targets: [{ path: target, kind: 'directory', mode: 'read' }], operation: { kind: 'list', target, args: JSON.parse(JSON.stringify(args)) } } }
+      catch (error) { if (error instanceof FsToolError) throw nativePlanValidationFailure({ error: error.message, code: error.code }); throw error }
+    },
+    execute: async (_args, exec) => softFail(async () => {
+      const { target } = nativeOperation<{ target: string }>(exec), entries = await readdir(target)
+      const scope = exec && deps.observeInstructionTarget ? await deps.observeInstructionTarget({ path: target, kind: 'directory' }, exec).catch(() => ({ status: 'unavailable' as const, reason: 'mapping-unavailable' as const })) : undefined
+      return { entries, ...(scope ? { instruction_scope: scope } : {}) }
+    }),
   }
   const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number; sandbox_permissions?: string; justification?: string }, { ok: boolean; path: string; replacements: number; change: TextDiff; preImageRef?: string; isNewFile?: boolean } | FsToolFailure> = {
     name: "edit",
@@ -310,8 +398,20 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     },
     isReadOnly: false,
     approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "edit", implementation),
-    execute: async ({ path, old_string, new_string, replace_all = false, observedMtimeMs, sandbox_permissions, justification }, exec: ToolExec) => softFail(async () => {
-      const target = resolvePath(deps.workspace, path)
+    captureNativePlan(args) {
+      try {
+        const target = resolvePath(deps.workspace, args.path)
+        return { targets: [{ path: target, kind: 'file', mode: 'mutate' }], operation: { kind: 'edit', target, args: JSON.parse(JSON.stringify(args)) } }
+      } catch (error) {
+        if (error instanceof FsToolError) throw nativePlanValidationFailure({ error: error.message, code: error.code })
+        throw error
+      }
+    },
+    execute: async (_args, exec: ToolExec) => softFail(async () => {
+      const { target, args: { path, old_string, new_string, replace_all = false, observedMtimeMs, sandbox_permissions, justification } } = nativeOperation<{ target: string; args: { path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number; sandbox_permissions?: string; justification?: string } }>(exec)
+      const mutation = nativeMutation(exec)
+      let entered = false
+      try {
       const ladder = await resolveWriteCall(deps, exec, "edit", { sandbox_permissions, justification }, `write to ${target}`)
       if (ladder.kind === "refused") return ladder.failure
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
@@ -357,7 +457,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         }
       }
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
-      await writeFileAtomic(target, finalText)
+      await writeFileAtomic(target, finalText, undefined, boundary => { guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot); mutation.before(boundary); entered = true })
       return {
         ok: true,
         path,
@@ -368,6 +468,8 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         ...(preImageRef !== undefined ? { preImageRef } : {}),
         ...(deps.rewind !== undefined ? { isNewFile: false } : {}),
       }
+      } catch (error) { if (isInstructionReplan(error)) return replanOutput(exec, error, target, entered); throw error
+      } finally { mutation.settle() }
     }),
   }
   const apply_patch: Tool<{ patch_content: string; sandbox_permissions?: string; justification?: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } | FsToolFailure> = {
@@ -375,10 +477,31 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     description: "apply a multi-file structured patch (*** Begin/End Patch + Add/Delete/Update + @@ context)",
     inputSchema: { type: "object", properties: { patch_content: { type: "string" }, sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" }, justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" } }, required: ["patch_content"] },
     isReadOnly: false,
-    execute: async ({ patch_content, sandbox_permissions, justification }, exec: ToolExec) => softFail(async () => {
+    captureNativePlan(args) {
+      try {
+        const hunks = parsePatch(normalizeLineEndings(args.patch_content)).map(hunk => {
+          // Partial-effect results retain the original lexical label, which
+          // may be much longer than its normalized executable target.
+          if (hunk.path.length > 4096) throw new FsToolError('FS_TOO_LARGE', `patch path exceeds the 4096-character effect label limit: ${hunk.path}`)
+          return { ...hunk, absolutePath: resolvePath(deps.workspace, hunk.path) }
+        })
+        // Parser-internal optional fields may be undefined; the executable data
+        // contains only JSON values and is frozen by the registry.
+        const operation = JSON.parse(JSON.stringify({ kind: 'patch', args, hunks }))
+        return { targets: hunks.map(hunk => ({ path: hunk.absolutePath, kind: 'file' as const, mode: 'mutate' as const })), operation }
+      } catch (error) {
+        if (error instanceof FsToolError) throw nativePlanValidationFailure({ error: error.message, code: error.code })
+        throw error
+      }
+    },
+    execute: async (_args, exec: ToolExec) => softFail(async () => {
       // CRLF 正規化：patch 內容若帶 \r，parsePatch 會把 \r 當行內容 → replace 誤報
       // FS_EDIT_NOT_FOUND、純 add 寫入字面 \r。先統一成 LF 再解析。
-      const hunks = parsePatch(normalizeLineEndings(patch_content))
+      const { args: { patch_content, sandbox_permissions, justification }, hunks } = nativeOperation<{ args: { patch_content: string; sandbox_permissions?: string; justification?: string }; hunks: (PatchHunk & { absolutePath: string })[] }>(exec)
+      const mutation = nativeMutation(exec)
+      try {
+      const byPath = new Map(hunks.map(hunk => [hunk.path, hunk.absolutePath]))
+      const resolved = (path: string) => { const target = byPath.get(path); if (!target) throw new Error('Patch path outside captured plan'); return target }
       // M62: the ladder runs ONCE for this call, before the first hunk is
       // guarded. Awaiting it inside the guard would ask the human once per hunk
       // — a five-hunk patch would raise five prompts for one tool call, and each
@@ -397,14 +520,14 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       const recorder = deps.rewind
       const patchRewind: RewindCapture | undefined = recorder === undefined ? undefined : {
         take(path, before) {
-          const rel = relForRewind(deps.workspace, resolvePath(deps.workspace, path))
+          const rel = relForRewind(deps.workspace, resolved(path))
           return rel === null ? { blobId: null, isNewFile: false } : recorder.take(rel, before)
         },
       }
-      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, patchRewind, (target) => guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot))
+      const { applied, errors, replan } = await applyPatch(resolved, hunks, patchRewind, (target) => guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot), boundary => mutation.before(boundary))
       // M49: aggregate per-file changes when the parser exposed before/after
       // (update hunks); anything else keeps the original patch text as rawPatch.
-      const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } = {
+      const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string; instruction_replan?: import('@i-harness/core-tools').InstructionReplanData } = {
         ok: errors.length === 0,
         applied,
         errors,
@@ -413,7 +536,14 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       if (applied.length === 1 && withChange.length === 1) result.change = withChange[0]!.change
       else if (applied.length > 1 && withChange.length === applied.length) result.changes = withChange.map((entry) => entry.change!)
       if (withChange.length < applied.length) result.rawPatch = patch_content
+      if (replan) {
+        const effects = { applied: applied.map(item => item.path), notApplied: replan.remaining, ...(replan.entered ? { effectsUnknown: [errors.at(-1)!.path] } : {}) }
+        declareInstructionReplan(exec, replan.error, effects)
+        declareToolResultOutcome(exec, replan.entered ? 'unknown' : 'failed')
+        result.instruction_replan = { ...replan.error.data, ...effects }
+      }
       return result
+      } finally { mutation.settle() }
     }),
   }
   return [read, edit, write, apply_patch, list_dir]

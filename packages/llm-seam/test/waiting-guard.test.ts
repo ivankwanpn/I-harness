@@ -1,9 +1,53 @@
 import { setTimeout as realDelay } from "node:timers/promises"
 import { afterEach, expect, it, vi } from "vitest"
-import { createWaitingGuard, createRetryingClient, resolveRetryPolicy, type LLMRequest, type LLMStreamEvent, type ModelClient } from "../src/index.ts"
+import { createGenerationControl, createWaitingGuard, createRetryingClient, resolveRetryPolicy, describeHttpError, type LLMRequest, type LLMStreamEvent, type ModelClient } from "../src/index.ts"
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 
 const request: LLMRequest = { messages: [], tools: [], systemPrompt: "" }
-afterEach(() => vi.useRealTimers())
+it("a stalled HTTP error body retains its terminal hint and explicit Stop still wins", async () => {
+  vi.useFakeTimers()
+  const client: ModelClient = { async *stream(req) {
+    const response = new Response(new ReadableStream<Uint8Array>({}), { status: 400 })
+    yield { type: "error", error: await describeHttpError("fixture", response, req) }
+  } }
+  const guard = createWaitingGuard(client, { firstResponseMs: 100, progressMs: 100 })
+  const run = collect(guard)
+  await vi.advanceTimersByTimeAsync(100)
+  expect(await run.done).toMatchObject({ code: "INVALID_ARGUMENT", httpStatus: 400 })
+  const controller = new AbortController()
+  const stopped = collect(guard, { ...request, signal: controller.signal })
+  await vi.advanceTimersByTimeAsync(1)
+  controller.abort()
+  expect(await stopped.done).toMatchObject({ code: "ABORTED" })
+})
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
+it('does not treat an awaited managed reservation as provider silence or allocate another send', async () => {
+  vi.useFakeTimers()
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let calls = 0, reservations = 0, completed = false
+  vi.stubGlobal('fetch', async (url: string) => {
+    if (url !== 'https://wait.fixture.invalid/v1/chat/completions') throw new Error('Unexpected network destination')
+    calls++
+    return new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+  })
+  const generation = createGenerationControl({ signal: new AbortController().signal, async reserve() {
+    reservations++; entered.resolve(); await release.promise
+    return { issue() {}, async settle() {} }
+  } })
+  const model = createWaitingGuard(createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'fixture', baseUrl: 'https://wait.fixture.invalid' }), { firstResponseMs: 10, progressMs: 10 })
+  const result = collect(model, { ...request, generation })
+  void result.done.then(() => { completed = true })
+  await entered.promise
+  try {
+    await vi.advanceTimersByTimeAsync(25)
+    expect(completed).toBe(false)
+    expect(calls).toBe(0)
+    expect(reservations).toBe(1)
+    release.resolve()
+    expect(await result.done).toBeUndefined()
+    expect(calls).toBe(1)
+  } finally { release.resolve(); await result.done }
+})
 function fixture() {
   let req!: LLMRequest
   let resolve!: (value: IteratorResult<LLMStreamEvent>) => void

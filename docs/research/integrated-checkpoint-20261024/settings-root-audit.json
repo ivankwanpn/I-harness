@@ -1,0 +1,510 @@
+{
+  "base": "807d2cc082632544034aa13bbd8a75d2b952fcf0",
+  "head": "1ca5385621489e24d551d2201baf99df8459ca0c",
+  "physical": [
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\node_modules\\.pnpm\\chokidar@5.0.0_patch_hash=e_57308e9d82f262839d4bcd52d3500ed1\\node_modules\\chokidar\\handler.js",
+      "expected": "7b132a2ab051eef27c52983c9c7686cf9b4c66f4ade07de8c82c3f07c06803c1",
+      "actual": "7b132a2ab051eef27c52983c9c7686cf9b4c66f4ade07de8c82c3f07c06803c1",
+      "receipt": "fix2-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\desktop-gateway\\src\\host.ts",
+      "expected": "d2c67efa9df60e5976ec716918b09107a92f161d2dd36508a5ec128ac1d58d3e",
+      "actual": "d2c67efa9df60e5976ec716918b09107a92f161d2dd36508a5ec128ac1d58d3e",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\desktop-gateway\\test\\repeated-growth-diagnosis.test.ts",
+      "expected": "9fb750a75ec847dc97dd95d16e7ec7668b65d919bcb8208805f9a34fb93cec68",
+      "actual": "9fb750a75ec847dc97dd95d16e7ec7668b65d919bcb8208805f9a34fb93cec68",
+      "receipt": "fix2-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\desktop-gateway\\test\\settings-watch-close.test.ts",
+      "expected": "06de0c6372b1a640b9aa8a64ccc71fd5cd7cd3b30bbcf3f0f0e822fb8371ea2e",
+      "actual": "06de0c6372b1a640b9aa8a64ccc71fd5cd7cd3b30bbcf3f0f0e822fb8371ea2e",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\context-subsystems.ts",
+      "expected": "9b92583ce136e47e37044bdc9c03a3e96935d849ed645725c265299645139a70",
+      "actual": "9b92583ce136e47e37044bdc9c03a3e96935d849ed645725c265299645139a70",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\index.ts",
+      "expected": "977603d5323bea528112564be8b74b9a0a9d52e02ad88f476db427b81b4e40a2",
+      "actual": "977603d5323bea528112564be8b74b9a0a9d52e02ad88f476db427b81b4e40a2",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\instructions.ts",
+      "expected": "c0fad494456338284e720a7cfac7eb6511c82436062558109b7a44b2461dbe62",
+      "actual": "c0fad494456338284e720a7cfac7eb6511c82436062558109b7a44b2461dbe62",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\normalize\\execution.ts",
+      "expected": "87b76b2e5f717a8c14695796258b9315848fa985fff29d9ed40291d890295e84",
+      "actual": "87b76b2e5f717a8c14695796258b9315848fa985fff29d9ed40291d890295e84",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\normalize\\primitives.ts",
+      "expected": "2106dd94c3e68d8029f7ec645e44934288d50aaf4013e0a54b3c553bccba8211",
+      "actual": "2106dd94c3e68d8029f7ec645e44934288d50aaf4013e0a54b3c553bccba8211",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\normalize\\providers.ts",
+      "expected": "58d1569c51129b452803f54075fadbf1365b60c9f2eb2d244ed8b0a74796b0c3",
+      "actual": "58d1569c51129b452803f54075fadbf1365b60c9f2eb2d244ed8b0a74796b0c3",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\normalize\\settings.ts",
+      "expected": "11145d1d55490a12813a87573abcc0f2c511844015253690e022e8e2446ace81",
+      "actual": "11145d1d55490a12813a87573abcc0f2c511844015253690e022e8e2446ace81",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\normalize\\tui.ts",
+      "expected": "7e6f7eff87940192f7150b9eb691ea466bcb0490c290c95bfc0161687fcd21f6",
+      "actual": "7e6f7eff87940192f7150b9eb691ea466bcb0490c290c95bfc0161687fcd21f6",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\observation\\source-stamp.ts",
+      "expected": "571ae50cb0c8f622401af28342864b7a0c2f4c6ff9d1fd083c75e3cfe7a044e7",
+      "actual": "571ae50cb0c8f622401af28342864b7a0c2f4c6ff9d1fd083c75e3cfe7a044e7",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\observation\\watch-settings.ts",
+      "expected": "e504f436e9a0461346029911a47c4b6973ec74670f8e4c87fd2e03806c3dcb20",
+      "actual": "e504f436e9a0461346029911a47c4b6973ec74670f8e4c87fd2e03806c3dcb20",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\schema\\defaults.ts",
+      "expected": "a00637b8410fa15ebdb819ef027108596455ba4d45c23a3ae0a6eed8d8cf1c9c",
+      "actual": "a00637b8410fa15ebdb819ef027108596455ba4d45c23a3ae0a6eed8d8cf1c9c",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\schema\\types.ts",
+      "expected": "b61123ae6417c98f6579bdaf4a0efdb89e6716f9e401f754e7488aebe8f1d48c",
+      "actual": "b61123ae6417c98f6579bdaf4a0efdb89e6716f9e401f754e7488aebe8f1d48c",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\sections.ts",
+      "expected": "3e2443773f78071eb8cb0eed570cc5e454982a26881d6f661a3e4b3dc15696f7",
+      "actual": "3e2443773f78071eb8cb0eed570cc5e454982a26881d6f661a3e4b3dc15696f7",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\storage\\contracts.ts",
+      "expected": "1ddfaf92fe6a97b7b224251821ae9885ee7b0e3230965d6978633e9fe0bb8c06",
+      "actual": "1ddfaf92fe6a97b7b224251821ae9885ee7b0e3230965d6978633e9fe0bb8c06",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\storage\\instruction-migration.ts",
+      "expected": "60a17fab63db317e86cebc3f5eb08b8ab13bfaa31be8758cdb73a1143c1f5305",
+      "actual": "60a17fab63db317e86cebc3f5eb08b8ab13bfaa31be8758cdb73a1143c1f5305",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\storage\\json-patch.ts",
+      "expected": "da0a3c2b030bc77936c85ec19b20fc3c4b625d8f6a5059fe28d66bfc3b0ef2c2",
+      "actual": "da0a3c2b030bc77936c85ec19b20fc3c4b625d8f6a5059fe28d66bfc3b0ef2c2",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\storage\\layered-store.ts",
+      "expected": "2af7c8a5eb29165d0a1c5d27426ed17db53f2a1fcd4d82bd5aa34fb0482edf9b",
+      "actual": "2af7c8a5eb29165d0a1c5d27426ed17db53f2a1fcd4d82bd5aa34fb0482edf9b",
+      "receipt": "fix2-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\storage\\layers.ts",
+      "expected": "2f36fb7a30c1821d13d4e21e774cb1f7c2d2c244a32076aadd184ae2b0862fc2",
+      "actual": "2f36fb7a30c1821d13d4e21e774cb1f7c2d2c244a32076aadd184ae2b0862fc2",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\storage\\revision.ts",
+      "expected": "f61bf439590d41ec29475bced16290e68205656f7ef97aa66bffc798d1ee6438",
+      "actual": "f61bf439590d41ec29475bced16290e68205656f7ef97aa66bffc798d1ee6438",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\storage\\single-store.ts",
+      "expected": "2057a33dae4d46351d4d3d76e9678e2bb9a1cf21f24d4f72c9bc0db59c8d80a0",
+      "actual": "2057a33dae4d46351d4d3d76e9678e2bb9a1cf21f24d4f72c9bc0db59c8d80a0",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\src\\storage\\transaction.ts",
+      "expected": "4dd66b1273eb938ad603945471d405aa60e726763be970552b96f7dabc6304a4",
+      "actual": "4dd66b1273eb938ad603945471d405aa60e726763be970552b96f7dabc6304a4",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\agent-shell.test.ts",
+      "expected": "d594df526a5573af52787ef8dfc1947b3517cf1689a5c29b4270111680d53aa4",
+      "actual": "d594df526a5573af52787ef8dfc1947b3517cf1689a5c29b4270111680d53aa4",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\code-mode.test.ts",
+      "expected": "b18af8c885eb309e8a2c3cb18d80bcb274cc33d1fa3ea37a5a31675c6a3c9d3b",
+      "actual": "b18af8c885eb309e8a2c3cb18d80bcb274cc33d1fa3ea37a5a31675c6a3c9d3b",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\context-subsystems.test.ts",
+      "expected": "215b48c2ac254804363ad21a39365d12c37b19ea7c9f9214fddf0796723251d4",
+      "actual": "215b48c2ac254804363ad21a39365d12c37b19ea7c9f9214fddf0796723251d4",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\helpers\\settings-lease.ts",
+      "expected": "d84ede8bb60fcc1206ca4553a65ca8e558cec069d3341a9846ee2c02c4266668",
+      "actual": "d84ede8bb60fcc1206ca4553a65ca8e558cec069d3341a9846ee2c02c4266668",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\instructions.test.ts",
+      "expected": "ed8d6f90bb71454c972d31af39fadc8244b86a7bc3602affa504d6abab3ec090",
+      "actual": "ed8d6f90bb71454c972d31af39fadc8244b86a7bc3602affa504d6abab3ec090",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\layering.test.ts",
+      "expected": "824fcacd47fc3bf364e36b16753b94cdfd19cccf577702fcc8dd7656c4a5cde7",
+      "actual": "824fcacd47fc3bf364e36b16753b94cdfd19cccf577702fcc8dd7656c4a5cde7",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\model-retry-limit.test.ts",
+      "expected": "09fab5298a836c64abcfcd286ae2266f1ee499672262fcf117d9bdcb36d01e10",
+      "actual": "09fab5298a836c64abcfcd286ae2266f1ee499672262fcf117d9bdcb36d01e10",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\model-wait.test.ts",
+      "expected": "9af67ffdb96730df3a7733516ec3cd7d9a464ed52d01e58dfb1b991aaeb5458e",
+      "actual": "9af67ffdb96730df3a7733516ec3cd7d9a464ed52d01e58dfb1b991aaeb5458e",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\prompt-cache.test.ts",
+      "expected": "0cc5c2e26a3ad45c0e89fa678131b638839a6577d2e5b2d8f7d0331a4d068d7c",
+      "actual": "0cc5c2e26a3ad45c0e89fa678131b638839a6577d2e5b2d8f7d0331a4d068d7c",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\retired-tui-keys.test.ts",
+      "expected": "997e7877fa5a2e9656566957c41695498b5882cfe13644dabe68cbf80ac9f8a6",
+      "actual": "997e7877fa5a2e9656566957c41695498b5882cfe13644dabe68cbf80ac9f8a6",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\sections.test.ts",
+      "expected": "d9324e6774799c62871554c010fbdc5da1bc3ba8ba336eb6e8053259b3db981f",
+      "actual": "d9324e6774799c62871554c010fbdc5da1bc3ba8ba336eb6e8053259b3db981f",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\settings.test.ts",
+      "expected": "18d8a01eaefb3cb80cad58407b922753a61276bd9ef1c49b219fe639d7a40d2a",
+      "actual": "18d8a01eaefb3cb80cad58407b922753a61276bd9ef1c49b219fe639d7a40d2a",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\watch-baseline.test.ts",
+      "expected": "76772b5833a3f08ffe0805dd8de19106598820db9699f6592e80d2cde14ae4aa",
+      "actual": "76772b5833a3f08ffe0805dd8de19106598820db9699f6592e80d2cde14ae4aa",
+      "receipt": "fix2-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\watch-events.test.ts",
+      "expected": "2d8552198f3fbc4f86e439f0fa776c8811bd92ddbce61c0747de1abf3523ad0c",
+      "actual": "2d8552198f3fbc4f86e439f0fa776c8811bd92ddbce61c0747de1abf3523ad0c",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\watch-io.test.ts",
+      "expected": "bde57fae02aefe9532152e81eeba3ba9a4c6d12e01f132ea6e5390df86f64b10",
+      "actual": "bde57fae02aefe9532152e81eeba3ba9a4c6d12e01f132ea6e5390df86f64b10",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\watch-lease.test.ts",
+      "expected": "15a6341dfd45f106b9a720edadf74f0d824d411e24fd06cdfd2661440b94011c",
+      "actual": "15a6341dfd45f106b9a720edadf74f0d824d411e24fd06cdfd2661440b94011c",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\watch.test.ts",
+      "expected": "cfd6ce516cf3237e5af072c10d0f7d98ad5c9a2d79fcfdf82abb9b9aab0df01b",
+      "actual": "cfd6ce516cf3237e5af072c10d0f7d98ad5c9a2d79fcfdf82abb9b9aab0df01b",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\test\\wsl-product.test.ts",
+      "expected": "10663fba2c8c248b43b3f67822f9bd004c4ddfa1cf71af72fa5720e273bbb8bc",
+      "actual": "10663fba2c8c248b43b3f67822f9bd004c4ddfa1cf71af72fa5720e273bbb8bc",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\desktop-gateway\\package.json",
+      "expected": "b570323c7425982ce9e9dedfc6b6e0215e08e525a8a9ab35ee25db08c1692f4f",
+      "actual": "b570323c7425982ce9e9dedfc6b6e0215e08e525a8a9ab35ee25db08c1692f4f",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\fs-watch\\package.json",
+      "expected": "24ccf0b4aeb142d8a49f6d7f388aca4449eadc28744bb834cf0c90590a2ae696",
+      "actual": "24ccf0b4aeb142d8a49f6d7f388aca4449eadc28744bb834cf0c90590a2ae696",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\fs-watch\\src\\index.ts",
+      "expected": "2a17201fd8b74e65f01c509a90678640c282ac96f867866bbca025b58d2aac9f",
+      "actual": "2a17201fd8b74e65f01c509a90678640c282ac96f867866bbca025b58d2aac9f",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\fs-watch\\src\\leases.ts",
+      "expected": "b0553ad56be27deceb09c8186d9be66d85649920cb0d10c647069a108856caec",
+      "actual": "b0553ad56be27deceb09c8186d9be66d85649920cb0d10c647069a108856caec",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\fs-watch\\src\\routing.ts",
+      "expected": "61ab8c5a55528b4bf8db52bf4da0e219cb5026029adf2216ce7c771839f96b0a",
+      "actual": "61ab8c5a55528b4bf8db52bf4da0e219cb5026029adf2216ce7c771839f96b0a",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\fs-watch\\src\\stream.ts",
+      "expected": "1be0c5186c867b003feb40dacfd8d1d8b78d3ac028deebd0c20526d07db67900",
+      "actual": "1be0c5186c867b003feb40dacfd8d1d8b78d3ac028deebd0c20526d07db67900",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\fs-watch\\src\\types.ts",
+      "expected": "974794a857974e51f3b99ac8fc9f431d12109e07dad928c72abaad934c485cdb",
+      "actual": "974794a857974e51f3b99ac8fc9f431d12109e07dad928c72abaad934c485cdb",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\settings\\package.json",
+      "expected": "bf48fb5f3cf65bedecbd516055550129d363486403a4130d6bc49f8ed7217e0f",
+      "actual": "bf48fb5f3cf65bedecbd516055550129d363486403a4130d6bc49f8ed7217e0f",
+      "receipt": "fix1-final-before.txt"
+    },
+    {
+      "file": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\pnpm-lock.yaml",
+      "expected": "2f0350132a4ce84d7e1ef1b01d20973def91cdbb75dbdcc061f82cc56bee82a3",
+      "actual": "2f0350132a4ce84d7e1ef1b01d20973def91cdbb75dbdcc061f82cc56bee82a3",
+      "receipt": "fix1-final-before.txt"
+    }
+  ],
+  "owned": [
+    {
+      "file": "packages/desktop-gateway/src/host.ts",
+      "actual": "a901b84878ea65bd5b2c911030c13f10643aae9d",
+      "expected": "a901b84878ea65bd5b2c911030c13f10643aae9d"
+    },
+    {
+      "file": "packages/desktop-gateway/test/settings-watch-close.test.ts",
+      "actual": "53b6edad924388786e3607621a18583ebae2728d",
+      "expected": "53b6edad924388786e3607621a18583ebae2728d"
+    },
+    {
+      "file": "packages/settings/src/index.ts",
+      "actual": "ab8f5bd9d895562da20fa77196c4db40b493cc31",
+      "expected": "ab8f5bd9d895562da20fa77196c4db40b493cc31"
+    },
+    {
+      "file": "packages/settings/src/observation/source-stamp.ts",
+      "actual": "f1b75ad58ec6b24624bb45a229d9ff6e1f59c7e2",
+      "expected": "f1b75ad58ec6b24624bb45a229d9ff6e1f59c7e2"
+    },
+    {
+      "file": "packages/settings/src/observation/watch-settings.ts",
+      "actual": "529a785b687e95af52dd5c415fc588d20e2b770f",
+      "expected": "529a785b687e95af52dd5c415fc588d20e2b770f"
+    },
+    {
+      "file": "packages/settings/src/storage/contracts.ts",
+      "actual": "8d2cca2f8385f6ce87435ff495a97316f481ce8a",
+      "expected": "8d2cca2f8385f6ce87435ff495a97316f481ce8a"
+    },
+    {
+      "file": "packages/settings/src/storage/layered-store.ts",
+      "actual": "db2573739761e709d83148e15faddd1193f3c11d",
+      "expected": "db2573739761e709d83148e15faddd1193f3c11d"
+    },
+    {
+      "file": "packages/settings/src/storage/transaction.ts",
+      "actual": "d3866ca2da044697b91062e23e1affa71928d57f",
+      "expected": "d3866ca2da044697b91062e23e1affa71928d57f"
+    },
+    {
+      "file": "packages/settings/test/helpers/settings-lease.ts",
+      "actual": "c0725028fad099b8f7b3dee444451d4f34dfb614",
+      "expected": "c0725028fad099b8f7b3dee444451d4f34dfb614"
+    },
+    {
+      "file": "packages/settings/test/layering.test.ts",
+      "actual": "b21418dddfe292a0358c50a5b882a3997bcda122",
+      "expected": "b21418dddfe292a0358c50a5b882a3997bcda122"
+    },
+    {
+      "file": "packages/settings/test/watch-baseline.test.ts",
+      "actual": "5a137ea74ae8b617fe25eb439d9da1a6a2b1cb44",
+      "expected": "5a137ea74ae8b617fe25eb439d9da1a6a2b1cb44"
+    },
+    {
+      "file": "packages/settings/test/watch-events.test.ts",
+      "actual": "296592926f5eabc4a56ef97cc072cc4522efd414",
+      "expected": "296592926f5eabc4a56ef97cc072cc4522efd414"
+    },
+    {
+      "file": "packages/settings/test/watch-io.test.ts",
+      "actual": "ad060fe45b62f887df957c501df3e156d796be66",
+      "expected": "ad060fe45b62f887df957c501df3e156d796be66"
+    },
+    {
+      "file": "packages/settings/test/watch-lease.test.ts",
+      "actual": "ebc428f5c24b4dc85fff3af326a88595974307a4",
+      "expected": "ebc428f5c24b4dc85fff3af326a88595974307a4"
+    },
+    {
+      "file": "packages/settings/test/watch.test.ts",
+      "actual": "53b696d8f514b29e5b7ee62e14dc1f0def271263",
+      "expected": "53b696d8f514b29e5b7ee62e14dc1f0def271263"
+    }
+  ],
+  "logs": [
+    {
+      "file": "fix1-green.log",
+      "sha256": "1f6c67db2e56cbd5635ee37c382c5c516f2fd0cdbbf8006f50e2078fb24271eb"
+    },
+    {
+      "file": "fix1-red.log",
+      "sha256": "2219cd16a8cd14746d56bd0e6c478493728e0e26eb79248f588f2e170a93543f"
+    },
+    {
+      "file": "fix1-typecheck.log",
+      "sha256": "ace395c33b51a43e4b66969d1e9a762872a10ba1c88b95d12513aeb0abf72274"
+    },
+    {
+      "file": "fix1-watch-layering.log",
+      "sha256": "6fd0267b5f4ce015bb43a52268cdf686066dd3ec642d85002ad4765f50583e33"
+    },
+    {
+      "file": "fix2-cases.log",
+      "sha256": "00a10b823e32185c62fbe1bcdb1cb9e9553071ea2aa00555384ea89b19c2cc56"
+    },
+    {
+      "file": "fix2-crossdrive.log",
+      "sha256": "384af0a5a37b31623b83047afd8bf4a1c9a858186bacfb273be4759742403233"
+    },
+    {
+      "file": "fix2-typecheck.log",
+      "sha256": "ace395c33b51a43e4b66969d1e9a762872a10ba1c88b95d12513aeb0abf72274"
+    },
+    {
+      "file": "gateway-close-final.log",
+      "sha256": "ce76bf865ce026746fd0b242c335e72cfea27bf26a651c2d5cb900b1d01c45c2"
+    },
+    {
+      "file": "gateway-typecheck-final.log",
+      "sha256": "5a3973f79ed9becd5f23c4feff467513814de7ea381d75a4d2e339aa8b8edca9"
+    },
+    {
+      "file": "retired-keys-baseline.log",
+      "sha256": "f8dd2d9e46efbc5239ada0a3f462ca09629867ecce89d9a6981252276374c3f9"
+    },
+    {
+      "file": "review-startup-probe.log",
+      "sha256": "51137aadaa46492cfd117153f05594217f78eca65f888771ae42e644159f9abf"
+    },
+    {
+      "file": "settings-held-read-final.log",
+      "sha256": "cac84fc0d1a02fb29442c651bf269b33e9e2e0ee33ab506326b8c6eb6ceb957e"
+    },
+    {
+      "file": "settings-typecheck-final.log",
+      "sha256": "5a3973f79ed9becd5f23c4feff467513814de7ea381d75a4d2e339aa8b8edca9"
+    },
+    {
+      "file": "settings-typecheck.log",
+      "sha256": "2a1737e0daed5e79d675a08072343da5d05bb5d9ddcc683f5c05485402964dbc"
+    },
+    {
+      "file": "settings-whole-final.log",
+      "sha256": "eba14a124e9ff34dda2999eb39b2c1daf98a8f0863040e8fa1017a64f6e11bf6"
+    },
+    {
+      "file": "settings-whole.log",
+      "sha256": "db1932ae1063466ee833c1e45d8f1cf89d7d067a146f9e0e83f4d9a887b8ff82"
+    },
+    {
+      "file": "task-1-diagnostics-green.log",
+      "sha256": "104ec5cbd6bbe0d6e5ce582dbbcbedea28a503b1198afc1377fe2e5f21884a9d"
+    },
+    {
+      "file": "task-1-diagnostics-red.log",
+      "sha256": "15a498b3ab38ae82a6c744a7c2d973e1b3175e255184cf225239ffd75fda36ab"
+    },
+    {
+      "file": "task-1-green.log",
+      "sha256": "6aedc6411facc0fc005fa57d184d0f5337ed73176ae3595b61ea0f0a376d768e"
+    },
+    {
+      "file": "task-1-io.log",
+      "sha256": "b19066cf8ac6c2b16718a098c736abc5fb14f338a5f08cbc381e97949dd51330"
+    },
+    {
+      "file": "task-1-red.log",
+      "sha256": "9e2d0e84f3a6390b1157272b33420b0c0756b5e27418a4d2d77ebe604686e729"
+    },
+    {
+      "file": "task-2-baseline-final.log",
+      "sha256": "3bad88791ab614b9a21eb66d2499e1a1a55acc66b3b004a2ad4273aeff32e70d"
+    },
+    {
+      "file": "task-2-events.log",
+      "sha256": "ac0e479b7a29d9761ba4b87a2239945b64d5046e68249b1c2b5fbbd3936ad3e2"
+    },
+    {
+      "file": "task-2-green.log",
+      "sha256": "140017b06483412e1ce53ccc52e16167dc6ff61c1c52f6ef9e7eed3fe3590ec2"
+    },
+    {
+      "file": "task-2-red.log",
+      "sha256": "e08999418a5bbdd1e0b56c64b179009c6ce3b2836991070448aaa39a4eb12e60"
+    },
+    {
+      "file": "task-3-filesystem.log",
+      "sha256": "968a05b051c6dd6c31ddb1385cb49a11b0d5140b6edd5bc1535a7fc6c6f340c9"
+    },
+    {
+      "file": "task-3-green.log",
+      "sha256": "1bc03ac5ef1014b4be3f784c2c8494ea62ddf19f49cf8fd5a67f6a36f712669f"
+    },
+    {
+      "file": "task-3-red.log",
+      "sha256": "227a6542f27f4a51ca01e46dc59e85ae395d14a43afd3ba78984409987a2c619"
+    }
+  ],
+  "errors": []
+}

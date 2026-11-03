@@ -1,0 +1,12 @@
+{
+  "created": "2026-10-20T23:50:23.463Z",
+  "root": "D:\\I-harness-main\\.tmp\\r4v1",
+  "inventorySha256": "d35800afe5e607ebcf5f2de027773e207d8c63e2b61596c8db86f1605738f359",
+  "regularFiles": 21601,
+  "regularBytes": 1237041147,
+  "links": 0,
+  "finalInputSha256": "9db007f013b2a2112a73df325ebdfe3946571c39ed7a0c1c5debb76680e183b0",
+  "portableSha256": "9afec259828969cdd578087dfe2ed98e23f5adc9f9fd9ce2bbf1437a25055c9f",
+  "portableOriginals": 53,
+  "sourceQualification": "Product/test freeze33dab47e; exact per-gate workspace source manifests remain authoritative. Final inventory adds closing audit/seal helpers; source-final2771 precedes this sealer, final-input2772 includes it. No new product qualification is inferred from a metadata helper."
+}

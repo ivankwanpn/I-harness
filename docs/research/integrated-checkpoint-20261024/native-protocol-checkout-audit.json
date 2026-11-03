@@ -1,0 +1,40 @@
+{
+  "checkedAt": "2026-10-25T09:00:41.845Z",
+  "records": [
+    {
+      "root": "D:/I-harness-main",
+      "bytes": 26061,
+      "bom": "23204e",
+      "crlf": 0,
+      "lf": 167,
+      "raw": "6b0d187edb52222b72bbdc5b6aa777113dd9ac19fa2a5cfa5251013f19e35991",
+      "normalizedLf": "6b0d187edb52222b72bbdc5b6aa777113dd9ac19fa2a5cfa5251013f19e35991",
+      "manifestProtocol": "6b0d187edb52222b72bbdc5b6aa777113dd9ac19fa2a5cfa5251013f19e35991"
+    },
+    {
+      "root": "C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main",
+      "bytes": 28636,
+      "bom": "23204e",
+      "crlf": 173,
+      "lf": 173,
+      "raw": "fc0e8472f35a210d9cab523c226ad53866947f81dde4c525ed3562be1663a287",
+      "normalizedLf": "e795fc9cae6e26d45ecdba592e13f84eccc803bae141ffc37f6acd3d0bd2912c",
+      "manifestProtocol": "fc0e8472f35a210d9cab523c226ad53866947f81dde4c525ed3562be1663a287"
+    },
+    {
+      "root": "C:/Users/inkik/.codex/worktrees/context-native-transfer/I-harness-main",
+      "bytes": 28463,
+      "bom": "23204e",
+      "crlf": 0,
+      "lf": 173,
+      "raw": "e795fc9cae6e26d45ecdba592e13f84eccc803bae141ffc37f6acd3d0bd2912c",
+      "normalizedLf": "e795fc9cae6e26d45ecdba592e13f84eccc803bae141ffc37f6acd3d0bd2912c",
+      "manifestProtocol": "fc0e8472f35a210d9cab523c226ad53866947f81dde4c525ed3562be1663a287"
+    }
+  ],
+  "gitE68": {
+    "bytes": 28463,
+    "sha256": "e795fc9cae6e26d45ecdba592e13f84eccc803bae141ffc37f6acd3d0bd2912c",
+    "normalizedLf": "e795fc9cae6e26d45ecdba592e13f84eccc803bae141ffc37f6acd3d0bd2912c"
+  }
+}

@@ -1,14 +1,27 @@
-import { createSession } from "@i-harness/core-session"
+import {associateTableProjection} from './runtime-projection.ts'
+import type { SessionView, FactOwner } from "@i-harness/core-session"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
+import type { ResultPublication } from './result-publication.ts'
 
-export type ChildStatus = "running" | "waiting" | "completed" | "killed" | "error"
-export interface ChildAgentEntry {
+export type ChildStatus = "running" | "waiting" | "completed" | "killed" | "error" | "recovery-required"
+export interface ChildAgentEntry extends ResultPublication {
   path: string
   status: ChildStatus
-  session: ReturnType<typeof createSession>
+  session: SessionView
+  /** Process-local capability for this exact child view, never serialized. */
+  factOwner?: FactOwner
+  /** Exact live model source, installed only by real child composition. */
+  executionModel?: () => import('@i-harness/llm-seam').ModelClient
   controller: AbortController
   finalText?: string
+  result?: import("./task/result.ts").RetainedTaskResult
+  taskId?: string
+  /** Original process-local body capture; never serialized. */
+  resultCapture?: import("./child/result.ts").ChildResultSettlement
+  resultLifetime?: () => boolean
   error?: string
+  retention?: "memory" | "pending" | "durable" | "failed"
+  retentionError?: string
   mailbox: string[]
   jobId?: string
   unmount?: () => void
@@ -72,7 +85,7 @@ export function createAgentTable(): AgentTable {
   const publish = (change: AgentTableChange) => {
     for (const listener of [...listeners]) { try { listener(change) } catch { /* Observers never interrupt producers. */ } }
   }
-  return {
+  const result:AgentTable = {
     entries: () => table,
     add: (path, entry) => { table.set(path, entry); publish({ kind: "add", path, entry }) },
     get: (path) => table.get(path),
@@ -88,6 +101,16 @@ export function createAgentTable(): AgentTable {
     },
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
   }
+  associateTableProjection(result,entry=>{const path=entry.path;let projection:Promise<void>|undefined;return terminal=>projection??=(async()=>{
+    if(terminal.agentPath!==path)throw Error('Original agent entry changed');if(table.get(path)!==entry){if(!table.has(path))return;throw Error('Original agent entry replaced')}
+    if((terminal.outcome===undefined||terminal.outcome==='recovery-required'))throw Error('Original agent terminal outcome unavailable')
+    if(entry.status==='killed'&&terminal.outcome!=='cancelled')return
+    entry.status=terminal.outcome==='cancelled'?'killed':terminal.outcome==='error'?'error':'waiting';entry.taskId=terminal.id
+    if(terminal.result)entry.result=terminal.result
+    if(terminal.resultText!==undefined)entry.finalText=terminal.resultText
+    if(terminal.error!==undefined)entry.error=terminal.error
+    publish({kind:'update',path,entry})
+  })()});return result
 }
 
 /** W11: how long the entry's CURRENT run has been going — `undefined` when

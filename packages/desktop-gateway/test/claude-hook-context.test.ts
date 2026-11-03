@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createSessionService } from "@i-harness/session-executor"
 import { append, createSession } from "@i-harness/core-session"
+import { recordFixture } from './managed-fixture.ts'
 import type { LLMRequest, ModelClient } from "../../llm-seam/src/index.ts"
 import { createHookSettings } from "../src/hook-settings.ts"
 import { pluginExtensions } from "../src/plugin-mount.ts"
@@ -109,7 +110,7 @@ it.each(["full-access", "plan"])("reports actual %s mode to approved Desktop plu
   try {
     const assembly = await f.service.assemblyFor("s")
     f.fullAccess()
-    if (mode === "plan") append(assembly.session, { type: "plan/mode", mode: "on" })
+    if (mode === "plan") await recordFixture(assembly.factOwner, { type: "plan/mode", mode: "on" })
     const row = (await f.settings.state()).handlers[0]!
     await f.settings.mutate({ action: "approve", id: row.id, sha256: row.sha256 })
     const input = JSON.parse((await readFile(f.capture, "utf8")).trim())

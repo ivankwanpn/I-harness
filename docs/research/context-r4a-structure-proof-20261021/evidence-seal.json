@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-20T21:30:31.072Z",
+  "entries": 1456,
+  "files": 1432,
+  "links": 24,
+  "bytes": 33625065,
+  "inventorySha256": "b82b8244f296d04c254c4f38b25711e29247facd179e851d1842650eb6b87fde",
+  "exclusions": [
+    "evidence-inventory.json",
+    "evidence-seal.json"
+  ],
+  "sourceSha256": "943c5498f2252d31d5567223b8ad7dce0a9522176caec8d6e9476d66b39a6d07"
+}

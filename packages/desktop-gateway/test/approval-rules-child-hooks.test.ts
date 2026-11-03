@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -33,16 +34,16 @@ async function childHookFixture(spawnName: "spawn_agent" | "spawn_teammate", cha
   const inputs = { skillDirs: [], mcpServerConfigs: {}, commandDescriptors: [], agentDescriptors: [], hookConfigs: [hookPath] }
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
   await coordinator.create({ sessionId: "lead" })
-  const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } }
+  const parent: ModelClient = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   let rounds = 0
-  const child: ModelClient = { async *stream() {
+  const child: ModelClient = controlledModel(request => ({ async *stream() {
     if (++rounds === 1) yield { type: "tool_call", call: { id: "ordinary-read", name: "read", args: { path: "fixture.txt" } } }
     else if (rounds === 2 && !change) yield { type: "tool_call", call: { id: "wrapper-read", name: "code_exec", args: { code: spawnName === "spawn_teammate"
       ? 'const file = await tools.read({path:"fixture.txt"});text(file.content);const members = await tools.list_members({});text(members.members.map(m=>m.name));const tasks = await tools.team_task_list({});text(tasks.tasks)'
       : 'const file = await tools.read({path:"fixture.txt"});text(file.content)' } } }
     else yield { type: "text/chunk", text: "Child completed" }
     yield { type: "end" }
-  } }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, model: parent, sandbox: "read-only", approveAll: true, coordinator,
     team: {}, concurrentSessionTeams: true, codeMode: { mode: "mixed" },
     extensionsFor: async () => pluginExtensions(inputs, configDir, "lead", () => {}),

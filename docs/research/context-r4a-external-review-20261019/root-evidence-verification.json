@@ -1,0 +1,432 @@
+{
+  "checkedAt": "2026-10-19T00:13:08.686Z",
+  "head": "41e97ecb80149bfe99bb7151c3bd5a0b7c11a9e7",
+  "closedManifestSha256": "2a55e1c00b7fd3be8244d89e745f78e0e2cc28d1ec6c94c8b0fcbfcca0c27221",
+  "closedFiles": 53,
+  "sourceManifestSha256": "7401ba918f6871160a3c0d3326fc94e45b2f503680f4211629421227a930e168",
+  "currentManifestFiles": 4587,
+  "receipts": [
+    {
+      "label": "a1-gateway-retained-suite",
+      "exitCode": 0,
+      "sourceBefore": "3ec02830bfeff33e6fc4903db08b2991fc1fe0f0d9802693c67a7cb5f192ff8c",
+      "sourceAfter": "3ec02830bfeff33e6fc4903db08b2991fc1fe0f0d9802693c67a7cb5f192ff8c",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a1-session-executor-baseline",
+      "exitCode": 0,
+      "sourceBefore": "0ef007cd233a009efeedab5ac0dc239cfd76766fc2e0f69bc4dec8bb05300967",
+      "sourceAfter": "0ef007cd233a009efeedab5ac0dc239cfd76766fc2e0f69bc4dec8bb05300967",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a1-subagent-retained-and-protocol",
+      "exitCode": 0,
+      "sourceBefore": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "sourceAfter": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a2-exec-suite",
+      "exitCode": 0,
+      "sourceBefore": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "sourceAfter": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a2-executor-retained-and-code",
+      "exitCode": 1,
+      "sourceBefore": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "sourceAfter": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a2-output-retention-suite",
+      "exitCode": 0,
+      "sourceBefore": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "sourceAfter": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a6-context-output-suite",
+      "exitCode": 0,
+      "sourceBefore": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "sourceAfter": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a6-core-tools-suite",
+      "exitCode": 0,
+      "sourceBefore": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "sourceAfter": "9039f3a04289c689ffb6e65adff4d8e385cc39779f6c4014a81f192f34ecc5cc",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a6-session-executor-full-head-baseline",
+      "exitCode": 1,
+      "sourceBefore": "c0f3e4c30f361a29fa693f1c7f8910abe1417eac1fc6dbb6d6cb7d96ba49d836",
+      "sourceAfter": "c0f3e4c30f361a29fa693f1c7f8910abe1417eac1fc6dbb6d6cb7d96ba49d836",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "a6-session-executor-full",
+      "exitCode": 1,
+      "sourceBefore": "17ab2dcb6a1b7daad5ba68fd13a8b6d44f3005336ef9b6dd49b1d3cccc434798",
+      "sourceAfter": "c0f3e4c30f361a29fa693f1c7f8910abe1417eac1fc6dbb6d6cb7d96ba49d836",
+      "changedDuringRun": [
+        "packages/exec/src/capture/frames.ts",
+        "packages/exec/src/index.ts",
+        "packages/exec/src/jobs/contracts.ts",
+        "packages/exec/src/jobs/records.ts",
+        "packages/exec/src/jobs/views.ts",
+        "packages/exec/test/managed-frames.test.ts",
+        "packages/session-executor/src/lifecycle/exec-result-retention.ts",
+        "packages/subagent/src/task/registry.ts",
+        "packages/subagent/src/task/validation.ts",
+        "packages/session-executor/.tmp/sandbox-redesign-caller-4ElzQM/sessions/native-context/context-output/context-output/9c704cd74b871924a6a258a93d9cbb04e0457af182b0b98d33e7fb0ae9c92fb7/managed-v1/ctxv1_152b30a48759991127c2a5871bd39fe34d1d9058fa6ae743cabd682aa4d0135e/access/9225e94b62061d2cb5897ec47ecb7aec6ef354539bd77a136099592a7e364b75.json",
+        "packages/session-executor/.tmp/sandbox-redesign-caller-4ElzQM/sessions/native-context/context-output/context-output/9c704cd74b871924a6a258a93d9cbb04e0457af182b0b98d33e7fb0ae9c92fb7/managed-v1/ctxv1_152b30a48759991127c2a5871bd39fe34d1d9058fa6ae743cabd682aa4d0135e/manifest.json",
+        "packages/session-executor/.tmp/sandbox-redesign-caller-4ElzQM/sessions/native-context/context-output/context-output/9c704cd74b871924a6a258a93d9cbb04e0457af182b0b98d33e7fb0ae9c92fb7/managed-v1/ctxv1_152b30a48759991127c2a5871bd39fe34d1d9058fa6ae743cabd682aa4d0135e/operation.json",
+        "packages/session-executor/.tmp/sandbox-redesign-caller-4ElzQM/sessions/native-context/context-output/context-output/9c704cd74b871924a6a258a93d9cbb04e0457af182b0b98d33e7fb0ae9c92fb7/managed-v1/ctxv1_152b30a48759991127c2a5871bd39fe34d1d9058fa6ae743cabd682aa4d0135e/pins/9225e94b62061d2cb5897ec47ecb7aec6ef354539bd77a136099592a7e364b75.json"
+      ],
+      "sourceIdentity": [
+        {
+          "path": "packages/exec/src/capture/frames.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        },
+        {
+          "path": "packages/exec/src/index.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        },
+        {
+          "path": "packages/exec/src/jobs/contracts.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        },
+        {
+          "path": "packages/exec/src/jobs/records.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        },
+        {
+          "path": "packages/exec/src/jobs/views.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        },
+        {
+          "path": "packages/exec/test/managed-frames.test.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        },
+        {
+          "path": "packages/session-executor/src/lifecycle/exec-result-retention.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        },
+        {
+          "path": "packages/subagent/src/task/registry.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        },
+        {
+          "path": "packages/subagent/src/task/validation.ts",
+          "before": [
+            "candidate-crlf"
+          ],
+          "after": [
+            "handoff-crlf"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "final-a1-subagent",
+      "exitCode": 0,
+      "sourceBefore": "1fc6de6d16faf6695d15d2a6073cd85601abc5c1d7cd86a26a951479471d88f0",
+      "sourceAfter": "1fc6de6d16faf6695d15d2a6073cd85601abc5c1d7cd86a26a951479471d88f0",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "final-a1a2-executor",
+      "exitCode": 0,
+      "sourceBefore": "1fc6de6d16faf6695d15d2a6073cd85601abc5c1d7cd86a26a951479471d88f0",
+      "sourceAfter": "1fc6de6d16faf6695d15d2a6073cd85601abc5c1d7cd86a26a951479471d88f0",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    },
+    {
+      "label": "final-types",
+      "exitCode": 0,
+      "sourceBefore": "1fc6de6d16faf6695d15d2a6073cd85601abc5c1d7cd86a26a951479471d88f0",
+      "sourceAfter": "1fc6de6d16faf6695d15d2a6073cd85601abc5c1d7cd86a26a951479471d88f0",
+      "changedDuringRun": [],
+      "sourceIdentity": []
+    }
+  ],
+  "copies": [
+    {
+      "source": "packages/exec/src/capture/frames.ts",
+      "copy": "context-r4a-gateway-20261019-075731\\node_modules\\@i-harness\\exec\\src\\capture\\frames.ts",
+      "sha256": "a53d0e596a1961ab056da11da35c035ab1c28c7679ab2aeac947fd6fb26279ce"
+    },
+    {
+      "source": "packages/exec/src/index.ts",
+      "copy": "context-r4a-gateway-20261019-075731\\node_modules\\@i-harness\\exec\\src\\index.ts",
+      "sha256": "516c19e32d772b57e7253efb5407617ec3648fa407e43b4a9730f4a912e4ee7a"
+    },
+    {
+      "source": "packages/exec/src/jobs/contracts.ts",
+      "copy": "context-r4a-gateway-20261019-075731\\node_modules\\@i-harness\\exec\\src\\jobs\\contracts.ts",
+      "sha256": "0c6e16a8d5849d7636f18a5ce6adc862712828091e673ede57871e465c174bf8"
+    },
+    {
+      "source": "packages/exec/src/jobs/views.ts",
+      "copy": "context-r4a-gateway-20261019-075731\\node_modules\\@i-harness\\exec\\src\\jobs\\views.ts",
+      "sha256": "00044d16c95f9547440db06bf7c8bc833418f1a025eb49a49d88a898a0d92e99"
+    },
+    {
+      "source": "packages/exec/src/jobs/records.ts",
+      "copy": "context-r4a-gateway-20261019-075731\\node_modules\\@i-harness\\exec\\src\\jobs\\records.ts",
+      "sha256": "ea4efb07214281909c16e3243b1ebb94c7c60f5bb7d63927a69ef702d1a128e8"
+    },
+    {
+      "source": "packages/session-executor/src/lifecycle/exec-result-retention.ts",
+      "copy": "context-r4a-gateway-20261019-075731\\node_modules\\@i-harness\\session-executor\\src\\lifecycle\\exec-result-retention.ts",
+      "sha256": "73b05464de871e728d3c708854fc6438ac99572e86c32107d6a6e8c44f32f156"
+    },
+    {
+      "source": "packages/subagent/src/task/registry.ts",
+      "copy": "context-r4a-gateway-20261019-075731\\node_modules\\@i-harness\\subagent\\src\\task\\registry.ts",
+      "sha256": "a19b0520fb1e66a61356eb12d7da2f86874c0d613eecf6fce4498c591f0cc871"
+    },
+    {
+      "source": "packages/subagent/src/task/validation.ts",
+      "copy": "context-r4a-gateway-20261019-075731\\node_modules\\@i-harness\\subagent\\src\\task\\validation.ts",
+      "sha256": "09b29b1134364145efeaf57b5a9dba7fd1d54bd261d4baf58781d5c0361d7bba"
+    }
+  ],
+  "cli": {
+    "bytes": 6743847,
+    "sha256": "42e891038aa008c45ca7c4db955b86ed49013744c869d10fb1d7ab290d179429"
+  },
+  "omittedTracked": [
+    "packages/agent-team/src/README.md",
+    "packages/code-mode/src/runtime/README.md",
+    "packages/code-retrieval/src/service/README.md",
+    "packages/coding-plans/README.md",
+    "packages/coding-plans/licenses/cc-switch-LICENSE",
+    "packages/coding-plans/licenses/codex-LICENSE",
+    "packages/compaction/README.md",
+    "packages/context-engine/README.md",
+    "packages/core-agent/README.md",
+    "packages/core-plugin/README.md",
+    "packages/core-session/README.md",
+    "packages/core-tools/README.md",
+    "packages/desktop-gateway/test/fixtures/official-plugins/SOURCE.md",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/explanatory-output-style/LICENSE",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/explanatory-output-style/README.md",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/explanatory-output-style/hooks-handlers/session-start.sh",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/feature-dev/LICENSE",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/feature-dev/README.md",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/feature-dev/agents/code-architect.md",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/feature-dev/agents/code-explorer.md",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/feature-dev/agents/code-reviewer.md",
+    "packages/desktop-gateway/test/fixtures/official-plugins/plugins/feature-dev/commands/feature-dev.md",
+    "packages/desktop/README.md",
+    "packages/desktop/installer/README.md",
+    "packages/desktop/installer/desktop.nsi",
+    "packages/desktop/licenses/media/GPL-3.0.txt",
+    "packages/desktop/licenses/media/ffmpeg-build.txt",
+    "packages/desktop/licenses/msys-pty/COPYING",
+    "packages/desktop/licenses/msys-pty/COPYING.LIB",
+    "packages/desktop/licenses/msys-pty/CYGWIN_LICENSE",
+    "packages/desktop/licenses/msys-pty/SOURCES.md",
+    "packages/desktop/licenses/opencode/LICENSE",
+    "packages/desktop/licenses/opencode/README.md",
+    "packages/desktop/licenses/ui-controls/CONTROL_SOURCES.md",
+    "packages/desktop/licenses/ui-controls/LICENSE.txt",
+    "packages/desktop/licenses/ui-controls/SETTINGS_DRAFT_SOURCES.md",
+    "packages/desktop/licenses/ui-controls/TOOL_OUTPUT_SOURCES.md",
+    "packages/desktop/licenses/ui-controls/WINDOW_CONTROLS_SOURCES.md",
+    "packages/desktop/licenses/zcode/LICENSE",
+    "packages/desktop/licenses/zcode/README.md",
+    "packages/desktop/licenses/zcode/UPSTREAM-NOTICE.md",
+    "packages/desktop/src/renderer/browser/browser-pane.css",
+    "packages/desktop/src/renderer/design/CONTROL_SOURCES.md",
+    "packages/desktop/src/renderer/design/LICENSE.controls.txt",
+    "packages/desktop/src/renderer/design/controls.css",
+    "packages/desktop/src/renderer/design/tokens.css",
+    "packages/desktop/src/renderer/index.html",
+    "packages/desktop/src/renderer/permission-preview.html",
+    "packages/desktop/src/renderer/projects/projects.css",
+    "packages/desktop/src/renderer/review/EditorTabs.css",
+    "packages/desktop/src/renderer/review/SourceFileEditor.css",
+    "packages/desktop/src/renderer/review/project-files-layout.css",
+    "packages/desktop/src/renderer/review/project-git.css",
+    "packages/desktop/src/renderer/review/review-editor.css",
+    "packages/desktop/src/renderer/review/session-changes.css",
+    "packages/desktop/src/renderer/session/COMPOSER_SOURCES.md",
+    "packages/desktop/src/renderer/session/Composer.css",
+    "packages/desktop/src/renderer/session/ComposerProjectContext.css",
+    "packages/desktop/src/renderer/session/ContextUsage.css",
+    "packages/desktop/src/renderer/session/RuntimeFeedback.css",
+    "packages/desktop/src/renderer/session/SLASH_SOURCES.md",
+    "packages/desktop/src/renderer/session/SlashCommands.css",
+    "packages/desktop/src/renderer/session/SubagentPane.css",
+    "packages/desktop/src/renderer/session/TOOL_OUTPUT_SOURCES.md",
+    "packages/desktop/src/renderer/session/TodoProgress.css",
+    "packages/desktop/src/renderer/session/TodoSection.css",
+    "packages/desktop/src/renderer/session/execution-processes.css",
+    "packages/desktop/src/renderer/session/session-manager.css",
+    "packages/desktop/src/renderer/session/timeline-polish.css",
+    "packages/desktop/src/renderer/session/tool-output.css",
+    "packages/desktop/src/renderer/session/workflow.css",
+    "packages/desktop/src/renderer/settings/CodingPlans.css",
+    "packages/desktop/src/renderer/settings/DiagnosticsPane.css",
+    "packages/desktop/src/renderer/settings/RuntimeLog.css",
+    "packages/desktop/src/renderer/settings/SETTINGS_DRAFT_SOURCES.md",
+    "packages/desktop/src/renderer/settings/UsageStatistics.css",
+    "packages/desktop/src/renderer/settings/hook-diagnostics.css",
+    "packages/desktop/src/renderer/settings/notifications.css",
+    "packages/desktop/src/renderer/settings/resources.css",
+    "packages/desktop/src/renderer/shell/projects-sidebar.css",
+    "packages/desktop/src/renderer/shell/session-actions.css",
+    "packages/desktop/src/renderer/shell/workbench-tools.css",
+    "packages/desktop/src/renderer/terminal/terminal-pane.css",
+    "packages/desktop/src/renderer/vendor/zcode/WINDOW_CONTROLS_SOURCES.md",
+    "packages/desktop/src/renderer/vendor/zcode/styles.css",
+    "packages/desktop/test/installer-fixture-hooks.nsh",
+    "packages/exec/README.md",
+    "packages/hooks/README.md",
+    "packages/hooks/test/fixtures/claude-official/README.md",
+    "packages/hooks/test/fixtures/claude-official/hookify/LICENSE",
+    "packages/hooks/test/fixtures/claude-official/hookify/core/config_loader.py",
+    "packages/hooks/test/fixtures/claude-official/hookify/core/rule_engine.py",
+    "packages/hooks/test/fixtures/claude-official/hookify/hooks/posttooluse.py",
+    "packages/hooks/test/fixtures/claude-official/hookify/hooks/pretooluse.py",
+    "packages/hooks/test/fixtures/claude-official/hookify/hooks/stop.py",
+    "packages/hooks/test/fixtures/claude-official/hookify/hooks/userpromptsubmit.py",
+    "packages/hooks/test/fixtures/claude-official/ralph-loop/LICENSE",
+    "packages/hooks/test/fixtures/claude-official/ralph-loop/hooks/stop-hook.sh",
+    "packages/http-transport/README.md",
+    "packages/image-validation/test/large.png",
+    "packages/llm-anthropic/README.md",
+    "packages/llm-bedrock/README.md",
+    "packages/llm-gemini/README.md",
+    "packages/llm-openai-compatible/README.md",
+    "packages/llm-openai/README.md",
+    "packages/llm-seam/README.md",
+    "packages/mcp-client/src/supervisor/README.md",
+    "packages/memory/README.md",
+    "packages/plugin-registry/test/fixtures/marketplace-a/plugins/hello/commands/hello.md",
+    "packages/plugin-registry/test/fixtures/marketplace-a/plugins/hello/skills/hello/SKILL.md",
+    "packages/provider-runtime/README.md",
+    "packages/provider/README.md",
+    "packages/sandbox-local/README.md",
+    "packages/sandbox-policy/README.md",
+    "packages/sandbox-windows-acl/README.md",
+    "packages/sandbox-windows-psec/.gitattributes",
+    "packages/sandbox-windows-psec/.gitignore",
+    "packages/sandbox-windows-psec/README.md",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/i-harness-msys-pty.exe",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/i-harness-windows-helper.exe",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/msys-notices/COPYING",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/msys-notices/COPYING.LIB",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/msys-notices/CYGWIN_LICENSE",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/msys-notices/SOURCES.md",
+    "packages/sandbox-windows-psec/native/Cargo.lock",
+    "packages/sandbox-windows-psec/native/Cargo.toml",
+    "packages/sandbox-windows-psec/native/msys/api.h",
+    "packages/sandbox-windows-psec/native/msys/bridge.c",
+    "packages/sandbox-windows-psec/native/msys/bridge.sha256",
+    "packages/sandbox-windows-psec/native/msys/import-path.c",
+    "packages/sandbox-windows-psec/native/msys/notices/COPYING",
+    "packages/sandbox-windows-psec/native/msys/notices/COPYING.LIB",
+    "packages/sandbox-windows-psec/native/msys/notices/CYGWIN_LICENSE",
+    "packages/sandbox-windows-psec/native/msys/notices/SOURCES.md",
+    "packages/sandbox-windows-psec/native/src/command_line.rs",
+    "packages/sandbox-windows-psec/native/src/error.rs",
+    "packages/sandbox-windows-psec/native/src/ffi.rs",
+    "packages/sandbox-windows-psec/native/src/job.rs",
+    "packages/sandbox-windows-psec/native/src/main.rs",
+    "packages/sandbox-windows-psec/native/src/msys.rs",
+    "packages/sandbox-windows-psec/native/src/msys_image.rs",
+    "packages/sandbox-windows-psec/native/src/policy.rs",
+    "packages/sandbox-windows-psec/native/src/protocol.rs",
+    "packages/sandbox-windows-psec/native/src/runner.rs",
+    "packages/sandbox-windows-psec/native/src/runner/README.md",
+    "packages/sandbox-windows-psec/native/src/runner/control.rs",
+    "packages/sandbox-windows-psec/native/src/runner/dispatch.rs",
+    "packages/sandbox-windows-psec/native/src/runner/event_drain.rs",
+    "packages/sandbox-windows-psec/native/src/runner/prepared.rs",
+    "packages/sandbox-windows-psec/native/src/runner/running.rs",
+    "packages/sandbox-windows-psec/native/src/runner/status.rs",
+    "packages/sandbox-windows-psec/native/src/self_child.rs",
+    "packages/sandbox-windows-psec/native/src/transport.rs",
+    "packages/sandbox-windows-psec/protocol.md",
+    "packages/sandbox-windows-psec/scripts/build-native.ps1",
+    "packages/sandbox-wsl/README.md",
+    "packages/sandbox-wsl/test/product_worker_test.py",
+    "packages/sandbox-wsl/test/worker_test.py",
+    "packages/sandbox-wsl/worker/runner.py",
+    "packages/sandbox/README.md",
+    "packages/session-executor/README.md",
+    "packages/session-persistence/README.md",
+    "packages/session-query/src/file-backed/README.md",
+    "packages/settings/README.md",
+    "packages/shell/README.md",
+    "packages/subagent/src/README.md",
+    "packages/web/README.md",
+    "packages/workspace-runtime/README.md",
+    "pnpm-lock.yaml"
+  ],
+  "limits": [
+    "Closed evidence includes logs only; runner scripts, final source manifest, copy map and build/verify commands are not themselves sealed by its53-file digest.",
+    "8 copied source matches and one bundle hash prove those identities, not all runtime imports or packaged behavior. No build rerun is claimed."
+  ],
+  "errors": []
+}

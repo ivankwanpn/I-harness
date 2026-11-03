@@ -1,6 +1,7 @@
+import { resolveModelContext } from '../src/catalog/context.ts'
 import { describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
-import { createProviderRegistry, buildModelClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
+import { createProviderRegistry, buildModelClient, resolveModelCard, resolveEffectiveModelContextEvidence, type ProviderProfile } from "../src/index.ts"
 
 // D3: the table's own shape is asserted by reading the SHIPPED FILE, because
 // the loader's readers are not exported — they have no production consumer yet
@@ -161,31 +162,31 @@ describe("M15 context catalog", () => {
 
   // M31 T1: unified resolution — the settings-side user model row is the TOP
   // of the chain (userModel > modelContexts > profile > undefined).
-  it("resolveEffectiveModelContext: user overrides modelContexts overrides profile", () => {
+  it("resolveEffectiveModelContextEvidence: user overrides modelContexts overrides profile", () => {
     const profile = {
       name: "p", displayName: "P", protocol: "openai-compatible",
       contextWindow: 128_000, modelContexts: { m1: { contextWindow: 64_000 } },
     } as ProviderProfile
-    expect(resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { contextWindow: 32_000 } })?.contextWindow).toBe(32_000)
-    expect(resolveEffectiveModelContext({ profile, modelId: "m1" })?.contextWindow).toBe(64_000)
-    expect(resolveEffectiveModelContext({ profile, modelId: "m2" })?.contextWindow).toBe(128_000)
-    expect(resolveEffectiveModelContext({ profile, modelId: "m3" })?.contextWindow).toBe(128_000)
+    expect(resolveEffectiveModelContextEvidence({ profile, modelId: "m1", userModel: { contextWindow: 32_000 } })?.contextWindow).toBe(32_000)
+    expect(resolveEffectiveModelContextEvidence({ profile, modelId: "m1" })?.contextWindow).toBe(64_000)
+    expect(resolveEffectiveModelContextEvidence({ profile, modelId: "m2" })?.contextWindow).toBe(128_000)
+    expect(resolveEffectiveModelContextEvidence({ profile, modelId: "m3" })?.contextWindow).toBe(128_000)
   })
 
   // M32 T1 (G1): SettingsModel.maxTokens semantics FIXED = the model's output
   // length (maxOutputTokens — the card field), NOT a context-window cap. The
   // M31 G1 mapping to maxContextWindow is removed: maxTokens NEVER touches
   // maxContextWindow; it overrides the catalog's maxOutputTokens when present.
-  it("resolveEffectiveModelContext: user maxTokens = output length (maxOutputTokens), NOT maxContextWindow", () => {
+  it("resolveEffectiveModelContextEvidence: user maxTokens = output length (maxOutputTokens), NOT maxContextWindow", () => {
     const profile = {
       name: "p", displayName: "P", protocol: "openai-compatible",
       contextWindow: 128_000, modelContexts: { m1: { contextWindow: 64_000, maxContextWindow: 70_000 } },
     } as ProviderProfile
-    const r1 = resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { maxTokens: 4096 } })
+    const r1 = resolveEffectiveModelContextEvidence({ profile, modelId: "m1", userModel: { maxTokens: 4096 } })
     expect(r1?.contextWindow).toBe(64_000)
     expect(r1?.maxContextWindow).toBe(70_000) // maxContextWindow keeps its native value — maxTokens no longer maps here
     expect(r1?.maxOutputTokens).toBe(4096)
-    const r2 = resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { contextWindow: 32_000, maxTokens: 8192 } })
+    const r2 = resolveEffectiveModelContextEvidence({ profile, modelId: "m1", userModel: { contextWindow: 32_000, maxTokens: 8192 } })
     expect(r2?.contextWindow).toBe(32_000)
     expect(r2?.maxContextWindow).toBe(70_000)
     expect(r2?.maxOutputTokens).toBe(8192)
@@ -199,12 +200,12 @@ describe("M15 context catalog", () => {
   // handles "no window ⇒ the value passes through unclamped". The gate is now
   // "NEITHER resolved"; window-only readers are unaffected because they read
   // `.contextWindow`, which is absent in exactly the cases it always was.
-  it("resolveEffectiveModelContext: nothing at all resolves → undefined; a user maxTokens alone is CARRIED (M72 Ⅱ R5)", () => {
+  it("resolveEffectiveModelContextEvidence: nothing at all resolves → undefined; a user maxTokens alone is CARRIED (M72 Ⅱ R5)", () => {
     const profile: ProviderProfile = { name: "p", displayName: "P", protocol: "openai-compatible" }
-    expect(resolveEffectiveModelContext({ profile, modelId: "m" })).toBeUndefined()
+    expect(resolveEffectiveModelContextEvidence({ profile, modelId: "m" })).toBeUndefined()
     // RED before the R5 fix — this asserted `toBeUndefined()`, i.e. it pinned
     // the loss of the user's own setting rather than the fail-closed rule.
-    const r = resolveEffectiveModelContext({ profile, modelId: "m", userModel: { maxTokens: 100 } })
+    const r = resolveEffectiveModelContextEvidence({ profile, modelId: "m", userModel: { maxTokens: 100 } })
     expect(r?.maxOutputTokens).toBe(100)
     expect(r?.contextWindow).toBeUndefined()
   })
@@ -237,16 +238,17 @@ describe("M32 model catalog", () => {
     expect(resolveModelCard("deepseek", "gpt-4o")).toBeUndefined()
   })
 
-  it("resolveEffectiveModelContext: the card arm fills unknown windows from the catalog", () => {
+  it("resolveEffectiveModelContextEvidence: the card arm fills unknown windows from the catalog", () => {
     const profile: ProviderProfile = { name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" }
-    const r = resolveEffectiveModelContext({ profile, modelId: "deepseek-v4-flash" })
+    const r = resolveEffectiveModelContextEvidence({ profile, modelId: "deepseek-v4-flash" })
     expect(r?.contextWindow).toBe(1_048_576)
-    expect(r?.maxOutputTokens).toBe(384_000)
+    expect(r?.maxOutputTokens).toBeUndefined()
+    expect(r?.limits.outputTokens?.value).toBe(384_000)
   })
 
-  it("resolveEffectiveModelContext: user row overrides the card per field", () => {
+  it("resolveEffectiveModelContextEvidence: user row overrides the card per field", () => {
     const profile: ProviderProfile = { name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible", contextWindow: 96_000 }
-    const r = resolveEffectiveModelContext({
+    const r = resolveEffectiveModelContextEvidence({
       profile, modelId: "deepseek-v4-flash",
       userModel: { contextWindow: 32_000, maxTokens: 4_096 },
     })
@@ -254,23 +256,24 @@ describe("M32 model catalog", () => {
     expect(r?.maxOutputTokens).toBe(4_096)
   })
 
-  it("resolveEffectiveModelContext: modelContexts win over the card for contextWindow; the card still fills maxOutputTokens", () => {
+  it("resolveEffectiveModelContextEvidence: modelContexts select the window and catalog output remains an independent ceiling", () => {
     const profile: ProviderProfile = {
       name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible",
       contextWindow: 96_000, modelContexts: { "deepseek-v4-flash": { contextWindow: 64_000 } },
     }
-    const r = resolveEffectiveModelContext({ profile, modelId: "deepseek-v4-flash" })
+    const r = resolveEffectiveModelContextEvidence({ profile, modelId: "deepseek-v4-flash" })
     expect(r?.contextWindow).toBe(64_000)
-    expect(r?.maxOutputTokens).toBe(384_000)
+    expect(r?.maxOutputTokens).toBeUndefined()
+    expect(r?.limits.outputTokens?.value).toBe(384_000)
   })
 
-  it("resolveEffectiveModelContext: no card + no window anywhere → undefined; a user maxTokens survives (M72 Ⅱ R5)", () => {
+  it("resolveEffectiveModelContextEvidence: no card + no window anywhere → undefined; a user maxTokens survives (M72 Ⅱ R5)", () => {
     const profile: ProviderProfile = { name: "openai", displayName: "O", protocol: "openai-responses" }
-    expect(resolveEffectiveModelContext({ profile, modelId: "gpt-4o" })).toBeUndefined()
+    expect(resolveEffectiveModelContextEvidence({ profile, modelId: "gpt-4o" })).toBeUndefined()
     // M72 Ⅱ (R5): the route that has no card is exactly the realistic path —
     // every `openai`-family route resolves no card, so `models add … --max-tokens
     // 4096` on one used to silently drop the cap.
-    expect(resolveEffectiveModelContext({ profile, modelId: "gpt-4o", userModel: { maxTokens: 500 } })?.maxOutputTokens).toBe(500)
+    expect(resolveEffectiveModelContextEvidence({ profile, modelId: "gpt-4o", userModel: { maxTokens: 500 } })?.maxOutputTokens).toBe(500)
   })
 })
 

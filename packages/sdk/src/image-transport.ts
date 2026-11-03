@@ -1,7 +1,7 @@
-import type { ImageInput, Session, SessionEvent } from "@i-harness/core-session"
+import { copyConversationData, type DeepReadonly, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
 
 type Admission = { position: number; event: Extract<SessionEvent, { type: "agent/input/admitted" }> }
-type AdmissionIndex = { events: SessionEvent[]; processed: number; lastEvent?: SessionEvent; byId: Map<string, Admission[]> }
+type AdmissionIndex = { events: readonly SessionEvent[]; processed: number; lastEvent?: SessionEvent; byId: Map<string, Admission[]> }
 const indexes = new WeakMap<Session, AdmissionIndex>()
 
 /** Build once per live/cold session and extend only for new append-only events.
@@ -26,7 +26,7 @@ function indexFor(session: Session): AdmissionIndex {
   return index
 }
 
-function earlierImages(index: AdmissionIndex, inputId: string, before: number): ImageInput[] {
+function earlierImages(index: AdmissionIndex, inputId: string, before: number): readonly DeepReadonly<ImageInput>[] {
   const admissions = index.byId.get(inputId) ?? []
   let low = 0, high = admissions.length
   while (low < high) {
@@ -42,7 +42,7 @@ function earlierImages(index: AdmissionIndex, inputId: string, before: number): 
 /** Give SDK readers the displayed image without sending its recovery copy.
  * The durable admission still owns the bytes; this produces fresh wire events
  * and never mutates session.events. Pages may start after the admission. */
-export function transportSessionEvents(session: Session, events: readonly SessionEvent[]): SessionEvent[] {
+export function transportSessionEvents(session: Session, events: readonly SessionEvent[]): import('@i-harness/core-session').SessionEvent[] {
   const needed = new Map<number, string>()
   for (const event of events) {
     if (event.type !== "user/message" || event.imageInputId === undefined) continue
@@ -52,12 +52,12 @@ export function transportSessionEvents(session: Session, events: readonly Sessio
     }
     needed.set(position, event.imageInputId)
   }
-  const hydrated = new Map<number, ImageInput[]>()
+  const hydrated = new Map<number, readonly DeepReadonly<ImageInput>[]>()
   if (needed.size > 0) {
     const index = indexFor(session)
     for (const [position, inputId] of needed) hydrated.set(position, earlierImages(index, inputId, position))
   }
-  return events.map((event) => {
+  return copyConversationData(events.map((event) => {
     if (event.type === "agent/input/admitted" && event.images !== undefined) {
       const { images: _images, ...rest } = event
       return rest
@@ -67,5 +67,5 @@ export function transportSessionEvents(session: Session, events: readonly Sessio
       return { ...event, images: hydrated.get(position)! }
     }
     return event
-  })
+  }))
 }

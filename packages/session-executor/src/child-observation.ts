@@ -1,4 +1,4 @@
-import { subscribe, type Session } from "@i-harness/core-session"
+import { subscribe, type SessionView as Session } from "@i-harness/core-session"
 import type { AgentTable, ChildAgentEntry } from "@i-harness/subagent"
 
 /** Process-local observation only. Durable storage remains owned by the child. */

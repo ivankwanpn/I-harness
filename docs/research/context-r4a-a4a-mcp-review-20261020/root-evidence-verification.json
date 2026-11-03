@@ -1,0 +1,875 @@
+{
+  "checkedAt": "2026-10-20T11:16:25.272Z",
+  "evidence": "D:\\I-harness-main\\.tmp\\context-r4a-a4a-mcp-20261020-implementation",
+  "head": "fd84e6eaab3357bc79ea1d3b4a73f763661c9466",
+  "branch": "codex/v0.1.13-development",
+  "status": "",
+  "receipts": [
+    {
+      "label": "01-real-path-red",
+      "exit": 1,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2601,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/retained-mcp-result.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:02:03.0932710Z",
+      "ended": "2026-10-20T11:02:07.7979084Z",
+      "beforeSha256": "da8f61f414d6b74a96864efa2a737b72b36479fae6432fd3776727f4118d4605",
+      "afterSha256": "da8f61f414d6b74a96864efa2a737b72b36479fae6432fd3776727f4118d4605",
+      "rawSha256": "6f53a71e0f7c13e58524ebb143f8293b264047aacc186f6fb743b70b974858bc",
+      "receiptSha256": "91e4680e241d0ddc208fa9c31d8a5fed08593b9d5860341078785aab8f2c3894",
+      "testSummary": [
+        " ❯ test/retained-mcp-result.test.ts (2 tests | 2 failed) 787ms",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        " Test Files  1 failed (1)",
+        "      Tests  2 failed (2)",
+        "   Duration  3.28s (transform 1.33s, setup 0ms, collect 2.22s, tests 787ms, environment 0ms, prepare 91ms)"
+      ]
+    },
+    {
+      "label": "02-capture-red",
+      "exit": 1,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2602,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\output-retention",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/mcp-presentation.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:02:54.1176399Z",
+      "ended": "2026-10-20T11:02:56.4041339Z",
+      "beforeSha256": "674cb2a6f03746eb936a2adb70e93f41bf0651a43186e7b4e127fe9301de331c",
+      "afterSha256": "674cb2a6f03746eb936a2adb70e93f41bf0651a43186e7b4e127fe9301de331c",
+      "rawSha256": "506e75a9870917915a299061dfa97231f9b3d74005a373de737e2509c0b1ae05",
+      "receiptSha256": "404272adb6e662e104d72ee5e94249d3d79d85c75a86a5b5289798eb1f7b7bf0",
+      "testSummary": [
+        " ❯ test/mcp-presentation.test.ts (10 tests | 6 failed) 56ms",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯",
+        " Test Files  1 failed (1)",
+        "      Tests  6 failed | 4 passed (10)",
+        "   Duration  954ms (transform 465ms, setup 0ms, collect 682ms, tests 56ms, environment 0ms, prepare 77ms)"
+      ]
+    },
+    {
+      "label": "03-real-path-green",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/retained-mcp-result.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:03:32.6740413Z",
+      "ended": "2026-10-20T11:03:37.9733296Z",
+      "beforeSha256": "df3b381ae7b7d4ddbf6e871f0d25c18f6358d846ee2a8451d96b27e26138e968",
+      "afterSha256": "df3b381ae7b7d4ddbf6e871f0d25c18f6358d846ee2a8451d96b27e26138e968",
+      "rawSha256": "d7cc034aab1157506cad7d9fd54329e765a49f8f9fce1e0da03ff2b39967b1ae",
+      "receiptSha256": "565aea8c427275958e97d94c65e25d65e50cfa7da519c0de51836359003db296",
+      "testSummary": [
+        " Test Files  1 passed (1)",
+        "      Tests  2 passed (2)",
+        "   Duration  3.96s (transform 1.25s, setup 0ms, collect 2.04s, tests 1.69s, environment 0ms, prepare 73ms)"
+      ]
+    },
+    {
+      "label": "04-capture-green",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\output-retention",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/mcp-presentation.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:03:44.3225841Z",
+      "ended": "2026-10-20T11:03:46.4715496Z",
+      "beforeSha256": "df3b381ae7b7d4ddbf6e871f0d25c18f6358d846ee2a8451d96b27e26138e968",
+      "afterSha256": "df3b381ae7b7d4ddbf6e871f0d25c18f6358d846ee2a8451d96b27e26138e968",
+      "rawSha256": "3bb9e5759ec3367c39ca7c9c965f011c9c06d4364ea3285a78d615038af11532",
+      "receiptSha256": "2faadc9d9e0a22bdec6d9664036d83a88466f05d32dd280512dee1be74195600",
+      "testSummary": [
+        " Test Files  1 passed (1)",
+        "      Tests  10 passed (10)",
+        "   Duration  944ms (transform 464ms, setup 0ms, collect 689ms, tests 45ms, environment 0ms, prepare 80ms)"
+      ]
+    },
+    {
+      "label": "05-mcp-local-and-bridge",
+      "exit": 1,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\mcp-client",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/bridge.test.ts",
+          "test/client.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:04:35.6903240Z",
+      "ended": "2026-10-20T11:04:39.8170690Z",
+      "beforeSha256": "eadf55e4a4a9eda8b66d0c1f897ae4831843f72bfa72119e20f133ee02402176",
+      "afterSha256": "eadf55e4a4a9eda8b66d0c1f897ae4831843f72bfa72119e20f133ee02402176",
+      "rawSha256": "e9d947673dfeaa88a2d9a22c6f9a649d83107eceeaba69a07b94ae0d07e0b39f",
+      "receiptSha256": "c8c38130c84bceec891eb5b0aa1dc1a4462200777781b0204730acba55635826",
+      "testSummary": [
+        " ❯ test/client.test.ts (6 tests | 1 failed) 1180ms",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        " Test Files  1 failed | 1 passed (2)",
+        "      Tests  1 failed | 11 passed (12)",
+        "   Duration  2.76s (transform 533ms, setup 0ms, collect 1.19s, tests 1.19s, environment 0ms, prepare 145ms)"
+      ]
+    },
+    {
+      "label": "06-managed-quota-wasm-unknown",
+      "exit": 1,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/retained-mcp-result.test.ts",
+          "test/retained-result-flow.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:05:49.6432134Z",
+      "ended": "2026-10-20T11:06:00.4106494Z",
+      "beforeSha256": "bfae2a88d5f34da88333daa886aef94247b9f9712da68e22560ff2cb5e3e987e",
+      "afterSha256": "bfae2a88d5f34da88333daa886aef94247b9f9712da68e22560ff2cb5e3e987e",
+      "rawSha256": "45af61a97c9b1a7ecf37643f8ea26f6abe2b2fdcc95085503220a79a0ffcb8a4",
+      "receiptSha256": "315046ba728662a96f550fddb185b7051fe59b3e64d828323487e839a280a72c",
+      "testSummary": [
+        " ❯ test/retained-mcp-result.test.ts (9 tests | 1 failed) 5198ms",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯",
+        " Test Files  1 failed | 1 passed (2)",
+        "      Tests  1 failed | 14 passed (15)",
+        "   Duration  9.46s (transform 1.33s, setup 0ms, collect 2.37s, tests 6.65s, environment 0ms, prepare 146ms)"
+      ]
+    },
+    {
+      "label": "07-managed-source-close",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/retained-mcp-result.test.ts",
+          "test/retained-result-flow.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:06:34.9667520Z",
+      "ended": "2026-10-20T11:06:46.1781362Z",
+      "beforeSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "afterSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "rawSha256": "64f6b22ca04ce95c2bc60adb204d42bad9068c5bde0d5efd2b836721bbd0956b",
+      "receiptSha256": "e846cfb2f1e6d0de96f2405c9fe4ba2cbc463fdcd89b67b6a5c463bad6eb8ee0",
+      "testSummary": [
+        " Test Files  2 passed (2)",
+        "      Tests  15 passed (15)",
+        "   Duration  9.98s (transform 1.35s, setup 0ms, collect 2.40s, tests 7.14s, environment 0ms, prepare 138ms)"
+      ]
+    },
+    {
+      "label": "08-core-tools-full",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\core-tools",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:07:18.4834430Z",
+      "ended": "2026-10-20T11:07:24.9875085Z",
+      "beforeSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "afterSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "rawSha256": "849e20b2cc289f4357cfd1c3e75213d27aa4e24644b4a2322a9fa7e989e7cf2a",
+      "receiptSha256": "a3777805c97cb51dad86cb36e2fc75437feaa1f7d7a283b9f4864fd4b797a2ed",
+      "testSummary": [
+        " Test Files  15 passed (15)",
+        "      Tests  137 passed (137)",
+        "   Duration  5.26s (transform 746ms, setup 0ms, collect 2.15s, tests 324ms, environment 2ms, prepare 1.04s)"
+      ]
+    },
+    {
+      "label": "09-output-retention-full",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\output-retention",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:07:31.7642249Z",
+      "ended": "2026-10-20T11:07:36.5360502Z",
+      "beforeSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "afterSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "rawSha256": "ba356b5e2298e7f719f5d7da3c1d36dbe84c17e36e236a05bf84e5539bc95882",
+      "receiptSha256": "1e1253113c5d86e26f513fee66b8111c1371c83ca9d25c3023a183bf4071cd01",
+      "testSummary": [
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-hjMED7'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-ggl3yr'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-roahfF'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-Hutvvl'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-R9KCS4'",
+        " Test Files  7 passed (7)",
+        "      Tests  51 passed (51)",
+        "   Duration  3.56s (transform 682ms, setup 0ms, collect 1.52s, tests 718ms, environment 1ms, prepare 477ms)"
+      ]
+    },
+    {
+      "label": "10-types-core-tools",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\core-tools",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      "started": "2026-10-20T11:07:43.3288992Z",
+      "ended": "2026-10-20T11:07:47.5195863Z",
+      "beforeSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "afterSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receiptSha256": "b590963b0d5a3a11155441b7b443a62058f18ffe15e0ed3ff076aab34e1f3d0a",
+      "testSummary": []
+    },
+    {
+      "label": "10-types-mcp-client",
+      "exit": 2,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\mcp-client",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      "started": "2026-10-20T11:07:52.3528668Z",
+      "ended": "2026-10-20T11:07:55.8201392Z",
+      "beforeSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "afterSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "rawSha256": "679938bcb89e7ab5dbb16f976cac1b1f86f3e361e136f2c3d0330d46cf2727af",
+      "receiptSha256": "4ceed6d3af1bcc81341c61f292283be9a0f870869340714ffbd07ac591a9313e",
+      "testSummary": []
+    },
+    {
+      "label": "10-types-output-retention",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\output-retention",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      "started": "2026-10-20T11:07:48.1317238Z",
+      "ended": "2026-10-20T11:07:51.7695437Z",
+      "beforeSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "afterSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receiptSha256": "86a2682523063ab3a641390b46a760fe61543a35a40041d7af77cf3f275fcfb8",
+      "testSummary": []
+    },
+    {
+      "label": "10-types-session-executor",
+      "exit": 2,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      "started": "2026-10-20T11:07:56.3939033Z",
+      "ended": "2026-10-20T11:08:04.0408384Z",
+      "beforeSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "afterSha256": "e7263ade07ae14c5de9b2defd3c0dcf0e5299c1c2d3aec26170bb29bbdd7c26c",
+      "rawSha256": "b53dd3112fa8a2585699e205f4c74c80ba0645222dad50fe83555031b70120f4",
+      "receiptSha256": "eaa4403af89dd71f1e7c9619d3221968c77adbd1fcd1b772830d46703e2653ea",
+      "testSummary": []
+    },
+    {
+      "label": "11-mcp-literal-stdio",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\mcp-client",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/bridge.test.ts",
+          "test/client.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:08:35.7234001Z",
+      "ended": "2026-10-20T11:08:39.4667454Z",
+      "beforeSha256": "dc19cc8dfccc104769a1229444472de2ef41018b06e1c02a52a727bdecdc8f0a",
+      "afterSha256": "dc19cc8dfccc104769a1229444472de2ef41018b06e1c02a52a727bdecdc8f0a",
+      "rawSha256": "126bb4d760485e482e82fc4f744f4e20ee77faee777540bcf3e5e41cb05c33b8",
+      "receiptSha256": "8a4d3ea40b4e6959d1f1de5b71591074488bceb2cf28165a3f16512aa4f28727",
+      "testSummary": [
+        " Test Files  2 passed (2)",
+        "      Tests  12 passed (12)",
+        "   Duration  2.49s (transform 529ms, setup 0ms, collect 1.18s, tests 900ms, environment 0ms, prepare 145ms)"
+      ]
+    },
+    {
+      "label": "12-mcp-full",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\mcp-client",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:09:19.0737616Z",
+      "ended": "2026-10-20T11:09:33.5861873Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "8c69d6c9449e318b7d74cbc15aa964d7f88b5f0aa5dfadf00138999628642501",
+      "receiptSha256": "8713fa2faad813f416da48a3b668782f4c6916c7bd4f13a30753a9fd9a25ec0a",
+      "testSummary": [
+        "[i-harness] mcp-server(oauth-failsoft) OAuth: proactive refresh failed (refresh token revoked); keeping the stored token (the 401 path will handle it)",
+        "[i-harness] mcp-server(oauth-failsoft) OAuth: proactive refresh failed (refresh token revoked); keeping the stored token (the 401 path will handle it)",
+        "[i-harness] mcp-server(oauth-stale-discovery) OAuth: proactive refresh failed (fetch failed); keeping the stored token (the 401 path will handle it)",
+        "   ✓ mcp catalogue refresh (list_changed → dirty → rebuild) > a failed rebuild is throttled: ONE drain per window, then the boundary tries again  422ms",
+        "[i-harness] mcp-server(files) OAuth: token re-read failed (store offline); keeping the stored token",
+        " Test Files  16 passed (16)",
+        "      Tests  107 passed (107)",
+        "   Duration  13.30s (transform 639ms, setup 0ms, collect 4.02s, tests 6.30s, environment 2ms, prepare 1.08s)"
+      ]
+    },
+    {
+      "label": "13-output-retention-final",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\output-retention",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:09:49.2416753Z",
+      "ended": "2026-10-20T11:09:54.0553639Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "7a132514dbd098b916e7914efea29ee97d99c002147cae830d96a4e1466ee28f",
+      "receiptSha256": "d8749371166211f4fe2af17ff90f7c5959d2d232cb3ccfeebf4b6cf6e19dd061",
+      "testSummary": [
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-4O5mjv'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-t6dTuB'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-cdR7Xd'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-mU6Xk7'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-2ct48i'",
+        " Test Files  7 passed (7)",
+        "      Tests  53 passed (53)",
+        "   Duration  3.62s (transform 692ms, setup 0ms, collect 1.53s, tests 726ms, environment 1ms, prepare 487ms)"
+      ]
+    },
+    {
+      "label": "14-session-mcp-final",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/retained-mcp-result.test.ts",
+          "test/retained-result-flow.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:10:01.7561986Z",
+      "ended": "2026-10-20T11:10:12.9220670Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "9f4028dcd65c9b54a56ab32c11d5fac493fd65d315e9be1e615350d76bf9eead",
+      "receiptSha256": "d43712abff8b61882e794a95097c7f717e49207487c23b776da6e4cb34180118",
+      "testSummary": [
+        " Test Files  2 passed (2)",
+        "      Tests  16 passed (16)",
+        "   Duration  9.90s (transform 1.28s, setup 0ms, collect 2.32s, tests 7.13s, environment 0ms, prepare 137ms)"
+      ]
+    },
+    {
+      "label": "15-gateway-build",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\desktop",
+        "args": [
+          "scripts/build-gateway.mjs",
+          "--out",
+          ".tmp/context-r4a-a4a-mcp-20261020-gateway"
+        ]
+      },
+      "started": "2026-10-20T11:10:49.1264856Z",
+      "ended": "2026-10-20T11:10:55.5590871Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "9f91639c9c24f02086a6852db327affdc2c7a1e2549840e2d61222c11d7e6762",
+      "receiptSha256": "044b37f1345c920456ae4d33af7e31273e28af4f597c8dbee0bfa9aa26776e96",
+      "testSummary": []
+    },
+    {
+      "label": "16-copy-prepare",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\.",
+        "args": [
+          ".tmp/context-r4a-a4a-mcp-20261020-implementation/prepare-copied-qa.mjs"
+        ]
+      },
+      "started": "2026-10-20T11:11:06.7899517Z",
+      "ended": "2026-10-20T11:11:08.1944081Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "ccdc543d3ecd516f49c43672b964d122e4f93d5c35184bfb191e517a9685a505",
+      "receiptSha256": "6fb594a4ed90357d3dc7625bfe80255d2a6ab5b5efc038c7ea92b84c2f60c7a8",
+      "testSummary": []
+    },
+    {
+      "label": "17-copy-runtime",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\.tmp\\context-r4a-a4a-mcp-20261020-implementation\\copied-qa",
+        "args": [
+          "D:/I-harness-main/node_modules/vitest/vitest.mjs",
+          "run",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:11:08.8019026Z",
+      "ended": "2026-10-20T11:11:21.5018939Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "b8c144549c0df61d47ee5387c70ad0b3af98d3e9fd12d3faeff4c433492764c5",
+      "receiptSha256": "3d60b9bcc44a88e1f11aebd7daee5345da9772b2a77de06c9b46cafe7e8abac6",
+      "testSummary": [
+        " Test Files  5 passed (5)",
+        "      Tests  37 passed (37)",
+        "   Duration  11.55s (transform 1.41s, setup 0ms, collect 2.93s, tests 7.62s, environment 1ms, prepare 364ms)"
+      ]
+    },
+    {
+      "label": "18-types-final-core-tools",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\core-tools",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      "started": "2026-10-20T11:11:30.8499142Z",
+      "ended": "2026-10-20T11:11:34.9850792Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receiptSha256": "6250d295f3460ccdca6f485304ac9aafa0a8e08d2c7c899fa32f2d757ab95521",
+      "testSummary": []
+    },
+    {
+      "label": "18-types-final-mcp-client",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\mcp-client",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      "started": "2026-10-20T11:11:39.7021135Z",
+      "ended": "2026-10-20T11:11:43.1119616Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receiptSha256": "c90173db52e830146401308780d2a998b1fc65883621304096dba6849c6aa77c",
+      "testSummary": []
+    },
+    {
+      "label": "18-types-final-output-retention",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\output-retention",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      "started": "2026-10-20T11:11:35.5900819Z",
+      "ended": "2026-10-20T11:11:39.1236447Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receiptSha256": "574df23ec2c46df362f89f524c13925caa70b2e02e3bb74b94d0989695d37a64",
+      "testSummary": []
+    },
+    {
+      "label": "18-types-final-session-executor",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ]
+      },
+      "started": "2026-10-20T11:11:43.6921346Z",
+      "ended": "2026-10-20T11:11:51.2026684Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "receiptSha256": "8a7dba85df097097c1b4ea6231c3f9ec0c0341c1a537feeaf131b76ab79713e1",
+      "testSummary": []
+    },
+    {
+      "label": "19-package-graph",
+      "exit": 0,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\.",
+        "args": [
+          ".tmp/context-r4a-a4a-mcp-20261020-implementation/package-graph.mjs"
+        ]
+      },
+      "started": "2026-10-20T11:12:16.3049049Z",
+      "ended": "2026-10-20T11:12:17.3461409Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "42a8cfb60404ddad92a23d5ef41a4dd2e1749651d39fbbf9c0d7ecc6232dbca0",
+      "receiptSha256": "017c8653d049bb8bcbc1b1dc73f0a6ceb1003437c7d115e69055b09c67f2fcff",
+      "testSummary": []
+    },
+    {
+      "label": "20-reachability",
+      "exit": 1,
+      "head": "3ed2d6681decfce4230eca4699890e874da13965",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\.",
+        "args": [
+          "scripts/audit/check-reachability.mjs",
+          "--gate"
+        ]
+      },
+      "started": "2026-10-20T11:12:18.0240837Z",
+      "ended": "2026-10-20T11:12:30.0735898Z",
+      "beforeSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "afterSha256": "e36f483ab9b71a6aafda71e597658ad0e8aeaf2847773681a5495f4f151a91eb",
+      "rawSha256": "d65f08c43125c65f132c7c884be7f16c8f42278f5df8a85d0143ec4fb3e9dd2b",
+      "receiptSha256": "20e64369af163eecf681dc178ab96b4dcd4cb1631f9f289ed59353fb4a7ff945",
+      "testSummary": []
+    },
+    {
+      "label": "21-quota-wording-red",
+      "exit": 1,
+      "head": "01bbd64ea5f3dc579740f26d3bbf44559aa1fcd7",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\output-retention",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/mcp-presentation.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:13:29.7557903Z",
+      "ended": "2026-10-20T11:13:32.0497245Z",
+      "beforeSha256": "85cb30ee229d3e5abf599aaa26422cb603fd72cf52d7474e00ea8e4dc5859e2e",
+      "afterSha256": "85cb30ee229d3e5abf599aaa26422cb603fd72cf52d7474e00ea8e4dc5859e2e",
+      "rawSha256": "642992c836d6bfe5cc4337c5b67c57621f9d5e82041d1436a9d78c259229c484",
+      "receiptSha256": "4088d9b4f19e2609d0e208b19aad26774b6c58019c59c4c20f9b83385d063643",
+      "testSummary": [
+        " ❯ test/mcp-presentation.test.ts (12 tests | 5 failed) 52ms",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯",
+        " Test Files  1 failed (1)",
+        "      Tests  5 failed | 7 passed (12)",
+        "   Duration  962ms (transform 466ms, setup 0ms, collect 697ms, tests 52ms, environment 0ms, prepare 76ms)"
+      ]
+    },
+    {
+      "label": "22-output-retention-final-neutral",
+      "exit": 0,
+      "head": "01bbd64ea5f3dc579740f26d3bbf44559aa1fcd7",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\output-retention",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:13:44.5368743Z",
+      "ended": "2026-10-20T11:13:49.3911084Z",
+      "beforeSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "afterSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "rawSha256": "67e3d5433df23daa3f6eb2e92b70d90515ad7fa1168d44325661930f0821e470",
+      "receiptSha256": "88bf22a36b87a4268a710e99c3608605f4b581f5e3f432182546654124c674eb",
+      "testSummary": [
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-MikeMB'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-PJtgNv'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-ipWN68'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-yl9pgC'",
+        "[i-harness] spill GC failed: Error: ENOENT: no such file or directory, scandir 'C:\\Users\\inkik\\AppData\\Local\\Temp\\m26-spill-GWb6hw'",
+        " Test Files  7 passed (7)",
+        "      Tests  53 passed (53)",
+        "   Duration  3.62s (transform 682ms, setup 0ms, collect 1.54s, tests 748ms, environment 1ms, prepare 485ms)"
+      ]
+    },
+    {
+      "label": "23-session-mcp-final-neutral",
+      "exit": 0,
+      "head": "01bbd64ea5f3dc579740f26d3bbf44559aa1fcd7",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/retained-mcp-result.test.ts",
+          "test/retained-result-flow.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:13:50.0346758Z",
+      "ended": "2026-10-20T11:14:01.2727083Z",
+      "beforeSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "afterSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "rawSha256": "50b40b5fb0950fefc41833dd5be7663fdba5cdda7761698158d16518489166a2",
+      "receiptSha256": "dd1eac644b1435c07a00674eaf9b2c81f042695432259ec4b7cce00b23bf5b3e",
+      "testSummary": [
+        " Test Files  2 passed (2)",
+        "      Tests  16 passed (16)",
+        "   Duration  10.05s (transform 1.36s, setup 0ms, collect 2.44s, tests 7.15s, environment 0ms, prepare 156ms)"
+      ]
+    },
+    {
+      "label": "24-gateway-build-final",
+      "exit": 0,
+      "head": "01bbd64ea5f3dc579740f26d3bbf44559aa1fcd7",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\desktop",
+        "args": [
+          "scripts/build-gateway.mjs",
+          "--out",
+          ".tmp/context-r4a-a4a-mcp-20261020-gateway-b"
+        ]
+      },
+      "started": "2026-10-20T11:14:18.7938833Z",
+      "ended": "2026-10-20T11:14:23.9938499Z",
+      "beforeSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "afterSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "rawSha256": "baa5d20691ca76433b7bba94fe8aa8dcced35309c2a881c07733d8f6e106990f",
+      "receiptSha256": "de99dc2a8f645ac196dad3c5379dd133ec854761e08f633d88f2326448626964",
+      "testSummary": []
+    },
+    {
+      "label": "25-copy-prepare-final",
+      "exit": 0,
+      "head": "01bbd64ea5f3dc579740f26d3bbf44559aa1fcd7",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\.",
+        "args": [
+          ".tmp/context-r4a-a4a-mcp-20261020-implementation/prepare-copied-qa-b.mjs"
+        ]
+      },
+      "started": "2026-10-20T11:14:24.6005097Z",
+      "ended": "2026-10-20T11:14:25.8858319Z",
+      "beforeSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "afterSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "rawSha256": "7dd0b24abb9f22103dc6013e9d27e9fa8a6a5862c47e87cfaeff56718447f623",
+      "receiptSha256": "7ba02ca85bec391670787b8a28bd817efe660f45fa2a2bb855fd6153dc516db0",
+      "testSummary": []
+    },
+    {
+      "label": "26-copy-runtime-final",
+      "exit": 0,
+      "head": "01bbd64ea5f3dc579740f26d3bbf44559aa1fcd7",
+      "sourceStable": true,
+      "sourceEntries": 2603,
+      "command": {
+        "executable": "C:/Program Files/nodejs/node.exe",
+        "cwd": "D:\\I-harness-main\\.tmp\\context-r4a-a4a-mcp-20261020-implementation\\copied-qa-b",
+        "args": [
+          "D:/I-harness-main/node_modules/vitest/vitest.mjs",
+          "run",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ]
+      },
+      "started": "2026-10-20T11:14:26.4749565Z",
+      "ended": "2026-10-20T11:14:36.3414443Z",
+      "beforeSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "afterSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+      "rawSha256": "2a8166fab8f4f0050f152e90407bccfb5866c6dd40211cc7f587d4b2b990b0ed",
+      "receiptSha256": "350c8fe5f80905098c5640c3abe0926d24d1cd04d06f29adab8b4e850cdcb48b",
+      "testSummary": [
+        " Test Files  2 passed (2)",
+        "      Tests  22 passed (22)",
+        "   Duration  8.71s (transform 1.30s, setup 0ms, collect 2.22s, tests 6.07s, environment 0ms, prepare 144ms)"
+      ]
+    }
+  ],
+  "overlappingRuns": [],
+  "stabilityClaimFailures": [],
+  "finalSource": {
+    "receipt": "26-copy-runtime-final",
+    "entries": 2603,
+    "manifestSha256": "7dc079bb38130bdfc47dddab27cf3539c219ad3e8b1f016f26ec19b27d69b11a",
+    "mismatches": []
+  }
+}

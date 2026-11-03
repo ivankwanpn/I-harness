@@ -11,9 +11,14 @@ import { registerSubagent } from "../src/index.ts"
 const resolveModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 
 describe("registerSubagent", () => {
-  it("awaits an in-flight parent notification and its final task document before persistence teardown", async () => {
-    const entered = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
+  it('defers the original parent model accessor until child work', async () => {
+    const ctx=createContext(),tools=createToolRegistry(ctx),model=createMockClient([]);let reads=0
+    const mounted=registerSubagent(ctx,tools,{resolveModel,exec:registerExec(ctx),parentSession:createSession(),getParentModel(){reads++;return model}})
+    await mounted.ready;expect(reads).toBe(0);expect(mounted.roles.get('general')).toBeDefined();expect(tools.get('spawn_agent')).toBeDefined()
+    await mounted.dispose()
+  })
+  it("unbound legacy notification stays pending through activation and persistence teardown", async () => {
+    let admissions = 0
     const saved: unknown[] = []
     const ctx = createContext(), parentReg = createToolRegistry(ctx)
     const mounted = registerSubagent(ctx, parentReg, {
@@ -22,20 +27,15 @@ describe("registerSubagent", () => {
         getDocument: async () => undefined,
         putDocument: async (_key: string, value: unknown) => { saved.push(structuredClone(value)) },
       } as never },
-      parentNotify: { admit: async () => { entered.resolve(); await release.promise }, wake: () => {} },
+      parentNotify: { admit: async () => { admissions++ }, wake: () => {} },
     })
     await mounted.ready
     const task = mounted.tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/helper", description: "helper", prompt: "work", agent: "general", delivery: "parent" })
     mounted.tasks.terminalize({ taskId: task.id, outcome: "completed", resultText: "done" })
-    let drained = false
-    try {
-      const flushing = mounted.flushPersistence().then(() => { drained = true })
-      await entered.promise
-      expect(drained).toBe(false)
-      release.resolve()
-      await flushing
-      expect(saved.at(-1)).toMatchObject({ notifications: [expect.objectContaining({ status: "woken" })] })
-    } finally { release.resolve() }
+    await mounted.drainParentNotifications()
+    await mounted.flushPersistence()
+    expect(admissions).toBe(0)
+    expect(saved.at(-1)).toMatchObject({ notifications: [expect.objectContaining({ status: "pending" })] })
   })
 
   it("seeds built-in roles, mounts the 13 tools, and returns the registries", () => {

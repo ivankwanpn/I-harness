@@ -6,10 +6,11 @@ import { fileURLToPath } from "node:url"
 import { expect, it } from "vitest"
 import { PluginRegistry } from "@i-harness/plugin-registry"
 import { createHookTrustStore, sha256ClaudePluginTreeSync } from "@i-harness/hooks"
-import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
+import { encodeFrame, isRpcSuccess, makeRequest, type HistoryRange, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
 import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 import { createHostFixtureModel } from "./host-fixture-model.ts"
+import { append, createSession, deriveMessages, fromJSONL, toJSONL } from '@i-harness/core-session'
 
 it("the real Desktop host registers authority for spawned child and teammate ordinary and Code Mode tool dispatch", async () => {
   const trace = createHostFixtureTrace('desktop-child-authority-host')
@@ -68,12 +69,37 @@ it("the real Desktop host registers authority for spawned child and teammate ord
     const catalog = await rpc("desktop/session/subagents/list", { sessionId }) as { agents: { path: string; sessionId: string }[] }
     expect(catalog.agents.map(agent => agent.path).sort()).toEqual(["lead/helper-team", "root/helper"])
     for (const agent of catalog.agents) {
-      const { events } = await rpc("desktop/session/subagents/history", { sessionId, childSessionId: agent.sessionId }) as { events: { type: string; name?: string; output?: unknown; isError?: boolean }[] }
+      const { events } = await rpc("desktop/session/subagents/history", { sessionId, childSessionId: agent.sessionId }) as HistoryRange
       const results = events.filter(event => event.type === "tool/result")
-      expect(results.some(event => event.isError)).toBe(false)
-      expect(results.find(event => event.name === "read")).toMatchObject({ output: { content: "Desktop host fixture" } })
-      expect(JSON.stringify(results.find(event => event.name === "code_exec")?.output)).toContain("Desktop host fixture")
-      if (agent.path.startsWith("lead/")) expect(JSON.stringify(results.find(event => event.name === "code_exec")?.output)).toContain("helper-team")
+      expect(results.length).toBeGreaterThanOrEqual(2)
+      // Validate copies of the genuine matching DTOs through public intake and
+      // cold decoding. This selection is not the complete original child/F1 log.
+      const selection = createSession()
+      for (const result of results) {
+        const call = events.find(event => event.type === 'tool/call' && event.callId === result.callId)
+        if (call?.type !== 'tool/call') throw new Error('Expected genuine matching child tool call')
+        expect(call.name).toBe(result.name)
+        append(selection, call)
+        append(selection, result)
+        if (!result.envelope) throw new Error('Expected retained child result envelope')
+        expect(result.envelope.execution).toEqual({ outcome: 'succeeded', dispatch: 'dispatched' })
+        expect(Buffer.byteLength(JSON.stringify(result.envelope))).toBeLessThanOrEqual(64000)
+      }
+      const cold = fromJSONL(toJSONL(selection))
+      expect(cold.events).toEqual(selection.events)
+      for (const message of deriveMessages(cold).filter(message => message.role === 'tool'))
+        expect(Buffer.byteLength(JSON.stringify(message))).toBeLessThanOrEqual(64000)
+      const inlineValue = (name: string) => {
+        const result = cold.events.find(event => event.type === 'tool/result' && event.name === name)
+        if (result?.type !== 'tool/result' || result.envelope?.retention.kind !== 'inline') throw new Error(`Expected complete inline ${name} fixture value`)
+        return result.envelope.retention.value
+      }
+      expect(inlineValue('read')).toEqual({ content: 'Desktop host fixture' })
+      const text = agent.path.startsWith('lead/') ? 'Desktop host fixture\n["lead","helper-team"]\n{"tasks":[]}' : 'Desktop host fixture'
+      // The complete small observation is inline. Its nested text index has
+      // separate retained-code qualification; this test exercises tool authority.
+      expect(inlineValue('code_exec')).toMatchObject({ status: 'completed', text, truncated: false,
+        textRetention: { stored: true, complete: true, omittedBytes: 0, truncated: false, admittedBytes: Buffer.byteLength(text) } })
     }
   } finally {
     try { await trace.run('host/close', async () => { await host?.close() }) }

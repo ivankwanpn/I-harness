@@ -1,0 +1,32 @@
+{
+  "legacy": [
+    {
+      "operation": "capture",
+      "tokens": 378,
+      "equalUnderExplicitPortSubstitutions": true,
+      "sha256": "cd48e349e554ecc08e350a70d507b988b188ee3230a8c736c1ac477b4695125a"
+    },
+    {
+      "operation": "read",
+      "tokens": 110,
+      "equalUnderExplicitPortSubstitutions": true,
+      "sha256": "7d05c491722c2fbf0bcae59cbe15f70e890ba3c6b93a40a98d217b981c0e1681"
+    },
+    {
+      "operation": "search",
+      "tokens": 610,
+      "equalUnderExplicitPortSubstitutions": true,
+      "sha256": "71ff5279e833d550f6f81bc6b1738f0eb20d12ac0326321b899ebf091229e88b"
+    }
+  ],
+  "unchangedOwners": [
+    "packages/subagent/src/task/persistence.ts",
+    "packages/subagent/src/task/notifications.ts",
+    "packages/subagent/src/task/result.ts",
+    "packages/subagent/src/task/publication.ts",
+    "packages/subagent/src/task/settlement.ts",
+    "packages/context-output/src/artifact/ownership.ts",
+    "packages/subagent/src/jobs.ts"
+  ],
+  "hardCandidates": []
+}

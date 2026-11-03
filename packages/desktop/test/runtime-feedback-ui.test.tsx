@@ -28,6 +28,18 @@ function fixture() {
   return { bridge, emit, entry, status }
 }
 
+it("shows the canonical context diagnosis and keeps safe facts in the error details", async () => {
+  const f = fixture()
+  const row: RuntimeDiagnosticEntry = { id: "context", timestamp: Date.now(), workspaceId: "w", sessionId: "a", kind: "session/error", level: "error", message: "Model input exceeds the context window. (HTTP 400)", modelFailure: { code: "CONTEXT_WINDOW_EXCEEDED", reason: "context-limit", message: "Model input exceeds the context window.", contextLimit: 200000 } }
+  vi.mocked(f.bridge.request).mockResolvedValue({ entries: [row] })
+  render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
+  f.entry({ ...row, retry: undefined })
+  expect(screen.getByRole("alert").textContent).toContain("Model input exceeds the context window.")
+  fireEvent.click(screen.getByText("詳細資料"))
+  await screen.findByText(/200000/)
+  expect(screen.getByRole("dialog").textContent).toContain("200000")
+})
+
 it.each(["failed", "cancelled", "completed"])("retains current quiet and retry feedback after an uncorrelated old %s status", terminal => {
   const f = fixture(); const props = { bridge: f.bridge, workspaceId: "w", sessionId: "a", onOpenLog() {} }
   const view = render(<RuntimeFeedback {...props} />)
@@ -210,4 +222,12 @@ it("does not clear a replacement retry from an older logical recovery", () => {
   f.entry({ id: "new-retry", requestId: "new-logical", retry: { requestId: "new-logical", phase: "attempting", attempt: 2, delayMs: 0, code: "TIMEOUT" } })
   f.entry({ id: "old-recovery", kind: "model/recovered", level: "info", requestId: "old-logical", retry: undefined })
   expect(screen.getByRole("status").textContent).toContain("重新連線中")
+})
+
+it('retries only the same session recovery through the existing queue resume action',async()=>{
+ const f=fixture();render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={()=>{}} />)
+ f.entry({id:'team-recovery',kind:'session/error',level:'error',code:'TEAM_RECOVERY_REQUIRED',message:'The task needs recovery.',retry:undefined})
+ const retry=screen.getByRole('button',{name:'重試'});await act(async()=>{fireEvent.click(retry);await Promise.resolve()})
+ expect(f.bridge.request).toHaveBeenCalledWith({kind:'desktop/session/input/resume',workspaceId:'w',sessionId:'a'})
+ expect(screen.queryByRole('alert')).toBeNull()
 })

@@ -1,0 +1,112 @@
+{
+  "head": "cd169c8d7978d64163dda7e6dd80c2ecab91182f",
+  "donor": "f36d8adc5807f623006af8a31ff181371cd37eb4",
+  "changed": [
+    "packages/core-agent/src/agent/create.ts",
+    "packages/core-agent/src/agent/dependencies.ts",
+    "packages/core-agent/src/agent/tool-generation.ts",
+    "packages/core-agent/src/agent/turn.ts",
+    "packages/core-agent/src/tool-batch/cancel.ts",
+    "packages/core-agent/src/tool-batch/dispatch.ts",
+    "packages/core-agent/src/tool-batch/join.ts",
+    "packages/core-agent/src/tool-batch/live-continuation.ts",
+    "packages/core-agent/src/tool-batch/record.ts",
+    "packages/core-agent/test/retained-batch-continuation.test.ts",
+    "packages/session-executor/test/code-mode-children-close-boundary.test.ts",
+    "packages/session-executor/test/guardian-generation.test.ts",
+    "packages/session-executor/test/retained-batch-continuation.test.ts"
+  ],
+  "receipts": [
+    {
+      "head": "cd169c8d7978d64163dda7e6dd80c2ecab91182f",
+      "donor": "f36d8adc5807f623006af8a31ff181371cd37eb4",
+      "name": "core-continuation",
+      "cwd": "D:\\I-harness-main\\packages\\core-agent",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/retained-batch-continuation.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T11:35:23.079Z",
+      "ended": "2026-10-25T11:35:29.299Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2884,
+      "sha256": "a6448c1cc620d10691dcacace5f798e4062459ae62f03249e4a3fa1e26826019",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\close"
+      }
+    },
+    {
+      "head": "cd169c8d7978d64163dda7e6dd80c2ecab91182f",
+      "donor": "f36d8adc5807f623006af8a31ff181371cd37eb4",
+      "name": "session-continuation-close",
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/retained-batch-continuation.test.ts",
+        "test/code-mode-children-close-boundary.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T11:35:29.302Z",
+      "ended": "2026-10-25T11:35:45.331Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2884,
+      "sha256": "cd078f4778b19dc89e1dc844f37867b601df3b079281db2dac2a92de4ada390d",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\close"
+      }
+    },
+    {
+      "head": "cd169c8d7978d64163dda7e6dd80c2ecab91182f",
+      "donor": "f36d8adc5807f623006af8a31ff181371cd37eb4",
+      "name": "core-types",
+      "cwd": "D:\\I-harness-main\\packages\\core-agent",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T11:35:45.331Z",
+      "ended": "2026-10-25T11:35:51.375Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2884,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\close"
+      }
+    },
+    {
+      "head": "cd169c8d7978d64163dda7e6dd80c2ecab91182f",
+      "donor": "f36d8adc5807f623006af8a31ff181371cd37eb4",
+      "name": "executor-types",
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T11:35:51.376Z",
+      "ended": "2026-10-25T11:36:01.039Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2884,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\integrated-cd169c8d\\close"
+      }
+    }
+  ]
+}

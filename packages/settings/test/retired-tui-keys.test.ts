@@ -180,6 +180,30 @@ describe("retired TUI-only settings keys (Task 2A)", () => {
     })
   })
 
+  it.each(["set", "reset"] as const)("%s retires known root keys while preserving unrelated extension data and instruction provenance", async operation => {
+    await withUserDocument(async file => {
+      const extension = { schemaVersion: 7, settings: { theme: "extension-owned", enabled: true } }
+      await writeFile(file, JSON.stringify({ ...USER_DOCUMENT, extension,
+        instructions: { enabled: false, globalSources: [], maxBytes: 24000 },
+        _instructionsMigration: { version: 1, mode: "native", profilePath: file },
+      }), "utf8")
+      const original = await readFile(file, "utf8")
+      const store = new SettingsStore({ path: file })
+      await store.load()
+      expect(await readFile(file, "utf8")).toBe(original)
+      if (operation === "set") await store.set({ fontSize: 16 })
+      else await store.reset()
+      const persisted = JSON.parse(await readFile(file, "utf8"))
+      expect(survivors(persisted)).toEqual([])
+      expect(persisted.extension).toEqual(extension)
+      expect(persisted._instructionsMigration).toEqual({ version: 1, mode: "native", profilePath: file })
+      expect(persisted.instructions.enabled).toBe(operation === "reset")
+      if (operation === "set") expect(persisted.instructions.globalSources).toEqual([])
+      const reopened = new SettingsStore({ path: file })
+      expect((await reopened.load()).instructions).toEqual(store.get().instructions)
+    })
+  })
+
   it("retired keys inside the legacy tui.providers plane are unaffected (only prefs keys go)", async () => {
     // `tui.providers` is the pre-canonical provider plane and is NOT a T row;
     // its read migration must survive the prefs retirement intact.

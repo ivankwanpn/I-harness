@@ -3,6 +3,7 @@
  * patterns documented in TOOL_OUTPUT_SOURCES.md. It consumes durable records;
  * opening the activity does not execute or restore a code cell.
  */
+import type { RecordedResultReader } from "./result-pages.ts"
 import { useState } from "react"
 import { Braces, FileOutput, Save } from "lucide-react"
 import { ToolSummaryRow } from "../vendor/zcode/ToolSummaryRow.tsx"
@@ -10,11 +11,13 @@ import type { RecordedCodeEvent } from "./project.ts"
 import { OutputBlock } from "./OutputBlock.tsx"
 import { CapturedValueBlock, RawRecordedRecord } from "./RawRecordedData.tsx"
 import { RecordedImages } from "./RecordedToolOutput.tsx"
+import { RecordedResultEnvelope } from "./RecordedResultEnvelope.tsx"
 import { record, resultImages } from "./tool-presentation.ts"
 import { useToolText } from "./tool-text.ts"
 import "./tool-output.css"
 
 export interface RecordedCodeActivityProps {
+  resultReader?: RecordedResultReader
   event: RecordedCodeEvent
   expanded?: boolean
   onToggle?(): void
@@ -24,7 +27,7 @@ export interface RecordedCodeActivityProps {
 const states = { started: ["已開始", "Started"], running: ["執行中", "Running"], completed: ["已完成", "Completed"], failed: ["執行失敗", "Failed"], terminated: ["已停止", "Terminated"], interrupted: ["已中斷", "Interrupted"] } satisfies Record<string, [string, string]>
 
 /** A single historical output item is sufficient; earlier cell data is optional. */
-export function RecordedCodeActivity({ event, expanded: controlled, onToggle, onPreview }: RecordedCodeActivityProps) {
+export function RecordedCodeActivity({ event, expanded: controlled, onToggle, onPreview, resultReader }: RecordedCodeActivityProps) {
   const t = useToolText(), [localExpanded, setExpanded] = useState(false)
   const expanded = controlled ?? localExpanded
   const title = event.type === "code/output" ? t("Code Mode 輸出", "Code Mode output") : event.type === "code/store" ? t("Code Mode 儲存候選", "Code Mode store candidate") : t("Code Mode 執行單元", "Code Mode cell")
@@ -32,12 +35,12 @@ export function RecordedCodeActivity({ event, expanded: controlled, onToggle, on
   const status = event.type === "code/cell" ? t(...states[event.state]) : t("已記錄", "Recorded")
   return <div className="timeline-other recorded-code-activity">
     <ToolSummaryRow name="Code Mode" title={title} summary={event.cellId} status={status} state={event.type === "code/cell" ? event.state : undefined} icon={<Icon size={15} aria-hidden="true" />} expanded={expanded} label={`${title} ${event.cellId}`} onToggle={onToggle ?? (() => setExpanded(value => !value))} />
-    {expanded ? <div className="recorded-code-content"><CodeActivityBody event={event} onPreview={onPreview} /><RawRecordedRecord value={event} /></div> : null}
+    {expanded ? <div className="recorded-code-content"><CodeActivityBody resultReader={resultReader} event={event} onPreview={onPreview} /><RawRecordedRecord value={event} /></div> : null}
   </div>
 }
 
 /** Typed content is recognized and formatted only after the disclosure opens. */
-function CodeActivityBody({ event, onPreview }: Pick<RecordedCodeActivityProps, "event" | "onPreview">) {
+function CodeActivityBody({ event, onPreview, resultReader }: Pick<RecordedCodeActivityProps, "event" | "onPreview" | "resultReader">) {
   const t = useToolText()
   if (event.type === "code/cell") return <>
     {event.parentCallId || event.sessionId ? <div className="tool-result-metadata">{event.parentCallId ? <span>{t("父呼叫", "Parent call")} <code>{event.parentCallId}</code></span> : null}{event.sessionId ? <span>{t("會話", "Session")} <code>{event.sessionId}</code></span> : null}</div> : null}
@@ -45,6 +48,7 @@ function CodeActivityBody({ event, onPreview }: Pick<RecordedCodeActivityProps, 
     {event.error !== undefined ? <OutputBlock label={t("錯誤記錄", "Recorded error")} text={event.error} defaultWrap /> : null}
   </>
   if (event.type === "code/store") return <><p className="tool-result-note">{t("此記錄包含儲存候選資料。", "This record contains candidate store values.")}</p><CapturedValueBlock label={t("儲存候選資料", "Candidate store values")} value={event.writes} /></>
+  if (event.envelope) return <RecordedResultEnvelope resultReader={resultReader} envelope={event.envelope} onPreview={onPreview} />
   const content = record(event.content)
   if (content?.type === "text" && typeof content.text === "string") return <OutputBlock label={t("Code Mode 輸出", "Code Mode output")} text={content.text} />
   if (content?.type === "image") {

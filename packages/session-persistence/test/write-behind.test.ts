@@ -1,10 +1,59 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
 import { SessionWriteBehind } from "../src/write-behind.ts"
+import { createProcessReadLatches } from '../src/coordinator/process-read-latches.ts'
 
 afterEach(() => { vi.useRealTimers() })
 
 describe("SessionWriteBehind", () => {
+  it('retains original enqueue witnesses through a failed batch and later coalesced retry', async () => {
+    const latches = createProcessReadLatches(), batches: SessionEvent[][] = []
+    let fail = true
+    const controller = new SessionWriteBehind({ maxDelayMs: 1000, write: async events => {
+      batches.push(events); if (fail) throw new Error('retained')
+    }, reportBackgroundFailure: () => {} })
+    const first = latches.beginMutation({ sessionIds: ['s'], documentKeys: [], kind: 'other' })
+    controller.enqueue({ type: 'turn/start' }, first)
+    await expect(controller.flush()).rejects.toThrow('retained')
+    expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).toThrow()
+    const second = latches.beginMutation({ sessionIds: ['s'], documentKeys: [], kind: 'other' })
+    controller.enqueue({ type: 'turn/end' }, second)
+    fail = false
+    await controller.flush()
+    expect(batches.map(batch => batch.map(event => event.type))).toEqual([['turn/start'], ['turn/start', 'turn/end']])
+    expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow()
+  })
+  it('keeps the active and later queued witnesses until their original batches settle', async () => {
+    const latches = createProcessReadLatches(), gate = Promise.withResolvers<void>(), started = Promise.withResolvers<void>()
+    const controller = new SessionWriteBehind({ maxDelayMs: 1000, write: async events => {
+      if (events[0]?.type === 'turn/start') { started.resolve(); await gate.promise }
+    }, reportBackgroundFailure: () => {} })
+    controller.enqueue({ type: 'turn/start' }, latches.beginMutation({ sessionIds: ['s'], documentKeys: [], kind: 'other' }))
+    const flushing = controller.flush(); await started.promise
+    controller.enqueue({ type: 'turn/end' }, latches.beginMutation({ sessionIds: ['s'], documentKeys: [], kind: 'other' }))
+    expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).toThrow()
+    gate.resolve(); await flushing
+    expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow()
+  })
+  it('bounds callback witnesses by retained work through repeated failures and coalescing', async () => {
+    const latches = createProcessReadLatches(), ended: number[] = []
+    let attempts = 0, fail = true
+    const batches: string[][] = []
+    const controller = new SessionWriteBehind({ maxDelayMs: 1000,
+      beginWrite: () => { const index = ++attempts, token = latches.beginMutation({ sessionIds: ['s'], documentKeys: [], kind: 'other' });
+        return { end(outcome) { ended.push(index); token.end(outcome) } } },
+      write: async events => { batches.push(events.map(event => event.type)); if (fail) throw new Error('retry') }, reportBackgroundFailure: () => {} })
+    controller.enqueue({ type: 'turn/start' })
+    for (let retry = 0; retry < 5; retry++) await expect(controller.flush()).rejects.toThrow('retry')
+    expect(ended).toEqual([])
+    expect(attempts).toBe(1)
+    controller.enqueue({ type: 'turn/end' })
+    fail = false
+    await controller.flush()
+    expect(ended).toEqual([1])
+    expect(batches).toEqual([...Array.from({ length: 5 }, () => ['turn/start']), ['turn/start', 'turn/end']])
+    expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow()
+  })
   it("uses one fixed window from the first queued event and owns its copy", async () => {
     vi.useFakeTimers()
     const batches: SessionEvent[][] = []

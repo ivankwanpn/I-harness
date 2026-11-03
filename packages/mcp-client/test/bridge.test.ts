@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, resultExecution, resultPresentation } from "@i-harness/core-tools"
 import { createMcpTool } from "../src/index.ts"
 import type { ConnectedMcpClient } from "../src/index.ts"
 
@@ -23,6 +23,24 @@ function fakeClient(result: { content: unknown[]; isError?: boolean }): Connecte
 }
 
 describe("createMcpTool", () => {
+  it.each([false, true])('keeps the full normalized value on actual registered execution without retention (failed=%s)', async failed => {
+    const normalized = { content: [{ type: 'text', text: 'body' }], isError: failed, structuredContent: failed ? null : { error: 'data', values: [false, null] } }
+    const registry = createToolRegistry(createContext())
+    registry.register(createMcpTool(fakeClient(normalized), 'remote', 'raw', { name: 'raw' }, { transport: 'stdio', serverName: 'fixture', command: 'unused', args: [] }))
+    const prepared = await registry.prepare({ name: 'remote', args: {} })
+    const output = await registry.dispatch(prepared)
+    expect(output).toEqual(normalized)
+    expect((await registry.finalize(prepared, output)).output).toEqual(normalized)
+    expect(resultExecution(prepared)).toEqual({ outcome: failed ? 'failed' : 'succeeded', dispatch: 'dispatched' })
+    expect(resultPresentation(prepared)).toBe('mcp')
+    expect(() => resultPresentation({ ...prepared })).toThrow()
+  })
+
+  it('keeps direct successful execution content-only compatibility', async () => {
+    const content = [{ type: 'text', text: 'compatibility' }]
+    const tool = createMcpTool(fakeClient({ content, isError: false }), 'remote', 'raw', { name: 'raw' }, { transport: 'stdio', serverName: 'fixture', command: 'unused', args: [] })
+    expect(await tool.execute({}, {} as never)).toEqual(content)
+  })
   it("maps name/description/inputSchema and forwards calls by raw name", async () => {
     const client = fakeClient({ content: [], isError: false })
     let calledRaw = ""

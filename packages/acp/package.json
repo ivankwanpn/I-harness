@@ -15,5 +15,8 @@
     "@i-harness/sdk": "workspace:*",
     "@i-harness/session-executor": "workspace:*",
     "@i-harness/session-persistence": "workspace:*"
+  },
+  "devDependencies": {
+    "@i-harness/core-session": "workspace:*"
   }
 }

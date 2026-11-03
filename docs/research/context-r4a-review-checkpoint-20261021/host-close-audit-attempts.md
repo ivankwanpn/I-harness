@@ -1,0 +1,7 @@
+# Host-close review audit attempts
+
+2026-10-21. First read-only causal audit exited1 because it counted every B parent input promotion as the target notification promotion. B correctly contains the earlier explicit human main input as well as the later parent-notify input. The corrected static audit binds the actual target `promotionId` (A's independent literal `parent-notify-controlled`); all recorded source/log/outcome bytes remain unchanged. This is a reviewer scope-oracle correction, not product or causal evidence failure. No product import/runtime was executed by either audit attempt.
+
+The initial git pathspec `packages/*/src` returned no source diff; explicit `packages/session-persistence/src` then provided the complete five-owner diff. Full source reads are from that actual scope. Broad combined source/test output was bounded; the remaining executor service test was separately read in full.
+
+The first final-proof checker verified portable originals, all gate/source records and Gateway copy pairs, then exited1 by treating the CLI map's explicitly `sourceIdentical:false` generated WSL manifest as a physical source file. Corrected checker respects that declared row and independently constructs the exact manifest from the original worker hash and builder schema. This is not an existence fallback or changed evidence. Additional guessed read paths for an old-style CLI WSL asset location and script directory did not exist; the actual map and `scripts/runtime-wsl-assets.mjs` resolved them.

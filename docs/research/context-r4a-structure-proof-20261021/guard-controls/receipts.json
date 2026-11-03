@@ -1,0 +1,50 @@
+[
+  {
+    "label": "fresh actual gate shape",
+    "argv": [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      "const { structureEvidence } = await import('./packages/context-output/test/structure-evidence.ts'); console.log(structureEvidence('unused')); console.log('guard accepted before product imports')"
+    ],
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\guard-controls\\outer\\gate\\fixtures\\structure",
+    "start": "2026-10-20T21:19:01.588Z",
+    "end": "2026-10-20T21:19:01.768Z",
+    "exit": 0,
+    "stdout": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\guard-controls\\outer\\gate\\fixtures\\structure\nguard accepted before product imports\n",
+    "stderr": ""
+  },
+  {
+    "label": "direct seal",
+    "argv": [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      "const { structureEvidence } = await import('./packages/context-output/test/structure-evidence.ts'); console.log(structureEvidence('unused')); console.log('guard accepted before product imports')"
+    ],
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\guard-controls\\outer\\gate\\fixtures\\structure",
+    "start": "2026-10-20T21:19:01.770Z",
+    "end": "2026-10-20T21:19:01.887Z",
+    "exit": 1,
+    "stdout": "",
+    "stderr": "D:\\I-harness-main\\packages\\context-output\\test\\structure-evidence.ts:10\r\n    if (existsSync(join(path, 'evidence-seal.json'))) throw Error(`Structure evidence sealed: ${path}`)\r\n                                                            ^\r\n\r\nError: Structure evidence sealed: D:\\I-harness-main\\.tmp\\r4as-1021-01\\guard-controls\\outer\\gate\\fixtures\\structure\r\n    at structureEvidence (D:\\I-harness-main\\packages\\context-output\\test\\structure-evidence.ts:10:61)\r\n    at file:///D:/I-harness-main/[eval1]:1:113\r\n\r\nNode.js v24.15.0\r\n"
+  },
+  {
+    "label": "outer seal with actual gate/fixtures/structure ancestry",
+    "argv": [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      "const { structureEvidence } = await import('./packages/context-output/test/structure-evidence.ts'); console.log(structureEvidence('unused')); console.log('guard accepted before product imports')"
+    ],
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\guard-controls\\outer\\gate\\fixtures\\structure",
+    "start": "2026-10-20T21:19:01.889Z",
+    "end": "2026-10-20T21:19:02.004Z",
+    "exit": 1,
+    "stdout": "",
+    "stderr": "D:\\I-harness-main\\packages\\context-output\\test\\structure-evidence.ts:10\r\n    if (existsSync(join(path, 'evidence-seal.json'))) throw Error(`Structure evidence sealed: ${path}`)\r\n                                                            ^\r\n\r\nError: Structure evidence sealed: D:\\I-harness-main\\.tmp\\r4as-1021-01\\guard-controls\\outer\r\n    at structureEvidence (D:\\I-harness-main\\packages\\context-output\\test\\structure-evidence.ts:10:61)\r\n    at file:///D:/I-harness-main/[eval1]:1:113\r\n\r\nNode.js v24.15.0\r\n"
+  }
+]

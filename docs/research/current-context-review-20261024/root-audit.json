@@ -1,0 +1,88 @@
+{
+  "time": "2026-10-23T18:29:36.458Z",
+  "base": "b7ba78b0ae2c977f61709052f4180acae4977fdc",
+  "head": "fe8e11c876d4f6aaf1ea7ac7a160bb5c52711997",
+  "sourceFiles": 72,
+  "changedFiles": 72,
+  "capsules": [
+    {
+      "name": "current-context-format1",
+      "commit": "460a2aee9395dafe196eb31425dcc2c3fcdc259e",
+      "files": 45,
+      "gitSourceFiles": 33,
+      "localDependencyFiles": 12,
+      "sha256": "5a70c62fc2b665350049cfddf7de3feb1963ec283b2e1b860f26c4ab5942a249"
+    },
+    {
+      "name": "current-context-format11",
+      "commit": "b7ba78b0ae2c977f61709052f4180acae4977fdc",
+      "files": 193,
+      "gitSourceFiles": 181,
+      "localDependencyFiles": 12,
+      "sha256": "47999e9bbd1e854f7954bb0992339f0e2357dea6f471634ab6eca993a9028af6"
+    }
+  ],
+  "passed": 1864,
+  "failed": 42,
+  "total": 1906,
+  "baselineFailures": 42,
+  "newFailures": [],
+  "resolved": [],
+  "commands": [
+    {
+      "label": "final-tests",
+      "exit": 1,
+      "start": "2026-10-23T18:10:42.961Z",
+      "end": "2026-10-23T18:11:57.768Z"
+    },
+    {
+      "label": "types-core-session",
+      "exit": 0,
+      "start": "2026-10-23T18:11:57.769Z",
+      "end": "2026-10-23T18:12:01.360Z"
+    },
+    {
+      "label": "types-session-persistence",
+      "exit": 0,
+      "start": "2026-10-23T18:12:01.361Z",
+      "end": "2026-10-23T18:12:04.924Z"
+    },
+    {
+      "label": "types-session-persistence-jsonl",
+      "exit": 0,
+      "start": "2026-10-23T18:12:04.925Z",
+      "end": "2026-10-23T18:12:09.187Z"
+    },
+    {
+      "label": "types-runtime-context",
+      "exit": 0,
+      "start": "2026-10-23T18:12:09.188Z",
+      "end": "2026-10-23T18:12:11.462Z"
+    },
+    {
+      "label": "types-context-engine",
+      "exit": 0,
+      "start": "2026-10-23T18:12:11.463Z",
+      "end": "2026-10-23T18:12:13.976Z"
+    },
+    {
+      "label": "types-core-agent",
+      "exit": 0,
+      "start": "2026-10-23T18:12:13.978Z",
+      "end": "2026-10-23T18:12:19.293Z"
+    },
+    {
+      "label": "types-session-executor",
+      "exit": 0,
+      "start": "2026-10-23T18:12:19.294Z",
+      "end": "2026-10-23T18:12:28.188Z"
+    },
+    {
+      "label": "types-llm-seam",
+      "exit": 0,
+      "start": "2026-10-23T18:12:28.188Z",
+      "end": "2026-10-23T18:12:31.063Z"
+    }
+  ],
+  "errors": []
+}

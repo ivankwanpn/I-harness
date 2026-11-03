@@ -1,0 +1,5 @@
+{
+  "checkedUtc": "2026-10-20T20:52:13.2580169Z",
+  "matchingNodeProcesses": [],
+  "query": "Win32_Process Name=node.exe, commandline r4am-1021-01 or mixed-retention"
+}

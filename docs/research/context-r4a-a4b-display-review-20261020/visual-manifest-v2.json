@@ -1,0 +1,47 @@
+{
+  "observedAt": "2026-10-20T13:27:58.518Z",
+  "correction": "Cua screenshot bytes are JPEG; originals retained byte-for-byte, correct extension copies made. Initial PNG-offset dimension parse is invalid evidence and superseded.",
+  "files": [
+    {
+      "name": "zh-top.jpg",
+      "originalCaptureFilename": "zh-top.png",
+      "format": "JPEG",
+      "width": 1265,
+      "height": 712,
+      "bytes": 44250,
+      "sha256": "284fed075444f01ae87dd955cf4c9810b889cdb46e8756143151c9774d495208"
+    },
+    {
+      "name": "zh-lower.jpg",
+      "originalCaptureFilename": "zh-lower.png",
+      "format": "JPEG",
+      "width": 1265,
+      "height": 712,
+      "bytes": 49790,
+      "sha256": "dbe455d0cdf23b805b517fda6b28e706729416ca41714fcc16077c96e06bbccf"
+    },
+    {
+      "name": "zh-media.jpg",
+      "originalCaptureFilename": "zh-media.png",
+      "format": "JPEG",
+      "width": 1265,
+      "height": 712,
+      "bytes": 38465,
+      "sha256": "90f96292de8dbc715163f51a7ca5dd75be27185a5f5d54e757ce1c96569efb80"
+    },
+    {
+      "name": "en-raw.jpg",
+      "originalCaptureFilename": "en-raw.png",
+      "format": "JPEG",
+      "width": 1265,
+      "height": 712,
+      "bytes": 47016,
+      "sha256": "689b220c79968f1bcd2a3941535024868d27b487f7a20cc091c64bdb0e3e80d3"
+    },
+    {
+      "name": "en-raw.ax.txt",
+      "bytes": 5364,
+      "sha256": "5245435347ea0eb442e7f9c1060fa709bce02b767adcbed74b60cb9259063f34"
+    }
+  ]
+}

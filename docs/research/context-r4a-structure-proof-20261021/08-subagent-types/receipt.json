@@ -1,0 +1,26 @@
+{
+  "id": "08-subagent-types",
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "node": "v24.15.0",
+  "argv": [
+    "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+    "--noEmit"
+  ],
+  "cwd": "D:\\I-harness-main\\packages\\subagent",
+  "env": {
+    "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-1021-01/config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\08-subagent-types\\fixtures\\mixed",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\08-subagent-types\\fixtures\\integrity",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\08-subagent-types\\fixtures\\native",
+    "IH_PUBLICATION_PINS_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\08-subagent-types\\fixtures\\publication",
+    "IH_PHYSICAL_CRASH_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\08-subagent-types\\fixtures\\physical",
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\08-subagent-types\\fixtures\\structure"
+  },
+  "head": "bad38c2dc8b5663eaaeb2ef283ecd2b8de7b9994",
+  "start": "2026-10-20T21:12:57.175Z",
+  "pid": 22008,
+  "end": "2026-10-20T21:13:01.831Z",
+  "code": 0,
+  "signal": null,
+  "sourceUnchanged": true
+}

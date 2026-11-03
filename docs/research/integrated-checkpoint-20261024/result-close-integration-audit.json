@@ -1,0 +1,151 @@
+{
+  "head": "12cb34cf516b72914dc761c11d362c60d0add9cb",
+  "reviewedSource": [
+    {
+      "path": "packages/context-output/src/service.ts",
+      "blob": "8d0e1342127084d8782aa15fe6eecf4f03a4ffdd",
+      "physicalSha256": "50b08a400ae1c9f7c754081fc9d61bea0a09e6345832d7ee36b187805b72c65e",
+      "donorPhysicalEqual": true,
+      "canonicalGitMatch": true
+    },
+    {
+      "path": "packages/context-output/test/close-fixture.ts",
+      "blob": "4bf60faf50e98203577fe3c91b4d7142d97a6e01",
+      "physicalSha256": "796585eed5f7f14e67e9ef468fe21dd086b98f3f52cf124aa4112b39b1570e57",
+      "donorPhysicalEqual": false,
+      "canonicalGitMatch": true
+    },
+    {
+      "path": "packages/context-output/test/close-ownership.test.ts",
+      "blob": "c1d17bc065c1250f83310d272d1f71e76a303844",
+      "physicalSha256": "4f1cc7375c3dcb1d780743d523f649c4aff07f8ecd99f585defc57f942b45b60",
+      "donorPhysicalEqual": false,
+      "canonicalGitMatch": true
+    },
+    {
+      "path": "packages/session-executor/src/lifecycle/result-store.ts",
+      "blob": "aad727cdbc9647b35e7683391d39aa5ae44bd045",
+      "physicalSha256": "30aa76152c144d89ea622109266885b1b630ebfd29293cc4bc01f8806feafd02",
+      "donorPhysicalEqual": true,
+      "canonicalGitMatch": true
+    },
+    {
+      "path": "packages/session-executor/src/service.ts",
+      "blob": "5dc9c66453874da2a3e029ed4e257785dae77312",
+      "physicalSha256": "4484c8da0be68292380fb54dc4f01264fdd35ef4b0212c2b9ae7381b184c6c94",
+      "donorPhysicalEqual": true,
+      "canonicalGitMatch": true
+    },
+    {
+      "path": "packages/session-executor/src/service/result-reader.ts",
+      "blob": "39804195532bc6f351a0372eece49d27e2239bde",
+      "physicalSha256": "f281cb7bfdb1fb2dcec7c75146df30e24af2bbe09a1edc061f82788df7b1b9a9",
+      "donorPhysicalEqual": true,
+      "canonicalGitMatch": true
+    },
+    {
+      "path": "packages/session-executor/test/result-reader-close.test.ts",
+      "blob": "74d72892d6a5ca2b164f0eac5e8bcd1bd10959ad",
+      "physicalSha256": "770ea67c622455fd197c3b18aecb78568398e325b01a9079a648aec5ef4fdfd4",
+      "donorPhysicalEqual": false,
+      "canonicalGitMatch": true
+    },
+    {
+      "path": "packages/session-executor/test/result-store-close.test.ts",
+      "blob": "9dfa544319b3d167574ce357a0eda9ca200aaad2",
+      "physicalSha256": "c4f85b2e2adae47da64c434bce2e869e62e60478f7bb3a9dd1675245fe515f4d",
+      "donorPhysicalEqual": false,
+      "canonicalGitMatch": true
+    },
+    {
+      "path": "packages/session-executor/test/service-instruction-close.test.ts",
+      "blob": "55e7b007281a880b56ff3492e58aae1390546fc3",
+      "physicalSha256": "398944887e890f2a4118739d9a9024a1507a8fca13545690225213063bbbd308",
+      "donorPhysicalEqual": false,
+      "canonicalGitMatch": true
+    }
+  ],
+  "copies": [
+    {
+      "path": "packages/context-output/src/service.ts",
+      "copied": "D:\\I-harness-main\\.tmp\\result-close-gateway-610739573c\\node_modules\\@i-harness\\context-output\\src\\service.ts",
+      "sha256": "50b08a400ae1c9f7c754081fc9d61bea0a09e6345832d7ee36b187805b72c65e",
+      "equal": true
+    },
+    {
+      "path": "packages/session-executor/src/lifecycle/result-store.ts",
+      "copied": "D:\\I-harness-main\\.tmp\\result-close-gateway-610739573c\\node_modules\\@i-harness\\session-executor\\src\\lifecycle\\result-store.ts",
+      "sha256": "30aa76152c144d89ea622109266885b1b630ebfd29293cc4bc01f8806feafd02",
+      "equal": true
+    },
+    {
+      "path": "packages/session-executor/src/service/result-reader.ts",
+      "copied": "D:\\I-harness-main\\.tmp\\result-close-gateway-610739573c\\node_modules\\@i-harness\\session-executor\\src\\service\\result-reader.ts",
+      "sha256": "f281cb7bfdb1fb2dcec7c75146df30e24af2bbe09a1edc061f82788df7b1b9a9",
+      "equal": true
+    },
+    {
+      "path": "packages/session-executor/src/service.ts",
+      "copied": "D:\\I-harness-main\\.tmp\\result-close-gateway-610739573c\\node_modules\\@i-harness\\session-executor\\src\\service.ts",
+      "sha256": "4484c8da0be68292380fb54dc4f01264fdd35ef4b0212c2b9ae7381b184c6c94",
+      "equal": true
+    },
+    {
+      "path": "packages/instructions/src/index.ts",
+      "copied": "D:\\I-harness-main\\.tmp\\result-close-gateway-610739573c\\node_modules\\@i-harness\\instructions\\src\\index.ts",
+      "sha256": "28191b1070370416d1646e8e3572a884ae8cfccecce2c0ce7a6e2086e4bea70c",
+      "equal": true
+    },
+    {
+      "path": "packages/runtime-context/src/index.ts",
+      "copied": "D:\\I-harness-main\\.tmp\\result-close-gateway-610739573c\\node_modules\\@i-harness\\runtime-context\\src\\index.ts",
+      "sha256": "071170be6954efbf10d55bf73eb0cba30aefc5f243d5f9f2cc9fd28b6ddf0999",
+      "equal": true
+    },
+    {
+      "path": "packages/runtime-context/package.json",
+      "copied": "D:\\I-harness-main\\.tmp\\result-close-gateway-610739573c\\node_modules\\@i-harness\\runtime-context\\package.json",
+      "sha256": "6ed41c9efff89f01fca0a7e3da184760c9d5f0e86ab8e9a3a8fa022a683b6ee3",
+      "equal": true
+    }
+  ],
+  "cli": {
+    "path": "D:\\I-harness-main\\.tmp\\result-close-cli-610739573c\\ih.mjs",
+    "bytes": 7153996,
+    "sha256": "159a9f3caafff15f27af404129fbef83b69841137849557093bef65c63698cc9",
+    "containsReaderCleanup": true
+  },
+  "gates": [
+    {
+      "name": "executor-combined",
+      "exit": 0,
+      "head": "12cb34cf516b72914dc761c11d362c60d0add9cb"
+    },
+    {
+      "name": "executor-types",
+      "exit": 0,
+      "head": "12cb34cf516b72914dc761c11d362c60d0add9cb"
+    },
+    {
+      "name": "cli-types",
+      "exit": 0,
+      "head": "12cb34cf516b72914dc761c11d362c60d0add9cb"
+    },
+    {
+      "name": "cli-build",
+      "exit": 0,
+      "head": "12cb34cf516b72914dc761c11d362c60d0add9cb"
+    },
+    {
+      "name": "gateway-copy",
+      "exit": 0,
+      "head": "12cb34cf516b72914dc761c11d362c60d0add9cb"
+    }
+  ],
+  "sourceFiles": 2851,
+  "failures": [],
+  "limits": [
+    "Selected copies and bundle marker/hash, not full installed-runtime or platform proof.",
+    "CLI dynamic-import warnings remain; no release readiness inferred."
+  ]
+}

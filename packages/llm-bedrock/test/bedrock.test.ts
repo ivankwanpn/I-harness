@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Mock } from "vitest"
 import { createBedrockClient, resolveBedrockRegion, translateReasoning, type BedrockRuntimeFace } from "../src/index.ts"
 import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
+import { modelFailureFacts, retryErrorCode } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -32,6 +33,26 @@ afterEach(() => {
 })
 
 describe("llm-bedrock protocol (Converse wire)", () => {
+  it.each([
+    ["ValidationException", "The input length exceeds the maximum context length. private prompt", "CONTEXT_WINDOW_EXCEEDED"],
+    ["ValidationException", 'Invalid tool arguments: "context_length_exceeded" private prompt', "INVALID_ARGUMENT"],
+    ["AccessDeniedException", "context_length_exceeded private prompt", "AUTH"],
+    ["ServiceQuotaExceededException", "context_length_exceeded private prompt", "QUOTA"],
+  ])("preserves classified SDK %s failure facts with the original send receiver and cause", async (name, message, code) => {
+    const upstream = Object.assign(new Error(message), { name, $metadata: { httpStatusCode: 400, requestId: "aws-123" } })
+    let receiver: unknown
+    const fake = { async send() { receiver = this; throw upstream }, destroy() {} } as unknown as BedrockRuntimeFace
+    const events: LLMStreamEvent[] = []
+    for await (const event of createBedrockClient({ model: "fixture" }, fake).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(receiver).toBe(fake)
+    expect(events).toHaveLength(1)
+    const event = events[0]!
+    if (event.type !== "error") throw new Error("missing error")
+    expect(event.error.cause).toBe(upstream)
+    expect(retryErrorCode(event.error)).toBe(code)
+    expect(modelFailureFacts(event.error)).toMatchObject({ code, providerType: name, httpStatus: 400, requestId: "aws-123" })
+    expect(JSON.stringify(modelFailureFacts(event.error))).not.toContain("private prompt")
+  })
   it("keeps request cache intent out of the Converse payload", async () => {
     const { fake } = fakeRuntime([])
     const client = createBedrockClient({ model: "fixture" }, fake)
@@ -110,7 +131,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     ])
   })
 
-  it("marks a failed tool result for a Converse model that supports status", async () => {
+  it("retains failed tool outcome on a custom transport without inventing status support", async () => {
     const { fake } = fakeRuntime([])
     const iterator = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake).stream({ messages: [
       { role: "assistant", content: "", toolCalls: [{ id: "bad", name: "read", args: {} }] },
@@ -119,12 +140,12 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     await iterator.next()
     const { input } = await lastCommandSent(fake)
     expect((input.messages as { content: unknown[] }[])[1]!.content).toEqual([
-      { toolResult: { toolUseId: "bad", content: [{ json: { error: "missing" } }], status: "error" } },
+      { toolResult: { toolUseId: "bad", content: [{ json: { isError: true } }, { json: { error: "missing" } }] } },
     ])
     await iterator.return?.()
   })
 
-  it("marks failed results on a regional Claude inference profile", async () => {
+  it("keeps error annotation on a regional profile with unverified native status support", async () => {
     const { fake } = fakeRuntime([])
     const iterator = createBedrockClient({ model: "us.anthropic.claude-3-5-sonnet-20240620-v1:0" }, fake).stream({ messages: [
       { role: "assistant", content: "", toolCalls: [{ id: "bad", name: "read", args: {} }] },
@@ -132,7 +153,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const { input } = await lastCommandSent(fake)
-    expect((input.messages as { content: { toolResult?: { status?: string } }[] }[])[1]!.content[0]!.toolResult?.status).toBe("error")
+    expect((input.messages as any[])[1]!.content[0]!.toolResult).toEqual({ toolUseId: 'bad', content: [{ json: { isError: true } }, { json: { error: 'missing' } }] })
     await iterator.return?.()
   })
 
@@ -220,8 +241,8 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     const client = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake)
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } })
-    const replay = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "tool-7", name: "read", args: {} }], providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }], contentOrder: [{ kind: 'reasoning', index: 0 }, { kind: 'tool', index: 0 }], producerWitness: { version: 1, messagesPrefixId: expect.stringMatching(/^[a-f0-9]{64}$/), inputSurfaceId: expect.stringMatching(/^[a-f0-9]{64}$/), callsId: expect.stringMatching(/^[a-f0-9]{64}$/), callCount: 1 } } })
+    const replay = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "tool-7", name: "read", args: {} }], providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } }, { role: 'tool', toolCallId: 'tool-7', content: 'done' }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await replay.next()
     const { input } = await lastCommandSent(fake)
     expect((input.messages as { content: unknown[] }[])[0]!.content[0]).toEqual({ reasoningContent: { reasoningText: { text: "plan", signature: "signed" } } })
@@ -232,6 +253,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     const { fake } = fakeRuntime([])
     const iterator = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake).stream({ messages: [
       { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-3-7", reasoningBlocks: [{ reasoningText: { text: "old", signature: "old-sig" } }] } },
+      { role: 'tool', toolCallId: 'c1', content: 'done' },
     ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const { input } = await lastCommandSent(fake)
@@ -283,7 +305,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     ])
     const events: LLMStreamEvent[] = []
     for await (const event of createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ redactedContentBase64: "AQIDBA==" }] } })
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ redactedContentBase64: "AQIDBA==" }], contentOrder: [{ kind: 'reasoning', index: 0 }], producerWitness: { version: 1, messagesPrefixId: expect.stringMatching(/^[a-f0-9]{64}$/), inputSurfaceId: expect.stringMatching(/^[a-f0-9]{64}$/), callsId: expect.stringMatching(/^[a-f0-9]{64}$/), callCount: 0 } } })
   })
 
   it("yields an error event and stops on malformed tool args", async () => {
@@ -594,8 +616,8 @@ describe("M72 Ⅰ request-level failures (bedrock)", () => {
       Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
     )
     const controller = new AbortController()
-    controller.abort()
     const client = createBedrockClient({ model: "m" }, fake)
+    controller.abort()
     const events: { type: string }[] = []
     const drain = async (): Promise<void> => {
       for await (const ev of client.stream({
@@ -663,11 +685,13 @@ describe("M72 Ⅰ mid-stream failures (bedrock)", () => {
       Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
     )
     const controller = new AbortController()
-    controller.abort()
     const client = createBedrockClient({ model: "m", region: "us-east-1" }, runtimeWithStream(stream))
     const events: { type: string }[] = []
     const drain = async (): Promise<void> => {
-      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) events.push(ev)
+      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) {
+        events.push(ev)
+        controller.abort()
+      }
     }
     await expect(drain()).rejects.toThrow("aborted")
     // The pre-abort delta was already delivered; NO error event follows it.

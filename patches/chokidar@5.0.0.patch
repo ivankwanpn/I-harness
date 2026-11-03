@@ -1,0 +1,12 @@
+diff --git a/handler.js b/handler.js
+index 6b12880bfcdae186dd738a9397b53ebb5849f0ac..9dcd1011b4a75997fb84a317cf7592e5fa99d4c2 100644
+--- a/handler.js
++++ b/handler.js
+@@ -160,6 +160,7 @@ const setFsWatchListener = (path, fullPath, options, handlers) => {
+         watcher = createFsWatchInstance(path, options, listener, errHandler, rawEmitter);
+         if (!watcher)
+             return;
++        watcher.on(EV.ERROR, errHandler);
+         return watcher.close.bind(watcher);
+     }
+     if (cont) {

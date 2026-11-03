@@ -22,6 +22,17 @@
 }
 
 .context-usage-gauge-track { stroke: var(--ih-divider); }
+.context-usage-popover { overflow-y: auto; overflow-wrap: anywhere; }
+.context-usage-capacity { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.context-usage-remaining { margin: 12px 0 0; font-size: 13px; }
+.context-usage-remaining dd { font-weight: 600; }
+.context-usage-facts { margin-top: 12px; border-top: 1px solid var(--ih-divider); padding-top: 4px; }
+.context-usage-facts small { font-size: 12px; }
+.context-usage-fact-group { display: grid; gap: 7px; margin: 12px 0 0; }
+.context-usage-fact-group + .context-usage-fact-group { border-top: 1px solid var(--ih-divider); padding-top: 12px; }
+.context-usage-fact { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.context-usage-fact dt { color: var(--ih-muted); }
+.context-usage-fact dd { margin: 0; text-align: right; color: var(--ih-text); font-variant-numeric: tabular-nums; }
 .context-usage-gauge-fill { stroke: currentColor; stroke-linecap: round; }
 .context-usage-reading {
   position: absolute;

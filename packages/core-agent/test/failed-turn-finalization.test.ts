@@ -17,7 +17,7 @@ it.each(["pre-step", "request-context"] as const)("closes a %s refusal without c
   } })
   await expect(agent.run("Owned refused input")).rejects.toBe(refusal)
   expect(modelCalls).toBe(0)
-  expect(session.events.map(event => event.type)).toEqual(["turn/start", "user/message", "step/start", "step/failed", "step/end", "turn/end"])
+  expect(session.events.map(event => event.type)).toEqual(["conversation/semantics", "turn/start", "user/message", "step/start", "step/failed", "step/end", "turn/end"])
   expect(session.events.some(event => event.type === "assistant/message")).toBe(false)
   denied = false
   expect((await agent.run("Owned later input")).finalText).toBe("Actual later answer")

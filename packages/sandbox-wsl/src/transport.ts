@@ -249,6 +249,7 @@ export class WorkerClient {
     })
     return Object.freeze({ receipt: lease.receipt, pid, rootExited: lease.rootExited,
       get settled() { return lease.settled }, cancel: lease.cancel, release: lease.release,
+      terminationObservation: lease.terminationObservation,
       runner: Object.freeze({ enforcement: "partial" as const, denialSignatures: Object.freeze(["Permission denied", "Operation not permitted", "Read-only file system"]), runnerFailureRules: Object.freeze([]) }),
       io: { output: this.output.output, diagnostics: () => this.output.diagnostics(),
         write: (data: Uint8Array) => this.writeInput(data), endInput: () => this.endInput() },

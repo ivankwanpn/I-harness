@@ -1,0 +1,2 @@
+export {bindPreparedTeamLaunchLeaf,assertOriginalManagedTeamCaller,bindOriginalTeamProvisioningCandidate,assertOriginalTeamCallerProvisioning,retainOriginalManagedTeamBirth,assertOriginalManagedTeamBirth,assertOriginalManagedTeamBirthHeld,bindOriginalTeamBirthCapture,assertOriginalTeamBirthCapture} from './registry/prepared-body.ts'
+export type {OriginalManagedTeamCaller,OriginalManagedTeamBirthAuthority} from './registry/prepared-body.ts'

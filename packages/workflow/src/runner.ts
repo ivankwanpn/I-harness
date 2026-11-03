@@ -33,6 +33,8 @@
 // not escaped). Only declared params interpolate; unknown ${...} is left
 // verbatim so the model can see the unresolved hole.
 import { getArgv } from "@i-harness/shell"
+import { randomUUID } from 'node:crypto'
+import { isWorkflowStepFactory, type WorkflowStepFactory, type OwnedWorkflowStep } from '@i-harness/exec/direct-reservation'
 import type { BackgroundJobStatus, BackgroundJobView, ExecCommand, ExecResult, ExecService } from "@i-harness/exec"
 import type { WorkflowDefinition, WorkflowStep } from "./definition.ts"
 
@@ -61,6 +63,7 @@ export interface WorkflowJobStore {
   get(jobId: string): WorkflowJobEntry | undefined
   // Copy of the public BackgroundJobView shape (never the internal entry).
   view(jobId: string): BackgroundJobView
+  subscribeJobs?(listener: () => void): () => void
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   update(jobId: string, patch: Partial<Pick<WorkflowJobEntry, "status" | "stdout" | "stderr" | "exitCode">>): void
   list(): BackgroundJobView[]
@@ -71,8 +74,10 @@ export function createWorkflowJobStore(): WorkflowJobStore {
   let counter = 0
   const jobs = new Map<string, WorkflowJobEntry>()
   const listeners = new Map<string, Set<(view: BackgroundJobView) => void>>()
+  const collection = new Set<() => void>()
 
   function publish(job: WorkflowJobEntry): void {
+    for (const listener of [...collection]) { try { listener() } catch {} }
     for (const listener of [...listeners.get(job.id) ?? []]) {
       try { listener(toView(job)) } catch { /* Observers cannot interrupt the runner. */ }
     }
@@ -94,6 +99,7 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       counter += 1
       const job: WorkflowJobEntry = { id: `workflow-${counter}`, status: "running", stdout: "", stderr: "", controller: new AbortController(), ...(owner !== undefined ? { owner } : {}) }
       jobs.set(job.id, job)
+      publish(job)
       return job
     },
     get(jobId: string): WorkflowJobEntry | undefined {
@@ -104,6 +110,7 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       if (!job) throw new Error(`unknown job: ${jobId}`)
       return toView(job)
     },
+    subscribeJobs(listener) { collection.add(listener); return () => { collection.delete(listener) } },
     subscribeJob(jobId, listener) {
       if (!jobs.has(jobId)) throw new Error(`unknown job: ${jobId}`)
       let group = listeners.get(jobId)
@@ -145,6 +152,77 @@ export interface WorkflowRunHandle {
   // defers those).
   runId: string
   jobId: string
+}
+
+/** Loop observations only. Neither status nor this join certifies native cleanup. */
+export interface WorkflowLoopFailure {
+  readonly phase: 'attempt' | 'loop'
+  readonly step?: number
+  readonly attempt?: number
+  readonly cause: unknown
+}
+export interface WorkflowLoopCompletion {
+  readonly kind: 'loop-finished'
+  readonly cleanup: 'unqualified' | 'clean' | 'recovery-required'
+  readonly status: BackgroundJobStatus
+  readonly dispatch: 'not-dispatched' | 'dispatched' | 'unknown'
+  readonly resultCompleteness:'complete'|'source-limited'
+  readonly result: import('../../core-session/src/events/workflow-delivery.ts').WorkflowRunResult
+  readonly failures: readonly WorkflowLoopFailure[]
+}
+export interface OwnedWorkflowRunHandle extends WorkflowRunHandle {
+  readonly invocationId: string
+  join(): Promise<WorkflowLoopCompletion>
+  reconcile(): Promise<WorkflowLoopCompletion>
+}
+const originalWorkflowCompletions=new WeakMap<object,WeakSet<object>>()
+/** Only the original reserved run can qualify its own joined completion. */
+export function isOriginalWorkflowCompletion(run:object,value:object):value is WorkflowLoopCompletion{return !!run&&!!value&&originalWorkflowCompletions.get(run)?.has(value)===true}
+export interface WorkflowReservation {
+  readonly invocationId: string
+  start(): OwnedWorkflowRunHandle
+  join(): Promise<WorkflowLoopCompletion>
+}
+
+/** Allocation/validation only: no store publication, Exec call or observer effect. */
+export function reserveWorkflowIn(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService,
+  store: WorkflowJobStore, owner?: string, defaultCwd?: string, steps?: WorkflowStepFactory): WorkflowReservation {
+  if (steps && !isWorkflowStepFactory(steps)) throw new Error('Original Workflow step factory required')
+  const values = resolveParams(def, params)
+  const captured = { ...def, steps: def.steps.map(step => ({ ...step,
+    ...(step.env ? { env: { ...step.env } } : {}), ...(step.retry ? { retry: { ...step.retry } } : {}),
+  })) }
+  const invocationId = randomUUID(), completion = Promise.withResolvers<WorkflowLoopCompletion>()
+  void completion.promise.catch(() => {})
+  let handle: OwnedWorkflowRunHandle | undefined, starting = false, failed = false, failure: unknown
+  const ownedSteps: OwnedWorkflowStep[] = []
+  const reservation: WorkflowReservation = Object.freeze({ invocationId,
+    start() {
+      if (this !== reservation) throw new Error('Foreign Workflow reservation receiver')
+      if (handle) return handle
+      if (failed) throw failure
+      if (starting) throw new Error('Workflow reservation start in progress')
+      starting = true
+      try {
+        const job = startWorkflowLoop(captured, values, exec, store, owner, defaultCwd, completion.resolve, steps, ownedSteps, invocationId)
+        const original: OwnedWorkflowRunHandle = Object.freeze({ ...job, invocationId,
+          join() { if (this !== original) throw new Error('Foreign Workflow handle receiver'); return completion.promise.then(value=>{originalWorkflowCompletions.get(original)!.add(value);return value}) },
+          async reconcile() {
+            if (this !== original) throw new Error('Foreign Workflow handle receiver')
+            const prior = await completion.promise
+            if(!ownedSteps.length){originalWorkflowCompletions.get(original)!.add(prior);return prior}
+            let clean = true, dispatched = false, unknown = false
+            for (const step of ownedSteps) { const result = await step.reconcile(); if (result.kind !== 'clean') {clean = false;unknown = true} else if(result.execution==='dispatched')dispatched=true;else if(result.execution==='unknown')unknown=true }
+            if (clean) { for (const step of ownedSteps) step.release(); ownedSteps.length = 0 }
+            const observed=Object.freeze({ ...prior, cleanup: steps ? clean ? 'clean' as const : 'recovery-required' as const : 'unqualified' as const, dispatch:!steps||unknown?'unknown' as const:dispatched?'dispatched' as const:'not-dispatched' as const });originalWorkflowCompletions.get(original)!.add(observed);return observed
+          },
+        })
+        originalWorkflowCompletions.set(original,new WeakSet());return handle = original
+      } catch (cause) { failed = true; failure = cause; completion.reject(cause); throw cause }
+    },
+    join() { if (this !== reservation) throw new Error('Foreign Workflow reservation receiver'); return completion.promise },
+  })
+  return reservation
 }
 
 function interpolate(text: string, values: Record<string, string>): string {
@@ -210,12 +288,22 @@ export function runWorkflowIn(
   // D1 (m55): default cwd for steps that do not declare one — the mount's
   // workspace. Absent → exec's own contract (process cwd).
   defaultCwd?: string,
-): WorkflowRunHandle {
-  const values = resolveParams(def, params)
+  steps?: WorkflowStepFactory,
+): OwnedWorkflowRunHandle {
+  return reserveWorkflowIn(def, params, exec, store, owner, defaultCwd, steps).start()
+}
+
+function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, string>, exec: ExecService,
+  store: WorkflowJobStore, owner: string | undefined, defaultCwd: string | undefined,
+  completed: (value: WorkflowLoopCompletion) => void, stepFactory?: WorkflowStepFactory, ownedSteps: OwnedWorkflowStep[] = [], invocationId = ''): WorkflowRunHandle {
   const job = store.createJob(owner)
   const { controller } = job
   const steps = def.steps
   const total = steps.length
+  const failures: WorkflowLoopFailure[] = []
+  let cleanup: WorkflowLoopCompletion['cleanup'] = stepFactory ? 'clean' : 'unqualified', dispatched=false, unknown=!stepFactory
+  let sourceLimited=false
+  const stepResults:import('../../core-session/src/events/workflow-delivery.ts').WorkflowRunResult['steps']=[]
 
   function setStatus(status: BackgroundJobStatus, exitCode: number): void {
     if (job.status !== "running") return // killed runs stay killed
@@ -238,16 +326,30 @@ export function runWorkflowIn(
       const attempts = Math.max(1, step.retry?.attempts ?? 1)
       let result: ExecResult | undefined
       for (let attempt = 1; attempt <= attempts; attempt++) {
+        let owned: OwnedWorkflowStep | undefined
         appendLine(job, `[step ${i + 1}/${total} ${step.name}] started`)
         store.update(job.id, { stdout: job.stdout })
         try {
           const cmd = stepCommand(step, values, defaultCwd)
           cmd.abortSignal = controller.signal
-          result = await exec.run(cmd)
+          if (stepFactory) { owned = stepFactory.create(cmd); ownedSteps.push(owned); result = await owned.run() }
+          else result = await exec.run(cmd)
         } catch (e) {
+          failures.push(Object.freeze({ phase: 'attempt', step: i, attempt, cause: e }))
           // exec.run can reject (e.g. sandbox unavailable) — translate into an
           // ordinary step failure so the failure discipline applies uniformly.
           result = { stdout: "", stderr: e instanceof Error ? e.message : String(e), exitCode: -1, timedOut: false }
+        }
+        if(result.truncated?.stdout||result.truncated?.stderr||result.stdoutSpillPath||result.stderrSpillPath||result.outputDiagnostics?.outputAbandoned||result.outputDiagnostics?.discardedOutputBytes||result.retentionFailure||result.stream?.stopReason)sourceLimited=true
+        stepResults.push({step:i,attempt,outcome:controller.signal.aborted?'canceled':result.exitCode===0?'succeeded':'failed',exitCode:result.exitCode,timedOut:result.timedOut,stdout:result.stdout,stderr:result.stderr})
+        if (owned) {
+          const ownership = await owned.join()
+          if (ownership.kind !== 'clean') {
+            unknown=true;cleanup = 'recovery-required'
+            failures.push(Object.freeze({ phase: 'loop', step: i, attempt, cause: ownership.cause }))
+            setStatus('error', -1); skipRest(i + 1); return
+          }
+          if(ownership.execution==='dispatched')dispatched=true;else if(ownership.execution==='unknown')unknown=true
         }
         if (controller.signal.aborted) {
           skipRest(i + 1)
@@ -287,9 +389,17 @@ export function runWorkflowIn(
   })().catch((e: unknown) => {
     // Defensive: the loop itself must never reject unhandled. Surface the bug
     // on the job and fail the run.
-    job.stderr += `workflow runner error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`
-    setStatus("error", -1)
-  })
+    failures.push(Object.freeze({ phase: 'loop', cause: e }))
+    try {
+      job.stderr += `workflow runner error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`
+      setStatus("error", -1)
+    } catch (cause) { failures.push(Object.freeze({ phase: 'loop', cause })) }
+  }).then(() => {
+    // Original run-disposal boundary. No aggregate output proof is emitted.
+    if (cleanup === 'clean') { for (const step of ownedSteps) step.release(); ownedSteps.length = 0 }
+    completed(Object.freeze({ kind: 'loop-finished', cleanup,
+    status: job.status,resultCompleteness:sourceLimited?'source-limited':'complete',dispatch:unknown?'unknown':dispatched?'dispatched':'not-dispatched',result:Object.freeze({version:1,kind:'workflow-run-result',invocationId,steps:Object.freeze(stepResults.map(value=>Object.freeze({...value}))) as unknown as typeof stepResults,stdout:job.stdout,stderr:job.stderr}), failures: Object.freeze([...failures]),
+  })) })
 
   return { runId: job.id, jobId: job.id }
 }
@@ -298,7 +408,7 @@ export function runWorkflowIn(
 // store, so jobs started this way are queryable via any executor's
 // getOutput/listJobs/killJob. `owner` attributes the run (the per-session
 // projection filters on it).
-export function runWorkflow(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService, owner?: string, defaultCwd?: string): WorkflowRunHandle {
+export function runWorkflow(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService, owner?: string, defaultCwd?: string): OwnedWorkflowRunHandle {
   return runWorkflowIn(def, params ?? {}, exec, sharedJobs, owner, defaultCwd)
 }
 
@@ -308,6 +418,7 @@ export function runWorkflow(def: WorkflowDefinition, params: Record<string, stri
 export interface WorkflowExecutor {
   runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): WorkflowRunHandle
   getOutput(jobId: string): BackgroundJobView
+  subscribeJobs?(listener: () => void): () => void
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
   killJob(jobId: string): "cancellation-requested" | "already-finished"
@@ -315,21 +426,27 @@ export interface WorkflowExecutor {
 
 interface WorkflowExecutorDeps {
   exec: ExecService
+  steps?: WorkflowStepFactory
   // Inject an isolated store (tests); default = the shared run-level store.
   jobs?: WorkflowJobStore
   // D1 (m55): default cwd for steps without one — the mount's workspace.
   cwd?: string
 }
 
-export function createWorkflowExecutor(deps: WorkflowExecutorDeps): WorkflowExecutor {
+export function createWorkflowExecutor(deps: WorkflowExecutorDeps): Omit<WorkflowExecutor, 'runWorkflow'> & {
+  reserveWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): WorkflowReservation
+  runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): OwnedWorkflowRunHandle
+} {
   const jobs = deps.jobs ?? sharedJobs
   return {
-    runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): WorkflowRunHandle {
-      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner, deps.cwd)
+    reserveWorkflow(def, params = {}, owner) { return reserveWorkflowIn(def, params, deps.exec, jobs, owner, deps.cwd, deps.steps) },
+    runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): OwnedWorkflowRunHandle {
+      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner, deps.cwd, deps.steps)
     },
     getOutput(jobId: string): BackgroundJobView {
       return jobs.view(jobId)
     },
+    subscribeJobs(listener) { return jobs.subscribeJobs?.(listener) ?? (() => {}) },
     subscribeJob(jobId, listener) { return jobs.subscribeJob(jobId, listener) },
     listJobs(): BackgroundJobView[] {
       return jobs.list()

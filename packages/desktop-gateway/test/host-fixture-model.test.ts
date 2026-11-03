@@ -8,13 +8,12 @@ import { createDesktopHost } from '../src/host.ts'
 import { createHostFixtureModel } from './host-fixture-model.ts'
 import { createHostFixtureOwner } from './host-fixture-owner.ts'
 
-it('keeps real host loopback transports independent through a failed prompt without replacing global fetch', async () => {
+it('keeps actual owned host terminals on registered loopback origins through a failed prompt', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-host-transports-'))
   const owner = createHostFixtureOwner(), servers: Server[] = []
   const routes: Array<{ model: string; authorization?: string }> = []
   let failFirst = true
   const globalGuard = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw new Error('Fixture used unowned global fetch') })
-  const guardedFetch = globalThis.fetch
   try {
     async function fixture(name: string) {
       const server = createServer(async (request, response) => {
@@ -51,7 +50,8 @@ it('keeps real host loopback transports independent through a failed prompt with
     await second.request('session/prompt', { sessionId: second.sessionId, prompt: 'Complete on the other fixture origin' })
     await first.request('session/prompt', { sessionId: first.sessionId, prompt: 'Retry on the original fixture origin' })
     expect(routes).toEqual([{ model: 'first', authorization: 'Bearer fixture-key' }, { model: 'second', authorization: 'Bearer fixture-key' }, { model: 'first', authorization: 'Bearer fixture-key' }])
-    expect(globalThis.fetch).toBe(guardedFetch)
+    expect(globalGuard).not.toHaveBeenCalled()
+    expect(() => globalThis.fetch('https://foreign.fixture.invalid')).toThrow(/unregistered network destination/)
     const history = await second.request('session/history', { sessionId: second.sessionId, afterSeq: 0, limit: 100 }) as { events: Array<{ type: string; text?: string }> }
     expect(history.events).toContainEqual(expect.objectContaining({ type: 'assistant/message', text: 'second completed' }))
     const settings = { autoTitle: false, sandboxMode: 'read-only', llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'https://example.invalid', apiKeyEnv: 'IH_TRANSPORT_KEY', models: [{ id: 'first', contextWindow: 32000 }] } }, defaultModel: { provider: 'fixture', model: 'first' } } }

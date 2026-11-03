@@ -21,24 +21,29 @@ it("captures an explicitly selected aliased root as readonly external bytes", as
   finally { await reader.close() }
 })
 
-it("reads an intentional external leaf alias as readonly while a replace-after-check race remains refused", async () => {
+it("reads an intentional external alias as readonly (junction ancestor on Windows, leaf symlink on POSIX)", async () => {
   const root = await fixture(), outside = await fixture()
-  await writeFile(join(outside, "secret.txt"), "outside secret"); await symlink(join(outside, "secret.txt"), join(root, "link.txt"), "file")
+  await writeFile(join(outside, "secret.txt"), "outside secret")
+  const path = process.platform === "win32" ? "alias/secret.txt" : "link.txt"
+  await symlink(process.platform === "win32" ? outside : join(outside, "secret.txt"), join(root, process.platform === "win32" ? "alias" : "link.txt"), process.platform === "win32" ? "junction" : "file")
   const reader = await createPinnedProjectContentReader(root, budget(), new AbortController().signal)
-  try { const result = await reader.read("link.txt", 1024); expect(result).toMatchObject({ external: true, readonly: true }); expect(result?.bytes.toString()).toBe("outside secret") }
+  try { const result = await reader.read(path, 1024); expect(result).toMatchObject({ external: true, readonly: true }); expect(result?.bytes.toString()).toBe("outside secret") }
   finally { await reader.close() }
 })
 
 it("refuses an outside leaf handle before calling its read method after replacement", async () => {
   const root = await fixture(), outside = await fixture(), leaf = join(root, "leaf.txt"), saved = join(root, "saved.txt")
   await writeFile(leaf, "inside"); await writeFile(join(outside, "secret.txt"), "outside secret")
-  let outsideReads = 0
+  let outsideOpens = 0, outsideReads = 0
   const limits = budget(), reader = await createPinnedProjectContentReader(root, limits, new AbortController().signal, { async openFile(path) {
-    await rename(leaf, saved); await symlink(join(outside, "secret.txt"), leaf, "file")
-    const handle = await openPinnedFileForReview(path)
+    expect(path).toBe(leaf)
+    await rename(leaf, saved)
+    // Open the actual replacement target through the injected open boundary.
+    // This reaches the outside handle on Windows without file-symlink privilege.
+    const handle = await openPinnedFileForReview(join(outside, "secret.txt")); outsideOpens++
     return { ...handle, async read(maxBytes) { outsideReads++; return handle.read(maxBytes) } }
   } })
-  try { expect(await reader.read("leaf.txt", 1024)).toBeUndefined(); expect(outsideReads).toBe(0); expect(limits.stats.inputBytes).toBe(0); expect(limits.reasons.has("file-unavailable")).toBe(true) }
+  try { expect(await reader.read("leaf.txt", 1024)).toBeUndefined(); expect(outsideOpens).toBe(1); expect(outsideReads).toBe(0); expect(limits.stats.inputBytes).toBe(0); expect(limits.reasons.has("file-unavailable")).toBe(true) }
   finally { await reader.close() }
 })
 

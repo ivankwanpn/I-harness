@@ -1,0 +1,15 @@
+# Instruction cutover retirement acceptance
+
+The narrow post-IC-B retirement is accepted and integrated as `17925354a924096e3c259113478f0b3aabb74486`. Full reviewed donor range: `03a97a3ea6bb00fc15197ade19761000982b3e52..0d82ecf432bd109d2341083ad220a366c53eb2f2`, twelve changed paths. Fresh GPT-6.1 Sol review approved both spec compliance and quality with no requested correction.
+
+Removed the unused synchronous/ambient instruction chain and pre-step publication wrapper, including the wrapper-only tests and one unused package dependency. Accepted observed services and current-context implementation remain unchanged. Actual core HTTP and assembly/Agent controls were migrated, preserving native-signature/tool-result order, precise whole-current visibility, original publication settlement and deduplication. The five stale lifecycle Promise assertions were independently reproduced on unchanged MAIN before migration to the accepted original-lease retry contract; all seventeen lifecycle cases remain.
+
+Scoped qualification: instructions124, runtime22, core loopback2, executor short controls27; final strengthened managed-producers8 and four affected typechecks pass. CLI build and Gateway package copy succeed, with242 copied package roots. The build retains36 dynamic TypeScript import and90 dynamic-import warnings; no distribution or platform readiness is inferred.
+
+Root independently checked ten changed physical/Git-canonical files and two deletions,170 unchanged selected bodies, five source copies, six artifact hashes,22 numeric receipt exits and the actual reachability delta. The actual baseline has404 rows, final399, exactly five removed and none added. The historical reachability gate still fails on16 seed-relative rows. No exemptions, reseeding or fake consumers were added.
+
+Evidence limits remain explicit: per-command receipts do not each carry a contemporaneous source manifest. Final source manifests, body comparison, later targeted rerun and root audit provide retrospective selected binding. The accepted257-request behavior is reused only because its executed bodies are unchanged; it is not a new performance, durable-JSONL, whole-file or bundle-identity claim. Generated output directories and all failed/setup receipts are preserved locally.
+
+Sources: [implementation report](integrated-checkpoint-20261024/instruction-retirement-report.md), [independent review](integrated-checkpoint-20261024/instruction-retirement-review.md), [root audit](integrated-checkpoint-20261024/instruction-retirement-root-audit.json). Raw material remains in `.superpowers/sdd/2026-10-24-instruction-cutover-retirement/` and the named frozen worktree.
+
+This closes replaced instruction-path retirement only. The separate result-store/reader cleanup packet is not yet accepted. Actual fork/child callers, native inheritance, instruction mutation/Code Mode/source UI, remaining event delivery and R6/release gates remain. Version0.1.13-rc.1 and Session format12 are unchanged; no remote push, tag or release.

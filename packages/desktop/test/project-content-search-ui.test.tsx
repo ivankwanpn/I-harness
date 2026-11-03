@@ -7,12 +7,12 @@ import { EditorDraftStore } from "../src/renderer/review/editor-drafts.ts"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { ProjectFilesRequest } from "../../desktop-gateway/src/project-files.ts"
+import { projectFilesFixture } from "./project-files-fixture.ts"
 
 const selection = { workspaceId: "host", sessionId: "owner", projectId: "project" }
 const roots = [{ workspaceId: "first", label: "First" }, { workspaceId: "second", label: "Second" }]
-type FilesFixture = Awaited<ReturnType<typeof import("./project-files-fixture.ts").projectFilesFixture>>
+type FilesFixture = Awaited<ReturnType<typeof projectFilesFixture>>
 const fixtures: FilesFixture[] = []
-const projectFilesFixture = async () => (await import("./project-files-fixture.ts")).projectFilesFixture()
 afterEach(async () => { cleanup(); localStorage.clear(); for (const fixture of fixtures.splice(0)) { await fixture.dispose(); await rm(fixture.home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) } })
 const emptyPage = { entries: [], nextOffset: null, truncated: false }
 function result(matches: Record<string, unknown>[] = [], extra: Record<string, unknown> = {}) {

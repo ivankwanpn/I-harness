@@ -1,3 +1,4 @@
+import { safeCompactionBlockedReason } from "@i-harness/desktop-gateway/src/context-diagnostics.ts"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { ComposerPreparationError, retireSessionDraft } from "./session/Composer.tsx"
 import type { HistorySelection } from "./session/SessionSearch.tsx"
@@ -42,6 +43,7 @@ import { useLocale, useText } from "./design/i18n.ts"
 import { useUiStore } from "./shell/ui-store.ts"
 import { createRefreshScheduler } from "./session/refresh-scheduler.ts"
 import { RuntimeFeedback } from "./session/RuntimeFeedback.tsx"
+import { createForkOperationController, createForkCallbackAdapters } from './session/fork-operation.ts'
 
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
@@ -191,6 +193,24 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     dashboardApplied.current = request
     setDashboard(result as SessionDashboardResult)
   }, [bridge])
+  const forkDependencies = useRef({ bridge, refreshDashboard })
+  const forkOperations = useRef<ReturnType<typeof createForkOperationController> | undefined>(undefined)
+  if (forkDependencies.current.bridge !== bridge) forkOperations.current?.retireNavigation()
+  forkDependencies.current = { bridge, refreshDashboard }
+  if (!forkOperations.current) forkOperations.current = createForkOperationController({
+    bridge: { request: request => forkDependencies.current.bridge.request(request) },
+    selection: () => selection.current, navigationVersion: () => navigationVersion.current,
+    refresh: workspaceId => forkDependencies.current.refreshDashboard(workspaceId),
+    navigate(workspaceId, sessionId) {
+      navigationVersion.current++
+      if (workspaceId !== selection.current.workspaceId) setDashboard(undefined)
+      setHistoryTarget(undefined); setSelectedWorkspaceId(workspaceId); setSelectedSessionId(sessionId)
+      useUiStore.getState().setSurface('conversation')
+    },
+  })
+  const forkCallbacks = useRef<ReturnType<typeof createForkCallbackAdapters> | undefined>(undefined)
+  if (!forkCallbacks.current) forkCallbacks.current = createForkCallbackAdapters(forkOperations.current)
+  useEffect(() => () => forkOperations.current?.retireNavigation(), [])
 
   const refreshTasks = useCallback(async (workspaceId: string, sessionId: string): Promise<void> => {
     const scope = selection.current
@@ -545,7 +565,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         canCompact: gate.canSend && !running && !operation?.busy && !(queue?.length),
         onCompact: async (instructions?: string): Promise<void> => {
           const scope = selection.current
-          await operations.run(selectedWorkspaceId, selectedSessionId, "compact", instructions)
+          const result = await operations.run(selectedWorkspaceId, selectedSessionId, "compact", instructions)
+          if (selection.current === scope && (result?.outcome === 'blocked' || result?.outcome === 'reduced-over-target')) setTaskActionFailure({ scope, message: [result.outcome === 'reduced-over-target' ? t('壓縮後的完整請求仍超過目標。') : t('壓縮未完成。'), safeCompactionBlockedReason(result.blockedReason)].filter(Boolean).join(' ') })
           if (selection.current === scope) await pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
         },
         queue,
@@ -662,13 +683,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setSelectedWorkspaceId(workspaceId); setSelectedSessionId(sessionId)
       }}
       onManageSessionInWorkspace={async (workspaceId, sessionId, action, title) => {
-        const scope = selection.current
-        const result = await bridge.request({ kind: "desktop/session/manage", workspaceId, sessionId, action, ...(title !== undefined ? { title } : {}) }) as { sessionId: string }
+        if (action === 'fork' || action === 'fork-fresh') {
+          await forkCallbacks.current!.inWorkspace(workspaceId, sessionId, action); return
+        }
+        await bridge.request({ kind: "desktop/session/manage", workspaceId, sessionId, action, ...(title !== undefined ? { title } : {}) })
         if (selection.current.workspaceId === workspaceId) {
           await refreshDashboard(workspaceId)
           if (action === "archive" && selection.current.workspaceId === workspaceId && selection.current.sessionId === sessionId) setSelectedSessionId(undefined)
         }
-        if (action === "fork" && selection.current === scope) { if (workspaceId !== selection.current.workspaceId) setDashboard(undefined); setSelectedWorkspaceId(workspaceId); setSelectedSessionId(result.sessionId); useUiStore.getState().setSurface("conversation") }
       }}
       dashboard={dashboard}
       attentionBySession={pending.reduce<Record<string, number>>((counts, row) => { counts[row.sessionId] = (counts[row.sessionId] ?? 0) + 1; return counts }, {})}
@@ -785,20 +807,23 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }}
       onManageSession={async (sessionId, action, title) => {
         if (!selectedWorkspaceId) return
+        if (action === 'fork' || action === 'fork-fresh') {
+          await forkCallbacks.current!.inSelection(selectedWorkspaceId, sessionId, action); return
+        }
         const scope = selection.current
-        const result = await bridge.request({ kind: "desktop/session/manage", workspaceId: selectedWorkspaceId, sessionId, action, ...(title !== undefined ? { title } : {}) }) as { sessionId: string }
+        await bridge.request({ kind: "desktop/session/manage", workspaceId: selectedWorkspaceId, sessionId, action, ...(title !== undefined ? { title } : {}) })
         await refreshDashboard(selectedWorkspaceId)
         if (selection.current !== scope) return
         if (action === "archive" && selectedSessionId === sessionId) setSelectedSessionId(undefined)
-        if (action === "fork") { setSelectedSessionId(result.sessionId); useUiStore.getState().setSurface("conversation") }
       }}
       onRetry={() => {
+        forkOperations.current!.retireNavigation()
         setConnection("reconnecting")
         setError(undefined)
         setRetryNonce((current) => current + 1)
       }}
       onSessionsChanged={() => {
-        if (selectedWorkspaceId !== undefined) void refreshDashboard(selectedWorkspaceId)
+        if (selectedWorkspaceId !== undefined) void forkOperations.current!.refresh(selectedWorkspaceId)
       }}
     />
     <RuntimeFeedback bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} onOpenLog={useUiStore.getState().openRuntimeLog} />

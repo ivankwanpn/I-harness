@@ -1,0 +1,16 @@
+{
+  "head": "bd052a4d3451b488b9c023c70807305b669b8bb5",
+  "path": "packages/core-agent/test/context-effect-freshness.test.ts",
+  "sha256": "59c8b342b766f998b43a009cce60c1b79221269f8321b800b3d80c8a69a07063",
+  "gitBlob": "23f28444a20405e08ac1aede01938c698555f2ee",
+  "fullAgentLog": "agent-full-suite.txt",
+  "typecheckLog": "agent-typecheck.txt",
+  "focusedLog": "freshness-combined-2.txt",
+  "setupInvalid": "freshness-combined.txt",
+  "testResult": {
+    "exit": 0,
+    "files": 54,
+    "passed": 495,
+    "failed": 0
+  }
+}

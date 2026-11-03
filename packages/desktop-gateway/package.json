@@ -1,8 +1,9 @@
 {
   "name": "@i-harness/desktop-gateway",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "type": "module",
+  "files": ["src"],
   "exports": { ".": "./src/index.ts", "./src/*": "./src/*" },
   "scripts": {
     "test": "vitest run",
@@ -10,6 +11,7 @@
     "gateway": "node --import tsx src/cli.ts"
   },
   "dependencies": {
+    "@i-harness/fs-watch": "workspace:*",
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/provider": "workspace:*",
     "@i-harness/usage-stats": "workspace:*",

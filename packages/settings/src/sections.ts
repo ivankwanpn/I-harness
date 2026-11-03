@@ -15,10 +15,12 @@
  * @module @i-harness/settings/sections
  */
 
-import type { SettingsLlm, SettingsOnboarding, SettingsProviderConfig, SettingsStoreSurface } from "./index.ts"
+import type { SettingsLlm, SettingsOnboarding, SettingsProviderConfig } from "./schema/types.ts"
+import type { SettingsStoreSurface } from "./storage/contracts.ts"
+import { assertInstructionData, validateInstructions, validInstructionSources, type SettingsInstructions } from "./instructions.ts"
 
 /** The top-level section keys the section protocol knows about. */
-export type SectionName = "llm" | "onboarding"
+export type SectionName = "llm" | "onboarding" | "instructions"
 
 /** How a field's value is surfaced by describe. */
 export type FieldRole = "value" | "secret" | "credential-ref"
@@ -168,6 +170,13 @@ const providerConfigFields: Record<string, FieldSpec> = {
 
 /** Default schemas for the readable sections (sections() 預設 schema). */
 export const SECTION_SCHEMAS: Record<SectionName, SectionSchema> = {
+  instructions: {
+    fields: {
+      enabled: { type: "boolean" },
+      maxBytes: { type: "number", validate: (v) => Number.isSafeInteger(v) && (v as number) >= 0 ? undefined : "expected nonnegative safe integer" },
+      globalSources: { type: "array", items: { type: "string" }, validate: (v) => validInstructionSources(v) ? undefined : "expected at most 256 unique absolute candidate paths" },
+    },
+  },
   llm: {
     fields: {
       videoAudio: { type: "object", fields: { provider: { type: "string" }, model: { type: "string" } }, required: ["provider", "model"] },
@@ -577,7 +586,14 @@ export async function mutateSection(
     throw new SettingsConflictError(expectedRevision, actual)
   }
   const next = structuredClone(current)
+  if (name === "instructions") {
+    try { assertInstructionData(ops) } catch (error) { throw new SettingsValidationError(String(error)) }
+    if (ops.some((op) => op.path.some((key) => ["__proto__", "prototype", "constructor"].includes(key)))) throw new SettingsValidationError("instructions: invalid mutation path")
+  }
   for (const op of ops) applyOp(schema, next, op)
+  if (name === "instructions") {
+    try { validateInstructions(next) } catch (error) { throw new SettingsValidationError(String(error)) }
+  }
   // Nested edits must leave a complete cache configuration. Validating only
   // the leaf would allow retention without mode, then normalization would
   // silently discard the user's edit before persistence.
@@ -594,7 +610,9 @@ export async function mutateSection(
   await store.set(
     name === "llm"
       ? { llm: next as unknown as SettingsLlm }
+      : name === "instructions" ? { instructions: next as unknown as SettingsInstructions }
       : { onboarding: next as unknown as SettingsOnboarding },
+    { section: name, expectedRevision: actual },
   )
   return describeSection(name, store)
 }

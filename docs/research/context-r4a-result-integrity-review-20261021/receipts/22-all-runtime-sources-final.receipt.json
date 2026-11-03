@@ -1,0 +1,38 @@
+{
+  "name": "22-all-runtime-sources-final",
+  "cwd": "D:\\I-harness-main\\packages\\..",
+  "executable": "C:/Program Files/nodejs/node.exe",
+  "arguments": [
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "packages/context-output/test/cold-lookup-integrity.test.ts",
+    "packages/context-output/test/result-integrity-vectors.test.ts",
+    "packages/context-output/test/result-integrity-corruption.test.ts",
+    "packages/context-output/test/result-integrity-codecs.test.ts",
+    "packages/context-output/test/result-integrity-witness.test.ts",
+    "packages/context-output/test/managed-artifacts.test.ts",
+    "packages/context-output/test/managed-ownership.test.ts",
+    "packages/context-output/test/original-owner-pin.test.ts",
+    "packages/context-output/test/dependency-membership.test.ts",
+    "packages/context-output/test/result-page.test.ts",
+    "packages/context-output/test/exec-frame-pages.test.ts",
+    "packages/context-output/test/result-dependency-query.test.ts",
+    "packages/desktop-gateway/test/result-page.test.ts",
+    "packages/desktop-gateway/test/result-page-host.test.ts",
+    "packages/session-executor/test/result-reader.test.ts",
+    "packages/session-executor/test/result-reader-lifetime.test.ts",
+    "packages/session-executor/test/result-store-read.test.ts",
+    "packages/session-executor/test/retained-child-pins.test.ts",
+    "--maxWorkers=1",
+    "--minWorkers=1"
+  ],
+  "environment": {
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\shell-config",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:/I-harness-main/.tmp/r4ai-1021-01",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\native"
+  },
+  "startedUtc": "2026-10-20T20:11:50.2867495Z",
+  "finishedUtc": "2026-10-20T20:12:24.1672201Z",
+  "nativeExit": 1,
+  "head": "0df518e7042039ef0f312c53aa565abf314bef3a"
+}

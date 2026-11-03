@@ -1,0 +1,66 @@
+{
+  "normalGateExit": 1,
+  "byteIdenticalStdoutAndStderr": true,
+  "baselineScope": "Both original BASE registry/service entries restored; new unreferenced leaves stay on disk and lexical scanner may see them. This is an entry comparison, not a clean BASE checkout.",
+  "rows": [
+    "  new  unused-export\t@i-harness/core-session#ExecFrameRecord\tpackages/core-session/src/index.ts",
+    "  new  unused-export\t@i-harness/core-session#JsonStreamOptions\tpackages/core-session/src/index.ts",
+    "  new  unused-export\t@i-harness/core-session#validResultEnvelope\tpackages/core-session/src/index.ts",
+    "  new  unused-export\t@i-harness/output-retention#ExecFrameCaptureOptions\tpackages/output-retention/src/index.ts",
+    "  new  unused-export\t@i-harness/output-retention#ResultCaptureOptions\tpackages/output-retention/src/index.ts",
+    "  new  unused-export\t@i-harness/output-retention#createOutputSpillGuard\tpackages/output-retention/src/index.ts"
+  ],
+  "classifications": [
+    {
+      "name": "ExecFrameRecord",
+      "declaration": "packages/core-session/src/results/exec-frames.ts:1",
+      "barrel": "packages/core-session/src/index.ts:102",
+      "kind": "public type reexport",
+      "actualInternalUse": "encodeExecFrameRecord parameter, decodeExecFrameRecord return and parsed record type",
+      "outsideImplementationProductionConsumer": false
+    },
+    {
+      "name": "JsonStreamOptions",
+      "declaration": "packages/core-session/src/serialization/json-stream.ts:2",
+      "barrel": "packages/core-session/src/index.ts:101",
+      "kind": "public type reexport",
+      "actualInternalUse": "streamJsonData options parameter",
+      "outsideImplementationProductionConsumer": false
+    },
+    {
+      "name": "validResultEnvelope",
+      "declaration": "packages/core-session/src/results/validate.ts:46",
+      "barrel": "packages/core-session/src/index.ts:99",
+      "kind": "public function reexport",
+      "actualInternalUse": "validRetainedResultRevision and validateResultFact in the same validator module",
+      "outsideImplementationProductionConsumer": false,
+      "tests": "Actual tests consume public validator, including the adapted Desktop child test; tests are not production reachability"
+    },
+    {
+      "name": "ExecFrameCaptureOptions",
+      "declaration": "packages/output-retention/src/result/exec-frames.ts:5",
+      "barrel": "packages/output-retention/src/index.ts:228",
+      "kind": "public type reexport",
+      "actualInternalUse": "createExecFrameCapture parameter",
+      "outsideImplementationProductionConsumer": false
+    },
+    {
+      "name": "ResultCaptureOptions",
+      "declaration": "packages/output-retention/src/result/capture.ts:8",
+      "barrel": "packages/output-retention/src/index.ts:227",
+      "kind": "public type reexport",
+      "actualInternalUse": "createResultCapture options parameter",
+      "outsideImplementationProductionConsumer": false
+    },
+    {
+      "name": "createOutputSpillGuard",
+      "declaration": "packages/output-retention/src/spill-guard.ts:205",
+      "barrel": "packages/output-retention/src/index.ts:225",
+      "kind": "public legacy function reexport",
+      "actualInternalUse": "Legacy implementation remains defined; no maintained production caller found by scoped rg across packages (excluding test/build/release)",
+      "outsideImplementationProductionConsumer": false,
+      "disposition": "Retain public API unchanged here; A6 public-surface/legacy-spill retirement inventory remains root-owned"
+    }
+  ],
+  "noReseedOrExemptionsOrFakeConsumers": true
+}

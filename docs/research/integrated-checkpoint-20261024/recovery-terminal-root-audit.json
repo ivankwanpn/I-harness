@@ -1,0 +1,669 @@
+{
+  "observedAt": "2026-10-23T22:53:01.5038086+00:00",
+  "head": "fc11339411e73c6d7efb5972f70304341b791039",
+  "sources": [
+    {
+      "path": "packages/core-agent/src/agent/acceptance-settlement.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/budget.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/create.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/dependencies.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/exchange.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/finalization.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/generation.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/recovery-settlement.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/recovery.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/response.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/settlement-source.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/turn.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/types.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/unstarted-call-settlement.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/src/index.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/test/agent-invocation.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/test/context-recovery.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/test/context-snapshot.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/test/fixtures/generation.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/test/recovery-settlement.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-agent/test/unstarted-call-settlement.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/index.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/managed/groups.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/managed/memory-capture.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/managed/memory-group.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/managed/memory-source.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/managed/nondurable.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/managed/ports-factory.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/managed/ports.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/src/managed/settlement-event.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/test/model-exchange-capture.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/core-session/test/recovery-settlement.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/src/assembly.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/src/lifecycle/generation-actions.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/src/lifecycle/input-preparation.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/src/lifecycle/literal-input.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/test/context-recovery.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/test/ingress-generation-close.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/action-captures.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/settlement-source.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-persistence/test/managed-fact-batch.test.ts",
+      "physicalMatch": true,
+      "copyMatch": true,
+      "gitMatch": true
+    }
+  ],
+  "receipts": [
+    {
+      "receipt": "01-recovery-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "02-semantic-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "03-constructor-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "04-constructor-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "05-resolution-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "06-acceptance-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "07-acceptance-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "08-acceptance-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "09-original-matrix.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "10-original-matrix.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "11-managed-constructor.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "12-executor-integration.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "13-http-errors.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "14-accepted-errors.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "15-executor-stop-cold.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "16-executor-stop-cold.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "17-executor-stop-cold.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "18-executor-stop-cold.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "19-executor-stop-cold.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "20-executor-stop-cold.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "21-executor-loopback.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "22-agent-owner-suite.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "23-session-owner-suite.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "24-persistence-owner-suite.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "25-agent-typecheck.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "26-agent-typecheck.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "27-original-matrix-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "28-session-typecheck.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "29-agent-focused-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "30-session-persistence-typecheck.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "31-session-executor-typecheck.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "32-optional-race.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "33-agent-typecheck-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "34-executor-loopback-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "35-runtime-binding.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "36-acceptance-final-coordinates.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "37-optional-managed-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "38-optional-managed-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "39-optional-managed-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "40-optional-managed-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "41-agent-owner-suite-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "42-agent-typecheck-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "43-executor-typecheck-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "44-executor-loopback-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "45-accepted-tool-continuation-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "46-accepted-tool-continuation-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "47-unstarted-managed-matrix.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "48-unstarted-managed-matrix.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "49-unstarted-managed-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "50-p206-focused-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "51-acceptance-absence-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "52-acceptance-absence-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "53-p206-typecheck.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "54-p207-acceptance-dispositions.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "55-p207-managed-closure.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "56-p207-full-matrix.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "57-memory-acceptance-constructor.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "58-managed-acceptance-constructor.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "59-p207-typecheck.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "60-real-coordinator-close-race.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "61-memory-observer-closure.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "62-explicit-generation-construction.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "63-borrowed-service-acceptance-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "64-borrowed-service-acceptance-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "65-ingress-construction-boundaries.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "66-ingress-construction-boundaries.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "67-agent-owner-suite-p207.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "68-session-owner-suite-p207.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "69-persistence-owner-suite-p207.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "70-executor-final-integration-p207.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "71-captured-constructor-strict-red.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "72-captured-constructor-strict-green.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "73-agent-types-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "74-core-session-types-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "75-session-persistence-types-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "76-session-executor-types-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "77-executor-types-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "78-agent-qualified-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "79-session-qualified-final.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "80-persistence-final-constructor.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "81-executor-final-affected.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    },
+    {
+      "receipt": "82-executor-final-types.txt",
+      "hashMatch": true,
+      "headerComplete": true
+    }
+  ],
+  "exactRangePaths": true,
+  "protectedSHA256": "9fb750a75ec847dc97dd95d16e7ec7668b65d919bcb8208805f9a34fb93cec68",
+  "status": [
+    "?? packages/desktop-gateway/test/repeated-growth-diagnosis.test.ts"
+  ]
+}

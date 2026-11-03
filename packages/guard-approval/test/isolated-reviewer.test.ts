@@ -21,15 +21,17 @@ it("does not review a silently truncated tool argument", async () => {
   expect(stream).not.toHaveBeenCalled()
 })
 it("aborts a pending model request without falling back to a human approval", async () => {
+  const entered = Promise.withResolvers<void>()
   let signal: AbortSignal | undefined
   const model: ModelClient = { async *stream(input) {
-    signal = input.signal
+    signal = input.signal; entered.resolve()
     await new Promise<void>((resolve) => input.signal!.addEventListener("abort", () => resolve(), { once: true }))
   } }
   const ctx = createContext()
   await registerGuardian(ctx, { ...deps(model), execution: "isolated", fallbackToHumanOnFailure: true })
   const controller = new AbortController()
   const review = ctx.services.get<ApprovalGuardian>("approval/guardian")({ ...request, signal: controller.signal })
+  await entered.promise
   controller.abort(new Error("user stopped"))
   await expect(review).rejects.toThrow("user stopped")
   expect(signal?.aborted).toBe(true)
@@ -95,7 +97,9 @@ it("isolates reused conversations by effective model, policy, permission and use
   for (const field of ["provider", "model", "protocol", "reasoningEffort", "configurationKey"] as const) { state.identity[field] += "-changed"; await review() }
   state.permission("workspace-two:delegate:restricted"); await review()
   state.config.policyText = "A changed policy"; await review()
-  state.config.parentSession.events.push({ type: "user/message", text: "A different task", seq: 0 }); await review()
+  const { isNondurableSession, append } = await import('@i-harness/core-session')
+  if (!isNondurableSession(state.config.parentSession!)) throw new Error('Expected standalone parent fixture')
+  append(state.config.parentSession, { type: "user/message", text: "A different task", seq: 0 }); await review()
   expect(lengths).toEqual([1, 3, 1, 1, 1, 1, 1, 1, 1, 1])
 })
 it("rolls back malformed and operational reviews instead of poisoning reusable context", async () => {
@@ -244,4 +248,12 @@ it("reuses only final text and never private reasoning or provider continuation 
   expect(seen[1]!.messages).toHaveLength(3)
   expect(seen[1]!.messages[1]).toEqual({ role: "assistant", content: approval })
   expect(JSON.stringify(seen[1]!.messages)).not.toContain("private")
+})
+
+it('renders bounded reviewer context directly from an original event slice',async()=>{
+ const guardian=await import('../src/guardian/reviewer.ts'),{createSession,append}=await import('@i-harness/core-session'),session=createSession()
+ for(let index=0;index<15;index++)append(session,{type:'user/message',text:`message ${index}`})
+ const render=(guardian as any).renderRecentEvents;expect(render).toBeTypeOf('function')
+ expect(render(session.events)).toBe(guardian.renderRecentContext(session))
+ expect(render(session.events,{maxEvents:2})).toContain('message 14');expect(render(session.events,{maxEvents:2})).not.toContain('message 12')
 })

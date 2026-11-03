@@ -1,0 +1,13 @@
+# Selected-result Task 2 — bounded codec acceptance
+
+Accepted for continued development on 2026-10-28, at isolated HOST commit `61320f2878e34a89f4a9a5b68a43c4c5cbebcca1`. The implementation starts from accepted Task 1 `680fdac590fc84c2628434e9321d6bc381c7a9e5`; original Task 2 commit is `6d3bd06e2307c0c26138183ec98fb021c4b12594`. These changes have not been integrated into MAIN and do not enable a public route or release.
+
+The accepted scope is the separate V3 selected-result metadata codec/read contract, shared origin normalization before final commitment, registered one-use held capture, and explicit old-family writer denial. Public and child data profiles remain distinct; data validation grants no child execution or recipient read authority. The global Session format remains 13 and the product remains 0.1.13-rc.1.
+
+Independent full implementation review required two Important corrections and one Minor correction. The same reviewer closed all three on the exact correction range: authentic held metadata is now detached and immutable without cloning payloads or the indexed fact population; aggregate metadata accounting refuses before accumulating/cloning an over-budget classification; V3 completion and optional-initial arithmetic rejects unsafe totals while old-family arithmetic remains literal.
+
+Saved correction verification comprises 151 Core controls, 44 actual Gateway source controls and 6 affected persistence controls (201 tests in 13 named files), plus two refreshed scoped type checks. Unchanged persistence/JSONL compatibility and the other two type receipts are explicitly reused from the original Task 2 packet. These counts describe distinct saved scopes, not a full-version passing total. Root has not represented them as new independent runtime reruns.
+
+Root independently checked all seven correction runtime hashes and Git blobs against the frozen final manifest; all match. Manifest SHA256 is `7257C95414E1FB675662506DE88BDE2DE88AAB5F08A1B91DA6DBAB33227326EE`. The original report, RED/setup failures, correction packet and same-reviewer closure remain in the plan-owned `.superpowers/sdd/2026-10-28-selected-results-projection/` directory; root binding evidence is `task-2-root-binding-audit.json`.
+
+Next is Task 3's explicit outer request, retained original capture and same-root storage route, after its remaining closed contract details are frozen and reviewed. Genuine frozen old ACTIVE writer qualification, managed/L1 content and recipient proofs, native READY/cold positives, model discovery, child all/N and UI/SDK defaults remain separate gates. Neither parser denial nor this acceptance substitutes for those gates. User's current instruction is to continue integrated development and not prepare or publish a release.

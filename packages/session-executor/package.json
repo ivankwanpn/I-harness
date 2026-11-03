@@ -4,13 +4,18 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./internal/managed-native-recovery": "./src/lifecycle/managed-native-recovery.ts",
+    "./internal/managed-rewind": "./src/owned-rewind.ts",
+    "./internal/process-result-service": "./src/lifecycle/process-result-service.ts"
   },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "devDependencies": { "@i-harness/session-persistence-jsonl": "workspace:*" },
+  "devDependencies": {
+    "@i-harness/session-persistence-jsonl": "workspace:*"
+  },
   "dependencies": {
     "@i-harness/media": "workspace:*",
     "@i-harness/code-mode": "workspace:*",
@@ -24,6 +29,7 @@
     "@i-harness/diagnostics": "workspace:*",
     "@i-harness/exec": "workspace:*",
     "@i-harness/fs": "workspace:*",
+    "@i-harness/fs-watch": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
     "@i-harness/guard-approval": "workspace:*",
     "@i-harness/guard-repeat-tool": "workspace:*",
@@ -58,6 +64,7 @@
     "@i-harness/tool-search": "workspace:*",
     "@i-harness/web": "workspace:*",
     "@i-harness/workflow": "workspace:*",
-    "@i-harness/context-output": "workspace:*"
+    "@i-harness/context-output": "workspace:*",
+    "@i-harness/context-engine": "workspace:*"
   }
 }

@@ -13,9 +13,10 @@ import type { TeamWaitResult } from "./activity.ts"
 
 export interface TeamToolDeps {
   resolveCaller(exec: ToolExec): TeamCaller
+  captureTeamCaller?(exec:ToolExec):import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller
   roster: {
     listMembers(): TeamMemberView[]
-    spawnTeammate(c: TeamCaller, n: string, o: { description: string; prompt: string; context?: "fresh" | "fork"; forkTurns?: "none" | "all" | number }): Promise<TeamMemberView>
+    spawnTeammate(c: TeamCaller, n: string, o: { description: string; prompt: string; context?: "fresh" | "fork"; forkTurns?: "none" | "all" | number; originalCaller?:import('@i-harness/core-tools/internal/team-caller').OriginalManagedTeamCaller }): Promise<TeamMemberView>
     interrupt(c: TeamCaller, t: string): Promise<{ previousStatus: string }>
   }
   mailbox: {
@@ -50,7 +51,7 @@ export function createTeamTools(deps: TeamToolDeps): Tool[] {
     description: "Create one named, durable teammate. Returns member.agentPath (lead/<name>) for close_agent and other subagent management, member.sessionId, and its live member.jobId. Team tools address the member by name. Only the Team Lead may call this.",
     inputSchema: { type: "object", properties: { name: { type: "string" }, description: { type: "string" }, prompt: { type: "string" }, context: { type: "string", enum: ["fresh", "fork"] }, fork_turns: { type: "string" } }, required: ["name", "description", "prompt"] },
     isReadOnly: false,
-    execute: async (args, exec) => ({ member: await deps.roster.spawnTeammate(deps.resolveCaller(exec), args.name, { description: args.description, prompt: args.prompt, ...(args.context ? { context: args.context as "fresh" | "fork" } : {}), ...(args.fork_turns ? { forkTurns: args.fork_turns as never } : {}) }) }),
+    execute: async (args, exec) => { const caller=deps.captureTeamCaller?.(exec); return { member: await deps.roster.spawnTeammate(deps.resolveCaller(exec), args.name, { description: args.description, prompt: args.prompt, ...(args.context ? { context: args.context as "fresh" | "fork" } : {}), ...(args.fork_turns ? { forkTurns: args.fork_turns as never } : {}), ...caller?{originalCaller:caller}:{} }) } },
   }
   const list: Tool<ListArgs, { members: TeamMemberView[] }> = {
     name: "list_members",

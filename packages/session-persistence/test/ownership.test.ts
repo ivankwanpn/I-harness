@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it, vi, beforeAll, afterAll, afterEach } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -362,6 +363,7 @@ describe("session ownership lease", () => {
       // OS-level proof the lease was truly released (not just dropped from
       // the map): another coordinator can acquire it.
       const b = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await shared.create("sess-m2", { formatVersion: CURRENT_FORMAT_VERSION, sessionId: "sess-m2", createdAt: "fixture" })
       await b.adoptOwnership("sess-m2")
       expect(b.ownerOf("sess-m2")).toBe(true)
     })

@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/owned-gateway-task.ts","test/owned-gateway-task.test.ts"]}

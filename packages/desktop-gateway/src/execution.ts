@@ -30,9 +30,13 @@ export function resourceId(value: unknown): string {
   return value
 }
 /** Inspector reads must never enter the loader's crash-recovery write path. */
-export async function readDesktopSnapshot(coordinator: SessionCoordinator, sessionId: string) {
+export async function readDesktopSnapshot(coordinator: SessionCoordinator, sessionId: string, assertCurrent?: () => void) {
+  assertCurrent?.()
   if (!coordinator.snapshot) throw new Error("Read-only snapshot inspection is unavailable for this backend")
-  return (await coordinator.snapshot(sessionId)).session
+  assertCurrent?.()
+  const snapshot = await coordinator.snapshot(sessionId)
+  assertCurrent?.()
+  return snapshot.session
 }
 /** Text-only bounded rendering keeps media payloads out of the diagnostic IPC. */
 export function displayValue(value: unknown): string {
@@ -70,12 +74,21 @@ export function createCodeModeSettings(path: string, service: Pick<SessionServic
 
 export function createDesktopExecution(coordinator: SessionCoordinator, service: Pick<SessionService, "liveAssembly">) {
   return {
-    async read(sessionId: string, options: { offset?: number; limit?: number } = {}): Promise<DesktopExecutionView> {
-      resourceId(sessionId); await coordinator.profile(sessionId)
+    async read(sessionId: string, options: { offset?: number; limit?: number } = {}, assertCurrent?: () => void, profile?: () => ReturnType<SessionCoordinator["profile"]>): Promise<DesktopExecutionView> {
+      assertCurrent?.()
+      resourceId(sessionId); assertCurrent?.(); await (profile ? profile() : coordinator.profile(sessionId))
+      assertCurrent?.()
       const offset = boundedInteger(options.offset, 0, Number.MAX_SAFE_INTEGER, 0)
       const limit = boundedInteger(options.limit, 1, 20, 10)
+      assertCurrent?.()
       const assembly = service.liveAssembly(sessionId)
-      const session = assembly?.session ?? await readDesktopSnapshot(coordinator, sessionId)
+      assertCurrent?.()
+      let session = assembly?.session
+      if (!session) {
+        assertCurrent?.()
+        session = await readDesktopSnapshot(coordinator, sessionId, assertCurrent)
+        assertCurrent?.()
+      }
       const owned = new Set(assembly?.liveResources?.().codeCells.map(cell => cell.id) ?? [])
       const starts = new Map<string, Extract<SessionEvent, { type: "code/cell" }>>()
       for (const event of session.events) if (event.type === "code/cell" && (!event.sessionId || event.sessionId === sessionId)) starts.set(event.cellId, { ...starts.get(event.cellId), ...event })
@@ -101,6 +114,10 @@ export function createDesktopExecution(coordinator: SessionCoordinator, service:
         const cell = cells.get(event.cellId); if (!cell) continue
         if (event.type === "code/output") {
           if (cell.output.length >= 100) { cell.truncated = true; continue }
+          if (event.envelope) {
+            cell.output.push({ kind: 'text', text: clip(cell, { preview: event.envelope.preview, retention: event.envelope.retention }), seq: event.seq })
+            continue
+          }
           const content = event.content as { type?: string; text?: string } | null
           cell.output.push({ kind: content?.type ?? "value", text: clip(cell, content?.type === "text" ? content.text : event.content), seq: event.seq })
         } else if (event.type === "code/call") {
@@ -112,7 +129,9 @@ export function createDesktopExecution(coordinator: SessionCoordinator, service:
           if (call && event.type === "code/result") { call.output = clip(cell, event.output); call.isError = event.isError === true }
         }
       }
-      return { sessionId, live: Boolean(assembly), ...(assembly?.executionState ? { effectiveMode: assembly.executionState().codeMode } : {}), cells: selected.map(id => cells.get(id)!), total: ids.length, offset, hasMore: offset + limit < ids.length }
+      const result = { sessionId, live: Boolean(assembly), ...(assembly?.executionState ? { effectiveMode: assembly.executionState().codeMode } : {}), cells: selected.map(id => cells.get(id)!), total: ids.length, offset, hasMore: offset + limit < ids.length }
+      assertCurrent?.()
+      return result
     },
     async stop(sessionId: string, cellId: string) {
       resourceId(sessionId); resourceId(cellId); await coordinator.profile(sessionId)

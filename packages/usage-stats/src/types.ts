@@ -1,5 +1,6 @@
 /** Public data-only contract. No prompts, response content or credentials. */
 export interface UsageRecord {
+  requestMetrics?: import("./request-metrics.js").RequestMetrics
   id: string
   startedAt: number
   durationMs: number
@@ -82,3 +83,5 @@ export interface UsageSnapshot {
   warnings: string[]
   recordingSince?: number
 }
+
+export type { UsageObservationV1, UsageFactObservation, UsageLiveObservation, ObservationOrigin, ObservationLane } from './observation-types.js'

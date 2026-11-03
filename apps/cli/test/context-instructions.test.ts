@@ -3,9 +3,11 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runHeadless } from "../src/run.ts"
-import { createSession } from "@i-harness/core-session"
+import { createSession, renderRuntimeContext } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { SessionEvent } from "@i-harness/core-session"
+import type { LLMRequest } from "@i-harness/llm-seam"
+import { createRuntimeContext } from "../../../packages/runtime-context/src/index.ts"
 
 describe("CLI runtime context + instructions", () => {
   let dir: string
@@ -15,18 +17,28 @@ describe("CLI runtime context + instructions", () => {
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
-  it("renders the instructions section into the first snapshot, model-visible", async () => {
+  it("publishes typed current instructions and sends only the latest prefix to the model", async () => {
     const session = createSession()
+    const previous = createRuntimeContext(session)
+    previous.registerSection("instructions", () => "RETIRED_INSTRUCTIONS_SENTINEL")
+    await previous.render(); await previous.close()
     const model = createMockClient([{ role: "assistant", text: "ok" }])
+    const requests: LLMRequest[] = [], prepare = model.prepare!.bind(model)
+    const preparing = vi.spyOn(model as typeof model & { prepare: NonNullable<typeof model.prepare> }, "prepare").mockImplementation(async (request: LLMRequest) => { requests.push(request); return prepare(request) })
     const result = await runHeadless("task", { workspace: dir, model, session })
+    preparing.mockRestore()
     expect(result.exitCode).toBe(0)
     const snapshots = session.events.filter(
-      (e): e is Extract<SessionEvent, { type: "user/message" }> =>
-        e.type === "user/message" && e.source?.kind === "plugin" && e.source.plugin === "i-harness/runtime-context",
+      (e): e is Extract<SessionEvent, { type: "runtime/context" }> => e.type === "runtime/context",
     )
-    expect(snapshots).toHaveLength(1)
-    expect(snapshots[0]!.text).toContain("Use pnpm only")
-    expect(snapshots[0]!.text).toContain("## instructions")
+    expect(snapshots).toHaveLength(2)
+    expect(snapshots[0]!.sections).toEqual([{ name: "instructions", text: "RETIRED_INSTRUCTIONS_SENTINEL" }])
+    expect(snapshots[1]!.version).toBe(1)
+    expect(renderRuntimeContext(snapshots[1]!.sections)).toContain("## instructions")
+    expect(snapshots[1]!.sections.find(section => section.name === "instructions")?.text).toContain("Use pnpm only. Never touch the vendor dir.")
+    expect(JSON.stringify(requests[0]!.messages).split("Use pnpm only. Never touch the vendor dir.")).toHaveLength(2)
+    expect(JSON.stringify(requests[0]!.messages)).not.toContain("RETIRED_INSTRUCTIONS_SENTINEL")
+    expect(session.events.filter(event => event.type === "user/message" && event.source?.kind === "plugin" && event.source.plugin === "i-harness/runtime-context")).toHaveLength(0)
   })
 
   it("W11: forwards subagentStaleAfterMs to the assembly (the option reaches the knob it names)", async () => {

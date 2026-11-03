@@ -1,3 +1,6 @@
+import { RetainedChildBody } from "./RetainedChildBody.tsx"
+import { InstructionsPane } from './InstructionsPane.tsx'
+import { useToolText } from './tool-text.ts'
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { HistoryRange } from "@i-harness/sdk"
 import type { DesktopSubagentCatalog, DesktopSubagentControl, DesktopSubagentControlResult, DesktopSubagentRow, DesktopSubagentStatus } from "@i-harness/desktop-gateway/src/session-subagents.ts"
@@ -15,6 +18,7 @@ export interface SubagentPaneProps {
   workspaceId: string
   sessionId: string
   parentTitle?: string
+  instructionsAvailable?: boolean
 }
 
 const STATUS_LABELS: Record<DesktopSubagentStatus, Message> = {
@@ -50,8 +54,10 @@ function ancestors(row: DesktopSubagentRow, rows: DesktopSubagentRow[], parentId
   return result
 }
 
-function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: SubagentPaneProps) {
+function SubagentSession({ bridge, workspaceId, sessionId, parentTitle, instructionsAvailable }: SubagentPaneProps) {
   const t = useText()
+  const instructionText = useToolText()
+  const [instructionChild, setInstructionChild] = useState<string>()
   const [catalog, setCatalog] = useState<DesktopSubagentCatalog>()
   const [catalogError, setCatalogError] = useState<string>()
   const [selected, setSelected] = useState<string>()
@@ -148,6 +154,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
 
   useEffect(() => {
     historyTicket.current++
+    setInstructionChild(undefined)
     setHistory(undefined); setHistoryError(undefined)
     if (selected) void readHistory(selected)
   }, [selected, readHistory])
@@ -217,6 +224,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
       <nav className="subagent-lineage" aria-label={t("子代理執行記錄")}><button type="button" onClick={() => setSelected(undefined)}>{parentTitle ?? t("主會話")}</button>{lineage.map((ancestor) => <span key={ancestor.sessionId}><ChevronRight size={12} aria-hidden="true" /><button type="button" onClick={() => setSelected(ancestor.sessionId)}>{ancestor.label}</button></span>)}<span><ChevronRight size={12} aria-hidden="true" />{selectedAgent?.label ?? selected}</span></nav>
       <div className="subagent-detail-heading"><button type="button" className="subagent-back" aria-label={t("返回子代理列表")} title={t("返回子代理列表")} onClick={() => setSelected(undefined)}><ArrowLeft size={16} aria-hidden="true" /></button><h3>{selectedAgent?.label ?? selected}</h3>{selectedAgent ? <span className="subagent-status" data-status={selectedAgent.status}>{t(STATUS_LABELS[selectedAgent.status])}</span> : null}</div>
       <p className="subagent-detail-model">{selectedAgent ? selectedAgent.modelLabel ?? t("模型未記錄") : t("模型資訊未提供")}</p>
+      {instructionsAvailable && selectedAgent ? <><button type="button" className="link-button" onClick={() => setInstructionChild(value => value === selected ? undefined : selected)}>{instructionChild === selected ? instructionText('隱藏指令來源', 'Hide instruction sources') : instructionText('指令來源', 'Instruction sources')}</button>{instructionChild === selected ? <InstructionsPane key={JSON.stringify([workspaceId, sessionId, selected])} bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} childSessionId={selected} /> : null}</> : null}
       {selectedAgent?.live === false ? <p className="subagent-recorded">{t("已保存的子代理記錄")}</p> : null}
       {selectedAgent?.controlReason ? <p className="subagent-control-reason">{controlGuidance ? t(controlGuidance) : selectedAgent.controlReason}</p> : null}
       {selectedAgent?.error ? <p role="alert" className="notice error-text">{selectedAgent.error}</p> : null}
@@ -225,6 +233,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
       {displayedHistory?.startSeq ? <p className="subagent-history-bound">{t("顯示最近 {count} 筆記錄", { count: displayedHistory.events.length })}</p> : null}
       <div className="subagent-transcript">{displayedHistory ? rows.length ? <Timeline key={selected} rows={rows} running={selectedAgent?.live === true && selectedAgent.status === "running"} /> : <p className="muted">{t("沒有可顯示的子代理記錄")}</p> : displayedError === undefined ? <p role="status" className="muted">{t("正在讀取…")}</p> : null}</div>
       {selectedAgent?.finalText ? <details className="subagent-final-result"><summary>{t("最終結果")}</summary><pre>{selectedAgent.finalText}</pre></details> : null}
+      {selectedAgent?.fullResult ? <RetainedChildBody key={JSON.stringify(selectedAgent.fullResult)} bridge={bridge} workspaceId={workspaceId} request={selectedAgent.fullResult} /> : null}
       <div className="subagent-readonly" role="status"><Bot size={16} aria-hidden="true" /><span>{t("子會話為唯讀；可用操作由父會話管理。")}</span></div>
       {feedback[selected]?.error ? <p role="alert" className="notice error-text">{feedback[selected].error}</p> : feedback[selected]?.notice ? <p role="status" className="subagent-action-notice">{feedback[selected].notice}</p> : null}
       {selectedAgent?.canFollowup || selectedAgent?.canMessage ? <label className="subagent-input">{t("子代理輸入")}<textarea rows={3} maxLength={8000} value={text} disabled={disabled} onChange={(event) => setDrafts((current) => ({ ...current, [selected]: event.target.value }))} /></label> : null}

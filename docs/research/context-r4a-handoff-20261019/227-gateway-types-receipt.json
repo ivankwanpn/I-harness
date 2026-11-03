@@ -1,0 +1,16 @@
+{
+  "before": "7C50BD8806BCC1AC2EED94CE274690C073B5286AD91E1E5F11F979C36EA947F4",
+  "node": "C:/Program Files/nodejs/node.exe",
+  "exitCode": 0,
+  "args": [
+    "../../node_modules/typescript/bin/tsc",
+    "--noEmit"
+  ],
+  "cwd": "D:/I-harness-main/packages/desktop-gateway",
+  "sourceRoot": "D:/I-harness-main",
+  "started": "2026-10-18T23:07:48.9524566Z",
+  "after": "7C50BD8806BCC1AC2EED94CE274690C073B5286AD91E1E5F11F979C36EA947F4",
+  "ended": "2026-10-18T23:07:56.7676855Z",
+  "output": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+  "label": "227-unaccepted-handoff-current-types"
+}

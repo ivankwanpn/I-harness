@@ -1,0 +1,22 @@
+{
+  "name": "16-gateway-read-lifecycle",
+  "cwd": "D:\\I-harness-main\\packages\\desktop-gateway",
+  "executable": "C:/Program Files/nodejs/node.exe",
+  "arguments": [
+    "../../node_modules/vitest/vitest.mjs",
+    "run",
+    "test/result-page.test.ts",
+    "test/result-page-host.test.ts",
+    "--maxWorkers=1",
+    "--minWorkers=1"
+  ],
+  "environment": {
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\shell-config",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:/I-harness-main/.tmp/r4ai-1021-01",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\native"
+  },
+  "startedUtc": "2026-10-20T20:07:40.5683447Z",
+  "finishedUtc": "2026-10-20T20:07:48.9187591Z",
+  "nativeExit": 0,
+  "head": "0df518e7042039ef0f312c53aa565abf314bef3a"
+}

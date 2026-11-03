@@ -1,0 +1,12 @@
+{
+  "observedAt": "2026-10-24T01:31:06.5690919+00:00",
+  "head": "48222ffe89793ebe8bd658fcdd7829753f6a8dac",
+  "path": "packages/session-executor/test/service.test.ts",
+  "sha256": "506A93BA61302ACC60C685514B5D35ED5E7134F59A5365EC3250E5E38372DEA2",
+  "expectedSha256": "506A93BA61302ACC60C685514B5D35ED5E7134F59A5365EC3250E5E38372DEA2",
+  "physicalMatch": true,
+  "workingBlob": "837c94c52752c1adb37bef65e4b57c5da7592d55",
+  "committedBlob": "837c94c52752c1adb37bef65e4b57c5da7592d55",
+  "gitMatch": true,
+  "status": []
+}

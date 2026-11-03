@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
-import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound, Code2, Activity, Wrench, Target, Network, ListTodo, ShieldCheck, GitBranch, FileDiff } from "lucide-react"
+import { useEffect, useMemo, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
+import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound, Code2, Activity, Wrench, Target, Network, ListTodo, ShieldCheck, GitBranch, FileDiff, FileText } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { WorkbenchTools, type WorkbenchTool } from "./WorkbenchTools.tsx"
 import { useUiStore } from "./ui-store.ts"
@@ -13,6 +13,8 @@ import { PluginMarketplace } from "../settings/PluginMarketplace.tsx"
 const TerminalPane = lazy(() => import("../terminal/TerminalPane.tsx").then((module) => ({ default: module.TerminalPane })))
 import { useAppearance, usePreferences } from "../design/preferences.ts"
 import type { SessionOperation } from "../session/use-session-operation.ts"
+import type { RecordedResultReader } from "../session/result-pages.ts"
+import type { ResultPageResult } from "@i-harness/sdk"
 import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i-harness/sdk"
 import type { SandboxState } from "../../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
@@ -25,6 +27,7 @@ import { Composer, NewTaskComposer, readDraft, writeDraft, boundedDraft, useComp
 import { ComposerProjectContext, type ComposerProjectState } from "../session/ComposerProjectContext.tsx"
 import type { TimelineRow } from "../session/project.ts"
 import { ExecutionPane } from "../session/ExecutionPane.tsx"
+import { InstructionsPane } from '../session/InstructionsPane.tsx'
 import { AgentProcessesPane } from "../session/AgentProcessesPane.tsx"
 import { DiagnosticsPane } from "../settings/DiagnosticsPane.tsx"
 import type { ExternalFileTarget, FileNavigation, ProjectFileTarget } from "../session/file-navigation.ts"
@@ -169,6 +172,16 @@ export function Workbench({
   onRetry,
 }: WorkbenchProps) {
   const t = useText()
+  const canReadResults = capabilities["session-result-read"]?.includes("1") === true
+  const resultReader = useMemo<RecordedResultReader | undefined>(() => canReadResults && selectedWorkspaceId && selectedSessionId ? {
+    workspaceId:selectedWorkspaceId, sessionId:selectedSessionId,
+    readPage: query => bridge.request({kind:"session/result/read",workspaceId:selectedWorkspaceId,sessionId:selectedSessionId,...query}) as Promise<ResultPageResult>,
+  } : undefined, [bridge,canReadResults,selectedWorkspaceId,selectedSessionId])
+  const historyWorkspaceId = historicalView?.selection.workspaceId, historySessionId = historicalView?.selection.sessionId
+  const historyResultReader = useMemo<RecordedResultReader | undefined>(() => canReadResults && historyWorkspaceId === selectedWorkspaceId && historySessionId && historyWorkspaceId ? {
+    workspaceId:historyWorkspaceId, sessionId:historySessionId,
+    readPage: query => bridge.request({kind:"session/result/read",workspaceId:historyWorkspaceId,sessionId:historySessionId,...query}) as Promise<ResultPageResult>,
+  } : undefined, [bridge,canReadResults,historyWorkspaceId,historySessionId,selectedWorkspaceId])
   const english = useLocale(state => state.locale) === "en"
   const diagnosticsLabel = english ? "Tool diagnostics" : "工具與環境診斷"
   const processesLabel = english ? "Agent processes" : "Agent 程序"
@@ -217,6 +230,7 @@ export function Workbench({
     if ((workPaneTab === "execution" && (!selectedSessionId || !capabilities["desktop-execution"]?.includes("1"))) || (workPaneTab === "processes" && (!selectedSessionId || !capabilities["desktop-agent-processes"]?.includes("1"))) || (workPaneTab === "diagnostics" && !capabilities["desktop-environment-diagnostics"]?.includes("1"))) setWorkPaneTab("changes")
     if (workPaneTab === "reminders" && (!selectedSessionId || !capabilities["desktop-schedule"]?.includes("1"))) setWorkPaneTab("changes")
     if (workPaneTab === "subagents" && (!selectedSessionId || !capabilities["desktop-subagent-catalog"]?.includes("1"))) setWorkPaneTab("changes")
+    if (workPaneTab === 'instructions' && (!selectedSessionId || !capabilities['desktop-instructions']?.includes('1'))) setWorkPaneTab('changes')
   }, [workPaneTab, selectedSessionId, capabilities])
   useEffect(() => {
     const workspaceId = manager?.workspaceId ?? selectedWorkspaceId
@@ -401,6 +415,7 @@ export function Workbench({
               { id: "tasks", label: t("任務"), icon: <ListTodo size={16} />, selected: reviewOpen && workPaneTab === "tasks", open: () => openPane("tasks") },
               ...(capabilities["desktop-execution"]?.includes("1") ? [{ id: "execution", label: "Code Mode", icon: <Code2 size={16} />, selected: reviewOpen && workPaneTab === "execution", open: () => openPane("execution") }] : []),
               ...(capabilities["desktop-agent-processes"]?.includes("1") ? [{ id: "processes", label: processesLabel, icon: <Activity size={16} />, selected: reviewOpen && workPaneTab === "processes", open: () => openPane("processes") }] : []),
+              ...(capabilities['desktop-instructions']?.includes('1') ? [{ id: 'instructions', label: english ? 'Instructions' : '指令來源', icon: <FileText size={16} />, selected: reviewOpen && workPaneTab === 'instructions', open: () => openPane('instructions') }] : []),
               ...(capabilities["desktop-subagent-catalog"]?.includes("1") ? [{ id: "subagents", label: t("子代理"), icon: <UsersRound size={16} />, selected: reviewOpen && workPaneTab === "subagents", open: () => openPane("subagents") }] : []),
             ] : [] },
             { label: english ? "Work and collaboration" : "工作與協作", items: selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? ([["goal", "Goal / Plan", Target], ["team", "Team", Network], ["jobs", t("背景工作"), ListTodo], ["reviews", t("代審"), ShieldCheck]] as const).map(([id, label, Icon]): WorkbenchTool => ({ id, label, icon: <Icon size={16} />, open: () => openWorkflow(id) })) : [] },
@@ -420,7 +435,7 @@ export function Workbench({
               )}
             </p>
           )}
-        {surface === "plugins" && selectedWorkspaceId ? <PluginMarketplace key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(target) => { if (onSelectHistory) onSelectHistory(target); else { setSurface("conversation"); onSelectSession(target.sessionId) } }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} onAuthoringRequest={capabilities["desktop-memory-authoring"]?.includes("1") ? authoringRequest : undefined} /> : historicalView ? <SessionHistoryView {...historicalView} navigation={fileNavigation} /> : <section className="session-body todo-progress-host" aria-label={t("會話")}>
+        {surface === "plugins" && selectedWorkspaceId ? <PluginMarketplace key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(target) => { if (onSelectHistory) onSelectHistory(target); else { setSurface("conversation"); onSelectSession(target.sessionId) } }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} onAuthoringRequest={capabilities["desktop-memory-authoring"]?.includes("1") ? authoringRequest : undefined} /> : historicalView ? <SessionHistoryView {...historicalView} resultReader={historyResultReader} navigation={fileNavigation} /> : <section className="session-body todo-progress-host" aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>
@@ -434,7 +449,7 @@ export function Workbench({
                 {capabilities["desktop-work-state"]?.includes("1") ? <TodoProgress key={`todos:${selectedWorkspaceId}:${selectedSessionId}`} todos={conversation.workState?.todos} error={conversation.workStateError} onOpenTasks={openTodoEditor} /> : null}
                 {conversation.rows.length === 0
                   ? <div className="empty-conversation"><div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1><p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div></div>
-                  : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} running={conversation.running} navigation={fileNavigation} />}
+                  : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} running={conversation.running} navigation={fileNavigation} />}
                 <div className="conversation-dock">
                 {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text">{conversation.taskError}</p> : null}
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} />
@@ -492,15 +507,16 @@ export function Workbench({
         </section>}
       </main>
       </>}
-      {reviewOpen || visitedWork.current.tabs.size > 0 || visitedWorkspacePanes.current.tabs.size > 0 ? <aside className={`review-pane${workPaneTab === "files" && review?.projectFiles ? " review-pane-files" : ""}`} aria-label={t("成果檢查")} hidden={!workVisible}>
+      {reviewOpen || visitedWork.current.tabs.size > 0 || visitedWorkspacePanes.current.tabs.size > 0 ? <aside className={`review-pane${workPaneTab === "files" && review?.projectFiles ? " review-pane-files" : ""}${workPaneTab === 'instructions' ? ' review-pane-instructions' : ''}`} aria-label={t("成果檢查")} hidden={!workVisible}>
         <ReviewResizeHandle width={actualReviewWidth} min={reviewMin} max={reviewMax} onResize={setReviewWidth} />
-        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[...(capabilities["desktop-environment-diagnostics"]?.includes("1") ? [{ id: "diagnostics", label: diagnosticsLabel }] : []), ...(selectedSessionId && capabilities["desktop-execution"]?.includes("1") ? [{ id: "execution", label: "Code Mode" }] : []), ...(selectedSessionId && capabilities["desktop-agent-processes"]?.includes("1") ? [{ id: "processes", label: processesLabel }] : []), { id: "browser", label: t("瀏覽器") }, { id: "files", label: t("檔案") }, { id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? [{ id: "subagents", label: t("子代理") }] : []), ...(selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? [{ id: "workflow", label: t("工作流程") }] : []), ...(selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? [{ id: "reminders", label: t("提醒") }] : []), ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
+        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[...(capabilities["desktop-environment-diagnostics"]?.includes("1") ? [{ id: "diagnostics", label: diagnosticsLabel }] : []), ...(selectedSessionId && capabilities["desktop-execution"]?.includes("1") ? [{ id: "execution", label: "Code Mode" }] : []), ...(selectedSessionId && capabilities['desktop-instructions']?.includes('1') ? [{ id: 'instructions', label: english ? 'Instructions' : '指令來源' }] : []), ...(selectedSessionId && capabilities["desktop-agent-processes"]?.includes("1") ? [{ id: "processes", label: processesLabel }] : []), { id: "browser", label: t("瀏覽器") }, { id: "files", label: t("檔案") }, { id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? [{ id: "subagents", label: t("子代理") }] : []), ...(selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? [{ id: "workflow", label: t("工作流程") }] : []), ...(selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? [{ id: "reminders", label: t("提醒") }] : []), ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
         <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
         {workVisible && workPaneTab === "diagnostics" && selectedWorkspaceId && capabilities["desktop-environment-diagnostics"]?.includes("1") ? <DiagnosticsPane key={`diagnostics:${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} /> : null}
         {workVisible && workPaneTab === "execution" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-execution"]?.includes("1") ? <ExecutionPane key={`execution:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} /> : null}
+        {workVisible && workPaneTab === 'instructions' && selectedWorkspaceId && selectedSessionId && capabilities['desktop-instructions']?.includes('1') ? <InstructionsPane key={`instructions:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} /> : null}
         {workVisible && workPaneTab === "processes" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-agent-processes"]?.includes("1") ? <AgentProcessesPane key={`processes:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} /> : null}
-        {workVisible && workPaneTab === "subagents" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? <SubagentPane key={`subagents:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} parentTitle={sessionTitle} /> : null}
+        {workVisible && workPaneTab === "subagents" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? <SubagentPane key={`subagents:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} parentTitle={sessionTitle} instructionsAvailable={capabilities['desktop-instructions']?.includes('1')} /> : null}
         {visitedWork.current.tabs.has("workflow") && selectedWorkspaceId && selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? <div className="retained-work-pane" hidden={workPaneTab !== "workflow"}>{conversation?.projectReady === false ? <p role="status" className="notice">{conversation.sendReason}</p> : <WorkflowPane key={`${selectedWorkspaceId}:${selectedSessionId}`} active={workVisible && workPaneTab === "workflow"} section={workflowSection} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} running={conversation?.running} onChanged={conversation?.onRetryWorkState} />}</div> : null}
         {workVisible && workPaneTab === "workflow" && !capabilities["desktop-workflow"]?.includes("1") ? <p role="status" className="notice">{t("目前工作區後端未提供此功能。")}</p> : null}
         {workVisible && workPaneTab === "workflow" && !selectedSessionId ? <p role="status" className="notice">{t("選擇會話以開啟工作流程。")}</p> : null}

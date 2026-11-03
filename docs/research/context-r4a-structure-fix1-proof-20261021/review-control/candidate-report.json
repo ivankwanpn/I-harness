@@ -1,0 +1,111 @@
+{
+  "variant": "candidate",
+  "entry": "D:\\I-harness-main\\.tmp\\r4as-rv2\\candidate\\src\\index.ts",
+  "start": "2026-10-20T21:40:32.444Z",
+  "cases": [
+    {
+      "name": "ordinary-calibration",
+      "producerCalls": 1,
+      "ref": {
+        "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+        "workspaceId": "before",
+        "sessionId": "owner",
+        "callId": "call",
+        "label": "literal",
+        "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+        "bytes": 30,
+        "originalBytes": 30,
+        "complete": true,
+        "expiresAt": 1793137232503
+      },
+      "expectedWorkspace": "before",
+      "expectedId": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+      "liveText": "literal original producer body",
+      "storeDirectories": [
+        "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb"
+      ],
+      "expectedStoreDirectory": "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+      "persistedArtifact": {
+        "ref": {
+          "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+          "workspaceId": "before",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137232503
+        }
+      },
+      "reopenedText": "literal original producer body",
+      "activeJobsAfterClose": 0
+    },
+    {
+      "name": "held-producer-options-mutation",
+      "producerCalls": 1,
+      "ref": {
+        "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+        "workspaceId": "before",
+        "sessionId": "owner",
+        "callId": "call",
+        "label": "literal",
+        "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+        "bytes": 30,
+        "originalBytes": 30,
+        "complete": true,
+        "expiresAt": 1793137232622
+      },
+      "expectedWorkspace": "after",
+      "expectedId": "ctx_6f198559c680c125d4f47b9a964603a23ecd63d250c33544beeb1c1e987c40f2",
+      "liveText": "literal original producer body",
+      "storeDirectories": [
+        "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8"
+      ],
+      "expectedStoreDirectory": "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8",
+      "persistedArtifact": {
+        "ref": {
+          "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+          "workspaceId": "before",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137232622
+        }
+      },
+      "reopenError": "Invalid context artifact identity",
+      "failed": [
+        "reference workspace",
+        "reference identity",
+        "reopened body"
+      ],
+      "activeJobsAfterClose": 0
+    }
+  ],
+  "end": "2026-10-20T21:40:32.683Z",
+  "failures": [
+    {
+      "case": "held-producer-options-mutation",
+      "label": "reference workspace",
+      "actual": "before",
+      "expected": "after"
+    },
+    {
+      "case": "held-producer-options-mutation",
+      "label": "reference identity",
+      "actual": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+      "expected": "ctx_6f198559c680c125d4f47b9a964603a23ecd63d250c33544beeb1c1e987c40f2"
+    },
+    {
+      "case": "held-producer-options-mutation",
+      "label": "reopened body",
+      "actual": null,
+      "expected": "literal original producer body"
+    }
+  ]
+}

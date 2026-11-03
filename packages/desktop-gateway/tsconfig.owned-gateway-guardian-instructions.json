@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/owned-gateway-guardian.ts","src/owned-gateway-guardian-instructions.ts"]}

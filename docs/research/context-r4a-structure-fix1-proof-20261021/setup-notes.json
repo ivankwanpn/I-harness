@@ -1,0 +1,9 @@
+{
+  "nativeGates": "All ten recorded fix gates are source-stable and sequential. Gate01 is genuine public behavior RED, not a setup error. Gate02 runs the unchanged new tests on the byte-exact original BASE service entry; new leaves remain unused. Gate03 and final04 run the repaired entry.",
+  "readOnlySetupObservations": [
+    "Initial exploratory read guessed base/receipts.json and candidate/receipts.json; actual fresh reviewer receipts are .tmp/r4as-rv2/receipts.json. No write or product import occurred.",
+    "Initial source-map display was oversized; subsequent inspection selected its copied-file count, original identities, dependency resolutions and loader. The entire original JSON is copied unchanged into review-control for exact review evidence."
+  ],
+  "priorProofLimit": "Original body-token equivalence substituted a scalar workspace value and did not prove argument evaluation timing. This fix uses a live getter substitution at each original body expression, with independent public accessor timing/count and cold-read tests. Old proof/report bytes are preserved without rewriting.",
+  "evidenceReuse": "Original sealed writer and reviewer evidence were read only. Their control source is copied for provenance, not executed again. Existing 210-test source-scoped evidence is retained; this increment freshly runs only affected legacy/service/mixed/integrity scopes plus relevant types and census/equivalence."
+}

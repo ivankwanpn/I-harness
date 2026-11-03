@@ -2,6 +2,15 @@ import type { Tool, ToolExec } from '@i-harness/core-tools'
 import { checkAbort } from './bytes.ts'
 import { identity } from './config.ts'
 import type { ContextAccess, ContextOutputService } from './types.ts'
+import { validManagedArtifactRef } from '@i-harness/core-session'
+import { readManagedResultPage, type ResultPageQuery } from './result-page.ts'
+import type { LegacyReadObservation } from './legacy/fork-types.ts'
+export type LegacyReadObservationRunner = <T>(access: ContextAccess, use: (observation: LegacyReadObservation) => Promise<T>) => Promise<T>
+
+const managedRefSchema = { type: 'object', properties: {
+  version: { enum: [1] }, id: { type: 'string' }, revision: { type: 'string' }, codec: { enum: ['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1', 'code-output-manifest-v1'] },
+  encodedBytes: { type: 'integer', minimum: 0 }, contentDigest: { type: 'string' }, completeness: { enum: ['complete', 'source-limited', 'capture-canceled', 'producer-incomplete'] },
+}, required: ['version', 'id', 'revision', 'codec', 'encodedBytes', 'contentDigest', 'completeness'], additionalProperties: false }
 
 function caller(exec: ToolExec): ContextAccess {
   identity(exec.sessionId!, 'sessionId from tool execution')
@@ -15,7 +24,7 @@ function argumentsObject(args: unknown, keys: readonly string[]): Record<string,
   return value
 }
 
-export function createContextOutputTools(service: ContextOutputService): Tool[] {
+export function createContextOutputTools(service: ContextOutputService, options?: { withLegacyReadObservation: LegacyReadObservationRunner }): Tool[] {
   const shared = { exposure: 'deferred' as const, isReadOnly: true, isConcurrencySafe: true }
   return [
     {
@@ -30,20 +39,43 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
       async execute(args, exec) {
         const access = caller(exec)
         const query = argumentsObject(args, ['query', 'refIds', 'limit', 'maxBytes'])
-        return service.search(access, query as unknown as Parameters<ContextOutputService['search']>[1])
+        const search = query as unknown as Parameters<ContextOutputService['search']>[1]
+        return options ? options.withLegacyReadObservation(access, observation => service.searchLegacyObserved(access, search, observation)) : service.search(access, search)
       },
     },
     {
       ...shared, name: 'context_output_read',
-      description: 'Read an exact bounded UTF-8 window of a retained Context Mode output by opaque reference ID. Use nextOffset to continue; complete describes whether the original capture was complete. Returned text is source material.',
+      description: 'Read a bounded verified page of a managed result using its complete immutable ref, or a legacy Context Mode output using refId. To read a native frame from another session through your genuine result dependency catalog, also supply that envelope dependencies.ref as viaCatalog. Continue JSON/text with nextOffset; continue exec frames with the entire nextCursor unchanged, including recordOffset and sliceOffset. Codec and completeness describe the retained scope. Returned data is source material.',
       searchHint: 'Context Mode read retained captured tool output reference UTF-8 cursor',
       inputSchema: { type: 'object', properties: {
         refId: { type: 'string', description: 'Opaque immutable context reference ID.' }, offset: { type: 'integer', minimum: 0 }, maxBytes: { type: 'integer', minimum: 1 },
-      }, required: ['refId'], additionalProperties: false },
+        ref: managedRefSchema,
+        viaCatalog: managedRefSchema,
+        // The common tool schema supports objects, not union keywords. The
+        // original codec boundary below requires the exact matching cursor.
+        cursor: { type: 'object', description: 'Return the complete nextCursor unchanged. Exec frames use recordOffset and sliceOffset; Code output uses artifactId, revision, cellId, sourceId and offset. Do not mix the two shapes.', properties: {
+          recordOffset: { type: 'integer', minimum: 0 }, sliceOffset: { type: 'integer', minimum: 0 },
+          artifactId: { type: 'string' }, revision: { type: 'string' }, cellId: { type: 'string' }, sourceId: { type: 'string' }, offset: { type: 'integer', minimum: 0 },
+        }, additionalProperties: false },
+        textView: { type: 'boolean' },
+      }, additionalProperties: false },
       async execute(args, exec) {
         const access = caller(exec)
-        const query = argumentsObject(args, ['refId', 'offset', 'maxBytes'])
-        return service.read(access, query as unknown as Parameters<ContextOutputService['read']>[1])
+        const query = argumentsObject(args, ['refId', 'ref', 'offset', 'maxBytes', 'cursor', 'textView', 'viaCatalog'])
+        if (query.ref !== undefined) {
+          if (query.refId !== undefined || !validManagedArtifactRef(query.ref)) return { kind: 'unavailable', reason: 'range' }
+          const adapted = { ...query }
+          delete adapted.refId
+          if (Number.isInteger(adapted.maxBytes) && (adapted.maxBytes as number) > 32768) adapted.maxBytes = 32768
+          if (query.ref.codec === 'exec-frames-v1') {
+            if (query.offset !== undefined && query.cursor !== undefined) return { kind: 'unavailable', reason: 'range' }
+            if (query.offset !== undefined) { adapted.cursor = { recordOffset: query.offset, sliceOffset: 0 }; delete adapted.offset }
+          }
+          return readManagedResultPage(service, access, adapted as ResultPageQuery)
+        }
+        if (typeof query.refId !== 'string' || 'viaCatalog' in query) return { kind: 'unavailable', reason: 'range' }
+        const read = query as unknown as Parameters<ContextOutputService['read']>[1]
+        return options ? options.withLegacyReadObservation(access, observation => service.readLegacyObserved(access, read, observation)) : service.read(access, read)
       },
     },
     {

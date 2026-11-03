@@ -1,0 +1,257 @@
+{
+  "base": "5e4f6038a98a5363babda0c9a15bbbef4dc80f1b",
+  "head": "32c88704a56c15094d793717a1d0150799db67b1",
+  "failures": [],
+  "evidence": {
+    "files": 1418,
+    "bytes": 52934253,
+    "closureSha256": "989a4476dce47cb06d4e543fc8a596d5aea4ee6068e5408b8824286f6a81785d",
+    "reportSha256": "976a05fd0b1906443241e45a0463e2f4becad0160496bff7db0255ec8838e0ef"
+  },
+  "source": {
+    "initialDirect": 555,
+    "qualifiedDirect": 562,
+    "baselineGitArchive": 2652,
+    "baselineIdentical": 71,
+    "baselineCrlfOnly": 2581,
+    "qualifiedWide": 2659,
+    "added": [
+      "packages/session-executor/test/helpers/publication-fixture.mts",
+      "packages/session-executor/test/helpers/publication-launch.mts",
+      "packages/session-executor/test/helpers/publication-native.mts",
+      "packages/session-executor/test/helpers/publication-producer.mts",
+      "packages/session-executor/test/publication-pins-physical.test.ts",
+      "packages/session-executor/test/publication-pins.test.ts",
+      "packages/session-executor/tsconfig.publication-pins.json"
+    ],
+    "archives": [
+      {
+        "archive": "source-before.zip",
+        "entries": 555,
+        "bytes": 4221068,
+        "mismatch": 0
+      },
+      {
+        "archive": "source-qualified.zip",
+        "entries": 562,
+        "bytes": 4217665,
+        "mismatch": 0
+      },
+      {
+        "archive": "source-before-wide.zip",
+        "entries": 2652,
+        "bytes": 18410168,
+        "mismatch": 0
+      },
+      {
+        "archive": "source-qualified-wide.zip",
+        "entries": 2659,
+        "bytes": 18355237,
+        "mismatch": 0
+      }
+    ],
+    "productChanges": 0,
+    "mismatch": 0
+  },
+  "processes": {
+    "launched": 90,
+    "allClosed": true,
+    "uniqueNonce": 90,
+    "failedSetup": 3,
+    "crashProcesses": 30
+  },
+  "cases": [
+    {
+      "directory": "control-body-sync-9U6hjb",
+      "mode": "control",
+      "cut": "body-sync",
+      "passed": true
+    },
+    {
+      "directory": "live-body-sync-SzX4lq",
+      "mode": "live",
+      "cut": "body-sync",
+      "passed": true
+    },
+    {
+      "directory": "live-leaves-sync-LvkXj7",
+      "mode": "live",
+      "cut": "leaves-sync",
+      "passed": true
+    },
+    {
+      "directory": "live-index-sync-LOA0jl",
+      "mode": "live",
+      "cut": "index-sync",
+      "passed": true
+    },
+    {
+      "directory": "live-staged-rename-Ux4Pji",
+      "mode": "live",
+      "cut": "staged-rename",
+      "passed": true
+    },
+    {
+      "directory": "live-manifest-rename-0ap9Sq",
+      "mode": "live",
+      "cut": "manifest-rename",
+      "passed": true
+    },
+    {
+      "directory": "live-first-pin-TKTxLz",
+      "mode": "live",
+      "cut": "first-pin",
+      "passed": true
+    },
+    {
+      "directory": "live-first-access-KRQlf5",
+      "mode": "live",
+      "cut": "first-access",
+      "passed": true
+    },
+    {
+      "directory": "live-committed-rename-nOCfq7",
+      "mode": "live",
+      "cut": "committed-rename",
+      "passed": true
+    },
+    {
+      "directory": "live-second-pin-qFviLo",
+      "mode": "live",
+      "cut": "second-pin",
+      "passed": true
+    },
+    {
+      "directory": "live-second-access-yoQzhW",
+      "mode": "live",
+      "cut": "second-access",
+      "passed": true
+    },
+    {
+      "directory": "crash-body-sync-C9ir2C",
+      "mode": "crash",
+      "cut": "body-sync",
+      "passed": true
+    },
+    {
+      "directory": "crash-leaves-sync-rEhdKQ",
+      "mode": "crash",
+      "cut": "leaves-sync",
+      "passed": true
+    },
+    {
+      "directory": "crash-index-sync-pHV1mJ",
+      "mode": "crash",
+      "cut": "index-sync",
+      "passed": true
+    },
+    {
+      "directory": "crash-staged-rename-nkg0Tn",
+      "mode": "crash",
+      "cut": "staged-rename",
+      "passed": true
+    },
+    {
+      "directory": "crash-manifest-rename-qVkQVd",
+      "mode": "crash",
+      "cut": "manifest-rename",
+      "passed": true
+    },
+    {
+      "directory": "crash-first-pin-wR0NAV",
+      "mode": "crash",
+      "cut": "first-pin",
+      "passed": true
+    },
+    {
+      "directory": "crash-first-access-MXRfAK",
+      "mode": "crash",
+      "cut": "first-access",
+      "passed": true
+    },
+    {
+      "directory": "crash-committed-rename-tRGp0p",
+      "mode": "crash",
+      "cut": "committed-rename",
+      "passed": true
+    },
+    {
+      "directory": "crash-second-pin-IlWWJj",
+      "mode": "crash",
+      "cut": "second-pin",
+      "passed": true
+    },
+    {
+      "directory": "crash-second-access-LGFxZN",
+      "mode": "crash",
+      "cut": "second-access",
+      "passed": true
+    },
+    {
+      "directory": "delete-first-pin-GH4EfD",
+      "mode": "delete",
+      "cut": "first-pin",
+      "passed": true
+    },
+    {
+      "directory": "delete-first-access-M6rMzX",
+      "mode": "delete",
+      "cut": "first-access",
+      "passed": true
+    },
+    {
+      "directory": "delete-second-pin-Gg26WY",
+      "mode": "delete",
+      "cut": "second-pin",
+      "passed": true
+    },
+    {
+      "directory": "delete-second-access-wQd4Fh",
+      "mode": "delete",
+      "cut": "second-access",
+      "passed": true
+    },
+    {
+      "directory": "closure-manifest-rename-zntCWO",
+      "mode": "closure",
+      "cut": "manifest-rename",
+      "passed": true
+    },
+    {
+      "directory": "quota-second-body-sync-LbFo3i",
+      "mode": "quota-second",
+      "cut": "body-sync",
+      "passed": true
+    },
+    {
+      "directory": "quota-commit-body-sync-Izklip",
+      "mode": "quota-commit",
+      "cut": "body-sync",
+      "passed": true
+    }
+  ],
+  "gates": {
+    "attempts": 15,
+    "finalFocused": 28,
+    "established": 24,
+    "finalTypes": 0,
+    "failuresPreserved": [
+      {
+        "gate": "coupled-seven",
+        "exit": 1
+      },
+      {
+        "gate": "quota-corrected-oracle",
+        "exit": 1
+      },
+      {
+        "gate": "explicit-mts-types",
+        "exit": 2
+      },
+      {
+        "gate": "original-controls",
+        "exit": 1
+      }
+    ]
+  }
+}

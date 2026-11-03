@@ -1,0 +1,26 @@
+{
+  "id": "10-freeze",
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "node": "v24.15.0",
+  "argv": [
+    "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\census.mjs",
+    ".tmp/r4as-fix1-1021/census-frozen.json"
+  ],
+  "cwd": "D:\\I-harness-main",
+  "env": {
+    "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-fix1-1021/config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\10-freeze\\fixtures\\mixed",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\10-freeze\\fixtures\\integrity",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\10-freeze\\fixtures\\native",
+    "IH_PUBLICATION_PINS_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\10-freeze\\fixtures\\publication",
+    "IH_PHYSICAL_CRASH_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\10-freeze\\fixtures\\physical",
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\10-freeze\\fixtures\\structure"
+  },
+  "head": "f7086d8acbf6febb5724688408d597beabae1d03",
+  "start": "2026-10-20T21:48:30.262Z",
+  "pid": 8884,
+  "end": "2026-10-20T21:48:30.583Z",
+  "code": 0,
+  "signal": null,
+  "sourceUnchanged": true
+}

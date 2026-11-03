@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/owned-gateway-default.ts","src/owned-approval-bindings.ts","src/owned-gateway-leaves.ts","test/owned-gateway-default.test.ts"]}

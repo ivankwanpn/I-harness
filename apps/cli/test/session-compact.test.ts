@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from '../../../packages/compaction/test/fixtures/checkpoint.ts'
 import { describe, expect, it, vi } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
@@ -8,11 +9,11 @@ import { handleSessionCompactCommand } from "../src/run.ts"
 
 // M33 §5: manual compact surface — session-compact command (v0 error texts +
 // JSON echo; busy when the executor lane is running).
-const noopMaybe = async (): Promise<CompactionResult> => ({ compacted: false, shadowedSeqs: [] })
+const noopMaybe = async (): Promise<CompactionResult> => ({ compacted: false, shadowedSeqs: [], outcome:'unchanged',publication:'none' })
 
 function deps(overrides: Partial<{ compactNow: (instructions?: string) => Promise<CompactionResult>; isRunning: () => boolean }> = {}) {
   const compactNow = vi.fn(async (instructions?: string): Promise<CompactionResult> => ({
-    compacted: true,
+    compacted: true, outcome: 'ready',publication:'nondurable',
     shadowedSeqs: [0, 1],
     ...(instructions !== undefined ? { summary: `summarized (${instructions})` } : { summary: "summarized" }),
   }))
@@ -28,7 +29,7 @@ describe("session-compact command (M33 §5)", () => {
     const d = deps()
     const out = await handleSessionCompactCommand(d, "{}")
     expect(d.compactNow).toHaveBeenCalledWith(undefined)
-    expect(JSON.parse(out)).toEqual({ compacted: true, shadowedSeqs: [0, 1], summary: "summarized" })
+    expect(JSON.parse(out)).toEqual({ compacted: true, shadowedSeqs: [0, 1], summary: 'summarized', outcome:'ready',publication:'nondurable' })
   })
 
   it("threads instructions to compactNow and echoes summary", async () => {
@@ -52,7 +53,7 @@ describe("session-compact command (M33 §5)", () => {
 
   it("M73: a summarizer failure does not read as 'nothing to compact'", async () => {
     const d = deps({
-      compactNow: async (): Promise<CompactionResult> => ({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }),
+      compactNow: async (): Promise<CompactionResult> => ({ compacted: false, shadowedSeqs: [], reason: 'summarizer-failed',outcome:'blocked',publication:'none',blockedReason:'summary-failed' }),
     })
     const out = await handleSessionCompactCommand(d, "{}")
     expect(out).not.toBe("No compactable history yet.")
@@ -67,11 +68,11 @@ describe("session-compact command (M33 §5)", () => {
 
   it("registers and runs through the real command registry", async () => {
     const s = createSession()
-    append(s, { type: "user/message", text: "initial work" })
+    append(s, { type: "user/message", text: "initial work".repeat(300) })
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       session: s,
-      model: createMockClient([{ role: "assistant", text: "## Primary Request and Intent\n- " + "work ".repeat(120) }]), // ≥ 500 chars (M34 ⑦c floor)
+      model: Object.assign(createMockClient([{role:"assistant",text:checkpointOfLength(600)}]),{prepare:prepareTextFixture}), // ≥ 500 chars (M34 ⑦c floor)
       compact: { contextWindow: 100_000 },
     })
     try {
@@ -94,7 +95,7 @@ describe("session-compact command (M33 §5)", () => {
       expect(parsed.compacted).toBe(true)
       expect(parsed.shadowedSeqs).toEqual([0])
       expect(parsed.summary).toBeDefined()
-      expect(assembly.session.events.some((e) => e.type === "compaction/summary")).toBe(true)
+      expect(assembly.session.events.some((e) => e.type === "compaction/replacement")).toBe(true)
     } finally {
       await assembly.dispose()
     }

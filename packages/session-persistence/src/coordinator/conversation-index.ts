@@ -1,0 +1,46 @@
+import { CURRENT_FORMAT_VERSION, canonicalJsonData, createConversationValidationIndex, type ConversationValidationIndex, type SessionEvent } from "@i-harness/core-session"
+import { SessionFormatUnsupportedError } from "../format/registry.ts"
+import { preflightBatchShape, preflightSessionFormat } from "../format/validation.ts"
+import { ensureWritableFormatUnlocked } from "./writable-format.ts"
+import type { PersistenceBackend } from "./types.ts"
+
+/** Derived facts live under the coordinator's existing operation gate. No raw log cache. */
+export function createConversationIndexes(backend: Pick<PersistenceBackend, "read" | "id" | "upgradeSessionFormat">) {
+  const indexes = new Map<string, ConversationValidationIndex>()
+  return {
+    invalidate(id: string) { indexes.delete(id) },
+    clear() { indexes.clear() },
+    async stage(id: string, events: SessionEvent[], preservePhysical = false) {
+      let index = indexes.get(id)
+      const loaded = preservePhysical ? await backend.read(id) : await ensureWritableFormatUnlocked(backend, id)
+      if (preservePhysical && loaded.version >= 14) throw new Error('TASK_TRANSITION_RETRY_REQUIRED')
+      if (preservePhysical) preflightSessionFormat(loaded.version,loaded.events,loaded.meta)
+      const version = preservePhysical ? loaded.version : CURRENT_FORMAT_VERSION
+      let suffix = events
+      if (!index || index.formatVersion !== version || index.eventCount !== loaded.events.length) {
+        index = createConversationValidationIndex(loaded.events, { formatVersion: version, header: loaded.meta })
+        indexes.set(id, index)
+        // A retained write-behind batch may already be durable after an uncertain
+        // append. Compare actual persisted records once on reload; never cache bodies.
+        let overlap = 0
+        const bySeq = new Map(loaded.events.filter(event => event.seq !== undefined).map(event => [event.seq, event]))
+        for (const event of events) {
+          const existing = event.seq === undefined ? undefined : bySeq.get(event.seq)
+          if (!existing) break
+          if (JSON.stringify(existing) !== JSON.stringify(event)) throw new SessionFormatUnsupportedError("append conflicts with durable prefix")
+          overlap++
+        }
+        suffix = events.slice(overlap)
+      }
+      preflightBatchShape(version, suffix)
+      try {
+        const staged = index.stage(suffix, { readCurrentEvent: position => loaded.events[position] })
+        const before = canonicalJsonData({ version: loaded.version, events: loaded.events })
+        return { events: suffix, baseLength: loaded.events.length, commit: () => staged.commit(), async historyChanged() {
+          const after = await backend.read(id)
+          return canonicalJsonData({ version: after.version, events: after.events }) !== before
+        } }
+      } catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation suffix", { cause }) }
+    },
+  }
+}

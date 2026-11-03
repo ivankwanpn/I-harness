@@ -8,7 +8,9 @@ import { type SupervisedExecution } from "@i-harness/exec"
 import { createOwnedExec } from "./owned-exec.ts"
 
 const git = win32.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git")
-const bash = win32.join(git, "bin", "bash.exe")
+// Exercise the actual MSYS image supported by PE import detection. Unknown
+// Git launcher shims deliberately retain their native ConPTY behavior.
+const bash = win32.join(git, "usr", "bin", "bash.exe")
 const suite = describe.skipIf(process.platform !== "win32" || !existsSync(bash))
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 async function until(check: () => boolean, detail: () => string = () => "", timeout = 5000) {
@@ -21,8 +23,13 @@ async function fixture() {
   const root = await mkdtemp(join(build, "msys-pty-acceptance-"))
   const exec = createOwnedExec(root), executions: SupervisedExecution[] = [], readers: Promise<void>[] = []
   async function start(args: string[], lifetime: "retain-tree" | "complete-tree" = "retain-tree", command = bash) {
+    // Keep the acceptance tools in the admitted Git runtime's /usr namespace.
+    // Another MSYS distribution on the host PATH has its own PTY and /proc state.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"))
+    const inheritedPath = Object.entries(process.env).find(([key]) => key.toLowerCase() === "path")?.[1]
     const execution = await exec.launchTransport({ argv: [command, ...args], cwd: root,
-      env: { ...process.env, TERM: "xterm-256color", PS1: "PTY_ACCEPT_READY> ", HISTFILE: join(root, "history") } as Record<string, string>,
+      env: { ...env, PATH: [win32.dirname(bash), inheritedPath].filter(Boolean).join(";"),
+        TERM: "xterm-256color", PS1: "PTY_ACCEPT_READY> ", HISTFILE: join(root, "history") } as Record<string, string>,
       transport: "pty", lifetime, argumentEncoding: "crt", pty: { cols: 100, rows: 24 } })
     executions.push(execution)
     let output = "", bytes = 0
@@ -108,7 +115,7 @@ suite("owned MSYS PTY production acceptance", () => {
   it("retains descendants with closed stdio and cancels the actual tree", async () => {
     const f = await fixture()
     try {
-      const t = await f.start(["--noprofile", "--norc", "-c", "nohup bash --noprofile --norc -c 'cat /proc/$$/winpid > child.pid; sleep 30; :' </dev/null >/dev/null 2>&1 & while [[ ! -s child.pid ]]; do :; done"], "retain-tree")
+      const t = await f.start(["--noprofile", "--norc", "-c", "nohup \"$BASH\" --noprofile --norc -c 'cat /proc/$$/winpid > child.pid; sleep 30; :' </dev/null >/dev/null 2>&1 & while [[ ! -s child.pid ]]; do :; done"], "retain-tree")
       expect(await t.execution.handle.rootExited).toMatchObject({ exitCode: 0 })
       const child = Number(await readFile(join(f.root, "child.pid"), "utf8")); process.kill(child, 0)
       expect(await Promise.race([t.execution.handle.settled.then(() => "settled"), pause(50).then(() => "retained")])).toBe("retained")

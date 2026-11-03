@@ -13,6 +13,7 @@ import type { SdkServer } from "@i-harness/sdk/server"
 import type { DesktopHandlers, GatewayWrite } from "./types.ts"
 import { ReviewPathError } from "./review.ts"
 import { randomUUID } from "node:crypto"
+import { createSurfaceSubscriptions } from './observation/subscriptions.ts'
 import { ScheduleInputError } from "@i-harness/schedule"
 import { ModelUnavailableError } from "@i-harness/session-executor"
 import { memoryRequest } from "./memory-wire.ts"
@@ -22,6 +23,10 @@ import { createProviderProbes } from "./provider-probes.ts"
 import { dispatchGatewayProjectFiles } from "./project-files.ts"
 import { dispatchGatewayContentSearch } from "./project-content-search.ts"
 import { usageRequest } from "./usage-wire.ts"
+import { instructionRequest } from './instructions/wire.ts'
+import { canonicalJsonData } from '@i-harness/core-session'
+import { ForkAdmissionError } from '@i-harness/session-persistence'
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -41,6 +46,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.codeSettings) capabilities["desktop-code-mode-settings"] = ["1"]
     if (handlers.contextSubsystems) capabilities["desktop-context-subsystems"] = ["1"]
     if (handlers.execution) capabilities["desktop-execution"] = ["1"]
+    if (handlers.execution && handlers.executionObservation?.supported?.()) capabilities["desktop-surface-events"] = ["1"]
     if (handlers.diagnostics) capabilities["desktop-environment-diagnostics"] = ["1"]
     if (handlers.agentProcesses) capabilities["desktop-agent-processes"] = ["1"]
     if (handlers.approvalRules) capabilities["desktop-approval-rules"] = ["1"]
@@ -57,6 +63,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.hooks?.writeConfig) capabilities["desktop-hook-authoring"] = ["1"]
     if (handlers.subagents) capabilities["desktop-subagents"] = ["1"]
     if (handlers.sessionSubagents) capabilities["desktop-subagent-catalog"] = ["1"]
+    if (handlers.instructions) capabilities['desktop-instructions'] = ['1']
     if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
     if (handlers.terminal) capabilities["desktop-terminal"] = ["1"]
     if (handlers.schedules) capabilities["desktop-schedule"] = ["1"]
@@ -65,7 +72,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.rewind) capabilities["desktop-rewind"] = ["1"]
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
     if (handlers.provider !== undefined) capabilities["desktop-provider"] = ["1"]
-    if (handlers.usageStats !== undefined) capabilities["desktop-usage"] = ["1"]
+    if (handlers.usageStats !== undefined) capabilities["desktop-usage"] = handlers.usageStats.queryV2?["1","2"]:["1"]
     if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
     if (handlers.memory?.update) capabilities["desktop-memory-authoring"] = ["1"]
     if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
@@ -99,11 +106,15 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
 } {
   let initialized = false
   let closed = false
+  let closing: Promise<void> | undefined
+  const forkRequestContext = new AsyncLocalStorage<{ active: boolean }>()
   const activePrompts = new Map<string, number>()
   const compacting = new Map<string, AbortController>()
   const compactJobs = new Set<Promise<unknown>>()
   const probes = handlers.provider ? createProviderProbes(handlers.provider) : undefined
   const modelSwitches = new Map<string, Promise<unknown>>()
+  const forkSources = new Map<string, { identity: string; flight: Promise<unknown> }>()
+  const surfaces = handlers.executionObservation ? createSurfaceSubscriptions(handlers.executionObservation, notice => send({jsonrpc:'2.0',method:'desktop/surface/changed',params:notice})) : undefined
 
   return {
     async handleLine(line) {
@@ -119,6 +130,28 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
 
       if (!message.method.startsWith("desktop/")) {
+        if (['session/fork/prepare', 'session/fork/begin', 'session/fork/retry'].includes(message.method)) {
+          const request = { active: true }
+          try { await forkRequestContext.run(request, () => base.handleLine(line, { fork: { async withNewWork<T>(sourceSessionId: string, _operationId: string, use: () => Promise<T>): Promise<T> {
+            if (closed) throw new ForkAdmissionError('cancelled')
+            // Base SDK validates the complete operation before invoking this
+            // host-only callback. Identity here restricts concurrent admission.
+            const identity = canonicalJsonData(asRecord(message.params)?.operation)
+            const prior = forkSources.get(sourceSessionId)
+            if (prior) {
+              if (prior.identity === identity) return prior.flight as Promise<T>
+              throw new ForkAdmissionError('busy')
+            }
+            if (activePrompts.has(sourceSessionId) || compacting.has(sourceSessionId) || modelSwitches.has(sourceSessionId)) throw new ForkAdmissionError('busy')
+            if (!handlers.sessions) throw new ForkAdmissionError('unsupported')
+            const owned = { identity, flight: Promise.resolve().then(() => handlers.sessions!.withForkSource(sourceSessionId, use)) }
+            forkSources.set(sourceSessionId, owned)
+            try { return await owned.flight }
+            finally { if (forkSources.get(sourceSessionId) === owned) forkSources.delete(sourceSessionId) }
+          } } })) }
+          finally { request.active = false }
+          return
+        }
         if (message.method === "session/create" && asRecord(message.params)?.clientToken !== undefined && handlers.draftSession) {
           if (!initialized) { send(makeFailure(message.id, INVALID_REQUEST, "not initialized: send initialize first")); return }
           try { send(makeSuccess(message.id, await handlers.draftSession(asRecord(message.params)!.clientToken as string))) }
@@ -127,7 +160,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         }
         if (message.method === "shutdown") for (const controller of compacting.values()) controller.abort()
         const scopedSessionId = asRecord(message.params)?.sessionId
-        if (typeof scopedSessionId === "string" && modelSwitches.has(scopedSessionId)
+        if (typeof scopedSessionId === "string" && (modelSwitches.has(scopedSessionId) || forkSources.has(scopedSessionId))
           && ["session/prompt", "session/model/set", "session/rewind/execute"].includes(message.method)) {
           send(makeFailure(message.id, INVALID_REQUEST, "session model change is running", { reason: "session_busy" })); return
         }
@@ -213,7 +246,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
             case "desktop/session/execution/stop": if (!sessionId || !handlers.execution || typeof params.cellId !== "string") throw new Error("Execution unavailable"); result = await handlers.execution.stop(sessionId, params.cellId); break
             case "desktop/session/processes/read": if (!sessionId || !handlers.agentProcesses) throw new Error("Processes unavailable"); result = await handlers.agentProcesses.read(sessionId); break
             case "desktop/session/processes/control": if (!sessionId || !handlers.agentProcesses) throw new Error("Processes unavailable"); result = await handlers.agentProcesses.control(sessionId, params.command); break
-            case "desktop/session/processes/job-output": if (!sessionId || !handlers.agentProcesses || typeof params.id !== "string") throw new Error("Processes unavailable"); result = await handlers.agentProcesses.jobOutput(sessionId, params.id); break
+            case "desktop/session/processes/job-output": if (Object.keys(params).some(key => !["sessionId", "id", "backend", "instanceId", "sourceId", "mode", "cursor", "expectedRef"].includes(key))) throw new Error("Invalid job output query"); if (!sessionId || !handlers.agentProcesses || typeof params.id !== "string") throw new Error("Processes unavailable"); result = await handlers.agentProcesses.jobOutput(sessionId, params.id, { backend: params.backend, instanceId: params.instanceId, sourceId: params.sourceId, mode: params.mode, cursor: params.cursor, expectedRef: params.expectedRef } as import("./agent-processes.ts").JobOutputQuery); break
             case "desktop/session/processes/terminal-output": if (!sessionId || !handlers.agentProcesses || typeof params.id !== "string") throw new Error("Processes unavailable"); result = await handlers.agentProcesses.terminalOutput(sessionId, params.id); break
             case "desktop/approval-rules/state": if (!handlers.approvalRules || !handlers.workspace) throw new Error("Approval rules unavailable"); result = handlers.approvalRules.state(handlers.workspace, handlers.interaction?.pending() ?? []); break
             case "desktop/approval-rules/revoke": if (!handlers.approvalRules || !handlers.workspace || typeof params.ruleId !== "string") throw new Error("Approval rules unavailable"); handlers.approvalRules.revoke(handlers.workspace, params.ruleId); result = { revoked: true }; break
@@ -225,7 +258,28 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
-      if (["desktop/session/subagents/list", "desktop/session/subagents/history", "desktop/session/subagents/control"].includes(message.method) && handlers.sessionSubagents) {
+      if(message.method.startsWith('desktop/surface/') && surfaces) {
+        try {
+          if(message.method==='desktop/surface/subscribe') { const lease=await surfaces.subscribe(message.params);surfaces.acknowledge(lease.subscriptionId,value=>send(makeSuccess(message.id,value))) }
+          else if(message.method==='desktop/surface/snapshot') { const reply=await surfaces.snapshot(message.params);reply.write(value=>send(makeSuccess(message.id,value))) }
+          else if(message.method==='desktop/surface/unsubscribe') send(makeSuccess(message.id,await surfaces.unsubscribe(message.params)))
+          else throw Error('Unknown surface method')
+        } catch(error) {send(makeFailure(message.id,INVALID_PARAMS,error instanceof Error?error.message:String(error)))}
+        return
+      }
+      if (['desktop/instructions/state', 'desktop/instructions/refresh', 'desktop/instructions/subscribe', 'desktop/instructions/unsubscribe', 'desktop/instructions/settings', 'desktop/instructions/configure'].includes(message.method) && handlers.instructions) {
+        try {
+          const result = await instructionRequest(handlers.instructions, message.method, message.params, handlers.instructionSettings)
+          if (message.method === 'desktop/instructions/subscribe') {
+            if (!handlers.instructions.acknowledge((result as { subscriptionId: string }).subscriptionId, () => send(makeSuccess(message.id, result)))) throw new Error('Instruction scope changed before acknowledgement')
+          } else if (message.method === 'desktop/instructions/state' || message.method === 'desktop/instructions/refresh') {
+            (result as Awaited<ReturnType<typeof handlers.instructions.snapshotReply>>).write(snapshot => send(makeSuccess(message.id, snapshot)))
+          } else send(makeSuccess(message.id, result))
+        }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+      if (["desktop/session/subagents/list", "desktop/session/subagents/history", "desktop/session/subagents/result", "desktop/session/subagents/control"].includes(message.method) && handlers.sessionSubagents) {
         const params = asRecord(message.params)
         try {
           if (typeof params?.sessionId !== "string" || !params.sessionId || params.sessionId.length > 256) throw new Error("Invalid parent session")
@@ -233,7 +287,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           if (message.method.endsWith("/list")) result = await handlers.sessionSubagents.list(params.sessionId)
           else {
             if (typeof params.childSessionId !== "string" || !params.childSessionId || params.childSessionId.length > 256) throw new Error("Invalid child session")
-            if (message.method.endsWith("/history")) {
+            if (message.method.endsWith("/result")) {
+              for (const key of ["offset", "maxBytes"]) if (params[key] !== undefined && (typeof params[key] !== "number" || !Number.isSafeInteger(params[key]) || (params[key] as number) < (key === "offset" ? 0 : 1024) || key === "maxBytes" && (params[key] as number) > 16384)) throw new Error("Invalid child result page")
+              for (const key of ["resultRevision", "refId", "refRevision"]) if (params[key] !== undefined && (typeof params[key] !== "string" || !(params[key] as string).length || (params[key] as string).length > 128)) throw new Error("Invalid child result identity")
+              result = await handlers.sessionSubagents.result(params.sessionId, params.childSessionId, { offset: params.offset as number | undefined, maxBytes: params.maxBytes as number | undefined, resultRevision: params.resultRevision as string | undefined, refId: params.refId as string | undefined, refRevision: params.refRevision as string | undefined })
+            } else if (message.method.endsWith("/history")) {
               if (params.afterSeq !== undefined && (typeof params.afterSeq !== "number" || !Number.isSafeInteger(params.afterSeq) || params.afterSeq < 0)) throw new Error("Invalid history cursor")
               if (params.limit !== undefined && (typeof params.limit !== "number" || !Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > 1000)) throw new Error("Invalid history limit")
               result = await handlers.sessionSubagents.history(params.sessionId, params.childSessionId, { ...(params.afterSeq !== undefined ? { afterSeq: params.afterSeq as number } : {}), ...(params.limit !== undefined ? { limit: params.limit as number } : {}) })
@@ -251,7 +309,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         const params = asRecord(message.params)
         const sessionId = params?.sessionId
         if (typeof sessionId !== "string" || !sessionId || sessionId.length > 128) { send(makeFailure(message.id, INVALID_PARAMS, "Invalid session")); return }
-        if (compacting.has(sessionId) || modelSwitches.has(sessionId)) { send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return }
+        if (compacting.has(sessionId) || modelSwitches.has(sessionId) || forkSources.has(sessionId)) { send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return }
         try {
           const operation = message.method.slice("desktop/session/input/".length)
           let result: unknown
@@ -487,11 +545,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         const sessionId = params?.sessionId
         const action = params?.action
         const navigationOnly = ["pin", "unpin", "read", "unread"].includes(String(action))
-        if (typeof sessionId !== "string" || !sessionId || !["rename", "archive", "restore", "fork", "pin", "unpin", "read", "unread"].includes(String(action))
+        if (typeof sessionId !== "string" || !sessionId || !["rename", "archive", "restore", "pin", "unpin", "read", "unread"].includes(String(action))
           || (action === "rename" && (typeof params?.title !== "string" || !params.title.trim() || params.title.length > 256))) {
           send(makeFailure(message.id, INVALID_PARAMS, "Invalid session management request")); return
         }
-        if (!navigationOnly && (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId))) {
+        if (!navigationOnly && (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId) || forkSources.has(sessionId))) {
           send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return
         }
         const job = handlers.sessions.mutate(sessionId, action as import("./session-management.ts").SessionManagementAction, params?.title as string | undefined)
@@ -518,7 +576,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
       if (message.method.startsWith("desktop/usage/") && handlers.usageStats !== undefined) {
         try { send(makeSuccess(message.id, await usageRequest(handlers.usageStats, message.method, message.params))) }
-        catch { send(makeFailure(message.id, INVALID_PARAMS, "Usage statistics could not be read or saved. Check the filters and local storage.")) }
+        catch(error) { if(error!==null&&typeof error==='object'&&'code' in error&&error.code==='USAGE_UPGRADE_REQUIRED')send(makeFailure(message.id,INVALID_PARAMS,'Update the desktop client to view action and send usage.',{code:'USAGE_UPGRADE_REQUIRED'}));else send(makeFailure(message.id, INVALID_PARAMS, "Usage statistics could not be read or saved. Check the filters and local storage.")) }
         return
       }
       if (message.method === "desktop/provider/directory" && handlers.provider !== undefined) {
@@ -690,21 +748,32 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
 
       send(makeFailure(message.id, METHOD_NOT_FOUND, `unknown method: ${message.method}`))
     },
-    async close() {
-      await handlers.projectContentSearch?.close()
-      if (closed) return
+    close() {
+      if (forkRequestContext.getStore()?.active) return Promise.reject(new Error('Gateway fork callback cannot close its own request'))
+      if (closing) return closing
       closed = true
-      await probes?.close()
-      await Promise.allSettled(modelSwitches.values())
-      for (const controller of compacting.values()) controller.abort()
-      for (const sessionId of activePrompts.keys()) {
-        const id = `desktop-internal-${randomUUID()}`
-        internalIds.add(id)
-        try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
-        finally { internalIds.delete(id) }
-      }
-      await Promise.allSettled([...compactJobs])
-      await base.close()
+      const attempt = (async () => {
+        const failures: unknown[] = []
+        try { await surfaces?.close() } catch(cause) {failures.push(cause)}
+        // Independent auxiliary cleanup cannot skip the original SDK join.
+        try { await handlers.projectContentSearch?.close() } catch (cause) { failures.push(cause) }
+        try { await probes?.close() } catch (cause) { failures.push(cause) }
+        await Promise.allSettled(modelSwitches.values())
+        for (const controller of compacting.values()) controller.abort()
+        for (const sessionId of activePrompts.keys()) {
+          const id = `desktop-internal-${randomUUID()}`
+          internalIds.add(id)
+          try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
+          catch (cause) { failures.push(cause) }
+          finally { internalIds.delete(id) }
+        }
+        await Promise.allSettled([...compactJobs])
+        try { await base.close() } catch (cause) { failures.push(cause) }
+        if (failures.length) throw new AggregateError(failures, 'Gateway router cleanup incomplete')
+      })()
+      closing = attempt
+      void attempt.catch(() => { if (closing === attempt) closing = undefined })
+      return attempt
     },
   }
 }

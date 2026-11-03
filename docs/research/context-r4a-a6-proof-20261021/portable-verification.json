@@ -1,0 +1,272 @@
+{
+  "scope": "Read-only documentation recovery verification: decoded all portable records, compared each length and SHA256 to its immutable original. This is not independent whole-evidence audit or runtime acceptance.",
+  "portableFileSha256": "9afec259828969cdd578087dfe2ed98e23f5adc9f9fd9ce2bbf1437a25055c9f",
+  "count": 53,
+  "originals": [
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\source-final.json",
+      "bytes": 501556,
+      "sha256": "47e638bf851287cfe7fd4523d711e8d507632004cd4f229c758b700eac40833f"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\accepted-owner-reuse.json",
+      "bytes": 775792,
+      "sha256": "d768acb4c60a9c1dc1e964d336fec057f56501772d29e749830a85fe6243136e"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\structural-scope-identities.json",
+      "bytes": 3420,
+      "sha256": "0ef82479559d208ec68cdf2ed688965d56f5dfdcc942a31bb7d7b67ccf7dd952"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\scale-closure-reuse.json",
+      "bytes": 1315,
+      "sha256": "c2b76a47242af3a4ab54d95159f3c467281f1702ed8c9a71a03dcdad4bcada41"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\native-ledger.json",
+      "bytes": 80985,
+      "sha256": "78623cc2002376848d2e2668bb5837ed910a4e82634a0f3ea4b48267247d30fe"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\test-collection.json",
+      "bytes": 7807,
+      "sha256": "1108e0128419a1899408d31a70444a44f6303504bc77e025e71bffb8f647f23b"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\fixed-wire-identities.json",
+      "bytes": 9481,
+      "sha256": "c9c1f4730ac0c11e19efc6198afed116005dbc318b42602af57e45ae6aa23eba"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\fixture-transformations.json",
+      "bytes": 25777,
+      "sha256": "955f916a7b1abb017dfb13877189439bd80e7599272edbd8057e12df5b126c11"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\fan-selector-transformation.json",
+      "bytes": 1349,
+      "sha256": "dc2994f9d1fa78efbb8357c21e9ee5303701cad778f274dc8ce8207ff8fca9b0"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\cli-test-transformation.json",
+      "bytes": 2892,
+      "sha256": "75caa5bcca6f896f9acdddc8c7a57de307eb5470cf1c61265b052e1290520bfa"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\approval-test-transformation.json",
+      "bytes": 3036,
+      "sha256": "67e28d247c99a3f65d13c1b7dec155c69f41dcefae668af18db0aa9c3cb11507"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\context-r4a-evidence-20261018-a\\normal-100mib.mjs",
+      "bytes": 4205,
+      "sha256": "4daa6df4e2ab69bfa67fdd3e10c65d51fba0c87dc3b4b5074d86cacf0c68bfba"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\context-r4a-evidence-20261018-a\\exec-100mib.mjs",
+      "bytes": 12461,
+      "sha256": "158f39e3bac664b4363d1c1587856cbbf4d5e9e83bf5b637e0062e12cf040b42"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\context-r4a-evidence-20261018-a\\child-fan-in-100-v2c.mjs",
+      "bytes": 11854,
+      "sha256": "7f18f9517a77b995ba128ca03ebbe06e91bb64b6d9d3f5b413fbeb5c0e37fb13"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\structural-preflight.md",
+      "bytes": 25432,
+      "sha256": "4420a82af732fabf9aedb1a45473a04d435c8d30f709011cc132d6b4c01036b9"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\structural-ruling.md",
+      "bytes": 6064,
+      "sha256": "233a8ab2f23f4be5d5c2c8399d7eb91cc42d05659179092516d2de48b36c790c"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\sdk-approval-design.md",
+      "bytes": 5294,
+      "sha256": "9c28236c2a6aad00bc2d1a831659e5e7d3e502f93dbb5d3768aca63ae4c41d9f"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\sdk-approval-preflight.md",
+      "bytes": 12862,
+      "sha256": "0ce75e5059344ad9446cff77ece01153eecb97f98a2828cf2012def3b3c3793d"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-B2-marker-race38.mjs",
+      "bytes": 21414,
+      "sha256": "c7ca15669610cb456027cbbcd1e549f2eed8c65099755ba8837cb045a36858fc"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-G5-full-child28.mjs",
+      "bytes": 21365,
+      "sha256": "3fce4ed9b9a03aee8146affd8bd1ff1d5f49c1be7b4214e6244d32aa2cacd0ef"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-original-no-consent18.mjs",
+      "bytes": 20470,
+      "sha256": "c000a06369ba0e84271f062970d199e77ca80edd2beee26a39397fa4f52bc234"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-shell-exit-oracle16.mjs",
+      "bytes": 20284,
+      "sha256": "1e22d0b64a94c36da290e5b419a63cafa23380b6add2d027ca2aec193adff5e4"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\identities.json",
+      "bytes": 4060,
+      "sha256": "8d91ad2bb1edff5a017e9221b93e540d2e6caa99707cde94dc77235a532f53c7"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\original-source-cli-index.ts",
+      "bytes": 55497,
+      "sha256": "877167d27824727775b56415a41b9c99b29fcaa850a241db260420d043c5741b"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\original-wire-current9.test.ts",
+      "bytes": 27624,
+      "sha256": "314e79570d622e0ac582cabc942d504cc447b070a53b2f969bd5a791faccde4c"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\source-sdk-consent-RED30.test.ts",
+      "bytes": 8294,
+      "sha256": "fb73730f1981e8258f88f16176ad717524573b051a770f5f0788384d1e7a100c"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\deny-fallback.mjs",
+      "bytes": 1160,
+      "sha256": "9665d44bb701c0abf837f81ad26bbb5db20b1197d0db90ec84ef25ea9a0b4c33"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\entry-flows.mjs",
+      "bytes": 21623,
+      "sha256": "6e3804cf01d964c1edd56b02b59327e3ca84eb33757a788c751d8ff053d8dc1f"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\exec-1.mjs",
+      "bytes": 14307,
+      "sha256": "5c8538aed1a7e94790fe7b193fcf7d8f6d1b3153161309922da37e31fdb258e7"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\exec-100.mjs",
+      "bytes": 13931,
+      "sha256": "accee7336afbc18fa99706e74f3fe28cb0b6b9503b1b163acc02dfaa87b673ff"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\fan-100.mjs",
+      "bytes": 12960,
+      "sha256": "94a53421e7f4493f32e8fd8e9a6b05535038ca63c115e5655727bc8e48abef16"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\future11.jsonl",
+      "bytes": 394,
+      "sha256": "872bddb049f3a079c0a93f6d1dd9409a5c14472b21d6dac0943b21ef29c818ac"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\legacy8.jsonl",
+      "bytes": 897,
+      "sha256": "9976d0f03e1ab0821d848c8029547423c822544da2a2fc47e2005f2b203c923e"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\legacy9.jsonl",
+      "bytes": 897,
+      "sha256": "0f5053598566c6e731f997492fb04a9c3b58575e28e44d957650cf7c18625472"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-probe.mjs",
+      "bytes": 232,
+      "sha256": "c2d3ec47404a3503a5a5f286b1ac9276af45090dafedde9014e56628776d3b44"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-worker.mjs",
+      "bytes": 378,
+      "sha256": "0f378ab853760462ed1b1e634866351c15f39f4f4b962eee87459a72875086da"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\normal-1.mjs",
+      "bytes": 4644,
+      "sha256": "b9811c0d47a044e37fcd65cda2d140ff66229db56c11202f4453380ccc137d11"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\normal-100.mjs",
+      "bytes": 4652,
+      "sha256": "cf514330c6b4a63c060f180461e67ef54503453f5356aa6bd9ffed358855e0c2"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\result-page-bundle.test.ts",
+      "bytes": 11032,
+      "sha256": "3c95952266a18f25bcf59fb57a49a0bc8d9aa7b91a5e73585e698003d3fa1231"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\sdk-approval-bundle.test.ts",
+      "bytes": 12985,
+      "sha256": "f15e91c669ff1181e7ee2ddc0372a512ec808e69d9d0cd8466a48b2c7f91636e"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\sdk-approval-worker.mjs",
+      "bytes": 246,
+      "sha256": "390cad445b5e5ddf695df6f5efdfb8dcbf04e503c4b90c800cc08e0f9aaf68b9"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\unknown8.jsonl",
+      "bytes": 2618,
+      "sha256": "901cdb01af6b720ff4d4ec2945d6f7e156b7a70910fa43de1775e3f0bb1b3454"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\unknown9.jsonl",
+      "bytes": 2618,
+      "sha256": "8fc1f623efe336c25cea12dcd6de910c864a5334d26e69d47933d6b70aba9153"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\wire-owned.mjs",
+      "bytes": 3006,
+      "sha256": "21d30c9884713b475c82efeab1e7501dc26b15df68c8481f91ef0ef2fc464633"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\run-gate.mjs",
+      "bytes": 6642,
+      "sha256": "b0a95b9ea01cae63a3b67a259d9953259fd308c783134f75cbcdf7b382b65d39"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\run-candidate.mjs",
+      "bytes": 2888,
+      "sha256": "fe27d291f7d331a147c1909e86549bb0bc5fe1e59f1f8e0247311996d07ed9c0"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\runtime-policy.mjs",
+      "bytes": 3713,
+      "sha256": "f41e9b29c16ce04cb19ad7a61104be066e8600b3dd30b0890312638631e50ddc"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\copy-fixtures.mjs",
+      "bytes": 8237,
+      "sha256": "4fac749325e7f716e15cad3d0757637c9b114501d323b3dde1377c0a43002170"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\final-audit.mjs",
+      "bytes": 11484,
+      "sha256": "169d35d0e13e4ebea4b47084263bab166127e92cf9abbc15a0bdaede736eaf7c"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\audit-source-copy.mjs",
+      "bytes": 8858,
+      "sha256": "50186218d5ebefe7aa3e317f8cefe9301acd179de3e82162f5920a2308e156bf"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\archive-variants.mjs",
+      "bytes": 7642,
+      "sha256": "114cd907b37e4b0f3c31a6dd7977dcdee5b9abf2f87604ad71e72f0ab11313e7"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\seal-evidence.mjs",
+      "bytes": 3112,
+      "sha256": "8e98fbc415701cff64ab7d90d476ab690098e12f92a8dac88df88e323a92dbfb"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\final-input-inventory.json",
+      "bytes": 501757,
+      "sha256": "9db007f013b2a2112a73df325ebdfe3946571c39ed7a0c1c5debb76680e183b0"
+    }
+  ]
+}

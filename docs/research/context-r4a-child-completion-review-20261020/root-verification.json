@@ -1,0 +1,155 @@
+{
+  "checkedAt": "2026-10-20T14:49:52.918Z",
+  "base": "fd6177c213b7a8872979f1a3d9d5bd4c2d88a4ac",
+  "testHead": "3c468c70519e1a6b14939102d2ce8defb600664c",
+  "handoffHead": "5de6299c1e57dbdd1cd782b8865a836876897f17",
+  "sealSha256": "e3614c23d660b20d6ce0b56dfb221bcdba328b160398108168864bc9198cb426",
+  "sealedFiles": 43,
+  "sourceFiles": 2559,
+  "sourceManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+  "receipts": [
+    {
+      "name": "qualification-first",
+      "cwd": "D:/I-harness-main/packages/subagent",
+      "command": "pnpm exec vitest run test/followup-settlement.test.ts --maxWorkers 1 --no-file-parallelism",
+      "started": "2026-10-20T14:42:21.1847271+00:00",
+      "ended": "2026-10-20T14:42:25.6482515+00:00",
+      "elapsedSeconds": 4.4635244,
+      "exit": 0,
+      "sourceCount": 2559,
+      "beforeManifestSha256": "da08b10c61710b2153f88c1fc9115cf1c18aecf4c2d40809f13e44832b706c9f",
+      "afterManifestSha256": "da08b10c61710b2153f88c1fc9115cf1c18aecf4c2d40809f13e44832b706c9f",
+      "stable": true,
+      "logSha256": "ebb4aa74809b5560b25e23472e3ec979cf6044e14b4a60d0e428e67665013917",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  2 passed (2)",
+        "   Duration  1.40s (transform 791ms, setup 0ms, collect 1.17s, tests 10ms, environment 0ms, prepare 79ms)"
+      ]
+    },
+    {
+      "name": "tools-final",
+      "cwd": "D:/I-harness-main/packages/subagent",
+      "command": "pnpm exec vitest run test/tools.test.ts --maxWorkers 1 --no-file-parallelism",
+      "started": "2026-10-20T14:42:48.5507260+00:00",
+      "ended": "2026-10-20T14:42:53.7216318+00:00",
+      "elapsedSeconds": 5.1709058,
+      "exit": 1,
+      "sourceCount": 2559,
+      "beforeManifestSha256": "679f4dc2e0690b2a3e09176f19cec6dd249c25af5bf2c8b857a79e602722f324",
+      "afterManifestSha256": "679f4dc2e0690b2a3e09176f19cec6dd249c25af5bf2c8b857a79e602722f324",
+      "stable": true,
+      "logSha256": "ea3d6469b15d6202a6c1222cdb674f0162048ee4227bdf2d979b1705f48904ed",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  2 failed | 67 passed (69)",
+        "   Duration  4.60s (transform 1.40s, setup 0ms, collect 2.17s, tests 2.21s, environment 0ms, prepare 80ms)"
+      ]
+    },
+    {
+      "name": "tools-qualified",
+      "cwd": "D:/I-harness-main/packages/subagent",
+      "command": "pnpm exec vitest run test/tools.test.ts --maxWorkers 1 --no-file-parallelism",
+      "started": "2026-10-20T14:43:23.1265565+00:00",
+      "ended": "2026-10-20T14:43:28.2185087+00:00",
+      "elapsedSeconds": 5.0919522,
+      "exit": 0,
+      "sourceCount": 2559,
+      "beforeManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "afterManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "stable": true,
+      "logSha256": "c7f73fadb52b64227ff3a5b025ab5fe67d71c22bba7e1afc079ce49b2df44a6c",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  69 passed (69)",
+        "   Duration  4.51s (transform 1.39s, setup 0ms, collect 2.12s, tests 2.15s, environment 0ms, prepare 76ms)"
+      ]
+    },
+    {
+      "name": "settlement-qualified",
+      "cwd": "D:/I-harness-main/packages/subagent",
+      "command": "pnpm exec vitest run test/followup-settlement.test.ts --maxWorkers 1 --no-file-parallelism",
+      "started": "2026-10-20T14:43:36.1922201+00:00",
+      "ended": "2026-10-20T14:43:38.1760107+00:00",
+      "elapsedSeconds": 1.9837906,
+      "exit": 0,
+      "sourceCount": 2559,
+      "beforeManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "afterManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "stable": true,
+      "logSha256": "44514cf4a17d87a5e2e1e589b49af94e7bbabbf1b41af09c32ca83b22e5c3511",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  2 passed (2)",
+        "   Duration  1.43s (transform 807ms, setup 0ms, collect 1.21s, tests 11ms, environment 0ms, prepare 77ms)"
+      ]
+    },
+    {
+      "name": "native-qualified",
+      "cwd": "D:/I-harness-main/packages/subagent",
+      "command": "pnpm exec vitest run test/native-outcomes.test.ts --maxWorkers 1 --no-file-parallelism",
+      "started": "2026-10-20T14:43:45.6478988+00:00",
+      "ended": "2026-10-20T14:43:48.4292055+00:00",
+      "elapsedSeconds": 2.7813067,
+      "exit": 0,
+      "sourceCount": 2559,
+      "beforeManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "afterManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "stable": true,
+      "logSha256": "71c93cbcb2ec90505872c6c926e95982293c3954d3c1e6b6a357f6eaf2aba6a3",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  1 passed (1)",
+        "   Duration  2.23s (transform 1.30s, setup 0ms, collect 1.99s, tests 19ms, environment 0ms, prepare 77ms)"
+      ]
+    },
+    {
+      "name": "retained-owners-qualified",
+      "cwd": "D:/I-harness-main/packages/subagent",
+      "command": "pnpm exec vitest run test/retained-task-body.test.ts test/retained-task-negative.test.ts test/retained-task-cold.test.ts test/managed-job-facts.test.ts test/task-protocol.test.ts test/generation-actions.test.ts --maxWorkers 1 --no-file-parallelism",
+      "started": "2026-10-20T14:44:00.1559913+00:00",
+      "ended": "2026-10-20T14:44:07.4664223+00:00",
+      "elapsedSeconds": 7.310431,
+      "exit": 0,
+      "sourceCount": 2559,
+      "beforeManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "afterManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "stable": true,
+      "logSha256": "bf6deaed838ddaa6696c4eaf2d461359aad48f2703118f9faec3f14235b7890a",
+      "summary": [
+        " Test Files  6 passed (6)",
+        "      Tests  31 passed (31)",
+        "   Duration  6.76s (transform 1.54s, setup 0ms, collect 3.27s, tests 2.30s, environment 1ms, prepare 417ms)"
+      ]
+    },
+    {
+      "name": "types-qualified",
+      "cwd": "D:/I-harness-main/packages/subagent",
+      "command": "pnpm exec tsc --noEmit",
+      "started": "2026-10-20T14:44:13.8381811+00:00",
+      "ended": "2026-10-20T14:44:18.5744846+00:00",
+      "elapsedSeconds": 4.7363035,
+      "exit": 0,
+      "sourceCount": 2559,
+      "beforeManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "afterManifestSha256": "e7c9d9b27b0c7ec6feee3fc16a5a9b29f4390e921f7f672e968ec5e7761d4cb8",
+      "stable": true,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    }
+  ],
+  "qualifiedReceipts": [
+    "tools-qualified",
+    "settlement-qualified",
+    "native-qualified",
+    "retained-owners-qualified",
+    "types-qualified"
+  ],
+  "historicalRawSha256": "eaa659fdb695243f3c80b0f248a271c25e21fad4250d6b03c82c15a7a85e6e69",
+  "changed": [
+    "docs/research/2026-10-20-context-r4a-child-completion-delivery.md",
+    "packages/subagent/test/followup-settlement.test.ts",
+    "packages/subagent/test/tools.test.ts"
+  ],
+  "failures": []
+}

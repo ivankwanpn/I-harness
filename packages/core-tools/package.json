@@ -5,7 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./context-remaining": "./src/context-remaining.ts"
+    "./context-remaining": "./src/context-remaining.ts",
+    "./internal/task-caller": "./src/task-caller.ts",
+    "./internal/workflow-origin": "./src/workflow-origin.ts",
+    "./internal/team-caller": "./src/team-caller.ts",
+    "./internal/code-origin": "./src/code-origin.ts",
+    "./model-origin": "./src/model-origin.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -16,6 +21,7 @@
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-session": "workspace:*",
+    "@i-harness/llm-seam": "workspace:*",
     "@i-harness/token-meter": "workspace:*"
   },
   "devDependencies": {

@@ -1,0 +1,54 @@
+{
+  "observedAt": "2026-10-23T23:48:55.7245842+00:00",
+  "head": "3aeda4f25cf916f560351fd4738294c01d5faa96",
+  "sourceMatches": [
+    {
+      "path": "packages/session-executor/src/service.ts",
+      "reviewed": "6a86046b29a51116ca0d79e97a9563b95b9b6faa",
+      "integrated": "6a86046b29a51116ca0d79e97a9563b95b9b6faa",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/context-recovery.test.ts",
+      "reviewed": "851c00b8b759d6b32085c5e2d65d649c092ce55d",
+      "integrated": "851c00b8b759d6b32085c5e2d65d649c092ce55d",
+      "match": true
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/fact-types.ts",
+      "reviewed": "907fe3fcb60d9a15c09251888df13fe54167900d",
+      "integrated": "907fe3fcb60d9a15c09251888df13fe54167900d",
+      "match": true
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/managed-document.ts",
+      "reviewed": "6e56e3577927e316778e350e81d7092054ac0207",
+      "integrated": "6e56e3577927e316778e350e81d7092054ac0207",
+      "match": true
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/settlement-source.ts",
+      "reviewed": "0fed651be16f64cff5501b7283e0bbd5443e777e",
+      "integrated": "0fed651be16f64cff5501b7283e0bbd5443e777e",
+      "match": true
+    },
+    {
+      "path": "packages/session-persistence/test/managed-fact-batch.test.ts",
+      "reviewed": "09e47301f2d32b711a278c8107aa9e5dea76981d",
+      "integrated": "09e47301f2d32b711a278c8107aa9e5dea76981d",
+      "match": true
+    }
+  ],
+  "status": [],
+  "gate": {
+    "files": 5,
+    "typecheckExit": 0,
+    "failed": 0,
+    "passed": 48,
+    "exit": 0
+  },
+  "logs": [
+    "schedule-service-combined.txt",
+    "executor-typecheck.txt"
+  ]
+}

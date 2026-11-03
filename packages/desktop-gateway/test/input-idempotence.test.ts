@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -41,7 +42,7 @@ it("rejects same-token retry while admission flush still fails, then durably sch
   const coordinator = createSessionCoordinator({ ...backend, append }, { maxDelayMs: 60000 })
   await coordinator.create({ sessionId: "s" })
   const stream = vi.fn(async function* () { yield { type: "text/chunk" as const, text: "fixture result" }; yield { type: "end" as const } })
-  const service = createSessionService({ workspace: root, coordinator, model: { stream }, sessionFor: createDurableSessionLoader(coordinator) })
+  const service = createSessionService({ workspace: root, coordinator, model: controlledModel(request => ({ stream } as import('@i-harness/llm-seam').ModelClient).stream(request)), sessionFor: createDurableSessionLoader(coordinator) })
   const input = createDesktopInput(coordinator, service)
   const raw = { text: "retain until durable", delivery: "queue" as const, clientToken: "flush-retry-token-123" }
   try {

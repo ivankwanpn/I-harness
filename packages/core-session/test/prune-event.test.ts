@@ -1,5 +1,6 @@
+import { deriveMessagesUpTo } from '../src/projection/messages.ts'
 import { describe, expect, it } from "vitest"
-import { createSession, append, deriveMessages, deriveMessagesUpTo, type LLMMessage } from "../src/index.ts"
+import { createSession, append, deriveMessages, type LLMMessage } from "../src/index.ts"
 
 // M33: model-free prune pass — `compaction/prune` shadow projection. The raw
 // log is NEVER rewritten; deriveMessages substitutes the pruned tool/result

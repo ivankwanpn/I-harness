@@ -1,0 +1,29 @@
+{
+  "base": "03a97a3ea6bb00fc15197ade19761000982b3e52",
+  "head": "0d82ecf432bd109d2341083ad220a366c53eb2f2",
+  "observedAt": "2026-10-24T10:18:17.790Z",
+  "present": 10,
+  "deleted": 2,
+  "unchangedBodies": 170,
+  "copies": 5,
+  "artifacts": 6,
+  "commandExits": 22,
+  "reachability": {
+    "before": 404,
+    "after": 399,
+    "added": [],
+    "removed": [
+      "unused-export\t@i-harness/instructions#InstructionsConfig\tpackages/instructions/src/index.ts",
+      "unused-export\t@i-harness/instructions#DEFAULT_INSTRUCTIONS_MAX_BYTES\tpackages/instructions/src/index.ts",
+      "unused-export\t@i-harness/instructions#createInstructionsSection\tpackages/instructions/src/index.ts",
+      "unused-export\t@i-harness/instructions#discoverInstructionPaths\tpackages/instructions/src/index.ts",
+      "unused-export\t@i-harness/runtime-context#installRuntimeContext\tpackages/runtime-context/src/index.ts"
+    ]
+  },
+  "failures": [],
+  "limits": [
+    "Selected recorded files and body comparisons only; not an entire dependency graph or packaged runtime attestation.",
+    "Physical hashes and LF-canonical Git comparisons are separate checks.",
+    "No tests or builds rerun; existing receipts checked, original failures retained."
+  ]
+}

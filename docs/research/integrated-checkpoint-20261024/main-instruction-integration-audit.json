@@ -1,0 +1,393 @@
+{
+  "observedAt": "2026-10-24T04:21:36.1730253+00:00",
+  "head": "4c0ccf412a309e0100b8a7ecf07373274450a2f2",
+  "reviewed": "3e5c8c413b8d10280cac6eded3663ec3b80eb3c9",
+  "files": [
+    {
+      "path": "apps/cli/src/index.ts",
+      "reviewed": "617fc3ea23d78a0703a2ecad46508bd0c2d73577",
+      "integrated": "617fc3ea23d78a0703a2ecad46508bd0c2d73577",
+      "match": true
+    },
+    {
+      "path": "apps/cli/src/provider-runtime.ts",
+      "reviewed": "4f2316e0aa4230ae2d20691b572353a2a73da5be",
+      "integrated": "4f2316e0aa4230ae2d20691b572353a2a73da5be",
+      "match": true
+    },
+    {
+      "path": "apps/cli/src/run.ts",
+      "reviewed": "6315593876117897a928fe10fc16d43710238f94",
+      "integrated": "6315593876117897a928fe10fc16d43710238f94",
+      "match": true
+    },
+    {
+      "path": "apps/cli/test/context-instructions.test.ts",
+      "reviewed": "06e51eb947f0ba1e55cfb3c86cdf671cc491337a",
+      "integrated": "06e51eb947f0ba1e55cfb3c86cdf671cc491337a",
+      "match": true
+    },
+    {
+      "path": "apps/cli/test/main-instruction-entries.test.ts",
+      "reviewed": "43f9c6d7db1a90ecfcd3b780490114cb9e7d5df6",
+      "integrated": "43f9c6d7db1a90ecfcd3b780490114cb9e7d5df6",
+      "match": true
+    },
+    {
+      "path": "apps/cli/test/sdk-approval.test.ts",
+      "reviewed": "2a2d36ece890b0ca29f1c1a4313b01f498641a61",
+      "integrated": "2a2d36ece890b0ca29f1c1a4313b01f498641a61",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/acceptance-settlement.ts",
+      "reviewed": "862740f40f4509bd2ac977c873c06501e321ece5",
+      "integrated": "862740f40f4509bd2ac977c873c06501e321ece5",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/admission.ts",
+      "reviewed": "56a811490bc826af4be14272806087d169334a37",
+      "integrated": "56a811490bc826af4be14272806087d169334a37",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/context-reduction/bridge.ts",
+      "reviewed": "89f6e42f49a1706d5358b0a41ecd9bef055cecd3",
+      "integrated": "89f6e42f49a1706d5358b0a41ecd9bef055cecd3",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/context-reduction/composition.ts",
+      "reviewed": "a370bacdc54aa822cb8dc3a404c858d4638259e8",
+      "integrated": "a370bacdc54aa822cb8dc3a404c858d4638259e8",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/context-reduction/instruction-lease.ts",
+      "reviewed": "39d5333ed26f1a99711ac433bffc97d0cb688d83",
+      "integrated": "39d5333ed26f1a99711ac433bffc97d0cb688d83",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/context-reduction/publication.ts",
+      "reviewed": "a9a2d1f58e12e545c1d04f17bfa1d2027a57168e",
+      "integrated": "a9a2d1f58e12e545c1d04f17bfa1d2027a57168e",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/context.ts",
+      "reviewed": "2a61661678351c2dec56d6be7ab5f79364370aec",
+      "integrated": "2a61661678351c2dec56d6be7ab5f79364370aec",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/current-representability.ts",
+      "reviewed": "1c4d0b6ee7b43cd79137d5047b3076e19c1e95f0",
+      "integrated": "1c4d0b6ee7b43cd79137d5047b3076e19c1e95f0",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/dependencies.ts",
+      "reviewed": "64cfd1e3773166804a061f2736103d1c1a22faa6",
+      "integrated": "64cfd1e3773166804a061f2736103d1c1a22faa6",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/exchange.ts",
+      "reviewed": "cdbafc72dcd37004c04a658f5f1c349183bd353b",
+      "integrated": "cdbafc72dcd37004c04a658f5f1c349183bd353b",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/finalization.ts",
+      "reviewed": "06f2c017d6e592a5909b6b648daad872cb8bb28b",
+      "integrated": "06f2c017d6e592a5909b6b648daad872cb8bb28b",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/request-context.ts",
+      "reviewed": "586842e3e8d3300c1efecee4bcc427e088d35150",
+      "integrated": "586842e3e8d3300c1efecee4bcc427e088d35150",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/request-snapshot.ts",
+      "reviewed": "012858fd1d3248e2c7ba9c3e504ad6b9f865a2de",
+      "integrated": "012858fd1d3248e2c7ba9c3e504ad6b9f865a2de",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/response.ts",
+      "reviewed": "acc7c5e31a63f951b274ee382e64bb11b7d6e404",
+      "integrated": "acc7c5e31a63f951b274ee382e64bb11b7d6e404",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/turn.ts",
+      "reviewed": "3a2d2594d1cab9786e51f52334959b51dbc84daa",
+      "integrated": "3a2d2594d1cab9786e51f52334959b51dbc84daa",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/types.ts",
+      "reviewed": "147ce9af4078ba3b67229aae56c253f6ee33ddea",
+      "integrated": "147ce9af4078ba3b67229aae56c253f6ee33ddea",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/agent/unstarted-call-settlement.ts",
+      "reviewed": "059dac19a82cdd5b5683ba0a4211db95958093da",
+      "integrated": "059dac19a82cdd5b5683ba0a4211db95958093da",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/src/index.ts",
+      "reviewed": "ebf5ccffe7c10756f3d21feeb9dd790684ef4d4a",
+      "integrated": "ebf5ccffe7c10756f3d21feeb9dd790684ef4d4a",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/test/current-representability.test.ts",
+      "reviewed": "7e34eba2538443c3b1c7549802b950bfdf2e1250",
+      "integrated": "7e34eba2538443c3b1c7549802b950bfdf2e1250",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/test/instruction-reduction.test.ts",
+      "reviewed": "f4fc49945f2d24a4813f4430f1e3576bc60d7676",
+      "integrated": "f4fc49945f2d24a4813f4430f1e3576bc60d7676",
+      "match": true
+    },
+    {
+      "path": "packages/core-agent/test/instruction-request-context.test.ts",
+      "reviewed": "260539ba3419d6c65af6d21c02637d28e45cb9b6",
+      "integrated": "260539ba3419d6c65af6d21c02637d28e45cb9b6",
+      "match": true
+    },
+    {
+      "path": "packages/desktop-gateway/package.json",
+      "reviewed": "bc9f739d98c9e61ae5273b157a9502f87e1d322d",
+      "integrated": "bc9f739d98c9e61ae5273b157a9502f87e1d322d",
+      "match": true
+    },
+    {
+      "path": "packages/desktop-gateway/src/host.ts",
+      "reviewed": "e578c5f38ad47ed0a3b8ff59148d9ef850f10d1b",
+      "integrated": "e578c5f38ad47ed0a3b8ff59148d9ef850f10d1b",
+      "match": true
+    },
+    {
+      "path": "packages/desktop-gateway/test/main-instruction-host.test.ts",
+      "reviewed": "32de752acc61e1dbb2f943cd01fad4595e415a47",
+      "integrated": "32de752acc61e1dbb2f943cd01fad4595e415a47",
+      "match": true
+    },
+    {
+      "path": "packages/fs/src/index.ts",
+      "reviewed": "fd910470f403e2b57b0af6162da5362aae4aa374",
+      "integrated": "fd910470f403e2b57b0af6162da5362aae4aa374",
+      "match": true
+    },
+    {
+      "path": "packages/fs/src/range-read.ts",
+      "reviewed": "4f619ab0ee7a4b27450fd950ec316ac200c6c4d1",
+      "integrated": "4f619ab0ee7a4b27450fd950ec316ac200c6c4d1",
+      "match": true
+    },
+    {
+      "path": "packages/fs/test/instruction-scope.test.ts",
+      "reviewed": "9de53a9d0cc5cf5805ac28d6faa1e1dd75c5b9ae",
+      "integrated": "9de53a9d0cc5cf5805ac28d6faa1e1dd75c5b9ae",
+      "match": true
+    },
+    {
+      "path": "packages/instructions/src/service.ts",
+      "reviewed": "745d2ee207c3a873fbd432e67f40c419206f8e2d",
+      "integrated": "745d2ee207c3a873fbd432e67f40c419206f8e2d",
+      "match": true
+    },
+    {
+      "path": "packages/runtime-context/src/index.ts",
+      "reviewed": "d9ff32e0b20f9e0bf812c9d0dd2ac6401b85d43c",
+      "integrated": "d9ff32e0b20f9e0bf812c9d0dd2ac6401b85d43c",
+      "match": true
+    },
+    {
+      "path": "packages/runtime-context/test/original-disposition.test.ts",
+      "reviewed": "d2f338c00ae4765f9db3a07c3696baa555896393",
+      "integrated": "d2f338c00ae4765f9db3a07c3696baa555896393",
+      "match": true
+    },
+    {
+      "path": "packages/runtime-context/test/publication-lifetime.test.ts",
+      "reviewed": "ac4b6f2b2eb8d17a060f212733c6ba3acfe8fd0f",
+      "integrated": "ac4b6f2b2eb8d17a060f212733c6ba3acfe8fd0f",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/package.json",
+      "reviewed": "cdcf18c5bf83a0ffa759cd88f09b276f2a792b17",
+      "integrated": "cdcf18c5bf83a0ffa759cd88f09b276f2a792b17",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/assembly.ts",
+      "reviewed": "990c05d4a1558f3281aadf85480bcb8584ae845f",
+      "integrated": "990c05d4a1558f3281aadf85480bcb8584ae845f",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/context/instructions/contracts.ts",
+      "reviewed": "cce05a6f3b88b895e2f14155ff0db5cd849e8d28",
+      "integrated": "cce05a6f3b88b895e2f14155ff0db5cd849e8d28",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/context/instructions/host.ts",
+      "reviewed": "7cda148d137c8637f2b0cb88890c26748fb77b74",
+      "integrated": "7cda148d137c8637f2b0cb88890c26748fb77b74",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/context/instructions/index.ts",
+      "reviewed": "de21d75dbdb5651d72808daa0a0c26d67705ea9e",
+      "integrated": "de21d75dbdb5651d72808daa0a0c26d67705ea9e",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/context/instructions/manager.ts",
+      "reviewed": "eaa5ee2d4932d48aa7344a521c75dfed561b9a32",
+      "integrated": "eaa5ee2d4932d48aa7344a521c75dfed561b9a32",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/context/instructions/policy.ts",
+      "reviewed": "e5cd818ed4473c012ed8fccb3379c49ea0ce08e3",
+      "integrated": "e5cd818ed4473c012ed8fccb3379c49ea0ce08e3",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/context/instructions/targets.ts",
+      "reviewed": "a377e414d45890f4340b1b7e82ef3ea2afb4777f",
+      "integrated": "a377e414d45890f4340b1b7e82ef3ea2afb4777f",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/context/instructions/views.ts",
+      "reviewed": "3e653354f4a27fcd515f863d13fc9255bec66051",
+      "integrated": "3e653354f4a27fcd515f863d13fc9255bec66051",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/index.ts",
+      "reviewed": "5faa2f0592bd272db81ee276dac6c8bb93876b7f",
+      "integrated": "5faa2f0592bd272db81ee276dac6c8bb93876b7f",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/src/service.ts",
+      "reviewed": "a9e758b5d917822675049834324792733ac651c4",
+      "integrated": "a9e758b5d917822675049834324792733ac651c4",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-construction.test.ts",
+      "reviewed": "e6f4f3b36ce384888a5e7421e786fe3a85ab90f8",
+      "integrated": "e6f4f3b36ce384888a5e7421e786fe3a85ab90f8",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-freshness.test.ts",
+      "reviewed": "5d93fd5360ea4d00ca7b0785d6497d70e4e030d3",
+      "integrated": "5d93fd5360ea4d00ca7b0785d6497d70e4e030d3",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-host-lifetime.test.ts",
+      "reviewed": "0630ecf6b4b3fc1d0658d69169423fd1dbdcc432",
+      "integrated": "0630ecf6b4b3fc1d0658d69169423fd1dbdcc432",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-lifetimes.test.ts",
+      "reviewed": "8cf19aad9e7108da9121e5bba3c4e9212c4bf794",
+      "integrated": "8cf19aad9e7108da9121e5bba3c4e9212c4bf794",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-order.test.ts",
+      "reviewed": "ab2e37edc1aac36175e1ab3f5edcf75d4d41f11e",
+      "integrated": "ab2e37edc1aac36175e1ab3f5edcf75d4d41f11e",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-policy.test.ts",
+      "reviewed": "4e50eb12701713965c31d6c5af520b082b8a5388",
+      "integrated": "4e50eb12701713965c31d6c5af520b082b8a5388",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-publication-submit.test.ts",
+      "reviewed": "3530dead5d4cda62977df94e74c7b5645f927f20",
+      "integrated": "3530dead5d4cda62977df94e74c7b5645f927f20",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-publication.test.ts",
+      "reviewed": "c73ab9ad006611e90a9e74a236f037d46e331e92",
+      "integrated": "c73ab9ad006611e90a9e74a236f037d46e331e92",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-raw-precedence.test.ts",
+      "reviewed": "74d87e2d2b92593626a37d064a4f1268a2fa36a9",
+      "integrated": "74d87e2d2b92593626a37d064a4f1268a2fa36a9",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-read-scope.test.ts",
+      "reviewed": "060a9df5cec0e5335ddead93f7b5e5a9269a92cf",
+      "integrated": "060a9df5cec0e5335ddead93f7b5e5a9269a92cf",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-selection.test.ts",
+      "reviewed": "b3db303c4f430564f0dfb0c5caa20a9f24371f6a",
+      "integrated": "b3db303c4f430564f0dfb0c5caa20a9f24371f6a",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-source-close.test.ts",
+      "reviewed": "ce7e9d8f25443eb219543f9aeb10b1081c4c7c3f",
+      "integrated": "ce7e9d8f25443eb219543f9aeb10b1081c4c7c3f",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-targets.test.ts",
+      "reviewed": "94d088b927b1469f0afe9b1cce6296d4847ce167",
+      "integrated": "94d088b927b1469f0afe9b1cce6296d4847ce167",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instructions.test.ts",
+      "reviewed": "d42df062bee8dc9c844272d18fe4532458f1c4e7",
+      "integrated": "d42df062bee8dc9c844272d18fe4532458f1c4e7",
+      "match": true
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "reviewed": "e70e0fc212da372ded45950b2364cae5aedc7a01",
+      "integrated": "e70e0fc212da372ded45950b2364cae5aedc7a01",
+      "match": true
+    }
+  ],
+  "status": [],
+  "gates": {
+    "executorTests": 82,
+    "cliTypeExit": 0,
+    "executorTypeExit": 0,
+    "executorExit": 0,
+    "executorFiles": 6
+  }
+}

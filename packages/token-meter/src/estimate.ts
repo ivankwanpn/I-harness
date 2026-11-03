@@ -1,3 +1,4 @@
+import { stringifyJsonData } from "@i-harness/core-session"
 import type { LLMMessage } from "@i-harness/core-session"
 
 // M15: dsh-style fixed-density heuristics. `estimateMessage` prices one
@@ -23,9 +24,9 @@ export function estimateMessage(m: LLMMessage): number {
       total += Math.ceil(m.content.length / CHARS_PER_TOKEN) + BLOCK_OVERHEAD
     }
     for (const call of m.toolCalls ?? []) {
-      // JSON.stringify(undefined) returns undefined, not a string — normalize
+      // stringifyJsonData(undefined) returns undefined, not a string — normalize
       // so the "as the wire would send it" pricing never sees NaN.
-      const argsJson = JSON.stringify(call.args) ?? ""
+      const argsJson = stringifyJsonData(call.args) ?? ""
       total += Math.ceil(call.name.length / CHARS_PER_TOKEN)
         + Math.ceil(argsJson.length / CHARS_PER_TOKEN)
         + BLOCK_OVERHEAD

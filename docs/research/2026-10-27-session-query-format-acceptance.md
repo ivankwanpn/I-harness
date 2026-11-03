@@ -1,0 +1,13 @@
+# Readonly managed query compatibility — limited acceptance
+
+Actual supported managed journals now reach canonical logical-event decoding instead of inserting session/fact-batch carriers into SQLite with undefined event_type. Inherited V1/V2 conversation text is searchable through the shared core normalizer without indexing passive CodeStore, native transport or artifact bodies.
+
+Reviewed donor range:1af3c7ab275e4d3327e344dac45e015bca3a7566..f58547351b90b0934d682bb697f54dfc8db0ed2d, through7f0c56e7/6201b40f/f5854735. Root integrated2c25e524/259d4daa/d82f7596. Independent session_query_formats_review_sol_20261027 requested an owned-cache projection correction and exact image-byte metadata; same reviewer closed both with no new findings.
+
+The query preserves actual semanticSeed/subagentProtocolVersion header scope, validates supported managed formats6..current through original readFactJournal, rejects invalid/future sources and keeps exact valid-prefix/torn/CRLF behavior. Source observation never repairs or writes session/stage bytes. The shared seed-group normalizer uses visible content, bounded projected results, call names/arguments and image metadata only; no query-specific history walker or private-body fetch was added.
+
+Canonical validation also accepts a complete semantic history in a correctly digested inherited prefix. Although no ordinary writer path was established, this is a real supported-reader-domain counterexample to the initial no-old-cache rationale. Existing owned cache version3 rebuilds the prior version2 projection transactionally on reopen, preserving foreign/future refusal and rollback. It does not fence an already-running old process. The regression is explicitly a literal historical index fixture. Padding-aware image summaries report16/1/2/3 bytes; historical raw image behavior remains unchanged.
+
+Root matched all8 declared Git/hash identities and exact changed-file set. On fixed MAINd82f7596192d3078a300f5b248b1072a5b78bf03, actual26 core search tests and84 query tests passed; core/query typechecks also passed. Genuine V1/V2 controls preserve source/stage hashes and revision metadata. Other combined public fork/provider tests and types passed separately; populations are not additive. Evidence: own SDD task-1-report.md/task-1-review-fixes.md/reviews and `.superpowers/public-query-integration-20261027/receipt.json`/logs. Source hashes stayed stable.
+
+This closes the query package task. HOST Gateway C must still consume the exact reviewed commits and rerun its affected original search/delete positive; this report is not Gateway, packaging or whole-release acceptance. Productrc.1/Session13; only the owned derived index version changes.

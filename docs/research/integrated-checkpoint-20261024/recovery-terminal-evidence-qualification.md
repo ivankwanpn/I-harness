@@ -1,0 +1,9 @@
+# P2 evidence qualification after independent review
+
+The immutable implementation handoff at fc113394 used the phrase "actual warm/cold continuation" for the borrowed service concurrent-close control (report lines3/76). Independent review and root inspection of `packages/session-executor/test/context-recovery.test.ts` confirm that both continuation iterations construct a new coordinator and service over the same durable store. The earlier host and coordinator were deliberately closed. The control therefore proves **two real fresh-host reopens**, not a followup on the original still-open service.
+
+The direct managed Agent matrix separately proves a same-Agent warm followup and a disk-cold continuation. That is evidence for those actual owners only; it must not be promoted into proof of unchanged service.submit warm recovery. No existing receipt or its report/source hash is rewritten. This qualification supersedes the broader wording in the original handoff and root's intermediate progress messages.
+
+The borrowed-ingress contract's concurrent host-close scenario requires original receipt reconciliation, terminal generation facts, ordered original results/classification/end facts, and real reopening without replay. Those observations remain supported. Same-service continuation after uncertain acceptance without closing that service remains a distinct connected validation obligation; it is not established by these two reopen iterations and is not waived for whole-version delivery. This note changes no product, schema, management API, test expectation or authority.
+
+Root's source/evidence audit separately matched all41 current source files, their preserved copies and committed Git blobs; all82 indexed receipt hashes/command headers matched. Those integrity checks do not expand the behavioral coverage of a test.

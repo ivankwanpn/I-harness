@@ -1,3 +1,6 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
+import { controlledModel } from "./controlled-model.ts"
 import { describe, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
@@ -23,11 +26,11 @@ function deferred() {
 function modelFixture(script: MockStep[]) {
   const requests: LLMRequest[] = [], next = deferred()
   const mock = createMockClient(script)
-  const model: ModelClient = { async *stream(request) {
+  const model: ModelClient = controlledModel(async function* (request) {
     requests.push(request)
     if (requests.length === 2) next.resolve()
     yield* mock.stream(request)
-  } }
+  })
   return { model, requests, next, script }
 }
 
@@ -38,8 +41,11 @@ async function untilStarted(control: ReturnType<typeof deferred>) {
 }
 
 function results(assembly: SessionAssembly, name: string) {
-  return assembly.session.events.filter(event => event.type === "tool/result" && event.name === name)
-    .map(event => event as { callId: string; output: Record<string, unknown> })
+  return assembly.session.events.filter(event => event.type === "tool/result").filter(event => event.name === name)
+    .map(event => {
+      if (event.envelope && event.envelope.retention.kind !== 'inline') throw new Error('Expected actual inline tool result in steering fixture')
+      return { callId: event.callId, output: event.envelope?.retention.kind === 'inline' ? event.envelope.retention.value : event.output } as { callId: string; output: Record<string, unknown> }
+    })
 }
 
 async function dispatched(assembly: SessionAssembly, name: string) {
@@ -55,15 +61,15 @@ function assertAdmission(assembly: SessionAssembly, inputId: string, request: LL
 describe("real assembly: steering releases observation and preserves the producer", () => {
   it.each(["foreground", "target", "all", "tasks", "subagent-job"] as const)("%s child wait lets the parent turn end, then a later turn retrieves the same work", async family => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-child-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+    const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
     await coordinator.create({ sessionId: "parent" })
     const started = deferred(), release = deferred()
     let childCalls = 0, childFinished = 0, aborts = 0
-    const child: ModelClient = { async *stream(request) {
+    const child: ModelClient = controlledModel(async function* (request) {
       childCalls++; request.signal?.addEventListener("abort", () => { aborts++ }, { once: true })
       started.resolve(); await release.promise; childFinished++
       yield { type: "text/chunk", text: "original child result" }; yield { type: "end" }
-    } }
+    })
     const fixture = modelFixture([])
     const assembly = await createSessionAssembly({ workspace: root, sessionId: "parent", coordinator, model: fixture.model,
       approveAll: true, sandbox: "danger-full-access", pluginAgents: [{ name: "probe", description: "Controlled child", systemPrompt: "Complete the fixture", tools: [] }],
@@ -159,7 +165,7 @@ describe("real assembly: steering releases observation and preserves the produce
       expect(JSON.stringify(final)).not.toContain('"text":"before"')
       expect(assembly.session.events.filter(event => event.type === "code/call" && event.name === "held_read")).toHaveLength(1)
       const invocation = assembly.session.events.find(event => event.type === "code/call" && event.name === "held_read")!
-      expect(assembly.session.events.filter(event => event.type === "code/result")).toEqual([expect.objectContaining({ cellId: id, callId: "callId" in invocation ? invocation.callId : undefined, name: "held_read", output: "original nested result" })])
+      expect(assembly.session.events.filter(event => event.type === "code/result")).toEqual([expect.objectContaining({ cellId: id, callId: "callId" in invocation ? invocation.callId : undefined, name: "held_read", envelope: expect.objectContaining({ retention: expect.objectContaining({ kind: 'inline', value: 'original nested result' }) }) })])
       expect(assembly.session.events.filter(event => event.type === "tool/result" && event.callId === observation.callId)).toHaveLength(1)
       expect(calls).toBe(1); expect(aborts).toBe(0); expect(assembly.liveResources!().codeCells).toEqual([])
     } finally { release.resolve(); executor.dispose(); await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
@@ -168,10 +174,10 @@ describe("real assembly: steering releases observation and preserves the produce
   it("closing the real child releases a long target observation and retains its original task result", async () => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-child-close-")), release = deferred()
     let childCalls = 0, aborts = 0
-    const child: ModelClient = { async *stream(request) {
+    const child: ModelClient = controlledModel(async function* (request) {
       childCalls++; request.signal?.addEventListener("abort", () => { aborts++; release.resolve() }, { once: true })
       await release.promise; yield { type: "text/chunk", text: "closed producer" }; yield { type: "end" }
-    } }
+    })
     const fixture = modelFixture([{ role: "assistant", toolCalls: [{ name: "wait_agent", args: { target: "root/held", timeout_ms: 300_000 } }] }, { role: "assistant", text: "closed child observed" }])
     const assembly = await createSessionAssembly({ workspace: root, sessionId: "parent", model: fixture.model, sandbox: "danger-full-access", approveAll: true,
       allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "fixture", model: "child" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),

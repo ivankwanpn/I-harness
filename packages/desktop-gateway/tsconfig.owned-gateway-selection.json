@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/plugins.ts","src/mcp-settings.ts","src/owned-gateway-selection.ts","src/owned-gateway-hook-selection.ts","src/owned-gateway-selection-owner.ts","test/owned-gateway-selection-witness.test.ts","test/owned-plugin-refresh-adoption.test.ts","test/owned-plugin-refresh-witness.test.ts"]}

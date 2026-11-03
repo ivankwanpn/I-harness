@@ -5,13 +5,16 @@ import { dispatchDesktopRequest, registerDesktopIpc } from "../src/main/ipc.ts"
 import type { DesktopIpcDependencies, IpcMainLike } from "../src/main/ipc.ts"
 import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopEvent, type DesktopRequest } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
+import { RpcError } from '@i-harness/sdk'
+import { createForkOperation } from '@i-harness/sdk/fork'
+import { preparedFork, readyFork } from './helpers/fork-contract.ts'
 
 const ENTRY: WorkspaceEntry = { id: "ws-1", path: "C:/workspace", label: "workspace" }
 
 function fixture() {
   const listSessions = vi.fn(async () => ({ sessions: [] }))
   const history = vi.fn(async (sessionId: string, options: unknown) => ({ sessionId, options, events: [], nextSeq: 0 }))
-  const request = vi.fn(async () => ({ ok: true }))
+  const request = vi.fn(async (): Promise<unknown> => ({ ok: true }))
   const cancelQueueItem = vi.fn(async () => ({ cancelled: true }))
   const cancelTask = vi.fn(async () => "cancellation-requested")
   const client = { listSessions, history, request, cancelQueueItem, cancelTask } as unknown as HarnessClient
@@ -51,6 +54,67 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it('validates new fork commands before runtime work and forwards only a known capable workspace', async () => {
+    const f = fixture(), request = { kind: 'desktop/session/fork/prepare', workspaceId: ENTRY.id, request: { version: 1, sourceSessionId: 'a' } }
+    for (const invalid of [{ ...request, extra: true }, { ...request, request: { ...request.request, signal: {} } }, { ...request, request: { version: 1, sourceSessionId: '' } }]) await expect(dispatchDesktopRequest(invalid, f.dependencies)).rejects.toThrow()
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest({ ...request, workspaceId: 'unknown' }, f.dependencies)).rejects.toThrow()
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest(request, f.dependencies)).rejects.toThrow(/unavailable/i)
+    expect(f.request).not.toHaveBeenCalled()
+    f.setRuntime({ client: { request: f.request }, info: { capabilities: { 'session-fork-bootstrap': '1' } } })
+    await expect(dispatchDesktopRequest(request, f.dependencies)).rejects.toThrow(/unavailable/i)
+    expect(f.request).not.toHaveBeenCalled()
+    f.setRuntime({ client: { request: f.request }, info: { capabilities: { 'session-fork-bootstrap': ['1'] } } })
+    f.request.mockResolvedValueOnce(preparedFork('a'))
+    expect(await dispatchDesktopRequest(request, f.dependencies)).toEqual(preparedFork('a'))
+    expect(f.request).toHaveBeenLastCalledWith('session/fork/prepare', request.request)
+    const operation = createForkOperation(preparedFork('a').prepared, { operationId: 'ipc-original', targetSessionId: 'child', createdAt: '2026-10-27T00:00:00.000Z' })
+    f.request.mockResolvedValueOnce(readyFork(operation))
+    expect(await dispatchDesktopRequest({ kind: 'desktop/session/fork/begin', workspaceId: ENTRY.id, operation }, f.dependencies)).toEqual(readyFork(operation))
+    expect(f.request).toHaveBeenLastCalledWith('session/fork/begin', { operation })
+    const before = f.request.mock.calls.length
+    await expect(dispatchDesktopRequest({ kind: 'desktop/session/manage', workspaceId: ENTRY.id, sessionId: 'a', action: 'fork' }, f.dependencies)).rejects.toThrow()
+    expect(f.request).toHaveBeenCalledTimes(before)
+  })
+  it('preserves validated existing fork error data across Electron serialization without exposing arbitrary RPC data', async () => {
+    const f = fixture(), operation = createForkOperation(preparedFork('a').prepared, { operationId: 'ipc-cleanup', targetSessionId: 'child', createdAt: '2026-10-27T00:00:00.000Z' })
+    const data = { version: 1, kind: 'session-fork-error', operation, capture: 'captured', reason: 'cleanup-incomplete', lastOutcome: readyFork(operation) }
+    f.setRuntime({ client: { request: f.request }, info: { capabilities: { 'session-fork-bootstrap': ['1'] } } })
+    f.request.mockRejectedValueOnce(new RpcError(-32603, 'Session fork unavailable', data))
+    expect(await dispatchDesktopRequest({ kind: 'desktop/session/fork/retry', workspaceId: ENTRY.id, operation }, f.dependencies)).toEqual(data)
+    f.request.mockRejectedValueOnce(new RpcError(-32603, 'private raw error', { ...data, privatePayload: 'must not cross IPC' }))
+    const malformed = await dispatchDesktopRequest({ kind: 'desktop/session/fork/retry', workspaceId: ENTRY.id, operation }, f.dependencies).catch(error => error)
+    if (!(malformed instanceof Error)) throw new Error('Expected a safe IPC rejection')
+    expect(malformed.message).toBe('Invalid session fork response'); expect(malformed.message).not.toContain('private')
+    const other = createForkOperation(operation.prepared, { operationId: operation.invocation.operationId, createdAt: operation.invocation.createdAt, targetSessionId: 'other' })
+    f.request.mockRejectedValueOnce(new RpcError(-32603, 'Session fork unavailable', { ...data, operation: other, lastOutcome: readyFork(other) }))
+    await expect(dispatchDesktopRequest({ kind: 'desktop/session/fork/retry', workspaceId: ENTRY.id, operation }, f.dependencies)).rejects.toThrow('Invalid session fork response')
+  })
+  it("preflights result queries before Gateway startup and forwards only capable known scopes", async () => {
+    const f = fixture()
+    const ref = {version:1,id:"ctxv1_"+"a".repeat(64),revision:"b".repeat(64),codec:"text-utf8-v1",encodedBytes:100,contentDigest:"c".repeat(64),completeness:"complete"}
+    const valid = {kind:"session/result/read",workspaceId:ENTRY.id,sessionId:"conversation",ref,maxBytes:16384}
+    for (const invalid of [{...valid,maxBytes:64000},{...valid,offset:-1},{...valid,cursor:{recordOffset:9,sliceOffset:0}},{...valid,ref:{...ref,revision:"forged"}},{...valid,sessionId:""},{...valid,extra:"path"}]) {
+      await expect(dispatchDesktopRequest(invalid,f.dependencies)).rejects.toThrow()
+    }
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest({...valid,workspaceId:"unknown"},f.dependencies)).rejects.toThrow()
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest(valid,f.dependencies)).rejects.toThrow(/unavailable/i)
+    expect(f.request).not.toHaveBeenCalled()
+    const page = {ref,offset:0,nextOffset:null,eof:true,data:{kind:"text",text:"saved"}}
+    const request = vi.fn(async () => page)
+    f.setRuntime({client:{request},info:{capabilities:{"session-result-read":["1"]}}})
+    expect(await dispatchDesktopRequest(valid,f.dependencies)).toBe(page)
+    expect(request).toHaveBeenCalledExactlyOnceWith("session/result/read",{sessionId:"conversation",ref,maxBytes:16384})
+    const native={...ref,codec:"exec-frames-v1"},catalog={...ref,id:"ctxv1_"+"d".repeat(64),codec:"json-utf8-v1"}
+    await expect(dispatchDesktopRequest({...valid,ref:native,viaCatalog:catalog},f.dependencies)).rejects.toThrow(/unavailable/i)
+    expect(request).toHaveBeenCalledTimes(1)
+    f.setRuntime({client:{request},info:{capabilities:{"session-result-read":["1","2"]}}})
+    await dispatchDesktopRequest({...valid,ref:native,viaCatalog:catalog},f.dependencies)
+    expect(request).toHaveBeenLastCalledWith("session/result/read",{sessionId:"conversation",ref:native,viaCatalog:catalog,maxBytes:16384})
+  })
   it("rejects unsupported subagent catalog hosts and validates lineage/paging arguments before routing", async () => {
     const f = fixture()
     await expect(dispatchDesktopRequest({ kind: "desktop/session/subagents/list", workspaceId: ENTRY.id, sessionId: "parent" }, f.dependencies)).rejects.toThrow(/Subagent catalog/i)
@@ -318,6 +382,23 @@ describe("Desktop scoped IPC", () => {
     expect(gated.request).not.toHaveBeenCalled()
   })
 
+  it("unregisters after Electron destroys the window without accessing its native webContents getter", async () => {
+    const f = fixture()
+    let destroyed = false
+    const sender = { id: 1, send: vi.fn() }
+    const window = {
+      get webContents() { if (destroyed) throw new TypeError("Object has been destroyed"); return sender },
+      isDestroyed: () => destroyed,
+    }
+    const ipc: IpcMainLike = { handle: vi.fn(), removeHandler: vi.fn() }
+    const unregister = registerDesktopIpc(window as unknown as BrowserWindow, f.dependencies, ipc)
+    destroyed = true
+    await expect(unregister()).resolves.toBeUndefined()
+    await expect(unregister()).resolves.toBeUndefined()
+    expect(ipc.removeHandler).toHaveBeenCalledTimes(1)
+    expect(f.offEvent).toHaveBeenCalledTimes(1)
+  })
+
   it("rejects a request from any other webContents and unregisters cleanly", async () => {
     const f = fixture()
     const send = vi.fn()
@@ -334,6 +415,9 @@ describe("Desktop scoped IPC", () => {
 
     await expect(handler?.({ sender: { id: 2 } }, { kind: "workspace/list" }))
       .rejects.toThrow(/untrusted/i)
+    await expect(handler?.({ sender: { id: 2 } }, { kind: "session/result/read", workspaceId: ENTRY.id, sessionId: "s" }))
+      .rejects.toThrow(/untrusted/i)
+    expect(f.get).not.toHaveBeenCalled()
     await expect(handler?.({ sender: window.webContents }, { kind: "workspace/list" } satisfies DesktopRequest))
       .resolves.toEqual([ENTRY])
 

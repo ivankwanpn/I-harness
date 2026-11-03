@@ -1,0 +1,79 @@
+{
+  "head": "8fa88c96c30dea92929e56b317f974c41c1fd53b",
+  "donor": "fdaba3188235faee9def0ac80e0daf8a80dd87ad",
+  "changed": [
+    "packages/session-persistence/src/coordinator/binding-observation.ts",
+    "packages/session-persistence/src/coordinator/types.ts",
+    "packages/session-persistence/src/index.ts",
+    "packages/session-persistence/test/existing-binding-observation.test.ts"
+  ],
+  "receipts": [
+    {
+      "head": "8fa88c96c30dea92929e56b317f974c41c1fd53b",
+      "donor": "fdaba3188235faee9def0ac80e0daf8a80dd87ad",
+      "name": "binding-observations",
+      "cwd": "D:\\I-harness-main\\packages\\session-persistence",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/existing-binding-observation.test.ts",
+        "test/binding-observation.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T12:05:08.078Z",
+      "ended": "2026-10-25T12:05:11.277Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2885,
+      "sha256": "09a6c2cd38e1ef387893964306ee58e90e0d3d95a316c24d77d6c1b7e4384f15",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\close"
+      }
+    },
+    {
+      "head": "8fa88c96c30dea92929e56b317f974c41c1fd53b",
+      "donor": "fdaba3188235faee9def0ac80e0daf8a80dd87ad",
+      "name": "executor-types",
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T12:05:11.279Z",
+      "ended": "2026-10-25T12:05:20.947Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2885,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\close"
+      }
+    },
+    {
+      "head": "8fa88c96c30dea92929e56b317f974c41c1fd53b",
+      "donor": "fdaba3188235faee9def0ac80e0daf8a80dd87ad",
+      "name": "gateway-types",
+      "cwd": "D:\\I-harness-main\\packages\\desktop-gateway",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T12:05:20.947Z",
+      "ended": "2026-10-25T12:05:29.743Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2885,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-existing-binding-observation\\integrated-8fa88c96\\close"
+      }
+    }
+  ]
+}

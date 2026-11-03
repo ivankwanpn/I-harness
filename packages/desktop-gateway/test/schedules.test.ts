@@ -14,7 +14,7 @@ afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: 
 
 async function fixture(modelPolicy: "test-mock" | "required" = "test-mock") {
   const root = mkdtempSync(join(tmpdir(), "desktop-schedules-")); roots.push(root)
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")),{lock:{enabled:true}})
   await coordinator.create({ sessionId: "s1" })
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelPolicy,
     ...(modelPolicy === "test-mock" ? { mockScript: [{ role: "assistant" as const, text: "unused" }] } : {}) })

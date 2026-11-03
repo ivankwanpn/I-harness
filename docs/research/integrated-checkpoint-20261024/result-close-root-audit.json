@@ -1,0 +1,52 @@
+{
+  "base": "03356998dc337ebc3d53bf63af73dce48498080d",
+  "head": "fb049821a0a2f02d8368a754532fab03d678f4ad",
+  "observedAt": "2026-10-24T10:33:33.574Z",
+  "changed": 8,
+  "sealedFiles": 99,
+  "phases": [
+    {
+      "name": "context-final",
+      "exit": 0,
+      "files": 246,
+      "differences": []
+    },
+    {
+      "name": "executor-consumer-final",
+      "exit": 0,
+      "files": 246,
+      "differences": [
+        {
+          "path": "packages/context-output/test/close-ownership.test.ts",
+          "recorded": "0aea2343dfc41d1897d20c5160e2adcdfcc0180e581e54fc30809f5b1fd74de7",
+          "current": "edeef03312ce33bdad51f1486697582e5a517b8856a3a102d577390fdc11dfef"
+        }
+      ]
+    },
+    {
+      "name": "context-final-types",
+      "exit": 0,
+      "files": 246,
+      "differences": []
+    },
+    {
+      "name": "final-executor-types",
+      "exit": 0,
+      "files": 246,
+      "differences": [
+        {
+          "path": "packages/context-output/test/close-ownership.test.ts",
+          "recorded": "0aea2343dfc41d1897d20c5160e2adcdfcc0180e581e54fc30809f5b1fd74de7",
+          "current": "edeef03312ce33bdad51f1486697582e5a517b8856a3a102d577390fdc11dfef"
+        }
+      ]
+    }
+  ],
+  "failures": [],
+  "limits": [
+    "Selected two-package source manifests and final changed-file copies; not whole dependency graph or built runtime.",
+    "Executor final suite AND typecheck precede the same subsequently strengthened context test source delta; context final full suite/typecheck cover that final test. No executor production/test bytes differ.",
+    "Initial root-audit.json retains the overly strict cross-package typecheck phase assertion; this qualification records the actual limited delta instead of rerunning unchanged code.",
+    "No new test/build run performed. Original setup/RED/baseline failures preserved."
+  ]
+}

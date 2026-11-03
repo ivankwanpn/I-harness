@@ -41,6 +41,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { verifyNativeAssets } from "./runtime-native-assets.mjs"
 import { verifyWslAssets } from "./runtime-wsl-assets.mjs"
+import { verifyAclWaitAssets } from "./runtime-acl-wait-assets.mjs"
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const argv = process.argv.slice(2)
@@ -107,6 +108,8 @@ if (!existsSync(OUT)) {
   process.exit(1)
 }
 assert(existsSync(IH), `bundle present: ${IH}`, `missing ${IH}`)
+try { verifyAclWaitAssets(OUT); assert(true, "ACL fixed Worker, exact bridge ABI and asset hashes") }
+catch (error) { fail(error.message) }
 try { verifyNativeAssets(join(OUT, "sandbox-windows-psec")); assert(true, "native helper/protocol/qualification integrity") }
 catch (error) { fail(error.message) }
 try { verifyWslAssets(join(OUT, "wsl-assets")); assert(true, "WSL worker/protocol manifest integrity") }

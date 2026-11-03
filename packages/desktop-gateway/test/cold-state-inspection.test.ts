@@ -1,5 +1,5 @@
 import { expect, it } from "vitest"
-import { append } from "@i-harness/core-session"
+import { recordFixture } from "./managed-fixture.ts"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader } from "@i-harness/session-executor"
@@ -16,10 +16,11 @@ it.each(["input", "work", "schedules"] as const)("keeps cold %s inspection immut
   const reading = kind === "input" ? input.state(f.id) : kind === "work" ? work.read(f.id) : schedules.list(f.id)
   try {
     await f.entered; await f.startTurn()
-    const before = await f.contents(), assembly = await f.service.assemblyFor(f.id)
-    assembly.inbox.admit({ inputId: "owned-steer", text: "Owned steering", delivery: "steer", intent: "user" })
-    append(assembly.session, { type: "todo/write", version: 1, items: [{ content: "Live task", status: "pending" }] })
-    append(assembly.session, { type: "schedule/change", version: 1, operation: "create", schedule: createAfterScheduleRecord("owned-reminder", "Future fixture", 600, Date.now()) })
+    const assembly = await f.service.assemblyFor(f.id)
+    await assembly.inbox.admit({ inputId: "owned-steer", text: "Owned steering", delivery: "steer", intent: "user" })
+    await recordFixture(assembly.factOwner, { type: "todo/write", version: 1, items: [{ content: "Live task", status: "pending" }] })
+    await recordFixture(assembly.factOwner, { type: "schedule/change", version: 1, operation: "create", schedule: createAfterScheduleRecord("owned-reminder", "Future fixture", 600, Date.now()) })
+    const before=await f.contents()
     f.releaseRead()
     const result = await reading
     expect(await f.contents()).toBe(before)

@@ -1,0 +1,186 @@
+{
+  "measurementDomains": {
+    "legacyActiveTokens": 4283,
+    "legacyAfterPrune": 2566,
+    "routes": {
+      "chat": {
+        "projectedTokens": 51198,
+        "packet": {
+          "sizeKind": "http-json-body",
+          "inlineBinaryBytes": 0,
+          "cacheMetadataBytes": 0,
+          "signatureBytes": 0,
+          "bodyBytes": 51588
+        },
+        "coverage": "complete",
+        "reasoning": 0,
+        "output": {
+          "capSupport": "supported",
+          "configuredCap": 1024,
+          "effectiveCap": 1024,
+          "minimumCap": 1,
+          "source": "request"
+        }
+      },
+      "responses": {
+        "projectedTokens": 51166,
+        "packet": {
+          "sizeKind": "http-json-body",
+          "inlineBinaryBytes": 0,
+          "cacheMetadataBytes": 0,
+          "signatureBytes": 0,
+          "bodyBytes": 51518
+        },
+        "coverage": "complete",
+        "reasoning": 0,
+        "output": {
+          "capSupport": "supported",
+          "configuredCap": 1024,
+          "effectiveCap": 1024,
+          "minimumCap": 16,
+          "source": "request"
+        }
+      },
+      "subscription": {
+        "projectedTokens": 51205,
+        "packet": {
+          "sizeKind": "http-json-body",
+          "inlineBinaryBytes": 0,
+          "cacheMetadataBytes": 0,
+          "signatureBytes": 0,
+          "bodyBytes": 51695
+        },
+        "coverage": "complete",
+        "reasoning": 0,
+        "output": {
+          "capSupport": "unsupported",
+          "configuredCap": 1024,
+          "minimumCap": 1,
+          "source": "request"
+        }
+      },
+      "anthropic": {
+        "projectedTokens": 64511,
+        "packet": {
+          "sizeKind": "http-json-body",
+          "inlineBinaryBytes": 0,
+          "cacheMetadataBytes": 0,
+          "signatureBytes": 19,
+          "bodyBytes": 91589
+        },
+        "coverage": "complete",
+        "reasoning": 13338,
+        "output": {
+          "capSupport": "supported",
+          "configuredCap": 1024,
+          "effectiveCap": 1024,
+          "minimumCap": 1,
+          "source": "request"
+        }
+      },
+      "gemini": {
+        "projectedTokens": 51175,
+        "packet": {
+          "sizeKind": "http-json-body",
+          "inlineBinaryBytes": 0,
+          "cacheMetadataBytes": 0,
+          "signatureBytes": 0,
+          "bodyBytes": 51557
+        },
+        "coverage": "complete",
+        "reasoning": 0,
+        "output": {
+          "capSupport": "supported",
+          "configuredCap": 1024,
+          "effectiveCap": 1024,
+          "minimumCap": 1,
+          "source": "request"
+        }
+      },
+      "bedrock": {
+        "projectedTokens": 51177,
+        "packet": {
+          "sizeKind": "sdk-command-estimate",
+          "inlineBinaryBytes": 0,
+          "cacheMetadataBytes": 0,
+          "signatureBytes": 0,
+          "sdkCommandBytesEstimate": 51570
+        },
+        "coverage": "complete",
+        "reasoning": 0,
+        "output": {
+          "capSupport": "supported",
+          "configuredCap": 1024,
+          "effectiveCap": 1024,
+          "minimumCap": 1,
+          "source": "request"
+        }
+      }
+    }
+  },
+  "pruneDecision": {
+    "initialAdmission": "fit",
+    "initialPressure": 100000,
+    "threshold": 80000,
+    "legacyAfterPrune": 2566,
+    "actualPreparedAfterPrune": 43851,
+    "actualPressureAfterPrune": 92251,
+    "result": {
+      "compacted": true,
+      "shadowedSeqs": [],
+      "pruned": true
+    },
+    "summaryCalls": 0
+  },
+  "currentInput": {
+    "rawInputStillStored": true,
+    "summaryShadowsCurrentInput": true,
+    "currentInputSentVerbatim": false,
+    "originalBytesPreserved": true
+  },
+  "summaryRetention": {
+    "configuredMaxTokens": 1024,
+    "acceptedJsChars": 4096,
+    "acceptedUtf8Bytes": 12288,
+    "projectedTextTokens": 12288
+  },
+  "summaryProvenance": {
+    "copiedToolTextIntoSensitiveInstructionsTemplate": true,
+    "inputCopies": 1
+  },
+  "cacheCalibration": {
+    "off": {
+      "sameShape": true,
+      "sameFirstUnit": true,
+      "estimate": {
+        "tokens": 239,
+        "calibrated": true
+      }
+    },
+    "automatic": {
+      "sameShape": true,
+      "sameFirstUnit": false,
+      "estimate": {
+        "tokens": 708,
+        "calibrated": false
+      }
+    }
+  },
+  "protocolValidation": {
+    "orphanResultAcceptedByPrepare": true,
+    "physicalBodyBytes": 399,
+    "networkCalls": 0
+  },
+  "archive": {
+    "rawJsonlEventBytes": 132018505,
+    "activeMessageCount": 2,
+    "physicalBodyBytes": 467,
+    "projectedTokens": 150,
+    "foldMs": 0.16800000000000637
+  },
+  "childFullFork": {
+    "defaultForkIsNone": true,
+    "explicitAllSeedEventBytes": 132018505,
+    "activeMessageCount": 2
+  }
+}

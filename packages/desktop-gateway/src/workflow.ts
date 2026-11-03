@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
-import { append, derivePlanMode, type Session, type GoalOperation } from "@i-harness/core-session"
+import { committedFactSeqs, metadataFactsFor, derivePlanMode, type SessionView as Session, type GoalOperation, type MetadataFact } from "@i-harness/core-session"
+import { actionMetadataFacts } from '@i-harness/session-executor'
 import { applyGoalMutation, foldGoal, type GoalView, type GoalMutationRequest } from "@i-harness/goal"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { foldJobs, projectJobsDoc, type JobView } from "@i-harness/jobs"
@@ -8,6 +9,7 @@ import { validateJsonSchemaValue, type JsonSchemaNode, type Tool } from "@i-harn
 import type { GuardianReviewRecord } from "@i-harness/guard-approval"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
+import type {createManagedGoalUi} from './managed-goal-ui.ts'
 
 export interface DesktopWorkflowView {
   goal: GoalView | null
@@ -16,6 +18,13 @@ export interface DesktopWorkflowView {
   jobs: (JobView & { live: boolean; canCancel: boolean })[]
   team: { enabled: boolean; members: TeamMemberSnapshot[]; tasks: TeamTaskSnapshot[] }
   reviews: GuardianReviewRecord[]
+}
+export interface ManagedWorkflowUi {
+ readonly goal:ReturnType<typeof createManagedGoalUi>
+ assertCurrent():void
+ details():Promise<Pick<DesktopWorkflowView,'jobs'|'team'>>
+ lastStepSince(ordinal:number):Promise<{refused?:boolean;empty?:boolean}|undefined>
+ teamCommand(tool:string,args:Record<string,unknown>):Promise<void>
 }
 export type WorkflowCommand =
   | { action: "goal"; operation: GoalOperation; request: GoalMutationRequest; start?: boolean }
@@ -40,17 +49,22 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
   reviews?: (sessionId: string) => Promise<GuardianReviewRecord[]>
   onChanged?: (sessionId: string) => void
   onRunningChanged?: (sessionId: string, running: boolean, error?: string) => void
+  managed?: (sessionId:string)=>ManagedWorkflowUi|undefined
+  managedForMutation?: (sessionId:string)=>Promise<ManagedWorkflowUi|undefined>
 } = {}) {
   const goalRuns = new Map<string, { controller: AbortController; job: Promise<void> }>()
   const goalFailures = new Map<string, { goalId?: string; error: string }>()
   const goalVersions = new Map<string, number>()
   let closed = false
+  const save=async(id:string,event:MetadataFact)=>{const document=await coordinator.openManagedDocument(id);committedFactSeqs(await actionMetadataFacts(document).admit(event))}
   const goalDoc = (id: string) => `desktop-goal-${createHash("sha256").update(id).digest("hex")}`
   async function sessionFor(id: string): Promise<Session> {
     await coordinator.profile(id)
     return service.liveSession(id) ?? (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
   }
   async function read(id: string): Promise<DesktopWorkflowView> {
+    const managed=options.managed?.(id)
+    if(managed){const selected=managed.goal.read(),{goal,plan}=selected,details=await managed.details();managed.assertCurrent();selected.assertCurrent();const savedFailure=await coordinator.getDocument(goalDoc(id)) as {goalId?:string;error?:string}|undefined;managed.assertCurrent();const last=goalFailures.get(id)??savedFailure,running=Boolean(goalRuns.get(id)&&!goalRuns.get(id)!.controller.signal.aborted),reviews=await options.reviews?.(id)??[];managed.assertCurrent();selected.assertCurrent();return {goal,plan,jobs:details.jobs,team:details.team,reviews,goalRun:{running,...!running&&last?.goalId===goal?.id&&last?.error?{error:last.error.slice(0,2000)}:{}}}}
     const session = await sessionFor(id)
     const jobs = new Map([...projectJobsDoc(await coordinator.getDocument(id)), ...foldJobs(session.events)].map((job) => [job.jobId, job]))
     const live = service.tasks(id)
@@ -67,7 +81,7 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
     }
   }
   function stopGoal(id: string) { goalRuns.get(id)?.controller.abort(new Error("Goal stopped by user")) }
-  function startGoal(id: string, objective: string) {
+  function startGoal(id: string, objective: string, originalGoalId?:string) {
     if (closed) throw new Error("Workflow closed")
     const previous = goalRuns.get(id)
     if (previous && !previous.controller.signal.aborted) return
@@ -82,13 +96,14 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
     entry.job = (async () => {
       let prompt = `執行目前目標：${objective}\n完成後先驗證結果，再呼叫 goal_complete。不要自行變更使用者暫停的目標。`
       while (!closed && !controller.signal.aborted) {
-        const current = foldGoal((await sessionFor(id)).events)
+        const managed=options.managed?.(id)
+        const current = managed?managed.goal.read().goal:foldGoal((await sessionFor(id)).events)
         if (!current || current.phase !== "active") break
-        const before = service.liveSession(id)?.events.length ?? 0
+        const before = managed?managed.goal.position():service.liveSession(id)?.events.length ?? 0
         await service.submit(id, prompt, controller.signal)
-        const end = service.liveSession(id)?.events.slice(before).filter((event) => event.type === "step/end").at(-1)
+        const end = managed?await managed.lastStepSince(before):service.liveSession(id)?.events.slice(before).filter((event) => event.type === "step/end").at(-1)
         if (end?.refused || end?.empty) throw new Error(end.refused ? "Provider refused the Goal request; resume only after reviewing the refusal" : "Provider returned no usable result; Goal continuation was paused")
-        const latest = foldGoal((await sessionFor(id)).events)
+        const latest = managed?managed.goal.read().goal:foldGoal((await sessionFor(id)).events)
         if (!latest || latest.phase !== "active") break
         prompt = `目標自動續行：${latest.objective}\n接續未完成工作；若已驗證完成，呼叫 goal_complete。`
         await new Promise<void>((resolve) => {
@@ -102,10 +117,10 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
       if (!controller.signal.aborted) {
         failure = error instanceof Error ? error.message : String(error)
         controller.abort(error)
-        const session = service.liveSession(id)
-        const current = session && foldGoal(session.events)
+        const managed=options.managed?.(id),session = managed?undefined:service.liveSession(id)
+        const current = managed?managed.goal.read().goal:session&&foldGoal(session.events)
         goalFailures.set(id, { goalId: current?.id, error: failure })
-        if (session && current?.phase === "active") append(session, applyGoalMutation(current, "pause", { ref: current }, Date.now()).event)
+        if (current?.phase === "active") {if(managed)await managed.goal.mutateGoal('pause',{ref:current});else if(session)await save(id, applyGoalMutation(current, "pause", { ref: current }, Date.now()).event)}
         await coordinator.putDocument(goalDoc(id), { goalId: current?.id, error: failure.slice(0, 2000) })
         await coordinator.flush(id)
         console.warn(`[desktop] goal run stopped: ${error instanceof Error ? error.message : String(error)}`)
@@ -116,7 +131,7 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
     }).catch((error) => {
       if (goalVersions.get(id) !== version) return
       const message = `Goal stopped, but recovery could not be saved: ${error instanceof Error ? error.message : String(error)}`
-      goalFailures.set(id, { goalId: foldGoal(service.liveSession(id)?.events ?? [])?.id, error: message })
+      goalFailures.set(id, { goalId: originalGoalId??foldGoal(service.liveSession(id)?.events ?? [])?.id, error: message })
       try { options.onRunningChanged?.(id, false, message); options.onChanged?.(id) } catch { /* closed notification sink */ }
       console.warn(`[desktop] ${message}`)
     })
@@ -124,6 +139,27 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
   async function mutate(id: string, value: unknown): Promise<DesktopWorkflowView> {
     if (closed) throw new Error("Workflow closed")
     const command = object(value)
+    const managed=options.managed?.(id)??await options.managedForMutation?.(id)
+    if(managed){
+      let startGoalValue:Readonly<GoalView>|undefined
+      if(command.action==='goal'){
+        if(!GOAL_OPERATIONS.has(String(command.operation)))throw Error('Invalid Goal operation')
+        const request=object(command.request);if(Object.keys(request).some(key=>!['objective','ref'].includes(key)))throw Error('Unsupported Goal field');if(request.objective!==undefined)text(request.objective)
+        if(command.start!==undefined&&typeof command.start!=='boolean')throw Error('Invalid Goal start flag')
+        if(command.start===true&&!goalRuns.has(id)&&(service.queueState(id).running||service.queueState(id).queued))throw Error('Wait for the current turn before starting a Goal')
+        if(['pause','clear','complete'].includes(String(command.operation))){const running=goalRuns.get(id);stopGoal(id);await running?.job}
+        const current=managed.goal.read().goal
+        if(command.operation==='resume'&&command.start===true&&current?.phase==='active'){const ref=object(request.ref);if(ref.id!==current.id||ref.revision!==current.revision)throw Error('Stale Goal revision')}
+        else await managed.goal.mutateGoal(command.operation as GoalOperation,request as GoalMutationRequest)
+        const goal=managed.goal.read().goal;if(command.start===true&&goal?.phase==='active')startGoalValue=goal
+      }else if(command.action==='plan'){
+        if(typeof command.enabled!=='boolean')throw Error('Invalid Plan mode flag');if(service.queueState(id).running||service.queueState(id).queued)throw Error('Wait for the current turn before changing Plan Mode');if(command.proposal!==undefined)text(command.proposal)
+        await managed.goal.setPlan(command.enabled,command.proposal as string|undefined)
+      }else if(command.action==='team'){
+        if(!options.teamEnabled||!TEAM_TOOLS.has(String(command.tool)))throw Error('Team action unavailable');if(managed.goal.read().plan.active)throw Error('Leave Plan Mode before changing team state');const args=object(command.args);if(JSON.stringify(args).length>65536)throw Error('Team request too large');await managed.teamCommand(String(command.tool),args)
+      }else if(command.action==='job/cancel')service.cancelTask(id,text(command.id,256));else throw Error('Unknown workflow command')
+      options.onChanged?.(id);const view=await read(id);if(startGoalValue){startGoal(id,startGoalValue.objective,startGoalValue.id);return {...view,goalRun:{running:true}}}return view
+    }
     const assembly = await service.assemblyFor(id)
     const session = assembly.session
     if (command.action === "goal") {
@@ -138,7 +174,7 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
       if (startingActive) {
         const ref = object(request.ref)
         if (ref.id !== current.id || ref.revision !== current.revision) throw new Error("Stale Goal revision")
-      } else append(session, applyGoalMutation(current, command.operation as GoalOperation, request as GoalMutationRequest, Date.now()).event)
+      } else committedFactSeqs(await metadataFactsFor(session,assembly.metadataFacts).admit(applyGoalMutation(current, command.operation as GoalOperation, request as GoalMutationRequest, Date.now()).event))
       if (["pause", "clear", "complete"].includes(String(command.operation))) stopGoal(id)
       await coordinator.flush(id)
       const goal = foldGoal(session.events)
@@ -147,8 +183,8 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
       if (typeof command.enabled !== "boolean") throw new Error("Invalid Plan mode flag")
       if (service.queueState(id).running || service.queueState(id).queued) throw new Error("Wait for the current turn before changing Plan Mode")
       if (command.proposal !== undefined) text(command.proposal)
-      if (command.enabled && command.proposal) enterPlanMode(session, command.proposal as string)
-      else append(session, { type: "plan/mode", mode: command.enabled ? "on" : "off" })
+      if (command.enabled && command.proposal) await enterPlanMode(session, command.proposal as string,assembly.metadataFacts)
+      else committedFactSeqs(await metadataFactsFor(session,assembly.metadataFacts).admit({ type: "plan/mode", mode: command.enabled ? "on" : "off" }))
       await coordinator.flush(id)
     } else if (command.action === "team") {
       if (!options.teamEnabled || !TEAM_TOOLS.has(String(command.tool))) throw new Error("Team action unavailable")
@@ -173,11 +209,12 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
   return {
     read, mutate,
     async cancel(id: string) {
-      if (!goalRuns.has(id)) return
+      const running=goalRuns.get(id);if(!running)return
       stopGoal(id)
-      const session = service.liveSession(id)
-      const current = session && foldGoal(session.events)
-      if (session && current?.phase === "active") append(session, applyGoalMutation(current, "pause", { ref: current }, Date.now()).event)
+      const managed=options.managed?.(id);if(managed)await running.job
+      const session = managed?undefined:service.liveSession(id)
+      const current = managed?managed.goal.read().goal:session&&foldGoal(session.events)
+      if(current?.phase==='active'){if(managed)await managed.goal.mutateGoal('pause',{ref:current});else if(session)await save(id,applyGoalMutation(current,'pause',{ref:current},Date.now()).event)}
       await coordinator.flush(id)
       options.onChanged?.(id)
     },
@@ -193,12 +230,30 @@ export function createDesktopWorkflow(coordinator: SessionCoordinator, service: 
   }
 }
 
-export function createDesktopGoalTools(sessionFor: (id: string) => Session | undefined, changed: (id: string) => void): Tool[] {
+export function createDesktopGoalTools(sessionFor: (id: string) => Session | undefined, changed: (id: string) => void, metadataFor:(id:string)=>import('@i-harness/core-session').MetadataFactSource|undefined=()=>undefined): Tool[] {
+  return goalTools({
+    read: exec => {const session=exec.sessionId&&sessionFor(exec.sessionId);return session?foldGoal(session.events):null},
+    complete: async (args,exec) => { const id=exec.sessionId,session=id&&sessionFor(id);if(!id||!session)throw new Error('Goal session unavailable');const current=foldGoal(session.events);if(current?.phase!=='active')throw new Error('Goal is not active');committedFactSeqs(await metadataFactsFor(session,metadataFor(id),exec.abortSignal).admit(applyGoalMutation(current,'complete',{ref:object(args) as unknown as {id:string;revision:number}},Date.now()).event));changed(id);return foldGoal(session.events) },
+  })
+}
+
+export interface OwnedGoalToolPort {
+  read():Readonly<GoalView>|null
+  complete(ref:{id:string;revision:number},signal?:AbortSignal):Promise<Readonly<GoalView>|null>
+}
+/** The same Gateway tool schemas and transitions over an owned metadata port. */
+export function createDesktopOwnedGoalTools(port:OwnedGoalToolPort,changed:()=>void):Tool[] {
+  return goalTools({
+    read:()=>port.read(),
+    complete:async(args,exec)=>{const current=port.read();if(current?.phase!=='active')throw new Error('Goal is not active');const result=await port.complete(object(args) as unknown as {id:string;revision:number},exec.abortSignal);changed();return result},
+  })
+}
+function goalTools(ops:{read:(exec:Parameters<Tool['execute']>[1])=>unknown;complete:(args:unknown,exec:Parameters<Tool['execute']>[1])=>Promise<unknown>}):Tool[] {
   return [
     { name: "goal_read", description: "Read this conversation's persisted goal and revision.", inputSchema: { type: "object", properties: {} }, isReadOnly: true,
-      execute: async (_args, exec) => { const session = exec.sessionId && sessionFor(exec.sessionId); return session ? foldGoal(session.events) : null } },
+      execute: async (_args, exec) => ops.read(exec) },
     { name: "goal_complete", description: "Mark the current goal complete only after the work is actually verified. Include its latest id and revision from goal_read.",
       inputSchema: { type: "object", properties: { id: { type: "string" }, revision: { type: "integer", minimum: 1 } }, required: ["id", "revision"] }, isReadOnly: true,
-      execute: async (args, exec) => { const id = exec.sessionId; const session = id && sessionFor(id); if (!id || !session) throw new Error("Goal session unavailable"); const current = foldGoal(session.events); if (current?.phase !== "active") throw new Error("Goal is not active"); append(session, applyGoalMutation(current, "complete", { ref: object(args) as unknown as { id: string; revision: number } }, Date.now()).event); changed(id); return foldGoal(session.events) } },
+      execute: async (args, exec) => ops.complete(args,exec) },
   ]
 }

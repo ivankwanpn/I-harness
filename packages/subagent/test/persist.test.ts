@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createSession, type SessionEvent } from "@i-harness/core-session"
+import { createSession, isNondurableSession, type SessionEvent } from "@i-harness/core-session"
 import { createJobRegistry, type JobRegistry } from "../src/jobs.ts"
 import { createAgentTable, type AgentTable } from "../src/agent-table.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "../src/roles.ts"
@@ -47,7 +47,7 @@ describe("subagent state snapshot", () => {
     const { id } = s.jobs.registerJob("root", "subagent", "helper")
     s.jobs.updateJob(id, { status: "completed", output: "done" })
     const snap = snapshotState(s)
-    expect(snap.formatVersion).toBe(1)
+    expect(snap.formatVersion).toBe(2)
     expect(snap.jobs).toHaveLength(1)
     expect(snap.jobs[0]).toMatchObject({ id, status: "completed", output: "done", terminal: true })
     expect(snap.roles.map((r) => r.name)).toContain("general")
@@ -75,13 +75,16 @@ describe("subagent state snapshot", () => {
     expect(fresh.table.get("root/running")?.status).toBe("error") // running → error
     expect(fresh.roles.get("custom")).toBeDefined()
     // restored entries have fresh (non-persisted) session/controller
-    expect(typeof fresh.table.get("root/helper")?.session.events.push).toBe("function")
+    const restored = fresh.table.get("root/helper")!.session
+    expect(isNondurableSession(restored)).toBe(true)
+    if (!isNondurableSession(restored)) throw new Error('Expected standalone restored fixture')
+    expect(typeof restored.events.push).toBe("function")
   })
 
   it("snapshotState/restoreState round-trip the child sessionId link", () => {
     const s = makeState()
     s.table.add("root/helper", {
-      path: "root/helper", status: "completed", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      path: "root/helper", status: "completed", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
       controller: new AbortController(), mailbox: [], sessionId: "child-abc",
     })
     const snap = snapshotState(s)
@@ -94,7 +97,7 @@ describe("subagent state snapshot", () => {
   it("snapshotState/restoreState round-trip the child roleName", () => {
     const s = makeState()
     s.table.add("root/helper", {
-      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
       controller: new AbortController(), mailbox: [], sessionId: "child-abc", roleName: "research",
     })
     const snap = snapshotState(s)
@@ -107,7 +110,7 @@ describe("subagent state snapshot", () => {
   it("snapshotState/restoreState round-trip the recorded model label", () => {
     const s = makeState()
     s.table.add("root/helper", {
-      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
       controller: new AbortController(), mailbox: [], sessionId: "child-abc", roleName: "general", modelLabel: "gw:small",
     })
     const snap = snapshotState(s)
@@ -121,7 +124,7 @@ describe("subagent state snapshot", () => {
   it("snapshotState/restoreState round-trip the inbox consumption cursor (lastInboxSeq)", () => {
     const s = makeState()
     s.table.add("root/helper", {
-      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
       controller: new AbortController(), mailbox: [], sessionId: "child-abc", lastInboxSeq: 6,
     })
     const snap = snapshotState(s)
@@ -168,8 +171,8 @@ describe("subagent state snapshot", () => {
       formatVersion: 1,
       jobs: [],
       agentTable: [
-        { path: "root/wait", status: "waiting", session: { formatVersion: 1, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c1" },
-        { path: "root/run", status: "running", session: { formatVersion: 1, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c2" },
+        { path: "root/wait", status: "waiting", session: { formatVersion: 2, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c1" },
+        { path: "root/run", status: "running", session: { formatVersion: 2, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c2" },
       ],
       roles: [],
     }
@@ -199,7 +202,7 @@ describe("persistent wrappers", () => {
     const table = createAgentTable()
     const save = vi.fn(async () => {})
     const wrapped = persistentAgentTable(table, save)
-    wrapped.add("root/helper", { path: "root/helper", status: "running", session: (() => { const s = { formatVersion: 1, events: [] as never[] }; return s })(), controller: new AbortController(), mailbox: [] })
+    wrapped.add("root/helper", { path: "root/helper", status: "running", session: (() => { const s = { formatVersion: 2, events: [] as never[] }; return s })(), controller: new AbortController(), mailbox: [] })
     expect(save).toHaveBeenCalledTimes(1)
     wrapped.remove("root/helper")
     expect(save).toHaveBeenCalledTimes(2)
@@ -259,12 +262,14 @@ describe("task 4.4: job stamp persistence + job/status events", () => {
     }
     const wired = wireSubagentPersistence(s, persist)
     const { id } = wired.jobs.registerJob("root", "subagent", "h")
+    await wired.flushFacts()
     expect(parent.events.map((e) => e.type)).toEqual(["job/status"])
     const first = parent.events[0] as Extract<SessionEvent, { type: "job/status" }>
     expect(first.job).toMatchObject({ jobId: id, kind: "subagent", label: "h", status: "running", outputAvailable: false })
     expect(typeof first.job.startedAt).toBe("number")
     // completed transition → second event
     wired.jobs.updateJob(id, { status: "completed", output: "done" })
+    await wired.flushFacts()
     expect(parent.events.map((e) => e.type)).toEqual(["job/status", "job/status"])
     const second = parent.events[1] as Extract<SessionEvent, { type: "job/status" }>
     expect(second.job).toMatchObject({ status: "completed", outputAvailable: true })
@@ -272,10 +277,13 @@ describe("task 4.4: job stamp persistence + job/status events", () => {
     // updating the same terminal job with the same status/output again is a
     // no-op state change → NO spurious event (the wrapper compares snapshots).
     wired.jobs.updateJob(id, { status: "completed", output: "done" })
+    await wired.flushFacts()
     expect(parent.events).toHaveLength(2)
     // kill on a finished job is a no-op → no event
     expect(wired.jobs.kill(id)).toBe("already-finished")
+    await wired.flushFacts()
     expect(parent.events).toHaveLength(2)
+    await wired.closeFacts()
   })
 
   it("wireSubagentPersistence WITHOUT a parentSession appends no events (additive-only)", async () => {

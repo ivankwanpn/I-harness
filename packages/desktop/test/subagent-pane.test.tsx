@@ -22,6 +22,18 @@ const child: DesktopSubagentRow = {
 const second: DesktopSubagentRow = { ...child, sessionId: "child-b", parentSessionId: "child-a", path: "/root/reader/checker", label: "Checker", status: "running", modelLabel: "Provider / Checker model", canFollowup: false, canMessage: true, canInterrupt: true, canClose: true }
 const history = (text: string): HistoryRange["events"] => [{ type: "user/message", text: "Inspect the project", seq: 0 }, { type: "assistant/message", text, seq: 1 }]
 
+it('reads retained child bodies as explicitly encoded JSON pages with the original revision and ref identity', async () => {
+  const fullResult = { method: 'desktop/session/subagents/result' as const, sessionId: 'parent', childSessionId: 'child-a', resultRevision: 'original-result', refId: 'ctxv1_' + '1'.repeat(64), refRevision: '2'.repeat(64) }
+  const ref = { version: 1, id: fullResult.refId, revision: fullResult.refRevision, codec: 'json-utf8-v1', encodedBytes: 27, contentDigest: '3'.repeat(64), completeness: 'complete' }
+  const { bridge } = fixture(request => request.kind === 'desktop/session/subagents/result' ? { codec: 'json-utf8-v1', resultRevision: 'original-result', ref, offset: 0, nextOffset: null, eof: true, data: { kind: 'text', text: '{"resultText":"完整🙂"}' } } : undefined, { parentSessionId: 'parent', agents: [{ ...child, finalText: 'bounded preview', fullResult }] })
+  render(<SubagentPane bridge={bridge} workspaceId="w" sessionId="parent" />)
+  fireEvent.click(await screen.findByRole('button', { name: '查看子代理 Reader' }))
+  fireEvent.click(await screen.findByRole('button', { name: '讀取完整結果' }))
+  expect(await screen.findByText('{"resultText":"完整🙂"}')).toBeTruthy()
+  expect(screen.getByText(/JSON 編碼片段/)).toBeTruthy()
+  expect(bridge.request).toHaveBeenCalledWith({ kind: 'desktop/session/subagents/result', workspaceId: 'w', sessionId: 'parent', childSessionId: 'child-a', resultRevision: 'original-result', refId: fullResult.refId, refRevision: fullResult.refRevision, offset: 0, maxBytes: 16384 })
+})
+
 function fixture(handle?: (request: DesktopRequest) => unknown, initial: DesktopSubagentCatalog = { parentSessionId: "parent", agents: [child, second] }) {
   let catalog = initial
   const listeners = new Set<(event: DesktopEvent) => void>()

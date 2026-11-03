@@ -1,8 +1,62 @@
 import { describe, expect, it } from "vitest"
-import { backoffDelay, createRetryingClient, resolveRetryPolicy } from "../src/index.ts"
+import { backoffDelay, createRetryingClient, generationError, prepareModelRequest, resolveRetryPolicy } from "../src/index.ts"
+import { isExecutionControlError, preparedExecution } from '../src/prepared/execution.ts'
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "../src/index.ts"
 
 const REQ: LLMRequest = { messages: [], tools: [], systemPrompt: "" }
+
+it.each(['stop', 'generation', 'execution'] as const)('settles already observed usage before the original %s failure without retry/output', async mode => {
+  const stop = new AbortController()
+  const original = mode === 'generation' ? generationError('GENERATION_CLOSED') : new Error(`controlled ${mode}`)
+  const prepared = await prepareModelRequest({ async *stream() {} }, REQ)
+  const execution = preparedExecution(prepared.measurement, { validateBeforeTransport() { throw original } }, prepared.validation)
+  let attempts = 0
+  const model: ModelClient = { async *stream() {
+    attempts++
+    yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 3 } }
+    if (mode === 'stop') stop.abort(original)
+    if (mode === 'execution') execution.confirm()
+    throw original
+  } }
+  const events: LLMStreamEvent[] = []
+  const run = async () => { for await (const event of createRetryingClient(model, resolveRetryPolicy({ mode: 'always' })).stream({ ...REQ, signal: stop.signal })) events.push(event) }
+  await expect(run()).rejects.toBe(original)
+  expect(events).toEqual([{ type: 'usage', usage: { inputTokens: 12, outputTokens: 3 } }])
+  expect(attempts).toBe(1)
+  if (mode === 'execution') expect(isExecutionControlError(original)).toBe(true)
+})
+
+it('Stop while buffered success usage is being observed cannot emit completion or duplicate counters', async () => {
+  const stop = new AbortController(), original = new Error('controlled Stop during usage settlement')
+  const model: ModelClient = { async *stream() {
+    yield { type: 'usage', usage: { inputTokens: 12 } }
+    yield { type: 'usage', usage: { outputTokens: 3 } }
+    yield { type: 'end' }
+  } }
+  const events: LLMStreamEvent[] = []
+  const run = async () => { for await (const event of createRetryingClient(model, resolveRetryPolicy({ mode: 'normal', maxRetries: 1 })).stream({ ...REQ, signal: stop.signal })) { events.push(event); stop.abort(original) } }
+  await expect(run()).rejects.toBe(original)
+  expect(events).toEqual([{ type: 'usage', usage: { inputTokens: 12 } }, { type: 'usage', usage: { outputTokens: 3 } }])
+})
+
+it('Stop at the recovered transition prevents its pending content event from escaping', async () => {
+  const stop = new AbortController(), original = new Error('controlled Stop at recovered')
+  let attempts = 0
+  const model: ModelClient = { async *stream() {
+    attempts++
+    if (attempts === 1) throw Object.assign(new Error('temporary'), { code: 'SERVER' })
+    yield { type: 'text/chunk', text: 'forbidden after Stop' }
+    yield { type: 'end' }
+  } }
+  const events: LLMStreamEvent[] = []
+  const run = async () => { for await (const event of createRetryingClient(model, resolveRetryPolicy({ mode: 'normal', maxRetries: 1, backoff: { initialDelayMs: 1 } })).stream({ ...REQ, signal: stop.signal })) {
+    events.push(event)
+    if (event.type === 'retry' && event.retry.phase === 'recovered') stop.abort(original)
+  } }
+  await expect(run()).rejects.toBe(original)
+  expect(events.filter(event => event.type !== 'retry')).toEqual([])
+  expect(attempts).toBe(2)
+})
 
 function streamOf(events: LLMStreamEvent[]): AsyncIterable<LLMStreamEvent> {
   return (async function* () {
@@ -194,28 +248,22 @@ describe("createRetryingClient", () => {
     expect(out.text.join("")).toBe("ok")
   })
 
-  // M5 T2. The wrapper sits between the adapter and core-agent, and the retry
-  // is SILENT — core-agent cannot tell two attempts from one round-trip. So a
-  // usage report from an attempt that then DIED must not reach it, or it will
-  // be merged with the successful attempt's and every number will be inflated
-  // by an amount no reader can see. That is worse than no metric at all: a
-  // wrong number that looks like a measurement.
-  //
-  // The attempt below is the realistic shape — Anthropic reports the input side
-  // on message_start, before any content, so a connection that dies early
-  // reports usage and produces nothing else. `produced` stays false, so the
-  // retry is silent and the leak is invisible.
-  it("M5 T2: usage from a FAILED attempt is not leaked into the retry's round-trip", async () => {
+  // The retry boundary is now explicit. Preserve failed billing observations
+  // before waiting so the Agent reports/resets that attempt instead of merging
+  // them into the next successful response's calibration.
+  it("keeps failed usage before its retry boundary and successful usage after it", async () => {
     const reported = { type: "usage", usage: { inputTokens: 1000, cacheReadTokens: 900 } } as const
     const { client, calls } = steppedModel(
       () => streamOf([reported, errorEvent("SERVER", "died after reporting")]),
       () => streamOf([reported, { type: "text/chunk", text: "ok" }, { type: "end" }]),
     )
     const retrying = createRetryingClient(client, resolveRetryPolicy({ mode: "normal", maxRetries: 1, backoff: { initialDelayMs: 1 } }))
-    const usages: unknown[] = []
-    for await (const ev of retrying.stream(REQ)) if (ev.type === "usage") usages.push(ev.usage)
+    const observations: unknown[] = []
+    for await (const ev of retrying.stream(REQ)) {
+      if (ev.type === 'usage') observations.push(ev.usage)
+      if (ev.type === 'retry' && ev.retry.phase === 'waiting') observations.push('waiting')
+    }
     expect(calls()).toBe(2)
-    // ONE round-trip completed → ONE report. Not two.
-    expect(usages).toEqual([{ inputTokens: 1000, cacheReadTokens: 900 }])
+    expect(observations).toEqual([{ inputTokens: 1000, cacheReadTokens: 900 }, 'waiting', { inputTokens: 1000, cacheReadTokens: 900 }])
   })
 })

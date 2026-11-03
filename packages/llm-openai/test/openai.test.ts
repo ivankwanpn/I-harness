@@ -78,10 +78,10 @@ describe("llm-openai protocol", () => {
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
     expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [item] } })
-    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [item] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [item] } }, { role: "tool", toolCallId: "c1", content: "fixture outcome" }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
-    expect(body.input).toEqual([item, { type: "function_call", call_id: "c1", name: "read", arguments: "{}" }])
+    expect(body.input).toEqual([item, { type: "function_call", call_id: "c1", name: "read", arguments: "{}" }, { type: "function_call_output", call_id: "c1", output: "fixture outcome" }])
     await iterator.return?.()
   })
 
@@ -162,10 +162,11 @@ describe("llm-openai protocol", () => {
     vi.stubGlobal("fetch", fetchMock)
     const iterator = createOpenAIClient({ apiKey: "k", model: "new-model" }).stream({ messages: [
       { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-responses", model: "old-model", reasoningItems: [{ type: "reasoning", id: "rs_old" }] } },
+      { role: "tool", toolCallId: "c1", content: "fixture outcome" },
     ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
-    expect(body.input).toEqual([{ type: "function_call", call_id: "c1", name: "read", arguments: "{}" }])
+    expect(body.input).toEqual([{ type: "function_call", call_id: "c1", name: "read", arguments: "{}" }, { type: "function_call_output", call_id: "c1", output: "fixture outcome" }])
     await iterator.return?.()
   })
 

@@ -1,3 +1,6 @@
+import { safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
+/** Data-only connected reduction compatibility; importing this type loads no engine. */
+export type SessionCompactResult = import('@i-harness/context-engine').ReductionResult
 // M27 R-C4: NDJSON JSON-RPC 2.0 line framing for @i-harness/sdk.
 //
 // The wire contract: ONE JSON-RPC 2.0 message per line (JSON.stringify +
@@ -140,8 +143,9 @@
  *
  *   "session-create": ["1"]
  *     session/create {} → { sessionId }
- *   "session-fork": ["1"]
- *     session/fork { sessionId } → { sessionId }
+ *   "session-fork-bootstrap": ["1"]
+ *     session/fork/prepare → closed ForkPrepareResult
+ *     session/fork/begin|retry { operation } → closed ForkOutcome
  *   "session-model": ["1"]
  *     session/model/state { sessionId } → SessionModelState
  *     session/model/set { sessionId, selection } → SessionModelState
@@ -367,7 +371,7 @@ export interface SessionListResult {
   listingUnavailable?: boolean
 }
 
-/** Additive session/create and session/fork result. */
+/** Session creation result; semantic forks return the closed ForkSuccess superset. */
 export interface SessionIdResult {
   sessionId: string
 }
@@ -397,10 +401,7 @@ export type SessionModelState =
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
   | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: string; reasoningEfforts?: string[]; imageInput?: true }
 
-/** Local token-meter estimate; it is not a provider billing report. */
-export type SessionContextState =
-  | { kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens?: { user: number; assistant: number; tool: number } }
-  | { kind: "unavailable"; reason: string }
+export type { SessionContextState } from "@i-harness/core-session"
 
 // ── M41b v1.1: session/cancel + session/rewind/* wire types ─────────────────
 // All shapes below STRUCTURALLY MIRROR packages/rewind's types (the wire can't
@@ -560,12 +561,14 @@ export interface RewindExecuteResponse {
 export class RpcError extends Error {
   readonly code: number
   readonly data: unknown
+  readonly modelFailure: ModelFailureFacts | undefined
 
   constructor(code: number, message: string, data?: unknown) {
     super(message)
     this.name = "RpcError"
     this.code = code
     this.data = data
+    this.modelFailure = safeModelFailureFacts(data !== null && typeof data === "object" ? (data as { modelFailure?: unknown }).modelFailure : undefined)
   }
 }
 
@@ -694,3 +697,4 @@ export class JsonRpcLineTransport {
     this.listeners.clear()
   }
 }
+export type { ResultPageQuery, ResultPageResult } from '@i-harness/session-executor'

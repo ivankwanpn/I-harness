@@ -55,7 +55,7 @@ it("discards only the failed attempt, preserves audit and earlier effects, and r
   expect(retries.map(event => event.retry.phase)).toEqual(["waiting", "attempting", "recovered"])
   expect(retries.map(deriveSearchText)).toEqual(["", "", ""])
   expect(fromJSONL(toJSONL(session)).events.filter(event => event.type === "model/retry")).toEqual(retries)
-  expect(emitted.filter(event => event.type === "provider/usage").map(event => event.data)).toEqual([{ inputTokens: 7 }])
+  expect(emitted.filter(event => event.type === "provider/usage").map(event => event.data)).toEqual([{ inputTokens: 100 }, { inputTokens: 7 }])
 })
 
 it("retains fail-closed duplicate call IDs even across discarded attempts", async () => {
@@ -103,7 +103,10 @@ it.each(["zero-retries", "exhaustion", "cancel-first", "cancel-retry"] as const)
   expect(session.events.filter(event => event.type === "step/failed")).toHaveLength(expectedCalls)
   expect(session.events.filter(event => event.type === "tool/call")).toHaveLength(expectedCalls)
   expect(effects).toBe(0)
-  expect(session.events.some(event => event.type === "tool/dispatch" || event.type === "tool/result")).toBe(false)
+  expect(session.events.filter(event => event.type === "tool/dispatch")).toEqual([])
+  expect(session.events.filter(event => event.type === "tool/result")).toEqual(Array.from({ length: expectedCalls }, (_, i) => expect.objectContaining({
+    callId: 'uncommitted-' + (i + 1), name: 'write', isError: true, output: { code: 'TOOL_ABORTED_BEFORE_DISPATCH', error: expect.any(String) },
+  })))
   expect(deriveMessages(session)).toEqual([{ role: "user", content: "start" }])
   expect(session.events.at(-1)?.type).toBe("turn/end")
 })

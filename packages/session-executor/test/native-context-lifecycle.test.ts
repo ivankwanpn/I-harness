@@ -1,3 +1,5 @@
+import { controlledModel, restoreControlledTransport } from "./controlled-model.ts"
+import {checkpointOfLength} from '../../compaction/test/fixtures/checkpoint.ts'
 import {afterEach,expect,it,vi} from 'vitest'
 import {mkdir,mkdtemp,rm} from 'node:fs/promises'
 import {join,resolve} from 'node:path'
@@ -17,31 +19,44 @@ afterEach(()=>vi.unstubAllGlobals())
 it('replays actual native Agent and Code Mode refs across five protocol framings, compaction and restart',async()=>{
   const base=resolve('build/native-lifecycle-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'run-'))
   const store=join(root,'sessions'),nativeRoot=join(root,'native')
-  let coordinator=createSessionCoordinator(createJsonlBackend(store))
+  let coordinator=createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } })
   await coordinator.create({sessionId:'s'})
   let context=createContextOutputService({root:nativeRoot,workspaceId:'w',config:{enabled:true}})
   const requests:LLMRequest[]=[];let step=0
-  const model:ModelClient={async *stream(request){
+  const model:ModelClient=controlledModel(async function* (request) {
     requests.push(structuredClone(request));step++
     if(step===1)yield{type:'tool_call',call:{id:'direct-native',name:'fixture_long',args:{}}}
     else if(step===2)yield{type:'tool_call',call:{id:'code-native',name:'code_exec',args:{code:'text("x".repeat(20000)+"CODE_MIDDLE"+"y".repeat(20000));',max_output_tokens:16}}}
     else yield{type:'text/chunk',text:'Finished native capture.'}
     yield{type:'end'}
-  }}
-  const summarizer:ModelClient={async *stream(){yield{type:'text/chunk',text:'The tools completed; resume using native references.'};yield{type:'end'}}}
-  const options={workspace:root,sandbox:'danger-full-access' as const,approveAll:true,model,contextWindow:100000,codeMode:{mode:'mixed' as const},compact:{auto:false,summarizationModel:summarizer,minSummaryChars:1},additionalTools:[{name:'fixture_long',description:'fixture',inputSchema:{type:'object'},isReadOnly:true,execute:async()=> 'a'.repeat(20000)+'DIRECT_MIDDLE'+'b'.repeat(20000)}]}
+  })
+  const summarizer:ModelClient=controlledModel(async function* () {yield{type:'text/chunk',text:checkpointOfLength(600)};yield{type:'end'}})
+  const options={workspace:root,sandbox:'danger-full-access' as const,approveAll:true,model,contextWindow:100000,codeMode:{mode:'mixed' as const},compact:{auto:false,summarizationModel:summarizer,minSummaryChars:1},additionalTools:[{name:'fixture_long',description:'fixture',inputSchema:{type:'object'},isReadOnly:true,execute:async()=> 'a'.repeat(70000)+'DIRECT_MIDDLE'+'b'.repeat(70000)}]}
   let service=createSessionService({...options,coordinator,sessionFor:createDurableSessionLoader(coordinator),contextOutput:context})
   try {
     await service.submit('s','capture both outputs',new AbortController().signal)
     let assembly=await service.assemblyFor('s')
+    // A3 cutover: no legacy extractor ref is published for either output. The
+    // ordinary tool result carries its own managed envelope, and Code Mode
+    // emitted text carries a managed artifact nested in its observation.
     const refs=assembly.session.events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])
-    expect(refs).toHaveLength(2)
+    expect(refs).toEqual([])
     // structuredClone snapshots message content but turns AbortSignal into a
     // plain object. These independent wire replays need a fresh live signal.
     const replay={...requests.at(-1)!,signal:new AbortController().signal}
     const tools=replay.messages.filter(message=>message.role==='tool')
     expect(tools).toHaveLength(2)
-    for(const message of tools)expect(JSON.stringify(message)).toContain('contextRef')
+    const envelopes=tools.map(message=>JSON.parse(String((message as {content?:unknown}).content)) as {retention?:{kind:string;ref?:Record<string,unknown>};textRetention?:{envelope?:{retention?:{kind?:string;ref?:Record<string,unknown>}}}})
+    const directEnvelope=envelopes.find(envelope=>envelope.retention?.kind==='artifact')
+    const directRef=directEnvelope?.retention?.ref as {id:string;revision:string;codec:string;encodedBytes:number;contentDigest:string;completeness:string;version:1}
+    expect(directRef).toBeDefined()
+    // An inline tool result projects to its value directly; the code_exec
+    // observation therefore carries textRetention at the top level.
+    const codeOutput=envelopes.find(output=>output.textRetention)
+    const codeRetention=codeOutput?.textRetention
+    const codeRef=codeRetention?.envelope?.retention?.ref as {id:string;revision:string;codec:string;encodedBytes:number;contentDigest:string;completeness:string;version:1}
+    expect(codeRetention?.envelope?.retention?.kind).toBe('artifact')
+    expect(codeRef?.id).toMatch(/^ctxv1_[a-f0-9]{64}$/)
     const bodyRequests:Record<string,any>[]=[]
     vi.stubGlobal('fetch',vi.fn(async(_url:unknown,init:RequestInit)=>{bodyRequests.push(JSON.parse(String(init.body)));return new Response('',{status:200})}))
     const clients=[createOpenAIClient({apiKey:'fixture',baseUrl:'https://fixture.invalid',model:'fixture'}),createOpenAICompatibleClient({apiKey:'fixture',baseUrl:'https://fixture.invalid',model:'fixture'}),createAnthropicClient({apiKey:'fixture',baseUrl:'https://fixture.invalid',model:'fixture'}),createGeminiClient({apiKey:'fixture',baseUrl:'https://fixture.invalid',model:'fixture'})]
@@ -66,21 +81,35 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
     const bedrockBlocks=bedrock!.messages.flatMap((item:any)=>item.content)
     expect(bedrockBlocks.filter((item:any)=>item.toolResult)).toHaveLength(2)
     expect(bedrockBlocks.filter((item:any)=>item.toolResult).map((item:any)=>item.toolResult.toolUseId)).toEqual(bedrockBlocks.filter((item:any)=>item.toolUse).map((item:any)=>item.toolUse.toolUseId))
-    for(const body of bodyRequests){expect(JSON.stringify(body)).toContain(refs[0]!.id);expect(JSON.stringify(body)).toContain(refs[1]!.id);expect(JSON.stringify(body)).not.toContain('context/result-ref')}
+    for(const body of bodyRequests){expect(JSON.stringify(body)).toContain(directRef.id);expect(JSON.stringify(body)).toContain(codeRef.id);expect(JSON.stringify(body)).not.toContain('context/result-ref')}
+    restoreControlledTransport()
     expect((await assembly.compactNow()).compacted).toBe(true)
     await service.submit('s','continue after compaction',new AbortController().signal)
-    expect(requests.at(-1)!.systemPrompt).toContain(refs[0]!.id)
-    expect(requests.at(-1)!.systemPrompt).toContain(refs[1]!.id)
+    // Managed artifacts stay in their durable result facts; the legacy
+    // extractor recovery hint therefore carries no ref after compaction.
+    expect(requests.at(-1)!.systemPrompt).not.toContain('context/result-ref')
     await coordinator.flush('s');await service.close();await context.close();await coordinator.close()
-    coordinator=createSessionCoordinator(createJsonlBackend(store))
+    coordinator=createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } })
     context=createContextOutputService({root:nativeRoot,workspaceId:'w',config:{enabled:true}})
     service=createSessionService({...options,coordinator,sessionFor:createDurableSessionLoader(coordinator),contextOutput:context})
     await service.submit('s','resume after restart',new AbortController().signal)
     assembly=await service.assemblyFor('s')
-    expect(requests.at(-1)!.systemPrompt).toContain(refs[0]!.id)
-    const searched=await assembly.tools.execute({name:'code_exec',args:{code:'text(await tools.context_output_search({query:"DIRECT_MIDDLE"}));text(await tools.context_output_search({query:"CODE_MIDDLE"}));'}})
-    expect(JSON.stringify(searched.output)).toContain(refs[0]!.id);expect(JSON.stringify(searched.output)).toContain(refs[1]!.id)
-    const read=await assembly.tools.dispatch(await assembly.tools.prepare({name:'context_output_read',args:{refId:refs[0]!.id,offset:19990,maxBytes:40}},undefined,{sessionId:'s',callId:'read-resumed'}))
-    expect(JSON.stringify(read)).toContain('DIRECT_MIDDLE')
+    expect(requests.at(-1)!.systemPrompt).not.toContain('context/result-ref')
+    // Both managed artifacts are read back through the actual managed reader
+    // after a real process restart (search coverage for managed artifacts is
+    // an A4 concern and is deliberately not claimed here).
+    async function readManaged(ref:{id:string;revision:string;codec:string;encodedBytes:number;contentDigest:string;completeness:string;version:1}){
+      let offset=0,encoded=''
+      for(;;){
+        const page=await assembly.tools.dispatch(await assembly.tools.prepare({name:'context_output_read',args:{ref,offset,maxBytes:32768}},undefined,{sessionId:'s',callId:'read-'+ref.id+'-'+offset})) as {data:{kind:string;text?:string};eof:boolean;nextOffset:number|null}
+        if(page.data.kind!=='text')throw new Error('Expected a text page')
+        encoded+=page.data.text!
+        if(page.eof)break
+        offset=page.nextOffset!
+      }
+      return encoded
+    }
+    expect(await readManaged(directRef)).toContain('DIRECT_MIDDLE')
+    expect(JSON.parse(await readManaged(codeRef))).toContain('CODE_MIDDLE')
   } finally {await service.close();await context.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 },20000)

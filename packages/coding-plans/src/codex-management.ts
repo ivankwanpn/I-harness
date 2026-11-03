@@ -1,3 +1,4 @@
+import { createLiveExecutionEpoch } from "./live-execution-epoch.ts"
 /**
  * Codex-compatible account credentials, model catalog, usage and reset cards.
  * Inference transport stays in the existing Responses adapter; this service
@@ -38,7 +39,7 @@ export interface CodexManagement {
   start(): Promise<void>
   cancel(): Promise<void>
   refresh(): Promise<void>
-  token(accountId: string, signal?: AbortSignal): Promise<{ accessToken: string; accountId: string }>
+  token(accountId: string, signal?: AbortSignal): Promise<{ accessToken: string; accountId: string; authEpoch?: string }>
   models(accountId: string): Promise<CodexModel[]>
   signOut(expectedAccountId?: string): Promise<void>
   redeem(input: { accountId: string; creditId: string; confirmed: true }): Promise<void>
@@ -331,6 +332,7 @@ export function createCodexManagement(options: CodexManagementOptions): CodexMan
       if (!login.controller.signal.aborted && pending === login) message = "OpenAI management sign-in failed. Please try again."
     } finally { await finishLogin(login).catch(() => { message = "OpenAI management sign-in could not be saved." }) }
   }
+  const liveExecutionEpoch = createLiveExecutionEpoch()
   const service: CodexManagement = {
     state: () => locked(async doc => {
       const p = doc.profile
@@ -388,7 +390,7 @@ export function createCodexManagement(options: CodexManagementOptions): CodexMan
       if (p.accountId !== accountId) throw fail("OpenAI management account did not match")
       await access(doc, p, signal)
       signal?.throwIfAborted()
-      return { accessToken: p.accessToken!, accountId: p.workspaceId }
+      return { accessToken: p.accessToken!, accountId: p.workspaceId, authEpoch: liveExecutionEpoch(p) }
     }),
     models: accountId => locked(async doc => {
       const p = selected(doc)

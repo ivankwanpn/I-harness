@@ -1,0 +1,201 @@
+{
+  "collected": [
+    {
+      "path": "packages/context-output/test/result-integrity-codecs.test.ts",
+      "tests": 3
+    },
+    {
+      "path": "packages/context-output/test/result-page.test.ts",
+      "tests": 2
+    },
+    {
+      "path": "packages/context-output/test/result-integrity-vectors.test.ts",
+      "tests": 5
+    },
+    {
+      "path": "packages/context-output/test/result-integrity-witness.test.ts",
+      "tests": 5
+    },
+    {
+      "path": "packages/context-output/test/result-integrity-corruption.test.ts",
+      "tests": 11
+    },
+    {
+      "path": "packages/session-executor/test/result-reader-lifetime.test.ts",
+      "tests": 4
+    },
+    {
+      "path": "packages/context-output/test/managed-artifacts.test.ts",
+      "tests": 6
+    },
+    {
+      "path": "packages/desktop-gateway/test/result-page.test.ts",
+      "tests": 5
+    },
+    {
+      "path": "packages/context-output/test/cold-lookup-integrity.test.ts",
+      "tests": 6
+    },
+    {
+      "path": "packages/session-executor/test/retained-child-pins.test.ts",
+      "tests": 5
+    },
+    {
+      "path": "packages/context-output/test/original-owner-pin.test.ts",
+      "tests": 2
+    },
+    {
+      "path": "packages/context-output/test/managed-ownership.test.ts",
+      "tests": 6
+    },
+    {
+      "path": "packages/session-executor/test/result-reader.test.ts",
+      "tests": 5
+    },
+    {
+      "path": "packages/context-output/test/dependency-membership.test.ts",
+      "tests": 1
+    },
+    {
+      "path": "packages/desktop-gateway/test/result-page-host.test.ts",
+      "tests": 1
+    },
+    {
+      "path": "packages/session-executor/test/result-store-read.test.ts",
+      "tests": 5
+    },
+    {
+      "path": "packages/context-output/test/exec-frame-pages.test.ts",
+      "tests": 1
+    },
+    {
+      "path": "packages/context-output/test/result-dependency-query.test.ts",
+      "tests": 2
+    }
+  ],
+  "expected": [
+    "packages/context-output/test/cold-lookup-integrity.test.ts",
+    "packages/context-output/test/dependency-membership.test.ts",
+    "packages/context-output/test/exec-frame-pages.test.ts",
+    "packages/context-output/test/managed-artifacts.test.ts",
+    "packages/context-output/test/managed-ownership.test.ts",
+    "packages/context-output/test/original-owner-pin.test.ts",
+    "packages/context-output/test/result-dependency-query.test.ts",
+    "packages/context-output/test/result-integrity-codecs.test.ts",
+    "packages/context-output/test/result-integrity-corruption.test.ts",
+    "packages/context-output/test/result-integrity-vectors.test.ts",
+    "packages/context-output/test/result-integrity-witness.test.ts",
+    "packages/context-output/test/result-page.test.ts",
+    "packages/desktop-gateway/test/result-page-host.test.ts",
+    "packages/desktop-gateway/test/result-page.test.ts",
+    "packages/session-executor/test/result-reader-lifetime.test.ts",
+    "packages/session-executor/test/result-reader.test.ts",
+    "packages/session-executor/test/result-store-read.test.ts",
+    "packages/session-executor/test/retained-child-pins.test.ts"
+  ],
+  "tests": 75.0,
+  "files": 18,
+  "comparisons": [
+    {
+      "gate": "13-complete-manifest-red",
+      "beforeFiles": 616,
+      "afterFiles": 616,
+      "delta": 0,
+      "beforeSha256": "9b9b036c2d8fe44e86c128781ea72ccde9106a4a53064fffe3aac6cb73ad56f5",
+      "afterSha256": "9b9b036c2d8fe44e86c128781ea72ccde9106a4a53064fffe3aac6cb73ad56f5"
+    },
+    {
+      "gate": "15-final-context-storage",
+      "beforeFiles": 616,
+      "afterFiles": 616,
+      "delta": 0,
+      "beforeSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238",
+      "afterSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238"
+    },
+    {
+      "gate": "16-gateway-read-lifecycle",
+      "beforeFiles": 616,
+      "afterFiles": 616,
+      "delta": 0,
+      "beforeSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238",
+      "afterSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238"
+    },
+    {
+      "gate": "17-executor-read-lifecycle",
+      "beforeFiles": 616,
+      "afterFiles": 616,
+      "delta": 0,
+      "beforeSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238",
+      "afterSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238"
+    },
+    {
+      "gate": "18-final-context-types",
+      "beforeFiles": 616,
+      "afterFiles": 616,
+      "delta": 0,
+      "beforeSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238",
+      "afterSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238"
+    },
+    {
+      "gate": "19-executor-types",
+      "beforeFiles": 616,
+      "afterFiles": 616,
+      "delta": 0,
+      "beforeSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238",
+      "afterSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238"
+    },
+    {
+      "gate": "20-gateway-types",
+      "beforeFiles": 616,
+      "afterFiles": 616,
+      "delta": 0,
+      "beforeSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238",
+      "afterSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238"
+    },
+    {
+      "gate": "21-sdk-types",
+      "beforeFiles": 616,
+      "afterFiles": 616,
+      "delta": 0,
+      "beforeSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238",
+      "afterSha256": "112bf3091f7c3d319aae48c791dc7ce654bc872ec69786a5354c817e94173238"
+    },
+    {
+      "gate": "23-contained-final-regressions",
+      "beforeFiles": 4271,
+      "afterFiles": 4271,
+      "delta": 0,
+      "beforeSha256": "5528495d0a096772e7eabcce97da537f78be942bf204d0972c602e0fa463876b",
+      "afterSha256": "5528495d0a096772e7eabcce97da537f78be942bf204d0972c602e0fa463876b"
+    },
+    {
+      "gate": "24-all-sources-context-types",
+      "beforeFiles": 4271,
+      "afterFiles": 4271,
+      "delta": 0,
+      "beforeSha256": "5528495d0a096772e7eabcce97da537f78be942bf204d0972c602e0fa463876b",
+      "afterSha256": "5528495d0a096772e7eabcce97da537f78be942bf204d0972c602e0fa463876b"
+    },
+    {
+      "gate": "25-excluded-final-regressions",
+      "beforeFiles": 4271,
+      "afterFiles": 4271,
+      "delta": 0,
+      "beforeSha256": "5762ce5f6dc519ba2b2ff8a0793a701c2c0b08fba0e004058f84939a63b9f398",
+      "afterSha256": "5762ce5f6dc519ba2b2ff8a0793a701c2c0b08fba0e004058f84939a63b9f398"
+    },
+    {
+      "gate": "26-final-types",
+      "beforeFiles": 4271,
+      "afterFiles": 4271,
+      "delta": 0,
+      "beforeSha256": "5762ce5f6dc519ba2b2ff8a0793a701c2c0b08fba0e004058f84939a63b9f398",
+      "afterSha256": "5762ce5f6dc519ba2b2ff8a0793a701c2c0b08fba0e004058f84939a63b9f398"
+    }
+  ],
+  "finalSourceFiles": 4271,
+  "finalHead": "2dca85136ff24810f91224b1fae5a9193b2b8123",
+  "implementation": "740c515399eebe1c4a27e7367b44ef353b212310",
+  "base": "0df518e7042039ef0f312c53aa565abf314bef3a",
+  "nativeNodeSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5"
+}

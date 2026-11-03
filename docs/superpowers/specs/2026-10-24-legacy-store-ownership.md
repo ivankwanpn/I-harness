@@ -1,0 +1,28 @@
+# Legacy result-store ownership for the semantic fork cutover
+
+This is the F1-L0 prerequisite within the approved [integrated delivery](2026-10-23-v0.1.13-integrated-delivery.md). It repairs the existing store used by shipping legacy capture/read/search, before F1 adds original-operation transfer records. It does not itself complete semantic fork, add a second result store, or change Session format12.
+
+## Concrete defect
+
+`ContextStore.open` rebuilds `index.sqlite` and loads mutable owner maps without a store lifetime lease. Two service instances for the same workspace can therefore rebuild a live index or retain contradictory maps. Separately, legacy mutations use a service-local queue while managed result writes use the workspace quota lock. These paths account the same physical directory but can both admit growth against the same free space. A quota lock release failure is also currently discarded by the managed mutation callback's `finally`.
+
+The service reads root/workspace options at different times. Managed storage captures its directory during construction, but legacy construction and quota-lock lookup can later observe a different workspace. Once ownership is coordinated, one service must identify one storage root and workspace consistently.
+
+## Required behavior
+
+1. Capture and validate service root and workspace ID once at construction. All storage directories and lock keys use that immutable identity. Mutating the caller's options object cannot relocate an existing service. Configuration remains changeable through the existing `configure` API. Producer input capture, one invocation, Stop, disabled admission and read/search query snapshots keep their existing behavior.
+2. An open legacy SQLite store holds an exclusive lifetime lease under a distinct `context-output-legacy:<workspaceId>` key. Obtain it before touching the live index or loading owner maps. A competing open either acquires after the original has retired or reports the existing bounded lock conflict; it cannot delete/rebuild the current owner's index. Different workspace identities remain independent. Closed/reopened original data remains readable and searchable.
+3. The existing `context-output:<workspaceId>` quota lock remains the one short-lived mutation exclusion for both managed and legacy storage. Reuse its real filesystem lock and queue; do not introduce a second quota, index, completion registry or process execution owner. Legacy open/rebuild, prune/capture/put, grants, clear and budget changes all participate. Pure inventory of an unopened store remains possible without acquiring an index lifetime.
+4. User/host producer and authorization callbacks run outside the quota critical section. A callback may access managed results without deadlocking itself. Before publication recheck abort, store/lifetime identity, full captured ref equality/expiry and actual quota. Generic async authorization remains its existing prepared decision; F1's later observed-policy lifetime is a distinct obligation. Do not reacquire the same quota lock from nested store helpers; mutation ownership must be explicit, private and tied to the actual shared owner.
+5. Queued and admitted operations are joined before their SQLite database, original file lease and mutation owner are retired. Failed cleanup retains the original object and failure. Concurrent close callers observe the same outcome; a later explicit close retries only unfinished cleanup. If the raw native lease has consumed its held bit and release failed, a subsequent no-op is not proof of release. No new store is constructed around unresolved disposal.
+6. Opening failures preserve the original error and any cleanup error. An ordinary fully cleaned failed open can later retry after corrected configuration. Failed cleanup cannot be silently discarded from the service's `opening.finally`. Actual result reads, captures and repeated close remain available in their correct lifecycle states; a refusal alone is not acceptance.
+
+## Compatibility and limits
+
+Legacy artifacts, blobs and canonical `owners.json` arrays keep their existing formats and paths. The SQLite index remains derived. No legacy transfer metadata, seed representation, public DTO, new retention limit, provider behavior or release change is included. The old getter/read-count test intentionally recorded mutable workspace relocation; that behavior is explicitly superseded by immutable construction identity and must be replaced with causal identity tests. Normal owned source metadata and query budgets are not shortened.
+
+The existing fs-lock implementation supports Windows/Linux and refuses unsupported platforms. This task does not add a weaker fallback or claim macOS qualification. Acquiring a contended ownership lease may use the existing bounded backoff; no healthy-state polling loop is added.
+
+## Acceptance
+
+Use real services and the real database for same-process and separate-process competing open, original-owner read after conflict, release followed by cold reopen, and independent workspace controls. Interleave real legacy and managed growth at a controlled admission barrier to show one physical quota decision. Exercise producer/authorization callbacks that read managed data, close during opening and queued mutation, database close failure, releasable lease failure and consumed-held-bit uncertainty. Preserve ordinary capture/grant/read/search, expiry/clear, disabled managed grants, source visibility, result-close recovery and the genuine mixed-retention/index-rebuild scenario. Tests run against controlled temporary stores, without user accounts or provider calls.

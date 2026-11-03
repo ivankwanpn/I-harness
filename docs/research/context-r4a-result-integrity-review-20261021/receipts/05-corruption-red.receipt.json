@@ -1,0 +1,21 @@
+{
+  "name": "05-corruption-red",
+  "cwd": "D:\\I-harness-main\\packages\\context-output",
+  "executable": "C:/Program Files/nodejs/node.exe",
+  "arguments": [
+    "../../node_modules/vitest/vitest.mjs",
+    "run",
+    "test/result-integrity-corruption.test.ts",
+    "--maxWorkers=1",
+    "--minWorkers=1"
+  ],
+  "environment": {
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\shell-config",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:/I-harness-main/.tmp/r4ai-1021-01",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\native"
+  },
+  "startedUtc": "2026-10-20T20:01:59.3153352Z",
+  "finishedUtc": "2026-10-20T20:02:01.7831154Z",
+  "nativeExit": 1,
+  "head": "0df518e7042039ef0f312c53aa565abf314bef3a"
+}

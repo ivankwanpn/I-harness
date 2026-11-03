@@ -3,13 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
+    "@i-harness/context-engine": "workspace:*",
     "@i-harness/core-session": "workspace:*",
     "@i-harness/diagnostics": "workspace:*",
     "@i-harness/llm-seam": "workspace:*",
-    "@i-harness/provider": "workspace:*",
     "@i-harness/telemetry": "workspace:*",
     "@i-harness/token-meter": "workspace:*"
   }

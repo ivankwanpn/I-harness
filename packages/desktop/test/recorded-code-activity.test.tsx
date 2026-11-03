@@ -7,6 +7,16 @@ import { projectHistoryTimeline, projectTimeline, type WireEvent } from "../src/
 
 afterEach(cleanup)
 
+it('renders a retained Code Mode fact as a bounded preview and reference without losing legacy readers', () => {
+  const event: WireEvent = { type: 'code/output', cellId: 'retained', envelope: { version: 1, execution: { outcome: 'unknown', dispatch: 'not-dispatched' }, preview: 'saved preview', media: [], retention: { kind: 'artifact', ref: { version: 1, id: 'ctxv1_' + 'a'.repeat(64), revision: 'b'.repeat(64), codec: 'json-utf8-v1', encodedBytes: 1048578, contentDigest: 'c'.repeat(64), completeness: 'complete' } } }, seq: 2 }
+  render(<Timeline rows={projectHistoryTimeline([event])} historical />)
+  expect(screen.queryByText('saved preview')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Code Mode 輸出 retained' }))
+  expect(screen.getByText('saved preview')).toBeTruthy()
+  expect(screen.getByText('輸出已保存')).toBeTruthy()
+  expect(screen.getByText('完整保留 · complete')).toBeTruthy()
+})
+
 it("keeps 150k Code Mode text out of the closed DOM and copies the full historical output", async () => {
   const text = "owned beginning\n" + "captured text ".repeat(12000) + "\nowned ending"
   const writes: string[] = []

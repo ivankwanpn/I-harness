@@ -5,8 +5,15 @@ import { join } from "node:path"
 import { SettingsStore } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
 import { createProviderRuntime } from "../src/index.ts"
+import { requestVideoAudio } from '../src/video-audio.ts'
 
 afterEach(() => vi.unstubAllGlobals())
+it('an exact body limit rejects complete token-unknown audio before transport', async () => {
+  const fetch=vi.fn(()=>{throw Error('network denied')});vi.stubGlobal('fetch',fetch)
+  expect(await requestVideoAudio({wav:new Uint8Array(44),startSeconds:0,durationSeconds:1},{provider:'fixture',model:'audio',baseURL:'https://audio.fixture.invalid',apiKey:'synthetic',
+    budgetBinding:{version:1,metadata:{version:1,modelId:'audio',protocol:'openai-compatible',identityCoverage:'partial'},limits:{bodyBytes:{value:100,origin:'explicit-route',sourceId:'fixture-body-limit'}},generation:{origin:'provider-managed'},capability:{version:1,route:'openai-compatible',evidenceId:'fixture',outputParameter:'optional',packetKind:'http-json-body'}}})).toMatchObject({status:'failed',reason:'Audio request failed local admission.'})
+  expect(fetch).not.toHaveBeenCalled()
+})
 async function fixture() {
   const root = mkdtempSync(join(tmpdir(), "video-audio-"))
   const settings = new SettingsStore({ path: join(root, "settings.json") }); await settings.load()

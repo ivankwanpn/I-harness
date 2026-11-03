@@ -84,6 +84,31 @@ function fixtureState(input: { agents?: FixtureAgent[]; jobs?: FixtureJob[] } = 
 // ------------------------------------------------------------------ rows
 
 describe("projectAgentTasks (spec §8.2)", () => {
+  it('keeps a newer unqualified resident result ahead of an older initial task completion', () => {
+    const state = fixtureState({ agents: [{ id: 'root/helper', role: 'helper', status: 'waiting' }] })
+    const task = state.tasks.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/helper', description: 'initial', prompt: 'initial prompt', agent: 'helper', delivery: 'tool' })
+    state.tasks.claim(task.id); state.tasks.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'old initial body' })
+    const entry = state.table.get('root/helper')!
+    state.table.update(entry.path, entry, { status: 'recovery-required', publication: 'unqualified', finalText: undefined, error: '', result: { version: 1, kind: 'pending', revision: 'new-resident-revision' } })
+    const row = projectAgentTasks(state).find(row => row.id === entry.path)!
+    expect(row.status).toBe('failed')
+    expect(row.summary).toMatch(/recovery|publication/)
+    const detail = projectAgentTaskDetail(state, row)!
+    expect(detail).not.toHaveProperty('result')
+    expect(detail).toHaveProperty('error', '')
+  })
+
+  it('uses the current retained resident preview and preserves its empty fields', () => {
+    const state = fixtureState({ agents: [{ id: 'root/helper', role: 'helper', status: 'waiting' }] })
+    const task = state.tasks.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/helper', description: 'initial', prompt: 'initial prompt', agent: 'helper', delivery: 'tool' })
+    state.tasks.claim(task.id); state.tasks.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'old initial body' })
+    const entry = state.table.get('root/helper')!
+    state.table.update(entry.path, entry, { finalText: '', error: 'new resident error', result: { version: 1, kind: 'pending', revision: 'new-resident-revision' } })
+    const row = projectAgentTasks(state).find(row => row.id === entry.path)!
+    expect(row.status).toBe('waiting')
+    expect(projectAgentTaskDetail(state, row)).toMatchObject({ result: '', error: 'new resident error' })
+  })
+
   it("projects stable parent/child task rows without leaking registries", () => {
     const rows = projectAgentTasks(fixtureState({
       agents: [{ id: "root/helper", parentId: "root", role: "helper", status: "running" }],

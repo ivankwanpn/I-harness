@@ -1,0 +1,214 @@
+{
+  "format": "derived-index-native-portable-arguments-v1",
+  "policyRevision": "DELETE-IF10-13-20261025",
+  "adaptation": "IF14 compiler clones; IF15 portable explicit qualification",
+  "approvedToEnableMemory": true,
+  "provenance": {
+    "reviewedFoundation": "IF10-IF14 fixed DELETE foundations; independent full-range review PASS",
+    "originalQualificationManifestSHA256": "3e3350d696262a11a0ccf61eb2c1ae47744743fc949ef8ff624a0bc9c62f5412",
+    "portableCopy": "Local source artifacts were replaced by explicitly labeled reviewed source arguments with original official URLs/digests; no portable file claims to have original implementation bytes. Original checksum texts remain byte-identical."
+  },
+  "proof": {
+    "path": "reviewed-policy.md",
+    "sha256": "8cc9ee24a6c548813786351997b72b717142333ababedbb879301c339b4a45d5",
+    "representation": "portable reviewed source argument",
+    "originalSHA256": "78db68fc3fe123020628be86d4e02f12117070a67dc07a348e1ee51ab684ad69"
+  },
+  "additionalArguments": [
+    {
+      "path": "delete-main-journal-source-argument.md",
+      "sha256": "c3a86baffcf6dcaae9f95f99ae3c4d815fa3edac09642d89fda5a1d46f07f674",
+      "representation": "portable reviewed source argument",
+      "originalSHA256": "1e0af7b40bf8f24afb086416138130107d11017a7fd53741a053775cf3522c67"
+    },
+    {
+      "path": "delete-subjournal-source-argument.md",
+      "sha256": "7a50bed12a4d82809bcbe4f13333577bb271adb23b1005efac0ae4a7c6d64507",
+      "representation": "portable reviewed source argument",
+      "originalSHA256": "a1c12de07088f445758295591aced1eca1f4b73a2b2c59ea42eefd4b88e85b03"
+    }
+  ],
+  "runtimes": [
+    {
+      "role": "active",
+      "node": "v24.15.0",
+      "sqlite": "3.51.3",
+      "nodeSource": {
+        "path": "source-argument-v24.15.0.md",
+        "sha256": "0e5d4e66c851b9ade694ae4714090e0c2b40fccd8062925f0ca685f01f53f492",
+        "representation": "reviewed Node and bundled SQLite source argument",
+        "upstream": [
+          {
+            "version": "v24.15.0",
+            "source": "src/node_sqlite.cc",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v24.15.0/src/node_sqlite.cc",
+            "sha256": "ce249c17c02dbefc4fcab55cced04f3c6e114193c3c5924b0aec6fe56c961849",
+            "bytes": 127571
+          },
+          {
+            "version": "v24.15.0",
+            "source": "src/node_sqlite.h",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v24.15.0/src/node_sqlite.h",
+            "sha256": "fdbab6d0ca552077c303c8b8e3bf9105c048e75e5e406f52779df35cca01e0fa",
+            "bytes": 16444
+          },
+          {
+            "version": "v24.15.0",
+            "source": "deps/sqlite/sqlite.gyp",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v24.15.0/deps/sqlite/sqlite.gyp",
+            "sha256": "822f3ea1667f29d020fea176100ba5be14689d7242562ae4f4bd1f2be2590f6a",
+            "bytes": 932
+          },
+          {
+            "version": "v24.15.0",
+            "source": "deps/sqlite/sqlite3.c",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v24.15.0/deps/sqlite/sqlite3.c",
+            "sha256": "9512509b1bccb7461f79bea8aad6280ae4699e925fa4804381b71f59e7efb0c5",
+            "bytes": 9390466
+          }
+        ]
+      },
+      "sqliteSource": {
+        "path": "source-argument-v24.15.0.md",
+        "sha256": "0e5d4e66c851b9ade694ae4714090e0c2b40fccd8062925f0ca685f01f53f492",
+        "representation": "reviewed bundled SQLite source argument (same version-specific argument file)",
+        "upstream": [
+          {
+            "version": "v24.15.0",
+            "source": "src/node_sqlite.cc",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v24.15.0/src/node_sqlite.cc",
+            "sha256": "ce249c17c02dbefc4fcab55cced04f3c6e114193c3c5924b0aec6fe56c961849",
+            "bytes": 127571
+          },
+          {
+            "version": "v24.15.0",
+            "source": "src/node_sqlite.h",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v24.15.0/src/node_sqlite.h",
+            "sha256": "fdbab6d0ca552077c303c8b8e3bf9105c048e75e5e406f52779df35cca01e0fa",
+            "bytes": 16444
+          },
+          {
+            "version": "v24.15.0",
+            "source": "deps/sqlite/sqlite.gyp",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v24.15.0/deps/sqlite/sqlite.gyp",
+            "sha256": "822f3ea1667f29d020fea176100ba5be14689d7242562ae4f4bd1f2be2590f6a",
+            "bytes": 932
+          },
+          {
+            "version": "v24.15.0",
+            "source": "deps/sqlite/sqlite3.c",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v24.15.0/deps/sqlite/sqlite3.c",
+            "sha256": "9512509b1bccb7461f79bea8aad6280ae4699e925fa4804381b71f59e7efb0c5",
+            "bytes": 9390466
+          }
+        ]
+      },
+      "auditReceipt": {
+        "path": "reviewed-plans-v24.15.0.json",
+        "sha256": "2c33fa88b8bb016979e2bbbb83e6279094402d1e56f4d9fe8fbee447bfc1f155",
+        "representation": "portable reviewed observation extraction",
+        "originalSHA256": "2806feeb37cbfe0902573da281e09c5f20f2c1f0d0e9b64cf3933a011aa9d6de"
+      },
+      "checksum": {
+        "path": "SHASUMS256-v24.15.0.txt",
+        "sha256": "1e812945dee26c3e4ca41a8c0b582668ff2401ba0ae727a122300c0e8514edb0",
+        "representation": "unchanged original official checksum text",
+        "url": "https://nodejs.org/dist/v24.15.0/SHASUMS256.txt",
+        "originalSHA256": "1e812945dee26c3e4ca41a8c0b582668ff2401ba0ae727a122300c0e8514edb0"
+      }
+    },
+    {
+      "role": "floor",
+      "node": "v22.18.0",
+      "sqlite": "3.50.2",
+      "nodeSource": {
+        "path": "source-argument-v22.18.0.md",
+        "sha256": "94445b7334b5c3da6cbc6b1047f515076efc6d404aabe3015b63ea6662282e12",
+        "representation": "reviewed Node and bundled SQLite source argument",
+        "upstream": [
+          {
+            "version": "v22.18.0",
+            "source": "src/node_sqlite.cc",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v22.18.0/src/node_sqlite.cc",
+            "sha256": "f3f9b8f8b4428c09ec61d250989fd92c34f8c916fdf83f4019b2df49a32c260e",
+            "bytes": 92947
+          },
+          {
+            "version": "v22.18.0",
+            "source": "src/node_sqlite.h",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v22.18.0/src/node_sqlite.h",
+            "sha256": "f198fd1a3e86b32686e1bb0cbf64db233aefb25550f145840b88384bfee283bf",
+            "bytes": 9405
+          },
+          {
+            "version": "v22.18.0",
+            "source": "deps/sqlite/sqlite.gyp",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v22.18.0/deps/sqlite/sqlite.gyp",
+            "sha256": "822f3ea1667f29d020fea176100ba5be14689d7242562ae4f4bd1f2be2590f6a",
+            "bytes": 932
+          },
+          {
+            "version": "v22.18.0",
+            "source": "deps/sqlite/sqlite3.c",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v22.18.0/deps/sqlite/sqlite3.c",
+            "sha256": "c9a0b6829b81d5f1b78392181f09744c818117a725667411d517b98149fcd3be",
+            "bytes": 9281384
+          }
+        ]
+      },
+      "sqliteSource": {
+        "path": "source-argument-v22.18.0.md",
+        "sha256": "94445b7334b5c3da6cbc6b1047f515076efc6d404aabe3015b63ea6662282e12",
+        "representation": "reviewed bundled SQLite source argument (same version-specific argument file)",
+        "upstream": [
+          {
+            "version": "v22.18.0",
+            "source": "src/node_sqlite.cc",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v22.18.0/src/node_sqlite.cc",
+            "sha256": "f3f9b8f8b4428c09ec61d250989fd92c34f8c916fdf83f4019b2df49a32c260e",
+            "bytes": 92947
+          },
+          {
+            "version": "v22.18.0",
+            "source": "src/node_sqlite.h",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v22.18.0/src/node_sqlite.h",
+            "sha256": "f198fd1a3e86b32686e1bb0cbf64db233aefb25550f145840b88384bfee283bf",
+            "bytes": 9405
+          },
+          {
+            "version": "v22.18.0",
+            "source": "deps/sqlite/sqlite.gyp",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v22.18.0/deps/sqlite/sqlite.gyp",
+            "sha256": "822f3ea1667f29d020fea176100ba5be14689d7242562ae4f4bd1f2be2590f6a",
+            "bytes": 932
+          },
+          {
+            "version": "v22.18.0",
+            "source": "deps/sqlite/sqlite3.c",
+            "url": "https://github.com/nodejs/node/raw/refs/tags/v22.18.0/deps/sqlite/sqlite3.c",
+            "sha256": "c9a0b6829b81d5f1b78392181f09744c818117a725667411d517b98149fcd3be",
+            "bytes": 9281384
+          }
+        ]
+      },
+      "auditReceipt": {
+        "path": "reviewed-plans-v22.18.0.json",
+        "sha256": "cdb4b7489b50928d0c7b4ac33735be24f55e2357ddaaf67858bca42de9108010",
+        "representation": "portable reviewed observation extraction",
+        "originalSHA256": "f4084e1342d7b5bc3399dba428973ac4c914d95fed88a83550c3584563b9ce00"
+      },
+      "checksum": {
+        "path": "SHASUMS256-v22.18.0.txt",
+        "sha256": "5499a9c23b58f52f297f9541656564aee7025ef652f7f74d49b98f7c72f9030f",
+        "representation": "unchanged original official checksum text",
+        "url": "https://nodejs.org/dist/v22.18.0/SHASUMS256.txt",
+        "originalSHA256": "5499a9c23b58f52f297f9541656564aee7025ef652f7f74d49b98f7c72f9030f"
+      }
+    }
+  ],
+  "usage": {
+    "path": "usage.md",
+    "sha256": "6597011122db0647a896ff96c3d247b388c554c1f5a801ae121d297a5b0f9bed",
+    "representation": "portable explicit command instructions"
+  }
+}

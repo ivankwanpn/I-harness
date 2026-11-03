@@ -14,7 +14,10 @@ import { CapturedValueBlock, RawRecordedData } from "./RawRecordedData.tsx"
 import { RecordedFileLink } from "./RecordedFileLink.tsx"
 import { formatRecordedValue, record, recordedDiffs, recordedUnifiedDiff, resultImages, safeRecordedUrl, stringField, toolFamily } from "./tool-presentation.ts"
 import { useToolText } from "./tool-text.ts"
-import type { ToolResultReference } from "./project.ts"
+import type { RecordedResultReader } from "./result-pages.ts"
+import { RecordedResultEnvelope, RecordedImages } from "./RecordedResultEnvelope.tsx"
+export { RecordedImages } from "./RecordedResultEnvelope.tsx"
+import type { RecordedResultEnvelope as ResultEnvelope, ToolResultReference } from "./project.ts"
 import { useOutputCopy } from "./useOutputCopy.ts"
 
 function RecordedList({ label, rows, children }: { label: string; rows: unknown[]; children(row: unknown, index: number): ReactNode }) {
@@ -117,20 +120,6 @@ function RecordedWeb({ output }: { output: Record<string, unknown> }) {
   </div>
 }
 
-export function RecordedImages({ output, onPreview }: { output: unknown; onPreview?(preview: { src: string; name: string }): void }) {
-  const t = useToolText()
-  const images = useMemo(() => resultImages(output), [output])
-  if (!images.length) return null
-  const metadata = images.map(({ dataBase64, ...image }) => ({ ...image, bytes: Math.floor(dataBase64.length * 3 / 4) - (dataBase64.match(/=+$/)?.[0].length ?? 0) }))
-  return <>
-    <div className="tool-result-images">{images.map((image, index) => {
-      const src = `data:${image.mediaType};base64,${image.dataBase64}`, name = image.name || `${t("圖片", "Image")} ${index + 1}`
-      const thumbnail = <img src={src} alt={name} loading="lazy" decoding="async" />
-      return onPreview ? <button key={index} type="button" className="tool-result-image-button" aria-label={name} onClick={() => onPreview({ src, name })}>{thumbnail}</button> : <div key={index} className="tool-result-image-button">{thumbnail}</div>
-    })}</div>
-    <CapturedValueBlock label={t("圖片資料", "Image metadata")} value={metadata} />
-  </>
-}
 
 function RecordedReferences({ refs }: { refs: ToolResultReference[] }) {
   const t = useToolText()
@@ -148,9 +137,9 @@ function RecordedReference({ reference: ref }: { reference: ToolResultReference 
   </details>
 }
 
-export function RecordedToolOutput({ name, args, output, resultReceived, navigation, resultRefs, onPreview }: { name: string; args: unknown; output: unknown; resultReceived?: true; navigation?: FileNavigation; resultRefs?: ToolResultReference[]; onPreview?(preview: { src: string; name: string }): void }) {
+function RecordedToolBody({ name, args, output, resultReceived, navigation, resultRefs, onPreview, retained }: { name: string; args: unknown; output: unknown; resultReceived?: true; navigation?: FileNavigation; resultRefs?: ToolResultReference[]; onPreview?(preview: { src: string; name: string }): void; retained?: boolean }) {
   const t = useToolText(), row = record(output), family = toolFamily(name)
-  const images = useMemo(() => resultImages(output), [output])
+  const images = useMemo(() => retained ? [] : resultImages(output), [output, retained])
   let content: ReactNode, typed = false
   if (family === "command" && (typeof output === "string" || typeof row?.stdout === "string" || typeof row?.stderr === "string")) {
     typed = true
@@ -189,10 +178,15 @@ export function RecordedToolOutput({ name, args, output, resultReceived, navigat
   else content = <p className="tool-result-note">{resultReceived ? t("未記錄輸出內容", "No output body was recorded") : t("尚未回報結果", "No result recorded yet")}</p>
   const error = row?.error
   return <div className="tool-recorded-output">
-    {error !== undefined && error !== null && error !== "" && typed ? <CapturedValueBlock label={t("錯誤記錄", "Recorded error")} value={error} /> : null}
+    {!retained && error !== undefined && error !== null && error !== "" && typed ? <CapturedValueBlock label={t("錯誤記錄", "Recorded error")} value={error} /> : null}
     {content}
-    <RecordedImages output={output} onPreview={onPreview} />
+    {!retained ? <RecordedImages output={output} onPreview={onPreview} /> : null}
     {resultRefs?.length ? <RecordedReferences refs={resultRefs} /> : null}
-    <RawRecordedData key={name} name={name} args={args} output={output} includeOutput={typed} />
+    <RawRecordedData key={name} name={name} args={args} output={output} includeOutput={retained || typed} />
   </div>
+}
+
+export function RecordedToolOutput({ envelope, resultReader, ...props }: Parameters<typeof RecordedToolBody>[0] & { envelope?: ResultEnvelope; resultReader?: RecordedResultReader }) {
+  if (envelope) return <RecordedResultEnvelope resultReader={resultReader} envelope={envelope} onPreview={props.onPreview} renderInline={value => <RecordedToolBody {...props} output={value} retained />} />
+  return <RecordedToolBody {...props} />
 }

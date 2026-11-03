@@ -180,7 +180,7 @@ describe("llm-openai-compatible protocol", () => {
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
     expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-compatible", model: "deepseek-flash", reasoningContent: "think more" } })
-    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-compatible", model: "deepseek-flash", reasoningContent: "think more" } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-compatible", model: "deepseek-flash", reasoningContent: "think more" } }, { role: "tool", toolCallId: "c1", content: "fixture outcome" }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
     expect(body.messages[0].reasoning_content).toBe("think more")
@@ -192,6 +192,7 @@ describe("llm-openai-compatible protocol", () => {
     vi.stubGlobal("fetch", fetchMock)
     const iterator = createOpenAICompatibleClient({ apiKey: "k", model: "new-model" }).stream({ messages: [
       { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-compatible", model: "old-model", reasoningContent: "old thought" } },
+      { role: "tool", toolCallId: "c1", content: "fixture outcome" },
     ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
@@ -292,7 +293,7 @@ describe("M14 openai-compatible wire", () => {
       tools: [],
       messages: [
         { role: "user", content: "hi, plain string" },
-        { role: "assistant", content: "" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }] },
         { role: "tool", toolCallId: "call_1", content: '{"content":"data"}' },
       ],
     })) {
@@ -306,7 +307,7 @@ describe("M14 openai-compatible wire", () => {
     expect(body.messages).toEqual([
       { role: "system", content: "s" },
       { role: "user", content: "hi, plain string" },
-      { role: "assistant", content: "" },
+      { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }] },
       { role: "tool", tool_call_id: "call_1", content: '{"content":"data"}' },
     ])
   })
@@ -333,7 +334,8 @@ describe("M14 openai-compatible wire", () => {
     expect(body.messages).toEqual([
       { role: "system", content: "s" },
       { role: "assistant", content: "planned", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: '{"path":"a.txt"}' } }] },
-      { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "tool says hi" }, { type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } }] },
+      { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "tool says hi" }] },
+      { role: 'user', content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } }] },
     ])
   })
 

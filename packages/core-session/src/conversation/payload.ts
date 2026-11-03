@@ -1,0 +1,93 @@
+import { copyConversationData } from './render.ts'
+import type { PreparedPrunedResult } from './restoration-types.ts'
+import type { ConversationSourceRef } from "./types.ts"
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
+import { imageDescriptor, type ImageInput } from "../images.ts"
+import { renderPruneSubstitute, type PruneRecord } from "../projection/pruning.ts"
+import { stringifyJsonData } from "../serialization/json-data.ts"
+import { resultText, resultIsError } from '../results/projection.ts'
+import type { ResultEnvelope } from '../results/types.ts'
+
+export type ConversationPayloadCapture = (value: unknown, source: ConversationSourceRef) => unknown
+export type ConversationPayloadReader = <T extends object, K extends keyof T>(value: T, key: K, source: ConversationSourceRef) => T[K]
+
+/** One selected capture per actual object/property slot. A source address can
+ * describe multiple payload fields (for example admission text and images). */
+export function createConversationPayloadReader(capture?: ConversationPayloadCapture): ConversationPayloadReader {
+  const captured = new WeakMap<object, Map<PropertyKey, unknown>>()
+  return (value, key, source) => {
+    if (!capture) return value[key]
+    let slots = captured.get(value)
+    if (!slots) { slots = new Map(); captured.set(value, slots) }
+    if (slots.has(key)) return slots.get(key) as typeof value[typeof key]
+    const owned = readConversationPayload(value, key, source, capture)
+    slots.set(key, owned)
+    return owned
+  }
+}
+
+/** Payload slots are read by descriptor before caller-owned validation. */
+export function readConversationPayload<T, K extends keyof T>(event: T, key: K, source: ConversationSourceRef, capture?: ConversationPayloadCapture): T[K] {
+  if (!capture) return event[key]
+  const descriptor = Object.getOwnPropertyDescriptor(event, key)
+  if (!descriptor) return undefined as T[K]
+  if (!("value" in descriptor) || !descriptor.enumerable) {
+    // Let the same validator reject a descriptor without executing its getter.
+    capture(Object.defineProperty({}, "payload", descriptor), source)
+    throw new Error("CONTEXT_SNAPSHOT_UNSUPPORTED")
+  }
+  return (descriptor.value === undefined ? undefined : capture(descriptor.value, source)) as T[K]
+}
+
+/** Outcome metadata never invokes accessors on unknown result graphs. */
+export function outcomeField(output: unknown, key: string): unknown {
+  if (!output || typeof output !== "object") return undefined
+  const descriptor = Object.getOwnPropertyDescriptor(output, key)
+  return descriptor && "value" in descriptor ? descriptor.value : undefined
+}
+
+/** Preflight exactly the retained result components before any JSON serializer. */
+export function projectToolResult(event: Extract<SessionEvent, { type: "tool/result" }>, record: PruneRecord | undefined, source: ConversationSourceRef, imageSource: ConversationSourceRef, capture?: ConversationPayloadCapture): { content: string; images?: ImageInput[] } {
+  if (event.envelope) {
+    if (record !== undefined) {
+      const media = readConversationPayload(event.envelope, 'media', imageSource, capture)
+      return { content: renderPruneSubstitute(capture ? capture(record, source) as PruneRecord : record), ...(media.length ? { images: [...media] } : {}) }
+    }
+    const envelope = readConversationPayload<{ envelope?: unknown }, 'envelope'>(event, 'envelope', source, capture) as ResultEnvelope
+    return { content: resultText(envelope), ...(envelope.media.length ? { images: [...envelope.media] } : {}) }
+  }
+  const output = record === undefined ? readConversationPayload(event, "output", source, capture) : undefined
+  // A pruned view retains its preview and images, not excluded raw output.
+  const out = record === undefined ? output : readConversationPayload(event, "output", source, capture ? value => value : undefined)
+  const images = out && typeof out === "object" ? readConversationPayload(out as { images?: ImageInput[] }, "images", imageSource, capture) : undefined
+  const content = record === undefined ? toolResultText(output) : renderPruneSubstitute(capture ? capture(record, source) as PruneRecord : record)
+  return { content, ...(Array.isArray(images) && images.length ? { images } : {}) }
+}
+
+/** Images travel in a companion message, never as base64 in result text. */
+function toolResultText(output: unknown): string {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) return stringifyJsonData(output) ?? String(output)
+  const record = output as Record<string, unknown>
+  const images = record["images"]
+  if (!Array.isArray(images) || images.length === 0) return stringifyJsonData(output) ?? String(output)
+  const { images: _images, ...rest } = record
+  const hasRest = Object.keys(rest).length > 0
+  const restText = hasRest ? (stringifyJsonData(rest) ?? String(rest)) : ""
+  const descriptor = imageDescriptor(images as ImageInput[])
+  return hasRest ? restText + descriptor : descriptor.trimStart()
+}
+
+/** Projection-only preparation after original complete-source validation. The
+ * returned closed slots never retain the excluded event/output/envelope. */
+export function preparePrunedResultProjection(event: Extract<SessionEvent, {type:'tool/result'}>, prune: PruneRecord, pruneSource: PreparedPrunedResult['pruneSource']): PreparedPrunedResult {
+  const originalMedia = event.envelope ? event.envelope.media : outcomeField(outcomeField(event, 'output'), 'images')
+  const media = Array.isArray(originalMedia) ? copyConversationData(originalMedia) as ImageInput[] : []
+  const stack:object[]=[media];while(stack.length){const value=stack.pop()!;for(const child of Object.values(value))if(child&&typeof child==='object'&&(Array.isArray(child)||Object.getPrototypeOf(child)===Object.prototype||Object.getPrototypeOf(child)===null))stack.push(child);Object.freeze(value)}
+  return Object.freeze({kind:'pruned-result',callId:event.callId,name:event.name,isError:event.envelope ? resultIsError(event.envelope) : event.isError===true,
+    media:Object.freeze(media),prune:Object.freeze({callId:prune.callId,head:prune.head,tail:prune.tail,removedBytes:prune.removedBytes}),pruneSource:Object.freeze({...pruneSource})})
+}
+export function projectPrunedResultProjection(slot: PreparedPrunedResult, source: ConversationSourceRef, imageSource: ConversationSourceRef, capture?: ConversationPayloadCapture): {content:string;images?:ImageInput[]} {
+  const record = capture ? capture(slot.prune,source) as PruneRecord : slot.prune
+  const media = capture ? capture(slot.media,imageSource) as ImageInput[] : slot.media
+  return {content:renderPruneSubstitute(record),...(media.length?{images:[...media]}:{})}
+}

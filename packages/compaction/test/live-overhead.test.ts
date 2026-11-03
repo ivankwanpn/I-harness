@@ -1,16 +1,12 @@
-import { expect, it } from "vitest"
-import { append, createSession } from "@i-harness/core-session"
-import type { ModelClient } from "@i-harness/llm-seam"
-import { createCompactionEngine } from "../src/index.ts"
-
-it("uses a changed live tool catalog price without rebuilding or resetting the compactor", async () => {
-  const session = createSession()
-  append(session, { type: "user/message", text: "x".repeat(300_000) })
-  const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "summary ".repeat(150) }; yield { type: "end" } } }
-  let overhead = 0
-  const engine = createCompactionEngine({ model, config: { contextWindow: 200_000, thresholdRatio: .8 }, overheadTokens: () => overhead })
-  expect((await engine.maybeCompact(session)).compacted).toBe(false)
-  overhead = 100_000
-  expect((await engine.maybeCompact(session)).compacted).toBe(true)
-  expect(session.events.some(e => e.type === "compaction/summary")).toBe(true)
+import { expect, it } from 'vitest'
+import { createCompactionHarness } from './fixtures/engine.ts'
+import { history, spyModel, autoConfig } from './fixtures/history.ts'
+it('reads the actual live system/schema surface on every probe without rebuilding the owner', async () => {
+  const f = spyModel(), session = history(); let systemPrompt = 'fixed '.repeat(20000)
+  const engine = createCompactionHarness({ model: f.model, config: autoConfig, requestShape: () => ({ systemPrompt, tools: [] }) })
+  expect(await engine.compact(session)).toMatchObject({ blockedReason: 'fixed-input', compacted: false })
+  expect(f.requests).toEqual([])
+  systemPrompt = 'current small system'
+  expect((await engine.compact(session)).compacted).toBe(true)
+  expect(f.requests[0]?.systemPrompt).toBe(systemPrompt)
 })

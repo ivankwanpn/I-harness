@@ -10,10 +10,12 @@ import re
 import select
 import selectors
 import signal
+import socket
 import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 MAX_FRAME = 256 * 1024
@@ -104,42 +106,108 @@ def require_same_mount(fd, expected):
 
 
 def canonical_directory(fd):
-    """Resolve spelling from verified directory entries, preserving Linux case rules."""
-    current = os.dup(fd)
-    names, ancestors, examined = [], [], 0
+    """Prove the selected location; proc text only nominates exact entry names.
+
+    Other names need no metadata. This deliberately no longer rejects a selected
+    location merely because another sibling attachment reaches the same object.
+    """
+    owner = Prepared.__new__(Prepared)
+    owner.directories = []
+    examined = 0
     deadline = time.monotonic() + 2.0
+    flags = os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+    def bounded():
+        require(time.monotonic() <= deadline, 'directory canonicalization limit exceeded')
+
+    def identity(current):
+        bounded()
+        info, mount = metadata(current)
+        require(type(mount) is int and 0 < mount < 2 ** 64
+                and stat.S_ISDIR(info[2]) and Directory.key(os.fstat(current)) == info[:2],
+                'directory identity changed')
+        return info[:2] + (mount,)
+
+    def parent_edge(child, parent_identity):
+        parent = temporary_directory(owner, '..', flags, dir_fd=child)
+        require(identity(parent) == parent_identity, 'directory parent edge changed')
+
     try:
-        for _ in range(128):
-            child_identity = Directory.key(os.fstat(current))
+        original = identity(fd)  # Borrowed input never enters the retirement list.
+        hint_path = os.fsencode('/proc/self/fd/' + str(fd))
+        hint = os.readlink(hint_path)
+        require(isinstance(hint, bytes) and hint.startswith(b'/') and len(hint) <= 32768
+                and not hint.endswith(b' (deleted)'), 'directory selected spelling unavailable')
+        names = [] if hint == b'/' else hint[1:].split(b'/')
+        require(len(names) < 128 and all(name not in (b'', b'.', b'..') and b'\0' not in name for name in names),
+                'directory selected spelling unavailable')
+        root = temporary_directory(owner, '/', flags)
+        root_identity = identity(root)
+        current, ancestors, edges = root, [root_identity], []
+        for name in names:
+            parent_identity = identity(current)
+            readable = temporary_directory(owner, '.', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                           dir_fd=current)
+            require(identity(readable) == parent_identity, 'directory parent changed')
+            matches = 0
+            with os.scandir(readable) as entries:
+                for entry in entries:
+                    examined += 1
+                    bounded()
+                    require(examined <= 8192, 'directory canonicalization limit exceeded')
+                    # NAME bytes only: no d_ino, type, stat or casefold premise.
+                    matches += os.fsencode(entry.name) == name
+            require(matches == 1, 'directory exact selected name unavailable')
+            selected, mount = metadata(current, name)
+            require(stat.S_ISDIR(selected[2]), 'selected directory changed')
+            child = temporary_directory(owner, name, flags, dir_fd=current)
+            child_identity = identity(child)
+            require(child_identity == selected[:2] + (mount,), 'selected directory changed')
+            parent_edge(child, parent_identity)
+            require(child_identity not in ancestors, 'directory ancestry cycle')
+            edges.append((current, child, name, parent_identity, child_identity))
             ancestors.append(child_identity)
-            parent = os.open('..', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=current)
-            try:
-                if Directory.key(os.fstat(parent)) == child_identity:
-                    os.close(parent)
-                    return '/' + '/'.join(reversed(names)), tuple(ancestors)
-                matches = []
-                with os.scandir(parent) as entries:
-                    for entry in entries:
-                        examined += 1
-                        require(examined <= 8192 and time.monotonic() <= deadline,
-                                'directory canonicalization limit exceeded')
-                        info = os.stat(entry.name, dir_fd=parent, follow_symlinks=False)
-                        if stat.S_ISDIR(info.st_mode) and Directory.key(info) == child_identity:
-                            matches.append(entry.name)
-                require(len(matches) == 1, 'ambiguous directory identity')
-                names.append(matches[0])
-            except Exception:
-                os.close(parent)
-                raise
-            os.close(current)
-            current = parent
-        raise Refusal('directory canonicalization limit exceeded')
-    finally:
-        os.close(current)
+            current = child
+        require(identity(current) == original, 'selected directory does not match original descriptor')
+        for parent, child, name, parent_identity, child_identity in edges:
+            require(identity(parent) == parent_identity and identity(child) == child_identity,
+                    'directory ancestor changed')
+            selected, mount = metadata(parent, name)
+            require(stat.S_ISDIR(selected[2]) and selected[:2] + (mount,) == child_identity,
+                    'selected directory edge changed')
+            parent_edge(child, parent_identity)
+        namespace_root = temporary_directory(owner, '/', flags)
+        require(identity(namespace_root) == root_identity and identity(fd) == original
+                and os.readlink(hint_path) == hint, 'directory selected location changed')
+        bounded()
+        result = os.fsdecode(hint), tuple(ancestors)
+    except BaseException as primary:
+        try:
+            owner.close()
+        except BaseException as cleanup:
+            raise WorkerFailure('directory proof cleanup incomplete', [primary, cleanup], owner=owner) from primary
+        raise
+    # No proof or cache can escape before every temporary close is acknowledged.
+    owner.close()
+    return result
+
+
+def temporary_directory(owner, path, flags, **kwargs):
+    entry = Directory.__new__(Directory)
+    entry.fd = os.open(path, flags, **kwargs)
+    entry.close_state, entry.close_error = 'live', None
+    owner.directories.append(entry)
+    return entry.fd
 
 
 def directory_contains(root, child):
-    return root.identity in child.ancestors
+    return (contains(root.physical, child.physical)
+            and root.ancestors == child.ancestors[:len(root.ancestors)])
+
+
+def directory_object_contains(root, child):
+    # Protected-reference exclusion is deliberately mount/location insensitive.
+    return root.identity in tuple(identity[:2] for identity in child.ancestors)
 
 
 class Directory:
@@ -157,18 +225,18 @@ class Directory:
         self.mapped = mapped
         self.physical = os.path.realpath(mapped, strict=True)
         self.fd = os.open(self.physical, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
-        self.identity = self.key(os.fstat(self.fd))
+        self.close_state, self.close_error = 'live', None
         try:
+            self.identity = self.key(os.fstat(self.fd))
             self.mount_identity = read_mount_id(self.fd)
-            if canonical_cache is not None and self.identity in canonical_cache:
-                self.physical, self.ancestors = canonical_cache[self.identity]
-            else:
-                self.physical, self.ancestors = canonical_directory(self.fd)
-                if canonical_cache is not None:
-                    canonical_cache[self.identity] = self.physical, self.ancestors
+            self.physical, self.ancestors = canonical_directory(self.fd)
             self.validate(canonical_cache)
-        except Exception:
-            os.close(self.fd)
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup:
+                raise WorkerFailure('directory initialization cleanup incomplete',
+                                    [primary, cleanup], owner=self) from primary
             raise
 
     @staticmethod
@@ -176,6 +244,9 @@ class Directory:
         return info.st_dev, info.st_ino
 
     def validate(self, canonical_cache=None):
+        require(self.close_state == 'live', 'directory original descriptor is retiring')
+        owner = Prepared.__new__(Prepared)
+        owner.directories = []
         try:
             require(self.key(os.stat(self.mapped)) == self.identity
                     and self.key(os.stat(self.physical)) == self.identity
@@ -183,24 +254,47 @@ class Directory:
             require_same_mount(self.fd, self.mount_identity)
             # A same-inode mount replacement at either spelling must not pass the fence.
             for path in (os.path.realpath(self.mapped, strict=True), self.physical):
-                current_fd = os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-                try:
-                    require_same_mount(current_fd, self.mount_identity)
-                    require(self.key(os.fstat(current_fd)) == self.identity, 'directory identity changed')
-                finally:
-                    os.close(current_fd)
-            if canonical_cache is not None and self.identity in canonical_cache:
-                current = canonical_cache[self.identity]
-            else:
-                current = canonical_directory(self.fd)
-                if canonical_cache is not None:
-                    canonical_cache[self.identity] = current
+                current_fd = temporary_directory(owner, path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                require_same_mount(current_fd, self.mount_identity)
+                require(self.key(os.fstat(current_fd)) == self.identity, 'directory identity changed')
+                require(canonical_directory(current_fd) == (self.physical, self.ancestors),
+                        'directory selected spelling changed')
+            current = canonical_directory(self.fd)
             require(current == (self.physical, self.ancestors), 'directory identity or ancestry changed')
-        except OSError:
-            raise Refusal('directory identity changed') from None
+            cache_key = self.identity + (self.mount_identity, self.physical)
+            if canonical_cache is not None:
+                require(cache_key not in canonical_cache or canonical_cache[cache_key] == current,
+                        'directory cache proof changed')
+        except BaseException as primary:
+            try:
+                owner.close()
+            except BaseException as cleanup:
+                raise WorkerFailure('directory validation cleanup incomplete', [primary, cleanup], owner=owner) from primary
+            if isinstance(primary, OSError):
+                raise Refusal('directory identity changed') from primary
+            raise
+        owner.close()
+        if canonical_cache is not None:
+            canonical_cache[cache_key] = current
 
     def close(self):
-        os.close(self.fd)
+        if self.close_state == 'closed':
+            return
+        if self.close_state == 'unknown':
+            raise self.close_error
+        # Install uncertainty BEFORE issue. Linux may have consumed this FD
+        # even if the call raises; its number must never authorize a retry.
+        self.close_error = RuntimeError('original directory close outcome unknown')
+        self.close_state = 'unknown'
+        try:
+            result = os.close(self.fd)
+            if result is not None:
+                raise RuntimeError('directory close acknowledgment unknown')
+        except BaseException as error:
+            self.close_error = error
+            raise
+        self.fd = None
+        self.close_state = 'closed'
 
 
 def write_inventory(roots, checkpoint=lambda: None, statistics=None):
@@ -350,20 +444,25 @@ class Prepared:
                     raise Refusal('managed runtime directory unavailable or changed') from None
                 require(directory_contains(directory, binary_directory), 'managed runtime bin escapes release')
                 self.runtimes.append(directory)
-            require(self.authority and any(a.identity == self.primary.identity for a in self.authority), 'missing primary authority')
+            require(self.authority and any(a.physical == self.primary.physical and a.ancestors == self.primary.ancestors
+                                          for a in self.authority), 'missing primary authority')
             require(policy['authorityKind'] != 'unbound' or len(self.authority) == 1, 'invalid unbound authority')
             require(any(directory_contains(a, self.cwd) for a in self.authority), 'cwd outside authority')
             require(self.mode != 'read-only' or not self.writes, 'read-only cannot grant writes')
             require(all(any(directory_contains(a, w) for a in self.authority) for w in self.writes), 'write outside authority')
-            require(all(not directory_contains(r, w) and not directory_contains(w, r)
+            require(all(not directory_object_contains(r, w) and not directory_object_contains(w, r)
                         for w in self.writes for r in self.references), 'write overlaps reference')
             require(all(not contains('/tmp', d.physical) and not contains('/run/WSL', d.physical)
                         and d.physical not in ('/', '/proc', '/dev') for d in self.directories), 'unsupported root location')
             self.inventory_statistics = {}
             self.inventory = write_inventory(self.writes, checkpoint, self.inventory_statistics)
             self.runtime_inventory = write_inventory(self.runtimes, checkpoint)
-        except Exception:
-            self.close()
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup:
+                raise WorkerFailure('preparation cleanup incomplete',
+                                    [primary, cleanup], owner=self) from primary
             raise
 
     def validate(self, checkpoint=lambda: None):
@@ -376,9 +475,19 @@ class Prepared:
         require(write_inventory(self.runtimes, checkpoint) == self.runtime_inventory, 'managed runtime inventory changed')
 
     def close(self):
+        retained, errors = [], []
         for directory in self.directories:
-            directory.close()
-        self.directories.clear()
+            try:
+                directory.close()
+            except BaseException as error:
+                retained.append(directory)
+                errors.append(error)
+        # Remove acknowledged originals immediately; keep exact unknown
+        # entries/errors reachable. Independent siblings were all attempted.
+        self.directories = retained
+        if errors:
+            raise WorkerFailure('prepared directory cleanup incomplete',
+                                errors, owner=self)
 
 
 def seccomp_fd():
@@ -443,6 +552,14 @@ def probe():
         return False, 'WSL2 isolation startup unavailable'
 
 
+class WorkerFailure(Exception):
+    """Identity-preserving aggregate, including on the supported Python 3.10."""
+    def __init__(self, message, errors, owner=None):
+        super().__init__(message)
+        self.exceptions = tuple(errors)
+        self.owner = owner
+
+
 class Worker:
     def __init__(self, nonce, digest):
         self.nonce, self.digest = nonce, digest
@@ -458,6 +575,21 @@ class Worker:
         self.streams = 0
         self.admission_deadline = 0
         self.progress_at = 0
+        self.wait_thread = None
+        self.wait_read = self.wait_write = None
+        self.wait_result = None
+        self.wait_errors = []
+        self.wait_state = 'not-started'
+        self.wait_registered = set()
+        self.wait_close_unknown = set()
+        self.failure_sockets = None
+        self.failure_socket_unknown = set()
+        self.failure_socket_closed = set()
+        self.setup_complete = False
+        self.cancel_acknowledged = False
+        self.failures = []
+        self.wait_consumed = False
+        self.selector_close_state = 'open'
 
     def checkpoint(self):
         now = time.monotonic()
@@ -499,32 +631,54 @@ class Worker:
         self.pending.extend(line)
 
     def stop(self):
-        if self.child is not None and self.child.poll() is None:
+        errors = []
+        if self.child is not None and (self.wait_result is None or self.wait_result[1] is not None) and not self.cancel_acknowledged:
             # Only the owned launcher/session. Namespace init destruction also kills setsid descendants.
             try:
                 os.killpg(self.child.pid, signal.SIGKILL)
+                self.cancel_acknowledged = True
             except ProcessLookupError:
-                pass
+                self.cancel_acknowledged = True
+            except BaseException as error:
+                errors.append(error)
         self.input.clear()
         self.ended = True
-        self.close_input()
-        if self.phase == 'prepared':
-            self.prepared.close()
-            self.prepared = None
-            self.phase = 'settled'
-            self.emit('settled')
+        try:
+            self.close_input()
+        except BaseException as error:
+            errors.append(error)
+        if self.child is None and self.phase == 'prepared' and not self.failed:
+            try:
+                self.prepared.close()
+                self.prepared = None
+                self.phase = 'settled'
+                self.emit('settled')
+            except BaseException as error:
+                errors.append(error)
+        if errors:
+            raise WorkerFailure('cancellation incomplete', errors)
 
     def fail(self, detail):
+        self.failures.append(detail)
         if self.failed:
             return
         self.failed = True
-        self.stop()
-        self.emit('error', detail=detail)
+        self.phase = 'failed'
         self.exiting = True
+        try:
+            self.stop()
+        except BaseException as error:
+            self.failures.append(error)
+        try:
+            self.emit('error', detail='worker operation refused')
+        except BaseException as error:
+            self.failures.append(error)
         try:
             self.selector.unregister(0)
         except KeyError:
             pass
+        except BaseException as error:
+            self.failures.append(error)
 
     def refuse(self, detail):
         if self.prepared is not None:
@@ -583,15 +737,23 @@ class Worker:
                 os.close(fd)
                 os.close(root_fd)
             self.phase = 'active'
+            self.setup_complete = False
+            self.start_waiter()
             for name in ('stdout', 'stderr'):
                 stream = getattr(self.child, name)
                 os.set_blocking(stream.fileno(), False)
                 self.selector.register(stream, selectors.EVENT_READ, name)
                 self.streams += 1
             os.set_blocking(self.child.stdin.fileno(), False)
+            self.setup_complete = True
             self.emit('started', pid=self.child.pid)
         elif kind in ('cancel', 'shutdown'):
             self.stop()
+            if self.child is None and self.phase == 'prepared':
+                self.prepared.close()
+                self.prepared = None
+                self.phase = 'settled'
+                self.emit('settled')
             if kind == 'shutdown':
                 self.exiting = True
         elif kind == 'input':
@@ -614,35 +776,217 @@ class Worker:
         else:
             raise Refusal('unknown protocol type')
 
-    def poll_child(self):
-        if self.child is None:
+    def start_waiter(self):
+        self.wait_result = None
+        self.wait_errors = []
+        self.wait_thread = None
+        self.wait_state = 'not-started'
+        self.wait_consumed = False
+        self.wait_registered = set()
+        self.wait_close_unknown = set()
+        self.failure_sockets = None
+        self.failure_socket_unknown = set()
+        self.failure_socket_closed = set()
+        self.wait_read, self.wait_write = os.pipe()
+        os.set_blocking(self.wait_read, False)
+        self.wait_registered.add(self.wait_read)
+        self.selector.register(self.wait_read, selectors.EVENT_READ, 'completion')
+        # Original, pre-registered failure channel: a failed write AND unknown
+        # pipe close must not leave the indefinite selector asleep.
+        self.failure_sockets = socket.socketpair()
+        self.wait_registered.add(self.failure_sockets[0])
+        self.selector.register(self.failure_sockets[0], selectors.EVENT_READ, 'completion')
+        def wait_original():
+            self.wait_state = 'running'
+            try:
+                self.wait_result = (self.child.wait(), None)
+            except BaseException as error:
+                self.wait_result = (None, error)
+            try:
+                if os.write(self.wait_write, b'x') != 1:
+                    raise RuntimeError('incomplete notifier write')
+            except BaseException as error:
+                self.wait_errors.append(error)
+                try:
+                    os.close(self.wait_write)
+                    self.wait_write = None
+                except BaseException as close_error:
+                    self.wait_errors.append(close_error)
+                    self.wait_close_unknown.add('wait_write')
+                # Socket capability was owned/registered before thread start.
+                # No replacement thread, timer or unowned wake is created.
+                try:
+                    if self.failure_sockets[1].send(b'f') != 1:
+                        raise RuntimeError('incomplete failure notification')
+                except BaseException as wake_error:
+                    self.wait_errors.append(wake_error)
+                    try:
+                        self.failure_sockets[1].shutdown(socket.SHUT_WR)
+                    except BaseException as eof_error:
+                        self.wait_errors.append(eof_error)
+            finally:
+                self.wait_state = 'finished'
+        thread = threading.Thread(target=wait_original)
+        self.wait_thread = thread
+        self.wait_state = 'starting'
+        try:
+            thread.start()
+        except BaseException:
+            # Thread identity remains installed even if start was interrupted
+            # before Python publishes ident. Absence of ident/is_alive is not
+            # proof that the native launch did not happen. Only failures before
+            # invoking start retain the provably not-started fallback state.
+            if self.wait_state == 'starting':
+                self.wait_state = 'start-unknown'
+            raise
+
+    def consume_waiter(self, ready=None):
+        if self.wait_consumed:
             return
-        status = self.child.poll()
-        if status is not None and not self.root_sent:
-            self.child.wait()
-            self.root_sent = True
+        if self.failure_sockets is not None and ready is self.failure_sockets[0]:
+            ready.recv(1)
+        else:
+            os.read(self.wait_read, 1)
+        self.wait_thread.join()
+        self.wait_state = 'joined'
+        self.wait_consumed = True
+        for interest in list(self.wait_registered):
+            self.selector.unregister(interest)
+            self.wait_registered.remove(interest)
+        status, error = self.wait_result
+        errors = ([error] if error is not None else []) + self.wait_errors
+        try:
+            self.close_waiter()
+        except BaseException as close_error:
+            errors.append(close_error)
+        if errors:
+            raise WorkerFailure('child completion notification failed', errors)
+        if self.failed or not self.setup_complete:
+            return
+        if not self.root_sent:
             fields = {'exitCode': status if status >= 0 else None}
             if status < 0:
                 fields['signal'] = signal.Signals(-status).name.removeprefix('SIG')
             self.emit('root', **fields)
+            self.root_sent = True
             self.close_input()
-        if self.root_sent and self.streams == 0 and self.phase == 'active':
+        self.settle_if_complete()
+
+    def settle_if_complete(self):
+        if self.root_sent and self.streams == 0 and self.phase == 'active' and self.setup_complete and not self.failed:
             self.prepared.close()
             self.prepared = None
             self.phase = 'settled'
             self.emit('settled')
 
+    def close_waiter(self):
+        if self.wait_state == 'not-started' and self.wait_result is None:
+            if not self.cancel_acknowledged:
+                raise RuntimeError('unstarted original child cancellation remains incomplete')
+            self.wait_state = 'fallback-issued'
+            try:
+                self.wait_result = (self.child.wait(), None)
+            except BaseException as error:
+                self.wait_result = (None, error)
+        if self.wait_thread is not None:
+            if self.wait_state in ('fallback-issued', 'joined'):
+                pass
+            elif self.wait_result is None:
+                raise RuntimeError('original waiter remains live; notifier ownership retained')
+            else:
+                self.wait_thread.join()
+            self.wait_state = 'joined'
+        errors = []
+        for interest in list(self.wait_registered):
+            try:
+                self.selector.unregister(interest)
+                self.wait_registered.remove(interest)
+            except KeyError:
+                self.wait_registered.remove(interest)
+            except BaseException as error:
+                errors.append(error)
+        for name in ('wait_read', 'wait_write'):
+            fd = getattr(self, name, None)
+            if fd is not None:
+                if fd in self.wait_registered:
+                    errors.append(RuntimeError('notifier selector interest remains owned'))
+                    continue
+                if name in self.wait_close_unknown:
+                    errors.append(RuntimeError('unknown notifier close retained: ' + name))
+                    continue
+                try:
+                    os.close(fd)
+                    setattr(self, name, None)
+                except BaseException as error:
+                    self.wait_close_unknown.add(name)
+                    errors.append(error)
+        if self.failure_sockets is not None:
+            for index, endpoint in enumerate(self.failure_sockets):
+                if endpoint in self.wait_registered or index in self.failure_socket_unknown:
+                    errors.append(RuntimeError('failure notifier retirement remains unresolved'))
+                    continue
+                if index in self.failure_socket_closed:
+                    continue
+                self.failure_socket_unknown.add(index)
+                try:
+                    endpoint.close()
+                    self.failure_socket_unknown.remove(index)
+                    self.failure_socket_closed.add(index)
+                except BaseException as error:
+                    errors.append(error)
+        if errors:
+            raise WorkerFailure('notifier cleanup incomplete', errors)
+
+    def cleanup(self):
+        errors = []
+        def attempt(action):
+            try:
+                action()
+            except BaseException as error:
+                errors.append(error)
+        attempt(self.stop)
+        if self.child is not None:
+            attempt(self.close_waiter)
+            for stream in (self.child.stdout, self.child.stderr):
+                if stream is not None and not stream.closed:
+                    attempt(stream.close)
+        # Prepared descriptors can still be needed by an original live child.
+        acknowledged = self.child is None or (self.wait_result is not None and self.wait_result[1] is None and
+                        (self.wait_thread is None or not self.wait_thread.is_alive()))
+        if acknowledged:
+            if self.prepared is not None:
+                try:
+                    self.prepared.close()
+                    self.prepared = None
+                except BaseException as error:
+                    errors.append(error)
+            if self.selector_close_state == 'unknown':
+                errors.append(RuntimeError('selector close outcome unknown'))
+            elif self.selector_close_state != 'closed':
+                self.selector_close_state = 'unknown'
+                try:
+                    self.selector.close()
+                    self.selector_close_state = 'closed'
+                    self.wait_registered.clear()
+                except BaseException as error:
+                    errors.append(error)
+        else:
+            errors.append(RuntimeError('original root completion remains unacknowledged'))
+        if errors:
+            raise WorkerFailure('worker cleanup incomplete', errors)
+
     def run(self):
-        self.emit('hello', sha256=self.digest, workerPid=os.getpid())
         try:
+            self.emit('hello', sha256=self.digest, workerPid=os.getpid())
             while True:
-                self.poll_child()
                 if self.exiting and self.phase != 'active' and not self.pending:
                     break
-                for key, _ in self.selector.select(0.05):
+                for key, _ in self.selector.select():
                     name = key.data
                     try:
-                        if name == 'wire':
+                        if name == 'completion':
+                            self.consume_waiter(key.fileobj)
+                        elif name == 'wire':
                             count = os.write(1, self.pending)
                             del self.pending[:count]
                             if not self.pending:
@@ -683,17 +1027,20 @@ class Worker:
                                 self.selector.unregister(key.fileobj)
                                 key.fileobj.close()
                                 self.streams -= 1
+                                self.settle_if_complete()
                     except BlockingIOError:
                         pass
-                    except BrokenPipeError:
+                    except BrokenPipeError as error:
                         if name == 'wire':
-                            self.stop()
                             self.pending.clear()
                             self.selector.unregister(1)
-                            self.exiting = True
-                        else:
+                            self.fail(error)
+                            self.pending.clear()
+                        elif name == 'input':
                             self.input.clear()
                             self.close_input()
+                        else:
+                            self.fail(error)
                     except AdmissionCancelled:
                         if self.prepared is not None:
                             self.prepared.close()
@@ -709,19 +1056,18 @@ class Worker:
                         if self.admitting and self.child is None:
                             self.refuse(str(error))
                         else:
-                            self.fail(str(error))
-                    except Exception:
-                        self.fail('worker operation refused')
+                            self.fail(error)
+                    except Exception as error:
+                        self.fail(error)
+        except BaseException as error:
+            self.fail(error)
         finally:
-            self.stop()
-            if self.child is not None:
-                self.child.wait()
-                for stream in (self.child.stdout, self.child.stderr):
-                    if not stream.closed:
-                        stream.close()
-            if self.prepared is not None:
-                self.prepared.close()
-            self.selector.close()
+            try:
+                self.cleanup()
+            except BaseException as error:
+                self.failures.append(error)
+            if self.failures:
+                raise WorkerFailure('worker failed with original ownership retained', self.failures)
 
 
 def main():

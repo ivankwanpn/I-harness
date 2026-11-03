@@ -1,78 +1,203 @@
+import { retainAcknowledgedExecutionMembers, getManagedExecutionAdmissionWait } from '@i-harness/core-session/internal/execution'
 import type { PluginContext } from "@i-harness/core-plugin"
-import { append } from "@i-harness/core-session"
-import { isPolicyRefusal, ToolArgsError, type Tool, type ToolRegistry } from "@i-harness/core-tools"
+import { captureLegacyFact, committedFactSeqs, FactRecoveryRequiredError, stringifyJsonData } from "@i-harness/core-session"
+import { isOriginalResultFinalization, isPolicyRefusal, isNativePlanValidationError, isInstructionReplan, instructionReplan, instructionReplanDisposition, registryRequiresInstructionOrigin, bindInstructionInvocation, preflightInstructionInvocations, releaseInstructionCell, retainedToolOutcome, resultExecution, ToolArgsError, type ToolRegistry, type InstructionCellOrigin, type InstructionReplanData } from "@i-harness/core-tools"
+import type { ManagedAction } from '@i-harness/core-session'
 import type { CodeModeInvocation, CodeModeMountOptions } from "./types.ts"
 import { captureCodeModeTools, codeModeDefinitions } from "./catalog.ts"
+import type { Cell, Queued } from './broker/types.ts'
+import { createCodeModeRecords, message, fatal } from './broker/records.ts'
+import { codeModeFactOwner } from './facts.ts'
 
-interface Cell { tools: Map<string, Tool>; stop: AbortController; seen: Set<string> }
-interface Queued {
-  call: CodeModeInvocation; tool: Tool; signal: AbortSignal; eventSeq?: number
-  resolve(value: unknown): void; reject(error: unknown): void; unsubscribe(): void
-  admitted(): void; finished: boolean; recorded: boolean
-}
-const message = (e: unknown) => e instanceof Error ? e.message : String(e)
-const fatal = (e: unknown) => Object.assign(new Error(message(e)), { policyRefusal: true as const })
-
-/** Only dispatch bodies overlap. Captured cell authority survives yields. */
-export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) {
-  const cells = new Map<string, Cell>(), queue: Queued[] = [], active = new Set<Queued>(), jobs = new Set<Promise<void>>()
+/** The broker owns admission/dispatch; real results retain their original slot
+ * through a failed join. Only the document's exact receipt marks them recorded. */
+export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions, onInstructionReplan?: (cellId: string, detail: InstructionReplanData) => void) {
+  const owner = codeModeFactOwner(options,ctx), records = createCodeModeRecords(complete, (item, output, execution) => {if(options.kind==='managed-execution'){if(!item.callCapture||!item.callOutcome)throw Error('Original Code call capture required');return tools.captureManagedSyntheticResult?.({kind:'code',domain:options.domain,source:item.source,action:item.action,cellId:item.call.cellId,callId:item.call.invocationId,name:item.call.name,capture:item.callCapture,outcome:item.callOutcome},output,execution)}return tools.captureSyntheticResult?.({ view: options.session, source: item.source, callId: item.call.invocationId, name: item.call.name }, output, execution)}, options.session, options.kind==='managed-execution'?item=>{if(!item.callCapture||!item.callOutcome)throw Error('Original Code call capture required');return {kind:'code',domain:options.domain,source:item.source,action:item.action,cellId:item.call.cellId,callId:item.call.invocationId,name:item.call.name,capture:item.callCapture,outcome:item.callOutcome}}:undefined)
+  const cells = new Map<string, Cell>(), queue: Queued[] = [], active = new Set<Queued>(), jobs = new Set<Promise<void>>(), unsettled = new Set<Queued>()
+  const retiredCells = new Map<string, Cell>()
   const stop = new AbortController(), parallel = Math.min(16, Math.max(1, options.maxParallel ?? 4))
-  let pumping = false, disposed = false, exclusive = false
+  let pumping = false, disposed = false, closed = false, exclusive = false, closeAttempt: Promise<void> | undefined
   let finalizers: Promise<void> = Promise.resolve()
-  function record(item: Queued, output: unknown, error = false) {
-    if (item.recorded) return
-    item.recorded = true
-    append(options.session, { type: "code/result", cellId: item.call.cellId, callId: item.call.invocationId, name: item.call.name, output, ...(error ? { isError: true } : {}) })
+  const recovery = (cause: unknown) => Object.assign(new FactRecoveryRequiredError(), { cause })
+  function replanCell(id: string, detail: InstructionReplanData) {
+    const cell = cells.get(id)
+    if (!cell || cell.replan) return
+    if(cell.delegation){cell.delegation.revoke();cell.stop.abort()}cell.replan = detail
+    onInstructionReplan?.(id, detail)
   }
-  function settle(item: Queued, outcome: { value: unknown } | { error: unknown }) {
-    if (item.finished) return
-    item.finished = true; item.unsubscribe()
-    if ("error" in outcome) item.reject(outcome.error)
-    else item.resolve(outcome.value)
+  function complete(item: Queued): Promise<unknown> {
+    if (item.completion) return item.completion
+    const completion = finalizers.then(async () => {
+      if (!item.prepared) throw recovery(item.recoveryCause)
+      if (!item.finalized && item.finalization) {
+        const settled = await item.finalization.settle()
+        if (settled.kind !== 'ready') throw recovery(item.recoveryCause)
+        item.finalized = { name: item.call.name, ...(settled.program.kind === 'value' ? { output: settled.program.value } : {}), program: settled.program, envelope: settled.envelope }
+      }
+      if (!item.finalized) {
+        item.finalizing ??= tools.finalize(item.prepared, item.bodyOutput)
+        try { item.finalized = await item.finalizing }
+        catch (cause) {
+          const handle = tools.resultFinalization?.(item.prepared)
+          if (isOriginalResultFinalization(item.prepared, handle)) { item.finalization = handle; item.source.holdRecovery() }
+          throw cause
+        }
+        const handle = tools.resultFinalization?.(item.prepared)
+        if (isOriginalResultFinalization(item.prepared, handle)) item.finalization = handle
+      }
+      const result = item.finalized
+      await records.record(item, result.output, false, result.envelope)
+      if (!item.signal.aborted && !item.postToolStarted) {
+        item.postToolStarted = true
+        try { await ctx.emit("agent/post-tool", { name: item.call.name, args: item.call.args, ...(result.program?.kind === 'unavailable' ? { program: result.program } : { output: result.output }), session: options.session, signal: item.signal }) }
+        catch (error) { throw fatal(`Code Mode post-tool hook failed: ${message(error)}`) }
+      }
+      if (result.program?.kind === 'unavailable') throw Object.assign(new Error('Code Mode tool result is unavailable for transfer'), { code: 'CODE_MODE_RESULT_UNAVAILABLE', reason: result.program.reason })
+      return result.program?.kind === 'value' ? result.program.value : result.output
+    })
+    item.completion = completion
+    void completion.catch(() => { if (item.finalization && !item.result && item.completion === completion) item.completion = undefined })
+    finalizers = completion.then(() => {}, () => {})
+    return completion
+  }
+  async function drainCell(id: string) {
+    const cell = cells.get(id) ?? retiredCells.get(id)
+    if (cell) await Promise.allSettled([...cell.preflights])
+    for (const item of [...unsettled].filter(value => value.call.cellId === id)) {
+      await item.done.promise
+      await item.source.close()
+      item.callPin?.release(); item.callPin=undefined
+      if(options.kind==='managed-execution')item.action.finish()
+      unsettled.delete(item)
+    }
+  }
+  async function finishCell(id: string) {
+    const cell = cells.get(id) ?? retiredCells.get(id)
+    if (!cell) return
+    return finishOriginalCell(id, cell)
+  }
+  function finishOriginalCell(id: string, cell: Cell): Promise<void> {
+    if (cell.finished) return Promise.resolve()
+    if (cell.finishing) return cell.finishing
+    const pending = Promise.resolve().then(async () => {
+      await cell.ending.promise
+      await drainCell(id)
+      if (cell.instructionOrigin) await releaseInstructionCell(cell.instructionOrigin)
+      cell.finished = true
+      if (cells.get(id) === cell) cells.delete(id)
+      if (retiredCells.get(id) === cell) retiredCells.delete(id)
+    })
+    cell.finishing = pending
+    void pending.catch(() => { if (cell.finishing === pending) cell.finishing = undefined })
+    return pending
   }
   function retireCell(id: string) {
     const cell = cells.get(id)
-    cells.delete(id); cell?.stop.abort()
+    if (!cell) return
+    cell.delegation?.revoke()
+    cells.delete(id)
+    retiredCells.set(id, cell)
+    cell.ending.resolve()
+    cell.stop.abort()
     void pump()
+    return undefined
+  }
+  async function finishTerminalCell(id: string) {
+    const cell = cells.get(id) ?? retiredCells.get(id)
+    if (!cell) return
+    cell.terminalCommitted = true
+    cell.ending.resolve()
+    await finishCell(id)
+  }
+  const track = (job: Promise<void>) => { jobs.add(job); void job.then(() => { jobs.delete(job); void pump() }, () => { jobs.delete(job); void pump() }) }
+  async function release(item: Queued) {
+    try { await item.generation?.close() }
+    catch (error) { item.source.requireRecovery(); item.recoveryCause = error }
+    item.done.resolve(); if(options.kind==='managed-execution')item.action.stop();else item.action.finish()
+    try { await item.source.close(); item.callPin?.release(); item.callPin=undefined; if(options.kind==='managed-execution')item.action.finish(); unsettled.delete(item) }
+    catch (cause) { if (!item.finished) records.settle(item, { error: recovery(cause) }) }
   }
   async function run(item: Queued) {
     try {
+      item.action.assertOpen()
       if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
       if (tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed")
-      let prepared
+      let prepared, preparing = false
       try {
-        prepared = await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session:options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code" })
-      } catch (e) { throw e instanceof ToolArgsError ? e : fatal(e) }
-      if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
-      if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during admission")
-      append(options.session, { type: "code/dispatch", cellId: item.call.cellId, callId: item.call.invocationId, ...(item.eventSeq === undefined ? {} : { eventSeq: item.eventSeq }) })
-      try { await options.flush?.() } catch (e) { throw fatal(`Code Mode checkpoint failed: ${message(e)}`) }
-      if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
-      if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during checkpoint")
-      item.admitted()
-      const output = await tools.dispatch(prepared)
-      const completion = finalizers.then(async () => {
-        let result
-        try { result = await tools.finalize(prepared, output) }
-        catch (e) { throw fatal(`Code Mode finalization failed: ${message(e)}`) }
-        record(item, result.output)
-        if (!item.signal.aborted) {
-          try { await ctx.emit("agent/post-tool", { name: item.call.name, args: item.call.args, output: result.output, session: options.session }) }
-          catch (e) { throw fatal(`Code Mode post-tool hook failed: ${message(e)}`) }
+        if(options.kind==='managed-execution'&&item.call.origin.generationLineage)throw Error('Private Code generation lineage unsupported')
+        item.generation ??= options.kind==='managed-execution'?undefined:item.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: item.call.cellId, action: item.action, eventSeq: item.eventSeq!, callId: item.call.invocationId, name: item.call.name, signal: item.signal,
+          current: () => !disposed && !item.signal.aborted && cells.has(item.call.cellId) && active.has(item) && tools.get(item.call.name) === item.tool })
+        preparing = true
+        prepared = item.capture ? await tools.prepareCaptured(item.capture, item.signal, item.instructionOrigin) : await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session: options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code", settlementSource: item.source, modelGeneration: item.generation?.factories })
+      } catch (error) {
+        // The nominal type alone cannot prove nondispatch: a real body or
+        // finalizer may throw it too. Only this preparation occurrence is soft.
+        if (preparing && isNativePlanValidationError(error) && !isPolicyRefusal(error)) {
+          try { await records.record(item, error.output, true); records.settle(item, { value: error.output }) }
+          catch (cause) { records.settle(item, { error: recovery(cause) }) }
+          return
         }
-        return result.output
-      })
-      finalizers = completion.then(() => {}, () => {})
-      settle(item, { value: await completion })
-    } catch (e) {
-      if (isPolicyRefusal(e)) retireCell(item.call.cellId)
-      try { record(item, { error: message(e), code: isPolicyRefusal(e) ? "POLICY_REFUSAL" : item.signal.aborted ? "TOOL_ABORTED" : "TOOL_FAILED" }, true) }
-      catch (recordError) { settle(item, { error: fatal(`Code Mode result persistence failed: ${message(recordError)}`) }); return }
-      settle(item, { error: e })
+        throw error instanceof ToolArgsError || isInstructionReplan(error) ? error : fatal(error)
+      }
+      item.action.assertOpen()
+      if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
+      if (cells.get(item.call.cellId)?.replan) throw instructionReplan(cells.get(item.call.cellId)!.replan!)
+      if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during admission")
+      committedFactSeqs(await item.action.facts.code.dispatch(item.call.cellId, item.call.invocationId, { kind: 'prior', seq: item.eventSeq!, expectedType: 'code/call' }))
+      try { await options.flush?.() } catch (error) { throw fatal(`Code Mode checkpoint failed: ${message(error)}`) }
+      item.action.assertOpen()
+      if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
+      if (cells.get(item.call.cellId)?.replan) throw instructionReplan(cells.get(item.call.cellId)!.replan!)
+      if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during checkpoint")
+      if(options.kind==='managed-execution'){
+        const cell=cells.get(item.call.cellId),delegation=cell?.delegation
+        if(!cell?.admissionAction||!delegation||!item.callCapture||!item.callOutcome||!item.callPin)throw Error('Original Code invocation authority required')
+        const current=()=>{item.signal.throwIfAborted();item.action.assertOpen();item.source.assertHeld();item.callPin!.assertCurrent();delegation.assertOpen();if(disposed||cells.get(item.call.cellId)!==cell||tools.get(item.call.name)!==item.tool)throw Error('Original Code cell retired or tool changed')}
+        for(;;){current();const wait=getManagedExecutionAdmissionWait(options.domain,cell.admissionAction,item.signal);if(!wait)break;await wait}
+        current();delegation.attach(prepared,item.action,item.source,item.callCapture,item.callOutcome)
+      }
+      item.admitted()
+      item.prepared = prepared
+      try { item.bodyOutput = await tools.dispatch(prepared); item.hasOutput = true }
+      catch (error) {
+        const retained = retainedToolOutcome(error, prepared)
+        if (retained) { item.retained = retained; item.recoveryCause = error }
+        throw error
+      }
+      const disposition = instructionReplanDisposition(prepared)
+      if (disposition) replanCell(item.call.cellId, disposition)
+      records.settle(item, { value: await complete(item) })
+    } catch (error) {
+      if (isInstructionReplan(error) && !isPolicyRefusal(error) && (!item.prepared || resultExecution(item.prepared).dispatch === 'not-dispatched')) {
+        replanCell(item.call.cellId, error.data)
+        try { await records.record(item, error.data, true); records.settle(item, { error }) }
+        catch (cause) { records.settle(item, { error: recovery(cause) }) }
+        return
+      }
+      if (item.retained) {
+        records.settle(item, { error: recovery(error) })
+        return
+      }
+      if (isPolicyRefusal(error)) retireCell(item.call.cellId)
+      // A real body/finalizer value can never be overwritten with a synthetic
+      // storage error. Its retained source is reconciled without execution.
+      if (item.hasOutput || item.result) {
+        if (!item.result && !item.recorded && !item.finalization) item.source.requireRecovery()
+        const failure = item.recorded ? error : !item.result
+          ? Object.assign(fatal(`Code Mode finalization failed: ${message(error)}`), { code: 'FACT_RECOVERY_REQUIRED' }) : recovery(error)
+        if (isPolicyRefusal(failure)) retireCell(item.call.cellId)
+        records.settle(item, { error: failure })
+      } else {
+        try {
+          await records.record(item, { error: message(error), code: isPolicyRefusal(error) ? "POLICY_REFUSAL" : item.signal.aborted ? "TOOL_ABORTED" : "TOOL_FAILED" }, true, undefined,
+            item.prepared ? resultExecution(item.prepared) : { outcome: item.signal.aborted ? 'canceled' : 'failed', dispatch: 'not-dispatched' })
+          records.settle(item, { error })
+        } catch (cause) { records.settle(item, { error: recovery(cause) }) }
+      }
     } finally {
       item.admitted(); active.delete(item)
       if (!item.tool.isConcurrencySafe) exclusive = false
-      void pump()
+      await release(item); void pump()
     }
   }
   async function pump() {
@@ -81,51 +206,150 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
     try {
       while (queue.length && active.size < parallel && !exclusive) {
         const item = queue[0]!
+        const cell = cells.get(item.call.cellId)
+        if (cell?.replan) {
+          queue.shift()
+          const error = instructionReplan(cell.replan)
+          try { await records.record(item, error.data, true); records.settle(item, { error }) }
+          catch (cause) { records.settle(item, { error: recovery(cause) }) }
+          item.admitted(); await release(item); continue
+        }
+        if (cell && (cell.instructionOrigin || registryRequiresInstructionOrigin(tools)) && !item.capture && !item.captureFailure) {
+          const group = queue.filter(value => value.call.cellId === item.call.cellId && !value.capture && !value.captureFailure)
+          const entries: import('@i-harness/core-tools').InstructionBatchEntry[] = []
+          let failure: unknown, failed = false, missingOriginMutation = false
+          for (const pending of group) {
+            try {
+              if(options.kind==='managed-execution'&&pending.call.origin.generationLineage)throw Error('Private Code generation lineage unsupported')
+              pending.generation = options.kind==='managed-execution'?undefined:pending.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: pending.call.cellId, action: pending.action, eventSeq: pending.eventSeq!, callId: pending.call.invocationId, name: pending.call.name, signal: pending.signal,
+                current: () => !disposed && !pending.signal.aborted && cells.has(pending.call.cellId) && active.has(pending) && tools.get(pending.call.name) === pending.tool })
+              if(options.kind==='managed-execution'){if(!cell.admissionAction||!cell.delegation)throw Error('Original Code instruction scheduling owner required');for(;;){pending.signal.throwIfAborted();pending.action.assertOpen();pending.source.assertHeld();const wait=getManagedExecutionAdmissionWait(options.domain,cell.admissionAction,pending.signal);if(!wait)break;await wait}}
+              const capture = tools.capture({ name: pending.call.name, args: pending.call.args }, { sessionId: options.sessionId ?? pending.call.origin.sessionId, session: options.session, callId: pending.call.invocationId, callEventSeq: pending.eventSeq, resultConsumer: 'code', settlementSource: pending.source, modelGeneration: pending.generation?.factories })
+              if(options.kind==='managed-execution'&&cell.instructionOrigin){if(!cell.delegation||!pending.callCapture||!pending.callOutcome)throw Error('Original Code call proof required');cell.delegation.certifyInstructionCall(capture,pending.action,pending.source,pending.callCapture,pending.callOutcome)}
+              const origin = cell.instructionOrigin ? bindInstructionInvocation(cell.instructionOrigin, pending.call.invocationId, capture) : undefined
+              pending.capture = capture; pending.instructionOrigin = origin
+              if (origin) entries.push({ registry: tools, capture, origin })
+              else if (tools.inspectCapture(capture).native?.targets.some(target => target.mode === 'mutate')) missingOriginMutation = true
+            } catch (error) {
+              if (isPolicyRefusal(error) || !isNativePlanValidationError(error) && !(error instanceof ToolArgsError)) { failure = error; failed = true; break }
+              pending.captureFailure = error
+            }
+          }
+          if (!failed) try {
+            if (missingOriginMutation) throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'missing-origin', currentFingerprint: '' })
+            if (cell.instructionOrigin) {
+              const preflight = preflightInstructionInvocations(cell.instructionOrigin, entries, AbortSignal.any(group.map(value => value.signal)))
+              cell.preflights.add(preflight)
+              try { await preflight } finally { cell.preflights.delete(preflight) }
+            }
+          } catch (error) { failure = error; failed = true }
+          const stopped = group.some(value => value.signal.aborted)
+          if (stopped) { failure = new Error('Code Mode tool call aborted before dispatch'); failed = true }
+          if (!stopped && failure && isInstructionReplan(failure) && !isPolicyRefusal(failure)) replanCell(item.call.cellId, failure.data)
+          for (const pending of group) {
+            const error = pending.captureFailure ?? failure
+            if (!pending.captureFailure && !failed) continue
+            const at = queue.indexOf(pending); if (at >= 0) queue.splice(at, 1)
+            try {
+              const output = stopped || pending.signal.aborted ? { error: 'Code Mode tool call aborted before dispatch', code: 'TOOL_ABORTED_BEFORE_DISPATCH' } : isPolicyRefusal(error) ? { error: message(error), code: 'POLICY_REFUSAL' } : isNativePlanValidationError(error) ? error.output : isInstructionReplan(error) ? error.data : { error: message(error), code: 'TOOL_FAILED' }
+              await records.record(pending, output, true, undefined, { outcome: stopped || pending.signal.aborted ? 'canceled' : 'failed', dispatch: 'not-dispatched' })
+              records.settle(pending, !stopped && !isPolicyRefusal(error) && isNativePlanValidationError(error) ? { value: output } : { error })
+            } catch (cause) { records.settle(pending, { error: recovery(cause) }) }
+            pending.admitted(); await release(pending)
+          }
+          if (failed && (!isInstructionReplan(failure) || isPolicyRefusal(failure))) retireCell(item.call.cellId)
+          continue
+        }
         if (!item.tool.isConcurrencySafe && active.size) break
         queue.shift(); if (item.finished) continue
         active.add(item); if (!item.tool.isConcurrencySafe) exclusive = true
         const admission = new Promise<void>(resolve => { item.admitted = resolve })
-        const job = run(item); jobs.add(job)
-        void job.finally(() => { jobs.delete(job); void pump() })
-        await admission
+        track(run(item)); await admission
       }
     } finally { pumping = false }
   }
   return {
     definitions() { return codeModeDefinitions(captureCodeModeTools(tools)) },
-    startCell(id: string) {
-      if (disposed || cells.has(id)) throw new Error("Code Mode cell unavailable")
-      cells.set(id, { tools: captureCodeModeTools(tools), stop: new AbortController(), seen: new Set() })
+    startCell(id: string, instructionOrigin?: InstructionCellOrigin, delegation?:import('@i-harness/core-tools/internal/code-origin').PrivateCodeCellDelegation, admissionAction?:ManagedAction<import('@i-harness/core-session').FactOutcome>) {
+      if (disposed || cells.has(id) || retiredCells.has(id)) throw new Error("Code Mode cell unavailable")
+      const cell: Cell = { delegation, admissionAction, tools: captureCodeModeTools(tools), stop: new AbortController(), seen: new Set(), preflights: new Set(), instructionOrigin, ending: Promise.withResolvers<void>() }
+      cells.set(id, cell)
+      return Object.freeze({ settle: () => finishOriginalCell(id, cell) })
     },
+    revokeCells(){for(const cell of cells.values())if(cell.delegation){cell.delegation.revoke();cell.stop.abort()}},
     retireCell,
-    invoke(call: CodeModeInvocation): Promise<unknown> {
-      const cell = cells.get(call.cellId)
-      if (disposed || !cell) return Promise.reject(new Error("Code Mode cell unavailable"))
-      if (options.sessionId && call.origin.sessionId && options.sessionId !== call.origin.sessionId) return Promise.reject(fatal("Code Mode session owner mismatch"))
-      if (cell.seen.has(call.invocationId)) return Promise.reject(new Error("Duplicate Code Mode invocation"))
-      cell.seen.add(call.invocationId)
-      const tool = cell.tools.get(call.name)
-      if (!tool || tool !== tools.get(call.name)) return Promise.reject(new Error("Code Mode tool unavailable or binding changed"))
-      if (Buffer.byteLength(JSON.stringify(call.args) ?? "null") > (options.config?.maxResultBytes ?? 4 * 1024 * 1024)) return Promise.reject(new Error("Code Mode tool arguments exceed transfer limit"))
-      append(options.session, { type: "code/call", cellId: call.cellId, ...(call.origin.callId ? { parentCallId: call.origin.callId } : {}), callId: call.invocationId, name: call.name, args: call.args })
-      const eventSeq = options.session.events.at(-1)?.seq, signal = AbortSignal.any([call.signal, stop.signal, cell.stop.signal])
-      return new Promise((resolve, reject) => {
-        const item: Queued = { call, tool, signal, eventSeq, resolve, reject, unsubscribe: () => {}, admitted: () => {}, finished: false, recorded: false }
+    replanCell,
+    drainCell,
+    finishReplannedCell: finishTerminalCell,
+    finishRetiredCell: finishTerminalCell,
+    async invoke(original: CodeModeInvocation): Promise<unknown> {
+      const cell = cells.get(original.cellId)
+      if (disposed || !cell) throw new Error("Code Mode cell unavailable")
+      if (cell.instructionOrigin !== original.origin.instructionOrigin) throw new Error('Code Mode instruction origin mismatch')
+      if (options.sessionId && original.origin.sessionId && options.sessionId !== original.origin.sessionId) throw fatal("Code Mode session owner mismatch")
+      if (cell.seen.has(original.invocationId)) throw new Error("Duplicate Code Mode invocation")
+      cell.seen.add(original.invocationId)
+      const tool = cell.tools.get(original.name)
+      if (!tool || tool !== tools.get(original.name)) throw new Error("Code Mode tool unavailable or binding changed")
+      const captured = captureLegacyFact(original.args)
+      if (captured.kind !== 'captured') throw Object.assign(new Error('Code Mode arguments cannot be captured'), { code: captured.code })
+      if (Buffer.byteLength(stringifyJsonData(captured.value) ?? 'null') > (options.config?.maxResultBytes ?? 4 * 1024 * 1024)) throw new Error("Code Mode tool arguments exceed transfer limit")
+      const call = { ...original, args: captured.value }, signal = AbortSignal.any([call.signal, stop.signal, cell.stop.signal])
+      if(options.kind==='managed-execution') {
+        if(!cell.admissionAction||!cell.delegation)throw Error('Original private Code cell action required')
+        for(;;){signal.throwIfAborted();if(disposed||cells.get(call.cellId)!==cell||tools.get(call.name)!==tool)throw Error('Original Code cell retired or tool changed');cell.delegation.assertOpen();const wait=getManagedExecutionAdmissionWait(options.domain,cell.admissionAction,signal);if(!wait)break;await wait}
+        signal.throwIfAborted();if(disposed||cells.get(call.cellId)!==cell||tools.get(call.name)!==tool)throw Error('Original Code cell retired or tool changed');cell.delegation.assertOpen()
+      }
+      const action = owner.beginAction(signal)
+      let item!: Queued
+      const source = action.registerSettlementSource(async () => { await item.done.promise; await records.drain(item) })
+      const waiting = Promise.withResolvers<unknown>()
+      item = { call, tool, signal, action, source, done: Promise.withResolvers<void>(), hasOutput: false, ...waiting, unsubscribe: () => {}, admitted: () => {}, finished: false, recorded: false }
+      unsettled.add(item)
+      try {
+        const event={ type: 'code/call' as const, cellId: call.cellId, ...(call.origin.callId ? { parentCallId: call.origin.callId } : {}), callId: call.invocationId, name: call.name, args: call.args }
+        if(options.kind==='managed-execution'){if(!action.captureCodeCall)throw Error('Original Code call capture unavailable');item.callCapture=action.captureCodeCall(event,item.source);const outcome=await item.callCapture.admit();item.eventSeq=committedFactSeqs(outcome)[0]!;if(outcome.kind!=='committed')throw new FactRecoveryRequiredError();item.callOutcome=outcome;item.callPin=retainAcknowledgedExecutionMembers(item.callCapture,outcome)}else item.eventSeq=committedFactSeqs(await action.facts.code.record(event))[0]!
         const abort = () => {
           if (active.has(item) || item.finished) return
-          try { record(item, { error: "Code Mode tool call aborted before dispatch", code: "TOOL_ABORTED_BEFORE_DISPATCH" }, true); settle(item, { error: new Error("Code Mode tool call aborted") }) }
-          catch (e) { settle(item, { error: fatal(e) }) }
-          void pump()
+          track((async () => {
+            try { await records.record(item, { error: 'Code Mode tool call aborted before dispatch', code: 'TOOL_ABORTED_BEFORE_DISPATCH' }, true); records.settle(item, { error: new Error('Code Mode tool call aborted') }) }
+            catch (cause) { records.settle(item, { error: recovery(cause) }) }
+            finally { await release(item) }
+          })())
         }
-        signal.addEventListener("abort", abort, { once: true }); item.unsubscribe = () => signal.removeEventListener("abort", abort)
+        signal.addEventListener('abort', abort, { once: true }); item.unsubscribe = () => signal.removeEventListener('abort', abort)
         queue.push(item); if (signal.aborted) abort(); void pump()
-      })
+      } catch (error) { await release(item); throw error }
+      return waiting.promise
     },
     async dispose() {
-      if (disposed) return
+      if (closed) return
+      if (closeAttempt) return closeAttempt
       disposed = true; stop.abort()
-      for (const id of cells.keys()) retireCell(id)
-      await Promise.allSettled([...jobs]); await options.flush?.()
+      for (const [id, cell] of cells) if (!cell.replan) retireCell(id)
+      const pending = (async () => {
+        await Promise.allSettled([...jobs])
+        await Promise.allSettled([...cells.values(), ...retiredCells.values()].flatMap(cell => [...cell.preflights]))
+        const errors: unknown[] = []
+        for (const item of unsettled) try { await item.source.close(); item.callPin?.release(); item.callPin=undefined; if(options.kind==='managed-execution')item.action.finish(); unsettled.delete(item) } catch (error) { errors.push(error) }
+        for (const [id, cell] of retiredCells) {
+          if (cell.instructionOrigin && !cell.terminalCommitted) { errors.push(new FactRecoveryRequiredError()); continue }
+          if (![...unsettled].some(item => item.call.cellId === id)) try { await finishCell(id) } catch (error) { errors.push(error) }
+        }
+        if ([...cells.values()].some(cell => cell.replan)) errors.push(new FactRecoveryRequiredError())
+        try { await options.flush?.() } catch (error) { errors.push(error) }
+        if (errors.length === 1) throw errors[0]
+        if (errors.length) throw Object.assign(new AggregateError(errors, 'Code Mode settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
+        closed = true
+      })()
+      closeAttempt = pending
+      void pending.catch(() => { if (closeAttempt === pending) closeAttempt = undefined })
+      return pending
     },
   }
 }
+
+
+
+
+

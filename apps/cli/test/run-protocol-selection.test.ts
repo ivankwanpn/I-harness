@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
+import { createSessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { runHeadless } from "../src/run.ts"
 import { loadProviderRuntime } from "../src/provider-runtime.ts"
@@ -68,13 +69,10 @@ async function runtimeWithRecorder() {
  * session's own event callback would use if a turn ever ran — it does not, the
  * resolution refuses first. The cast is the price of not standing up a real
  * JSONL store for a run that never writes one. */
-function coordinatorWithMeta(meta: SessionMeta): SessionCoordinator {
-  return {
-    profile: async () => ({ meta, blank: false }),
-    enqueue: () => {},
-    flush: async () => {},
-    close: async () => {},
-  } as unknown as SessionCoordinator
+async function coordinatorWithMeta(meta: SessionMeta) {
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(configDir, 'sessions')), { lock: { enabled: true } })
+  await coordinator.create({ sessionId: meta.sessionId, ...(meta.modelSelection ? { modelSelection: meta.modelSelection } : {}) })
+  return coordinator
 }
 
 function durableMeta(modelSelection: SessionMeta["modelSelection"]): SessionMeta {
@@ -115,7 +113,7 @@ describe("what the caller's selection reaches in runHeadless", () => {
     const result = await runHeadless("hello", {
       workspace: process.cwd(),
       providerRuntime: runtime,
-      coordinator: coordinatorWithMeta(
+      coordinator: await coordinatorWithMeta(
         durableMeta({ provider: "session-route", model: "session-model" }),
       ),
       sessionId: "session-1",
@@ -141,7 +139,7 @@ describe("what the caller's selection reaches in runHeadless", () => {
     const result = await runHeadless("hello", {
       workspace: process.cwd(),
       providerRuntime: runtime,
-      coordinator: coordinatorWithMeta(durableMeta({ provider: "", model: "" })),
+      coordinator: await coordinatorWithMeta(durableMeta({ provider: "", model: "" })),
       sessionId: "session-1",
       sessionSelection: { provider: "cli-route", model: "cli-model", protocol: "gemini" },
     })

@@ -10,6 +10,9 @@ import { useUiStore } from "../shell/ui-store.ts"
 
 interface Feedback { retry?: RuntimeDiagnosticEntry; error?: RuntimeDiagnosticEntry; activity?: RuntimeActivity["activity"] }
 const scopeKey = (workspaceId?: string, sessionId?: string) => JSON.stringify([workspaceId, sessionId])
+const feedbackKinds = new Set<RuntimeDiagnosticEntry["kind"]>([
+  "model/retry", "model/recovered", "session/cancelled", "session/error", "runtime/error", "gateway/disconnected",
+])
 
 /** Live feedback only. Historical records remain in the native Log and never
  * resurrect popups after dismissal or a renderer restart. */
@@ -26,6 +29,9 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   selectedScope.current = scopeKey(workspaceId, activeSessionId)
   const executionStates = useRef(new Map<string, { revision: number; busy: boolean }>())
   const [now, setNow] = useState(Date.now)
+  const [recovering,setRecovering]=useState(false)
+  const [recoveryFailed,setRecoveryFailed]=useState(false)
+  const recoveryFlight=useRef<object|undefined>(undefined)
   useEffect(() => {
     setScopes(previous => new Map([...previous].map(([key, value]) => [key, { ...value, activity: undefined }])))
   }, [workspaceId, activeSessionId])
@@ -56,6 +62,9 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
       }
       if (event.kind === "runtime/diagnostic") {
         const entry = event.entry
+        // Diagnostic bookkeeping belongs in the Log. Only explicit feedback
+        // events may change retries or create a request-failure notification.
+        if (!feedbackKinds.has(entry.kind)) return
         if (seen.current.has(entry.id)) return
         seen.current.add(entry.id)
         if (seen.current.size > 1000) seen.current.delete(seen.current.values().next().value!)
@@ -71,8 +80,6 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
             if (!entry.requestId || current.retry?.requestId === entry.requestId) next.set(key, { ...current, retry: undefined })
           } else if (entry.kind === "session/cancelled") {
             if (!busy && (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId)) next.set(key, { ...current, retry: undefined, activity: undefined })
-          } else if (entry.kind.startsWith("model/")) {
-            // Lifecycle records are history only; live activity arrives separately.
           } else {
             // Admission failures belong to a separate RPC even in the same chat.
             const clearsRetry = !busy && entry.kind === "session/error" && (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId)
@@ -118,6 +125,8 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   const selected = scopes.get(scopeKey(workspaceId, activeSessionId))
   const global = scopes.get(scopeKey(workspaceId))
   const failure = selected?.error ?? global?.error
+  const failureId=useRef<string|undefined>(undefined);failureId.current=failure?.id
+  useEffect(()=>{recoveryFlight.current=undefined;setRecovering(false);setRecoveryFailed(false)},[failure?.id])
   const retry = selected?.retry?.retry
   const activity = selected?.activity
   const quiet = activity?.phase === "quiet" && !retry
@@ -145,8 +154,8 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         </div>
       </div> : null}
       {failure ? <div className="runtime-feedback-card runtime-feedback-error" role="alert">
-        <AlertCircle size={18} aria-hidden="true" /><div><strong>{t("請求未完成")}</strong><p>{failure.message}</p>
-          <div className="runtime-feedback-actions"><Button variant="ghost" size="small" onClick={() => setDetails(failure)}>{t("詳細資料")}</Button><Button variant="ghost" size="small" onClick={onOpenLog}>{t("診斷記錄")}</Button></div>
+        <AlertCircle size={18} aria-hidden="true" /><div><strong>{t("請求未完成")}</strong><p>{failure.code==='TEAM_RECOVERY_REQUIRED'?t('工作需要恢復，請重試以繼續。'):failure.message}</p>
+          <div className="runtime-feedback-actions">{failure.code==='TEAM_RECOVERY_REQUIRED'&&failure.workspaceId&&failure.sessionId?<Button variant="ghost" size="small" disabled={recovering} onClick={()=>{const flight={};recoveryFlight.current=flight;setRecovering(true);setRecoveryFailed(false);void bridge.request({kind:'desktop/session/input/resume',workspaceId:failure.workspaceId!,sessionId:failure.sessionId!}).then(()=>{setScopes(previous=>{const next=new Map(previous),key=scopeKey(failure.workspaceId,failure.sessionId),current=next.get(key);if(current?.error?.id===failure.id)next.set(key,{...current,error:undefined});return next})},()=>{if(recoveryFlight.current===flight&&failureId.current===failure.id)setRecoveryFailed(true)}).finally(()=>{if(recoveryFlight.current===flight){recoveryFlight.current=undefined;setRecovering(false)}})}}>{t('重試')}</Button>:null}<Button variant="ghost" size="small" onClick={() => setDetails(failure)}>{t("詳細資料")}</Button><Button variant="ghost" size="small" onClick={onOpenLog}>{t("診斷記錄")}</Button></div>{recoveryFailed?<p>{t('重試失敗，請稍後再試。')}</p>:null}
         </div><Button variant="ghost" size="small" className="runtime-feedback-close" aria-label={t("關閉錯誤通知")} icon={<X size={15} />} onClick={() => setScopes(previous => {
           const next = new Map(previous), key = scopeKey(failure.workspaceId, failure.sessionId)
           next.set(key, { ...next.get(key), error: undefined }); return next

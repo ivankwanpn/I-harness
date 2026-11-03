@@ -49,7 +49,11 @@ describe("e2e workflow", () => {
       const outJson = JSON.stringify(out?.output)
       expect(outJson).toContain("wf hello from step")
       expect(outJson).toContain("[step 1/1 greet] ok")
-      expect(outJson).toContain("[status: completed]")
+      expect(out?.output).toMatchObject({status:"completed",job_id:"workflow-1",digest:expect.stringMatching(/^[a-f0-9]{64}$/),
+        full_result:{tool:"job_output",args:{job_id:"workflow-1",offset_bytes:0},retention:"memory"},truncated:false})
+      const output = out!.output as {digest:string;full_result:{digest:string;args:{digest:string}}}
+      expect(output.full_result.digest).toBe(output.digest)
+      expect(output.full_result.args.digest).toBe(output.digest)
     } finally {
       removeWorkspace(dir)
     }

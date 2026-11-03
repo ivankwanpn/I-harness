@@ -4,10 +4,10 @@ import { createSession, derivePlanMode } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { enterPlanMode, exitPlanMode, createPlanModeTools, ensurePlanModeTool, PLAN_MODE_SYSTEM_PROMPT } from "../src/index.ts"
 
-describe("plan mode", () => {
-  it("enterPlanMode appends the mode marker AND the proposal as a user message", () => {
+describe("plan mode", async () => {
+  it("enterPlanMode appends the mode marker AND the proposal as a user message", async () => {
     const s = createSession()
-    enterPlanMode(s, "1. design 2. implement")
+    await enterPlanMode(s, "1. design 2. implement")
     expect(derivePlanMode(s).active).toBe(true)
     expect(derivePlanMode(s).proposal).toBe("1. design 2. implement")
     expect(s.events.filter((e) => e.type === "user/message").map((e) => (e as { text: string }).text)).toEqual([
@@ -15,18 +15,18 @@ describe("plan mode", () => {
     ])
   })
 
-  it("exitPlanMode appends off only when active; idempotent off", () => {
+  it("exitPlanMode appends off only when active; idempotent off", async () => {
     const s = createSession()
-    enterPlanMode(s, "plan")
-    expect(exitPlanMode(s)).toBe(true)
+    await enterPlanMode(s, "plan")
+    expect(await exitPlanMode(s)).toBe(true)
     expect(derivePlanMode(s).active).toBe(false)
-    expect(exitPlanMode(s)).toBe(false)
+    expect(await exitPlanMode(s)).toBe(false)
     expect(s.events.filter((e) => e.type === "plan/mode")).toHaveLength(2)
   })
 
   it("exit_plan_mode tool is read-only and exits when active", async () => {
     const s = createSession()
-    enterPlanMode(s, "plan")
+    await enterPlanMode(s, "plan")
     const ctx = createContext()
     const registry = createToolRegistry(ctx)
     for (const tool of createPlanModeTools(s)) registry.register(tool)
@@ -49,20 +49,20 @@ describe("plan mode", () => {
   // This case passes before and after that deletion: it is not evidence for it and it is
   // not its guard -- the instrument's row count is. It also cannot see a wiring inside
   // the session assembly, which owns its own registry.
-  it("exit_plan_mode: ensure is idempotent, and plan-mode OFF does not withdraw it", () => {
+  it("exit_plan_mode: ensure is idempotent, and plan-mode OFF does not withdraw it", async () => {
     const s = createSession()
     const registry = createToolRegistry(createContext())
     ensurePlanModeTool(registry, s)
     ensurePlanModeTool(registry, s) // idempotent: the duplicate-register path is guarded by a get()
     expect(registry.get("exit_plan_mode")).toBeDefined()
 
-    enterPlanMode(s, "plan")
-    expect(exitPlanMode(s)).toBe(true)
+    await enterPlanMode(s, "plan")
+    expect(await exitPlanMode(s)).toBe(true)
     expect(derivePlanMode(s).active).toBe(false)
     expect(registry.get("exit_plan_mode")).toBeDefined() // OFF is a log event, not a registry mutation
   })
 
-  it("the bundled prompt fragment is non-empty text", () => {
+  it("the bundled prompt fragment is non-empty text", async () => {
     expect(PLAN_MODE_SYSTEM_PROMPT).toContain("plan")
   })
 })

@@ -3,9 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./direct-reservation": "./src/service.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
+    "@i-harness/core-session": "workspace:*",
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/sandbox": "workspace:*",
     "@i-harness/sandbox-local": "workspace:*",

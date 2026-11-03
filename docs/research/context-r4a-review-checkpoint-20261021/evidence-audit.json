@@ -1,0 +1,3806 @@
+{
+  "kind": "Read-only static identity audit; no product import/runtime or old runner executed",
+  "archive": {
+    "path": "docs/research/context-r4a-a6-proof-20261021/original-bytes.json",
+    "sha256": "9afec259828969cdd578087dfe2ed98e23f5adc9f9fd9ce2bbf1437a25055c9f",
+    "count": 53
+  },
+  "verified": [
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\source-final.json",
+      "bytes": 501556,
+      "sha256": "47e638bf851287cfe7fd4523d711e8d507632004cd4f229c758b700eac40833f"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\accepted-owner-reuse.json",
+      "bytes": 775792,
+      "sha256": "d768acb4c60a9c1dc1e964d336fec057f56501772d29e749830a85fe6243136e"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\structural-scope-identities.json",
+      "bytes": 3420,
+      "sha256": "0ef82479559d208ec68cdf2ed688965d56f5dfdcc942a31bb7d7b67ccf7dd952"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\scale-closure-reuse.json",
+      "bytes": 1315,
+      "sha256": "c2b76a47242af3a4ab54d95159f3c467281f1702ed8c9a71a03dcdad4bcada41"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\native-ledger.json",
+      "bytes": 80985,
+      "sha256": "78623cc2002376848d2e2668bb5837ed910a4e82634a0f3ea4b48267247d30fe"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\test-collection.json",
+      "bytes": 7807,
+      "sha256": "1108e0128419a1899408d31a70444a44f6303504bc77e025e71bffb8f647f23b"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\fixed-wire-identities.json",
+      "bytes": 9481,
+      "sha256": "c9c1f4730ac0c11e19efc6198afed116005dbc318b42602af57e45ae6aa23eba"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\fixture-transformations.json",
+      "bytes": 25777,
+      "sha256": "955f916a7b1abb017dfb13877189439bd80e7599272edbd8057e12df5b126c11"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\fan-selector-transformation.json",
+      "bytes": 1349,
+      "sha256": "dc2994f9d1fa78efbb8357c21e9ee5303701cad778f274dc8ce8207ff8fca9b0"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\cli-test-transformation.json",
+      "bytes": 2892,
+      "sha256": "75caa5bcca6f896f9acdddc8c7a57de307eb5470cf1c61265b052e1290520bfa"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\approval-test-transformation.json",
+      "bytes": 3036,
+      "sha256": "67e28d247c99a3f65d13c1b7dec155c69f41dcefae668af18db0aa9c3cb11507"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\context-r4a-evidence-20261018-a\\normal-100mib.mjs",
+      "bytes": 4205,
+      "sha256": "4daa6df4e2ab69bfa67fdd3e10c65d51fba0c87dc3b4b5074d86cacf0c68bfba"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\context-r4a-evidence-20261018-a\\exec-100mib.mjs",
+      "bytes": 12461,
+      "sha256": "158f39e3bac664b4363d1c1587856cbbf4d5e9e83bf5b637e0062e12cf040b42"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\context-r4a-evidence-20261018-a\\child-fan-in-100-v2c.mjs",
+      "bytes": 11854,
+      "sha256": "7f18f9517a77b995ba128ca03ebbe06e91bb64b6d9d3f5b413fbeb5c0e37fb13"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\structural-preflight.md",
+      "bytes": 25432,
+      "sha256": "4420a82af732fabf9aedb1a45473a04d435c8d30f709011cc132d6b4c01036b9"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\structural-ruling.md",
+      "bytes": 6064,
+      "sha256": "233a8ab2f23f4be5d5c2c8399d7eb91cc42d05659179092516d2de48b36c790c"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\sdk-approval-design.md",
+      "bytes": 5294,
+      "sha256": "9c28236c2a6aad00bc2d1a831659e5e7d3e502f93dbb5d3768aca63ae4c41d9f"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\sdk-approval-preflight.md",
+      "bytes": 12862,
+      "sha256": "0ce75e5059344ad9446cff77ece01153eecb97f98a2828cf2012def3b3c3793d"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-B2-marker-race38.mjs",
+      "bytes": 21414,
+      "sha256": "c7ca15669610cb456027cbbcd1e549f2eed8c65099755ba8837cb045a36858fc"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-G5-full-child28.mjs",
+      "bytes": 21365,
+      "sha256": "3fce4ed9b9a03aee8146affd8bd1ff1d5f49c1be7b4214e6244d32aa2cacd0ef"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-original-no-consent18.mjs",
+      "bytes": 20470,
+      "sha256": "c000a06369ba0e84271f062970d199e77ca80edd2beee26a39397fa4f52bc234"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-shell-exit-oracle16.mjs",
+      "bytes": 20284,
+      "sha256": "1e22d0b64a94c36da290e5b419a63cafa23380b6add2d027ca2aec193adff5e4"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\identities.json",
+      "bytes": 4060,
+      "sha256": "8d91ad2bb1edff5a017e9221b93e540d2e6caa99707cde94dc77235a532f53c7"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\original-source-cli-index.ts",
+      "bytes": 55497,
+      "sha256": "877167d27824727775b56415a41b9c99b29fcaa850a241db260420d043c5741b"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\original-wire-current9.test.ts",
+      "bytes": 27624,
+      "sha256": "314e79570d622e0ac582cabc942d504cc447b070a53b2f969bd5a791faccde4c"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\source-sdk-consent-RED30.test.ts",
+      "bytes": 8294,
+      "sha256": "fb73730f1981e8258f88f16176ad717524573b051a770f5f0788384d1e7a100c"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\deny-fallback.mjs",
+      "bytes": 1160,
+      "sha256": "9665d44bb701c0abf837f81ad26bbb5db20b1197d0db90ec84ef25ea9a0b4c33"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\entry-flows.mjs",
+      "bytes": 21623,
+      "sha256": "6e3804cf01d964c1edd56b02b59327e3ca84eb33757a788c751d8ff053d8dc1f"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\exec-1.mjs",
+      "bytes": 14307,
+      "sha256": "5c8538aed1a7e94790fe7b193fcf7d8f6d1b3153161309922da37e31fdb258e7"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\exec-100.mjs",
+      "bytes": 13931,
+      "sha256": "accee7336afbc18fa99706e74f3fe28cb0b6b9503b1b163acc02dfaa87b673ff"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\fan-100.mjs",
+      "bytes": 12960,
+      "sha256": "94a53421e7f4493f32e8fd8e9a6b05535038ca63c115e5655727bc8e48abef16"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\future11.jsonl",
+      "bytes": 394,
+      "sha256": "872bddb049f3a079c0a93f6d1dd9409a5c14472b21d6dac0943b21ef29c818ac"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\legacy8.jsonl",
+      "bytes": 897,
+      "sha256": "9976d0f03e1ab0821d848c8029547423c822544da2a2fc47e2005f2b203c923e"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\legacy9.jsonl",
+      "bytes": 897,
+      "sha256": "0f5053598566c6e731f997492fb04a9c3b58575e28e44d957650cf7c18625472"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-probe.mjs",
+      "bytes": 232,
+      "sha256": "c2d3ec47404a3503a5a5f286b1ac9276af45090dafedde9014e56628776d3b44"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-worker.mjs",
+      "bytes": 378,
+      "sha256": "0f378ab853760462ed1b1e634866351c15f39f4f4b962eee87459a72875086da"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\normal-1.mjs",
+      "bytes": 4644,
+      "sha256": "b9811c0d47a044e37fcd65cda2d140ff66229db56c11202f4453380ccc137d11"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\normal-100.mjs",
+      "bytes": 4652,
+      "sha256": "cf514330c6b4a63c060f180461e67ef54503453f5356aa6bd9ffed358855e0c2"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\result-page-bundle.test.ts",
+      "bytes": 11032,
+      "sha256": "3c95952266a18f25bcf59fb57a49a0bc8d9aa7b91a5e73585e698003d3fa1231"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\sdk-approval-bundle.test.ts",
+      "bytes": 12985,
+      "sha256": "f15e91c669ff1181e7ee2ddc0372a512ec808e69d9d0cd8466a48b2c7f91636e"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\sdk-approval-worker.mjs",
+      "bytes": 246,
+      "sha256": "390cad445b5e5ddf695df6f5efdfb8dcbf04e503c4b90c800cc08e0f9aaf68b9"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\unknown8.jsonl",
+      "bytes": 2618,
+      "sha256": "901cdb01af6b720ff4d4ec2945d6f7e156b7a70910fa43de1775e3f0bb1b3454"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\unknown9.jsonl",
+      "bytes": 2618,
+      "sha256": "8fc1f623efe336c25cea12dcd6de910c864a5334d26e69d47933d6b70aba9153"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\wire-owned.mjs",
+      "bytes": 3006,
+      "sha256": "21d30c9884713b475c82efeab1e7501dc26b15df68c8481f91ef0ef2fc464633"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\run-gate.mjs",
+      "bytes": 6642,
+      "sha256": "b0a95b9ea01cae63a3b67a259d9953259fd308c783134f75cbcdf7b382b65d39"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\run-candidate.mjs",
+      "bytes": 2888,
+      "sha256": "fe27d291f7d331a147c1909e86549bb0bc5fe1e59f1f8e0247311996d07ed9c0"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\runtime-policy.mjs",
+      "bytes": 3713,
+      "sha256": "f41e9b29c16ce04cb19ad7a61104be066e8600b3dd30b0890312638631e50ddc"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\copy-fixtures.mjs",
+      "bytes": 8237,
+      "sha256": "4fac749325e7f716e15cad3d0757637c9b114501d323b3dde1377c0a43002170"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\final-audit.mjs",
+      "bytes": 11484,
+      "sha256": "169d35d0e13e4ebea4b47084263bab166127e92cf9abbc15a0bdaede736eaf7c"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\audit-source-copy.mjs",
+      "bytes": 8858,
+      "sha256": "50186218d5ebefe7aa3e317f8cefe9301acd179de3e82162f5920a2308e156bf"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\archive-variants.mjs",
+      "bytes": 7642,
+      "sha256": "114cd907b37e4b0f3c31a6dd7977dcdee5b9abf2f87604ad71e72f0ab11313e7"
+    },
+    {
+      "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\seal-evidence.mjs",
+      "bytes": 3112,
+      "sha256": "8e98fbc415701cff64ab7d90d476ab690098e12f92a8dac88df88e323a92dbfb"
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4v1\\final-input-inventory.json",
+      "bytes": 501757,
+      "sha256": "9db007f013b2a2112a73df325ebdfe3946571c39ed7a0c1c5debb76680e183b0"
+    }
+  ],
+  "receipts": [
+    {
+      "file": "01-p3-native.receipt.json",
+      "sha256": "c454d7754a2ff95358cefa0d1c1985148ed100c63c632ff3a7f47cb82f5b764f",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "02-build-gateway.receipt.json",
+      "sha256": "a0b4a31f07630f56305c9ec6d7502939b331ae0c3f79a66d0e512a929378bccd",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "03-build-cli.receipt.json",
+      "sha256": "ad7b4c8952b64daf46ade52f0fc2fee16da851e1396cf1ad8ed4e152692e3752",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "04-verify-dist.receipt.json",
+      "sha256": "856a2d9648f05f23ac33db51a6e81a679bb2f98a11fc1db5700a23199bc75b98",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "05-normal-1.receipt.json",
+      "sha256": "28adcdb60c468fe6a99df71fa05033e2c10ff388bad92d534176ad7bf60aa761",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "06-normal-1.receipt.json",
+      "sha256": "15980ff291e4469c40fdb29fa7440b6909973651647b26e3c1e92564903e6c5a",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "07-native-policy-probe.receipt.json",
+      "sha256": "b3ddfbc5dff7fff31bc7a8bd19b3ede9f742482ecc64c287cee0337fea48213b",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "08-native-policy-positive.receipt.json",
+      "sha256": "6107c63984a4ca45e71674a92b776fe767179a3262cbf6742eb92480af2f1462",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "09-normal-1.receipt.json",
+      "sha256": "b449ca6a98fb4dbd20fde8b3b0248751d88a2e35e5fbc66f406c7c579298c864",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "10-normal-100.receipt.json",
+      "sha256": "f585e2543da6d7ef724bee76b81881f86b2dbdd34a8682cf420fbef59f785ee9",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "11-exec-1.receipt.json",
+      "sha256": "e7931a00639735fd67ba6fe1b9ec5650be9f4fbc69e169d58fd760fc1ab8cc9a",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "12-exec-100.receipt.json",
+      "sha256": "2bbcadfe0885d7de686a1c5f3a8b2dae94a1d302b0344971609816c715fa4ade",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "13-fan-100.receipt.json",
+      "sha256": "131943e20c751afe34bcd34ad995c75820816b5d7e371d4793637d64b98751ea",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "14-gateway-entry.receipt.json",
+      "sha256": "83a8a94d961040f21af146ba927f4cf6efa9c51af2b04b725d491bc3bc14e5ae",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "15-gateway-entry.receipt.json",
+      "sha256": "cedacb8c657268d4f72ab558b41a8286a44dbbebd2f79ff36a44cb9622046c2e",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "16-gateway-entry.receipt.json",
+      "sha256": "8129d84ecb7c44af21390abf3ec87d111606417ad6d8afaca547a079b49a302d",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "17-gateway-entry.receipt.json",
+      "sha256": "00168fd14890e27c1f3634e8af6d0b67b2503d2526fedb8a883d021c5daa9d72",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "18-cli-entry.receipt.json",
+      "sha256": "6eede3baac1b7f572e54aeb3c13c00e172da669bef4e9770afd71b98327ca635",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "19-reachability.receipt.json",
+      "sha256": "f114caae9a716e126f2d6d47a74a0f0a595fc57049c7a16543de1e14d8bbf0ad",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "20-current-executor.receipt.json",
+      "sha256": "f93e271516649b42ae4b97adfadd0ead2ff6bddefae592ed736440ea3e5413d1",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "21-wire-owned.receipt.json",
+      "sha256": "d09e1a7016eb79019508dad8fd794a7a2ad89bfc90278837cbd74bfa0c823d1c",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "22-deny-fallback.receipt.json",
+      "sha256": "9297fccb5cf4782e131b286e4fce1dda7e9106683068e07ad650c6d5461e383a",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "23-deny-fallback.receipt.json",
+      "sha256": "07dc8c365a8314cc05ef87dddb75391c87eff72b2df9f056327954721af88ab1",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "24-bundle-witness.receipt.json",
+      "sha256": "04249d9b2c7b8b912920de74bec459b4f648946641fdea5ca5428ec2766e76de",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "25-types-executor.receipt.json",
+      "sha256": "d8bb8a9b2862a924103410463567820e926ec40a5636ca2bc3cb5faf7d8b370b",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "26-source-copy-graph.receipt.json",
+      "sha256": "0099dbdf5f92e98423271293ef037fcf6680003b2446c207c070e0a87feb1534",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "27-types-gateway.receipt.json",
+      "sha256": "d15b6aceebe81fdd0ce53c384c241c99c331c6d4baec15bab1459f0cc9d25d38",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "28-gateway-full-selector.receipt.json",
+      "sha256": "1e31ca39fa6c4187d1f49f50605cf7fbd493044848b9da8317f71ef7050989e5",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "29-types-sdk.receipt.json",
+      "sha256": "b445a4069b39d1b0349dc2206bce2985090ffbb7299e20d7ec2927a828876bfb",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "30-sdk-yes-red.receipt.json",
+      "sha256": "0c348c0e6d01c122aea483ccb58153cd9b2a43f28ddb0159d78d14b0bda2c9bd",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "31-sdk-yes-green.receipt.json",
+      "sha256": "ca3aeb1f0ea7271f9fdf3a95c1104f5d62fc14ab1bc109bbf52b9b3058e78ec1",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "32-sdk-yes-green.receipt.json",
+      "sha256": "44b7a484d016e699410d4ad6f0c15e5fa66fa1ed40e0e75b442beeda37ee7be0",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "33-cli-final-focused.receipt.json",
+      "sha256": "42dd66f6f2648f49af13117e41b4086817653d956e5d7efd618e1ed7fe37f6db",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "34-cli-final-focused.receipt.json",
+      "sha256": "23d326ba67115569cb612e1f701389c659379a1f51c04b067728e5bf7d17c4e4",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "35-types-cli.receipt.json",
+      "sha256": "68eff3d5f4348fe48a5fa51fb007962f92bc3bae95f4db72f144c54af17362c7",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "36-build-cli-final.receipt.json",
+      "sha256": "7717e27475f69becf564e995585f607dd28407a8828362893af0cc6636f0737b",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "37-verify-cli-final.receipt.json",
+      "sha256": "95e04fbdd088002d8bf5b7d0b710bdec9845e5ae08e08f481552c2b474d7f80b",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "38-cli-final-flow.receipt.json",
+      "sha256": "3de5b76199d6763c6739488d252a9105e6576919989c841b6ecaaf9e89243cb2",
+      "exit": 1,
+      "sourceStable": true
+    },
+    {
+      "file": "39-cli-final-flow.receipt.json",
+      "sha256": "47f0483552f600c2184cdcf83eea7e2cc76566a3529907db0c8aa3575268a603",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "40-bundle-consent-controls.receipt.json",
+      "sha256": "b114ac1e3dcc73eac08980cd3b97a357e40cd8238170755ed01bc98689042ecd",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "41-final-bundle-witness.receipt.json",
+      "sha256": "6ca2910bade16a1eabd0aa4fbd8b4f7501fcbda503cb945b5ac5021e1baf8d1b",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "42-guards-role.receipt.json",
+      "sha256": "63490adb63bde521d531cd2e3396a0a87ad449e8a5b1c8c13fbd58b74bf7c04a",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "43-headless-routing.receipt.json",
+      "sha256": "d50bf6aa16b4de7e435fc21822877211b8bd08a0cdff3a37974e070823850a98",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "44-final-reachability.receipt.json",
+      "sha256": "4e9162cbfcb9a947425b7ed5b039da8257994ef370155a8b2d05ce525bc571dd",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "45-final-copy-graph-census.receipt.json",
+      "sha256": "c3b565dbfd592a11b903105a7b5d9e410879725ad6ce9a6759707cbe363819ef",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "46-gateway-isolation-final.receipt.json",
+      "sha256": "367a2d563f7db7176cc25710d7c0abf941d40cdb556ae52f3e5f1ae1c646dc90",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "47-cli-isolation-final.receipt.json",
+      "sha256": "aa1084975ad3bba48ae297046c6dd87d472080adaac4364c4374ae88de158e7c",
+      "exit": 0,
+      "sourceStable": true
+    },
+    {
+      "file": "48-final-closed-copy-audit.receipt.json",
+      "sha256": "07aee9f8d04ca6897a436349d4b0af1880ba262642c8e2aa56460789a3f057b1",
+      "exit": 0,
+      "sourceStable": true
+    }
+  ],
+  "selected": {
+    "structural-scope-identities.json": {
+      "topKeys": [
+        "ownership",
+        "unchangedFunctions",
+        "unchangedShared",
+        "rulings"
+      ],
+      "value": {
+        "ownership": [
+          {
+            "path": "packages/code-mode/src/runtime/output.ts",
+            "physicalSha256": "288e17747a9ed997fa0e479a15324a501547eddde689bd359cf8ceed69dc487e",
+            "assessedLfSha256": "047b9db1e93aa546186a7d56d753446f06c4c0fb0778e99731b01a0fca099331",
+            "unchangedSinceAssessed": true
+          },
+          {
+            "path": "packages/code-mode/src/runtime/retirement.ts",
+            "physicalSha256": "8e6a595b29f29c3c1d76be96def8f4ffb77d309638d5da1360bdcc795434dbc1",
+            "assessedLfSha256": "8e6a595b29f29c3c1d76be96def8f4ffb77d309638d5da1360bdcc795434dbc1",
+            "unchangedSinceAssessed": true
+          },
+          {
+            "path": "packages/subagent/src/tools/spawn.ts",
+            "physicalSha256": "0eaa86978209966051a58b7d17ecb54b3a89e08496e1bbad142e178996a2dad2",
+            "assessedLfSha256": "0eaa86978209966051a58b7d17ecb54b3a89e08496e1bbad142e178996a2dad2",
+            "unchangedSinceAssessed": true
+          },
+          {
+            "path": "packages/session-persistence/src/coordinator/managed-document.ts",
+            "physicalSha256": "ec90b7d6169d6cf8860a966a7b833218591ec8b162f89ed43a1012b266230e7b",
+            "assessedLfSha256": "ec90b7d6169d6cf8860a966a7b833218591ec8b162f89ed43a1012b266230e7b",
+            "unchangedSinceAssessed": true
+          },
+          {
+            "path": "apps/cli/src/index.ts",
+            "physicalSha256": "02fca758678c7775ec0c1f092667776366b1346436cc9210079d060c37527f8c",
+            "function": "runSdkCommand",
+            "functionLfSha256": "07afa335f2b1307a5f9200551ef2882a26b98f4ee1278450c5c008244f90c96f",
+            "ruling": "SDK-only composition251lines/13392chars; parser private8lineleaf. Root structural-ruling fifth exception at33dab47e."
+          }
+        ],
+        "unchangedFunctions": [
+          {
+            "name": "main",
+            "sha256": "1d4a4b88849401c2a855ddf0fb4cb157759b8330e8e6739ac1bc45f24f73edfc",
+            "sourceEquivalent": true
+          },
+          {
+            "name": "runAcpCommand",
+            "sha256": "0ea5b73e35a4c72c3f478f18a99f89541f91a32e1bfc1098bcabe3a15d9d5712",
+            "sourceEquivalent": true
+          }
+        ],
+        "unchangedShared": [
+          {
+            "path": "apps/cli/src/provider-runtime.ts",
+            "bytes": 5785,
+            "sha256": "14578c72818f5863464586fd53c78f62e26b65fbb0700560e2074d4668ff419a"
+          },
+          {
+            "path": "apps/cli/src/run.ts",
+            "bytes": 63866,
+            "sha256": "a19fa5d252d53169e9114183f54d578d6b9e00e2cba0f58fe16769b5ccf31c18"
+          },
+          {
+            "path": "packages/acp/src/index.ts",
+            "bytes": 10947,
+            "sha256": "8a6c4d03c1e8f34ae36bbcf4a4442de4e2ddba431372372020c584af9e13af60"
+          }
+        ],
+        "rulings": [
+          {
+            "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\structural-preflight.md",
+            "bytes": 25432,
+            "sha256": "4420a82af732fabf9aedb1a45473a04d435c8d30f709011cc132d6b4c01036b9"
+          },
+          {
+            "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\structural-ruling.md",
+            "bytes": 6064,
+            "sha256": "233a8ab2f23f4be5d5c2c8399d7eb91cc42d05659179092516d2de48b36c790c"
+          },
+          {
+            "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\sdk-approval-design.md",
+            "bytes": 5294,
+            "sha256": "9c28236c2a6aad00bc2d1a831659e5e7d3e502f93dbb5d3768aca63ae4c41d9f"
+          },
+          {
+            "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-a6-final\\sdk-approval-preflight.md",
+            "bytes": 12862,
+            "sha256": "0ce75e5059344ad9446cff77ece01153eecb97f98a2828cf2012def3b3c3793d"
+          }
+        ]
+      }
+    },
+    "scale-closure-reuse.json": {
+      "topKeys": [
+        "large",
+        "finalSourceCopyMap",
+        "scope"
+      ],
+      "value": {
+        "large": [
+          {
+            "name": "normal1b",
+            "files": 8833,
+            "unchangedCopiedCandidate": true,
+            "originalManifestSha256": "788a0319876bf1196dfa2b8f5373331e92b6fdaf7d0201dbfeeb72f049068c5a"
+          },
+          {
+            "name": "normal100",
+            "files": 8833,
+            "unchangedCopiedCandidate": true,
+            "originalManifestSha256": "788a0319876bf1196dfa2b8f5373331e92b6fdaf7d0201dbfeeb72f049068c5a"
+          },
+          {
+            "name": "exec1",
+            "files": 8833,
+            "unchangedCopiedCandidate": true,
+            "originalManifestSha256": "788a0319876bf1196dfa2b8f5373331e92b6fdaf7d0201dbfeeb72f049068c5a"
+          },
+          {
+            "name": "exec100",
+            "files": 8833,
+            "unchangedCopiedCandidate": true,
+            "originalManifestSha256": "788a0319876bf1196dfa2b8f5373331e92b6fdaf7d0201dbfeeb72f049068c5a"
+          },
+          {
+            "name": "fan100",
+            "files": 8833,
+            "unchangedCopiedCandidate": true,
+            "originalManifestSha256": "788a0319876bf1196dfa2b8f5373331e92b6fdaf7d0201dbfeeb72f049068c5a"
+          }
+        ],
+        "finalSourceCopyMap": "final-closed-audit/gateway-source-copy-map.json",
+        "scope": "Original copied closure is byte-identical and still maps to current original owners; final SDK-only command is absent from Gateway copied graph. Reuse final actual large gates09/10/11/12/13; no redundant huge rerun."
+      }
+    },
+    "native-ledger.json": {
+      "topKeys": [
+        "count",
+        "nonoverlapping",
+        "allSourceStable",
+        "failed",
+        "receipts"
+      ],
+      "value": {
+        "count": 48,
+        "nonoverlapping": true,
+        "allSourceStable": true,
+        "failed": [
+          {
+            "name": "05-normal-1",
+            "exit": 1
+          },
+          {
+            "name": "06-normal-1",
+            "exit": 1
+          },
+          {
+            "name": "07-native-policy-probe",
+            "exit": 1
+          },
+          {
+            "name": "14-gateway-entry",
+            "exit": 1
+          },
+          {
+            "name": "15-gateway-entry",
+            "exit": 1
+          },
+          {
+            "name": "16-gateway-entry",
+            "exit": 1
+          },
+          {
+            "name": "18-cli-entry",
+            "exit": 1
+          },
+          {
+            "name": "22-deny-fallback",
+            "exit": 1
+          },
+          {
+            "name": "30-sdk-yes-red",
+            "exit": 1
+          },
+          {
+            "name": "31-sdk-yes-green",
+            "exit": 1
+          },
+          {
+            "name": "33-cli-final-focused",
+            "exit": 1
+          },
+          {
+            "name": "38-cli-final-flow",
+            "exit": 1
+          }
+        ],
+        "receipts": [
+          {
+            "file": "01-p3-native.receipt.json",
+            "name": "01-p3-native",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/synthetic-result-retention.test.ts",
+              "--maxWorkers=2",
+              "--minWorkers=1",
+              "--exclude",
+              "**/.tmp/**",
+              "--exclude",
+              "**/.worktrees/**",
+              "--exclude",
+              "**/build/**",
+              "--exclude",
+              "**/dist/**",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/01-p3-native.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\packages\\session-executor",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T22:59:00.613Z",
+            "end": "2026-10-20T22:59:05.703Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "325f3cd25b611cdd99b4685ddc4b66de1592d905e7f83320e52c144726d6475a",
+            "afterSha256": "325f3cd25b611cdd99b4685ddc4b66de1592d905e7f83320e52c144726d6475a",
+            "stdoutSha256": "bfb3674d2b6c939b4a2e46e2784e03c09a8020e9a5ed92d0e76fa70ac0e5ab54",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "02-build-gateway.receipt.json",
+            "name": "02-build-gateway",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "packages/desktop/scripts/build-gateway.mjs",
+              "--out",
+              ".tmp/r4v1/g"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T22:59:11.749Z",
+            "end": "2026-10-20T22:59:18.879Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "325f3cd25b611cdd99b4685ddc4b66de1592d905e7f83320e52c144726d6475a",
+            "afterSha256": "325f3cd25b611cdd99b4685ddc4b66de1592d905e7f83320e52c144726d6475a",
+            "stdoutSha256": "b3a6ed73900c7562803f027e276dbe3a6bff4040d420d983d2df49389e15b042",
+            "stderrSha256": "cdc04ffa66c41effdf5f20a933c7f3be4d4e8cbb0a24c3990afd40fa5a5bc9bb"
+          },
+          {
+            "file": "03-build-cli.receipt.json",
+            "name": "03-build-cli",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "scripts/build-dist.mjs",
+              "--out",
+              ".tmp/r4v1/b"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T22:59:25.497Z",
+            "end": "2026-10-20T22:59:27.616Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "325f3cd25b611cdd99b4685ddc4b66de1592d905e7f83320e52c144726d6475a",
+            "afterSha256": "325f3cd25b611cdd99b4685ddc4b66de1592d905e7f83320e52c144726d6475a",
+            "stdoutSha256": "4744ecfd2a55cd88d86f72d1208452180843316bbbf9ab76e4ea882c917dd86a",
+            "stderrSha256": "ca9c359ef11a0d8208cd78f3d737da4d94e2a07abcd8740a40e0e84d99165f92"
+          },
+          {
+            "file": "04-verify-dist.receipt.json",
+            "name": "04-verify-dist",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "scripts/verify-dist.mjs",
+              "--out",
+              ".tmp/r4v1/b"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T22:59:33.504Z",
+            "end": "2026-10-20T22:59:37.338Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "325f3cd25b611cdd99b4685ddc4b66de1592d905e7f83320e52c144726d6475a",
+            "afterSha256": "325f3cd25b611cdd99b4685ddc4b66de1592d905e7f83320e52c144726d6475a",
+            "stdoutSha256": "561f05f0b9fb9f00244b38d08df076845b54a4953295af8122d96fe6435f24d1",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "05-normal-1.receipt.json",
+            "name": "05-normal-1",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "normal1",
+              "D:/I-harness-main/.tmp/r4v1/f/normal-1.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:01:35.101Z",
+            "end": "2026-10-20T23:01:36.356Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "13dc66e87087339ab06cdc2ab75b3b56c0f5ccf3a9e0456d8aec2ff8cce3cbbd",
+            "afterSha256": "13dc66e87087339ab06cdc2ab75b3b56c0f5ccf3a9e0456d8aec2ff8cce3cbbd",
+            "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSha256": "53b9995d6577867a361e14535f4331ca80413123bc47f4aa17e58ccc5284898a"
+          },
+          {
+            "file": "06-normal-1.receipt.json",
+            "name": "06-normal-1",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "normal1a",
+              "D:/I-harness-main/.tmp/r4v1/f/normal-1.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:01:45.364Z",
+            "end": "2026-10-20T23:01:49.396Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "8321ed006eaee3d0924cf4e6c9b80e462acfcfdbd96de309ea4704957353ed41",
+            "afterSha256": "8321ed006eaee3d0924cf4e6c9b80e462acfcfdbd96de309ea4704957353ed41",
+            "stdoutSha256": "cd8359a81bfc6a2b29b75290e4f4815d0343bc0100cb5bf159f9ac5c6cd59d6c",
+            "stderrSha256": "cbcbd6cebb96d7a7a11f9b53b41641bfc793e521a4e8cdb2e50afe202a02c127"
+          },
+          {
+            "file": "07-native-policy-probe.receipt.json",
+            "name": "07-native-policy-probe",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "nativeprobe",
+              "D:/I-harness-main/.tmp/r4v1/f/native-probe.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:02:15.096Z",
+            "end": "2026-10-20T23:02:18.356Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "66595cbd5214d915fbbf90313d658c4bbd19fe4c3ef5347946bb7b3d03addfd0",
+            "afterSha256": "66595cbd5214d915fbbf90313d658c4bbd19fe4c3ef5347946bb7b3d03addfd0",
+            "stdoutSha256": "788ad60cdf1ce8e3c0bd3bc598979ace1c8052f4e32e9e7ef7cdcacd7ab9b477",
+            "stderrSha256": "bc59503819c1f8766e8cb136bc11933e594a52a9cc1022ffae5e3f92bc37a771"
+          },
+          {
+            "file": "08-native-policy-positive.receipt.json",
+            "name": "08-native-policy-positive",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "nativepositive",
+              "D:/I-harness-main/.tmp/r4v1/f/native-probe.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:02:29.802Z",
+            "end": "2026-10-20T23:02:33.019Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "afterSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "stdoutSha256": "5f923f9dd8853944a8291106127381bcfbea18fc3f9ef81786d4fff001d3c7ad",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "09-normal-1.receipt.json",
+            "name": "09-normal-1",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "normal1b",
+              "D:/I-harness-main/.tmp/r4v1/f/normal-1.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:02:40.567Z",
+            "end": "2026-10-20T23:02:44.584Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "afterSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "stdoutSha256": "e5ab958e18f68d9ab2069db6d10aa23606cad5d4993a3d49d70ed591c17cb5cb",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "10-normal-100.receipt.json",
+            "name": "10-normal-100",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "normal100",
+              "D:/I-harness-main/.tmp/r4v1/f/normal-100.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:02:51.467Z",
+            "end": "2026-10-20T23:03:25.430Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "afterSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "stdoutSha256": "a5295bea44f1b55694d0ecc60f235293a38fb938dda65a94ed97bd5500d076d1",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "11-exec-1.receipt.json",
+            "name": "11-exec-1",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "exec1",
+              "D:/I-harness-main/.tmp/r4v1/f/exec-1.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:03:38.649Z",
+            "end": "2026-10-20T23:03:43.433Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "afterSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "stdoutSha256": "79d16dc651289d33c41a06e91a89364c5792c11e8cbfa318ea3cb281f415a2aa",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "12-exec-100.receipt.json",
+            "name": "12-exec-100",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "exec100",
+              "D:/I-harness-main/.tmp/r4v1/f/exec-100.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:03:55.740Z",
+            "end": "2026-10-20T23:05:04.155Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "afterSha256": "7ef2e38524b4a4acf67ee4a4e458ca51c1f50f670fe554bd5685c17cde040ed3",
+            "stdoutSha256": "a4f71f038840bacef458b89cc7fe518d7aff25921ee257b00ac71e33b9a31e52",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "13-fan-100.receipt.json",
+            "name": "13-fan-100",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "fan100",
+              "D:/I-harness-main/.tmp/r4v1/f/fan-100.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:05:59.384Z",
+            "end": "2026-10-20T23:08:18.664Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "dc3558d9ead887c92c24e9277da50ba241f9ced037b5de3a68fc8542b148308b",
+            "afterSha256": "dc3558d9ead887c92c24e9277da50ba241f9ced037b5de3a68fc8542b148308b",
+            "stdoutSha256": "b62cc531206357a05adc8005b2c47b5645e41dcca720503b49e20e4106f842cc",
+            "stderrSha256": "0ae4cd52ca926750efaca067eddbebad43c81805b4f60d76dc153747d50959f7"
+          },
+          {
+            "file": "14-gateway-entry.receipt.json",
+            "name": "14-gateway-entry",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "gatewayentry",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "gateway",
+              "G1"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:10:38.620Z",
+            "end": "2026-10-20T23:10:45.462Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "51a0599b7ee800e30441154f56550ad6063156d3675eec95a1fee789cb6c7df6",
+            "afterSha256": "51a0599b7ee800e30441154f56550ad6063156d3675eec95a1fee789cb6c7df6",
+            "stdoutSha256": "da9ef830c53d7ea90fd6b81eb4033f4184a344831e19b1828fee0815166a4aba",
+            "stderrSha256": "c43e94055fd35720b79341fb58e15dbb7f0ebef57866ef119ad38879d70df72d"
+          },
+          {
+            "file": "15-gateway-entry.receipt.json",
+            "name": "15-gateway-entry",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "gatewayentry2",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "gateway",
+              "G2"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:11:14.236Z",
+            "end": "2026-10-20T23:11:23.247Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "9901ad421dbf5ffadadcc9e9616a5e2e8be53a3ae1139bdac895a13cc96b8543",
+            "afterSha256": "9901ad421dbf5ffadadcc9e9616a5e2e8be53a3ae1139bdac895a13cc96b8543",
+            "stdoutSha256": "5a8569292785e8f5761babc421639e1d4fe0efb6c86431be7e9a8e007cec57c0",
+            "stderrSha256": "22693ac63318ebe47479b8b867eaabcb2e38002a76a298e9aace87e674ecdf48"
+          },
+          {
+            "file": "16-gateway-entry.receipt.json",
+            "name": "16-gateway-entry",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "gatewayentry3",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "gateway",
+              "G3"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:12:51.603Z",
+            "end": "2026-10-20T23:13:01.716Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "e6c6db366ad8cffa1bfae4e01f2a9dac4e786e2c647ab5eed23338064173fa52",
+            "afterSha256": "e6c6db366ad8cffa1bfae4e01f2a9dac4e786e2c647ab5eed23338064173fa52",
+            "stdoutSha256": "922ea453543209c416e2408ffee3468fe6b805e74a961aa257aabfa31146b9d2",
+            "stderrSha256": "22d4160ccb20e3cce1c5a604687b7d718bfb154d71988a09f6eac70abf14f935"
+          },
+          {
+            "file": "17-gateway-entry.receipt.json",
+            "name": "17-gateway-entry",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "gatewayentry4",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "gateway",
+              "G4"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:13:35.788Z",
+            "end": "2026-10-20T23:14:00.995Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "345af4afb94c70ac9896a68d9bd15a023902e6e3be3381a5003b34577f66a1e6",
+            "afterSha256": "345af4afb94c70ac9896a68d9bd15a023902e6e3be3381a5003b34577f66a1e6",
+            "stdoutSha256": "efe1c4a6ba1001cb042b6e2d710bffe46b7170da8be89f99732f9849d3d3e4ae",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "18-cli-entry.receipt.json",
+            "name": "18-cli-entry",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "clientry1",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "cli",
+              "B1"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:14:21.112Z",
+            "end": "2026-10-20T23:14:25.909Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "345af4afb94c70ac9896a68d9bd15a023902e6e3be3381a5003b34577f66a1e6",
+            "afterSha256": "345af4afb94c70ac9896a68d9bd15a023902e6e3be3381a5003b34577f66a1e6",
+            "stdoutSha256": "96fc03a191e7d800ba14312024cff278ce4a642a578cb00fd6c80a9ab7387b2f",
+            "stderrSha256": "1403b450e38f72da8f2c2daa87932168ce1ddcb53f222b91621608ea50e36fae"
+          },
+          {
+            "file": "19-reachability.receipt.json",
+            "name": "19-reachability",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "scripts/audit/check-reachability.mjs",
+              "--gate"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:16:32.874Z",
+            "end": "2026-10-20T23:16:44.621Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "267d487a83ecf8a2417fde32ac4a2943888e688e89065cca542d7dbdc0308edd",
+            "afterSha256": "267d487a83ecf8a2417fde32ac4a2943888e688e89065cca542d7dbdc0308edd",
+            "stdoutSha256": "56422910e47ef28c6d0c53fc92bf37223769d687b2009cf6bf8023ed86aab426",
+            "stderrSha256": "d5ef978bf1c755447b4aac91b1d8b0655a558deb8ffa2d8899b5dd8d030bd8c7"
+          },
+          {
+            "file": "20-current-executor.receipt.json",
+            "name": "20-current-executor",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/service-result-retention.test.ts",
+              "test/retained-result-flow.test.ts",
+              "test/retained-mcp-result.test.ts",
+              "test/native-producer-outcomes.test.ts",
+              "test/retained-exec-flow.test.ts",
+              "test/retained-background-exec.test.ts",
+              "test/retained-code-output.test.ts",
+              "test/retained-state-cold.test.ts",
+              "test/native-dependency-observer.test.ts",
+              "--maxWorkers=2",
+              "--minWorkers=1",
+              "--exclude",
+              "**/.tmp/**",
+              "--exclude",
+              "**/.worktrees/**",
+              "--exclude",
+              "**/release-*/**",
+              "--exclude",
+              "**/build/**",
+              "--exclude",
+              "**/dist/**",
+              "--exclude",
+              "**/out/**",
+              "--exclude",
+              "**/.gateway-dist/**",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/20-current-executor.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\packages\\session-executor",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:17:15.936Z",
+            "end": "2026-10-20T23:17:59.965Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "267d487a83ecf8a2417fde32ac4a2943888e688e89065cca542d7dbdc0308edd",
+            "afterSha256": "267d487a83ecf8a2417fde32ac4a2943888e688e89065cca542d7dbdc0308edd",
+            "stdoutSha256": "6315abe930025c58eb02ef963de73008928307b616e3487d4332fa2b345d8066",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "21-wire-owned.receipt.json",
+            "name": "21-wire-owned",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "wireowned",
+              "D:/I-harness-main/.tmp/r4v1/f/wire-owned.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:18:38.302Z",
+            "end": "2026-10-20T23:18:41.880Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "1178ce81a93041958141949039c5f201ffa40f977fdfa7712f14aeac35bc806c",
+            "afterSha256": "1178ce81a93041958141949039c5f201ffa40f977fdfa7712f14aeac35bc806c",
+            "stdoutSha256": "f4314e0f82adca88062d5f8d5e885cf00736a3adf94b9b61b20f30a26f91d160",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "22-deny-fallback.receipt.json",
+            "name": "22-deny-fallback",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "denyfallback",
+              "D:/I-harness-main/.tmp/r4v1/f/deny-fallback.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:18:59.791Z",
+            "end": "2026-10-20T23:19:03.067Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "1178ce81a93041958141949039c5f201ffa40f977fdfa7712f14aeac35bc806c",
+            "afterSha256": "1178ce81a93041958141949039c5f201ffa40f977fdfa7712f14aeac35bc806c",
+            "stdoutSha256": "19cedad28d295806f3b7eb6621eb6d699bc5f4ed3f44f6c388bb963bc5238119",
+            "stderrSha256": "48873fccf11b5e4f8d50789d55bb6ecf0650b392d1597a3c6bdf2ab5610d4610"
+          },
+          {
+            "file": "23-deny-fallback.receipt.json",
+            "name": "23-deny-fallback",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "denyfallback2",
+              "D:/I-harness-main/.tmp/r4v1/f/deny-fallback.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:19:21.231Z",
+            "end": "2026-10-20T23:19:24.457Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "61bcff4a08ca1bc7bfc2bfea7719c8bbc620a7177e1c818ea9236aeddf9d0a20",
+            "afterSha256": "61bcff4a08ca1bc7bfc2bfea7719c8bbc620a7177e1c818ea9236aeddf9d0a20",
+            "stdoutSha256": "d97620dc6ee74548c2715b01a5e86d78a9f7d6b66b64b84e76c08727088acf47",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "24-bundle-witness.receipt.json",
+            "name": "24-bundle-witness",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../../node_modules/vitest/vitest.mjs",
+              "run",
+              "result-page-bundle.test.ts",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/24-bundle-witness.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\f",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:19:55.795Z",
+            "end": "2026-10-20T23:19:59.677Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "afterSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "stdoutSha256": "0ccf0f03ad3fc6002888ae99704860fa2adae328e6886ec48e9ff743de01b4fe",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "25-types-executor.receipt.json",
+            "name": "25-types-executor",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/typescript/bin/tsc",
+              "--noEmit"
+            ],
+            "cwd": "D:\\I-harness-main\\packages\\session-executor",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:20:11.045Z",
+            "end": "2026-10-20T23:20:20.103Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "afterSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "26-source-copy-graph.receipt.json",
+            "name": "26-source-copy-graph",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/audit-source-copy.mjs"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:21:43.650Z",
+            "end": "2026-10-20T23:21:48.337Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "afterSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "stdoutSha256": "d0553efd12667bdaefa638db0f6e877af72a5b65c284db00928b183c7ed0a49d",
+            "stderrSha256": "a6ef22f47ffc62eb0b4b5595a9f0cf981a33905e98055239f1def33fb593ecd8"
+          },
+          {
+            "file": "27-types-gateway.receipt.json",
+            "name": "27-types-gateway",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/typescript/bin/tsc",
+              "--noEmit"
+            ],
+            "cwd": "D:\\I-harness-main\\packages\\desktop-gateway",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:22:10.921Z",
+            "end": "2026-10-20T23:22:19.532Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "afterSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "28-gateway-full-selector.receipt.json",
+            "name": "28-gateway-full-selector",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "gatewayfinal",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "gateway",
+              "G5"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:22:28.412Z",
+            "end": "2026-10-20T23:22:54.453Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "afterSha256": "bfba25dc3daa61f888978e623ab09efd86b80f9328e8cc6b956e2f1b3a6d52a4",
+            "stdoutSha256": "ebac3124d478a609c001c91e82c59ad385d8cee89c1f659919e4e7e69aeb1af9",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "29-types-sdk.receipt.json",
+            "name": "29-types-sdk",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/typescript/bin/tsc",
+              "--noEmit"
+            ],
+            "cwd": "D:\\I-harness-main\\packages\\sdk",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:23:55.705Z",
+            "end": "2026-10-20T23:24:02.656Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "ef6296a53dd9e36d3fd636f7fba28f85aea18e58db3ce48d1dd6117285332455",
+            "afterSha256": "ef6296a53dd9e36d3fd636f7fba28f85aea18e58db3ce48d1dd6117285332455",
+            "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "30-sdk-yes-red.receipt.json",
+            "name": "30-sdk-yes-red",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/sdk-approval.test.ts",
+              "-t",
+              "enables the actual original native producer",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--exclude",
+              "**/.tmp/**",
+              "--exclude",
+              "**/.worktrees/**",
+              "--exclude",
+              "**/build/**",
+              "--exclude",
+              "**/dist/**",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/30-sdk-yes-red.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\apps\\cli",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:25:26.839Z",
+            "end": "2026-10-20T23:25:33.634Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "8a706ba1b94e298f626d0d03c2e0cb73805abec666d75f3555f9fbe127e240af",
+            "afterSha256": "8a706ba1b94e298f626d0d03c2e0cb73805abec666d75f3555f9fbe127e240af",
+            "stdoutSha256": "86c81e56fc06d76cbbbce4b6baa2a94a798678f9635491a432eaac5ded52a477",
+            "stderrSha256": "b6bd3ff10d032b4a29c1beca702357f4afac2f9cf9f2e194650c04213d6e9c90"
+          },
+          {
+            "file": "31-sdk-yes-green.receipt.json",
+            "name": "31-sdk-yes-green",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/sdk-approval.test.ts",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--exclude",
+              "**/.tmp/**",
+              "--exclude",
+              "**/.worktrees/**",
+              "--exclude",
+              "**/build/**",
+              "--exclude",
+              "**/dist/**",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/31-sdk-yes-green.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\apps\\cli",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:26:24.651Z",
+            "end": "2026-10-20T23:26:40.252Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "9368cd945366d26ab531c30925b7d46ec7658b662f104b99688616ac1d3fb2b3",
+            "afterSha256": "9368cd945366d26ab531c30925b7d46ec7658b662f104b99688616ac1d3fb2b3",
+            "stdoutSha256": "801fe1dda9b7a7aaeae583f05a90d8a98be21c3ae3f154424f4158f470913a11",
+            "stderrSha256": "38f7e0e7b4fa740027ec8d0be6051c16f7bdc1a8b243ccfbf01c96ca9068ae57"
+          },
+          {
+            "file": "32-sdk-yes-green.receipt.json",
+            "name": "32-sdk-yes-green",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/sdk-approval.test.ts",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--exclude",
+              "**/.tmp/**",
+              "--exclude",
+              "**/.worktrees/**",
+              "--exclude",
+              "**/build/**",
+              "--exclude",
+              "**/dist/**",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/32-sdk-yes-green.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\apps\\cli",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:27:16.273Z",
+            "end": "2026-10-20T23:27:33.271Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "8c8fa95c3954e098b992eca00ee12bb54424d1ee513a4c1257673e115ca4add0",
+            "afterSha256": "8c8fa95c3954e098b992eca00ee12bb54424d1ee513a4c1257673e115ca4add0",
+            "stdoutSha256": "7eb48d319e782aa559498ccd194088a4d717b90cb72d3e1cf8d41bbeb959ad1c",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "33-cli-final-focused.receipt.json",
+            "name": "33-cli-final-focused",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/sdk-approval.test.ts",
+              "test/sdk-wire-v11.test.ts",
+              "test/bin.test.ts",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--exclude",
+              "**/.tmp/**",
+              "--exclude",
+              "**/.worktrees/**",
+              "--exclude",
+              "**/build/**",
+              "--exclude",
+              "**/dist/**",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/33-cli-final-focused.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\apps\\cli",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:28:52.686Z",
+            "end": "2026-10-20T23:29:32.891Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "11f918fdafa60e56ae4513d9065b377b06da9c4a7b518d0600863953e51dff88",
+            "afterSha256": "11f918fdafa60e56ae4513d9065b377b06da9c4a7b518d0600863953e51dff88",
+            "stdoutSha256": "f5178d2a6c3462bda86e7a610d2b7367493f799e3b33212e5a554ca4fe1bb44d",
+            "stderrSha256": "ce3f466dc659411c6a8f079a46b450cdef7c9ab6e72a915bc28fd508ff7d6d66"
+          },
+          {
+            "file": "34-cli-final-focused.receipt.json",
+            "name": "34-cli-final-focused",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/sdk-approval.test.ts",
+              "test/sdk-wire-v11.test.ts",
+              "test/bin.test.ts",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--exclude",
+              "**/.tmp/**",
+              "--exclude",
+              "**/.worktrees/**",
+              "--exclude",
+              "**/build/**",
+              "--exclude",
+              "**/dist/**",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/34-cli-final-focused.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\apps\\cli",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:30:33.380Z",
+            "end": "2026-10-20T23:31:16.703Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "6d6b13da67b5f72a77ad6d2c4df7ec36e48c1e18cd40d1ac574ec6624006e401",
+            "afterSha256": "6d6b13da67b5f72a77ad6d2c4df7ec36e48c1e18cd40d1ac574ec6624006e401",
+            "stdoutSha256": "b7d19284aad5348d749013d25ecbbf234b1413302ed4ec3426fd85c618f8542e",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "35-types-cli.receipt.json",
+            "name": "35-types-cli",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/typescript/bin/tsc",
+              "--noEmit"
+            ],
+            "cwd": "D:\\I-harness-main\\apps\\cli",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:31:51.137Z",
+            "end": "2026-10-20T23:31:58.547Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "6d6b13da67b5f72a77ad6d2c4df7ec36e48c1e18cd40d1ac574ec6624006e401",
+            "afterSha256": "6d6b13da67b5f72a77ad6d2c4df7ec36e48c1e18cd40d1ac574ec6624006e401",
+            "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "36-build-cli-final.receipt.json",
+            "name": "36-build-cli-final",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "scripts/build-dist.mjs",
+              "--out",
+              ".tmp/r4v1/b2"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:32:45.998Z",
+            "end": "2026-10-20T23:32:48.115Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "9e0423946a88d61c0dcb0fdce5fdd78125d2d314c5a090aaca0fb7dca6355da8",
+            "afterSha256": "9e0423946a88d61c0dcb0fdce5fdd78125d2d314c5a090aaca0fb7dca6355da8",
+            "stdoutSha256": "aa7ada4ef94cc9874c7b367d153c344a03cd93f3e7db41d7fcc60d9af06c87e0",
+            "stderrSha256": "1b490b583f0cbe37d3b958a5e5e93f8fec4e87877baa3e1e75cc12eda5abf549"
+          },
+          {
+            "file": "37-verify-cli-final.receipt.json",
+            "name": "37-verify-cli-final",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "scripts/verify-dist.mjs",
+              "--out",
+              ".tmp/r4v1/b2"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:33:25.974Z",
+            "end": "2026-10-20T23:33:29.816Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "9e0423946a88d61c0dcb0fdce5fdd78125d2d314c5a090aaca0fb7dca6355da8",
+            "afterSha256": "9e0423946a88d61c0dcb0fdce5fdd78125d2d314c5a090aaca0fb7dca6355da8",
+            "stdoutSha256": "f89effdea8881fbe8d9e2be3fc0547905a90da04d966cfa8836787dfde6fd06e",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "38-cli-final-flow.receipt.json",
+            "name": "38-cli-final-flow",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "clientryfinal",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "cli",
+              "B2"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "IH_A6_CLI_OUT": "D:/I-harness-main/.tmp/r4v1/b2",
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:33:45.549Z",
+            "end": "2026-10-20T23:33:50.945Z",
+            "exit": 1,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "9e0423946a88d61c0dcb0fdce5fdd78125d2d314c5a090aaca0fb7dca6355da8",
+            "afterSha256": "9e0423946a88d61c0dcb0fdce5fdd78125d2d314c5a090aaca0fb7dca6355da8",
+            "stdoutSha256": "e6313ec885857e1793af880b301300d4b66d6be971aa58ff03753990e454a9f3",
+            "stderrSha256": "6ad684f5e7afd623f5faf0cfa2d861e291d1b005d64f6176fc15989d97d167ba"
+          },
+          {
+            "file": "39-cli-final-flow.receipt.json",
+            "name": "39-cli-final-flow",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "clientryfinal2",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "cli",
+              "B3"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "IH_A6_CLI_OUT": "D:/I-harness-main/.tmp/r4v1/b2",
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:34:12.217Z",
+            "end": "2026-10-20T23:34:31.270Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "d96fae7e8ab9efe87b25bd842ae46a127cf9362970668fdbbed2c2c663870d10",
+            "afterSha256": "d96fae7e8ab9efe87b25bd842ae46a127cf9362970668fdbbed2c2c663870d10",
+            "stdoutSha256": "bbf75d89b145761b63e29952c58a4ed34b6c662cb5125a010b5d166d5eca1739",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "40-bundle-consent-controls.receipt.json",
+            "name": "40-bundle-consent-controls",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../../node_modules/vitest/vitest.mjs",
+              "run",
+              "sdk-approval-bundle.test.ts",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/40-bundle-consent-controls.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\f",
+            "environment": {
+              "IH_A6_CLI_OUT": "D:/I-harness-main/.tmp/r4v1/b2",
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:36:20.687Z",
+            "end": "2026-10-20T23:36:31.694Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "afterSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "stdoutSha256": "678df53babb5a757f2ad666b8a792b4f4d9374c978b81f819bde140697b92cb2",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "41-final-bundle-witness.receipt.json",
+            "name": "41-final-bundle-witness",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../../node_modules/vitest/vitest.mjs",
+              "run",
+              "result-page-bundle.test.ts",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/41-final-bundle-witness.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\f",
+            "environment": {
+              "IH_A6_CLI_OUT": "D:/I-harness-main/.tmp/r4v1/b2",
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:37:01.365Z",
+            "end": "2026-10-20T23:37:05.189Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "afterSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "stdoutSha256": "5e9a7cf6fae8435e0996761638d0473b3e9103c5a4d3aae24ca67c20d7e62ba0",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "42-guards-role.receipt.json",
+            "name": "42-guards-role",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/dispatch-authority.test.ts",
+              "test/role-tool-exposure.test.ts",
+              "test/registry-contracts.test.ts",
+              "--maxWorkers=2",
+              "--minWorkers=1",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/42-guards-role.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\packages\\core-tools",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:37:06.567Z",
+            "end": "2026-10-20T23:37:09.462Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "afterSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "stdoutSha256": "3bf32bf53dce7d92b06a5241be77fdbba3327bdac803dc83d690316db375b3a1",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "43-headless-routing.receipt.json",
+            "name": "43-headless-routing",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "../../node_modules/vitest/vitest.mjs",
+              "run",
+              "test/run-flag-routing.test.ts",
+              "test/headless-result-retention.test.ts",
+              "--maxWorkers=1",
+              "--minWorkers=1",
+              "--exclude",
+              "**/.tmp/**",
+              "--exclude",
+              "**/.worktrees/**",
+              "--exclude",
+              "**/build/**",
+              "--exclude",
+              "**/dist/**",
+              "--reporter=default",
+              "--reporter=json",
+              "--outputFile.json=D:/I-harness-main/.tmp/r4v1/43-headless-routing.tests.json"
+            ],
+            "cwd": "D:\\I-harness-main\\apps\\cli",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:37:19.963Z",
+            "end": "2026-10-20T23:37:28.411Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "afterSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "stdoutSha256": "7d78b24e965fe50b122852744ea1f034b025bd68b261347cf90f43f3d7293428",
+            "stderrSha256": "b680e72c2c186cc2c3f629c529b095dcf3aecb4a57e9d4eac29a2c73cd9cdeba"
+          },
+          {
+            "file": "44-final-reachability.receipt.json",
+            "name": "44-final-reachability",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              "scripts/audit/check-reachability.mjs",
+              "--gate"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:37:35.499Z",
+            "end": "2026-10-20T23:37:47.046Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "afterSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "stdoutSha256": "56422910e47ef28c6d0c53fc92bf37223769d687b2009cf6bf8023ed86aab426",
+            "stderrSha256": "d5ef978bf1c755447b4aac91b1d8b0655a558deb8ffa2d8899b5dd8d030bd8c7"
+          },
+          {
+            "file": "45-final-copy-graph-census.receipt.json",
+            "name": "45-final-copy-graph-census",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/audit-source-copy.mjs",
+              "final-audit"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:39:20.893Z",
+            "end": "2026-10-20T23:39:25.405Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "afterSha256": "d968b097354052b5c55c3086995650ab4b7fc16866a48bc375a18574957d09b9",
+            "stdoutSha256": "9f9a901dc3cd89fb3e1580104210c23a5513b5e4bcf8234b58eaa9d2bdded55f",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "46-gateway-isolation-final.receipt.json",
+            "name": "46-gateway-isolation-final",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "gatewaysealed",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "gateway",
+              "G6"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:43:24.055Z",
+            "end": "2026-10-20T23:43:48.129Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "5cf7d34ab061c1b3ab7a3cb4843380abd6eb301a1edcb61aa72bc5893a9a09f5",
+            "afterSha256": "5cf7d34ab061c1b3ab7a3cb4843380abd6eb301a1edcb61aa72bc5893a9a09f5",
+            "stdoutSha256": "72e309946f2ea1cd7f4e5c2193576ce5ca53c6d00d9529508a5edd1271c3e729",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "47-cli-isolation-final.receipt.json",
+            "name": "47-cli-isolation-final",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/run-candidate.mjs",
+              "copied",
+              "clisealed",
+              "D:/I-harness-main/.tmp/r4v1/f/entry-flows.mjs",
+              "cli",
+              "B4"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "IH_A6_CLI_OUT": "D:/I-harness-main/.tmp/r4v1/b2",
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:44:26.993Z",
+            "end": "2026-10-20T23:44:45.479Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "5cf7d34ab061c1b3ab7a3cb4843380abd6eb301a1edcb61aa72bc5893a9a09f5",
+            "afterSha256": "5cf7d34ab061c1b3ab7a3cb4843380abd6eb301a1edcb61aa72bc5893a9a09f5",
+            "stdoutSha256": "26787a6412fc70a4631654d92c8e9ad59418cae0e639bc636d226657b0853b51",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "file": "48-final-closed-copy-audit.receipt.json",
+            "name": "48-final-closed-copy-audit",
+            "head": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+            "executable": "C:\\Program Files\\nodejs\\node.exe",
+            "executableSha256": "3331e1ffe19874215472217c5e94f5a0c6d8e18c4ac7111d3937aa0ad5e9b4a5",
+            "argv": [
+              ".superpowers/sdd/2026-10-21-context-r4a-a6-final/audit-source-copy.mjs",
+              "final-closed-audit"
+            ],
+            "cwd": "D:\\I-harness-main",
+            "environment": {
+              "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+              "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\c",
+              "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\n",
+              "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\i",
+              "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4v1\\m",
+              "IH_A6_ROOT": "D:\\I-harness-main\\.tmp\\r4v1"
+            },
+            "clearedInherited": {
+              "NODE_PATH": null,
+              "NODE_OPTIONS": null
+            },
+            "start": "2026-10-20T23:45:49.859Z",
+            "end": "2026-10-20T23:45:53.493Z",
+            "exit": 0,
+            "signal": null,
+            "sourceStable": true,
+            "beforeSha256": "b6d619f1c993fcce74d2266c50f7a7a20f19d494439eaae7fd0401c06ad94c77",
+            "afterSha256": "b6d619f1c993fcce74d2266c50f7a7a20f19d494439eaae7fd0401c06ad94c77",
+            "stdoutSha256": "9f9a901dc3cd89fb3e1580104210c23a5513b5e4bcf8234b58eaa9d2bdded55f",
+            "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      }
+    },
+    "test-collection.json": {
+      "topKeys": [
+        "tests",
+        "scope"
+      ],
+      "value": {
+        "tests": [
+          {
+            "file": "01-p3-native.tests.json",
+            "passed": 2,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/synthetic-result-retention.test.ts",
+                "status": "passed",
+                "assertions": 2,
+                "passed": 2,
+                "failed": 0
+              }
+            ]
+          },
+          {
+            "file": "20-current-executor.tests.json",
+            "passed": 33,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/native-dependency-observer.test.ts",
+                "status": "passed",
+                "assertions": 1,
+                "passed": 1,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/native-producer-outcomes.test.ts",
+                "status": "passed",
+                "assertions": 4,
+                "passed": 4,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/retained-background-exec.test.ts",
+                "status": "passed",
+                "assertions": 1,
+                "passed": 1,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/retained-code-output.test.ts",
+                "status": "passed",
+                "assertions": 4,
+                "passed": 4,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/retained-exec-flow.test.ts",
+                "status": "passed",
+                "assertions": 1,
+                "passed": 1,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/retained-mcp-result.test.ts",
+                "status": "passed",
+                "assertions": 10,
+                "passed": 10,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/retained-result-flow.test.ts",
+                "status": "passed",
+                "assertions": 6,
+                "passed": 6,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/retained-state-cold.test.ts",
+                "status": "passed",
+                "assertions": 3,
+                "passed": 3,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/session-executor/test/service-result-retention.test.ts",
+                "status": "passed",
+                "assertions": 3,
+                "passed": 3,
+                "failed": 0
+              }
+            ]
+          },
+          {
+            "file": "24-bundle-witness.tests.json",
+            "passed": 1,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/.tmp/r4v1/f/result-page-bundle.test.ts",
+                "status": "passed",
+                "assertions": 1,
+                "passed": 1,
+                "failed": 0
+              }
+            ]
+          },
+          {
+            "file": "30-sdk-yes-red.tests.json",
+            "passed": 0,
+            "failed": 2,
+            "pending": 5,
+            "success": false,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/apps/cli/test/sdk-approval.test.ts",
+                "status": "failed",
+                "assertions": 7,
+                "passed": 0,
+                "failed": 2
+              }
+            ]
+          },
+          {
+            "file": "31-sdk-yes-green.tests.json",
+            "passed": 3,
+            "failed": 5,
+            "pending": 0,
+            "success": false,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/apps/cli/test/sdk-approval.test.ts",
+                "status": "failed",
+                "assertions": 8,
+                "passed": 3,
+                "failed": 5
+              }
+            ]
+          },
+          {
+            "file": "32-sdk-yes-green.tests.json",
+            "passed": 8,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/apps/cli/test/sdk-approval.test.ts",
+                "status": "passed",
+                "assertions": 8,
+                "passed": 8,
+                "failed": 0
+              }
+            ]
+          },
+          {
+            "file": "33-cli-final-focused.tests.json",
+            "passed": 20,
+            "failed": 1,
+            "pending": 0,
+            "success": false,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/apps/cli/test/bin.test.ts",
+                "status": "passed",
+                "assertions": 6,
+                "passed": 6,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/apps/cli/test/sdk-approval.test.ts",
+                "status": "passed",
+                "assertions": 8,
+                "passed": 8,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/apps/cli/test/sdk-wire-v11.test.ts",
+                "status": "failed",
+                "assertions": 7,
+                "passed": 6,
+                "failed": 1
+              }
+            ]
+          },
+          {
+            "file": "34-cli-final-focused.tests.json",
+            "passed": 22,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/apps/cli/test/bin.test.ts",
+                "status": "passed",
+                "assertions": 6,
+                "passed": 6,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/apps/cli/test/sdk-approval.test.ts",
+                "status": "passed",
+                "assertions": 9,
+                "passed": 9,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/apps/cli/test/sdk-wire-v11.test.ts",
+                "status": "passed",
+                "assertions": 7,
+                "passed": 7,
+                "failed": 0
+              }
+            ]
+          },
+          {
+            "file": "40-bundle-consent-controls.tests.json",
+            "passed": 9,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/.tmp/r4v1/f/sdk-approval-bundle.test.ts",
+                "status": "passed",
+                "assertions": 9,
+                "passed": 9,
+                "failed": 0
+              }
+            ]
+          },
+          {
+            "file": "41-final-bundle-witness.tests.json",
+            "passed": 1,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/.tmp/r4v1/f/result-page-bundle.test.ts",
+                "status": "passed",
+                "assertions": 1,
+                "passed": 1,
+                "failed": 0
+              }
+            ]
+          },
+          {
+            "file": "42-guards-role.tests.json",
+            "passed": 16,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/packages/core-tools/test/dispatch-authority.test.ts",
+                "status": "passed",
+                "assertions": 8,
+                "passed": 8,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/core-tools/test/registry-contracts.test.ts",
+                "status": "passed",
+                "assertions": 7,
+                "passed": 7,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/packages/core-tools/test/role-tool-exposure.test.ts",
+                "status": "passed",
+                "assertions": 1,
+                "passed": 1,
+                "failed": 0
+              }
+            ]
+          },
+          {
+            "file": "43-headless-routing.tests.json",
+            "passed": 22,
+            "failed": 0,
+            "pending": 0,
+            "success": true,
+            "paths": [
+              {
+                "path": "D:/I-harness-main/apps/cli/test/headless-result-retention.test.ts",
+                "status": "passed",
+                "assertions": 1,
+                "passed": 1,
+                "failed": 0
+              },
+              {
+                "path": "D:/I-harness-main/apps/cli/test/run-flag-routing.test.ts",
+                "status": "passed",
+                "assertions": 21,
+                "passed": 21,
+                "failed": 0
+              }
+            ]
+          }
+        ],
+        "scope": "Actual Vitest JSON; source and mapped-bundle copies are separate scopes. Repeats/refinements are not additional unique coverage."
+      }
+    },
+    "fixed-wire-identities.json": {
+      "topKeys": [
+        "createdBeforeCandidateExecution",
+        "identities"
+      ],
+      "value": {
+        "createdBeforeCandidateExecution": "2026-10-20T23:09:07.478Z",
+        "identities": [
+          {
+            "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\legacy8.jsonl",
+            "version": 8,
+            "id": "legacy8",
+            "bytes": 897,
+            "sha256": "9976d0f03e1ab0821d848c8029547423c822544da2a2fc47e2005f2b203c923e",
+            "bodySha256": "ab6028d0ad3d9804483bb762b878d19c5f080730039715f387ea79c564fa4691",
+            "events": [
+              {
+                "type": "user/message",
+                "text": "old literal8 input",
+                "seq": 0
+              },
+              {
+                "type": "assistant/message",
+                "text": "old literal8 body 中文",
+                "seq": 1
+              }
+            ],
+            "origin": "Test-only independent framing/checksum construction from literal objects; no candidate serializer/append/toJSONL/encoder called"
+          },
+          {
+            "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\unknown8.jsonl",
+            "version": 8,
+            "id": "unknown8",
+            "bytes": 2618,
+            "sha256": "901cdb01af6b720ff4d4ec2945d6f7e156b7a70910fa43de1775e3f0bb1b3454",
+            "bodySha256": "1d9d481d80dd9a9b6387ac47c92c3915c3032ade012e3467f6a082ae37d0df8f",
+            "events": [
+              {
+                "type": "agent/input/admitted",
+                "version": 1,
+                "inputId": "original",
+                "text": "/raw",
+                "delivery": "queue",
+                "intent": "user",
+                "preparationPolicy": "human-host",
+                "provenance": {
+                  "kind": "human",
+                  "authority": "request",
+                  "scope": "turn",
+                  "producer": "session.prompt"
+                },
+                "seq": 0
+              },
+              {
+                "type": "context/action",
+                "version": 1,
+                "op": "open",
+                "ownerSessionId": "unknown8",
+                "actionId": "old-generation",
+                "purpose": "main",
+                "origin": {
+                  "kind": "input",
+                  "seq": 0
+                },
+                "startedAt": 100,
+                "expiresAt": 3600100,
+                "trustedAt": 100,
+                "seq": 1
+              },
+              {
+                "type": "context/action",
+                "version": 1,
+                "op": "bind",
+                "executionDomain": "physical",
+                "ownerSessionId": "unknown8",
+                "actionId": "old-generation",
+                "retry": {
+                  "mode": "normal",
+                  "maxRetries": 5
+                },
+                "limits": {
+                  "total": 20,
+                  "main": 6,
+                  "recovery": 6,
+                  "summary": 8
+                },
+                "trustedAt": 100,
+                "seq": 2
+              },
+              {
+                "type": "agent/input/preparation",
+                "version": 1,
+                "preparationId": "old-preparation",
+                "actionId": "old-generation",
+                "actionSeq": 1,
+                "admissionSeq": 0,
+                "inputId": "original",
+                "op": "started",
+                "startedAt": 100,
+                "seq": 3
+              },
+              {
+                "type": "agent/input/preparation",
+                "version": 1,
+                "preparationId": "old-preparation",
+                "actionId": "old-generation",
+                "actionSeq": 1,
+                "admissionSeq": 0,
+                "inputId": "original",
+                "op": "completed",
+                "observations": [
+                  {
+                    "producer": "host-preparation",
+                    "text": "retained expansion"
+                  }
+                ],
+                "seq": 4
+              },
+              {
+                "type": "context/attempt",
+                "version": 1,
+                "op": "reserve",
+                "ownerSessionId": "unknown8",
+                "actionId": "old-generation",
+                "attemptId": "old-attempt",
+                "ordinal": 1,
+                "lane": "main",
+                "cause": "initial",
+                "incarnation": "old-owner",
+                "semanticId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "payloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "payloadKind": "http-json-body",
+                "trustedAt": 100,
+                "seq": 5
+              },
+              {
+                "type": "tool/call",
+                "callId": "old-unknown",
+                "name": "write",
+                "args": {},
+                "seq": 6
+              },
+              {
+                "type": "tool/result",
+                "callId": "old-unknown",
+                "name": "write",
+                "isError": true,
+                "output": {
+                  "code": "TOOL_OUTCOME_UNKNOWN",
+                  "replay": false,
+                  "originalExtension": "kept"
+                },
+                "seq": 7
+              }
+            ],
+            "origin": "Test-only independent framing/checksum construction from literal objects; no candidate serializer/append/toJSONL/encoder called"
+          },
+          {
+            "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\legacy9.jsonl",
+            "version": 9,
+            "id": "legacy9",
+            "bytes": 897,
+            "sha256": "0f5053598566c6e731f997492fb04a9c3b58575e28e44d957650cf7c18625472",
+            "bodySha256": "0f2db42a7b28a907df42c76d8e4ebf3e53e854d1a921ec02c27a234a8cffce65",
+            "events": [
+              {
+                "type": "user/message",
+                "text": "old literal9 input",
+                "seq": 0
+              },
+              {
+                "type": "assistant/message",
+                "text": "old literal9 body 中文",
+                "seq": 1
+              }
+            ],
+            "origin": "Test-only independent framing/checksum construction from literal objects; no candidate serializer/append/toJSONL/encoder called"
+          },
+          {
+            "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\unknown9.jsonl",
+            "version": 9,
+            "id": "unknown9",
+            "bytes": 2618,
+            "sha256": "8fc1f623efe336c25cea12dcd6de910c864a5334d26e69d47933d6b70aba9153",
+            "bodySha256": "436e68698b226a0e9fe420d5ad179fcac431ac330d15b2a39f5916730533a59d",
+            "events": [
+              {
+                "type": "agent/input/admitted",
+                "version": 1,
+                "inputId": "original",
+                "text": "/raw",
+                "delivery": "queue",
+                "intent": "user",
+                "preparationPolicy": "human-host",
+                "provenance": {
+                  "kind": "human",
+                  "authority": "request",
+                  "scope": "turn",
+                  "producer": "session.prompt"
+                },
+                "seq": 0
+              },
+              {
+                "type": "context/action",
+                "version": 1,
+                "op": "open",
+                "ownerSessionId": "unknown9",
+                "actionId": "old-generation",
+                "purpose": "main",
+                "origin": {
+                  "kind": "input",
+                  "seq": 0
+                },
+                "startedAt": 100,
+                "expiresAt": 3600100,
+                "trustedAt": 100,
+                "seq": 1
+              },
+              {
+                "type": "context/action",
+                "version": 1,
+                "op": "bind",
+                "executionDomain": "physical",
+                "ownerSessionId": "unknown9",
+                "actionId": "old-generation",
+                "retry": {
+                  "mode": "normal",
+                  "maxRetries": 5
+                },
+                "limits": {
+                  "total": 20,
+                  "main": 6,
+                  "recovery": 6,
+                  "summary": 8
+                },
+                "trustedAt": 100,
+                "seq": 2
+              },
+              {
+                "type": "agent/input/preparation",
+                "version": 1,
+                "preparationId": "old-preparation",
+                "actionId": "old-generation",
+                "actionSeq": 1,
+                "admissionSeq": 0,
+                "inputId": "original",
+                "op": "started",
+                "startedAt": 100,
+                "seq": 3
+              },
+              {
+                "type": "agent/input/preparation",
+                "version": 1,
+                "preparationId": "old-preparation",
+                "actionId": "old-generation",
+                "actionSeq": 1,
+                "admissionSeq": 0,
+                "inputId": "original",
+                "op": "completed",
+                "observations": [
+                  {
+                    "producer": "host-preparation",
+                    "text": "retained expansion"
+                  }
+                ],
+                "seq": 4
+              },
+              {
+                "type": "context/attempt",
+                "version": 1,
+                "op": "reserve",
+                "ownerSessionId": "unknown9",
+                "actionId": "old-generation",
+                "attemptId": "old-attempt",
+                "ordinal": 1,
+                "lane": "main",
+                "cause": "initial",
+                "incarnation": "old-owner",
+                "semanticId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "payloadId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "payloadKind": "http-json-body",
+                "trustedAt": 100,
+                "seq": 5
+              },
+              {
+                "type": "tool/call",
+                "callId": "old-unknown",
+                "name": "write",
+                "args": {},
+                "seq": 6
+              },
+              {
+                "type": "tool/result",
+                "callId": "old-unknown",
+                "name": "write",
+                "isError": true,
+                "output": {
+                  "code": "TOOL_OUTCOME_UNKNOWN",
+                  "replay": false,
+                  "originalExtension": "kept"
+                },
+                "seq": 7
+              }
+            ],
+            "origin": "Test-only independent framing/checksum construction from literal objects; no candidate serializer/append/toJSONL/encoder called"
+          },
+          {
+            "path": "D:\\I-harness-main\\.tmp\\r4v1\\f\\future11.jsonl",
+            "version": 11,
+            "id": "future11",
+            "bytes": 394,
+            "sha256": "872bddb049f3a079c0a93f6d1dd9409a5c14472b21d6dac0943b21ef29c818ac",
+            "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "events": [],
+            "origin": "Test-only independent framing/checksum construction from literal objects; no candidate serializer/append/toJSONL/encoder called"
+          }
+        ]
+      }
+    },
+    "fixture-transformations.json": {
+      "topKeys": [
+        "array"
+      ],
+      "value": [
+        {
+          "original": ".tmp\\context-r4a-evidence-20261018-a\\normal-100mib.mjs",
+          "originalBytes": 4205,
+          "originalSha256": "4daa6df4e2ab69bfa67fdd3e10c65d51fba0c87dc3b4b5074d86cacf0c68bfba",
+          "file": ".tmp\\r4v1\\f\\normal-1.mjs",
+          "bytes": 4644,
+          "sha256": "b9811c0d47a044e37fcd65cda2d140ff66229db56c11202f4453380ccc137d11",
+          "changes": [
+            {
+              "from": "'../../packages/core-plugin/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-plugin/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/core-tools/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-tools/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/core-session/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-session/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/context-output/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/context-output/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence-jsonl/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence-jsonl/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-executor/src/lifecycle/result-retention.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-executor/src/lifecycle/result-retention.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "resolve('build/r4a-large-controls')",
+              "to": "resolve(process.env.IH_A6_ROOT,'s')",
+              "why": "Fresh short isolated task scale root"
+            },
+            {
+              "from": "await rm(root,{recursive:true,force:true});",
+              "to": "console.log(JSON.stringify({phase:'artifacts-preserved',root}));",
+              "why": "Join owners, retain exact artifacts for independent cold proof"
+            },
+            {
+              "from": "'normal-100mib-'",
+              "to": "'n'+process.env.IH_A6_LABEL+'-'",
+              "why": "Short unique task fixture prefix"
+            },
+            {
+              "from": "assert.equal(result.envelope.retention.kind,'artifact');",
+              "to": "assert.equal(result.program.kind,'value');assert.equal(result.program.value,text);assert.equal(result.envelope.retention.kind,'artifact');",
+              "why": "Current tagged program must preserve exact original separately from bounded envelope; no extra full encode"
+            },
+            {
+              "from": "104857602",
+              "to": "1048578",
+              "why": "Independent1MiB JSON syntax bytes"
+            },
+            {
+              "from": "104857600",
+              "to": "1048576",
+              "why": "Literal1MiB source"
+            },
+            {
+              "from": "i<1600",
+              "to": "i<16",
+              "why": "Independent1MiB literal digest blocks"
+            }
+          ]
+        },
+        {
+          "original": ".tmp\\context-r4a-evidence-20261018-a\\normal-100mib.mjs",
+          "originalBytes": 4205,
+          "originalSha256": "4daa6df4e2ab69bfa67fdd3e10c65d51fba0c87dc3b4b5074d86cacf0c68bfba",
+          "file": ".tmp\\r4v1\\f\\normal-100.mjs",
+          "bytes": 4652,
+          "sha256": "cf514330c6b4a63c060f180461e67ef54503453f5356aa6bd9ffed358855e0c2",
+          "changes": [
+            {
+              "from": "'../../packages/core-plugin/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-plugin/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/core-tools/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-tools/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/core-session/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-session/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/context-output/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/context-output/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence-jsonl/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence-jsonl/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-executor/src/lifecycle/result-retention.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-executor/src/lifecycle/result-retention.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "resolve('build/r4a-large-controls')",
+              "to": "resolve(process.env.IH_A6_ROOT,'s')",
+              "why": "Fresh short isolated task scale root"
+            },
+            {
+              "from": "await rm(root,{recursive:true,force:true});",
+              "to": "console.log(JSON.stringify({phase:'artifacts-preserved',root}));",
+              "why": "Join owners, retain exact artifacts for independent cold proof"
+            },
+            {
+              "from": "'normal-100mib-'",
+              "to": "'n'+process.env.IH_A6_LABEL+'-'",
+              "why": "Short unique task fixture prefix"
+            },
+            {
+              "from": "assert.equal(result.envelope.retention.kind,'artifact');",
+              "to": "assert.equal(result.program.kind,'value');assert.equal(result.program.value,text);assert.equal(result.envelope.retention.kind,'artifact');",
+              "why": "Current tagged program must preserve exact original separately from bounded envelope; no extra full encode"
+            }
+          ]
+        },
+        {
+          "original": ".tmp\\context-r4a-evidence-20261018-a\\exec-100mib.mjs",
+          "originalBytes": 12461,
+          "originalSha256": "158f39e3bac664b4363d1c1587856cbbf4d5e9e83bf5b637e0062e12cf040b42",
+          "file": ".tmp\\r4v1\\f\\exec-1.mjs",
+          "bytes": 14307,
+          "sha256": "5c8538aed1a7e94790fe7b193fcf7d8f6d1b3153161309922da37e31fdb258e7",
+          "changes": [
+            {
+              "from": "'../../packages/core-plugin/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-plugin/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/core-tools/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-tools/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/core-session/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-session/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/context-output/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/context-output/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence-jsonl/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence-jsonl/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/sandbox/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/sandbox/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/sandbox-policy/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/sandbox-policy/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/exec/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/exec/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-executor/src/lifecycle/result-retention.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-executor/src/lifecycle/result-retention.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-executor/src/lifecycle/exec-result-retention.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-executor/src/lifecycle/exec-result-retention.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "resolve('build/r4a-large-controls')",
+              "to": "resolve(process.env.IH_A6_ROOT,'s')",
+              "why": "Fresh short isolated task scale root"
+            },
+            {
+              "from": "await rm(root,{recursive:true,force:true});",
+              "to": "console.log(JSON.stringify({phase:'artifacts-preserved',root}));",
+              "why": "Join owners, retain exact artifacts for independent cold proof"
+            },
+            {
+              "from": "'exec-100mib-'",
+              "to": "'e'+process.env.IH_A6_LABEL+'-'",
+              "why": "Short unique task fixture prefix"
+            },
+            {
+              "from": "assert.equal(finalized.output.exitCode,7);",
+              "to": "assert.equal(finalized.program.kind,'value');assert.equal(finalized.program.value,finalized.output);assert.equal(finalized.output.exitCode,7);",
+              "why": "Use actual tagged program compatibility after proving tag"
+            },
+            {
+              "from": "let bodyIo=0,indexIo=0,metadataIo=0;",
+              "to": "let bodyIo=0,indexIo=0,metadataIo=0;const readRecords=[];",
+              "why": "Retain exact actual native offsets/counts and independent inode path classes"
+            },
+            {
+              "from": "else metadataIo+=result.bytesRead;return result;",
+              "to": "else metadataIo+=result.bytesRead;readRecords.push({file:info.dev===bodyInfo.dev&&info.ino===bodyInfo.ino?'body':info.dev===indexInfo.dev&&info.ino===indexInfo.ino?'index':'bounded-metadata',position:typeof args[0]==='object'&&!Buffer.isBuffer(args[0])?args[0].position:args[3],requested:typeof args[0]==='object'&&!Buffer.isBuffer(args[0])?args[0].length:args[2],bytesRead:result.bytesRead});return result;",
+              "why": "Native FileHandle.read record after delegating unchanged"
+            },
+            {
+              "from": "const rawPageIo={bodyIo,indexIo,metadataIo};bodyIo=0;indexIo=0;metadataIo=0;",
+              "to": "const rawPageIo={bodyIo,indexIo,metadataIo,reads:readRecords.splice(0)};bodyIo=0;indexIo=0;metadataIo=0;\n  const crossingPage=await cold.readResult({sessionId:id},{ref:frameRef,offset:65536-123,maxBytes:32768});assert.ok(Buffer.byteLength(JSON.stringify(crossingPage))<=32768);assert.equal(bodyIo,2*65536);assert.ok(indexIo<=1024);assert.ok(metadataIo<=8192);const crossingPageIo={bodyIo,indexIo,metadataIo,reads:readRecords.splice(0)};bodyIo=0;indexIo=0;metadataIo=0;",
+              "why": "Additional legitimate two-chunk32KiB page; preserve original inside-chunk assertions"
+            },
+            {
+              "from": "const codecPageIo={bodyIo,indexIo,metadataIo};",
+              "to": "const codecPageIo={bodyIo,indexIo,metadataIo,reads:readRecords.splice(0)};",
+              "why": "Keep codec record IO separate"
+            },
+            {
+              "from": "rawPageIo,codecPageIo,maxConcat",
+              "to": "rawPageIo,crossingPageIo,codecPageIo,maxConcat",
+              "why": "Emit separate page IO scopes"
+            },
+            {
+              "from": "originalBytes=104857600",
+              "to": "originalBytes=1048576",
+              "why": "Literal1MiB raw source"
+            },
+            {
+              "from": "cycles=1280",
+              "to": "cycles=12",
+              "why": "12complete cycles then stdout tail"
+            },
+            {
+              "from": "const expectedRawDigest=expectedRaw.digest('hex')",
+              "to": "expectedRaw.update(stdoutFrame);for(let offset=0;offset<stdoutFrame.length;offset+=32768){const data=stdoutFrame.subarray(offset,offset+32768).toString('base64');const line='{\"channel\":\"stdout\",\"frame\":24,\"offset\":'+offset+',\"end\":'+(offset+32768>=stdoutFrame.length)+',\"data\":\"'+data+'\"}\\n';expectedEncoded.update(line);expectedBytes+=Buffer.byteLength(line);}\nconst expectedRawDigest=expectedRaw.digest('hex')",
+              "why": "Independent tail frame24 makes raw1048576,25frames38records"
+            },
+            {
+              "from": "cycle<1280",
+              "to": "cycle<12",
+              "why": "Actual transport12cycles"
+            },
+            {
+              "from": "}finally{drained();}",
+              "to": "yield{channel:'stdout',data:stdoutFrame};}finally{drained();}",
+              "why": "Actual final65536stdout tail before EOF"
+            },
+            {
+              "from": "frame===2300",
+              "to": "frame===20",
+              "why": "Separate small codec record sample frame20"
+            },
+            {
+              "from": "65536*1000+123",
+              "to": "65536*10+123",
+              "why": "Inside-chunk sample within1MiBencoded artifact"
+            },
+            {
+              "from": "frames[0].frame,2300",
+              "to": "frames[0].frame,20",
+              "why": "New sample expected actual frame20"
+            },
+            {
+              "from": "previousFrame,2559",
+              "to": "previousFrame,24",
+              "why": "25actual native frames"
+            },
+            {
+              "from": "records,3840",
+              "to": "records,38",
+              "why": "38independent canonical records"
+            },
+            {
+              "from": "raw,104857600",
+              "to": "raw,1048576",
+              "why": "Exact1MiB raw decode"
+            },
+            {
+              "from": "assert.ok(peakArrays-initial.arrayBuffers<originalBytes);assert.ok(peakHeap-initial.heapUsed<originalBytes);",
+              "to": "//1MiB control samples memory; original100MiB sample bounds are retained only in the100MiB control.",
+              "why": "Do not invent1MiB process-heap bound from original100MiB sample constraint"
+            }
+          ]
+        },
+        {
+          "original": ".tmp\\context-r4a-evidence-20261018-a\\exec-100mib.mjs",
+          "originalBytes": 12461,
+          "originalSha256": "158f39e3bac664b4363d1c1587856cbbf4d5e9e83bf5b637e0062e12cf040b42",
+          "file": ".tmp\\r4v1\\f\\exec-100.mjs",
+          "bytes": 13931,
+          "sha256": "accee7336afbc18fa99706e74f3fe28cb0b6b9503b1b163acc02dfaa87b673ff",
+          "changes": [
+            {
+              "from": "'../../packages/core-plugin/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-plugin/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/core-tools/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-tools/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/core-session/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/core-session/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/context-output/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/context-output/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence-jsonl/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence-jsonl/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/sandbox/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/sandbox/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/sandbox-policy/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/sandbox-policy/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/exec/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/exec/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-executor/src/lifecycle/result-retention.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-executor/src/lifecycle/result-retention.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-executor/src/lifecycle/exec-result-retention.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-executor/src/lifecycle/exec-result-retention.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "resolve('build/r4a-large-controls')",
+              "to": "resolve(process.env.IH_A6_ROOT,'s')",
+              "why": "Fresh short isolated task scale root"
+            },
+            {
+              "from": "await rm(root,{recursive:true,force:true});",
+              "to": "console.log(JSON.stringify({phase:'artifacts-preserved',root}));",
+              "why": "Join owners, retain exact artifacts for independent cold proof"
+            },
+            {
+              "from": "'exec-100mib-'",
+              "to": "'e'+process.env.IH_A6_LABEL+'-'",
+              "why": "Short unique task fixture prefix"
+            },
+            {
+              "from": "assert.equal(finalized.output.exitCode,7);",
+              "to": "assert.equal(finalized.program.kind,'value');assert.equal(finalized.program.value,finalized.output);assert.equal(finalized.output.exitCode,7);",
+              "why": "Use actual tagged program compatibility after proving tag"
+            },
+            {
+              "from": "let bodyIo=0,indexIo=0,metadataIo=0;",
+              "to": "let bodyIo=0,indexIo=0,metadataIo=0;const readRecords=[];",
+              "why": "Retain exact actual native offsets/counts and independent inode path classes"
+            },
+            {
+              "from": "else metadataIo+=result.bytesRead;return result;",
+              "to": "else metadataIo+=result.bytesRead;readRecords.push({file:info.dev===bodyInfo.dev&&info.ino===bodyInfo.ino?'body':info.dev===indexInfo.dev&&info.ino===indexInfo.ino?'index':'bounded-metadata',position:typeof args[0]==='object'&&!Buffer.isBuffer(args[0])?args[0].position:args[3],requested:typeof args[0]==='object'&&!Buffer.isBuffer(args[0])?args[0].length:args[2],bytesRead:result.bytesRead});return result;",
+              "why": "Native FileHandle.read record after delegating unchanged"
+            },
+            {
+              "from": "const rawPageIo={bodyIo,indexIo,metadataIo};bodyIo=0;indexIo=0;metadataIo=0;",
+              "to": "const rawPageIo={bodyIo,indexIo,metadataIo,reads:readRecords.splice(0)};bodyIo=0;indexIo=0;metadataIo=0;\n  const crossingPage=await cold.readResult({sessionId:id},{ref:frameRef,offset:65536-123,maxBytes:32768});assert.ok(Buffer.byteLength(JSON.stringify(crossingPage))<=32768);assert.equal(bodyIo,2*65536);assert.ok(indexIo<=1024);assert.ok(metadataIo<=8192);const crossingPageIo={bodyIo,indexIo,metadataIo,reads:readRecords.splice(0)};bodyIo=0;indexIo=0;metadataIo=0;",
+              "why": "Additional legitimate two-chunk32KiB page; preserve original inside-chunk assertions"
+            },
+            {
+              "from": "const codecPageIo={bodyIo,indexIo,metadataIo};",
+              "to": "const codecPageIo={bodyIo,indexIo,metadataIo,reads:readRecords.splice(0)};",
+              "why": "Keep codec record IO separate"
+            },
+            {
+              "from": "rawPageIo,codecPageIo,maxConcat",
+              "to": "rawPageIo,crossingPageIo,codecPageIo,maxConcat",
+              "why": "Emit separate page IO scopes"
+            }
+          ]
+        },
+        {
+          "original": ".tmp\\context-r4a-evidence-20261018-a\\child-fan-in-100-v2c.mjs",
+          "originalBytes": 11854,
+          "originalSha256": "7f18f9517a77b995ba128ca03ebbe06e91bb64b6d9d3f5b413fbeb5c0e37fb13",
+          "file": ".tmp\\r4v1\\f\\fan-100.mjs",
+          "bytes": 12330,
+          "sha256": "4c3d0e8aa0b42825994cec43e634f7ecc01b6c068c23ea07741131e2cad1e439",
+          "changes": [
+            {
+              "from": "'../../packages/context-output/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/context-output/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/llm-openai-compatible/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/llm-openai-compatible/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-executor/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-executor/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-persistence-jsonl/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-persistence-jsonl/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/subagent/src/index.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/subagent/src/index.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/session-executor/src/lifecycle/task-result-retention.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/@i-harness/session-executor/src/lifecycle/task-result-retention.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "'../../packages/desktop-gateway/src/context-runtime.ts'",
+              "to": "'file:///D:/I-harness-main/.tmp/r4v1/g/cli/src/context-runtime.ts'",
+              "why": "Actual builder output; private copied leaf explicitly test-only"
+            },
+            {
+              "from": "resolve('build/r4a-large-controls')",
+              "to": "resolve(process.env.IH_A6_ROOT,'s')",
+              "why": "Fresh short isolated task scale root"
+            },
+            {
+              "from": "await rm(root,{recursive:true,force:true});",
+              "to": "console.log(JSON.stringify({phase:'artifacts-preserved',root}));",
+              "why": "Join owners, retain exact artifacts for independent cold proof"
+            },
+            {
+              "from": "'child-fan-in-100-'",
+              "to": "'c-'",
+              "why": "Shortest child/native fixture paths"
+            },
+            {
+              "from": "const refs=new Set(),expectedById=new Map();",
+              "to": "const refs=new Set(),revisions=new Set(),expectedById=new Map();",
+              "why": "Count original immutable result revisions separately from refs"
+            },
+            {
+              "from": "refs.add(ref.id);expectedById.set",
+              "to": "refs.add(ref.id);revisions.add(task.result.revision);expectedById.set",
+              "why": "Actual task result revision"
+            },
+            {
+              "from": "assert.equal(refs.size,count);assert.equal(sends,count);",
+              "to": "assert.equal(refs.size,count);assert.equal(revisions.size,count);assert.equal(sends,count);",
+              "why": "100distinct refs AND revisions"
+            },
+            {
+              "from": "distinctRefs:refs.size,",
+              "to": "distinctRefs:refs.size,distinctResultRevisions:revisions.size,",
+              "why": "Emit distinct revision evidence"
+            }
+          ]
+        }
+      ]
+    },
+    "identities.json": {
+      "topKeys": [
+        "array"
+      ],
+      "value": [
+        {
+          "gate": "30-sdk-yes-red",
+          "path": "apps/cli/test/sdk-approval.test.ts",
+          "file": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\source-sdk-consent-RED30.test.ts",
+          "bytes": 8294,
+          "sha256": "fb73730f1981e8258f88f16176ad717524573b051a770f5f0788384d1e7a100c",
+          "provenance": "Reconstructed from recorded exact authored transformations or committed original, then mechanically matched against original pre-invocation native input SHA256 and byte length. This is a later exact-byte reconstruction, not a claimed contemporaneous full-byte source archive."
+        },
+        {
+          "gate": "30-sdk-yes-red",
+          "path": "apps/cli/src/index.ts",
+          "file": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\original-source-cli-index.ts",
+          "bytes": 55497,
+          "sha256": "877167d27824727775b56415a41b9c99b29fcaa850a241db260420d043c5741b",
+          "provenance": "Reconstructed from recorded exact authored transformations or committed original, then mechanically matched against original pre-invocation native input SHA256 and byte length. This is a later exact-byte reconstruction, not a claimed contemporaneous full-byte source archive."
+        },
+        {
+          "gate": "30-sdk-yes-red",
+          "path": "apps/cli/test/sdk-wire-v11.test.ts",
+          "file": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\original-wire-current9.test.ts",
+          "bytes": 27624,
+          "sha256": "314e79570d622e0ac582cabc942d504cc447b070a53b2f969bd5a791faccde4c",
+          "provenance": "Reconstructed from recorded exact authored transformations or committed original, then mechanically matched against original pre-invocation native input SHA256 and byte length. This is a later exact-byte reconstruction, not a claimed contemporaneous full-byte source archive."
+        },
+        {
+          "gate": "38-cli-final-flow",
+          "path": ".tmp/r4v1/f/entry-flows.mjs",
+          "file": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-B2-marker-race38.mjs",
+          "bytes": 21414,
+          "sha256": "c7ca15669610cb456027cbbcd1e549f2eed8c65099755ba8837cb045a36858fc",
+          "provenance": "Reconstructed from recorded exact authored transformations or committed original, then mechanically matched against original pre-invocation native input SHA256 and byte length. This is a later exact-byte reconstruction, not a claimed contemporaneous full-byte source archive."
+        },
+        {
+          "gate": "28-gateway-full-selector",
+          "path": ".tmp/r4v1/f/entry-flows.mjs",
+          "file": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-G5-full-child28.mjs",
+          "bytes": 21365,
+          "sha256": "3fce4ed9b9a03aee8146affd8bd1ff1d5f49c1be7b4214e6244d32aa2cacd0ef",
+          "provenance": "Reconstructed from recorded exact authored transformations or committed original, then mechanically matched against original pre-invocation native input SHA256 and byte length. This is a later exact-byte reconstruction, not a claimed contemporaneous full-byte source archive."
+        },
+        {
+          "gate": "18-cli-entry",
+          "path": ".tmp/r4v1/f/entry-flows.mjs",
+          "file": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-original-no-consent18.mjs",
+          "bytes": 20470,
+          "sha256": "c000a06369ba0e84271f062970d199e77ca80edd2beee26a39397fa4f52bc234",
+          "provenance": "Reconstructed from recorded exact authored transformations or committed original, then mechanically matched against original pre-invocation native input SHA256 and byte length. This is a later exact-byte reconstruction, not a claimed contemporaneous full-byte source archive."
+        },
+        {
+          "gate": "16-gateway-entry",
+          "path": ".tmp/r4v1/f/entry-flows.mjs",
+          "file": "D:\\I-harness-main\\.tmp\\r4v1\\qualified-variants\\entry-shell-exit-oracle16.mjs",
+          "bytes": 20284,
+          "sha256": "1e22d0b64a94c36da290e5b419a63cafa23380b6add2d027ca2aec193adff5e4",
+          "provenance": "Reconstructed from recorded exact authored transformations or committed original, then mechanically matched against original pre-invocation native input SHA256 and byte length. This is a later exact-byte reconstruction, not a claimed contemporaneous full-byte source archive."
+        }
+      ]
+    }
+  }
+}

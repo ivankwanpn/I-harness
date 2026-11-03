@@ -38,6 +38,7 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
       if (row.kind === "activity-group") return row.rows.some(failed)
       if (row.kind === "other") return row.label === "step/failed" || row.codeActivity?.type === "code/cell" && row.codeActivity.state === "failed"
       if (row.kind !== "tool") return false
+      if (row.envelope) return row.envelope.execution.outcome === "failed"
       if (row.isError) return true
       if (!row.output || typeof row.output !== "object" || Array.isArray(row.output)) return false
       const output = row.output as Record<string, unknown>

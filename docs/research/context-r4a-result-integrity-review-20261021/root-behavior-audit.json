@@ -1,0 +1,45 @@
+{
+  "status": "PASS",
+  "independentRecipes": [
+    {
+      "size": 0,
+      "index": 96,
+      "revision": "da32e22048d68e2fb1cecccf1ec47b1c70f8712f4aac7cc37bec804a0ad0e3c5"
+    },
+    {
+      "size": 65536,
+      "index": 96,
+      "revision": "16d6d01465c2bbbe5864129a6cfe7766d459423b6eb0778ff18096a53849c875"
+    },
+    {
+      "size": 65537,
+      "index": 160,
+      "revision": "bb01dc5ef54e2028d836d708912864d6cdf3f6480cd5dcbc7e022b3d3e5d047d"
+    },
+    {
+      "size": 131073,
+      "index": 288,
+      "revision": "92c8008f34b02c35abbff0e87f6c5e329e0ef15dd8427df6d7ba2467d87f47d3"
+    }
+  ],
+  "auditedSavedRuns": {
+    "vectors": 24,
+    "vectorPages": 72,
+    "nativeBoundary": 6,
+    "cold": {
+      "redForeign": 2,
+      "greenOriginal": 6
+    },
+    "pin": {
+      "redPlaintext": 2,
+      "greenDenied": 5
+    },
+    "exec": 6,
+    "witness": 5
+  },
+  "limits": [
+    "Audited saved repeated runs are not additional unique tests",
+    "No product runtime replay in root audit",
+    "Range proofs do not certify untouched body chunks"
+  ]
+}

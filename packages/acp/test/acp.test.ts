@@ -7,6 +7,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { client } from "@agentclientprotocol/sdk"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { fromJSONL } from "@i-harness/core-session"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
@@ -726,10 +727,10 @@ describe("i-harness acp (CLI stdio)", () => {
       await secondIo.waitFor((message) => message.id === 12, "second prompt")
       expect(await stopCli(second, secondIo.stderrText)).toBe(0)
 
-      const lines = (await readFile(join(sessionDir, `${sessionId}.jsonl`), "utf8")).trim().split("\n")
-      const events = lines.slice(1).map((line) => JSON.parse(line) as { type: string; text?: string; seq?: number })
+      const { events } = fromJSONL(await readFile(join(sessionDir, `${sessionId}.jsonl`), "utf8"))
       expect(events
-        .filter((event) => event.type === "user/message" && (event.text === "first prompt" || event.text === "second prompt"))
+        .filter((event) => event.type === "user/message")
+        .filter((event) => event.text === "first prompt" || event.text === "second prompt")
         .map((event) => event.text)).toEqual([
         "first prompt",
         "second prompt",

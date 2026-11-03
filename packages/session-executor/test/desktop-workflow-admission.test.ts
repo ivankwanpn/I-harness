@@ -1,8 +1,9 @@
+import { appendStandalone as append } from "./helpers.ts"
 import { expect, it } from "vitest"
 import { mkdtemp, rm, access } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { append } from "@i-harness/core-session"
+
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { createSessionAssembly } from "../src/assembly.ts"
 

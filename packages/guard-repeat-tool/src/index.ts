@@ -1,7 +1,8 @@
 import type { Plugin, PluginContext } from "@i-harness/core-plugin"
-import { append, type Session } from "@i-harness/core-session"
+import { committedFactSeqs, feedbackFactsFor, type SessionView as Session, type FeedbackFactSource } from "@i-harness/core-session"
 
 export interface RepeatToolConfig {
+  factsFor?: (session: Session) => FeedbackFactSource
   thresholds?: number[]            // default [3, 5, 8]
   include?: string[]               // *-wildcard patterns; empty = track everything
   exclude?: string[]               // *-wildcard patterns; transparent (no count, no reset)
@@ -49,8 +50,8 @@ export function createRepeatToolGuard(_ctx: PluginContext, config: RepeatToolCon
   return {
     name: "guard-repeat-tool",
     mount(ctx: PluginContext): void {
-      ctx.on("agent/post-tool", (payload: unknown) => {
-        const p = payload as { name: string; args: unknown; session: Session }
+      ctx.on("agent/post-tool", async (payload: unknown) => {
+        const p = payload as { name: string; args: unknown; session: Session; signal?: AbortSignal }
         // exclude is transparent: no count, no reset.
         if (matchesAny(exclude, p.name)) return
         // include gating: empty include = track everything.
@@ -68,13 +69,13 @@ export function createRepeatToolGuard(_ctx: PluginContext, config: RepeatToolCon
             `Heads-up: tool "${p.name}" has now been called ${state.count} consecutive times ` +
             `with the same arguments. If the previous calls did not achieve the intended result, ` +
             `consider changing the approach.\nArgs: ${preview}`
-          append(p.session, {
+          committedFactSeqs(await feedbackFactsFor(p.session, config.factsFor?.(p.session), p.signal).feedback({
             type: "user/message",
             text,
             source: { kind: "plugin", plugin: "guard-repeat-tool" },
             // M59: an internal nudge to the model — not a user turn in the TUI.
             internal: true,
-          })
+          }))
         }
       })
     },

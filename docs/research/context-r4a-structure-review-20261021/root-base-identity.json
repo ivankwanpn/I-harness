@@ -1,0 +1,27 @@
+{
+  "status": "PASS",
+  "entryReplay": [
+    {
+      "path": "packages/subagent/src/task/registry.ts",
+      "originalGateRawSha256": "56de705bbc5a7452f6945ffaea80df4b065417782c5e0ac8f682e8f407588dc7",
+      "matchesOriginalGateBytes": true,
+      "gitBaseTextEqualWithOnlyNewlineConvention": true
+    },
+    {
+      "path": "packages/context-output/src/service.ts",
+      "originalGateRawSha256": "1259de47c456c1ccdbf54a49114e9828af69c5d6c6cff581e05a7d74cddaacaa",
+      "matchesOriginalGateBytes": true,
+      "gitBaseTextEqualWithOnlyNewlineConvention": true
+    }
+  ],
+  "unchangedOwners": [
+    "packages/subagent/src/task/persistence.ts",
+    "packages/subagent/src/task/notifications.ts",
+    "packages/subagent/src/task/result.ts",
+    "packages/subagent/src/task/publication.ts",
+    "packages/subagent/src/task/settlement.ts",
+    "packages/context-output/src/artifact/ownership.ts",
+    "packages/subagent/src/jobs.ts"
+  ],
+  "limitation": "Entry replay plus unchanged shared closure, not full BASE checkout; raw native input is verified against original gate manifest, Git comparison only normalizes newline convention."
+}

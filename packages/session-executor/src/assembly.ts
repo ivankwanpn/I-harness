@@ -1,3 +1,12 @@
+export {createManagedExecutionRuntime,type ManagedExecutionRuntimeOptions} from './managed-assembly.ts'
+import { createToolRegistryWithModelOrigin } from '@i-harness/core-tools/model-origin'
+import { createAgentModelOriginOwner } from '@i-harness/core-agent/model-origin'
+import { isNondurableSession } from '@i-harness/core-session'
+import { managedExecutionStatus } from '@i-harness/session-persistence/internal/retained-inspection'
+import { summaryFactory, composeCompactConfig } from './context-composition.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
+import { ownedContextReadiness } from "@i-harness/session-persistence"
 // packages/session-executor/src/assembly.ts — R-C0 (engine-owned posture).
 // ONE assembly implementation. `runHeadless` (one-shot) and the web
 // `createSessionService` (multi-turn) both build through this. The branch's
@@ -7,18 +16,22 @@
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
-import { createScopedExec } from "./scoped-exec.ts"
+import { createScopedExec, createScopedExecWithReservation, createScopedWorkflowExec } from "./scoped-exec.ts"
 import { createChildObservation } from "./child-observation.ts"
 import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
 import { inspectWslRuntime } from "@i-harness/sandbox-local"
-import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
+import { derivePlanMode, AsyncInbox, subscribe, committedFactSeqs, captureLegacyFact, isManagedFactOwner, type SessionView as Session, type FactOwner, type MetadataFactSource } from "@i-harness/core-session"
+import { openExecutorDocument } from './lifecycle/managed-document.ts'
+import { actionMetadataFacts, actionFeedbackFacts, createRuntimeContextSource } from './lifecycle/action-facts.ts'
+import { createGenerationLifecycle } from './lifecycle/generation-actions.ts'
+import { createSteerPreparationFactory } from './lifecycle/steer-preparation.ts'
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type ToolDispatchMetadata, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
-import { approxTokens, type CompactionConfig, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
-import { createMockClient, type MockStep } from "@i-harness/llm-mock"
-import type { ModelClient } from "@i-harness/llm-seam"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { approxTokens, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
+import { createMockClient, createCyclicMockClient, type MockStep } from "@i-harness/llm-mock"
+import { createStableModelClient, type ModelClient } from "@i-harness/llm-seam"
+import type { SessionCoordinator, ManagedDocument } from "@i-harness/session-persistence"
 import { agentShellPrompt, registerShell, resolveWslAgentShell, type ShellRetentionOptions, type ResolvedAgentShell } from "@i-harness/shell"
 import { registerTerminal, type TerminalMountHandle } from "@i-harness/terminal"
 import { registerWeb, createWebCache, type WebAccessMode } from "@i-harness/web"
@@ -28,15 +41,21 @@ import { createReadImageTool } from "@i-harness/attachment"
 import { createReadVideoTool, type VideoAudioAnalyzer } from "@i-harness/media"
 import { createApprovalPolicy, ensureReviewerRole, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
-import { createOutputSpillGuard, createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
-import { createContextOutputTools, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
-import { createNativeCodeTextRetention, installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
+import { createContextOutputTools, type ContextOutputService, type ContextCapture, type LegacyReadObservationRunner } from "@i-harness/context-output"
+import { installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
+import { createCodeTextRetention } from "./lifecycle/code-text-retention.ts"
+import { createTaskResultRetention } from './lifecycle/task-result-retention.ts'
+import { createToolResultRetention } from './lifecycle/result-retention.ts'
+import { acquireAssemblyResultStore } from './lifecycle/result-store.ts'
+import { createExecResultRetention } from './lifecycle/exec-result-retention.ts'
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
-import { registerExec, type ExecService } from "@i-harness/exec"
+import { registerExecWithReservation, type ExecService } from "@i-harness/exec"
 import { registerApprovalAnswerer, registerAskUserInput } from "@i-harness/interaction"
-import { installRuntimeContext } from "@i-harness/runtime-context"
-import { createInstructionsSection } from "@i-harness/instructions"
+import { createRuntimeContext } from "@i-harness/runtime-context"
+import { createInstructionEnvironment, createProjectInstructionEnvironment, type InstructionEnvironment } from './context/instructions/index.ts'
+import { createMainInstructionManager } from './context/instructions/manager.ts'
+import { createChildInstructionHost } from './context/instructions/child-host.ts'
 import { PLAN_MODE_SYSTEM_PROMPT, ensurePlanModeTool } from "@i-harness/plan-mode"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
@@ -46,7 +65,7 @@ import { createScheduleTools } from "@i-harness/schedule/tools"
 // session-query package itself (a module side effect that evaluates before
 // its node:sqlite import) — the assembly needs no explicit wiring.
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
-import { registerSubagent, createStaleSubagentsSection, projectWorkflowRows, snapshotState, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
+import { registerSubagent, SHIPPING_REPORT_POLICY, createStaleSubagentsSection, projectWorkflowRows, snapshotState, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { createSkillsSection, registerSkills, scanMentionedSkillNames, SKILL_MENTION_PLUGIN } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
@@ -120,7 +139,7 @@ export class ModelUnavailableError extends Error {
 type RoleModelResolution =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number; budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata } }
 
 /** The selection a ROLE carries — what settings' `agents.roles.<name>` entry
  * holds, and what subagent's own `RoleModelSelection` is: named here so the
@@ -133,18 +152,19 @@ type RoleModelSelection = {
   reasoningEffort?: string
 }
 
-// The m26 mock client is destructive (one script step per turn, exhausted →
-// error). For the web path (repeated turns on ONE assembly with the default
-// mock) wrap it so every stream() call serves a fresh copy of the cycle.
-function cyclicMockClient(script: MockStep[]): ModelClient {
-  return {
-    async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
-      yield* createMockClient(script.slice()).stream(request)
-    },
-  }
-}
-
 export interface AssemblyOptions {
+  prepareTaskChild?: import('@i-harness/subagent').PrepareTaskChild
+  prepareExecDelivery?: import('./lifecycle/exec-delivery-owner.ts').PrepareExecDelivery
+  /** Constructor opt-in passive evidence only; no shipping activation. */
+  passiveGeneration?: import('@i-harness/llm-seam/internal/passive-observation').OriginalPassiveObserver
+  residentActivation?: ResidentActivationController
+  /** Retain the original partial assembly's cleanup before Team construction. */
+  retainConstructionCleanup?: (cleanup: () => Promise<void>) => void
+  instructionEnvironment?: InstructionEnvironment
+  instructionSettingsPath?: string
+  prepareHumanInput?: (text: string) => Promise<string>
+  modelActionTimeoutMs?: number
+  modelActionMaxAttempts?: number
   videoAudioAnalyzer?: VideoAudioAnalyzer
   codeMode?: CodeModeConfig | (() => CodeModeConfig)
   codeModeFactory?: CodeModeFactory
@@ -217,7 +237,11 @@ export interface AssemblyOptions {
   /** Host-owned tools participate in the same validation and approval pipeline. */
   additionalTools?: Tool[]
   contextOutput?: ContextOutputService
+  contextOutputSettingsPath?: string
   contextOutputSourceFor?: (sessionId: string) => Promise<ContextCapture['source']>
+  /** Internal service-owned publication gate for the original Code mount. */
+  codeFinalOutputFor?: (owner: FactOwner, sessionId: string, service: ContextOutputService, sourceFor: (sessionId: string) => Promise<ContextCapture['source']>) => import('../../code-mode/src/final-output.ts').CodeFinalOutputFactory | undefined
+  contextOutputLegacyReadObservation?: LegacyReadObservationRunner
   // M11: the window is NOT part of the host contract — the assembly resolves it
   // (see `CompactionRequest`) and fills it in before handing the engine a config.
   compact?: CompactionRequest
@@ -234,8 +258,10 @@ export interface AssemblyOptions {
   preset?: string // JSON AgentPreset text (@i-harness/preset): overrides the base system prompt
   planMode?: boolean // R-A7: plan-mode prompt fragment + exit_plan_mode tool
   guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient; enabled?: () => boolean; fallbackToHumanOnFailure?: boolean; allowModelSelection?: boolean; execution?: "subagent" | "isolated"; isolated?: GuardianIsolatedConfig | ((sessionId: string, session: Session) => GuardianIsolatedConfig) } // R-A9
-  outputSpill?: OutputSpillGuardConfig // M26-B7: registry-level output spill
   session?: Session // M14: host-pre-seeded session (host owns durability)
+  detachedSession?: import('@i-harness/core-session').Session
+  detachedPolicySession?: Session
+  policyDocument?: ManagedDocument
   /** The session the sandbox policy resolution READS for `sandbox/mode` events.
    * Defaults to the LIVE session (`opts.policySession ?? session`): a host that
    * passes only `session` (the web service) would otherwise resolve against
@@ -257,6 +283,8 @@ export interface AssemblyOptions {
    * supplied by the composition (e.g. web.ts via resolveModelContext). Absent →
    * get_context_remaining is NOT registered (fail-closed). */
   contextWindow?: number
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
+  contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
   /** M72 Ⅱ: the resolved output cap for this session's model (the binding's
    * `maxOutputTokens`). Moved VERBATIM — nothing here defaults or clamps it;
    * the single clamp lives where the request is assembled (core-agent), which
@@ -342,6 +370,10 @@ export interface UnavailableExecutionAuthorityStatus {
 }
 
 export interface SessionAssembly {
+  instructionDiagnostics?(childSessionId?: string): import('./context/instructions/manager.ts').InstructionDiagnostics | undefined
+  onExecutionSurfaceChanged?(listener: () => void): () => void
+  executionSurfaceState?(): "available" | "unavailable" | "retired"
+  settleRuntimeContextPublications(): Promise<void>
   reconcileExecutionAuthority(): Promise<void>
   /** An unavailable owner is reported without claiming backend probe results. */
   executionBackendStatus(): Promise<(BackendProbe | UnavailableExecutionAuthorityStatus) & { windowsSandboxBackend: "legacy" | "psec" | "wsl" }>
@@ -353,15 +385,19 @@ export interface SessionAssembly {
   /** Cancels only an owned live cell without competing with its model observer. */
   stopCodeCell?(cellId: string): Promise<void>
   /** The real assembly-local exec registry and exact owner-filtered workflow store. */
-  backgroundJobs?(): { id: string; kind: "shell" | "workflow"; status: "running" | "completed" | "killed" | "error"; output: string; outputTruncated: boolean; ownerSessionId?: string }[]
+  backgroundJobs?(): { id: string; kind: "shell" | "workflow"; status: "running" | "completed" | "killed" | "error"; output: string; outputTruncated: boolean; ownerSessionId?: string; nativeJob?: import('@i-harness/exec').NativeJobIdentity }[]
   /** Retry durable parent messages only after the host publishes its lane. */
-  drainParentNotifications?(): Promise<void>
+  drainParentNotifications?(ordinaryOnly?: boolean): Promise<void>
+  /** Original retained source settlement only: no recipient admission/wake. */
+  settleParentDeliverySources?(): Promise<void>
+  settleParentDeliveryJournalDebt?(): Promise<void>
   tools: ToolRegistry
   ctx: PluginContext // host wires approval/question answerers here (via onAssembly)
   agent: Agent // the per-session agent; tier-1 turns flow through it
   session: Session // the live session — the source of truth
   sessionId?: string
   model: ModelClient // R-B1: NOT the resolved client — the ONE stable handle the six handle-reachable holders share (the two CONFIGURED holders win over it; the service's memoised binding is a reporter). Its identity never changes; its `stream` forwards to the assembly's CURRENT client. The owner reads it at call time (e.g. auto-title, run.ts:697).
+  selectedModel(): ModelClient
   /** Swap the client this assembly's handle forwards to. Every HANDLE-REACHABLE
    * holder follows — they all hold this same object. It is deliberately NOT the
    * whole model surface: a CONFIGURED `summarizationModel` and a configured
@@ -370,7 +406,7 @@ export interface SessionAssembly {
    * `SessionService.rebindModel`, not by this call. Identity of `model` does NOT
    * change, which is deliberate: a rebind is one assignment, never a re-wiring. */
   setModel(client: ModelClient): void
-  setModelBinding?(binding: { model: ModelClient; contextWindow?: number; maxOutputTokens?: number; reasoningEffort?: ReasoningEffort }, compact?: CompactionRequest): void
+  setModelBinding?(binding: { model: ModelClient; contextWindow?: number; maxOutputTokens?: number; reasoningEffort?: ReasoningEffort; budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata }, compact?: CompactionRequest): void
   /** Task 4 review F-1: the effort half of the live model surface. A SIBLING of
    * `setModel` rather than an optional second parameter on it, deliberately:
    * `undefined` here means "the new selection names no effort — clear it", and
@@ -379,7 +415,12 @@ export interface SessionAssembly {
    * deps read the effort through a getter, so the next request carries it. */
   setReasoningEffort(effort: ReasoningEffort | undefined): void
   modelLabel?: string
-  inbox: Inbox // the per-session serial lane's inbox (owner builds the A executor over it)
+  inbox: AsyncInbox
+  factOwner: FactOwner
+  managedDocument?: ManagedDocument
+  metadataFacts: MetadataFactSource
+  recordSandboxMode(mode: SandboxMode): Promise<void>
+  revokeNewWork(): void
   telemetry?: Telemetry
   /** Request cancellation of one background job through the subagent job
    * registry (the model-facing job_kill machinery). */
@@ -397,6 +438,8 @@ export interface SessionAssembly {
   subagentState(): SubagentStateSnapshot
   /** Exact current child Session owned by this assembly; never mounts or restores it. */
   liveChildSession?(childSessionId: string): Session | undefined
+  /** Scalar read over an existing active child owner; never mounts or restores it. */
+  liveChildBudget?(childSessionId: string): import("@i-harness/core-session").BudgetRead | undefined
   /** Durable child events and registry lifecycle invalidations, local to this assembly. */
   onSubagentsChanged?(listener: (change: { kind: "changed" | "closed" }) => void): () => void
   /** Host-only read seam over an exact live child caller; no registry escapes. */
@@ -412,7 +455,7 @@ export interface SessionAssembly {
    * (no engine configured → { compacted: false } fallback). `instructions` are
    * forwarded to the summarizer prompt ("User instructions" section; absent →
    * pre-M33 prompt). */
-  compactNow(instructions?: string): Promise<CompactionResult>
+  compactNow(instructions?: string, execution?: { generation: import('@i-harness/core-agent').AgentGenerationAction; signal: AbortSignal }): Promise<CompactionResult>
   /** Per-server mount outcome of the plugin MCP servers (serverName → success). */
   pluginMcpResults: Map<string, boolean>
   /** Per-role outcome of the plugin subagent roles (role name → registered).
@@ -485,18 +528,18 @@ const bindAuthRefreshStatus =
 
 /** Fresh parent semantics: a coordinator mirrors new events, but never loads
  * or recovers a parent unless the caller supplies that session explicitly. */
-export function createAssemblySession(opts: Pick<AssemblyOptions, "coordinator" | "sessionId">): Session {
-  return createSession((ev) => {
-    if (opts.coordinator === undefined || opts.sessionId === undefined) return
-    opts.coordinator.enqueue(opts.sessionId, [ev])
-    if (ev.type === "turn/end") void opts.coordinator.flush(opts.sessionId).catch(() => {})
-  })
+export async function createAssemblySession(opts: Pick<AssemblyOptions, "coordinator" | "sessionId">): Promise<Session> {
+  return (await openExecutorDocument(opts)).session
 }
 
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
   // Structural configuration belongs to this assembly, including while setup awaits.
   opts = { ...opts, windowsSandboxBackend: opts.windowsSandboxBackend ?? process.env.IH_WINDOWS_SANDBOX as AssemblyOptions["windowsSandboxBackend"],
     ...(opts.wslExecution ? { wslExecution: Object.freeze({ ...opts.wslExecution, ...(opts.wslExecution.runtimePath ? { runtimePath: Object.freeze([...opts.wslExecution.runtimePath]) } : {}) }) } : {}) }
+  const attachment = await openExecutorDocument(opts)
+  const { session, inbox, factOwner, document: managedDocument } = attachment
+  const drainOriginalDocumentSources = managedDocument?.drainOriginalSources.bind(managedDocument)
+  const metadataFacts: MetadataFactSource = signal => actionMetadataFacts(factOwner, signal)
   // Resolve before mounting resources so a required-but-missing model cannot
   // leave a partially initialized assembly behind.
   //
@@ -524,7 +567,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let currentModel: ModelClient = opts.model ?? (() => {
     if (opts.modelPolicy !== "test-mock") throw new ModelUnavailableError()
     return opts.mockScript === undefined && opts.mockCycles === true
-      ? cyclicMockClient([{ role: "assistant", text: "ok" }])
+      ? createCyclicMockClient([{ role: "assistant", text: "ok" }])
       : createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
   })()
   // The SECOND cell of the live model surface (Task 4 review F-1): the resolved
@@ -537,18 +580,20 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // request; a getter is all it takes to make that read live (see the deps
   // literal below).
   let currentReasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
-  const model: ModelClient = {
-    stream: (request) => currentModel.stream(request),
-  }
+  const model = createStableModelClient(() => currentModel)
+  const resultStore = await acquireAssemblyResultStore(opts)
+  opts = { ...opts, ...(resultStore.service ? { contextOutput: resultStore.service } : {}), ...(resultStore.sourceFor ? { contextOutputSourceFor: resultStore.sourceFor } : {}), ...(resultStore.withLegacyReadObservation ? { contextOutputLegacyReadObservation: resultStore.withLegacyReadObservation } : {}) }
   const ctx: PluginContext = createContext()
-  const tools = createToolRegistry(ctx)
+  const modelOrigins = !isNondurableSession(session) ? createAgentModelOriginOwner({view:session,factOwner}) : undefined
+  const modelPair = modelOrigins ? createToolRegistryWithModelOrigin(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId), executionOwner: {view:session,factOwner,context:ctx,...opts.sessionId!==undefined?{sessionId:opts.sessionId}:{}} }, modelOrigins.verifier) : undefined
+  const tools = modelPair?.registry ?? createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId), executionOwner: {view:session,factOwner,context:ctx,...opts.sessionId!==undefined?{sessionId:opts.sessionId}:{}} })
+  const modelCallOrigin = modelPair && modelOrigins!.bind(tools, modelPair.driver)
 
   // ── session: live source of truth + coordinator mirror (write-behind) ──────
   // Created BEFORE the execution environment on purpose: the sandbox policy
   // resolver below re-reads this session's `sandbox/mode` events (and its
   // `policyFloor` is that session's length), so the session has to exist first.
   // Nothing here depends on the mounts.
-  const session = opts.session ?? createAssemblySession(opts)
 
   // ── execution environment + policy ─────────────────────────────────────────
   // D1 (m55): every exec-spawning tool gets the assembly workspace as its
@@ -639,7 +684,15 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // The floor is taken from whichever session will actually be read, because
   // `policySession` may be a different object from the live one. Slicing rather
   // than tracking indices keeps `resolve`'s contract unchanged.
-  const policyBase = opts.policySession ?? session
+  if (opts.detachedPolicySession) {
+    const captured = captureLegacyFact(opts.detachedPolicySession)
+    if (captured.kind !== 'captured') throw Object.assign(new Error('Policy import capture failed'), { code: 'FACT_CAPTURE_FAILED' })
+    const modes = captured.value.events.filter(event => event.type === 'sandbox/mode')
+    if (modes.length) committedFactSeqs(await metadataFacts().importPolicy(modes))
+  }
+  const policyBase = opts.detachedPolicySession ? session : opts.policySession ?? session
+  if (policyBase !== session && (!opts.policyDocument || opts.policyDocument.view !== policyBase || !isManagedFactOwner(policyBase, opts.policyDocument))) throw Object.assign(new Error('Separate policy Session requires matching owned capability or explicit detached import'), { code: 'FACT_OWNER_UNSUPPORTED' })
+  const policyFacts = () => policyBase === session ? metadataFacts() : opts.policyDocument!.metadata
   const policyFloor = policyBase.events.length
   // M1 Phase B: the CONSTRUCTION-TIME producer. Until this line the
   // `sandbox/mode` event had zero production producers -- 14 of its 17
@@ -657,7 +710,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // guard documented just above intact: restored history still cannot decide the
   // mode. The ladder is still forbidden from producing this event (call-policy.ts
   // documents that; sandbox-escalation.test.ts pins it).
-  if (opts.sandbox !== undefined) append(policyBase, { type: "sandbox/mode", mode: opts.sandbox })
+  if (opts.sandbox !== undefined) committedFactSeqs(await policyFacts().admit({ type: "sandbox/mode", mode: opts.sandbox }))
   const authorityNow = (): AuthorityState => {
     if (opts.executionAuthority) return opts.executionAuthority()
     const project = opts.projectContext?.()
@@ -710,7 +763,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     () => ctx.services.get<ApprovalPrompt>("approval/answerer"),
   )
   // One assembly execution owner is registered before either transport surface.
-  const assemblyExec = registerExec(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution })
+  const assemblyExecPair = registerExecWithReservation(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution, resultRetention: createExecResultRetention(opts.contextOutput, opts.shellRetention?.maxBytes ?? 64000) })
+  const assemblyExec=assemblyExecPair.service
   const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, {
     execService: assemblyExec,
     cwd: opts.workspace,
@@ -729,7 +783,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // per-call and transient, appends no `sandbox/mode` event, and never moves the
   // standing mode (spec §3.3 point 1). It reaches a tool through its own
   // arguments and the approver below, not through this resolver.
+  const directShell=createScopedExecWithReservation(assemblyExecPair,opts.workspace,sandboxPolicyNow,opts.prepareExecDelivery??(async()=>({kind:'unavailable',reason:'recipient-not-bound'})),ctx)
   registerShell(ctx, tools, {
+    directEntry: directShell.direct,
     ...(agentShell ? { agentShell } : {}),
     ...(wslShell ? { wslShell } : {}),
     timeoutMs: shellTimeoutMs,
@@ -851,6 +907,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
             : { ok: false as const, denial: denialFor("fs", effective.mode, decision.reason, decision.sufficientMode) }
         }
   const fsToolsDeps = {
+    observeInstructionTarget: async (target: import('@i-harness/instructions').InstructionTarget, exec: import('@i-harness/core-tools').ToolExec) => childInstructionHost
+      ? childInstructionHost.observe(target, exec) : { status: 'unavailable' as const, reason: 'mapping-unavailable' as const },
+    readPolicy: { maxOutputBytes: 64000 },
     workspace: opts.workspace,
     ...(rewindRecorder !== undefined
       ? { rewind: { take: (path: string, before: Uint8Array | null) => rewindRecorder.take(path, before) } }
@@ -869,18 +928,28 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // M10a guards + M12 retry (retry MUST mount BEFORE timeout — cascade order,
   // first registered = outermost) + M26-B7 registry-level output spill
   // (spill outermost so it sees the largest unprocessed output).
-  if (opts.outputSpill) ctx.mount(createOutputSpillGuard(ctx, opts.outputSpill))
-  if (opts.contextOutput) installNativeContextOutput(ctx,{service:opts.contextOutput,session,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor,
+  if (opts.contextOutput) installNativeContextOutput(ctx,{legacyToolCapture:false,service:opts.contextOutput,session,factOwner,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor,
     ...(opts.coordinator&&opts.sessionId?{inheritedSessionFor:async(id:string)=>{
       const {meta}=await opts.coordinator!.profile(id)
       if(meta.parentSession!==opts.sessionId||meta.origin!=='subagent'||meta.seedLength===undefined)return undefined
+      // The inherited lifecycle precedes the child's first admission flush.
+      // Grants must inspect the persisted seed, never an empty queued prefix.
+      await opts.coordinator!.flush(id)
       const snapshot=await opts.coordinator!.snapshot!(id)
+      const current=(await opts.coordinator!.profile(id)).meta
+      if(current.parentSession!==opts.sessionId||current.origin!=='subagent'||current.seedLength!==meta.seedLength
+        ||snapshot.session.header?.parentSession!==opts.sessionId||snapshot.session.header?.origin!=='subagent'||snapshot.session.header?.seedLength!==meta.seedLength)return undefined
       return {...snapshot.session,events:snapshot.session.events.slice(0,meta.seedLength)}
     }}:{}),
   })
   if (opts.retry) ctx.mount(createRetryGuard(ctx, opts.retry))
   ctx.mount(createTimeoutGuard(ctx))
-  ctx.mount(createRepeatToolGuard(ctx))
+  let childFactOwnerFor: (target: Session) => FactOwner | undefined = () => undefined
+  ctx.mount(createRepeatToolGuard(ctx, { factsFor: target => {
+    const owner = target === session ? factOwner : childFactOwnerFor(target)
+    if (!owner) throw Object.assign(new Error('Repeat feedback requires the exact session owner'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    return signal => actionFeedbackFacts(owner, signal)
+  } }))
 
   // Approval: approveAll → auto-approve; otherwise NO answerer — the host
   // wires the real one (mux approval bridge) through assembly.ctx; unanswered
@@ -905,12 +974,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
   }
   for (const tool of opts.additionalTools ?? []) tools.register(tool)
-  if(opts.contextOutput) for(const tool of createContextOutputTools(opts.contextOutput)) tools.register(tool)
+  if(opts.contextOutput) for(const tool of createContextOutputTools(opts.contextOutput, opts.contextOutputLegacyReadObservation ? { withLegacyReadObservation: opts.contextOutputLegacyReadObservation } : undefined)) tools.register(tool)
 
   // ── session: coordinator mirror (write-behind) ─────────────────────────────
   // `session` itself is created at the top of the function — the sandbox policy
   // resolves against its events per call, so it has to exist before the mounts.
-  const inbox = new Inbox(session)
   // M42 G1: recorder subscription — the turn's anchor is its first
   // user/message (begin, first-wins — a mid-turn spliced message must not
   // re-anchor), turn/end finalizes + appends the durable point. Finalize is
@@ -946,12 +1014,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
   // M27-R-A8: context budget tool — registered against the live session (the
   // M15 projection source) only when the composition supplied a window.
-  registerContextRemaining(ctx, tools, { contextWindow: opts.contextWindow, session })
+  let budgetRead: NonNullable<Agent["contextBudget"]> = () => ({ kind: "unavailable", reason: "Agent context is not initialized" })
+  if (opts.contextWindow !== undefined) registerContextRemaining(ctx, tools, { contextWindow: opts.contextWindow, session, budgetRead: () => budgetRead() })
 
   // M40 A1/B8: session-scoped tools — todo_write (M21 whole-list snapshot,
   // model-visible via todo/write events) + read_image (M14 multimodal read:
   // workspace-resolved path → ImageInput { mediaType, dataBase64 }).
-  tools.register(createTodoTool({ session }))
+  tools.register(createTodoTool({ session, metadata: metadataFacts }))
   tools.register(createReadImageTool({ workspace: opts.workspace }))
   tools.register(createReadVideoTool({ workspace: opts.workspace, analyzeAudio: opts.videoAudioAnalyzer }))
 
@@ -967,9 +1036,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // Tools and driver mount together: tools alone would be a fifth zero-source (writes the log,
   // nothing folds it — spec §10).
   if (opts.coordinator !== undefined && opts.sessionId !== undefined) {
-    const coordinator = opts.coordinator
     const scheduleSessionId = opts.sessionId
-    for (const tool of createScheduleTools({ session })) tools.register(tool)
+    for (const tool of createScheduleTools({ session, metadata: metadataFacts })) tools.register(tool)
+    let scheduleSignal: AbortSignal | undefined
     const scheduleDriver = createScheduleDriver({
       sessions: () => [scheduleSessionId],
       // Fork (§5): the driver owns only THIS session's own suffix — an inherited prefix
@@ -985,33 +1054,44 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // in memory (the fold consumed the dispatch; the next step boundary claims the admission,
         // so the user sees the reminder) while the write-behind retains & retries the batch —
         // `deliveryErrors` is a durability report, not a refusal.
-        for (const ev of delivery.dispatchEvents) append(session, ev)
-        inbox.admit({ inputId: delivery.inputId, text: delivery.text, delivery: "steer", intent: "system", synthetic: {
+        const action = factOwner.beginAction(scheduleSignal)
+        try { committedFactSeqs(await action.facts.inputs.scheduled(delivery.dispatchEvents, { type: 'agent/input/admitted', version: 1, inputId: delivery.inputId, text: delivery.text, delivery: "steer", intent: "system", provenance: { kind: "plugin", authority: "observation", scope: "turn", producer: "session.schedule" }, synthetic: {
           description: "Scheduled reminder", scope: "turn",
           display: {
             kind: "schedule",
             title: delivery.due.length === 1 ? `Scheduled reminder: ${delivery.due[0]!.record.id}` : "Scheduled reminders",
             body: delivery.due.length === 1 ? delivery.due[0]!.record.prompt : delivery.due.map(({ record }) => `${record.id}: ${record.prompt}`).join("\n\n"),
           },
-        } })
-        await coordinator.flush(scheduleSessionId)
+        } })) } finally { action.finish() }
       },
     })
     // §4.2: the trigger is the step boundary — no timer exists, so idle means no step means no
     // tick (I5 structurally). The handler MUST return undefined (block body, awaited inside):
     // emit() feeds a plain listener's non-undefined return into the waterfall chain payload, and
     // hooks HAS a waterfall on this same event (hooks/src/index.ts:411).
-    ctx.on("agent/pre-step", async () => { await scheduleDriver.tick() })
+    ctx.on("agent/pre-step", async input => {
+      if (typeof input !== "object" || input === null) return
+      const payload = input as { session?: unknown; signal?: AbortSignal }
+      // Child scopes bubble here; only this exact session owns the tick and signal.
+      if (payload.session !== session) return
+      scheduleSignal = payload.signal
+      await scheduleDriver.tick()
+    })
   }
 
-  // R-A4/R-A5: dynamic system context — sections render at every step boundary
-  // via the agent/pre-step hook. Instructions load as one section, the skills
-  // catalogue as the next; W11 registers the subagents table below, once the
-  // subagent mount has produced the table it reads.
-  const runtimeContext = installRuntimeContext(ctx, session)
+  // Main logical admission reconciles instructions and publishes this full
+  // component after its step hooks/claims. Register sections in their stable
+  // instructions → skills → subagents order; construction does not publish.
+  const runtimeContext = createRuntimeContext(session, createRuntimeContextSource(factOwner))
+  let instructionEnvironment: InstructionEnvironment | undefined
+  let instructionManager: ReturnType<typeof createMainInstructionManager> | undefined
+  let childInstructionHost: ReturnType<typeof createChildInstructionHost> | undefined
+  let isolatedInstructionHost: ReturnType<typeof import('./context/instructions/isolated.ts').createIsolatedInstructionHost> | undefined
+  let retireInstructionHost: (() => void) | undefined
+  let closeInstructionHost: (() => Promise<void>) | undefined
   runtimeContext.registerSection(
     "instructions",
-    createInstructionsSection({ workspace: opts.workspace }),
+    () => instructionManager?.text() ?? "",
   )
   // M6 batch C C1 (spec §3.2): the skills catalogue, registered HERE because
   // this is the first point holding both the runtime-context service and the
@@ -1048,7 +1128,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // (hooks/src/index.ts:411) — the schedule driver's listener above (:854) is
   // the precedent.
   let lastMentionTask: string | undefined
-  ctx.on("agent/pre-step", (payload) => {
+  ctx.on("agent/pre-step", async (payload) => {
     // `Listener` takes `unknown` (core-plugin/src/index.ts:2), so the payload
     // shape is narrowed here rather than in the signature — the same
     // typeof-narrowing hooks' prompt/submit handler does
@@ -1060,15 +1140,15 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const task = (payload as { task?: unknown }).task
     if (typeof task !== "string") return
     if (task === lastMentionTask) return
-    lastMentionTask = task
     const names = scanMentionedSkillNames(task, skillsMount.registry)
     if (names.length === 0) return
-    append(session, {
+    committedFactSeqs(await actionFeedbackFacts(factOwner, (payload as { signal?: AbortSignal }).signal).feedback({
       type: "user/message",
       text: `[skill mention] Load the ${names.map((n) => `"${n}"`).join(", ")} skill(s) with skill_get before proceeding.`,
       source: { kind: "plugin", plugin: SKILL_MENTION_PLUGIN },
       internal: true,
-    })
+    }))
+    lastMentionTask = task
   })
 
   // M26-B1: OAuth token store over the coordinator's document API (see run.ts;
@@ -1126,17 +1206,44 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let disposeSubagents: (() => Promise<void>) | undefined
   let childObservation: ReturnType<typeof createChildObservation> | undefined
   let disposing = false
+  let disposeFlight: Promise<void> | undefined
+  const disposeInvocation = new AsyncLocalStorage<boolean>()
+  const cleanupDone = new Set<unknown>()
+  const mountCloses = new Map<object, () => Promise<void>>()
   const backgroundJobs = new Map<string, { kind:string; label:string; requestCancel():void; cancel():void; done:Promise<void>; finish(status:"completed"|"killed"|"error",output:string):void }>()
   let codeModeMount: CodeModeMount | undefined
+  let cancelRootCodeMode: CodeModeMount['cancel'] | undefined
+  let disposeRootCodeMode: CodeModeMount['dispose'] | undefined
+  let executionSurfaceRetired = false
+  let constructionComplete = false
+  const residentActivation = opts.residentActivation ?? createResidentActivation(() => constructionComplete && !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false)
+  let offCodeModeSurface: (() => void) | undefined
+  let offExecSurface: (() => void) | undefined
+  let offWorkflowSurface: (() => void) | undefined
+  const executionSurfaceListeners = new Set<() => void>()
+  const executionSurfaceChanged = () => {
+    for (const listener of [...executionSurfaceListeners]) {
+      try { listener() } catch { /* Passive consumers cannot fail an owner. */ }
+    }
+  }
+  const retireExecutionSurface = () => {
+    residentActivation.retire()
+    isolatedInstructionHost?.retire()
+    retireInstructionHost?.()
+    if (executionSurfaceRetired) return
+    executionSurfaceRetired = true
+    offCodeModeSurface?.(); offCodeModeSurface = undefined
+    offExecSurface?.(); offExecSurface = undefined
+    offWorkflowSurface?.(); offWorkflowSurface = undefined
+    executionSurfaceChanged()
+  }
   const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
   const codeMode = codeModeNow()
   const mountCodeMode = opts.codeModeFactory ?? registerCodeMode
-  const codeSpillStore = opts.outputSpill?.spillRoot === undefined ? undefined : createUnifiedSpillStore(opts.outputSpill.spillRoot)
   const codeModeFactory: CodeModeFactory | undefined = codeMode.mode === "off" && typeof opts.codeMode !== "function" ? undefined : (childCtx, childTools, mountOptions) => mountCodeMode(childCtx, childTools, {
-    ...(opts.contextOutput ? {retainText:createNativeCodeTextRetention({service:opts.contextOutput,session:mountOptions.session,sessionId:mountOptions.sessionId,sourceFor:opts.contextOutputSourceFor,...(opts.sessionId?{parent:{sessionId:opts.sessionId,session}}:{})})}:{}),
+    ...(opts.contextOutput ? {retainText:createCodeTextRetention({service:opts.contextOutput,sessionId:mountOptions.sessionId,sourceFor:opts.contextOutputSourceFor})}:{}),
     ...mountOptions,
     config: codeModeNow(),
-    ...(codeSpillStore ? { spillStore: mountOptions.spillStore ?? codeSpillStore } : {}),
     ...(mountOptions.maxParallel === undefined && opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
   })
   let workflowMount: WorkflowMountHandle | undefined
@@ -1148,6 +1255,18 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   ].filter(Boolean).join('\n\n')
 
   try {
+    opts.retainConstructionCleanup?.(dispose)
+    // The original mount guard must own the asynchronous policy/watch lifetime
+    // before any dependent setup can reject. Earlier config getters acquire none.
+    instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
+    instructionManager = createMainInstructionManager({ session, environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+      available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
+    childInstructionHost = createChildInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+      available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false,
+      root: { session, factOwner, manager: instructionManager } })
+    isolatedInstructionHost = (await import('./context/instructions/isolated.ts')).createIsolatedInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow, available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false })
+    retireInstructionHost = childInstructionHost.retire.bind(childInstructionHost)
+    closeInstructionHost = childInstructionHost.close.bind(childInstructionHost)
     for (const cfg of opts.mcp ?? []) {
       mcpHandles.push(await mountMcpClient(ctx, tools, prepareMcpConfig(cfg), opts.telemetry ? { onStatus: mcpStatusHook } : undefined))
     }
@@ -1190,7 +1309,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     for (const cfg of opts.lsp ?? []) {
       lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
     }
-    workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService })
+    workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService, steps: createScopedWorkflowExec(assemblyExecPair, opts.workspace, sandboxPolicyNow) })
     // ONE resolver for every role-carrying spawn in this assembly: the subagent
     // tools, the approval guardian and team teammates all hand their role's
     // selection to the host's provider plane — the same runtime call the
@@ -1200,7 +1319,16 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       status: "unconfigured" as const,
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
+    const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => (action, dependencies) =>
+      createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, opts.passiveGeneration?{...dependencies,beforeDrain:dependencies?.beforeDrain??(async()=>{}),passiveGeneration:opts.passiveGeneration}:dependencies)
     const subagent = registerSubagent(ctx, tools, {
+      prepareTaskChild: opts.prepareTaskChild,
+      residentActivation: residentActivation.ticket,
+      createInstructionContext: childInstructionHost.create,
+      results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
+      generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
+      factOwner,
+      reportPolicy: SHIPPING_REPORT_POLICY,
       codeMode, codeModeFactory,
       ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
       includeAgentShell: agentShell !== undefined,
@@ -1223,6 +1351,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // subagentDeps → tools.ts's spawn_agent), so the values are only ever as
       // present as the host made them.
       get contextWindow() { return opts.contextWindow },
+      get budgetBinding() { return opts.budgetBinding },
+      get contextMetadata() { return opts.contextMetadata },
+      summaryFactory, inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+      get reasoningEffort() { return currentReasoningEffort },
       get maxOutputTokens() { return opts.maxOutputTokens },
       exec: execService,
       parentModel: model,
@@ -1242,6 +1374,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.parentNotify !== undefined ? { parentNotify: opts.parentNotify } : {}),
     })
     childObservation = createChildObservation(subagent.table)
+    childFactOwnerFor = target => [...subagent.table.entries().values()].find(entry => entry.session === target)?.factOwner
     const ownedToolCaller: NonNullable<SessionAssembly["ownedToolCaller"]> = (input) => {
         const entry = [...subagent.table.entries().values()].find((row) => row.sessionId === input.sessionId)
         const registry = entry?.toolRegistry
@@ -1252,9 +1385,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           if (entry.session.header?.parentSession !== opts.sessionId || input.registry !== registry || registry.get(input.call.name) !== input.tool || input.validateBinding?.() !== true) return false
           const role = subagent.roles.get(entry.roleName)
           if (!role) return false
-          // Child-local Code Mode wrappers already own the restricted registry;
-          // inherited tools must still be the current parent's exact binding.
-          const localWrapper = entry.factoryTools?.includes(input.tool) === true
+          // Exact child-local factory bindings own their restricted registry.
+          // The context reader additionally retains the current role/parent grant;
+          // other inherited tools remain the parent's exact binding.
+          const localWrapper = entry.factoryTools?.includes(input.tool) === true && (input.call.name !== "get_context_remaining" || role.tools.includes(input.call.name) && tools.get(input.call.name) !== undefined)
           return localWrapper || role.tools.includes(input.call.name) && tools.get(input.call.name) === input.tool
         }
         if (!valid()) return undefined
@@ -1317,6 +1451,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // register rather than try/catch, mirroring the tool loop above: a taken
     // name is skipped, and RoleRegistry.register's duplicate throw is never
     // used as control flow.
+    // Startup roles use the same live facade as later updates. Join its
+    // original load and restoration before the first installation attempt.
+    await subagent.ready
     const pluginAgentResults = new Map<string, boolean>()
     pluginCapabilities = createPluginCapabilities({
       skillDirs: pluginSkillDirs, handles: mcpHandles, roles: subagent.roles,
@@ -1331,6 +1468,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
     if (opts.guardian) {
       await registerGuardian(ctx, {
+        createIsolatedInstructionContext: isolatedInstructionHost.create,
+        createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
+        results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
+        ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
         ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
         subagents: {
           roles: subagent.roles,
@@ -1353,6 +1494,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // session's numbers describe the model this review will run on. It
         // passes them on the INHERITED arm alone.
         get contextWindow() { return opts.contextWindow },
+        get budgetBinding() { return opts.budgetBinding },
+        get contextMetadata() { return opts.contextMetadata },
+        summaryFactory, inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+        get reasoningEffort() { return currentReasoningEffort },
         get maxOutputTokens() { return opts.maxOutputTokens },
         parentModel: model,
         ...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {}),
@@ -1374,13 +1519,19 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // messages to entry.session — mirrors must be live first).
     await subagent.ready
     if (opts.team !== undefined) {
-      teamHandles.push(await mountAgentTeams(ctx, tools, {
+      await mountAgentTeams(ctx, tools, {
+        retainMount: handle => { teamHandles.push(handle) },
         ...(opts.parentNotify ? { parentNotify: opts.parentNotify } : {}),
         allowConcurrentTeams: opts.concurrentSessionTeams,
         preserveSubagentTools: opts.concurrentSessionTeams,
-        parentSession: session,
+        parentSession: session, factOwner,
         parentRegistry: tools,
         subagents: {
+          results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
+          createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
+          reportPolicy: SHIPPING_REPORT_POLICY,
+          generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
+          retainResults: subagent.retainResults,
           codeMode, codeModeFactory,
           ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
           table: subagent.table,
@@ -1399,15 +1550,22 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // field) — a teammate that inherits runs on the session's own model
           // and must carry its window and cap.
           get contextWindow() { return opts.contextWindow },
+          get budgetBinding() { return opts.budgetBinding },
+          get contextMetadata() { return opts.contextMetadata },
+          summaryFactory, inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+          get reasoningEffort() { return currentReasoningEffort },
           get maxOutputTokens() { return opts.maxOutputTokens },
           childSessions:
             opts.coordinator !== undefined && opts.sessionId !== undefined
               ? { coordinator: opts.coordinator, parentSessionId: opts.sessionId }
               : undefined,
           ensureResident: subagent.ensureResident,
+          followupGeneration: subagent.followupGeneration,
+          followupActivation: subagent.followupActivation,
+          captureFollowupGeneration: subagent.captureFollowupGeneration,
         },
         parentModel: model,
-      } satisfies TeamDeps, opts.team))
+      } satisfies TeamDeps, opts.team)
     }
 
     // M49 Task 14 (spec §11): the base system prompt is the I-harness-owned
@@ -1446,8 +1604,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       return text
     }
 
-    if (opts.planMode && !session.events.some((event) => event.type === "plan/mode")) append(session, { type: "plan/mode", mode: "on" })
-    ensurePlanModeTool(tools, session)
+    if (opts.planMode && !session.events.some((event) => event.type === "plan/mode")) committedFactSeqs(await metadataFacts().admit({ type: "plan/mode", mode: "on" }))
+    ensurePlanModeTool(tools, session, metadataFacts)
     ctx.on("tools/pre-execute", (call) => {
       const name = (call as { name?: string })?.name
       if (derivePlanMode(session).active && (!name || tools.get(name)?.isReadOnly !== true)) {
@@ -1456,12 +1614,17 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       return call
     })
     if (codeMode.mode !== "off") codeModeMount = mountCodeMode(ctx, tools, {
-      ...(opts.contextOutput ? {retainText:createNativeCodeTextRetention({service:opts.contextOutput,session,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor})}:{}),
-      session, sessionId: opts.sessionId, config: codeMode,
-      ...(codeSpillStore ? { spillStore: codeSpillStore } : {}),
+      ...(opts.contextOutput ? {retainText:createCodeTextRetention({service:opts.contextOutput,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor})}:{}),
+      ...(opts.contextOutput && opts.contextOutputSourceFor && opts.sessionId && opts.codeFinalOutputFor ? { finalOutput: opts.codeFinalOutputFor(factOwner, opts.sessionId, opts.contextOutput, opts.contextOutputSourceFor) } : {}),
+      session, factOwner, sessionId: opts.sessionId, config: codeMode,
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
-      ...(opts.coordinator !== undefined && opts.sessionId !== undefined ? { flush: () => opts.coordinator!.flush(opts.sessionId!) } : {}),
     })
+    cancelRootCodeMode = codeModeMount?.cancel.bind(codeModeMount)
+    disposeRootCodeMode = codeModeMount?.dispose.bind(codeModeMount)
+    offCodeModeSurface = codeModeMount?.onSurfaceChanged?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
+    offExecSurface = execService.subscribeJobs?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
+    offWorkflowSurface = workflowMount?.executor.subscribeJobs?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
+    await codeModeMount?.ready?.()
     const modelToolSchemas = () => codeModeMount?.schemas() ?? tools.schemas()
     let overheadOverride = opts.compact?.overheadTokens
     const modelOverheadTokens = () => overheadOverride ?? estimateAssemblyOverhead(systemPromptNow(), modelToolSchemas())
@@ -1486,27 +1649,22 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // directly in the compact config. The assembly's value wins when both exist;
     // the config's is the fallback. Requiring only the first would break callers
     // that already supply the second — a regression the assembly tests caught.
-    const compactWindow = opts.contextWindow ?? opts.compact?.contextWindow
-    let compactForAgent: CompactionConfig | undefined
-    if (opts.compact !== undefined) {
-      if (compactWindow !== undefined) {
-        compactForAgent = {
-          ...opts.compact,
-          contextWindow: compactWindow,
-          ...(opts.compact.overheadTokens === undefined && overheadEstimate !== undefined ? { overheadTokens: overheadEstimate } : {}),
-        }
-      } else {
-        d.warn(
-          "[i-harness] compaction was requested but no context window could be resolved, so auto-compaction is DISABLED for this session. " +
-            "Pressure will not trigger a summary; once the budget is exhausted the turn will be refused with prompt_too_long instead. " +
-            "Supply `contextWindow`, put one in the compact config, or use a model binding that carries one.",
-        )
-      }
-    }
+    const compactForAgent = composeCompactConfig(opts.compact, opts.contextWindow, overheadEstimate, d)
 
     const agent = createAgent(ctx, {
+      modelCallOrigin,
+      requestContext: instructionManager,
+      ...(managedDocument ? { inputPreparationFactory: createSteerPreparationFactory(session, inbox, opts.prepareHumanInput) } : {}),
+      ...(managedDocument ? { generationFactory: (action, dependencies) => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }, opts.passiveGeneration?{...dependencies,beforeDrain:dependencies?.beforeDrain??(async()=>{}),passiveGeneration:opts.passiveGeneration}:dependencies) } : {}),
+      modelActionTimeoutMs: opts.modelActionTimeoutMs,
+      modelActionMaxAttempts: opts.modelActionMaxAttempts,
+      summaryFactory,
+      modelBindingIdentity: () => currentModel,
+      ...(opts.coordinator && opts.sessionId ? { ensureWritableContext: ownedContextReadiness(opts.coordinator, opts.sessionId, session) } : {}),
+      budgetBinding: () => opts.budgetBinding,
+      contextMetadata: () => opts.contextMetadata,
       ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
-      session, tools, model,
+      session, tools, model, factOwner,
       modelToolSchemas,
       ...(codeModeMount ? { modelOverheadTokens } : {}),
       systemPrompt: systemPromptNow,
@@ -1522,31 +1680,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       get maxOutputTokens() { return opts.maxOutputTokens },
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
-      // M70: the checkpoint the tool scheduler awaits between the `tool/dispatch`
-      // marker and the body. The closure is built HERE because the assembly owns
-      // both halves — the coordinator, and the session id the mirror above files
-      // its appends under — and the drain must be the SAME write-behind that
-      // received the marker, or it would resolve without making anything
-      // durable. The guard is the mirror's OWN pair (assembly.ts:448-452): no
-      // coordinator means there is no durability to checkpoint, and no session
-      // id means there is nothing to drain BY NAME — either way no seam is
-      // built and the deps object is the pre-M70 one.
-      //
-      // IT IS A REQUIREMENT OF THE PAIR, NOT OF THIS CLOSURE, when the SESSION
-      // is the caller's: `opts.session` (line 448's `opts.session ?? …`) skips
-      // the mirror above, and then this seam drains whatever write-behind the
-      // coordinator holds under `(coordinator, sessionId)` — the one the host
-      // enqueues into, if it mirrors the supplied session under this SAME pair.
-      // The CLI's resume path does exactly that (run.ts builds its own mirror
-      // under `activeId` and hands that session in), so it is correct; a host
-      // that supplies a session mirrored elsewhere — or not at all — gets a
-      // checkpoint that RESOLVES over an empty queue: no error, no durability.
-      // Unreachable among the shipped callers (measured), and left as a stated
-      // requirement rather than a guard, because no seam is not the same thing
-      // as a seam that does nothing.
-      ...(opts.coordinator !== undefined && opts.sessionId !== undefined
-        ? { flush: () => opts.coordinator!.flush(opts.sessionId!) }
-        : {}),
       // M32 T3, made live (Task 4 review F-1): a GETTER, not the construction
       // value — the same discipline as the model handle above (R-B1). core-agent
       // reads `deps.reasoningEffort` when it builds each request
@@ -1554,22 +1687,35 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // reaches the wire without core-agent knowing a cell exists.
       get reasoningEffort() { return currentReasoningEffort },
       // R-A1: steer-tier claims at the step boundary (mid-turn injection).
-      stepInputs: { claimAtStepBoundary: () => inbox.claimAtStepBoundary() },
+      stepInputs: { claimAtStepBoundary: (facts, prepare, claim) => inbox.claimAtStepBoundary(facts, prepare, claim) },
     })
+    budgetRead = () => agent.contextBudget!()
 
     const backgroundOutput = (stdout: string, stderr: string) => {
       const first = stdout.slice(0, 131072)
       return { output: first + stderr.slice(0, 131072 - first.length), outputTruncated: stdout.length + stderr.length > 131072 }
     }
+    constructionComplete = true
+    if (!opts.residentActivation) residentActivation.activate()
     return {
-      reconcileExecutionAuthority: () => executionRuntime.reconcile(),
+      reconcileExecutionAuthority: () => { instructionManager?.diagnostics.invalidate(); childInstructionHost?.invalidateDiagnostics(); return executionRuntime.reconcile() },
+      settleRuntimeContextPublications: () => runtimeContext.settleOriginals(),
       executionBackendStatus: () => executionRuntime.status(),
       ctx,
       tools,
       agent,
       session,
+      factOwner, managedDocument, metadataFacts,
+      async recordSandboxMode(mode) { committedFactSeqs(await policyFacts().admit({ type: 'sandbox/mode', mode })) },
+      revokeNewWork() { retireExecutionSurface(); managedDocument?.revokeNewWork() },
+      onExecutionSurfaceChanged(listener) { executionSurfaceListeners.add(listener); return () => { executionSurfaceListeners.delete(listener) } },
+      executionSurfaceState: () => executionSurfaceRetired ? 'retired'
+        : managedDocument && managedExecutionStatus(managedDocument) !== 'available' ? managedExecutionStatus(managedDocument)
+        : !codeModeMount ? 'available'
+        : !codeModeMount.onSurfaceChanged || !codeModeMount.surfaceState ? 'unavailable' : codeModeMount.surfaceState(),
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       model,
+      selectedModel: () => currentModel,
       // R-B1: the model surface's mutations — TWO of them, and they are a PAIR
       // (F-1 added the second). Nothing in these types ties the two together, so
       // what keeps them paired is this description. The handle above keeps its
@@ -1582,6 +1728,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         overheadOverride = compact?.overheadTokens
         const overhead = estimateAssemblyOverhead(systemPromptNow(), modelToolSchemas())
         agent.updateContext!({
+          budgetBinding: binding.budgetBinding,
+          contextMetadata: binding.contextMetadata,
           ...(binding.contextWindow === undefined ? {} : {
             budget: { contextWindow: binding.contextWindow, overheadTokens: overhead },
             ...(compact === undefined ? {} : { compact: { ...compact, contextWindow: binding.contextWindow, overheadTokens: compact.overheadTokens ?? overhead } }),
@@ -1593,8 +1741,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         currentReasoningEffort = binding.reasoningEffort
         opts.contextWindow = binding.contextWindow
         opts.maxOutputTokens = binding.maxOutputTokens
+        opts.budgetBinding = binding.budgetBinding
+        opts.contextMetadata = binding.contextMetadata
         tools.unregister("get_context_remaining")
-        registerContextRemaining(ctx, tools, { contextWindow: binding.contextWindow, session })
+        if (binding.contextWindow !== undefined) registerContextRemaining(ctx, tools, { contextWindow: binding.contextWindow, session, budgetRead })
       },
       // The second half of the pair, and the PAIRING IS THE INVARIANT: nothing
       // in these types forces the two calls to happen together. A rebind that
@@ -1606,7 +1756,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       setReasoningEffort: (effort) => { currentReasoningEffort = effort },
       ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       inbox,
-      drainParentNotifications: async () => { for (const handle of teamHandles) await handle.drainLeadMessages?.() },
+      drainParentNotifications: async ordinaryOnly => { await subagent.drainParentNotifications(); if (!ordinaryOnly) for (const handle of teamHandles) await handle.drainLeadMessages?.() },
+      settleParentDeliverySources: () => subagent.settleParentDeliverySources(),
+      settleParentDeliveryJournalDebt: () => subagent.settleParentDeliveryJournalDebt(),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
       registerBackgroundJob: (input) => {
@@ -1627,7 +1779,19 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         return {finish}
       },
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
+      instructionDiagnostics: childSessionId => {
+        if (disposing) return undefined
+        if (!childSessionId) return instructionManager?.diagnostics
+        const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ['running', 'waiting'].includes(row.status))
+        return entry?.factOwner && !entry.closing && !entry.controller.signal.aborted ? childInstructionHost?.diagnosticsFor(entry.session, entry.factOwner) : undefined
+      },
       liveChildSession: childObservation.liveSession,
+      liveChildBudget: childSessionId => {
+        const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ["running", "waiting"].includes(row.status))
+        if (!entry) return undefined
+        if (disposing || entry.closing || entry.controller.signal.aborted) return { kind: "unavailable", reason: "Live child context owner is closing" }
+        return subagent.agents.get(childSessionId)?.contextBudget?.() ?? { kind: "unavailable", reason: "Live child context budget reader is unavailable" }
+      },
       onSubagentsChanged: childObservation.subscribe,
       ownedToolCaller,
       liveResources: (terminalOwnerSessionId = opts.sessionId) => {
@@ -1642,7 +1806,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         await codeModeMount.terminateCell(cellId)
       } } : {}),
       backgroundJobs: () => [
-        ...execService.listJobs().map(job => ({ id: job.id, kind: "shell" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: job.owner })),
+        ...assemblyExec.listJobViews().map(job => {
+          const output = backgroundOutput(job.stdout, job.stderr)
+          return { id: job.id, kind: "shell" as const, status: job.status, ...output,
+            outputTruncated: output.outputTruncated || !!job.truncated?.stdout || !!job.truncated?.stderr,
+            ownerSessionId: job.owner, nativeJob: job.nativeJob }
+        }),
         ...workflowMount!.executor.listJobs().filter(job => job.owner === opts.sessionId).map(job => ({ id: job.id, kind: "workflow" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: job.owner })),
       ],
       // M49 Task 12: the projection owns NO registry object — rows only. The
@@ -1673,8 +1842,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         if (id.startsWith("workflow-")) return workflowMount!.executor.killJob(id)
         return subagent.jobs.kill(id)
       },
-      compactNow: async (instructions?: string) =>
-        agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [] },
+      compactNow: async (instructions, execution) =>
+        agent.compact?.(instructions, execution ? { generation: execution.generation, signal: execution.signal } : undefined) ?? { compacted: false, shadowedSeqs: [], outcome: 'unchanged', publication: 'none' },
       pluginMcpResults,
       pluginAgentResults,
       updatePluginCapabilities: async (options) => {
@@ -1690,54 +1859,91 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
   } catch (err) {
     // A failed mount must not leak a half-built assembly.
-    await dispose().catch(() => {})
+    try { await dispose() }
+    catch (cleanup) { throw Object.assign(new AggregateError([err, cleanup], "Assembly construction and cleanup failed", { cause: err }), { cleanup: dispose }) }
     throw err
   }
 
-  async function dispose(): Promise<void> {
+  function dispose(): Promise<void> {
+    pluginCapabilities?.stopUpdates()
+    retireExecutionSurface()
+    managedDocument?.revokeNewWork()
     disposing = true
+    if (disposeInvocation.getStore()) {
+      const refusal = Promise.reject(Object.assign(new Error('Original assembly cleanup cannot join its own invocation'), { code: 'FACT_RECOVERY_REQUIRED' }))
+      void refusal.catch(() => {})
+      return refusal
+    }
+    if (disposeFlight) return disposeFlight
+    const attempt = Promise.withResolvers<void>()
+    disposeFlight = attempt.promise
+    void attempt.promise.then(() => { disposeFlight = undefined }, () => { disposeFlight = undefined })
+    void disposeInvocation.run(true, disposeOriginals).then(attempt.resolve, attempt.reject)
+    return attempt.promise
+  }
+
+  async function disposeOriginals(): Promise<void> {
     childObservation?.dispose()
     const processCleanupFailures: unknown[] = []
+    const phase = async (identity: unknown, close: () => unknown) => {
+      if (cleanupDone.has(identity)) return
+      try { await close(); cleanupDone.add(identity) } catch (error) { processCleanupFailures.push(error) }
+    }
     const draining:Promise<void>[]=[]
     for (const job of backgroundJobs.values()) {
-      try { job.cancel();draining.push(job.done) }
+      if (cleanupDone.has(job)) continue
+      try { job.cancel();draining.push(job.done.then(() => { cleanupDone.add(job) }, error => { cleanupDone.add(job); throw error })) }
       catch(error) { processCleanupFailures.push(error);d.warn(`Background job cancellation failed: ${String(error)}`) }
     }
-    await Promise.all(draining)
-    try { await codeModeMount?.cancel("Session assembly disposed") } catch (error) { d.warn(`Code Mode cancellation failed: ${String(error)}`) }
-    try { await codeModeMount?.dispose() } catch (error) { d.warn(`Code Mode disposal failed: ${String(error)}`) }
-    try { await disposeSubagents?.() } catch (error) { d.warn(`Subagent disposal failed: ${String(error)}`) }
-    try { await pluginCapabilities?.dispose() } catch (error) { d.warn(`Plugin disposal failed: ${String(error)}`) }
+    for (const result of await Promise.allSettled(draining)) if (result.status === 'rejected') processCleanupFailures.push(result.reason)
+    if (!cleanupDone.has('code-mode')) {
+      await phase('code-cancel', () => cancelRootCodeMode?.('Session assembly disposed'))
+      // Native dispose is the complete producer barrier even after a separate
+      // cancellation occurrence. Once it acknowledges, do not replay either.
+      await phase('code-mode', () => disposeRootCodeMode?.())
+    }
+    await phase('subagents', () => disposeSubagents?.())
+    // Join original physical producers before draining their retained fact sources.
+    await phase('terminal', () => terminalMount.dispose())
+    await phase('exec', () => assemblyExec.dispose())
+    // Unacknowledged producers still borrow these same role/MCP/instruction
+    // owners, even when their source barrier has not yet been entered.
+    if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, 'Assembly original producer cleanup incomplete')
+    await phase('document-sources', () => drainOriginalDocumentSources?.())
+    if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, 'Assembly original source cleanup incomplete')
+    await phase('plugins', () => pluginCapabilities?.dispose())
     // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()
     rewindSubscription = undefined
-    await rewindDrain
+    await phase('rewind', () => rewindDrain)
     // Unmount in REVERSE mount order (last-mounted unmounts first), best-effort:
-    // one handle's failure must not block the rest — and dispose never throws.
+    // Every original Team handle remains retained until its own cleanup acknowledges.
     const mounts = [...mcpHandles, ...lspHandles, ...teamHandles]
     for (const handle of mounts.reverse()) {
-      try {
-        await handle.unmount()
-      } catch {
-        // cleanup failure on unmount: disposal continues
-      }
+      let close = mountCloses.get(handle)
+      if (!close) { close = handle.unmount.bind(handle); mountCloses.set(handle, close) }
+      await phase(handle, close)
     }
     for (const handle of [skillsMount, workflowMount]) {
-      try {
-        await handle?.unmount()
-      } catch {
-        // cleanup failure on unmount: disposal continues
-      }
+      if (!handle) continue
+      let close = mountCloses.get(handle)
+      if (!close) { close = handle.unmount.bind(handle); mountCloses.set(handle, close) }
+      try { if (!cleanupDone.has(handle)) { await close(); cleanupDone.add(handle) } } catch { /* Preserve this optional mount's existing best-effort cleanup. */ }
     }
-    // M26-B2: terminal handle disposal (all PTYs).
-    try {
-      await terminalMount.dispose()
-    } catch (error) { processCleanupFailures.push(error); d.warn(`Terminal disposal failed: ${String(error)}`) }
-    try { await assemblyExec.dispose() } catch (error) { processCleanupFailures.push(error); d.warn(`Exec disposal failed: ${String(error)}`) }
     // Task documents have their own save chain above the coordinator queue.
     // Join that producer before the owner performs its final store close.
-    try { await flushSubagentPersistence?.() }
-    catch (error) { d.warn(`Subagent persistence drain failed: ${String(error)}`) }
+    await phase('persistence', () => flushSubagentPersistence?.())
+    // Failed child/generation debt still borrows the original publication,
+    // document, environment and result-store owners. Never release through it.
+    if (!processCleanupFailures.length) {
+      await phase('isolated-instructions', () => isolatedInstructionHost?.close())
+      if (cleanupDone.has('isolated-instructions')) await phase('instruction-host', () => closeInstructionHost?.())
+      if (cleanupDone.has('instruction-host')) await phase('runtime', () => runtimeContext.close())
+      if (cleanupDone.has('runtime')) await phase('instructions', () => instructionManager?.close())
+      if (cleanupDone.has('instructions')) await phase('document', () => managedDocument?.close())
+      if (cleanupDone.has('document')) await phase('environment', () => opts.instructionEnvironment ? undefined : instructionEnvironment?.close())
+      if (!processCleanupFailures.length && cleanupDone.has('environment')) await phase('result-store', () => resultStore.release())
+    }
     if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, "Assembly process cleanup incomplete")
     // NOTE: the coordinator and the telemetry stream are NEVER closed here —
     // the owner (run.ts / createSessionService) owns their lifecycle.

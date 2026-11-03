@@ -16,8 +16,10 @@
 | `session-inject` | `{ "text": string, "description": string, "scope": "turn" \| "session" }` | 提交注入輸入；**description + scope 必填**（缺 → JSON 驗證失敗） | 執行器運行中 |
 | `session-cancel` | `{ "inputId": string }` | 取消指定待處理輸入；回 `executor.cancel(inputId)` 結果 | 執行器運行中 |
 | `session-pending` | （無） | 列出待處理輸入：`{ "inputId", "text", "delivery" }[]` | 執行器運行中 |
+| `instruction-status` | `{ "format"?: "json" \| "text" }` | 讀取此 live assembly 最近一次發布的指令來源中繼資料，不呼叫模型 | live session |
+| `instruction-refresh` | `{ "format"?: "json" \| "text" }` | 透過原有來源 owner 刷新並發布 context，不呼叫模型；忙碌時回報目前狀態 | live session |
 
-> 註：這些命令由 CLI 的 `run` 路徑在 assembly 上註冊（`apps/cli/src/run.ts:769-820`，`session-send`…`session-pending` ＋ `session-compact` 共 7 條）；restore 的 pending 輸入在恢復時以 FIFO 先於新任務排出。**原文的「宿主（web-host）經 `CommandBridge.run(sessionId, line)` 代理」自 M65（2026-09-17）起是死引用**：`packages/web-host` 已刪（`git ls-files packages/web-host` = 0）、`CommandBridge` 對 `apps/**`＋`packages/**` 零命中（M80 重量）——今天命令面的宿主只有 CLI `run`。
+> 註：這些命令由 CLI 的 `run` 路徑在 live assembly 上註冊；restore 的 pending 輸入在恢復時以 FIFO 先於新任務排出。指令來源狀態描述的是已發布的 context，並不表示模型已讀取；冷 session 沒有可重建的來源中繼資料。shell 內路徑不會自動成為指令來源 target。**原文的「宿主（web-host）經 `CommandBridge.run(sessionId, line)` 代理」自 M65（2026-09-17）起是死引用**：`packages/web-host` 已刪、`CommandBridge` 對 `apps/**`＋`packages/**` 零命中——今天命令面的宿主只有 CLI `run`。
 
 ## 工具面（B 區，M26-B）
 
@@ -183,7 +185,9 @@
 
 ### 與 SDK 的界線
 
-`i-harness sdk`（NDJSON JSON-RPC v0 自家協議）是原生宿主協議；`i-harness acp` 是標準外部 ACP。二者只用 `--session-dir` 旗標（M29 起 `--session-backend` 已移除——JSONL 是唯一持久化後端，旗標傳入即 fail-loud 拒絕）、stdout 純幀紀律一致。ACP v1 下 `session/prompt` 是 request（回 `PromptResponse`）——舊版「fire-and-forget + `sessionUpdate{messageId}` admission 回執」的設計由「await submit + stopReason」取代（SDK 1.4 高階 client 面即此形狀）。
+`i-harness sdk`（NDJSON JSON-RPC v0 自家協議）是原生宿主協議；`i-harness acp` 是標準外部 ACP。兩者都支援 `--session-dir`，SDK 另有 `--yes`，ACP 保留原 `--no-auto-approve` prompt admission 選項；stdout 純幀紀律一致。M29 起 `--session-backend` 已移除——JSONL 是唯一持久化後端，旗標傳入即 fail-loud 拒絕。ACP v1 下 `session/prompt` 是 request（回 `PromptResponse`）——舊版「fire-and-forget + `sessionUpdate{messageId}` admission 回執」的設計由「await submit + stopReason」取代（SDK 1.4 高階 client 面即此形狀）。
+
+`i-harness sdk [--session-dir DIR] [--yes]` 的 `--yes` 是該 SDK server process 生命週期內對既有工具 approval requests 的廣泛同意，包括格式正確、帶理由的明確 per-call sandbox escalation。普通呼叫仍受已設定的 sandbox 約束；批准的 escalation 只適用於該次呼叫，不持久化 sandbox mode 或下一次呼叫的權限。沒有 `--yes` 時，需 approval 的工具仍因 stdio host 沒有互動 answerer 而 fail-closed；Desktop `approvalMode` 設定不會替 SDK 安裝 answerer。這個選項不覆蓋 deny、dispatch authority、guards 或 role tool restrictions，不回答 user questions，也不把同意保存到 settings、session、另一個 SDK process 或 ACP。SDK 沒有 `-y` alias。
 
 ## M29 變更註記（2026-09-02，SQLite 持久化分離）
 

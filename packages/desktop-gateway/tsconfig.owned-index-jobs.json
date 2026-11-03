@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/owned-index-jobs.ts","test/owned-index-jobs.test.ts"]}

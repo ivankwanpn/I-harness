@@ -1,0 +1,134 @@
+{
+  "status": "PASS",
+  "scope": "Independent read-only exact evidence/source/portable/receipt/copy/selected consumer and census audit; no product tests rerun, no whole-stage acceptance.",
+  "productHead": "cef5c6e2fdf50000bd8d074af1f918dc19ab48d9",
+  "files": 22393,
+  "bytes": 934948606,
+  "links": 0,
+  "sourceInputs": 2756,
+  "portableOriginals": 105,
+  "sealSha256": "364cde3500cdb7038ef52fe9d589fbf0759ce930d140f48a61b812942b3b262b",
+  "proofSha256": "6ba26db88f76c869deff08363d6a25ca981195e0f791388e1cc499ae547a18a0",
+  "gates": 37,
+  "failedReceiptsPreserved": [
+    {
+      "id": "01-red-task",
+      "nativeExit": 1
+    },
+    {
+      "id": "02-red-catalog",
+      "nativeExit": 1
+    },
+    {
+      "id": "04-green-catalog",
+      "nativeExit": 1
+    },
+    {
+      "id": "06-red-intake",
+      "nativeExit": 1
+    },
+    {
+      "id": "07-final-task",
+      "nativeExit": 1
+    },
+    {
+      "id": "12-final-catalog",
+      "nativeExit": 1
+    },
+    {
+      "id": "13-host-cleanup-control",
+      "nativeExit": 1
+    },
+    {
+      "id": "20-cli-entry",
+      "nativeExit": 1
+    },
+    {
+      "id": "22-red-live-no-body",
+      "nativeExit": 1
+    },
+    {
+      "id": "32-policy-controls",
+      "nativeExit": 1
+    }
+  ],
+  "finalTests": [
+    {
+      "name": "task",
+      "passed": 82,
+      "files": 8
+    },
+    {
+      "name": "Gateway focused",
+      "passed": 51,
+      "files": 5
+    }
+  ],
+  "sourceIdenticalCopies": 8833,
+  "generatedCopies": 1,
+  "hosts": [
+    {
+      "label": "G2",
+      "requests": 0,
+      "notifications": 0,
+      "exits": [
+        {
+          "phase": "cold",
+          "pid": 6912,
+          "code": 0,
+          "signal": null
+        }
+      ],
+      "rows": [
+        "current",
+        "pending",
+        "legacy",
+        "migrated",
+        "qualified",
+        "missing"
+      ]
+    },
+    {
+      "label": "B3",
+      "requests": 12,
+      "notifications": 282,
+      "exits": [
+        {
+          "phase": "cold",
+          "pid": 27480,
+          "code": 0,
+          "signal": null
+        },
+        {
+          "phase": "explicit",
+          "pid": 17380,
+          "code": 0,
+          "signal": null
+        }
+      ],
+      "rows": [
+        "current",
+        "pending",
+        "legacy",
+        "migrated",
+        "qualified",
+        "missing"
+      ]
+    }
+  ],
+  "census": {
+    "old": {
+      "raw": 260,
+      "unique": 222
+    },
+    "fresh": {
+      "raw": 262,
+      "unique": 223
+    }
+  },
+  "limitations": [
+    "Earlier helper variants are hash-only unless separately archived; original receipts retain that limitation.",
+    "Host teardown failures12/13 and instrumented pass14 are not reconciled by this audit.",
+    "SDK12 requests are explicit input/mount observations; cold read zeros are separate asserted scope."
+  ]
+}

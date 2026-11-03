@@ -1,0 +1,25 @@
+{
+  "id": "27-reachability-label-correction",
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "node": "v24.15.0",
+  "argv": [
+    "D:\\I-harness-main\\.tmp\\r4as-1021-01\\reachability-compare.mjs"
+  ],
+  "cwd": "D:\\I-harness-main",
+  "env": {
+    "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-1021-01/config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\27-reachability-label-correction\\fixtures\\mixed",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\27-reachability-label-correction\\fixtures\\integrity",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\27-reachability-label-correction\\fixtures\\native",
+    "IH_PUBLICATION_PINS_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\27-reachability-label-correction\\fixtures\\publication",
+    "IH_PHYSICAL_CRASH_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\27-reachability-label-correction\\fixtures\\physical",
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\27-reachability-label-correction\\fixtures\\structure"
+  },
+  "head": "186dd0e2ee8738e2d84520dde1d18114c7e9f6f5",
+  "start": "2026-10-20T21:29:18.644Z",
+  "pid": 18500,
+  "end": "2026-10-20T21:29:18.690Z",
+  "code": 0,
+  "signal": null,
+  "sourceUnchanged": true
+}

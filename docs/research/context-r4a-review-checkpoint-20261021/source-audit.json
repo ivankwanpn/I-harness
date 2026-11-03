@@ -1,0 +1,56 @@
+{
+  "kind": "Read-only source identity/AST and literal calculation, no product import",
+  "sourceManifest": {
+    "files": 2771,
+    "bytes": 19415246,
+    "sha256": "47e638bf851287cfe7fd4523d711e8d507632004cd4f229c758b700eac40833f"
+  },
+  "owners": [
+    {
+      "path": "packages/code-mode/src/runtime/output.ts",
+      "function": "createOutput",
+      "lines": 348,
+      "characters": 18962,
+      "physicalSha256": "288e17747a9ed997fa0e479a15324a501547eddde689bd359cf8ceed69dc487e",
+      "lfSha256": "047b9db1e93aa546186a7d56d753446f06c4c0fb0778e99731b01a0fca099331",
+      "functionLfSha256": "90a66bb830bb7cc02d191ef1cab5cbd80d90cb0bba947affb388433a25f56fed"
+    },
+    {
+      "path": "packages/code-mode/src/runtime/retirement.ts",
+      "function": "createRetirement",
+      "lines": 281,
+      "characters": 11196,
+      "physicalSha256": "8e6a595b29f29c3c1d76be96def8f4ffb77d309638d5da1360bdcc795434dbc1",
+      "lfSha256": "8e6a595b29f29c3c1d76be96def8f4ffb77d309638d5da1360bdcc795434dbc1",
+      "functionLfSha256": "668fdebdd1d7104be24eb7ce411dd337889d43ef0ec72947abec637cec359e04"
+    },
+    {
+      "path": "packages/subagent/src/tools/spawn.ts",
+      "function": "createSpawnTool",
+      "lines": 254,
+      "characters": 15405,
+      "physicalSha256": "0eaa86978209966051a58b7d17ecb54b3a89e08496e1bbad142e178996a2dad2",
+      "lfSha256": "0eaa86978209966051a58b7d17ecb54b3a89e08496e1bbad142e178996a2dad2",
+      "functionLfSha256": "700433ea2e7dcb2fe5f1a0e38570f52a660fd6482cef7559fb8d75c267bf5c96"
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/managed-document.ts",
+      "function": "createManagedDocument",
+      "lines": 353,
+      "characters": 18666,
+      "physicalSha256": "ec90b7d6169d6cf8860a966a7b833218591ec8b162f89ed43a1012b266230e7b",
+      "lfSha256": "ec90b7d6169d6cf8860a966a7b833218591ec8b162f89ed43a1012b266230e7b",
+      "functionLfSha256": "6be80ef6b336ec20f4df5fae569a145dfc1c2f2677a9c50f53fa620b456591f8"
+    },
+    {
+      "path": "apps/cli/src/index.ts",
+      "function": "runSdkCommand",
+      "lines": 251,
+      "characters": 13142,
+      "physicalSha256": "02fca758678c7775ec0c1f092667776366b1346436cc9210079d060c37527f8c",
+      "lfSha256": "1f79f4410684bda28f80f6a97b5b78679d2a67764074a0c6de02f21cd90c27db",
+      "functionLfSha256": "07afa335f2b1307a5f9200551ef2882a26b98f4ee1278450c5c008244f90c96f"
+    }
+  ],
+  "nativePreviewLiteralBytes": 1021
+}

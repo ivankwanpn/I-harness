@@ -1,4 +1,4 @@
-import type { LLMContentPart, Session } from "@i-harness/core-session"
+import type { LLMContentPart, SessionView as Session } from "@i-harness/core-session"
 import { activeTokens as meterActiveTokens, IMAGE_TOKEN_ESTIMATE } from "@i-harness/token-meter"
 
 // M15: single source of truth moved to @i-harness/token-meter; kept here as a

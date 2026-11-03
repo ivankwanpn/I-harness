@@ -1,6 +1,7 @@
 import type { ImageInput } from "@i-harness/core-session"
 
 export interface VideoAudioInput {
+  generation?: import('@i-harness/core-tools').MediaGenerationAction
   wav: Uint8Array
   question?: string
   startSeconds: number

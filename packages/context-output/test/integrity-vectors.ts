@@ -1,0 +1,63 @@
+// Fixed independent crypto/literal construction: hidden literal-vectors.mjs, no product imports.
+export const literalVectors = [
+  {
+    "size": 0,
+    "contentDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "treeRoot": "0a88111852095cae045340ea1f0b279944b2a756a213d9b50107d7489771e159",
+    "header": "49484152544944580000000100000040000100000000000000000000000000000000000000000001000000000000000100000000000000010000000000000000",
+    "heap": [
+      "0a88111852095cae045340ea1f0b279944b2a756a213d9b50107d7489771e159"
+    ],
+    "indexBytes": 96,
+    "indexDigest": "e935f29733b669874a41d44f4c7da0e1ff851a755cf7f188d7169c95533de6bc",
+    "manifest": "{\"version\":1,\"codec\":\"text-utf8-v1\",\"encodedBytes\":0,\"contentDigest\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":1,\"paddedLeaves\":1,\"treeRoot\":\"0a88111852095cae045340ea1f0b279944b2a756a213d9b50107d7489771e159\"}",
+    "revision": "da32e22048d68e2fb1cecccf1ec47b1c70f8712f4aac7cc37bec804a0ad0e3c5"
+  },
+  {
+    "size": 65536,
+    "contentDigest": "156c38442089c1323d3e3ba549a6ac24341c47e8b6367bec4740c9b8c865826e",
+    "treeRoot": "460793ff5a563ef79ac6938aabb7a7fa6d7f71bc6315807888568ec64d592c9f",
+    "header": "49484152544944580000000100000040000100000000000000000000000100000000000000000001000000000000000100000000000000010000000000000000",
+    "heap": [
+      "460793ff5a563ef79ac6938aabb7a7fa6d7f71bc6315807888568ec64d592c9f"
+    ],
+    "indexBytes": 96,
+    "indexDigest": "3253579b9485dba1530f0e185fecf6474ad6e69be52d725594e3d43dc3693ebe",
+    "manifest": "{\"version\":1,\"codec\":\"text-utf8-v1\",\"encodedBytes\":65536,\"contentDigest\":\"156c38442089c1323d3e3ba549a6ac24341c47e8b6367bec4740c9b8c865826e\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":1,\"paddedLeaves\":1,\"treeRoot\":\"460793ff5a563ef79ac6938aabb7a7fa6d7f71bc6315807888568ec64d592c9f\"}",
+    "revision": "16d6d01465c2bbbe5864129a6cfe7766d459423b6eb0778ff18096a53849c875"
+  },
+  {
+    "size": 65537,
+    "contentDigest": "8d311d77166ea3c4d4d1055c760f4062ba06dea737a31353c595a5670438fe88",
+    "treeRoot": "ac2694a6a2761439c6678070a8410add3a9eb538201b9cca96fd7801ba65bbf3",
+    "header": "49484152544944580000000100000040000100000000000000000000000100010000000000000002000000000000000200000000000000030000000000000000",
+    "heap": [
+      "ac2694a6a2761439c6678070a8410add3a9eb538201b9cca96fd7801ba65bbf3",
+      "460793ff5a563ef79ac6938aabb7a7fa6d7f71bc6315807888568ec64d592c9f",
+      "ca4040b953a4b55586074e09db2a15473ace4820776e377aa30309de9899f9f5"
+    ],
+    "indexBytes": 160,
+    "indexDigest": "dd0ccea0a814cc8815237952d2a4b563d793415fa7744a7f98d99cafa78a109d",
+    "manifest": "{\"version\":1,\"codec\":\"text-utf8-v1\",\"encodedBytes\":65537,\"contentDigest\":\"8d311d77166ea3c4d4d1055c760f4062ba06dea737a31353c595a5670438fe88\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":2,\"paddedLeaves\":2,\"treeRoot\":\"ac2694a6a2761439c6678070a8410add3a9eb538201b9cca96fd7801ba65bbf3\"}",
+    "revision": "bb01dc5ef54e2028d836d708912864d6cdf3f6480cd5dcbc7e022b3d3e5d047d"
+  },
+  {
+    "size": 131073,
+    "contentDigest": "a6abd245e58a1785067a837e0181f3d07d24a458ec7d00e60bee85b7f1e499f8",
+    "treeRoot": "60f6bad00840ded502b13599e2f3caafe143d1659b7da57e2b511ff915252a55",
+    "header": "49484152544944580000000100000040000100000000000000000000000200010000000000000003000000000000000400000000000000070000000000000000",
+    "heap": [
+      "60f6bad00840ded502b13599e2f3caafe143d1659b7da57e2b511ff915252a55",
+      "88d3228ed0f9a4f561a6291ca7fe4f7c328b25d539c34e9fcebd72952af20c19",
+      "fd4816ee8edc715975219cbec09ed4404a3b459bcb77f7bc9111c074d075a34c",
+      "460793ff5a563ef79ac6938aabb7a7fa6d7f71bc6315807888568ec64d592c9f",
+      "8fb1131e3c561a206dc1b24e30de93685be6ea1f0ebadfe01eebc9099ea457ee",
+      "a9375a59aef668c12d4b9eff9dd19c6733d4509bb488689bae943976dfed4a97",
+      "db5306248e0313e72619a639e264f7ef52a62ede36bac79eb710f803b2f63b3c"
+    ],
+    "indexBytes": 288,
+    "indexDigest": "69e58d015c1ceb3dd52c216eb05b87678e6f8f9783f5c70cb01d9e6989765af5",
+    "manifest": "{\"version\":1,\"codec\":\"text-utf8-v1\",\"encodedBytes\":131073,\"contentDigest\":\"a6abd245e58a1785067a837e0181f3d07d24a458ec7d00e60bee85b7f1e499f8\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":3,\"paddedLeaves\":4,\"treeRoot\":\"60f6bad00840ded502b13599e2f3caafe143d1659b7da57e2b511ff915252a55\"}",
+    "revision": "92c8008f34b02c35abbff0e87f6c5e329e0ef15dd8427df6d7ba2467d87f47d3"
+  }
+] as const

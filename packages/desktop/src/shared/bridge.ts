@@ -15,6 +15,7 @@ import type { DiagnosticsRequest } from "@i-harness/desktop-gateway"
 import type { NotificationHistoryRequest } from "../main/notification-history.ts"
 import type { MemoryAuthoringRequest } from "@i-harness/desktop-gateway"
 import type { DraftRequest } from "./attachment-drafts.ts"
+import type { ForkPrepareRequest, ForkOperation } from '@i-harness/sdk/fork'
 import type { ContextSubsystemRequest } from "@i-harness/desktop-gateway"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
@@ -22,10 +23,11 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | import("./result-pages.ts").ResultReadRequest
   | import("./runtime-diagnostics.ts").RuntimeDiagnosticsRequest
   | import("./runtime-diagnostics.ts").GlobalRetryRequest
   | import("./runtime-diagnostics.ts").GlobalModelWaitRequest
-  | { kind: "desktop/usage/query"; query: import("@i-harness/usage-stats/types").UsageQuery }
+  | { kind: "desktop/usage/query"; query: import("@i-harness/usage-stats/observation-snapshot").ObservationQuery }
   | { kind: "desktop/usage/pricing"; price: import("@i-harness/usage-stats/types").UsagePrice }
   | import("@i-harness/desktop-gateway").WslSettingsRequest
   | ContextSubsystemRequest
@@ -67,7 +69,15 @@ export type DesktopRequest =
   | { kind: "desktop/subagents/mutate"; workspaceId: string; command: SubagentSettingsCommand }
   | { kind: "desktop/session/subagents/list"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/subagents/history"; workspaceId: string; sessionId: string; childSessionId: string; afterSeq?: number; limit?: number }
+  | { kind: "desktop/session/subagents/result"; workspaceId: string; sessionId: string; childSessionId: string; offset?: number; maxBytes?: number; resultRevision?: string; refId?: string; refRevision?: string }
   | { kind: "desktop/session/subagents/control"; workspaceId: string; sessionId: string; childSessionId: string; action: "followup" | "message" | "interrupt" | "close"; text?: string }
+  | { kind: 'desktop/surface/subscribe'; workspaceId:string; surface:'execution'; sessionId:string }
+  | { kind:'desktop/surface/snapshot';workspaceId:string;subscriptionId:string;epoch:string;offset?:number;limit?:number }
+  | {kind:'desktop/surface/unsubscribe';workspaceId:string;subscriptionId:string}
+  | { kind: 'desktop/instructions/state' | 'desktop/instructions/refresh' | 'desktop/instructions/subscribe'; workspaceId: string; sessionId: string; childSessionId?: string }
+  | { kind: 'desktop/instructions/unsubscribe'; workspaceId: string; subscriptionId: string }
+  | { kind: 'desktop/instructions/settings'; workspaceId: string }
+  | { kind: 'desktop/instructions/configure'; workspaceId: string; patch: { enabled?: boolean; maxBytes?: number; globalSources?: string[] } }
   | { kind: "desktop/agent-settings/state"; workspaceId: string }
   | { kind: "desktop/agent-settings/configure"; workspaceId: string; patch: Partial<AgentDefaults> }
   | { kind: "browser/list" | "browser/open" | "browser/hide"; workspaceId: string }
@@ -92,7 +102,9 @@ export type DesktopRequest =
   | { kind: "desktop/rewind/plan"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation" }
   | { kind: "desktop/rewind/execute"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation"; fingerprint: string }
   | { kind: "desktop/session/archived"; workspaceId: string }
-  | { kind: "desktop/session/manage"; workspaceId: string; sessionId: string; action: "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread"; title?: string }
+  | { kind: 'desktop/session/fork/prepare'; workspaceId: string; request: ForkPrepareRequest }
+  | { kind: 'desktop/session/fork/begin' | 'desktop/session/fork/retry'; workspaceId: string; operation: ForkOperation }
+  | { kind: "desktop/session/manage"; workspaceId: string; sessionId: string; action: "rename" | "archive" | "restore" | "pin" | "unpin" | "read" | "unread"; title?: string }
   | { kind: "session/model/set"; workspaceId: string; sessionId: string; selection: SessionModelSelection }
   | { kind: "desktop/provider/directory"; workspaceId: string }
   | { kind: "desktop/provider/probe"; workspaceId: string; id: string; token: string }
@@ -143,16 +155,17 @@ export type DesktopRequest =
   | { kind: "desktop/review/commit"; workspaceId: string; message: string }
 
 export type DesktopEvent =
+  | {kind:"sdk/ready";workspaceId:string;runtimeGeneration:number;method:"sdk/ready";params?:never}
   | { kind: "runtime/diagnostic"; entry: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry }
   | ({ kind: "runtime/activity" } & import("./runtime-diagnostics.ts").RuntimeActivity)
   | { kind: "window/state"; maximized: boolean }
   | {
       kind: "sdk/notification"
       workspaceId: string
-      method: "session/event" | "session/status" | "session/execution-state" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/session/subagents/changed" | "desktop/usage/recording-warning"
+      method: "session/event" | "session/status" | "session/execution-state" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/session/subagents/changed" | "desktop/usage/recording-warning" | "desktop/context/diagnostic" | 'desktop/instructions/changed' | 'desktop/surface/changed'
       params: unknown
     }
-  | { kind: "sdk/disconnected"; workspaceId: string; message: string }
+  | { kind: "sdk/disconnected"; workspaceId: string; message: string; close?: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry["close"] }
 
 export interface DesktopBridge {
   request(request: DesktopRequest): Promise<unknown>

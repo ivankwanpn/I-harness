@@ -93,7 +93,7 @@ describe("SessionExecutor failed pump", () => {
     fail()
     const failure = await executor.drain().catch(error => error) as SessionExecutorFailure
     expect(failure.pendingCount).toBe(2)
-    expect(executor.cancel("waiting-1")).toEqual({ cancelled: true })
+    expect(await executor.cancel("waiting-1")).toEqual({ cancelled: true })
     expect(executor.pending()).toHaveLength(1)
     await expect(executor.drain()).rejects.toBe(failure)
     expect(failure.pendingCount).toBe(2)

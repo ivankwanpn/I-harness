@@ -2,12 +2,11 @@
 // Covers the three event kinds (add/change/unlink), the default + custom
 // ignore lists, and close() stopping the stream (and the iterator ending).
 //
-// Timing note: watchers report DELTAS after readiness — the initial chokidar
-// scan (baseline) is the "now" snapshot. Tests therefore let the watcher
-// settle (readinessMargin) before mutating, which is exactly the contract a
-// real subscriber observes: files created before readiness are baseline.
+// These legacy controls characterize observed deltas. The asynchronous baseline
+// is not atomic: lease consumers use readiness/reset plus a fresh snapshot.
+// Older cases retain their readiness margin; new convergence cases await ready.
 import { describe, expect, it } from "vitest"
-import { mkdtemp, rm, writeFile, unlink, mkdir } from "node:fs/promises"
+import { mkdtemp, rm, writeFile, unlink, mkdir, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createFsWatcher } from "../src/index.ts"
@@ -40,23 +39,27 @@ describe("createFsWatcher", () => {
     const w = createFsWatcher({ roots: [dir] })
     try {
       const it = w.events[Symbol.asyncIterator]()
-      await sleep(readinessMargin)
+      const file = join(dir, "a.txt")
+      const nextKind = (kind: string, previous?: string) => withTimeout((async () => {
+        for (;;) {
+          const event = await it.next()
+          expect(event.done).toBe(false)
+          expect(event.value.path).toBe(file)
+          if (event.value.kind === kind) return event.value
+          // Native delivery may repeat the prior kind; it is not a write count.
+          expect(event.value.kind).toBe(previous)
+        }
+      })(), 8000, kind)
+      await w.ready
       await writeFile(join(dir, "a.txt"), "x")
-      const e1 = await withTimeout(it.next(), 8000, "add")
-      expect(e1.done).toBe(false)
-      expect(e1.value.kind).toBe("add")
-      expect(e1.value.path).toBe(join(dir, "a.txt"))
+      await nextKind("add")
 
-      await sleep(200) // let awaitWriteFinish's stability window settle
       await writeFile(join(dir, "a.txt"), "xy")
-      const e2 = await withTimeout(it.next(), 8000, "change")
-      expect(e2.value.kind).toBe("change")
-      expect(e2.value.path).toBe(join(dir, "a.txt"))
+      await nextKind("change", "add")
+      expect(await readFile(file, "utf8")).toBe("xy")
 
-      await sleep(200)
       await unlink(join(dir, "a.txt"))
-      const e3 = await withTimeout(it.next(), 8000, "unlink")
-      expect(e3.value.kind).toBe("unlink")
+      await nextKind("unlink", "change")
     } finally {
       await w.close()
       await cleanup()
@@ -202,22 +205,33 @@ describe("createFsWatcher", () => {
     const file = join(dir, "settings.json")
     await writeFile(file, "{}")
     const w = createFsWatcher({ roots: [file] })
+    const observed: Array<{ path: string; kind: string }> = []
+    const snapshots = new Map<string, () => void>()
+    const atState = (state: string) => new Promise<void>(resolve => snapshots.set(state, resolve))
+    const deleted = atState("missing"), recreated = atState('{"fontSize":15}'), updated = atState('{"fontSize":16}')
+    const collecting = (async () => {
+      for await (const event of w.events) {
+        observed.push(event)
+        const state = await readFile(file, "utf8").catch(() => "missing")
+        snapshots.get(state)?.()
+      }
+    })()
     try {
-      const iterator = w.events[Symbol.asyncIterator]()
-      await sleep(readinessMargin)
+      await w.ready
       await unlink(file)
-      expect((await withTimeout(iterator.next())).value).toEqual({ path: file, kind: "unlink" })
-      await sleep(200) // leave chokidar's atomic-replacement window before recreating
+      await withTimeout(deleted)
+      expect(observed).toEqual([{ path: file, kind: "unlink" }])
       await writeFile(file, '{"fontSize":15}')
-      const recreated = (await withTimeout(iterator.next(), 2000, "recreated-root event")).value
-      expect(recreated.path).toBe(file)
-      // WHY: chokidar supplies the delta kind; fs-watch preserves add/change
-      // (src/index.ts:156), and either reappearance delta must survive.
-      expect(["add", "change"]).toContain(recreated.kind)
+      await withTimeout(recreated, 2000, "recreated-root snapshot")
+      // Windows may observe change + add for one recreation. Preserve both
+      // kinds; a notification invalidates a snapshot, not a write-count ledger.
+      expect(observed.slice(1).every(event => event.path === file && ["add", "change"].includes(event.kind))).toBe(true)
       await writeFile(file, '{"fontSize":16}')
-      expect((await withTimeout(iterator.next())).value).toEqual({ path: file, kind: "change" })
+      await withTimeout(updated, 2000, "further-write snapshot")
+      expect(await readFile(file, "utf8")).toBe('{"fontSize":16}')
     } finally {
       await w.close()
+      await collecting
       await cleanup()
     }
   })

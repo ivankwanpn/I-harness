@@ -1,0 +1,22 @@
+# Code Mode accepted-output settlement timing control
+
+Diagnostic scope only. The source-owner controls prove a later output can be refused before enqueue when its first group has closed and another source holds recovery. The first actual mounted controls did NOT reproduce that ordering: normal checkpoint abort stopped the guest before later output/store. This new control varies only genuine asynchronous delivery boundaries, preserving that counterexample and the historical cause limitation.
+
+Use one actual managed document, ToolRegistry, registerCodeMode, executeToolCalls, ContextOutput service and original text retention. No Agent/model/child/Team, broad three-turn fixture, product source edits, synthetic source/ready/error branding or guest replay. One original guest starts one harmless gate tool BEFORE the hold, emits first text, awaits that already-running tool, emits second text and stores one small value before finishing. No new tool is invoked under recovery.
+
+Controlled order:
+
+1. First actual result sink physically finishes once; deliberately hide its committed result from that caller as original-operation recovery-required, retaining actual reference/bytes/receipt.
+2. Actual registry issues its retained dispatch error and holds the real batch source. Delay delivery of that SAME rejection to executeToolCalls at an explicit test transport wrapper; the original error object is preserved. This is an intentional scheduling control, not a passive observer or a new failure.
+3. Make only that same result sink's known finish visible, release the already-running harmless tool body, and hold RETURN of its actual code/result record after native commit. Its real document event should drive the existing output-facts subscription refresh; do not call facts.refresh/source.close or trigger an artificial mutation from the test to force recovery.
+4. Observe first output's actual required capture and source close fulfillment. Then release the original code/result return so the guest can finish its original remaining statements while the original batch hold still exists.
+5. Observe actual later output registration/capture/install, and actual guest completion ordering. A passive spy on the genuine Worker.prototype.terminate call is allowed, preserving receiver/arguments/return promise and recording actual callsite/thread identity; only a retirement.complete call with no earlier external abort may certify this boundary. If public wrappers cannot establish the required ordering, stop and report the exact missing seam rather than add private production instrumentation.
+6. Release the original delayed registry rejection to the original batch caller. Observe real checkpoint abort, original retained drain/result/store/terminal outcomes and close. The original batch owns consuming retained take; no external take or fabricated output. Record both success and failure honestly.
+
+All wrappers delegate once on actual original objects and preserve returns except the explicitly declared sink visibility and two delivery-return gates. Do not return spread/proxy replacement settlement sources; their actual registered identities must remain. Passive observations are bounded synchronous memory writes with error/overflow counts, no sleeps, extra refresh, action, source, callback or wake.
+
+Evidence must bind original action/source/prepared call/worker/capture/operation identities, two literal text inputs, original physical artifact bytes/digest, append bytes/keys/receipts, registration refusal or successful enqueue, original error identity, original signal abort, genuine completion/termination callsite, retained result and truthful cleanup. Never infer private cell counters or historical output.ts353 flags from a stack alone. If the intended ordering is absent, that is the result; do not force it by bypassing cancellation/guards or releasing the outer hold.
+
+After observation, stop/join genuine guest/broker/context resources. Preserve failed managed close as failure evidence; never clear a hold/drop pending data/reopen or repair roots to obtain green. No leftover worker is acceptable. Initial test deadline follows the existing small mounted-control harness; do not increase it after failure. Any further arm or private trace needs a fresh root ruling.
+
+Root may select an ownership repair only after this control. Possible fixes remain unchosen; no Core settlement API, lifetime, optional-store/Stop behavior or live-continuation gate is authorized to change by this diagnostic.

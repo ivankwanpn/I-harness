@@ -1,0 +1,38 @@
+[
+  {
+    "path": ".superpowers/sdd/2026-10-21-context-r4a-structure/review.md",
+    "sha256": "49b4ced689c71bd5903364605ede2bad172a7b14f9bb96010c52ce5982d5dec0"
+  },
+  {
+    "path": ".tmp/r4as-rv2/base/control/report.json",
+    "sha256": "3ad84347c6c419d3eaf80e2fe5a513d6917128951f01ef827a4570b686e489a0"
+  },
+  {
+    "path": ".tmp/r4as-rv2/candidate/control/report.json",
+    "sha256": "929e246a9a73e688dad9eb6e16f0d522c8c3661d56c03c66fda2aec90cac46b2"
+  },
+  {
+    "path": ".tmp/r4as-rv2/receipts.json",
+    "sha256": "e9aa4e9471768e1612352901c972258a1786000b54fd690e0cd77482dd04bd8d"
+  },
+  {
+    "path": ".tmp/r4as-rv2/source-map.json",
+    "sha256": "05391da21bfa44d361cc0ddd10f12569bba9f28f264db23c90a415dfa0759857"
+  },
+  {
+    "path": ".tmp/r4as-rv2/control.mjs",
+    "sha256": "f6a7997cfde37c4bd9693d849bee15b53be1fe3ecd3095dd94886039735e0554"
+  },
+  {
+    "path": ".tmp/r4as-rv2/evidence-seal.json",
+    "sha256": "027f582f3881152e861cefb27cffc15e7d3a94c799efe36292debb988b06d8d2"
+  },
+  {
+    "path": ".tmp/r4as-1021-01/evidence-seal.json",
+    "sha256": "6965b347e3eb85580c49097c3dc51c414553236f87f5b65aa6a1a7b14fc24705"
+  },
+  {
+    "path": ".tmp/r4as-1021-01/evidence-inventory.json",
+    "sha256": "b82b8244f296d04c254c4f38b25711e29247facd179e851d1842650eb6b87fde"
+  }
+]

@@ -1,0 +1,44 @@
+{
+  "kind": "bounded-result-integrity-final-evidence-seal",
+  "sealedUtc": "2026-10-20T20:21:33.9658534Z",
+  "base": "0df518e7042039ef0f312c53aa565abf314bef3a",
+  "implementation": "740c515399eebe1c4a27e7367b44ef353b212310",
+  "head": "c9f41bd974f8940381d0f04748b19acc8647f4f3",
+  "reviewRange": "0df518e7042039ef0f312c53aa565abf314bef3a..c9f41bd974f8940381d0f04748b19acc8647f4f3",
+  "status": "ready-for-fresh-review-not-accepted",
+  "inventory": {
+    "path": "evidence-inventory.json",
+    "entries": 3081,
+    "sha256": "34a3c7ed16c713f5ea08e1efce4bad481ed3eba923d3b71da063fc3f8ba0697c"
+  },
+  "source": {
+    "path": "final-workspace-sources.json",
+    "files": 4271,
+    "sha256": "5762ce5f6dc519ba2b2ff8a0793a701c2c0b08fba0e004058f84939a63b9f398"
+  },
+  "report": {
+    "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-result-integrity\\task-1-report.md",
+    "sha256": "30398387773e20cd40e58411b5d15d5c1273163a772e301de30b71f25023366c"
+  },
+  "handback": {
+    "path": "D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-result-integrity/task-1-handback.json",
+    "sha256": "387922fa9a04778b711671b34cd1d2781eb9a1741369064b3d9246584f84230d"
+  },
+  "delivery": {
+    "path": "D:/I-harness-main/docs/research/2026-10-21-context-r4a-result-integrity-delivery.md",
+    "sha256": "5c525a56fc2aa414848c3e5be7956f6ea5da60d622acdd37259a5ff490ae3242"
+  },
+  "ownedProcessesAtSeal": 0,
+  "treeClean": true,
+  "guard": "All new fixtures and run-gate reject this exact evidence-seal.json; native subroot is independently sealed",
+  "limitations": [
+    "A6 scale/100MiB/packaged",
+    "mixed legacy-managed retention",
+    "whole R4A",
+    "R4B-R6",
+    "unrelated decomposition",
+    "new execution authority/F1 inference/ACL/journal",
+    "cryptographic authenticity against rewriting all trusted records",
+    "full revoke-restore ABA"
+  ]
+}

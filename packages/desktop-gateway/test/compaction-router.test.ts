@@ -13,7 +13,7 @@ it("excludes prompts and duplicate compactions until the compaction has settled"
   const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", mockScript: [{ role: "assistant", text: "ok" }] })
   const base = createSdkServer(service, { onWrite: f => frames.push(f) })
   const router = createDesktopRouter(base, f => frames.push(f), {
-    compact: async () => { entered(); await gate; return { compacted: true } },
+    compact: async () => { entered(); await gate; return { compacted: true,shadowedSeqs:[],outcome:'ready' as const,publication:'nondurable' as const } },
   })
   const call = (id: number, method: string, params: unknown) => router.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method, params }))
   try {

@@ -1,5 +1,5 @@
-import type { SessionEvent } from "@i-harness/core-session"
-import { materializeMissingImageAdmissions, remapSeedEvent } from "@i-harness/session-persistence"
+import { CURRENT_FORMAT_VERSION, isContextEventType, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
+import { remapConversationSeed } from "@i-harness/session-persistence"
 
 /** The last N parent turns as a child's SEED — in the CHILD's coordinates.
  *
@@ -35,21 +35,17 @@ import { materializeMissingImageAdmissions, remapSeedEvent } from "@i-harness/se
  * This path keeps it (the slice is a contiguous tail of the parent's log, so the
  * events it hides can be in it), which is why the reference has to MOVE here
  * rather than vanish. */
-export function forkTurns(events: SessionEvent[], n: number): SessionEvent[] {
-  const seed = materializeMissingImageAdmissions(events, sliceTurns(events, n))
+export function forkTurns(events: readonly SessionEventView[], n: number, sourceFormat = CURRENT_FORMAT_VERSION, sourceHeader?: import('@i-harness/core-session').SessionView['header']): SessionEvent[] {
+  const seed = sliceTurns(events, n).filter(event => !isContextEventType(event.type))
   // Every return path goes through the remap, including the untouched ones: for
   // a POSITIONAL whole-log seed (seq === index, what `append` writes) it is the
   // identity, and making it unconditional is what keeps the contract ("the output
   // is in child coordinates") true for all of them — a non-positional log (M51,
   // `repair.test.ts:289-302`: seqs [0, 20]) legitimately re-indexes instead.
-  const renumbered = new Map<number, number>()
-  for (const [index, event] of seed.entries()) {
-    if (event.seq !== undefined) renumbered.set(event.seq, index)
-  }
-  return seed.map((event, index) => remapSeedEvent(event, index, renumbered))
+  return remapConversationSeed({ sourceFormat, sourceHeader, source: events, retained: seed })
 }
 
-function sliceTurns(events: SessionEvent[], n: number): SessionEvent[] {
+function sliceTurns(events: readonly SessionEventView[], n: number): readonly SessionEventView[] {
   if (n === 0) return []
   const turnStarts: number[] = []
   for (let i = 0; i < events.length; i++) {

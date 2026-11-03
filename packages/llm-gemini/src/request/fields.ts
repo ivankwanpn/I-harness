@@ -1,0 +1,2 @@
+export const requestFields = ['contents', 'systemInstruction', 'tools', 'toolConfig', 'generationConfig', 'cachedContent', 'model', 'safetySettings', 'labels', 'continuationToken'] as const
+export const generationFields = ['maxOutputTokens', 'thinkingConfig', 'temperature', 'topP', 'topK', 'candidateCount', 'stopSequences', 'responseMimeType', 'responseSchema', 'responseJsonSchema', 'seed', 'presencePenalty', 'frequencyPenalty'] as const

@@ -5,9 +5,10 @@ import { expect, it, vi } from "vitest"
 import { createExecutionLease, type ExecutionOutput, type TransportExecutionBackend } from "@i-harness/sandbox"
 import { compileExecutionPolicy } from "@i-harness/sandbox-policy"
 import { createExecService } from "../src/service.ts"
-import { withExecCallerScope, type BackgroundJobView } from "../src/index.ts"
+import { withExecCallerScope, type BackgroundJobView, type ExecutionSupervisor } from "../src/index.ts"
 import { retainedOutputReader } from "../src/retained-output.ts"
 import { createExecutionSupervisor } from "../src/execution-supervisor.ts"
+import { createCaptureRetention } from '../src/capture/retention.ts'
 
 const opened = vi.hoisted(() => [] as number[])
 const closeFailure = vi.hoisted(() => ({ cause: undefined as Error | undefined, descriptors: [] as number[] }))
@@ -22,6 +23,52 @@ function deferred<T>() {
   const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
   return { promise, resolve, reject }
 }
+it('retains and finalizes the first real spill when second channel construction throws', () => {
+  const spillRoot = mkdtempSync(join(tmpdir(), 'capture-partial-'))
+  const boom = new Error('second channel'), start = opened.length
+  let reads = 0
+  const retention = createCaptureRetention({ spill: { spillRoot, get maxOutputBytes() {
+    if (++reads === 2) { retention.push('stdout', Buffer.alloc(64, 120)); throw boom }
+    return 16
+  } } }, undefined, undefined)
+  try {
+    expect(() => retention.initialize()).toThrow(boom)
+    expect(opened.slice(start)).toHaveLength(1)
+    expect(() => fstatSync(opened[start]!)).not.toThrow()
+    expect(retention.finalizeOutput()).toEqual([])
+    expect(() => fstatSync(opened[start]!)).toThrow(/EBADF/)
+    expect(retention.cleanupFailures()).toEqual([])
+  } finally { retention.finalizeOutput() }
+})
+it("reads the injected supervised handle once and preserves IO callback receivers through capture completion", async () => {
+  const events: string[] = []
+  const owner = { sessionId: "injected-owner" }
+  const policy = compileExecutionPolicy({ mode: "danger-full-access", owner,
+    authority: { kind: "unbound", revision: "injected-test", workspaceRoot: resolve(".") } })
+  const io = {
+    output: (async function* () { yield { channel: "stdout" as const, data: Buffer.from("captured\r\n") } })(),
+    async write() { expect(this).toBe(io); events.push("write") },
+    async endInput() { expect(this).toBe(io); events.push("end") },
+    diagnostics() { expect(this).toBe(io); events.push("diagnostics"); return { outputAbandoned: false, discardedOutputBytes: 0 } },
+  }
+  const root = { exitCode: 0 }
+  const handle = { pid: 1, receipt: { executionId: "injected", backendId: "injected", policyFingerprint: policy.fingerprint, owner, assurance: "unverified" as const },
+    io, rootExited: Promise.resolve(root), settled: Promise.resolve({ kind: "settled" as const, root, treeEmpty: true as const, ioSettled: true as const, resourcesReleased: true as const }),
+    async cancel() { throw new Error("unexpected cancellation") }, async release() { throw new Error("unexpected release") } }
+  const supervisor: ExecutionSupervisor = {
+    async launch() { return { id: "injected", policy, get handle() { events.push("handle"); return handle } } },
+    list: () => [], cancel: async () => { throw new Error("unexpected cancellation") },
+    reconcile: async () => {}, closeOwner: async () => {}, dispose: async () => {},
+  }
+  // Selection is still required before the injected supervisor receives a run.
+  const backend: TransportExecutionBackend = { probe: async () => { throw new Error("unused probe") }, prepare: async () => { throw new Error("unused prepare") } }
+  const exec = createExecService({ execution: { supervisor, defaultOwner: owner,
+    resolvePolicy: () => policy, validateAuthority: () => {}, selectBackend: () => backend } })
+  try {
+    expect(await exec.run({ argv: ["fixture"], input: "input" })).toMatchObject({ stdout: "captured\n", exitCode: 0 })
+    expect(events).toEqual(["handle", "write", "end", "diagnostics"])
+  } finally { await exec.dispose() }
+})
 function fixture(options: { output: AsyncIterable<ExecutionOutput>; inputError?: unknown; incomplete?: boolean; heldCancel?: boolean; spill?: boolean; autoLifetime?: "complete-tree" | "retain-tree" }) {
   const root = deferred<{ exitCode: number }>(), cancelled = deferred<void>(), releaseCancel = deferred<void>()
   const drained = deferred<void>()
@@ -98,7 +145,14 @@ it("preserves execution and both independent close failures while closing both d
       expect(closeFailure.descriptors).toContain(fd)
       expect(() => fstatSync(fd)).toThrow(/EBADF/)
     }
-  } finally { closeFailure.cause = undefined; await f.exec.dispose() }
+  } finally {
+    closeFailure.cause = undefined
+    const closes = closeFailure.descriptors.length
+    await expect(f.exec.dispose()).rejects.toThrow('Exec service disposal failed')
+    // close took effect before throwing: the owner must retain unknown debt,
+    // never replay that numeric fd after it could have been reused.
+    expect(closeFailure.descriptors.length).toBe(closes)
+  }
 })
 it.each([undefined, { opaque: "observer" }, new Error("observer")])("joins cancellation and rejects the exact observer throw %s", async cause => {
   const f = fixture({ heldCancel: true, output: (async function* () { yield { channel: "stdout", data: Buffer.from("callback") } })() })
@@ -235,7 +289,11 @@ it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rej
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(reads).toBe(3)
     expect(supervisor.list()).toHaveLength(0)
-  } finally { closeFailure.cause = undefined; recovered = true; nativeEof.resolve(); await outcome; await exec.dispose() }
+  } finally {
+    closeFailure.cause = undefined; recovered = true; nativeEof.resolve(); await outcome
+    if (mode.endsWith('close failures')) await expect(exec.dispose()).rejects.toThrow('Exec service disposal failed')
+    else await exec.dispose()
+  }
 })
 function steerFixture() {
   let pending = false
@@ -446,4 +504,19 @@ it("returns actual completion when capture settles before steer at the same cloc
     expect(steer.listenerCount()).toBe(0)
     expect(vi.getTimerCount()).toBe(0)
   } finally { finish.resolve(); f.root.resolve({ exitCode: 0 }); await f.exec.dispose(); vi.useRealTimers() }
+})
+
+it('promotes the same held capture for a background event', async () => {
+  const finish = deferred<void>(), background = steerFixture()
+  const f = fixture({ output: (async function* () { await finish.promise; yield { channel: 'stdout', data: Buffer.from('original output') } })() })
+  const pending = f.exec.run({ argv: ['fixture'] }, { backgroundEventWake: background.source })
+  try {
+    await vi.waitFor(() => expect(background.listenerCount()).toBe(1))
+    background.admit()
+    const result = await pending
+    expect(result).toMatchObject({ promoted: true, promotionReason: 'background-event', jobId: 'bash-1' })
+    expect(f.counts()).toEqual({ commits: 1, releases: 0 })
+    expect(f.observationCounts().aborts).toBe(0)
+    expect(background.listenerCount()).toBe(0)
+  } finally { finish.resolve(); f.root.resolve({ exitCode: 0 }); await f.exec.dispose() }
 })

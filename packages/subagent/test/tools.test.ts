@@ -1,3 +1,4 @@
+
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
@@ -209,7 +210,8 @@ describe("subagent tools", () => {
     const read = () => ({ ...view })
     const subscribe = (jobId: string, listener: (v: typeof view) => void) => { expect(jobId).toBe(id); listeners.add(listener); return () => { listeners.delete(listener) } }
     const workflow = { getOutput: read, subscribeJob: subscribe, runWorkflow: vi.fn(), listJobs: () => [], killJob: vi.fn() }
-    const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec: { ...exec, getOutput: read, subscribeJob: subscribe }, workflow, agents: createAgentRegistry(), tasks: createTaskRegistry() })
+    // Explicit legacy/custom port: this controlled view is not in the native registry.
+    const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec: { ...exec, getJobView: undefined, listJobViews: undefined, observeJobOutput: undefined, readJobOutputFrames: undefined, getOutput: read, subscribeJob: subscribe }, workflow, agents: createAgentRegistry(), tasks: createTaskRegistry() })
     const tool = tools.find(t => t.name === "job_output")!
     const controller = new AbortController()
     const observation = tool.execute({ job_id: id, wait: true, timeout_ms: 100 }, { session, abortSignal: controller.signal })
@@ -273,18 +275,24 @@ describe("subagent tools", () => {
     table.add(entry.path, entry)
     append(entry.session, { type: "subagent/inbox", message: "next", messageId: "next-1" })
     const seen: unknown[] = []
-    table.subscribe(change => seen.push({ status: change.entry.status, finalText: change.entry.finalText, error: change.entry.error, startedAt: change.entry.startedAt, controller: change.entry.controller }))
+    const running = Promise.withResolvers<void>()
+    const unsubscribe = table.subscribe(change => {
+      seen.push({ status: change.entry.status, finalText: change.entry.finalText, error: change.entry.error, startedAt: change.entry.startedAt, controller: change.entry.controller })
+      if (change.entry === entry && change.entry.status === "running") running.resolve()
+    })
     const previousController = entry.controller
     const waiting = driveFollowups({ table, jobs, agents }, entry, "child")
     try {
-      await Promise.resolve()
+      await running.promise
       expect(seen[0]).toMatchObject({ status: "running", finalText: undefined, error: undefined, startedAt: expect.any(Number) })
       expect(entry.controller).not.toBe(previousController)
+      expect(seen).toHaveLength(1)
+      expect(entry.status).toBe("running")
       release.resolve({ finalText: "new", turns: 1, reasoning: [] })
       await waiting
       expect(seen[1]).toMatchObject({ status: "waiting", finalText: "new", error: undefined })
       expect(seen).toHaveLength(2)
-    } finally { release.resolve({ finalText: "cleanup", turns: 1, reasoning: [] }); await waiting }
+    } finally { release.resolve({ finalText: "cleanup", turns: 1, reasoning: [] }); await waiting; unsubscribe() }
   })
   it("registers spawn_agent, wait_agent, list_agents", () => {
     const { tools } = setup()
@@ -380,7 +388,7 @@ describe("subagent control tools", () => {
     expect(out).toEqual({ resumed: true })
     expect(agents.get("child-1")).toBe(fakeAgent) // unchanged — NOT rebuilt
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("pending", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("pending", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.inbox" } })
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("ok")
   }, 10_000)
@@ -421,6 +429,7 @@ describe("subagent control tools", () => {
     const entry = table.get("root/helper")!
     const out = await resume.execute({ target: "root/helper" }, {})
     expect(out).toEqual({ resumed: true })
+    await entry.followupChain
     const rebuilt = agents.get("child-abc")
     expect(rebuilt).toBeDefined()
     expect(entry.session).toBe(loadedSession) // rebuilt on the persisted session, not a fresh one
@@ -562,7 +571,7 @@ describe("subagent control tools", () => {
     expect(out).toEqual({ delivered: true })
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "subagent/inbox", message: "again" }))
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup" } })
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("ok2")
     expect(jobs.read(jobId).status).toBe("completed")
@@ -607,9 +616,11 @@ describe("subagent control tools", () => {
 
     // Hold the retry in flight: list_agents must stop reporting the old turn's
     // error as soon as a new turn begins, not only after it succeeds.
+    const retryEntered = Promise.withResolvers<void>()
     let finishRetry!: (result: { finalText: string; turns: number; reasoning: string[] }) => void
-    followup.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve }))
+    followup.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve; retryEntered.resolve() }))
     await follow.execute({ target: "root/helper", message: "retry" }, {})
+    await retryEntered.promise
     try {
       const listed = await all.find((tool) => tool.name === "list_agents")!.execute({}, {}) as { agents: { status: string; error?: string }[] }
       expect(listed.agents[0]?.status).toBe("running")
@@ -777,7 +788,8 @@ describe("job tools bridge", () => {
     const read = await output.execute({ job_id: jobId, wait: true, timeout_ms: 5000 }, {})
     expect((read as { status: string }).status).toBe("completed")
     expect((read as { text: string }).text).toContain("bg done")
-    expect((read as { text: string }).text).toContain("[status: completed]")
+    expect(read).toMatchObject({ native_job: { jobId }, source: { kind: 'unavailable', reason: 'retention-unsupported' }, display_only: true })
+    expect(read).not.toHaveProperty('total_bytes')
   }, 10_000)
 
   it("job_list enumerates both subagent and bash jobs", async () => {
@@ -1076,9 +1088,31 @@ describe("M26-D2 background delivery", () => {
     const tasks = createTaskRegistry()
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks })
     const spawn = all.find((t) => t.name === "spawn_agent")!
-    const out = await spawn.execute({ message: "do it", task_name: "helper", background: false }, { sessionId: "s-main", callEventSeq: 5 })
-    expect(out).toMatchObject({ agent_path: "root/helper", task_id: "task-1", status: "completed", outcome: "completed", resultText: "child done" })
-    expect(table.get("root/helper")?.status).toBe("waiting")
+    const terminal: string[] = [], resident: string[] = []
+    let unsubscribeJob = () => {}
+    const unsubscribeTable = table.subscribe(change => {
+      if (change.path !== "root/helper") return
+      if (change.kind === "add") unsubscribeJob = jobs.subscribe(change.entry.jobId!, view => { if (view.status !== "running") terminal.push(view.status) })
+      if (change.kind === "update" && change.entry.status === "waiting") resident.push(change.entry.finalText!)
+    })
+    try {
+      const out = await spawn.execute({ message: "do it", task_name: "helper", background: false }, { sessionId: "s-main", callEventSeq: 5 })
+      expect(out).toMatchObject({ agent_path: "root/helper", task_id: "task-1", status: "completed", outcome: "completed", resultText: "child done" })
+      // The summary belongs to TaskRecord. This exact initial lifecycle owns the
+      // resident/job mirrors; future followups must not extend the promise we join.
+      const initialCompletion = table.get("root/helper")!.followupChain
+      expect(initialCompletion).toBeDefined()
+      await initialCompletion
+      expect(table.get("root/helper")?.status).toBe("waiting")
+      expect(table.get("root/helper")?.finalText).toBe("child done")
+      expect(jobs.list("root")).toEqual([expect.objectContaining({ status: "completed", output: "child done" })])
+      expect(resident).toEqual(["child done"])
+      expect(terminal).toEqual(["completed"])
+      const childEvents = table.get("root/helper")!.session.events
+      expect(childEvents.filter(event => event.type === "turn/start")).toHaveLength(1)
+      expect(childEvents.filter(event => event.type === "step/start")).toHaveLength(1)
+      expect(childEvents.filter(event => event.type === "assistant/message")).toEqual([expect.objectContaining({ text: "child done" })])
+    } finally { unsubscribeTable(); unsubscribeJob() }
   }, 15_000)
 
   // W12: this drives a REAL timeout — the injected bound (50ms) is passed to the
@@ -1112,7 +1146,7 @@ describe("M26-D2 background delivery", () => {
     expect(out.resultText).toBeUndefined()
   }, 15_000)
 
-  it("terminalize delivers to the parent immediately (drain hooked to onTerminalized)", async () => {
+  it("an unbound terminalized source stays pending without generic parent admission", async () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     parentReg.register({ name: "read", description: "read", inputSchema: {}, execute: async () => ({}) })
@@ -1151,11 +1185,11 @@ describe("M26-D2 background delivery", () => {
       await new Promise((r) => setTimeout(r, 50))
     }
     await new Promise((r) => setTimeout(r, 20))
-    expect(admits).toHaveLength(1)
-    expect(tasks.notifications()[0]!.status).toBe("woken")
+    expect(admits).toHaveLength(0)
+    expect(tasks.notifications()[0]!.status).toBe("pending")
   }, 15_000)
 
-  it("registerSubagent wires the drain (background:true spawn → completion admiss to the parent)", async () => {
+  it("registerSubagent activation keeps unbound background results pending and readable", async () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     const session = createSession()
@@ -1175,8 +1209,9 @@ describe("M26-D2 background delivery", () => {
     }
     expect(mounted.tasks.get(taskId)!.outcome).toBe("completed")
     await new Promise((r) => setTimeout(r, 50))
-    expect(admits).toHaveLength(1)
-    expect(mounted.tasks.notifications()[0]!.status).toBe("woken")
+    await mounted.drainParentNotifications()
+    expect(admits).toHaveLength(0)
+    expect(mounted.tasks.notifications()[0]!.status).toBe("pending")
   }, 15_000)
 })
 
@@ -1203,10 +1238,28 @@ describe("M26-D1 spawn_agent task records", () => {
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const jobOut = all.find((t) => t.name === "job_output")!
-    const spawned = await spawn.execute({ message: "do it", task_name: "h" }, { sessionId: "s", callEventSeq: 1 }) as { task_id: string; job_id: string }
-    await tasks.wait(spawned.task_id, 10_000)
-    const out = await jobOut.execute({ job_id: spawned.job_id }, {}) as { status: string }
-    expect(out.status).toBe("completed")
+    const terminal: string[] = []
+    let unsubscribeJob = () => {}
+    const unsubscribeTable = table.subscribe(change => {
+      if (change.path === "root/h" && change.kind === "add") unsubscribeJob = jobs.subscribe(change.entry.jobId!, view => { if (view.status !== "running") terminal.push(view.status) })
+    })
+    try {
+      const spawned = await spawn.execute({ message: "do it", task_name: "h" }, { sessionId: "s", callEventSeq: 1 }) as { task_id: string; job_id: string }
+      const initialCompletion = table.get("root/h")!.followupChain
+      expect(initialCompletion).toBeDefined()
+      await tasks.wait(spawned.task_id, 10_000)
+      expect(tasks.get(spawned.task_id)).toMatchObject({ outcome: "completed", resultText: "child done", parentSessionId: "s", callEventSeq: 1 })
+      // tasks.wait observes TaskRecord outcome, not JobRegistry completion.
+      await initialCompletion
+      const out = await jobOut.execute({ job_id: spawned.job_id }, {}) as { status: string; text: string }
+      expect(out.status).toBe("completed")
+      expect(out.text).toBe("child done\n[status: completed]")
+      expect(terminal).toEqual(["completed"])
+      const childEvents = table.get("root/h")!.session.events
+      expect(childEvents.filter(event => event.type === "turn/start")).toHaveLength(1)
+      expect(childEvents.filter(event => event.type === "step/start")).toHaveLength(1)
+      expect(childEvents.filter(event => event.type === "assistant/message")).toEqual([expect.objectContaining({ text: "child done" })])
+    } finally { unsubscribeTable(); unsubscribeJob() }
   }, 15_000)
 
   it("exact-retry adopts the existing task (no re-spawn); conflicting reuse throws", async () => {
@@ -1343,7 +1396,7 @@ describe("W11 elapsed on a running subagent", () => {
     const calledAt = Date.now()
     await follow.execute({ target: "root/helper", message: "again" }, {})
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup" } })
     expect(entry.status).toBe("waiting")
     expect(entry.startedAt!).toBeGreaterThanOrEqual(calledAt)
     expect(Date.now() - entry.startedAt!).toBeLessThan(500) // a fresh clock, not the 500ms-old one

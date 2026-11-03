@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -43,6 +43,24 @@ describe("runHeadless — the metrics summary", () => {
     // The run's own events, counted — not an empty summary that would also pass
     // a `toContain("[metrics]")` assertion.
     expect(summary).toMatch(/turn\/start=1/)
+  }, 30_000)
+
+  it.each([
+    { refused: true as const },
+    { refused: true as const, truncated: true as const },
+    {},
+  ])("reports raw ended provider usage once for clean, refused and combined endings (%j)", async ending => {
+    const result = await runHeadless("say hi", { workspace: root, telemetry: "jsonl", mockScript: [{ role: "assistant", text: "answer", ...ending,
+      usage: { inputTokens: 12, outputTokens: 7, cacheReadTokens: 400 } }] })
+    const rejected = "refused" in ending
+    expect(result.exitCode).toBe(rejected ? 1 : 0)
+    const summary = errors.filter(line => line.includes("[metrics]"))
+    expect(summary).toHaveLength(1)
+    expect(summary[0]).toMatch(/provider\/usage=1/)
+    expect(summary[0]).toMatch(/provider\/cache=1/)
+    expect(summary[0]).toMatch(/inputTokens=12/)
+    expect(summary[0]).toMatch(/outputTokens=7/)
+    expect(summary[0]).toMatch(/cacheReadTokens=400/)
   }, 30_000)
 
   it("a run with telemetry OFF stays quiet — the summary is for the operator who asked", async () => {
@@ -119,7 +137,9 @@ describe("runHeadless — the metrics summary", () => {
       mockScript: [{ role: "assistant", text: "partial", truncated: true }],
     })
     expect(result.truncated).toBe(true)
-    expect(errors.some((line) => line.includes("[truncated]"))).toBe(true)
+    expect(result.exitCode).toBe(1)
+    expect(result.session?.events.some(event => event.type === "step/end" && event.truncated)).toBe(true)
+    expect(errors.filter((line) => line.includes("[truncated]"))).toHaveLength(1)
   }, 30_000)
 
   it("M72 Ⅱ: a clean run neither says it nor sets the field", async () => {
@@ -141,7 +161,9 @@ describe("runHeadless — the metrics summary", () => {
       mockScript: [{ role: "assistant", refused: true }],
     })
     expect(result.refused).toBe(true)
-    expect(errors.some((line) => line.includes("[refused]"))).toBe(true)
+    expect(result.exitCode).toBe(1)
+    expect(result.session?.events.some(event => event.type === "step/end" && event.refused)).toBe(true)
+    expect(errors.filter((line) => line.includes("[refused]"))).toHaveLength(1)
   }, 30_000)
 
   it("M77: a clean run neither says it nor sets the field", async () => {
@@ -163,6 +185,7 @@ describe("runHeadless — the metrics summary", () => {
     })
     expect(result.truncated).toBe(true)
     expect(result.refused).toBe(true)
+    expect(result.exitCode).toBe(1)
     const lines = errors.filter((line) => line.includes("[truncated]") || line.includes("[refused]"))
     expect(lines).toHaveLength(2)
     expect(lines[0]!.includes("[truncated]")).toBe(true)
@@ -216,7 +239,7 @@ describe("runHeadless — the metrics summary", () => {
     const out = vi.spyOn(console, "log").mockImplementation(() => {}) // the final text is not this test's subject
     try {
       const code = await main(["node", "i-harness", "run", "say hi"])
-      expect(code).toBe(0)
+      expect(code).toBe(1)
       // The assertion R14 buys: one line, whatever route the host took.
       expect(errors.filter((line) => line.includes("[truncated]"))).toHaveLength(1)
     } finally {
@@ -271,7 +294,7 @@ describe("runHeadless — the metrics summary", () => {
     const out = vi.spyOn(console, "log").mockImplementation(() => {}) // the final text is not this test's subject
     try {
       const code = await main(["node", "i-harness", "run", "say hi"])
-      expect(code).toBe(0)
+      expect(code).toBe(1)
       // The assertion R14 buys: one line, whatever route the host took.
       expect(errors.filter((line) => line.includes("[refused]"))).toHaveLength(1)
     } finally {
@@ -287,14 +310,26 @@ describe("runHeadless — the metrics summary", () => {
   // summary line itself carries the new event row — the sink counts whatever
   // arrives by type, so a cap-hitting round-trip is visible there too.
   it("M72 Ⅱ: the metrics summary counts the cap-hitting round-trip", async () => {
-    await runHeadless("say hi", {
+    const result = await runHeadless("say hi", {
       workspace: root,
       telemetry: "jsonl",
-      mockScript: [{ role: "assistant", text: "partial", truncated: true }],
+      approveAll: true,
+      mockScript: [{ role: "assistant", text: "partial", truncated: true,
+        toolCalls: [{ name: "write", args: { path: "rejected.txt", text: "must not execute" } }],
+        usage: { inputTokens: 12, outputTokens: 7, cacheReadTokens: 400 } }],
     })
+    expect(result.exitCode).toBe(1)
+    expect(result.error).toMatch(/incomplete|truncat|output/i)
+    expect(result.session?.events.filter(event => event.type === "tool/dispatch")).toEqual([])
+    expect(existsSync(join(root, "rejected.txt"))).toBe(false)
     const summary = errors.find((line) => line.includes("[metrics]"))
     expect(summary).toBeDefined()
     expect(summary).toMatch(/provider\/truncated=1/)
+    expect(summary).toMatch(/session\/end=1/)
+    expect(summary).toMatch(/reported: [^\n]*inputTokens=12/)
+    expect(summary).toMatch(/outputTokens=7/)
+    expect(summary).toMatch(/cacheReadTokens=400/)
+    expect(errors.filter(line => line.includes("[metrics]"))).toHaveLength(1)
   }, 30_000)
 
   // M80: the run-level end of the EMPTY-success chain, point for point the

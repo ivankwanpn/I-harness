@@ -1,0 +1,68 @@
+import { RecipientDeliveryRecoveryError } from '../lifecycle/recipient-delivery.ts'
+import { DeliverySourcesError, OriginalTerminalRecoveryError } from '../../../subagent/src/task-notification.ts'
+
+const isOriginalRetryable = (error: unknown): boolean => error instanceof RecipientDeliveryRecoveryError && error.deliveryDisposition.kind === 'retryable'
+  || error instanceof OriginalTerminalRecoveryError
+export const isRetryableDeliveryError = (error: unknown): boolean => isOriginalRetryable(error)
+  || error instanceof DeliverySourcesError && error.errors.some(isOriginalRetryable)
+
+/** Scheduling only. Original captures, Inbox and the existing serial lane own
+ * the work; this loop has no model executor or persistent state of its own. */
+export function createDeliveryDrain(options: {
+  current(): boolean
+  reconcile(): Promise<void>
+  pending(): readonly string[]
+  schedule(inputId: string, settled: () => void): boolean
+  report(error: unknown): void
+}) {
+  let dirty = false, retired = false, running: Promise<void> | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined, backoff = 0
+  let signalRevision = 0
+  const inFlight = new Map<string, { signalRevision: number }>()
+  const clear = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined }
+  const run = (): Promise<void> => {
+    if (running) return running
+    const pending = (async () => {
+      while (dirty && !retired && options.current()) {
+        dirty = false
+        let failed = false, retryable = false
+        try { await options.reconcile() } catch (error) { failed = true; retryable = isRetryableDeliveryError(error); options.report(error) }
+        if (retired || !options.current()) return
+        // Source failure cannot erase already committed eligible inputs. The
+        // actual owner readiness still gates registration on the normal lane.
+        for (const inputId of options.pending()) {
+          if (retired || !options.current()) return
+          if (inFlight.has(inputId)) continue
+          const registration = { signalRevision }
+          inFlight.set(inputId, registration)
+          const settled = () => {
+            if (inFlight.get(inputId) !== registration) return
+            inFlight.delete(inputId)
+            // Settlement alone grants no retry. Preserve a genuine signal
+            // received while this exact registration was still in flight.
+            if (!retired && options.current() && signalRevision !== registration.signalRevision) { dirty = true; void run() }
+          }
+          try { if (!options.schedule(inputId, settled)) inFlight.delete(inputId) }
+          catch (error) { inFlight.delete(inputId); options.report(error); failed = true; retryable ||= isRetryableDeliveryError(error) }
+        }
+        if (failed) {
+          // A blocked observation never dirties itself. Actual source/receiver
+          // changes may trigger one new pass under the same published owner.
+          if (!dirty && !retired && options.current() && retryable && timer === undefined) {
+            const delay = [100, 500, 2000, 5000][Math.min(backoff++, 3)]!
+            timer = setTimeout(() => { timer = undefined; dirty = true; void run() }, delay)
+          }
+        } else { clear(); backoff = 0 }
+      }
+    })()
+    running = pending
+    void pending.then(() => { running = undefined; if (dirty && !retired && options.current()) void run() }, () => { running = undefined; if (dirty && !retired && options.current()) void run() })
+    return pending
+  }
+  return {
+    signal() { if (retired) return; signalRevision++; clear(); dirty = true; void run() },
+    reconcile() { if (retired) return Promise.resolve(); signalRevision++; clear(); dirty = true; return run() },
+    retire() { retired = true; dirty = false; clear() },
+    join() { return running ?? Promise.resolve() },
+  }
+}

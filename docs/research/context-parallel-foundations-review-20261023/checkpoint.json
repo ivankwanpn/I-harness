@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "productHead": "7706c2ea768af6da573ebb9abef75ef12aad4969",
+  "reports": [
+    {
+      "file": "task-1-report.md",
+      "bytes": 12590,
+      "sha256": "65324728184b8e8f1903caf78fa68e2dc481df5a4937919ad4f72fc5df1a4c96"
+    },
+    {
+      "file": "task-1-review.md",
+      "bytes": 8737,
+      "sha256": "5b2c0e4dbfdedf020ef682b9f4c8e34177372d9aba8108dfb952466156b45336"
+    },
+    {
+      "file": "task-1-root-audit.json",
+      "bytes": 2518,
+      "sha256": "44daf8d5fc8cf85cf3db8eef07edba1393a42bd6d0a333fd9102662c8f5cd538"
+    },
+    {
+      "file": "task-2-report.md",
+      "bytes": 12013,
+      "sha256": "d1438d5d59bfb9f922eabb0a813442113d4ac20d5a0c5f75eb03592803859c07"
+    },
+    {
+      "file": "task-2-review.md",
+      "bytes": 8351,
+      "sha256": "251fc46eb0a71b40e47605b043092d20bfaee2fb025e5165f111bd36711869d1"
+    },
+    {
+      "file": "task-2-root-audit.json",
+      "bytes": 2623,
+      "sha256": "9065b4385914c47d52c8cabbb61b1fccc5ec810f455fcaf90420dd14ceb21ef6"
+    },
+    {
+      "file": "task-3-report.md",
+      "bytes": 11105,
+      "sha256": "a2b9b9b5de0efb7bf5f21034337399a4be6aa06196d530d158c9db1f2d891c06"
+    },
+    {
+      "file": "task-3-review.md",
+      "bytes": 12513,
+      "sha256": "1401b76832e2f49f81317ef9b547a361af7b324ad5af4696316fe40800d02eb3"
+    },
+    {
+      "file": "task-3-root-audit.json",
+      "bytes": 2654,
+      "sha256": "4c6f8e741069e7b3f492ed1f55d6f359b8ab912e0460e9ba9a4302f8408f0617"
+    },
+    {
+      "file": "integration-fix-1-report.md",
+      "bytes": 6864,
+      "sha256": "9127720b10d11911137f4022a340e923ae48d21c8c990539ef3df348a7f8138e"
+    },
+    {
+      "file": "integration-fix-1-review.md",
+      "bytes": 5600,
+      "sha256": "8a988d3ab4ceb522b071262d7dfc283fdb93c563854e7f0a3d14ee2b1277a95d"
+    },
+    {
+      "file": "integration-fix-1-root-audit.json",
+      "bytes": 213,
+      "sha256": "d5d304df64a5a43762988e31a2bcc91c25535e520432546e5d3a73723bb976aa"
+    },
+    {
+      "file": "integration-root-audit.json",
+      "bytes": 12646,
+      "sha256": "89a04d99720531ce18133fa33a2b63ef7a2abdbd243338f2e6c94b1cd0adf98e"
+    },
+    {
+      "file": "native-next-contract.md",
+      "bytes": 28959,
+      "sha256": "a614450faa0829e5b93c34eafa617124a98c6e1470e688eb2da3e14d9b38fdba"
+    },
+    {
+      "file": "bootstrap-host-next-contract.md",
+      "bytes": 29755,
+      "sha256": "367736a2b381b63dc0ca29d3730798c8835f4d694d1f5d366e38c8270de98b75"
+    },
+    {
+      "file": "artifact-next-decisions-draft.md",
+      "bytes": 6382,
+      "sha256": "b3a435fb89059f94a104713d02dfad6b243ba12716fb6a9f9bfb298d9b42d645"
+    },
+    {
+      "file": "final-wave-review.md",
+      "bytes": 11063,
+      "sha256": "77b490806b711b488e2ed803a6b4121101b1024c8add3195b3950e58da2acfa5"
+    }
+  ],
+  "evidence": {
+    "file": "evidence.jsonl",
+    "entries": 121,
+    "rawBytes": 5030380,
+    "bytes": 2020642,
+    "sha256": "1f0439e3aa58486cc0434ece0df99f0bf39c9980dd0de83fc87b3d5c0be96b2e"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "25-public-graph",
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "node": "v24.15.0",
+  "argv": [
+    "D:\\I-harness-main\\node_modules\\tsx\\dist\\cli.mjs",
+    ".tmp/r4as-1021-01/public-graph.mjs"
+  ],
+  "cwd": "D:\\I-harness-main",
+  "env": {
+    "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-1021-01/config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\25-public-graph\\fixtures\\mixed",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\25-public-graph\\fixtures\\integrity",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\25-public-graph\\fixtures\\native",
+    "IH_PUBLICATION_PINS_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\25-public-graph\\fixtures\\publication",
+    "IH_PHYSICAL_CRASH_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\25-public-graph\\fixtures\\physical",
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\25-public-graph\\fixtures\\structure"
+  },
+  "head": "89553ea2126df6008ed51399a41f4204c1401a70",
+  "start": "2026-10-20T21:24:57.255Z",
+  "pid": 30136,
+  "end": "2026-10-20T21:24:58.552Z",
+  "code": 0,
+  "signal": null,
+  "sourceUnchanged": true
+}

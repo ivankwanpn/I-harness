@@ -1,0 +1,112 @@
+{
+  "status": "frozen-for-fresh-review-and-root-audit",
+  "workspace": "D:/I-harness-main",
+  "branch": "codex/v0.1.13-development",
+  "base": "40b660c44a3e96248ae5ada6a3d2a0f7f54fbc7c",
+  "implementationCommit": "da289034ca5a9503675dd19874722da6f7257425",
+  "head": "abe50917788ec042682face5be89a5aff7d18bed",
+  "reviewRange": "40b660c44a3e96248ae5ada6a3d2a0f7f54fbc7c..abe50917788ec042682face5be89a5aff7d18bed",
+  "productDelta": [],
+  "trackedFiles": [
+    "packages/session-executor/test/helpers/mixed-retention-fixture.mts",
+    "packages/session-executor/test/helpers/mixed-retention-native-probe.mts",
+    "packages/session-executor/test/mixed-retention-native.test.ts",
+    "packages/session-executor/test/mixed-retention-quota.test.ts",
+    "packages/session-executor/tsconfig.mixed-retention.json",
+    "docs/research/2026-10-21-context-r4a-mixed-retention-delivery.md"
+  ],
+  "versionUnchanged": "0.1.13-rc.1",
+  "sessionFormatUnchanged": 10,
+  "decompositionUnchanged": "27/43",
+  "behavioralRedReproduced": false,
+  "productRepairRequestedOrMade": false,
+  "finalRuntimeGate": "14",
+  "actualCollectedFiles": 8,
+  "tests": 62,
+  "newTests": 5,
+  "existingTests": 57,
+  "finalTypeGates": [
+    { "gate": "15", "config": "packages/context-output/tsconfig.json", "nativeExit": 0 },
+    { "gate": "16", "config": "packages/session-executor/tsconfig.mixed-retention.json", "nativeExit": 0, "includesNewMtsHelpers": true },
+    { "gate": "17", "config": "packages/desktop-gateway/tsconfig.json", "nativeExit": 0 }
+  ],
+  "qualifiedRuntimeGitHead": "40b660c44a3e96248ae5ada6a3d2a0f7f54fbc7c",
+  "qualifiedWorkspaceBytesCommittedLater": true,
+  "evidenceRoot": "D:/I-harness-main/.tmp/r4am-1021-01",
+  "qualifiedSource": {
+    "path": ".tmp/r4am-1021-01/qualified-source.json",
+    "entries": 2671,
+    "sha256": "f774de576f3b38e742726bf3f322b99240094f5d5dc9556ce34f540098139830",
+    "afterCommitAuditMismatches": []
+  },
+  "evidenceInventory": {
+    "path": ".tmp/r4am-1021-01/evidence-inventory.json",
+    "files": 973,
+    "bytes": 33026861,
+    "sha256": "66a05934041e0493239e1992fcb0c7829b7dce17804a385cf7887ef49ba6ccf3",
+    "excludesOnly": ["evidence-inventory.json", "evidence-seal.json"]
+  },
+  "outerSealPath": ".tmp/r4am-1021-01/evidence-seal.json",
+  "finalAudit": {
+    "path": ".tmp/r4am-1021-01/final-audit.json",
+    "sha256": "33f9b01267d7e03243d40da5662e64978ca13c4914b1b5a688174aefb0281130",
+    "literalRecords": 9,
+    "nativeGateReceipts": 17
+  },
+  "report": {
+    "path": ".superpowers/sdd/2026-10-21-context-r4a-mixed-retention/task-1-report.md",
+    "sha256": "59a407d128ca50c324b9fd56f6277d12e9ee3f43b659e7e6d56b177cccc466de"
+  },
+  "delivery": {
+    "path": "docs/research/2026-10-21-context-r4a-mixed-retention-delivery.md",
+    "sha256": "501f048c486205ff9283be634ba5adb284a71c05ad652a635b7aa05b130ad2a7"
+  },
+  "preservedFailureMap": [
+    {
+      "gate": "02",
+      "nativeExit": 1,
+      "classification": "fixture setup failure, not behavioral RED",
+      "reason": "native body probe installed after opening body handle; missing map prevented controlled boundary",
+      "correctedFromGate": "03",
+      "originalReceiptsUnchanged": true
+    }
+  ],
+  "inventoryScopeCorrection": {
+    "earlyGateCounts": { "01": 13601, "02": 13603 },
+    "earlyExtraScope": "historical Desktop release snapshots and sandbox native build outputs; not collected tests",
+    "finalScope": "Git current tracked/nonignored package/app inputs, root configs/lock and relevant hidden task/launcher inputs",
+    "oldManifestsAndGateV1Preserved": true,
+    "everyExploratorySourceVariantByteSnapshotClaimed": false
+  },
+  "mandatorySchedule": {
+    "fixedQuota": 370463,
+    "initialPhysicalBytes": 130463,
+    "afterLegacyBytes": 228767,
+    "afterManagedWriteBytes": 294339,
+    "finalPhysicalBytes": 228786,
+    "boundarySampledPeak": 294339,
+    "globalPeakOrAllInterleavingsProven": false,
+    "legacyDisposition": "none after rollback",
+    "managedDisposition": "known quota refusal",
+    "remainingTemporaryFiles": [],
+    "protectedIndependentOwnerUnchanged": true
+  },
+  "guardCalibration": {
+    "path": ".tmp/r4am-1021-01/guard-check.json",
+    "directConfiguredRoot": "passed before runtime import/write",
+    "actualOuterAncestorShape": "passed before runtime import/write"
+  },
+  "cleanup": {
+    "nativeRuntimeBrokerCoordinatorClosesJoined": true,
+    "newFixtureContextAndCodeActiveJobs": 0,
+    "nativeHoldsReleasedBeforeCleanup": true,
+    "originalTaskRetentionAttemptAndCallbackJoinedWithoutRetry": true,
+    "matchingTaskNodeProcesses": 0,
+    "processAuditPath": ".tmp/r4am-1021-01/process-audit.json",
+    "allHistoricalOrOsTempDirectoriesUnchangedClaimed": false
+  },
+  "outOfScope": ["A6 scale/fan-in", "copied/packaged entry", "whole R4A acceptance", "R4B/C", "R5/R6", "provider/profile/app/release"],
+  "noPushMergeTagRelease": true,
+  "noRecursiveAgents": true,
+  "noFurtherSourceOrEvidenceWritesAfterSeal": true
+}

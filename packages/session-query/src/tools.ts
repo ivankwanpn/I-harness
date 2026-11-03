@@ -4,7 +4,7 @@ import type { SessionQuery } from "./index.ts"
 export function createSessionQueryTools(query: SessionQuery): Tool[] {
   const sessionSearch: Tool = {
     name: "session_search",
-    description: "full-text search over persisted session transcripts (event-level hits, BM25 relevance, snippets). Returns JSON hits.",
+    description: "full-text search over persisted session transcripts (event-level hits, BM25 relevance, snippets). Retained results search stored previews or inline data only; missing hits do not prove absence from full artifact bodies. Returns JSON hits.",
     inputSchema: {
       type: "object",
       properties: {

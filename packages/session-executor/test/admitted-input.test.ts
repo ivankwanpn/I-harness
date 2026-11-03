@@ -35,3 +35,12 @@ it("keeps a durable input pending when cancellation wins before the lane microta
   expect(calls).toBe(0)
   expect(inbox.pending().map((input) => input.inputId)).toEqual(["pending"])
 })
+
+it("records the root service boundary as a request source", async () => {
+  const session = createSession()
+  const service = createSessionService({ workspace: process.cwd(), session, model: { async *stream() { yield { type: "end" } } } })
+  try {
+    await service.submit("root", "request", new AbortController().signal)
+    expect(session.events.find(event => event.type === "agent/input/admitted")).toMatchObject({ provenance: { kind: "human", authority: "request", scope: "turn", producer: "session.prompt" } })
+  } finally { await service.close() }
+})

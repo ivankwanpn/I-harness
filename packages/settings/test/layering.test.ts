@@ -1,6 +1,6 @@
 // M27 R-E10: layered settings (global < workspace < project, last wins),
 // event-driven hot-reload, comment-preserving leaf-patch writes.
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -10,13 +10,15 @@ import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
 
 // WHY: native watchers must close before their Windows temp roots are removed;
 // unlike the old unref'ed poll they own OS handles (packages/fs-watch/src/index.ts:201).
-const tracked: Array<{ dispose: () => void }> = []
-function track<T extends { dispose: () => void }>(watcher: T): T {
+const tracked: Array<{ dispose: () => void; close(): Promise<void> }> = []
+function track<T extends { dispose: () => void; close(): Promise<void> }>(watcher: T): T {
   tracked.push(watcher)
   return watcher
 }
-function disposeTracked(): void {
-  for (const watcher of tracked.splice(0)) watcher.dispose()
+async function disposeTracked(): Promise<void> {
+  const owners = tracked.splice(0)
+  for (const watcher of owners) watcher.dispose()
+  await Promise.all(owners.map(watcher => watcher.close()))
 }
 function trackedStore(options: Parameters<typeof createLayeredStore>[0]): LayeredSettingsStore {
   return track(createLayeredStore(options))
@@ -47,42 +49,21 @@ async function replaceFile(target: string, text: string): Promise<void> {
   await rename(tmp, target)
 }
 
-/** W1 rig: the store with the reload latency a loaded machine produces BY LUCK
- * injected deterministically — the in-flight window the conflate has to
- * survive. `reads` is pushed the instant the reload's file read finished,
- * while the reload is still in flight, so a test can land a second change
- * strictly after that read and strictly inside the window (no sleep needed to
- * guess where the read fell, which is the one thing such a test could not
- * otherwise observe). */
-class SlowReloadStore extends LayeredSettingsStore {
-  readonly reads: number[] = []
-  override async reloadFromDisk(): Promise<Settings> {
-    const settings = await super.reloadFromDisk()
-    this.reads.push(Date.now())
-    // 250ms, not "long enough": the case below asserts that nothing was
-    // reported BEFORE the second write lands, so an over-loaded worker that
-    // stalls past this delay would break the test, not the fix. 250ms is the
-    // same order the rest of this file already waits on.
-    await new Promise((r) => setTimeout(r, 250))
-    return settings
-  }
-}
-
-/** W1 rig for the FAILING reload: the first `reloadFromDisk` waits out a window
- * and then throws; later ones behave. The throw stands in for the real failure
- * the conflate must survive — `parseDocumentTolerant` on a torn read of a
- * non-atomic write — which cannot be scheduled from outside the store (the read
- * must see the torn bytes AND the settled write must land while that read is
- * running). The path pinned is the same one either way: the handler's `catch`. */
-class FailingReloadStore extends LayeredSettingsStore {
-  readonly attempts: number[] = []
-  override async reloadFromDisk(): Promise<Settings> {
-    const attempt = this.attempts.length
-    this.attempts.push(Date.now())
-    await new Promise((r) => setTimeout(r, 350)) // WHY: include 100ms write stability (packages/fs-watch/src/index.ts:145)
-    if (attempt === 0) throw new Error("reload failed (W1 pin: the torn read)")
-    return super.reloadFromDisk()
-  }
+/** Hold the actual read seam after initial load. Public reloadFromDisk is no
+ * longer the watcher entry point; source attribution stays within the queue. */
+function delayedReads(store: LayeredSettingsStore, failing = false) {
+  const reads: number[] = []
+  const seam = store as unknown as { read(): Promise<Settings> }
+  const original = seam.read.bind(store)
+  vi.spyOn(seam, "read").mockImplementation(async () => {
+    const attempt = reads.length
+    const settings = failing ? undefined : await original()
+    reads.push(Date.now())
+    await new Promise(resolve => setTimeout(resolve, failing ? 350 : 250))
+    if (failing && attempt === 0) throw new Error("reload failed (W1 torn read)")
+    return settings ?? await original()
+  })
+  return reads
 }
 
 describe("resolveLayeredSources (global < workspace < project)", () => {
@@ -101,7 +82,7 @@ describe("resolveLayeredSources (global < workspace < project)", () => {
       expect(sources[0]!.order).toBeLessThan(sources[1]!.order)
       expect(sources[2]!.order).toBeGreaterThan(sources[1]!.order)
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -138,7 +119,7 @@ describe("createLayeredStore", () => {
       // unknown/partial keys degrade per-normalize; merged values are normalized once
       expect(store.get().fontSize).toBe(14)
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -157,7 +138,7 @@ describe("createLayeredStore", () => {
       expect(await readFile(join(root, "p.json"), "utf8")).toContain('"fontSize": 16')
       expect(await readFile(join(root, "g.json"), "utf8").catch(() => "MISSING")).toBe("MISSING")
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -182,7 +163,7 @@ describe("createLayeredStore", () => {
       expect(store.get().fontSize).toBe(16)
       expect((store.get() as unknown as Record<string, unknown>).team).toBeUndefined()
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -211,7 +192,7 @@ describe("createLayeredStore", () => {
       const parsed = JSON.parse(stripped)
       expect(parsed.llm.defaultModel.model).toBe("deepseek-r2")
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -227,7 +208,7 @@ describe("createLayeredStore", () => {
       expect(sources[0]!.path).toBe(join(root, "p.json"))
       expect(sources[0]!.raws).toEqual({ model: "p" })
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -240,7 +221,7 @@ describe("watchSettings (event-driven hot-reload)", () => {
       const file = join(root, "s.json")
       await writeFile(file, JSON.stringify({ model: "a" }), "utf8")
       const changed: string[] = []
-      const { dispose: stop } = track(watchSettings(file, (path) => changed.push(path), { intervalMs: 60 }))
+      const { dispose: stop } = track(watchSettings(file, (path) => { changed.push(path) }, { intervalMs: 60 }))
       // WHY: allow the baseline scan before writing (packages/fs-watch/src/index.ts:149).
       await new Promise((r) => setTimeout(r, 300))
       await writeFile(file, JSON.stringify({ model: "b" }), "utf8")
@@ -254,7 +235,7 @@ describe("watchSettings (event-driven hot-reload)", () => {
       await new Promise((r) => setTimeout(r, 300))
       expect(changed.length).toBe(fired)
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -269,7 +250,7 @@ describe("watchSettings (event-driven hot-reload)", () => {
       await replaceFile(a, "a-0")
       await replaceFile(b, "b-0")
       const changed: string[] = []
-      const { dispose: stop } = track(watchSettings([a, b], (path) => changed.push(path), { intervalMs: 60 }))
+      const { dispose: stop } = track(watchSettings([a, b], (path) => { changed.push(path) }, { intervalMs: 60 }))
       try {
         // WHY: let fs-watch's baseline scan settle before the first pair
         // (packages/fs-watch/src/index.ts:149).
@@ -290,7 +271,7 @@ describe("watchSettings (event-driven hot-reload)", () => {
         stop()
       }
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -324,7 +305,7 @@ describe("M40 A6: settings/changed telemetry on hot-reload", () => {
       expect(notified).toBe(file)
       expect(events.filter((e) => e.type === "settings/changed")).toHaveLength(2)
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -360,7 +341,7 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       expect(store.get().fontSize).toBe(16)
       expect(changed().map((e) => e.data.path)).toEqual([file, file])
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -372,8 +353,9 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = track(new SlowReloadStore({ files: [file], watchIntervalMs: 10, telemetry }))
+      const store = track(new LayeredSettingsStore({ files: [file], watchIntervalMs: 10, telemetry, onWatchError: () => {} }))
       await store.load()
+      const reads = delayedReads(store, false)
       const changed = () => events.filter((e) => e.type === "settings/changed")
       // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
       await new Promise((r) => setTimeout(r, 300))
@@ -383,7 +365,7 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       // next write is therefore strictly after that read, and the reload is
       // still in flight for ~250ms after this point — the one window in which
       // "absorb the pending detection" and "re-check its state" differ.
-      await waitFor(() => store.reads.length >= 1)
+      await waitFor(() => reads.length >= 1)
       expect(changed()).toHaveLength(0) // nothing reported yet: the window is open
       await writeFile(file, JSON.stringify({ fontSize: 16 }), "utf8")
       // The report for 16 must survive the conflate: the reload that was in
@@ -393,7 +375,7 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       expect(changed()).toHaveLength(2)
       expect(store.get().fontSize).toBe(16)
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -407,8 +389,9 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await writeFile(b, JSON.stringify({ model: "b0" }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = track(new SlowReloadStore({ files: [a, b], watchIntervalMs: 10, telemetry }))
+      const store = track(new LayeredSettingsStore({ files: [a, b], watchIntervalMs: 10, telemetry }))
       await store.load()
+      const reads = delayedReads(store)
       const changed = () => events.filter((e) => e.type === "settings/changed")
       // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
       await new Promise((r) => setTimeout(r, 300))
@@ -428,7 +411,7 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       // strictly after that read and inside the reload's window, so its report
       // comes from the re-check — which must name b, not the a.json that
       // started the reload in flight (`data.path` is user-visible).
-      await waitFor(() => store.reads.length >= 1)
+      await waitFor(() => reads.length >= 1)
       await writeFile(b, JSON.stringify({ model: "b1" }), "utf8")
       await waitFor(() => changed().length >= 2)
       await new Promise((r) => setTimeout(r, 300))
@@ -436,7 +419,7 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       expect(store.get().fontSize).toBe(15)
       expect(store.get().model).toBe("b1")
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -448,14 +431,15 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = track(new FailingReloadStore({ files: [file], watchIntervalMs: 10, telemetry }))
+      const store = track(new LayeredSettingsStore({ files: [file], watchIntervalMs: 10, telemetry, onWatchError: () => {} }))
       await store.load()
+      const reads = delayedReads(store, true)
       const changed = () => events.filter((e) => e.type === "settings/changed")
       // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
       await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(0)
       await writeFile(file, JSON.stringify({ fontSize: 15 }), "utf8")
-      await waitFor(() => store.attempts.length >= 1) // the failing reload is in flight
+      await waitFor(() => reads.length >= 1) // the failing reload is in flight
       await new Promise((r) => setTimeout(r, 20)) // its detection has landed
       // The settled write, inside the failing reload's window: the watcher
       // advances its snapshot when it fires this one, so if the failure dropped
@@ -468,7 +452,7 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       expect(changed()[0]!.data.path).toBe(file)
       expect(store.get().fontSize).toBe(16)
     } finally {
-      disposeTracked()
+      await disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })

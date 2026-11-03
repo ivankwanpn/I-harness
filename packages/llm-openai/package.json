@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@i-harness/http-transport": "workspace:*",
-    "@i-harness/llm-seam": "workspace:*"
+    "@i-harness/llm-seam": "workspace:*",
+    "@i-harness/token-meter": "workspace:*"
   }
 }

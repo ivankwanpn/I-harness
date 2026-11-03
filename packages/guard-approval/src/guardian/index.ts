@@ -1,3 +1,4 @@
+import {isManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 import type { PluginContext } from "@i-harness/core-plugin"
 import { randomUUID } from "node:crypto"
 import type { ApprovalGuardian, GuardianRequest, GuardianVerdict } from "@i-harness/core-tools"
@@ -43,6 +44,7 @@ const isGuardianVerdict = (value: unknown): value is GuardianVerdict => {
 // admission of that risk is documented; the fail-closed path is the per-review
 // deny outcome, not the breaker).
 export async function registerGuardian(ctx: PluginContext, config: GuardianConfig): Promise<void> {
+  if(!!config.parentSession===!!config.managedParent || config.managedParent&&!isManagedExecutionDomain(config.managedParent.domain,ctx))throw TypeError('Original Guardian parent required')
   let breaker: GuardianBreaker | undefined
   if (config.breaker) {
     const key = BREAKER_STATE_PREFIX + config.breaker.sessionId

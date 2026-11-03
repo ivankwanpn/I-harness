@@ -1,0 +1,6 @@
+# These writer-produced files are byte evidence, including their original LF.
+original13-empty.jsonl -text
+empty13-target/* -text
+bootstrap13-public/* -text
+incomplete13-public/* -text
+synthetic12-child/* -text

@@ -1,0 +1,56 @@
+import { expect, it } from 'vitest'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import { createSessionCoordinator } from '../../../packages/session-persistence/src/index.ts'
+import { createJsonlBackend } from '../../../packages/session-persistence-jsonl/src/index.ts'
+import type { BackgroundJobView, ExecService } from '../../../packages/exec/src/index.ts'
+import { createSessionAssembly } from '../../../packages/session-executor/src/assembly.ts'
+import { controlledModel } from '../../../packages/session-executor/test/controlled-model.ts'
+
+it('publishes the completed native source in the shipping job_output result dependency catalog', async () => {
+  const base = resolve(import.meta.dirname, 'scratch')
+  await mkdir(base, { recursive: true })
+  const root = await mkdtemp(resolve(base, 'background-catalog-'))
+  const settings = resolve(root, 'settings.json'), worker = resolve(root, 'worker.mjs'), release = resolve(root, 'release')
+  await writeFile(settings, JSON.stringify({ contextSubsystems: { contextOutput: { enabled: false, maxDiskBytes: 8388608 } } }))
+  await writeFile(worker, [
+    "import { existsSync } from 'node:fs'",
+    "process.stdout.write('A'.repeat(100000))",
+    "const timer = setInterval(() => { if (existsSync(process.argv[2])) { clearInterval(timer); process.stderr.write('END') } }, 20)",
+  ].join('\n'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } })
+  const { id } = await coordinator.create()
+  let calls = 0, jobId: string | undefined
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings,
+    model: controlledModel(async function* () {
+      calls++
+      if (calls === 1) yield { type: 'tool_call', call: { id: 'start-background', name: 'pwsh', args: { command: `& "${process.execPath}" "${worker}" "${release}"`, background: true } } }
+      else if (calls === 3) yield { type: 'tool_call', call: { id: 'read-background', name: 'job_output', args: { job_id: jobId } } }
+      else yield { type: 'text/chunk', text: 'done' }
+      yield { type: 'end' }
+    }) })
+  try {
+    await assembly.agent.run('start background')
+    const startup = assembly.session.events.find(e => e.type === 'tool/result' && e.callId === 'start-background')
+    if (startup?.type !== 'tool/result' || startup.envelope?.retention.kind !== 'inline') throw new Error('Expected startup inline tool result')
+    jobId = (startup.envelope.retention.value as { job_id: string }).job_id
+    expect(jobId).toBeTruthy()
+    const exec = assembly.ctx.services.get<ExecService>('exec/service')!
+    expect(exec.getOutput(jobId!).status).toBe('running')
+    const terminalPromise = new Promise<BackgroundJobView>((done, fail) => {
+      const timer = setTimeout(() => fail(new Error('Terminal notification timed out')), 60000)
+      const stop = exec.subscribeJob(jobId!, view => { if (view.status !== 'running') { clearTimeout(timer); stop(); done(view) } })
+    })
+    await writeFile(release, '')
+    const terminal = await terminalPromise
+    expect(terminal.retained?.retention.kind).toBe('artifact')
+    await assembly.agent.run('read completed background output')
+    const result = assembly.session.events.find(e => e.type === 'tool/result' && e.callId === 'read-background')
+    if (result?.type !== 'tool/result' || !result.envelope) throw new Error('Expected shipping job_output tool result')
+    console.log(JSON.stringify({ calls, source: terminal.retained?.sourceId, automatic: terminal.retained?.retention.kind, startupDependencies: startup.envelope.dependencies ?? null, readerDependencies: result.envelope.dependencies ?? null, readerPreviewBytes: Buffer.byteLength(result.envelope.preview) }))
+    expect(result.envelope.dependencies, 'Shipping job_output must bind this actual native source; a live BackgroundJobView alone is not durable discovery').toMatchObject({ kind: 'artifact-set', count: 1 })
+  } finally {
+    await writeFile(release, '').catch(() => {})
+    await assembly.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true })
+  }
+})

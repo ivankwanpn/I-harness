@@ -1,0 +1,132 @@
+{
+  "status": "PASS",
+  "performed": "read-only hashes/identity/collection checks; no runtime tests rerun",
+  "receipts": 44,
+  "failuresPreserved": [
+    {
+      "name": "01-old-cli",
+      "exit": 1
+    },
+    {
+      "name": "02-old-executor",
+      "exit": 1
+    },
+    {
+      "name": "09-native-timeout-completeness",
+      "exit": 1
+    },
+    {
+      "name": "23-final-acp",
+      "exit": 1
+    },
+    {
+      "name": "33-acp-public-codec",
+      "exit": 1
+    },
+    {
+      "name": "34-acp-dependency-link",
+      "exit": 1
+    },
+    {
+      "name": "35-acp-dependency-link",
+      "exit": 1
+    },
+    {
+      "name": "38-acp-types",
+      "exit": 2
+    }
+  ],
+  "tests": {
+    "passed": 601,
+    "files": 72,
+    "gates": [
+      {
+        "name": "13-final-session",
+        "passed": 444,
+        "files": 37
+      },
+      {
+        "name": "14-final-retention",
+        "passed": 34,
+        "files": 4
+      },
+      {
+        "name": "15-final-shell",
+        "passed": 15,
+        "files": 2
+      },
+      {
+        "name": "16-final-tools",
+        "passed": 6,
+        "files": 3
+      },
+      {
+        "name": "17-final-exec",
+        "passed": 32,
+        "files": 5
+      },
+      {
+        "name": "18-final-executor",
+        "passed": 36,
+        "files": 11
+      },
+      {
+        "name": "19-final-native-dependencies",
+        "passed": 11,
+        "files": 4
+      },
+      {
+        "name": "20-final-cli",
+        "passed": 3,
+        "files": 2
+      },
+      {
+        "name": "21-final-gateway",
+        "passed": 1,
+        "files": 1
+      },
+      {
+        "name": "22-final-sdk",
+        "passed": 2,
+        "files": 2
+      },
+      {
+        "name": "39-acp-final",
+        "passed": 17,
+        "files": 1
+      }
+    ]
+  },
+  "originalCopies": 10,
+  "deliveredSource": {
+    "count": 4753,
+    "bytes": 1214600974,
+    "exclusions": "node_modules/.git/.tmp/.worktrees/build/dist/coverage/release-*; mutable progress/docs excluded because they are not executable inputs; hidden and untracked maintained files included"
+  },
+  "sourceReuse": {
+    "exactDeclaredDrift": [
+      ".superpowers/sdd/2026-10-21-context-r4a-surface/verify-source.mjs",
+      "packages/acp/package.json",
+      "packages/acp/test/acp.test.ts",
+      "pnpm-lock.yaml"
+    ],
+    "maintained": 2736,
+    "sealedExtras": 2017
+  },
+  "evidenceClosure": {
+    "files": 1453,
+    "bytes": 110371357,
+    "links": 0,
+    "inventorySha256": "1af1d01f2ec70c099cbe0350ee0d24227aecc0c2645f9f73b729d1ceb98268fd",
+    "sealSha256": "ac1e11e815f74ec3a9c4e2a0282541a62006cb45196725c2766ec6f32f4cc166"
+  },
+  "portableOriginals": 131,
+  "definingAlgorithmsUnchangedExceptExport": [
+    "packages/core-session/src/results/exec-frames.ts",
+    "packages/core-session/src/serialization/json-stream.ts",
+    "packages/core-session/src/results/validate.ts",
+    "packages/output-retention/src/result/capture.ts",
+    "packages/output-retention/src/result/exec-frames.ts"
+  ],
+  "lastGateEnd": "2026-10-20T22:36:57.321Z"
+}

@@ -246,6 +246,7 @@ export function createPosixExecutionBackend(): PosixExecutionBackend {
           })
           return Object.freeze({ receipt: lease.receipt, rootExited: lease.rootExited,
             get settled() { return lease.settled }, cancel: lease.cancel, release: lease.release,
+            terminationObservation: lease.terminationObservation,
             pid: session.pid, io: session.io(), ...(runner ? { runner } : {}),
           }) satisfies TransportExecutionHandle
         },

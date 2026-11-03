@@ -1,0 +1,116 @@
+{
+  "head": "bc83c3999501f5e5ccfc939b2c0109cb7201d251",
+  "donor": "7c1ee4536fdec6ff8ad73beedfd47cfc839ca79b",
+  "integratedBlobs": 36,
+  "receipts": [
+    {
+      "head": "bc83c3999501f5e5ccfc939b2c0109cb7201d251",
+      "donor": "7c1ee4536fdec6ff8ad73beedfd47cfc839ca79b",
+      "gate": "dependency-membership",
+      "cwd": "D:\\I-harness-main\\packages\\context-output",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/dependency-membership.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T10:28:06.397Z",
+      "ended": "2026-10-25T10:28:08.961Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2951,
+      "outputSha256": "3ad36de3c390ed92250e4fc695d447add81cf29832fee871dada39d48a3c1dad",
+      "environment": {
+        "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\native-dependency",
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\structure",
+        "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\integrity",
+        "IH_LEGACY_FORK_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\legacy",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\mixed"
+      }
+    },
+    {
+      "head": "bc83c3999501f5e5ccfc939b2c0109cb7201d251",
+      "donor": "7c1ee4536fdec6ff8ad73beedfd47cfc839ca79b",
+      "gate": "executor-integration",
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/result-store-close.test.ts",
+        "test/result-reader-close.test.ts",
+        "test/mixed-retention-native.test.ts",
+        "test/mixed-retention-quota.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T10:28:08.962Z",
+      "ended": "2026-10-25T10:28:22.862Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2951,
+      "outputSha256": "b34dccf6873fc7f53cba07df1544bf2c4c437ebf835037637b2294f336c02e8b",
+      "environment": {
+        "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\native-dependency",
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\structure",
+        "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\integrity",
+        "IH_LEGACY_FORK_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\legacy",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\mixed"
+      }
+    },
+    {
+      "head": "bc83c3999501f5e5ccfc939b2c0109cb7201d251",
+      "donor": "7c1ee4536fdec6ff8ad73beedfd47cfc839ca79b",
+      "gate": "context-types",
+      "cwd": "D:\\I-harness-main\\packages\\context-output",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T10:28:22.863Z",
+      "ended": "2026-10-25T10:28:30.046Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2951,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "environment": {
+        "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\native-dependency",
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\structure",
+        "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\integrity",
+        "IH_LEGACY_FORK_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\legacy",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\mixed"
+      }
+    },
+    {
+      "head": "bc83c3999501f5e5ccfc939b2c0109cb7201d251",
+      "donor": "7c1ee4536fdec6ff8ad73beedfd47cfc839ca79b",
+      "gate": "gateway-types",
+      "cwd": "D:\\I-harness-main\\packages\\desktop-gateway",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T10:28:30.046Z",
+      "ended": "2026-10-25T10:28:39.159Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2951,
+      "outputSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "environment": {
+        "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\native-dependency",
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\structure",
+        "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\integrity",
+        "IH_LEGACY_FORK_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\legacy",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399-setup-followup\\mixed"
+      }
+    }
+  ]
+}

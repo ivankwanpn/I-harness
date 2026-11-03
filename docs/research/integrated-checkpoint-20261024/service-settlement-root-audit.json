@@ -1,0 +1,364 @@
+{
+  "observedAt": "2026-10-24T07:42:44.8719674+08:00",
+  "head": "72e19b015af038d2a127adc8ad36bf72f69930fb",
+  "sourceAudit": [
+    {
+      "path": "packages/session-executor/src/service.ts",
+      "physicalMatch": true,
+      "gateCopyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/test/context-recovery.test.ts",
+      "physicalMatch": true,
+      "gateCopyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/fact-types.ts",
+      "physicalMatch": true,
+      "gateCopyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/managed-document.ts",
+      "physicalMatch": true,
+      "gateCopyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/settlement-source.ts",
+      "physicalMatch": true,
+      "gateCopyMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-persistence/test/managed-fact-batch.test.ts",
+      "physicalMatch": true,
+      "gateCopyMatch": true,
+      "gitMatch": true
+    }
+  ],
+  "receipts": [
+    {
+      "receipt": "01-causal-red",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t same open service --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "2B903DA0E432C05FBA674C366DDB62D23A7F22088D70C1A2FBC3AF1E6CBD7809",
+      "outputSha256": "D78DFD1984A606A40B091D9E5A665DCCAF856B45D3AD843B3519AF6B8A15BDB9",
+      "outputPresent": true
+    },
+    {
+      "receipt": "02-causal-red-corrected-original-aggregate",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t same open service --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "5E01A7EC528BCC4BB9E4C990EF46C8736DC42C54C6D95A5CA7BB84018521C151",
+      "outputSha256": "AFE0E30666D5151A59A499DDE5CE80F36887A0EC710392F2644A8AD6150B7E3D",
+      "outputPresent": true
+    },
+    {
+      "receipt": "03-first-finite-attempt",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t same open service --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "6B036895C93843DA5CB9E3F9534C16BB56E17D9C7CB42E2621892F99929565F3",
+      "outputSha256": "BE46AB926A4626F03CCEAED963A2F49FFFA457D088B2D175CE448799DAE6A2FF",
+      "outputPresent": true
+    },
+    {
+      "receipt": "04-persistence-controls",
+      "command": "pnpm exec vitest run test/managed-fact-batch.test.ts --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "CCAA3E571EDACAECF7659F7E1EE57696D01F6A3272115CA3AA2980D09DACC020",
+      "outputSha256": "5AEDF1B1F676FAEAEBACFDAF3B617A15B6336C9E19DE8BCEA46A89C094719303",
+      "outputPresent": true
+    },
+    {
+      "receipt": "05-persistence-types-intermediate",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "733826A51CE2344ED3CB36232EBBECECEF2F49D34D5CAED55914062F58A4DB61",
+      "outputSha256": null,
+      "outputPresent": false,
+      "outputQualification": "No text output.log retained; actual receipt.json with command/time/exit/source hashes exists. No missing log is reconstructed."
+    },
+    {
+      "receipt": "06-executor-types-intermediate",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "0773B2307C40CEA357B6F410ED7134BC1A006B1D39A1775E2CB13A87023CFC6C",
+      "outputSha256": null,
+      "outputPresent": false,
+      "outputQualification": "No text output.log retained; actual receipt.json with command/time/exit/source hashes exists. No missing log is reconstructed."
+    },
+    {
+      "receipt": "07-unqualified-frame-red-setup",
+      "command": "pnpm exec vitest run test/managed-fact-batch.test.ts -t does not reconcile pending --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "F45B864D946F16396CC36487E6BCA5778F280342A3E6B294BE2FCDE018B2D336",
+      "outputSha256": "6FD1BBDAD677211EA2C965ACA5AAD3611FEAC0D253CAFDB33179DA1EB19E484A",
+      "outputPresent": true
+    },
+    {
+      "receipt": "08-unqualified-frame-controls-before-s2-08",
+      "command": "pnpm exec vitest run test/managed-fact-batch.test.ts -t does not reconcile pending --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "A9A5AE4851D4AC042E28DA65530B16CBB932442A7C9A6ED5EC64FD113EE9814E",
+      "outputSha256": "6BF86A87B8FB1DA5EEA0AEFA55333B83D5FB6D67C53A4CE9D5164BD575DF6DE8",
+      "outputPresent": true
+    },
+    {
+      "receipt": "09-unqualified-frame-controls-corrected-input",
+      "command": "pnpm exec vitest run test/managed-fact-batch.test.ts -t does not reconcile pending --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "786A70565E373001E8341E4FF6383F2471025DB8A3227F3855879D39AC1DA609",
+      "outputSha256": "3ADE0D0142872A31917BD7398CB829D3F65E8B288FC3C38884FF61C46EBAC5DE",
+      "outputPresent": true
+    },
+    {
+      "receipt": "10-s2-08-causal-green",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t same open service --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "ECF962BE7E35CFCF2B748F846AED1CA13023A1BFFC8FCC46F93C5938AD817E22",
+      "outputSha256": "64910571701EC84435E79B9788FAE6E0FECA610B36E5132C8FDC424EDDFB0BAB",
+      "outputPresent": true
+    },
+    {
+      "receipt": "11-unqualified-source-and-persistence",
+      "command": "pnpm exec vitest run test/managed-fact-batch.test.ts --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "7B012703E77490EB06FA577DD48C5A7D1F5CDECF1C7F3718096C87B994F0FA1F",
+      "outputSha256": "ADEBC4942BEB799F09633DB6789CF0EF0016824D4CA0ABCCFF7520D12D0813CF",
+      "outputPresent": true
+    },
+    {
+      "receipt": "12-real-background-counterexamples",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t background=true --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "D97C02B68D68252EC45D864E513AC8E930FBA8AF7FD5708D413449BAAE33E250",
+      "outputSha256": "9EE4B084508796B7852E22D25D01E2D5A2A9FD3816853F1D7675F9160AF822F3",
+      "outputPresent": true
+    },
+    {
+      "receipt": "13-service-matrix",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t same open service --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "5283E67735137DF43DDAD57F98EEB47EDFDA149A896B8086704862331EB91111",
+      "outputSha256": "A29E1042C34BABE59D630D97C9F15B9087E1A505DA2B9AD7DE3449FE3F9FC15F",
+      "outputPresent": true
+    },
+    {
+      "receipt": "14-types-persistence-matrix",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "4A1E3E7ED552FE6AA2C462F878B570F1CCE572BD618F3DB3C07BBA25C8F7B4E6",
+      "outputSha256": null,
+      "outputPresent": false,
+      "outputQualification": "No text output.log retained; actual receipt.json with command/time/exit/source hashes exists. No missing log is reconstructed."
+    },
+    {
+      "receipt": "15-types-executor-matrix",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 2,
+      "complete": true,
+      "receiptSha256": "CF2ADB30D8DE231C7B269DF1FEE676FD1B3BA9C5F435F6E324F8536767693469",
+      "outputSha256": "A32741310FF505CB8CF29C9F2049CD983F9E269F56355B7FC9CD5690240058BA",
+      "outputPresent": true
+    },
+    {
+      "receipt": "16-affected-persistence",
+      "command": "pnpm exec vitest run test/managed-fact-batch.test.ts test/fact-capacity.test.ts test/received-cancellation-witness.test.ts test/capture-retirement.test.ts test/ownership.test.ts --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "7F590043A666533E8D197A7E5DC7DE1F57D1BC4D6E49F251F08EA60A5E37D661",
+      "outputSha256": "DD7B7BF29572C558442256210819773DF83D1D4E6E5D95779F669E5182CAE23D",
+      "outputPresent": true
+    },
+    {
+      "receipt": "17-controlled-install-failure-red",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t through install-failed --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "CFD60EB1D9B4FDE43126FC13363015E8C81217050A0118279AABF556632EB316",
+      "outputSha256": "14D76CD59BF752A4D88070592F702C88E9AB6DCF4167A8482ACA1A356AAC7F76",
+      "outputPresent": true
+    },
+    {
+      "receipt": "18-controlled-install-failure-green",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t through install-failed --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "97849D2A112363DFEA1E566589A93588E6E08B4D5F9EB1C9770CA4574343A05D",
+      "outputSha256": "AC18026FE657D850590F5E02879BD3F0710D7819983C2743F3BCB72969010B46",
+      "outputPresent": true
+    },
+    {
+      "receipt": "19-finite-snapshot-and-generation-secondary",
+      "command": "pnpm exec vitest run test/managed-fact-batch.test.ts --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "6918BB4D144BF9520226DC1854717689BE3E2E4B8908929AD95427073ACF7D40",
+      "outputSha256": "7FA4B632AE4296928D489869EB889BB403874A283F0ABAD71CACF21EFC1495E4",
+      "outputPresent": true
+    },
+    {
+      "receipt": "20-generation-secondary-service",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t through generation-unknown --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "814F00587CD78769F40B06C8793089328224CD33A9B09B4EB589024F4F1990F4",
+      "outputSha256": "F74BBD99587C1CA4A87D7FF75213F6D65926C8A2EC0FAD33AA34D688F4025C16",
+      "outputPresent": true
+    },
+    {
+      "receipt": "21-frozen-persistence-suite",
+      "command": "pnpm exec vitest run --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "BBD316E1776E6E3ACBF9EEAB93CBE359DDE9A11212FEEFE700F90F10EAE75E95",
+      "outputSha256": "A225F7C75E201AC0E4698FC206DB1ED6F2C9A9A03FDB324073CC202193A7C1BD",
+      "outputPresent": true
+    },
+    {
+      "receipt": "22-frozen-executor-affected",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts test/service.test.ts test/admitted-input.test.ts test/input-promotion-generation.test.ts test/ingress-generation-close.test.ts test/received-cancellation-close.test.ts test/managed-ticket-close.test.ts test/service-completion.test.ts test/managed-lifecycle.test.ts --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "53822C9EE3E5FFAAF02DFAC5F28EE8FEC5C9F097DF92D9353EF7BA06C05E8691",
+      "outputSha256": "5B63D2E895E6D115222583E4C327214C4262B22185D8BE6F0D85B39E72A5C618",
+      "outputPresent": true
+    },
+    {
+      "receipt": "23-frozen-persistence-types",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "24AC21CEC6F1946E06336FBA7E5A26F0937D8F88C99D8456A4A8B7AA2273DFFC",
+      "outputSha256": null,
+      "outputPresent": false,
+      "outputQualification": "No text output.log retained; actual receipt.json with command/time/exit/source hashes exists. No missing log is reconstructed."
+    },
+    {
+      "receipt": "24-frozen-executor-types",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "AD851B2BFF9BE14E1FD4D59769B3DA721B190B0D9A6D95ED85FED965C254423E",
+      "outputSha256": null,
+      "outputPresent": false,
+      "outputQualification": "No text output.log retained; actual receipt.json with command/time/exit/source hashes exists. No missing log is reconstructed."
+    },
+    {
+      "receipt": "25-s2-11-received-human-contract",
+      "command": "pnpm exec vitest run test/managed-lifecycle.test.ts test/context-recovery.test.ts --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "97F098C74963497407AB1D1D2260D7694DBD8044A18BF250225ED7B50653A9E6",
+      "outputSha256": "2F1A2437696D4F5DBD1EF042067F17265ACAB95B0B8A06179DFC7174AE23B40C",
+      "outputPresent": true
+    },
+    {
+      "receipt": "26-s2-11-matrix",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts -t same open service --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "391C28362B91E2EE6C9A829106A358EB8923496B38712F3C9B709705A1043D20",
+      "outputSha256": "24216A7BA0D786F4BE194626A112B2E294E1C245E5F42B781B300E525DF92868",
+      "outputPresent": true
+    },
+    {
+      "receipt": "27-s2-11-types",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 2,
+      "complete": true,
+      "receiptSha256": "10B0FF74232BFC3A06B321FB81CF801C5BCB499BC6DE15341D28412761624925",
+      "outputSha256": "E9CFF4FA38BC8B72F578B563A1E17FEBB87751AC3169E6DAE06C8DF75307F58C",
+      "outputPresent": true
+    },
+    {
+      "receipt": "28-final-executor-affected",
+      "command": "pnpm exec vitest run test/context-recovery.test.ts test/service.test.ts test/admitted-input.test.ts test/input-promotion-generation.test.ts test/ingress-generation-close.test.ts test/received-cancellation-close.test.ts test/managed-ticket-close.test.ts test/service-completion.test.ts test/managed-lifecycle.test.ts --maxWorkers=2 --minWorkers=1",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 1,
+      "complete": true,
+      "receiptSha256": "72874A88D2A872791DC5EA80E555C7271C2CFE866D52E9DBDD19FFEC78CE4530",
+      "outputSha256": "10AA70984233A5EB589AB1C874C3EBFF4C6FBFB2570758D0ABC621438DDDCF3E",
+      "outputPresent": true
+    },
+    {
+      "receipt": "29-final-persistence-types",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-persistence",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "971EB75256693DD1B156D389752C3C4D72901ACF839F6DF0605AE4976AD81D65",
+      "outputSha256": null,
+      "outputPresent": false,
+      "outputQualification": "No text output.log retained; actual receipt.json with command/time/exit/source hashes exists. No missing log is reconstructed."
+    },
+    {
+      "receipt": "30-final-executor-types",
+      "command": "pnpm exec tsc --noEmit",
+      "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main\\packages\\session-executor",
+      "exit": 0,
+      "complete": true,
+      "receiptSha256": "8B3535831FC5C8AE0387902E5D491C53A9306A6E0BEF8D5CE85A7910CBB4AA16",
+      "outputSha256": null,
+      "outputPresent": false,
+      "outputQualification": "No text output.log retained; actual receipt.json with command/time/exit/source hashes exists. No missing log is reconstructed."
+    }
+  ],
+  "status": [
+    "?? packages/desktop-gateway/test/repeated-growth-diagnosis.test.ts"
+  ],
+  "protectedSHA": "9FB750A75EC847DC97DD95D16E7EC7668B65D919BCB8208805F9A34FB93CEC68",
+  "outputQualification": [
+    "05-persistence-types-intermediate",
+    "06-executor-types-intermediate",
+    "14-types-persistence-matrix",
+    "23-frozen-persistence-types",
+    "24-frozen-executor-types",
+    "29-final-persistence-types",
+    "30-final-executor-types"
+  ]
+}

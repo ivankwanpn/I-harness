@@ -11,6 +11,50 @@ function deferred<T>() {
 
 const turn = () => new Promise<void>(resolve => setTimeout(resolve, 0))
 
+it('observes original termination admission without causing cleanup or changing a first reason', async () => {
+  let reentrant: unknown
+  const f = fixture({ terminate: () => {
+    reentrant = f.lease.terminationObservation?.()
+    f.lease.cancel('shutdown')
+    return f.termination.promise
+  } })
+  expect(f.lease.terminationObservation?.()).toEqual({ kind: 'none' })
+  expect(f.events).toEqual([])
+  f.root.resolve({ exitCode: 0 }) // Descendants are still alive.
+  const pending = f.lease.cancel('timeout')
+  expect(reentrant).toEqual({ kind: 'pending', reason: 'timeout' })
+  const snapshot = f.lease.terminationObservation!()
+  expect(Object.isFrozen(snapshot)).toBe(true)
+  f.termination.resolve(); finish(f)
+  expect((await pending).kind).toBe('settled')
+  f.lease.cancel('cancelled')
+  expect(f.lease.terminationObservation!()).toEqual({ kind: 'confirmed', reason: 'timeout' })
+  expect(snapshot).toEqual({ kind: 'pending', reason: 'timeout' })
+  expect(f.events).toEqual(['terminate:timeout', 'tree', 'io', 'release'])
+})
+
+it('retains failed native termination after successful cleanup recovery', async () => {
+  const f = fixture()
+  const stopped = f.lease.cancel('authority-revoked')
+  f.termination.reject(new Error('native kill failed')); finish(f)
+  expect((await stopped).kind).toBe('incomplete')
+  expect(f.lease.terminationObservation?.()).toEqual({ kind: 'failed', reason: 'authority-revoked' })
+  expect((await f.lease.release()).kind).toBe('settled')
+  expect(f.lease.terminationObservation?.()).toEqual({ kind: 'failed', reason: 'authority-revoked' })
+})
+
+it('late cancellation at tree-empty and release reservation preserves supported none', async () => {
+  const f = fixture()
+  f.tree.resolve(); f.io.resolve()
+  await turn()
+  const pending = f.lease.cancel('cancelled')
+  expect(f.lease.terminationObservation?.()).toEqual({ kind: 'none' })
+  f.root.resolve({ exitCode: 0 }); f.resources.resolve()
+  expect((await pending).kind).toBe('settled')
+  expect(f.lease.terminationObservation?.()).toEqual({ kind: 'none' })
+  expect(f.events).toEqual(['tree', 'io', 'release'])
+})
+
 function fixture(overrides: Partial<{
   waitTreeEmpty(): Promise<void>
   settleIo(): Promise<void>
@@ -198,12 +242,16 @@ it("failed termination can be retried while tree emptiness remains unconfirmed",
   finish(f)
   expect((await first).kind).toBe("incomplete")
   const retry = f.lease.cancel("authority-revoked")
+  expect(f.lease.terminationObservation?.()).toEqual({ kind: 'pending', reason: 'authority-revoked' })
   expect(f.lease.cancel("shutdown")).toBe(retry)
   expect(f.lease.release()).toBe(retry)
   await turn()
   expect(f.events).not.toContain("release")
   retryKill.resolve()
   expect((await retry).kind).toBe("settled")
+  expect(f.lease.terminationObservation?.()).toEqual({ kind: 'confirmed', reason: 'authority-revoked' })
+  f.lease.cancel('shutdown')
+  expect(f.lease.terminationObservation?.()).toEqual({ kind: 'confirmed', reason: 'authority-revoked' })
   expect(f.events).toEqual(["terminate:timeout", "tree", "terminate:authority-revoked", "tree", "io", "release"])
 })
 

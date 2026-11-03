@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/owned-gateway-prompt-parts.ts","test/owned-gateway-prompt-parts.test.ts"]}

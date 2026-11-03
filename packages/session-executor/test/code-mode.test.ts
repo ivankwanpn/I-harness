@@ -1,12 +1,15 @@
 import { expect, it, vi } from "vitest"
-import { mkdtemp, rm, stat } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { createSessionAssembly } from "../src/assembly.ts"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { clampOutputCap } from "@i-harness/llm-seam"
-import { estimateContent } from "@i-harness/token-meter"
-import { gcSpillStore } from "@i-harness/output-retention"
+import { prepareModelRequest } from "@i-harness/llm-seam"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { contextWorkspaceLocation, createContextOutputService } from "@i-harness/context-output"
+import type { CodeModeTextRetention } from "@i-harness/code-mode"
 
 it("reports an actual yielded live cell while the agent turn is idle and drops it after completion", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-live-cells-"))
@@ -71,8 +74,9 @@ it.each(["off", "mixed", "only"] as const)("uses the %s tool surface in actual m
     const names = request.tools.map(tool => tool.name)
     if (mode === "only") expect(names).toEqual(["code_exec", "code_status", "code_wait"])
     else { expect(names).toContain("list_dir"); expect(names.includes("code_exec")).toBe(mode === "mixed") }
-    const overhead = Math.ceil(request.systemPrompt.length / 4) + Math.ceil(JSON.stringify(request.tools).length / 4)
-    expect(request.maxOutputTokens).toBe(clampOutputCap(100_000, 100_000, overhead + estimateContent(request.messages)))
+    const prepared = await prepareModelRequest(model, request)
+    const actualInput = Object.values(prepared.measurement.input.components).reduce((sum, component) => sum + component.heuristicTokens, 0)
+    expect(request.maxOutputTokens).toBe(100_000 - 10_000 - actualInput)
   } finally { await assembly?.dispose(); await rm(root, { recursive: true, force: true }) }
 })
 
@@ -85,19 +89,43 @@ it("prices a live Code Mode catalog after host tools change", async () => {
     assembly.tools.register({ name: "late_tool", description: "Late catalog payload ".repeat(400), inputSchema: { type: "object", properties: {} }, isReadOnly: true, execute: async () => "ok" })
     await assembly.agent.run("hello")
     const request = requests[0]!
-    const overhead = Math.ceil(request.systemPrompt.length / 4) + Math.ceil(JSON.stringify(request.tools).length / 4)
     expect(request.tools[0]!.description).toContain("late_tool")
-    expect(request.maxOutputTokens).toBe(clampOutputCap(100_000, 100_000, overhead + estimateContent(request.messages)))
+    const prepared = await prepareModelRequest(model, request)
+    const actualInput = Object.values(prepared.measurement.input.components).reduce((sum, component) => sum + component.heuristicTokens, 0)
+    expect(request.maxOutputTokens).toBe(100_000 - 10_000 - actualInput)
   } finally { await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
 })
 
-it("retains Code Mode text in the host's unified spill root where existing GC can find it", async () => {
-  const root = await mkdtemp(join(tmpdir(), "ih-code-unified-spill-")), spillRoot = join(root, "owned-spills")
-  const assembly = await createSessionAssembly({ workspace: root, modelPolicy: "test-mock", sandbox: "workspace-write", codeMode: { mode: "only" }, outputSpill: { spillRoot } })
+it("retains Code Mode emitted text as a managed artifact in the assembly's result store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-code-artifact-")), settings = join(root, "settings.json")
+  await writeFile(settings, JSON.stringify({ contextSubsystems: { contextOutput: { enabled: false, maxDiskBytes: 8388608 } } }))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }), { id } = await coordinator.create()
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings, modelPolicy: "test-mock", sandbox: "workspace-write", codeMode: { mode: "only" } })
+  let cold: ReturnType<typeof createContextOutputService> | undefined
   try {
-    const result = (await assembly.tools.execute({ name: "code_exec", args: { code: 'text("x".repeat(20000));' } })).output as { textRetention: { path: string } }
-    expect(dirname(result.textRetention.path)).toBe(spillRoot)
-    expect((await stat(result.textRetention.path)).size).toBe(20000)
-    expect(await gcSpillStore(spillRoot, { maxAgeMs: 0, maxTotalBytes: 0, now: Date.now() + 1000 })).toMatchObject({ removedFiles: 1, removedBytes: 20000 })
-  } finally { await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
+    const result = (await assembly.tools.execute({ name: "code_exec", args: { code: 'text("x".repeat(1048576));', yield_time_ms: 5000 } })).output as { status: string; textRetention: CodeModeTextRetention }
+    expect(result.status).toBe("completed")
+    const retention = result.textRetention
+    expect(retention).toMatchObject({ stored: true, complete: true })
+    expect(retention).not.toHaveProperty("path")
+    const ref = retention.envelope?.retention.kind === "artifact" ? retention.envelope.retention.ref : undefined
+    expect(ref).toMatchObject({ codec: "json-utf8-v1", completeness: "complete", encodedBytes: 1048578 })
+    const original = assembly.session.events.filter(event => event.type === 'code/output')
+    expect(original).toHaveLength(1)
+    expect(Buffer.byteLength(JSON.stringify(original[0]))).toBeLessThanOrEqual(64000)
+    expect(assembly.session.events.some(event => event.type === "context/result-ref")).toBe(false)
+    const location = await contextWorkspaceLocation(root, coordinator.storageRoot!)
+    cold = createContextOutputService({ root: location.serviceRoot, workspaceId: location.workspaceKey, authorizeResult: async access => access.sessionId === id })
+    const pieces: Buffer[] = []; let offset = 0
+    for (;;) {
+      const page = await cold.readResult({ sessionId: id }, { ref: ref!, offset })
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(32768)
+      pieces.push(page.data.kind === "text" ? Buffer.from(page.data.text) : Buffer.from(page.data.base64, "base64"))
+      if (page.eof) break
+      offset = page.nextOffset!
+    }
+    const body = Buffer.concat(pieces)
+    expect(createHash("sha256").update(body).digest("hex")).toBe(ref!.contentDigest)
+    expect(JSON.parse(body.toString())).toBe("x".repeat(1048576))
+  } finally { await cold?.close(); await assembly.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

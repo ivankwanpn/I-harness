@@ -5,6 +5,7 @@ import { canonicalApprovalArguments, createApprovalRuleStore, prepareApprovalEvi
 import type { ApprovalRequest } from "@i-harness/interaction"
 import type { SessionAssembly } from "@i-harness/session-executor"
 
+export interface OwnedApprovalOwner { ctx: SessionAssembly["ctx"]; sessionId: string; tools: NonNullable<SessionAssembly["tools"]> }
 export interface RememberApprovalOptions { scope: "session" | "workspace"; expiresAt: number }
 export interface ApprovalRuleCandidate { requestId: string; sessionId: string; name: string; arguments: string }
 export interface ApprovalRulesState { rules: ApprovalRule[]; candidates: ApprovalRuleCandidate[] }
@@ -13,28 +14,30 @@ export interface ApprovalRulesAdapterOptions {
   /** A revision of current approval/sandbox/Plan/role/hooks and project authority.
    * Missing authority must return undefined and leaves this operation one-time. */
   policyIdentity(assembly: SessionAssembly): { workspaceId: string; revision: string } | undefined
+  ownedPolicyIdentity?(owner: OwnedApprovalOwner): { workspaceId: string; revision: string } | undefined
   clock?: () => number
 }
 
 export function createApprovalRulesAdapter(options: ApprovalRulesAdapterOptions) {
   const clock = options.clock ?? Date.now
   const store = createApprovalRuleStore(options.filePath, clock)
-  const candidates = new Map<string, { evidence: ApprovalEvidence; input: PreparedApprovalInput; assembly: SessionAssembly; expiresAt: number }>()
-  function current(assembly: SessionAssembly, input: PreparedApprovalInput) {
-    const policy = options.policyIdentity(assembly)
+  type Owner = SessionAssembly | OwnedApprovalOwner
+  type Policy = () => { workspaceId: string; revision: string } | undefined
+  const candidates = new Map<string, { evidence: ApprovalEvidence; input: PreparedApprovalInput; assembly: Owner; policy: Policy; expiresAt: number }>()
+  function current(policyNow: Policy, input: PreparedApprovalInput) {
+    const policy = policyNow()
     return prepareApprovalEvidence({ ...input, workspaceId: policy?.workspaceId ?? "", policyRevision: policy?.revision ?? "" })
   }
   function forget(request: ApprovalRequest): void { if (request.remember?.candidateId) candidates.delete(request.remember.candidateId) }
-  return {
-    attach(assembly: SessionAssembly): void {
+  function attachAuthority(assembly: Owner, policyNow: Policy, childCallerFor?: SessionAssembly["ownedToolCaller"]): void {
       const authority: ApprovalAuthorityProvider = (input) => {
-        const policy = options.policyIdentity(assembly)
+        const policy = policyNow()
         const workspaceId = policy?.workspaceId, revision = policy?.revision
         const rootCaller = input.sessionId === undefined || input.sessionId === assembly.sessionId
-        const childCaller = rootCaller ? undefined : assembly.ownedToolCaller?.(input)
+        const childCaller = rootCaller ? undefined : childCallerFor?.(input)
         return () => {
-          const currentPolicy = options.policyIdentity(assembly)
-          const currentChild = rootCaller ? undefined : assembly.ownedToolCaller?.(input)
+          const currentPolicy = policyNow()
+          const currentChild = rootCaller ? undefined : childCallerFor?.(input)
           return (rootCaller ? (input.sessionId === undefined || input.sessionId === assembly.sessionId)
               && (assembly.tools === undefined || input.registry === assembly.tools)
             : policy !== undefined && currentPolicy !== undefined && childCaller !== undefined && childCaller.validate()
@@ -48,25 +51,31 @@ export function createApprovalRulesAdapter(options: ApprovalRulesAdapterOptions)
       const provider: PreparedApprovalProvider = (input) => {
         if (input.sessionId !== undefined && input.sessionId !== assembly.sessionId) return { remembered: false, remember: { available: false, reason: "prepared caller identity differs from the attached approval authority" } }
         for (const [id, row] of candidates) if (row.expiresAt <= clock()) candidates.delete(id)
-        const prepared = current(assembly, input)
+        const prepared = current(policyNow, input)
         if (!prepared.evidence) return { remembered: false, remember: { available: false, reason: prepared.reason } }
         const originalEvidence = prepared.evidence
         const sameEvidence = () => {
-          const next = current(assembly, input).evidence
+          const next = current(policyNow, input).evidence
           return next !== undefined && canonicalApprovalArguments(next) === canonicalApprovalArguments(originalEvidence)
         }
         if (store.matches(prepared.evidence, assembly.sessionId)) return { remembered: true, remember: { available: true }, validate: () => sameEvidence() && store.matches(originalEvidence, assembly.sessionId) }
         if (candidates.size >= 1000) return { remembered: false, remember: { available: false, reason: "too many pending rule candidates" } }
         const candidateId = randomUUID()
-        candidates.set(candidateId, { evidence: prepared.evidence, input, assembly, expiresAt: clock() + 86400000 })
+        candidates.set(candidateId, { evidence: prepared.evidence, input, assembly, policy: policyNow, expiresAt: clock() + 86400000 })
         return { remembered: false, remember: { available: true, candidateId, arguments: prepared.evidence.arguments }, validate: sameEvidence }
       }
       assembly.ctx.services.register("approval/prepared", provider)
+    }
+  return {
+    attach(assembly: SessionAssembly): void { attachAuthority(assembly, () => options.policyIdentity(assembly), assembly.ownedToolCaller?.bind(assembly)) },
+    attachOwned(owner: OwnedApprovalOwner): void {
+      if (!options.ownedPolicyIdentity) throw new Error("owned approval policy authority is unavailable")
+      attachAuthority(owner, () => options.ownedPolicyIdentity!(owner))
     },
     grant(request: ApprovalRequest, sessionId: string, remember: RememberApprovalOptions): ApprovalRule {
       const candidate = request.remember?.candidateId ? candidates.get(request.remember.candidateId) : undefined
       if (!candidate || candidate.assembly.sessionId !== sessionId || candidate.expiresAt <= clock()) throw new Error("live prepared approval candidate is unavailable")
-      const prepared = current(candidate.assembly, candidate.input)
+      const prepared = current(candidate.policy, candidate.input)
       if (!prepared.evidence || canonicalApprovalArguments(prepared.evidence) !== canonicalApprovalArguments(candidate.evidence)) throw new Error("prepared operation or current policy changed; request fresh approval")
       if (remember.scope !== "session" && remember.scope !== "workspace") throw new Error("invalid approval rule scope")
       return store.add(candidate.evidence, remember.scope === "session" ? { kind: "session", sessionId } : { kind: "workspace" }, remember.expiresAt)

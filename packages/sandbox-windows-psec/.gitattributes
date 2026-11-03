@@ -1,2 +1,8 @@
 * text=auto eol=lf
 *.exe -text
+
+# Override this package's broad text rule for exact build and upstream bytes.
+/artifacts/** -text
+/native/msys/notices/** -text
+# The original Windows build owner emits CRLF JSON; retain those exact bytes.
+/artifacts/win32-x64/manifest.json whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

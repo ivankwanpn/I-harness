@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest"
-import { createSession, append } from "@i-harness/core-session"
-import { createTodoTool, deriveTodoList, renderTodoContext } from "../src/index.ts"
+import { createSession, append, metadataFactsFor } from "@i-harness/core-session"
+import { applyTodoProjection, createTodoTool, deriveTodoList, isTodoSnapshot, renderTodoContext, renderTodoSnapshot } from "../src/index.ts"
 
 describe("todo_write tool", () => {
+  it("writes through an owned metadata source without requiring a Session view", async () => {
+    const session = createSession()
+    const tool = createTodoTool({ metadata: metadataFactsFor(session) })
+    const out = await tool.execute({ todos: [{ content: "owned", status: "pending" }] }, {})
+    expect(out.counts.pending).toBe(1)
+    expect(deriveTodoList(session)).toEqual([{ content: "owned", status: "pending" }])
+  })
   it("appends todo/write and returns counts", async () => {
     const s = createSession()
     const tool = createTodoTool({ session: s })
@@ -34,6 +41,13 @@ describe("todo_write tool", () => {
 })
 
 describe("deriveTodoList", () => {
+  it("incrementally projects writes and retains explicit empty lists", () => {
+    const items = [{ content: "work", status: "pending" as const }]
+    const current = applyTodoProjection(null, { type: "todo/write", version: 1, items })
+    expect(current).toEqual(items)
+    expect(applyTodoProjection(current, { type: "user/message", text: "hello" })).toBe(current)
+    expect(applyTodoProjection(current, { type: "todo/write", version: 1, items: [] })).toEqual([])
+  })
   it("returns null with no todo/write events", () => {
     const s = createSession()
     expect(deriveTodoList(s)).toBeNull()
@@ -47,6 +61,22 @@ describe("deriveTodoList", () => {
 })
 
 describe("authoritative Todo model context", () => {
+  it("renders absent and explicitly cleared owned snapshots distinctly", () => {
+    expect(renderTodoSnapshot(null)).toBe("")
+    expect(renderTodoSnapshot([])).toContain('"todos":[]')
+  })
+  it("validates closed owned snapshot data", () => {
+    expect(isTodoSnapshot({kind:'absent'})).toBe(true)
+    expect(isTodoSnapshot({kind:'present',items:[]})).toBe(true)
+    expect(isTodoSnapshot({kind:'present',items:[{content:'x',status:'invalid'}]})).toBe(false)
+    expect(isTodoSnapshot({kind:'absent',items:[]})).toBe(false)
+    expect(isTodoSnapshot(Object.defineProperty({kind:'absent'},'extra',{value:true}))).toBe(false)
+    expect(isTodoSnapshot(new Proxy({kind:'absent'},{}))).toBe(false)
+    Object.defineProperty(Object.prototype,'kind',{value:'absent',configurable:true})
+    try { expect(isTodoSnapshot({other:true})).toBe(false) } finally { delete (Object.prototype as {kind?:unknown}).kind }
+    const sparse = new Array(1) as unknown[] & {extra?:boolean}; sparse.extra=true
+    expect(isTodoSnapshot({kind:'present',items:sparse})).toBe(false)
+  })
   it("keeps identical snapshots byte-stable while retaining every durable write and real list changes", () => {
     const session = createSession()
     const items = [{ content: "implement", status: "pending" as const }]

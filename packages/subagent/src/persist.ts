@@ -1,14 +1,21 @@
+import {associateJobProjection,assertJobProjectionCurrent,waitJobProjectionCurrent,originalJobProjectionFor,captureJobProjection,associateTableProjection,captureTableProjection,persistProjection} from './runtime-projection.ts'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { append, type Session, type SessionEvent } from "@i-harness/core-session"
+import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, isManagedFactOwner, validRetainedResultRevision, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
+import { retainedResultWitness, unknownResult, validResultPublication, type ResultPublication, type AuxiliaryResultStatus } from './result-publication.ts'
+import { createJobFacts } from './job-facts.ts'
 import type { JobRegistry, JobStatus, JobSnapshot } from "./jobs.ts"
 import type { AgentTable, ChildStatus } from "./agent-table.ts"
 import type { RoleRegistry, SubagentRole } from "./roles.ts"
 
-export interface DurableAgentEntry {
+export interface DurableAgentEntry extends ResultPublication {
   path: string
   status: ChildStatus
   finalText?: string
+  result?: import("./task/result.ts").RetainedTaskResult
+  taskId?: string
   error?: string
+  retention?: "memory" | "pending" | "durable" | "failed"
+  retentionError?: string
   mailbox: string[]
   jobId?: string
   sessionId?: string
@@ -25,13 +32,15 @@ export interface DurableAgentEntry {
   lastInboxSeq?: number
 }
 
-export interface DurableJobRecord {
+export interface DurableJobRecord extends ResultPublication {
   id: string
   owner: string
   kind: string
   label: string
   status: JobStatus
   output: string
+  result?: import("./task/result.ts").RetainedTaskResult
+  taskId?: string
   terminal: boolean
   agentPath?: string
   sessionId?: string
@@ -43,7 +52,7 @@ export interface DurableJobRecord {
 }
 
 export interface SubagentStateSnapshot {
-  formatVersion: 1
+  formatVersion: 1 | 2
   jobs: DurableJobRecord[]
   agentTable: DurableAgentEntry[]
   roles: SubagentRole[]
@@ -63,7 +72,8 @@ export interface SubagentPersistence {
   // caller that omits it — the CLI headless path — gets zero new events
   // (additive-only, zero behavior change). Deliberately NOT `registerSubagent`
   // defaulted from opts.parentSession (the CLI would suddenly log job events).
-  parentSession?: Session
+  parentSession?: SessionView
+  factOwner?: FactOwner
 }
 
 export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry }): SubagentStateSnapshot {
@@ -71,8 +81,8 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
   // registerJob("root", "subagent", ...)); list("root") is the enumeration.
   const jobSnaps = state.jobs.list("root")
   const jobsOut: DurableJobRecord[] = jobSnaps.map((j) => ({
-    id: j.id, owner: "root", kind: j.kind, label: j.label, status: j.status, output: j.output,
-    terminal: j.status !== "running",
+    id: j.id, owner: "root", kind: j.kind, label: j.label, status: j.status, output: j.output, ...(j.result ? { result: j.result } : {}),
+    terminal: j.status !== "running", ...(j.publication ? { publication: j.publication } : {}), ...(j.savedObservation ? { savedObservation: j.savedObservation } : {}), ...(j.taskId ? { taskId: j.taskId } : {}),
     ...(j.agentPath !== undefined ? { agentPath: j.agentPath } : {}),
     ...(j.sessionId !== undefined ? { sessionId: j.sessionId } : {}),
     // Task 4.4: stamps ride the doc verbatim (restore replays them, they are
@@ -85,7 +95,12 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     path: e.path,
     status: e.status,
     ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
+    ...(e.result ? { result: e.result } : {}),
+    ...(e.taskId ? { taskId: e.taskId } : {}),
+    ...(e.publication ? { publication: e.publication } : {}), ...(e.savedObservation ? { savedObservation: e.savedObservation } : {}),
     ...(e.error !== undefined ? { error: e.error } : {}),
+    ...(e.retention !== undefined ? { retention: e.retention } : {}),
+    ...(e.retentionError !== undefined ? { retentionError: e.retentionError } : {}),
     mailbox: e.mailbox,
     ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
     ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
@@ -96,7 +111,7 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
 
   const roles = state.roles.list().filter((role) => !role.ephemeral)
 
-  return { formatVersion: 1, jobs: jobsOut, agentTable, roles }
+  return { formatVersion: 2, jobs: jobsOut, agentTable, roles }
 }
 
 export function restoreState(
@@ -108,7 +123,19 @@ export function restoreState(
   // registerSubagent / ensureResidentAgent) — NOT implemented here.
   persistence?: SubagentPersistence,
 ): void {
-  void persistence
+  if (snap.formatVersion !== 1 && snap.formatVersion !== 2) throw new Error("Unsupported subagent state version")
+  if (snap.formatVersion === 1 && [...snap.agentTable, ...snap.jobs].some(row => row.result !== undefined || row.publication !== undefined || row.savedObservation !== undefined)) throw new Error("Invalid legacy result descriptor")
+  for (const row of [...snap.agentTable, ...snap.jobs]) if (row.result !== undefined && !validRetainedResultRevision(row.result)) throw new Error('Invalid retained state result')
+  for (const row of [...snap.agentTable, ...snap.jobs]) if (!validResultPublication(row)) throw new Error('Unsupported retained result publication metadata')
+  const parent = persistence?.parentSession, owner = persistence?.factOwner
+  const qualifiedParent = parent && owner?.view === parent && isManagedFactOwner(parent, owner) ? parent : undefined
+  const resultProjection = (row: DurableAgentEntry | DurableJobRecord, identity: { jobId?: string; taskId?: string }, job: boolean) => {
+    if (snap.formatVersion !== 2 || !row.result) return undefined
+    const observed = row.savedObservation ?? { status: row.status as AuxiliaryResultStatus, ...(row.result.kind === 'retained' ? { execution: { ...row.result.envelope.execution } } : {}) }
+    const witness = observed.status === 'running' ? undefined : retainedResultWitness(qualifiedParent, row.result, identity)
+    const proof = witness && (!job || witness.status === observed.status) ? witness : undefined
+    return { status: proof ? observed.status : 'recovery-required' as const, result: proof?.result ?? unknownResult(row.result), publication: proof ? 'committed' as const : 'unqualified' as const, savedObservation: observed }
+  }
   // Restore roles first (register may be used by later spawns).
   for (const role of snap.roles) {
     if (!state.roles.get(role.name)) state.roles.register(role)
@@ -121,16 +148,21 @@ export function restoreState(
   // re-drive can resume it. Only "running" is interrupted by resume.
   for (const entry of snap.agentTable) {
     const wasRunning = entry.status === "running"
-    const status: ChildStatus = wasRunning ? "error" : entry.status
+    const result = resultProjection(entry, { jobId: entry.jobId, taskId: entry.taskId }, false)
+    const status: ChildStatus = result?.status ?? (wasRunning ? "error" : entry.status)
     state.table.add(entry.path, {
       path: entry.path,
       status,
       session: createSessionFromEmpty(),
       controller: new AbortController(),
       ...(entry.finalText !== undefined ? { finalText: entry.finalText } : {}),
+      ...(result ? { result: result.result, publication: result.publication, savedObservation: result.savedObservation } : entry.result ? { result: entry.result } : {}),
       ...(wasRunning || entry.error !== undefined ? { error: wasRunning ? "interrupted by resume" : entry.error } : {}),
+      ...(entry.retention !== undefined ? { retention: entry.retention } : {}),
+      ...(entry.retentionError !== undefined ? { retentionError: entry.retentionError } : {}),
       mailbox: [...entry.mailbox],
       ...(entry.jobId !== undefined ? { jobId: entry.jobId } : {}),
+      ...(entry.taskId !== undefined ? { taskId: entry.taskId } : {}),
       ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
       ...(entry.roleName !== undefined ? { roleName: entry.roleName } : {}),
       ...(entry.modelLabel !== undefined ? { modelLabel: entry.modelLabel } : {}),
@@ -144,6 +176,7 @@ export function restoreState(
   // jobId links are advisory.
   for (const rec of snap.jobs) {
     const wasRunning = rec.status === "running"
+    const result = resultProjection(rec, { jobId: rec.id, taskId: rec.taskId }, true)
     // Older documents carried provenance only on the agent entry. Preserve
     // that exact job-id link before a later close removes the entry; never
     // infer historical ownership from a reusable task name or job label.
@@ -153,8 +186,10 @@ export function restoreState(
     const { id } = state.jobs.registerJob(rec.owner, rec.kind, rec.label, rec.id, rec.startedAt, undefined,
       agentPath !== undefined ? { agentPath, ...(sessionId !== undefined ? { sessionId } : {}) } : undefined)
     state.jobs.updateJob(id, {
-      status: wasRunning ? "error" : rec.status,
+      status: result?.status === 'waiting' ? 'recovery-required' : result?.status ?? (wasRunning ? "error" : rec.status),
       output: wasRunning ? "interrupted by resume" : rec.output,
+      ...(result ? { result: result.result, publication: result.publication, savedObservation: result.savedObservation } : rec.result ? { result: rec.result } : {}),
+      ...(rec.taskId !== undefined ? { taskId: rec.taskId } : {}),
       // Task 4.4: replay persisted stamps verbatim — a restored job keeps its
       // original startedAt / endedAt instead of re-minting them.
       ...(rec.startedAt !== undefined ? { startedAt: rec.startedAt } : {}),
@@ -166,17 +201,23 @@ export function restoreState(
 function createSessionFromEmpty() {
   // Minimal Session shape (formatVersion + events); callers only need a
   // non-null session object on restored entries.
-  return { formatVersion: 1, events: [] as unknown[] } as unknown as ReturnType<typeof import("@i-harness/core-session").createSession>
+  return { formatVersion: CURRENT_FORMAT_VERSION, events: [] as unknown[] } as unknown as ReturnType<typeof import("@i-harness/core-session").createSession>
 }
 
 // Task 4.4: a real transition observer — called with the post-change snapshot
 // for every transition that actually mutated state (never for no-op updates).
 export type JobTransitionObserver = (job: JobSnapshot) => void
 
+type JobTerminalStatus=Exclude<JobStatus,'running'|'recovery-required'>
+const persistentJobSettlements=new WeakMap<object,(status:JobTerminalStatus,output:string)=>Promise<boolean>>()
+/** Settle only the exact persistent producer and retain its original save outcome. */
+export function settlePersistentJob(registration:import('./jobs.ts').JobRegistration,status:JobTerminalStatus,output:string):Promise<boolean>{const settle=persistentJobSettlements.get(registration);if(!settle)return Promise.reject(TypeError('Original persistent job required'));try{captureJobProjection(registration);return settle(status,output)}catch(error){return Promise.reject(error)}}
+
 // Task 4.4: the additive `job/status` event (core-session SessionEvent,
 // registered in session-persistence's load gate). Whole-job snapshot per
 // event so a consumer folds last-wins by jobId (the goal/change pattern).
-function jobStatusEvent(job: JobSnapshot): SessionEvent {
+function jobStatusEvent(job: JobSnapshot): Extract<SessionEvent, { type: 'job/status' }> {
+  if (job.status === 'recovery-required') throw new Error('Derived cold publication cannot issue a job status fact')
   return {
     type: "job/status",
     version: 1,
@@ -186,6 +227,7 @@ function jobStatusEvent(job: JobSnapshot): SessionEvent {
       label: job.label,
       status: job.status,
       outputAvailable: job.output.length > 0,
+      ...(job.result ? { result: job.result } : {}),
       ...(job.startedAt !== undefined ? { startedAt: job.startedAt } : {}),
       ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
     },
@@ -196,23 +238,35 @@ export function persistentJobRegistry(
   jobs: JobRegistry,
   save: () => Promise<void>,
   observe?: JobTransitionObserver,
+  retainRequiredProjection?:(drive:()=>Promise<void>)=>void,
+  settleRequiredFacts?:()=>Promise<void>,
 ): JobRegistry {
   return {
     ...jobs,
-    registerJob(owner, kind, label, id, startedAt, cancel, identity) {
-      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity)
+    registerJob(owner, kind, label, id, startedAt, cancel, identity, acquired) {
+      let wrapped: ReturnType<JobRegistry['registerJob']> | undefined
+      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity, registration=>{
+        const original=originalJobProjectionFor(registration)
+        const finish=registration.finish
+        let terminal:{status:JobTerminalStatus;output:string;result:boolean;promise:Promise<boolean>}|undefined
+        wrapped=finish?{...registration,finish(status,output){
+          if(terminal)return finish(status,output)
+          const previous=jobs.read(registration.id),completion=Promise.withResolvers<boolean>()
+          if(previous.status!=='running')return finish(status,output)
+          terminal={status,output,result:false,promise:completion.promise};void completion.promise.catch(()=>{})
+          try{const updated=finish(status,output);terminal.result=updated
+            if(updated){const next=jobs.read(registration.id);if(previous.status!==next.status||previous.output!==next.output){observe?.(next);const saved=save();void Promise.resolve(saved).then(()=>completion.resolve(updated),completion.reject);return updated}}
+            completion.resolve(updated);return updated
+          }catch(error){completion.reject(error);throw error}
+        }}:registration
+        const receipt=wrapped
+        if(original)associateJobProjection(receipt,persistProjection(original,async()=>{assertJobProjectionCurrent(receipt);observe?.(jobs.read(receipt.id));await save()},()=>assertJobProjectionCurrent(receipt),settleRequiredFacts,()=>waitJobProjectionCurrent(receipt)),retainRequiredProjection)
+        if(finish)persistentJobSettlements.set(receipt,(status,output)=>{if(!terminal){if(jobs.read(receipt.id).status!=='running')return Promise.reject(Error('Original job terminal already decided'));try{receipt.finish!(status,output)}catch{} }if(!terminal||terminal.status!==status||terminal.output!==output)return Promise.reject(Error('Original job settlement changed'));return terminal.promise})
+        acquired?.(receipt)
+      })
       observe?.(jobs.read(result.id))
       void save()
-      if(!result.finish)return result
-      const finish=result.finish
-      return {...result,finish(status,output){
-        const previous=jobs.read(result.id),updated=finish(status,output)
-        if(updated) {
-          const next=jobs.read(result.id)
-          if(previous.status!==next.status || previous.output!==next.output){observe?.(next);void save()}
-        }
-        return updated
-      }}
+      return wrapped ?? result
     },
     updateJob(id, patch) {
       // Task 4.4: emit ONLY on an observable change — the wrapper compares the
@@ -229,7 +283,7 @@ export function persistentJobRegistry(
       // same rule as the no-op kill above.
       if (updated) {
         const next = jobs.read(id)
-        if (prev !== undefined && (prev.status !== next.status || prev.output !== next.output)) observe?.(next)
+        if (prev !== undefined && (prev.status !== next.status || prev.output !== next.output || prev.result !== next.result)) observe?.(next)
         void save()
       }
       return updated
@@ -261,20 +315,26 @@ export function emitRestoredJobTransitions(
   persist: SubagentPersistence,
   snap: SubagentStateSnapshot,
   jobs: JobRegistry,
+  observe?: JobTransitionObserver,
 ): void {
   if (persist.parentSession === undefined) return
   for (const rec of snap.jobs) {
-    if (rec.status !== "running") continue
+    if (rec.status !== "running" || snap.formatVersion === 2 && rec.result) continue
     const view = jobs.read(rec.id)
-    append(persist.parentSession, jobStatusEvent(view))
+    if (observe) observe(view)
+    else {
+      if (!isNondurableSession(persist.parentSession)) throw Object.assign(new Error('Restored job facts require the registered source'), { code: 'FACT_OWNER_UNSUPPORTED' })
+      append(persist.parentSession, jobStatusEvent(view))
+    }
   }
 }
 
 export function persistentAgentTable(
   table: AgentTable,
   save: () => Promise<void>,
+  settleRequiredFacts?:()=>Promise<void>,
 ): AgentTable {
-  return {
+  const result:AgentTable = {
     ...table,
     update(path, expected, patch) {
       const updated = table.update(path, expected, patch)
@@ -290,6 +350,7 @@ export function persistentAgentTable(
       void save()
     },
   }
+  associateTableProjection(result,(entry,current,wait)=>persistProjection(captureTableProjection(table,entry),save,current,settleRequiredFacts,wait));return result
 }
 
 export function persistentRoleRegistry(
@@ -298,8 +359,29 @@ export function persistentRoleRegistry(
 ): RoleRegistry {
   return {
     ...roles,
-    register(role) {
-      roles.register(role)
+    register(role, retainCleanup) {
+      roles.register(role, retainCleanup ? originalCleanup => {
+        const state: { removed: boolean; saved: boolean; flight?: Promise<void>; failure?: { cause: unknown } } = { removed: false, saved: false }
+        retainCleanup(() => {
+          if (state.flight) return state.flight
+          // The original role and original store/save owner survive retirement.
+          // A failed save retries only bookkeeping, never a second removal.
+          const attempt = Promise.withResolvers<void>()
+          state.flight = attempt.promise
+          void attempt.promise.then(() => { state.flight = undefined }, cause => { state.failure = { cause }; state.flight = undefined })
+          let removal: ReturnType<typeof originalCleanup>
+          // The original entry is fenced synchronously even if a retainer
+          // closes it reentrantly before register has published that entry.
+          try { removal = state.removed ? undefined : originalCleanup() }
+          catch (cause) { attempt.reject(cause); return attempt.promise }
+          void Promise.resolve(removal).then(async () => {
+            state.removed = true
+            if (!state.saved) { await save(); state.saved = true }
+            state.failure = undefined
+          }).then(attempt.resolve, attempt.reject)
+          return attempt.promise
+        })
+      } : undefined)
       void save()
     },
     remove(name) {
@@ -312,21 +394,25 @@ export function persistentRoleRegistry(
 export function wireSubagentPersistence(
   state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry },
   persist: SubagentPersistence,
-): { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry } {
+): { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry; observe?: JobTransitionObserver; flushFacts(): Promise<void>; closeFacts(): Promise<void> } {
   const saveAll = async () => {
     await persist.coordinator.putDocument(persist.stateId, snapshotState(state))
   }
   // Task 4.4: the transition observer is wired ONLY when the caller handed the
   // live parent session (web path) — otherwise zero events (additive-only).
+  const owner = persist.factOwner ?? (persist.parentSession && isNondurableSession(persist.parentSession) ? createNondurableFactOwner(persist.parentSession) : undefined)
+  if (persist.parentSession && (!owner || owner.view !== persist.parentSession)) throw Object.assign(new Error('Job events require matching owned facts'), { code: 'FACT_OWNER_UNSUPPORTED' })
+  const facts = persist.parentSession ? createJobFacts(owner!) : undefined
   const observe: JobTransitionObserver | undefined =
     persist.parentSession === undefined
       ? undefined
-      : (job) => { append(persist.parentSession!, jobStatusEvent(job)) }
+      : (job) => { if (job.status !== 'recovery-required' && job.publication !== 'unqualified') facts!.record(jobStatusEvent(job)) }
   // Return wrapped registries (deterministic — no in-place mutation). The
   // caller uses the returned object for the 11 tools and later lookups.
   return {
-    jobs: persistentJobRegistry(state.jobs, async () => { await saveAll() }, observe),
-    table: persistentAgentTable(state.table, async () => { await saveAll() }),
+    observe, flushFacts: async () => { await facts?.flush() }, closeFacts: async () => { await facts?.close() },
+    jobs: persistentJobRegistry(state.jobs, async () => { await saveAll() }, observe,facts?.retainProjection,facts?.flush),
+    table: persistentAgentTable(state.table, async () => { await saveAll() },facts?.flush),
     roles: persistentRoleRegistry(state.roles, async () => { await saveAll() }),
   }
 }

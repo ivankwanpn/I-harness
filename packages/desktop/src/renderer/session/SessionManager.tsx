@@ -8,8 +8,9 @@ import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { managementError } from "./management-error.ts"
 import { SessionManagerMenu } from "./SessionManagerMenu.tsx"
+import type { SessionAction } from '../shell/SessionActions.tsx'
 import "./session-manager.css"
-export type ManageSession = (sessionId: string, action: "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread", title?: string) => Promise<void>
+export type ManageSession = (sessionId: string, action: SessionAction, title?: string) => Promise<void>
 interface Row { id: string; title?: string; projectId?: string; updatedAt?: number; turnCount?: number }
 interface Menu { kind: "session" | "destination"; sessionId?: string; element: HTMLButtonElement; workspaceId: string; archived: boolean }
 export interface ManageSessionBatchCommand { action: "archive" | "restore" | "delete" | "move"; sessionIds: string[]; projectId?: string; expectedOwners?: Record<string, string | null> }

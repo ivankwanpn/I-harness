@@ -1,14 +1,21 @@
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
+const cleanupIO = vi.hoisted(() => ({ beforeRemove: undefined as ((path: string) => Promise<void>) | undefined }))
+vi.mock('node:fs/promises', async original => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, rm: async (...args: Parameters<typeof fs.rm>) => { await cleanupIO.beforeRemove?.(String(args[0])); return fs.rm(...args) } }
+})
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { createContextOutputService } from '@i-harness/context-output'
+import { ContextStore } from '../../context-output/src/store.ts'
+import { physicalBytes } from '../../context-output/src/artifact/quota.ts'
 import { createCodeRetrievalService } from '@i-harness/code-retrieval'
 import type { CodeSnapshotReader } from '@i-harness/code-retrieval'
 import { createFileProviderRuntime } from '@i-harness/provider-runtime/file'
 import { createContextSubsystemSettings } from '../src/context-subsystems.ts'
 
 const roots: string[] = []; const closes: (() => Promise<void>)[] = []
-afterEach(async () => { for (const close of closes.splice(0)) await close(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+afterEach(async () => { cleanupIO.beforeRemove = undefined; for (const close of closes.splice(0)) await close(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 async function fixture(reader?: CodeSnapshotReader) {
   const base = resolve('build/plan/context-settings-fixtures'); await mkdir(base, { recursive: true })
   const root = await mkdtemp(join(base, 'owned-')); roots.push(root)
@@ -20,6 +27,63 @@ async function fixture(reader?: CodeSnapshotReader) {
   const controller = createContextSubsystemSettings({ settingsPath, workspaceKey: 'host-key', workspaceId: 'w', contextOutput, codeRetrieval, actionSessionId: 'human-owned', onReferencesChanged: async refs => { referenceLists.push(refs) } })
   return { root, settingsPath, contextOutput, codeRetrieval, controller, referenceLists }
 }
+it('returns a fresh context snapshot after exact-budget cleanup completes with its derived index unavailable', async () => {
+  const f = await fixture()
+  await f.controller.configure({ scope: 'workspace', contextOutput: { enabled: true } })
+  const input = { callId: 'capture', label: 'saved', text: 'original needle', complete: true }
+  const a = await f.contextOutput.capture({ ...input, sessionId: 'A' }), b = await f.contextOutput.capture({ ...input, sessionId: 'B', callId: 'survivor' })
+  if (!a || !b) throw new Error('Actual caller fixture refused capture')
+  const directory = new ContextStore(join(f.root, 'context'), 'w').directory
+  const survivorPaths = [join(directory, 'owners', b.id + '.json'), join(directory, 'blobs', b.id + '.txt'), join(directory, 'artifacts', b.id + '.json')]
+  const before = await Promise.all(survivorPaths.map(path => readFile(path)))
+  const full = await physicalBytes(directory)
+  await f.contextOutput.configure({ maxDiskBytes: full })
+  expect((await f.controller.state()).context).toMatchObject({ state: 'ready', results: 2 })
+  const snapshot = await f.controller.action({ target: 'context', action: 'clear', sessionId: 'A' })
+  expect(snapshot.context).toMatchObject({ state: 'error', results: 1, config: { maxDiskBytes: full } })
+  expect(snapshot.context.error).toMatch(/requested cleanup completed.*index unavailable/i)
+  expect(snapshot.context).toEqual(f.contextOutput.status())
+  await expect(readFile(join(directory, 'blobs', a.id + '.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+  await expect(readFile(join(directory, 'artifacts', a.id + '.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  for (const [index, path] of survivorPaths.entries()) expect(await readFile(path)).toEqual(before[index])
+  expect((await f.contextOutput.read({ sessionId: 'B' }, { refId: b.id })).text).toBe(input.text)
+  await expect(f.contextOutput.search({ sessionId: 'B' }, { query: 'needle' })).rejects.toThrow(/index unavailable/i)
+  expect(await physicalBytes(directory)).toBeLessThanOrEqual(full)
+})
+it('propagates the original context cleanup failure through the controller and snapshots incomplete cleanup', async () => {
+  const f = await fixture()
+  await f.controller.configure({ scope: 'workspace', contextOutput: { enabled: true } })
+  const input = { callId: 'capture', label: 'saved', text: 'original needle', complete: true }
+  const a = await f.contextOutput.capture({ ...input, sessionId: 'A' }), b = await f.contextOutput.capture({ ...input, sessionId: 'B', callId: 'survivor' })
+  if (!a || !b) throw new Error('Actual caller fixture refused capture')
+  const directory = new ContextStore(join(f.root, 'context'), 'w').directory
+  const survivorPaths = [join(directory, 'owners', b.id + '.json'), join(directory, 'blobs', b.id + '.txt'), join(directory, 'artifacts', b.id + '.json')]
+  const before = await Promise.all(survivorPaths.map(path => readFile(path)))
+  const fault = Object.assign(new Error('Actual caller canonical body unlink EIO'), { code: 'EIO' })
+  const originalManifest = await readFile(join(directory, 'artifacts', a.id + '.json'))
+  let cuts = 0
+  cleanupIO.beforeRemove = async path => {
+    if (path !== join(directory, 'blobs', a.id + '.txt')) return
+    cuts++
+    expect(JSON.parse(await readFile(join(directory, 'owners', a.id + '.json'), 'utf8'))).toEqual([])
+    throw fault
+  }
+  await expect(f.controller.action({ target: 'context', action: 'clear', sessionId: 'A' })).rejects.toBe(fault)
+  expect(cuts).toBe(1)
+  const snapshot = await f.controller.state()
+  expect(snapshot.context).toMatchObject({ state: 'error', results: 1 })
+  expect(snapshot.context.error).toContain(fault.message)
+  expect(snapshot.context.error).toContain('Requested original cleanup remains incomplete')
+  expect(snapshot.context.error).not.toContain('Requested cleanup completed')
+  expect(await readFile(join(directory, 'blobs', a.id + '.txt'), 'utf8')).toBe(input.text)
+  expect(await readFile(join(directory, 'artifacts', a.id + '.json'))).toEqual(originalManifest)
+  for (const [index, path] of survivorPaths.entries()) expect(await readFile(path)).toEqual(before[index])
+  cleanupIO.beforeRemove = undefined
+  const recovered = await f.controller.action({ target: 'context', action: 'clear', sessionId: 'A' })
+  expect(recovered.context).toMatchObject({ state: 'ready', results: 1 })
+  expect(recovered.context.error).toBeUndefined()
+  expect((await f.contextOutput.read({ sessionId: 'B' }, { refId: b.id })).text).toBe(input.text)
+})
 it('persists workspace overrides through the settings lease while preserving provider saves', async () => {
   const f = await fixture()
   const provider = createFileProviderRuntime({ settingsPath: f.settingsPath, credentialsPath: join(f.root, 'credentials.json') })

@@ -1,0 +1,7 @@
+.instruction-settings { display: grid; gap: 10px; min-width: 0; padding: 12px 0; }
+.instruction-settings h2, .instruction-settings p { margin: 0; }
+.instruction-settings p { color: var(--text-weak, inherit); font-size: .85rem; }
+.instruction-settings label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.instruction-settings input[type='number'] { width: 9rem; max-width: 100%; }
+.instruction-settings textarea { width: 100%; min-height: 5rem; box-sizing: border-box; resize: vertical; }
+.instruction-settings button { justify-self: start; }

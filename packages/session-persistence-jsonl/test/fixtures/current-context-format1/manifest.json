@@ -1,0 +1,312 @@
+{
+  "version": 1,
+  "product": "460a2aee9395dafe196eb31425dcc2c3fcdc259e",
+  "format": 1,
+  "packages": [
+    "@i-harness/core-session",
+    "@i-harness/fs-lock",
+    "@i-harness/fs-watch",
+    "@i-harness/harness-home",
+    "@i-harness/session-persistence",
+    "@i-harness/session-persistence-jsonl",
+    "@i-harness/settings",
+    "@i-harness/telemetry",
+    "chokidar",
+    "readdirp"
+  ],
+  "capsuleSha256": "5a70c62fc2b665350049cfddf7de3feb1963ec283b2e1b860f26c4ab5942a249",
+  "decodedBytes": 572790,
+  "files": [
+    {
+      "path": "LICENSE",
+      "source": "LICENSE",
+      "gitBlob": "b10a3bec3a5d113fa09d569f30e9d5ffa8b99e31",
+      "bytes": 1062,
+      "sha256": "a4717b19bd707ac39cf1d7d870f1cf69ff467292919551d64cff15ce0440e11d"
+    },
+    {
+      "path": "node_modules/@i-harness/core-session/package.json",
+      "source": "packages/core-session/package.json",
+      "gitBlob": "4afeb35395b673dbd21bb9aeebe83d9798141a73",
+      "bytes": 225,
+      "sha256": "8e3da6dee32f00a9eb8d1480c41ff0f5e99526d82073921ff74b623bef77b09f"
+    },
+    {
+      "path": "node_modules/@i-harness/core-session/src/inbox.ts",
+      "source": "packages/core-session/src/inbox.ts",
+      "gitBlob": "38749a1f809fd605b98f2d52db4c9cfc57fbf2a4",
+      "bytes": 7159,
+      "sha256": "60a99cf311926ff38d0659f9f2aea97d742a54a65159610885077d795582a18a"
+    },
+    {
+      "path": "node_modules/@i-harness/core-session/src/index.ts",
+      "source": "packages/core-session/src/index.ts",
+      "gitBlob": "832fbe91c9535945bbc25b32e2461be131a6ba7a",
+      "bytes": 56458,
+      "sha256": "397d5f5d904d5787c3e80b67492d3524906a41ba5d178b7eaa526437663775e7"
+    },
+    {
+      "path": "node_modules/@i-harness/fs-lock/package.json",
+      "source": "packages/fs-lock/package.json",
+      "gitBlob": "fd7f4c8f59f094c24bf6f1e050f039741c11299c",
+      "bytes": 332,
+      "sha256": "0f6b9ca3a72591b56ac96373ea33f4ce1d75599f8b8a256d2d560165fee00757"
+    },
+    {
+      "path": "node_modules/@i-harness/fs-lock/src/errors.ts",
+      "source": "packages/fs-lock/src/errors.ts",
+      "gitBlob": "147563ee5baf20416393857948577a856d3731ef",
+      "bytes": 869,
+      "sha256": "27bf9c05414413f513170fe805e687b859c66b78fc7c63aa838d2f7749929d2c"
+    },
+    {
+      "path": "node_modules/@i-harness/fs-lock/src/index.ts",
+      "source": "packages/fs-lock/src/index.ts",
+      "gitBlob": "069cb4727476aca8f33c439f4903f937e261fae8",
+      "bytes": 4246,
+      "sha256": "bba853e4b8e4ce55020c7167dcdf50f7f8a19dae79154bd1e5d91ca1add298bf"
+    },
+    {
+      "path": "node_modules/@i-harness/fs-lock/src/linux.ts",
+      "source": "packages/fs-lock/src/linux.ts",
+      "gitBlob": "ec5033d3e1ad68a976bdf25bddda05b527071f50",
+      "bytes": 8490,
+      "sha256": "e37df4256aea6ee41866936630f625772dd84c4f5e3a982f157e2e95ee618648"
+    },
+    {
+      "path": "node_modules/@i-harness/fs-lock/src/win32.ts",
+      "source": "packages/fs-lock/src/win32.ts",
+      "gitBlob": "4096ada453d0a7a46dbfe7176d2c6acbf52d8af6",
+      "bytes": 10924,
+      "sha256": "ed0f96ad102fc4bb14fa1113e71f6dd6c51247eac4be10c7e16a053310493c7d"
+    },
+    {
+      "path": "node_modules/@i-harness/fs-watch/package.json",
+      "source": "packages/fs-watch/package.json",
+      "gitBlob": "5c5a0c65105bc600db0d1c05818929ad418e73df",
+      "bytes": 271,
+      "sha256": "276502b5c08be3989de4ed382b1c93dffb8e49edc7568c2fe56685417b5742d0"
+    },
+    {
+      "path": "node_modules/@i-harness/fs-watch/src/index.ts",
+      "source": "packages/fs-watch/src/index.ts",
+      "gitBlob": "1f5e326b5ad29893f172628626dc5d203e6f7887",
+      "bytes": 7918,
+      "sha256": "9a6cd524d6ac2376867007d9c2894e5d2de41d7c9a887ef1e6ad195a6b29c6b9"
+    },
+    {
+      "path": "node_modules/@i-harness/harness-home/package.json",
+      "source": "packages/harness-home/package.json",
+      "gitBlob": "c6143d1021bd81e007cc1d82a3f249d31652b58c",
+      "bytes": 231,
+      "sha256": "a76de9400317720905104331e3bf75153174a7903abd01eb3885f5ef3d6eed59"
+    },
+    {
+      "path": "node_modules/@i-harness/harness-home/src/index.ts",
+      "source": "packages/harness-home/src/index.ts",
+      "gitBlob": "012c5f67fb95ebfbfaf95d4a27f0fecbd444600b",
+      "bytes": 1746,
+      "sha256": "1b2f748299bb3aa249188f8adaea152a92ec675981cb35122b8030fff0fe1be1"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence-jsonl/package.json",
+      "source": "packages/session-persistence-jsonl/package.json",
+      "gitBlob": "1d550bbce845e862f8e0c1f2e879e96dbe15ff86",
+      "bytes": 387,
+      "sha256": "2317b6fa6d7a98bfee2c4d46f2e2faa90f995a29de32569088cfd56bb74deef2"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence-jsonl/src/format.ts",
+      "source": "packages/session-persistence-jsonl/src/format.ts",
+      "gitBlob": "1b504f35d7f8b043bc6f9c7ee5c10e0c03799b96",
+      "bytes": 4005,
+      "sha256": "08e7c33aa6630c25f83b9a4a07bc1fb75d2e09ebeefc130e5bfb802b5fed39a0"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence-jsonl/src/index.ts",
+      "source": "packages/session-persistence-jsonl/src/index.ts",
+      "gitBlob": "0799521724a4c00a5823d60ee7dfdbfa18e56b94",
+      "bytes": 16730,
+      "sha256": "c45166d268658c62ff4f4f1269d72be2e7b56a060ac7505fe2981f6dda2872cb"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence/package.json",
+      "source": "packages/session-persistence/package.json",
+      "gitBlob": "bb1b75fb4ed47b3ebf58b39073659268505bb0eb",
+      "bytes": 517,
+      "sha256": "5ac292d4091aa0cac6487974d7fe725473ad42f026757a5e53ced2b6c24be26f"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence/src/fork.ts",
+      "source": "packages/session-persistence/src/fork.ts",
+      "gitBlob": "18296a9008e8e84e07c8170bcb9ccfc2132cd0cc",
+      "bytes": 11721,
+      "sha256": "6be1d36adab0f6cd6da67d59780fd3ecb6a18afb37523094e07c27864edab755"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence/src/index.ts",
+      "source": "packages/session-persistence/src/index.ts",
+      "gitBlob": "9debc97a07fadd073ed89fc0dd29baf756f6d86f",
+      "bytes": 35486,
+      "sha256": "56e268bdbda2be2cb2be7edb66e186a57d07621032b54e8d61733db776e50555"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence/src/repair.ts",
+      "source": "packages/session-persistence/src/repair.ts",
+      "gitBlob": "ba1fa2138b120ce92564aad5eec7c057c08399dc",
+      "bytes": 11363,
+      "sha256": "04acad705bb940113729f00f49d63516bd3e1c4abcb7368d7c5fc6372550fc90"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence/src/store-root.ts",
+      "source": "packages/session-persistence/src/store-root.ts",
+      "gitBlob": "1e9eee422b186dd47ad41aa6f564406ab83eacc9",
+      "bytes": 980,
+      "sha256": "5ea968fa4b66a9da4aae5c3a3e5e480bef20491d2947d69639b69690326eb0b0"
+    },
+    {
+      "path": "node_modules/@i-harness/session-persistence/src/write-behind.ts",
+      "source": "packages/session-persistence/src/write-behind.ts",
+      "gitBlob": "dfbe063b1a0e33e6a55538f7221f9b870e8205d4",
+      "bytes": 4588,
+      "sha256": "15eaa00406244f252185d5f2f2b90e9c6f928db89e2adf702003c8674c67cdf9"
+    },
+    {
+      "path": "node_modules/@i-harness/settings/package.json",
+      "source": "packages/settings/package.json",
+      "gitBlob": "a6dd83c2a575eee156d146a0f57a78a2c9ce6e8e",
+      "bytes": 376,
+      "sha256": "78f5ccdc8fbd8a648187f60fc81f7f3f2446f3aa332760a17b18d107eebd7642"
+    },
+    {
+      "path": "node_modules/@i-harness/settings/src/context-subsystems.ts",
+      "source": "packages/settings/src/context-subsystems.ts",
+      "gitBlob": "ac29045d2f9e9f9f815e354ce89a69d375fb4d57",
+      "bytes": 6158,
+      "sha256": "6bd2beea364fef2142bef9ef71a719c1e98d4e90b72bb84fc1d27f4c1a56c1d8"
+    },
+    {
+      "path": "node_modules/@i-harness/settings/src/index.ts",
+      "source": "packages/settings/src/index.ts",
+      "gitBlob": "4f121029f3b800c9a468b324433ff390c6ac9a4b",
+      "bytes": 81337,
+      "sha256": "bd821a86b0cb24559fbcc1618e76d1a4d032f0fa27706170a59c1eb504d8b603"
+    },
+    {
+      "path": "node_modules/@i-harness/settings/src/sections.ts",
+      "source": "packages/settings/src/sections.ts",
+      "gitBlob": "24f00dc93f9bbeb5c01d91f95fabc57afe7a7491",
+      "bytes": 25793,
+      "sha256": "0173155114d2f52cde87120d16a4edbdbeacc5be4d018ba75d29875e1d067fc4"
+    },
+    {
+      "path": "node_modules/@i-harness/telemetry/package.json",
+      "source": "packages/telemetry/package.json",
+      "gitBlob": "51af9b7443e9fe7ba3745637ec302ce6748ac692",
+      "bytes": 206,
+      "sha256": "6e9a636cf6a5be471cf8c99fbc71bdd2f1b3a8a3525de38c4a6573e1c1349551"
+    },
+    {
+      "path": "node_modules/@i-harness/telemetry/src/index.ts",
+      "source": "packages/telemetry/src/index.ts",
+      "gitBlob": "9b1013d9cbd938dbf6cc7cbaf5972f12cdba1a0b",
+      "bytes": 806,
+      "sha256": "131bd8414df2fbbb7704bc542538bfac0e365a07e7f12fdbb5e4966ed834b10e"
+    },
+    {
+      "path": "node_modules/@i-harness/telemetry/src/jsonl.ts",
+      "source": "packages/telemetry/src/jsonl.ts",
+      "gitBlob": "861e0ecc63f25ca474dcb29b526eb8fc7820640b",
+      "bytes": 380,
+      "sha256": "157316369239b9bc498c4000020bf89256b9ebd78eb71baf914a472f498a5c3e"
+    },
+    {
+      "path": "node_modules/@i-harness/telemetry/src/manifest.ts",
+      "source": "packages/telemetry/src/manifest.ts",
+      "gitBlob": "37206649666dfc91e39f3805ea041fef2505feb2",
+      "bytes": 5446,
+      "sha256": "d1560ceb8302ca7850de6cdc4cbbd95973bb1c010d70582ff45b2804a5be1d67"
+    },
+    {
+      "path": "node_modules/@i-harness/telemetry/src/metrics.ts",
+      "source": "packages/telemetry/src/metrics.ts",
+      "gitBlob": "59d038d70c50098b124dc762c307505686eb3d7d",
+      "bytes": 7808,
+      "sha256": "4fd86cd0ab346bfded9773fd56e8dd24a9c9354d35fa5b38971453547dfb1b93"
+    },
+    {
+      "path": "node_modules/@i-harness/telemetry/src/telemetry.ts",
+      "source": "packages/telemetry/src/telemetry.ts",
+      "gitBlob": "8fc558f9771385af453018f5567f6736266bedee",
+      "bytes": 688,
+      "sha256": "d2e49265f0d6429af94955e199e05aa3c0cda062f74e035bec5885c47da77b32"
+    },
+    {
+      "path": "node_modules/@i-harness/telemetry/src/types.ts",
+      "source": "packages/telemetry/src/types.ts",
+      "gitBlob": "ecd286f69c7f3e790feb645ed0256101689d9d72",
+      "bytes": 3616,
+      "sha256": "d6247f6b19f43714a69e63894d65f3e2d0fe6e509dec7dcfa5c6a955b581a5aa"
+    },
+    {
+      "path": "node_modules/chokidar/handler.d.ts",
+      "bytes": 3912,
+      "sha256": "97a50b01aa5289ea4e360a4d86f2dd8fed81a03ad657439b369dcace978feca2"
+    },
+    {
+      "path": "node_modules/chokidar/handler.js",
+      "bytes": 24768,
+      "sha256": "dbc95cbb1f149acf9155fc605a5a6aeeecf354aeff7606192378d71778126450"
+    },
+    {
+      "path": "node_modules/chokidar/index.d.ts",
+      "bytes": 8103,
+      "sha256": "7c06703b5cba08462692c2df83b4ec2faedac46ecd3a6a83240db8729f0efa71"
+    },
+    {
+      "path": "node_modules/chokidar/index.js",
+      "bytes": 29452,
+      "sha256": "4d1669ff207e874eb6185b8a4f04c1e694120b9eaf6723ddea1be7ce5583b164"
+    },
+    {
+      "path": "node_modules/chokidar/LICENSE",
+      "bytes": 1124,
+      "sha256": "bdfd5e0edb6089e6586c8f15e6a86fab83ffbeeda3b3b7b33734ccb8c5906965"
+    },
+    {
+      "path": "node_modules/chokidar/package.json",
+      "bytes": 1346,
+      "sha256": "cb75ae8c3a8ac02e09efc5886a75a87256474ac8349ceea731ec389c03a70d96"
+    },
+    {
+      "path": "node_modules/chokidar/README.md",
+      "bytes": 13357,
+      "sha256": "1b82b52f67c8b964ad6f1c9e1ea052d305d9a16421a48f732c5d2d5a3d821b86"
+    },
+    {
+      "path": "node_modules/readdirp/index.d.ts",
+      "bytes": 4188,
+      "sha256": "29b4fbc889e18ffcf18274ecd17a941320164a6fab2df97c416cbd9aeb5f74a1"
+    },
+    {
+      "path": "node_modules/readdirp/index.js",
+      "bytes": 13638,
+      "sha256": "a42d9f1a7de9f9db1f2e3d7afe6ca82d337a7e65a49edbbce1f62de6b1ea18f1"
+    },
+    {
+      "path": "node_modules/readdirp/LICENSE",
+      "bytes": 1114,
+      "sha256": "dffec71d93f273d2af7b54c6c7e7e70b3289c632ec0d7253210ec21ac336d5ac"
+    },
+    {
+      "path": "node_modules/readdirp/package.json",
+      "bytes": 1398,
+      "sha256": "e4243493fb09c5a7b68b2128892b6e2fa3bbc1422030a2a777975fba3a1784f6"
+    },
+    {
+      "path": "node_modules/readdirp/README.md",
+      "bytes": 6494,
+      "sha256": "3a5dbfbb94a1b9dcb1321c119ed079a146f9ce0a02f177a698135456eceaaec6"
+    }
+  ]
+}

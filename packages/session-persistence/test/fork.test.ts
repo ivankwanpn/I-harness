@@ -1,19 +1,17 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { append, createSession, deriveMessages, rewindCuts, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, rewindCuts, toJSONL, type SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
   createSessionCoordinator,
   forkSession,
   remapSeedEvent,
 } from "../src/index.ts"
-// Task 2A: `SessionForkUnavailableError` and `completedTurnPrefix` are no longer
-// exported through the package entry (their only outside consumer was this
-// test); the behavior under test is unchanged, so the assertions below are
-// untouched and only the import path moves to the declaring module.
-import { SessionForkUnavailableError, completedTurnPrefix } from "../src/fork.ts"
+// The unrelated legacy remap helper keeps its own physical-prefix controls.
+import { completedTurnPrefix } from "../src/fork.ts"
 
 async function fixture(): Promise<{
   root: string
@@ -21,7 +19,7 @@ async function fixture(): Promise<{
   cleanup(): Promise<void>
 }> {
   const root = await mkdtemp(join(tmpdir(), "ih-session-fork-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   return {
     root,
     coordinator,
@@ -33,6 +31,32 @@ async function fixture(): Promise<{
 }
 
 describe("forkSession", () => {
+  it('forks a complete literal replacement prefix with an absent legacy reset list', async () => {
+    const { root, coordinator, cleanup } = await fixture()
+    const events: SessionEvent[] = [
+      { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H' },
+      { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: 'E' }, { type: 'step/end', seq: 4 }, { type: 'turn/end', seq: 5 },
+      { type: 'compaction/reset', seq: 6 } as SessionEvent,
+      { type: 'compaction/replacement', version: 1, seq: 7, replacementId: 'r7', text: 'S',
+        coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }],
+        insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } },
+    ]
+    const lines = toJSONL({ formatVersion: 7, events }).split('\n')
+    lines[0] = JSON.stringify({ ...JSON.parse(lines[0]!), sessionId: 'source', createdAt: 'literal' })
+    const original = lines.join('\n'), path = join(root, 'source.jsonl')
+    await writeFile(path, original)
+    try {
+      const forked = await forkSession(coordinator, 'source')
+      expect(forked.seedLength).toBe(3)
+      const child = await coordinator.openManagedDocument(forked.sessionId)
+      expect(child.view.events.map(event => event.type)).toEqual(['conversation/seed-manifest', 'conversation/seed-group', 'conversation/seed-group', 'session/bootstrap'])
+      expect(deriveMessages(child.view).map(message => message.content)).toEqual(['H', 'S'])
+      expect(await child.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', seqs: [4], receipt: { owner: { sessionId: forked.sessionId } } })
+      const upgraded = await readFile(path, 'utf8')
+      expect(JSON.parse(upgraded.split('\n')[0]!).formatVersion).toBe(CURRENT_FORMAT_VERSION)
+      expect(upgraded.split('\n').slice(1).join('\n')).toBe(original.split('\n').slice(1).join('\n'))
+    } finally { await cleanup() }
+  })
   it("keeps an image admission with its retained user turn", async () => {
     const { coordinator, cleanup } = await fixture()
     try {
@@ -82,16 +106,16 @@ describe("forkSession", () => {
     await mkdir(root)
     const outsidePath = join(outer, "secret.jsonl")
     const outside = [
-      JSON.stringify({ formatVersion: 1, sessionId: "secret", createdAt: "x" }),
+      JSON.stringify({ formatVersion: 2, sessionId: "secret", createdAt: "x" }),
       JSON.stringify({ type: "turn/start", seq: 0 }),
       JSON.stringify({ type: "user/message", text: "outside secret", seq: 1 }),
       JSON.stringify({ type: "turn/end", seq: 2 }),
       "",
     ].join("\n")
     await writeFile(outsidePath, outside, "utf8")
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
     try {
-      await expect(forkSession(coordinator, "../secret")).rejects.toThrow(/outside the JSONL store root/)
+      await expect(forkSession(coordinator, "../secret")).rejects.toThrow('Invalid fork request core')
       expect(await coordinator.list()).toEqual([])
       expect(await readFile(outsidePath, "utf8")).toBe(outside)
     } finally {
@@ -117,12 +141,13 @@ describe("forkSession", () => {
 
       const result = await forkSession(coordinator, "source")
       expect((await coordinator.profile(result.sessionId)).meta.modelSelection).toEqual({ provider: "custom", model: "m" })
-      expect(result).toMatchObject({ sessionId: expect.any(String), seedLength: 8, title: "Source title" })
+      expect(result).toMatchObject({ kind: 'ready', sessionId: expect.any(String), seedLength: 5, title: "Source title" })
       const child = await coordinator.load(result.sessionId)
-      expect(child.session.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+      expect(child.session.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5])
+      expect(deriveMessages(child.session).map(message => message.content)).toEqual(['one', 'answer one', 'two', 'answer two'])
       expect((await coordinator.profile(result.sessionId)).meta).toMatchObject({
         parentSession: "source",
-        seedLength: 8,
+        seedLength: 5,
         title: "Source title",
         workspaceId: "ws-source",
       })
@@ -149,8 +174,9 @@ describe("forkSession", () => {
         title: "Fork title",
         workspaceId: "ws-override",
       })
-      expect(result).toMatchObject({ seedLength: 4, title: "Fork title" })
+      expect(result).toMatchObject({ seedLength: 3, title: "Fork title" })
       expect((await coordinator.load(result.sessionId)).session.events).toHaveLength(4)
+      expect(deriveMessages((await coordinator.load(result.sessionId)).session).map(message => message.content)).toEqual(['one', 'answer one'])
       expect((await coordinator.profile(result.sessionId)).meta.workspaceId).toBe("ws-override")
     } finally {
       await cleanup()
@@ -180,7 +206,7 @@ describe("forkSession", () => {
     const { coordinator, cleanup } = await fixture()
     try {
       await coordinator.create({ sessionId: "source" })
-      await expect(forkSession(coordinator, "source")).rejects.toBeInstanceOf(SessionForkUnavailableError)
+      await expect(forkSession(coordinator, "source")).rejects.toMatchObject({ name: 'ForkOperationError', kind: 'outcome', outcome: { kind: 'refused', reason: 'no-completed-boundary' } })
     } finally {
       await cleanup()
     }
@@ -217,29 +243,28 @@ describe("forkSession", () => {
         .toEqual([{ cutFrom: 5, markerSeq: 8 }])
 
       const result = await forkSession(coordinator, "source")
-      expect(result.seedLength).toBe(8)
+      expect(result.seedLength).toBe(5)
       const child = (await coordinator.load(result.sessionId)).session
       expect(child.events.map((event) => event.type)).toEqual([
-        "turn/start", "user/message", "assistant/message", "turn/end",
-        "turn/start", "user/message", "assistant/message", "turn/end",
+        'conversation/seed-manifest', 'conversation/seed-group', 'conversation/seed-group',
+        'conversation/seed-group', 'conversation/seed-group', 'session/bootstrap',
       ])
-      expect(child.events
-        .filter((event) => event.type === "user/message" || event.type === "assistant/message")
-        .map((event) => (event as { text: string }).text))
+      expect(deriveMessages(child).map(message => message.content))
         .toEqual(["one", "answer one", "three", "answer three"])
       // The child is a fresh session: seq === index (loadOwned's invariant) and
       // no phantom rewind cut of its own (the child never had those turns).
-      expect(child.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+      expect(child.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5])
       expect(rewindCuts(child)).toEqual([])
       const owned = await coordinator.loadOwned(result.sessionId)
-      expect(owned.session.events).toHaveLength(8)
+      expect(owned.session.events).toHaveLength(6)
 
       // atSeq inside the hidden turn still resolves to the visible prefix:
       // the boundary is the hidden turn's own end, which the cut then drops.
       const atHidden = await forkSession(coordinator, "source", { atSeq: 6 })
-      expect(atHidden.seedLength).toBe(4)
+      expect(atHidden.seedLength).toBe(3)
       expect((await coordinator.load(atHidden.sessionId)).session.events.map((event) => event.seq))
         .toEqual([0, 1, 2, 3])
+      expect(deriveMessages((await coordinator.load(atHidden.sessionId)).session).map(message => message.content)).toEqual(['one', 'answer one'])
     } finally {
       await cleanup()
     }
@@ -262,16 +287,17 @@ describe("forkSession", () => {
       await coordinator.append("source", log.events)
 
       const result = await forkSession(coordinator, "source")
-      expect(result.seedLength).toBe(4)
+      expect(result.seedLength).toBe(3)
       const child = (await coordinator.load(result.sessionId)).session
       // No orphan trailing turn/start (which repairTurnTail would close with a
       // synthetic turn/end, rewriting the child's file on the next loadOwned).
       expect(child.events.map((event) => event.type))
-        .toEqual(["turn/start", "user/message", "assistant/message", "turn/end"])
+        .toEqual(['conversation/seed-manifest', 'conversation/seed-group', 'conversation/seed-group', 'session/bootstrap'])
+      expect(deriveMessages(child).map(message => message.content)).toEqual(['one', 'answer one'])
       expect(child.events.map((event) => event.seq)).toEqual([0, 1, 2, 3])
       expect((await coordinator.loadOwned(result.sessionId)).session.events
         .map((event) => event.type))
-        .toEqual(["turn/start", "user/message", "assistant/message", "turn/end"])
+        .toEqual(['conversation/seed-manifest', 'conversation/seed-group', 'conversation/seed-group', 'session/bootstrap'])
     } finally {
       await cleanup()
     }

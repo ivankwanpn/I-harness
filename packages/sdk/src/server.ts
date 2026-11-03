@@ -1,11 +1,13 @@
+import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { captureBootstrapCaptureRequest, type ForkExecutionControl } from '@i-harness/session-persistence'
+import { readForkPrepareRequest, readForkPrepareResult, readForkCommand, readForkOperation, readForkOutcome, readForkHostErrorData, ForkOperationError,
+  type ForkPrepareRequest, type ForkPrepareResult, type ForkCommand, type ForkOutcome, type ForkOperation } from './fork.ts'
 // M27 R-C4b: the SessionService-backed SDK server — in-process JSON-RPC
 // handler over the C-region SessionService. The CLI wires it to stdio
 // (`i-harness sdk`); an embedder can wire it to any duplex.
 //
-// Wire contract (methods) — ALL 19 switch cases below, in switch order (the
-// list was re-written from the switch on 2026-09-22; it had omitted seven
-// methods — session/create, session/fork, session/model/state,
-// session/model/set, session/tasks, session/tasks/cancel, session/dashboard):
+// Wire contract (methods), with host-gated semantic fork callbacks:
 //   initialize {clientInfo?} [M68 v3 — THE GATE]
 //                          → { name, version, protocolVersion, capabilities };
 //                            opens the gate and captures the connection
@@ -13,8 +15,9 @@
 //                            (same reply, first-wins identity)
 //   session/create {}      [additive; host-gated on opts.createSession]
 //                          → { sessionId } — absent seam → -32601
-//   session/fork {sessionId} [additive; host-gated on opts.forkSession]
-//                          → { sessionId } — absent seam → -32601
+//   session/fork/prepare   → closed ForkPrepareResult
+//   session/fork/begin|retry {operation} → closed ForkOutcome
+//                          (requires both genuine host callbacks)
 //   session/model/state {sessionId} [additive; host-gated on opts.modelState]
 //                          → SessionModelState — absent seam → -32601
 //   session/model/set {sessionId, selection} [additive; host-gated]
@@ -38,8 +41,8 @@
 //                            registry; an unknown id keeps the not-found
 //                            semantics (-32602 "unknown job/task")
 //   session/cancel {sessionId}   [M41b v1.1]
-//                          → { cancelled, reason? } — aborts the in-flight
-//                            submit's per-session AbortController
+//                          → { cancelled, reason? } — requests cancellation,
+//                            then joins the original delivery Stop receipt
 //   session/history {sessionId, afterSeq?, limit?}  [M41a v1]
 //                          → { events, nextSeq }; unknown session → -32602
 //                            with an explicit "session not found" message
@@ -70,10 +73,15 @@
 //   session/status { sessionId, status, error? } — lifecycle transitions
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
-import { append, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type Session, type SessionEvent } from "@i-harness/core-session"
+import { createNondurableFactOwner, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
+import { withRewindFacts } from '@i-harness/session-executor'
 import { transportSessionEvents } from "./image-transport.ts"
+import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
+export { parseResultPageQuery } from '@i-harness/session-executor'
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
+import { createManagedEventBridge } from "./managed-event-bridge.ts"
+import { onOriginalHostAssembly } from "../../session-executor/src/host-assembly-observer.ts"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import {
@@ -119,6 +127,10 @@ const HISTORY_DEFAULT_LIMIT = 500
 const HISTORY_LIMIT_CAP = 1000
 
 export interface SdkServerOptions {
+  /** Visibility is supplied by the host; never falls back to SessionService. */
+  readResultPage?: ResultPageHost
+  /** Explicit host opt-in: original pin-owned dependency catalog witnesses. */
+  supportsResultDependencyMembership?: boolean
   /** Server → client writer (responses AND notifications both flow here when
    * provided; see also onNotify for notifications only). */
   onWrite?: (message: RpcMessage) => void
@@ -144,7 +156,10 @@ export interface SdkServerOptions {
   /** Additive session lifecycle/model seams. Capability rows are advertised
    * only when the corresponding host operation is actually available. */
   createSession?: () => Promise<SessionIdResult>
+  /** Retired callback accepted only for source compatibility; never invoked. */
   forkSession?: (sessionId: string) => Promise<SessionIdResult>
+  prepareForkSession?: (request: ForkPrepareRequest) => Promise<ForkPrepareResult>
+  executeForkSession?: (command: ForkCommand, control?: ForkExecutionControl) => Promise<ForkOutcome>
   modelState?: (sessionId: string) => Promise<SessionModelState>
   setSessionModel?: (sessionId: string, selection: SessionModelSelection) => Promise<void>
   /** Server info version payload (defaults to "0.1.0"). */
@@ -165,7 +180,7 @@ export interface RewindServiceSurface {
   execute(
     targetTurnIndex: number,
     mode: RewindMode,
-    hooks: { appendEvent: (event: unknown) => void },
+    hooks: { appendEvent: (event: Extract<MutableSessionEvent,{type:'rewind/point'}>) => unknown },
   ): Promise<RewindExecuteResponse>
 }
 
@@ -174,7 +189,7 @@ export interface SdkServer {
    * produced no response — malformed lines, notifications, fire-and-forget).
    * Async methods (session/prompt) resolve their response late; notifications
    * are pushed as they happen via onNotify. */
-  handleLine(line: string): Promise<string | null>
+  handleLine(line: string, controls?: { fork?: ForkExecutionControl }): Promise<string | null>
   /** M68 batch B (v3): the connection identity captured at the FIRST
    * `initialize` — `{ name?, version? }`, absent when the client sent none (or
    * sent garbage, which warns instead of rejecting). Captured ONCE: a second
@@ -202,7 +217,27 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const preparingSessions = new Map<string, Promise<boolean>>()
   const preparingHistorySessions = new Map<string, Promise<Session | undefined>>()
   const inflight = new Map<string, Set<Inflight>>()
+  const requestFlights = new Set<Promise<RpcMessage>>(), requestContext = new AsyncLocalStorage<{ active: boolean }>(), forkAbort = new AbortController()
+  let closing: Promise<void> | undefined
+  let executionDetached = false, assemblyDetached = false, managedDetached = false
   let closed = false
+  const forkAvailable = () => typeof opts.prepareForkSession === 'function' && typeof opts.executeForkSession === 'function'
+  function requestFlight(use: () => Promise<RpcMessage>): Promise<RpcMessage> {
+    const scope = { active: true }
+    const promise = Promise.resolve().then(() => requestContext.run(scope, use)).finally(() => { scope.active = false })
+    requestFlights.add(promise); promise.then(() => requestFlights.delete(promise), () => requestFlights.delete(promise)); return promise
+  }
+  function forkFailure(id: number | string, operation: ForkOperation, cause: unknown): RpcMessage {
+    const data = { version: 1 as const, kind: 'session-fork-error' as const, operation, capture: 'unknown' as const, reason: 'internal' as const }
+    if (cause instanceof ForkOperationError && cause.hostError) {
+      try {
+        if (JSON.stringify(readForkOperation(cause.operation)) === JSON.stringify(operation)) {
+          return makeFailure(id, INTERNAL_ERROR, 'Session fork unavailable', readForkHostErrorData(cause.hostError, operation))
+        }
+      } catch { /* A malformed host error never echoes capabilities or raw values. */ }
+    }
+    return makeFailure(id, INTERNAL_ERROR, 'Session fork unavailable', data)
+  }
 
   // M68 batch B (v3): the connection-scoped state — the gate and the identity
   // captured behind it. Both are per-CONNECTION (this server object), never
@@ -252,7 +287,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   // Session event bridge: one subscription per live assembly — every appended
   // session/event flows to the client. Detached on close.
   const assemblyUnsubscribes = new Map<string, () => void>()
-  const offAssembly = service.onAssembly((assembly) => {
+  const attachAssembly = (assembly: Parameters<Parameters<SessionService["onAssembly"]>[0]>[0]) => {
     if (assembly.sessionId === undefined) return
     // The map holds AT MOST ONE closure per session, so a second assembly for
     // the same id (the service rebuilds one per closeSession → getOrCreate)
@@ -277,10 +312,19 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       }
     })
     assemblyUnsubscribes.set(assembly.sessionId, unsubscribe)
-  })
+  }
+  let offAssembly: () => void
+  try { offAssembly = onOriginalHostAssembly(service, attachAssembly) }
+  catch { offAssembly = service.onAssembly(attachAssembly) }
 
-  const statusNotify = (sessionId: string, status: string, error?: string): void => {
-    emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}) }))
+  const managedEvents = createManagedEventBridge(emitMessage)
+  const offManaged = service.onManagedRuntimeLifecycle?.(event => {
+    if (event.kind === 'published') managedEvents.attach(event.sessionId, event.owner)
+    else if (event.kind === 'retiring') managedEvents.retire(event.sessionId,event.owner)
+  }, {includeExisting:true})
+
+  const statusNotify = (sessionId: string, status: string, error?: string, modelFailure?: ModelFailureFacts): void => {
+    emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) }))
   }
   const offExecutionState = service.onExecutionState?.(state => {
     if (!closed) emitMessage(makeNotification("session/execution-state", state))
@@ -374,7 +418,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     return preparation
   }
 
-  async function handleRequest(method: string, params: unknown, id: number | string): Promise<RpcMessage> {
+  async function handleRequest(method: string, params: unknown, id: number | string, forkControl?: ForkExecutionControl): Promise<RpcMessage> {
     // M68 batch B (v3): `initialize` is THE GATE — the one funnel every request
     // passes, so it sits above the switch (an unknown method is gated too: "has
     // this connection handshaken?" is answered before "does this method exist",
@@ -411,6 +455,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             "prompt-context": ["1"],
             "prompt-images": ["1"],
             "session-context": ["1"],
+            ...(opts.readResultPage ? { 'session-result-read': opts.supportsResultDependencyMembership ? ['1', '2'] : ['1'] } : {}),
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],
@@ -432,7 +477,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             // listing source; no host seam needed.
             "session-dashboard": ["1"],
             ...(opts.createSession !== undefined ? { "session-create": ["1"] } : {}),
-            ...(opts.forkSession !== undefined ? { "session-fork": ["1"] } : {}),
+            ...(forkAvailable() ? { 'session-fork-bootstrap': ['1'] } : {}),
             ...(opts.modelState !== undefined && opts.setSessionModel !== undefined
               ? { "session-model": ["1"] }
               : {}),
@@ -452,20 +497,35 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         }
       }
       case "session/fork": {
-        if (opts.forkSession === undefined) {
-          return makeFailure(id, METHOD_NOT_FOUND, "session/fork unavailable")
-        }
-        const p = params as { sessionId?: unknown } | undefined
-        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
-          return makeFailure(id, INVALID_PARAMS, "session/fork requires a non-empty sessionId")
-        }
+        return makeFailure(id, METHOD_NOT_FOUND, 'session/fork retired')
+      }
+      case 'session/fork/prepare': {
+        if (!forkAvailable()) return makeFailure(id, METHOD_NOT_FOUND, 'Semantic fork unavailable')
+        let request: ForkPrepareRequest
+        try { request = readForkPrepareRequest(params) }
+        catch { return makeFailure(id, INVALID_PARAMS, 'Invalid fork preparation request') }
+        return requestFlight(async () => {
+          try { return makeSuccess(id, readForkPrepareResult(await opts.prepareForkSession!(request))) }
+          catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable') }
+        })
+      }
+      case 'session/fork/begin':
+      case 'session/fork/retry': {
+        if (!forkAvailable()) return makeFailure(id, METHOD_NOT_FOUND, 'Semantic fork unavailable')
+        let command: ForkCommand
         try {
-          const result = validSessionIdResult(await opts.forkSession(p.sessionId), "session/fork")
-          knownSessions.add(result.sessionId)
-          return makeSuccess(id, result)
-        } catch (error) {
-          return hostMethodFailure(id, "session/fork", error)
-        }
+          if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).length !== 1 || !Object.hasOwn(params, 'operation')) throw new TypeError('Invalid fork params')
+          command = readForkCommand({ operation: (params as { operation: unknown }).operation, mode: method === 'session/fork/begin' ? 'begin' : 'retry' })
+          captureBootstrapCaptureRequest({ invocation: command.operation.invocation, core: command.operation.prepared.core, requestIntent: command.operation.prepared.requestIntent })
+        } catch { return makeFailure(id, INVALID_PARAMS, 'Invalid fork operation') }
+        return requestFlight(async () => {
+          try {
+            const control: ForkExecutionControl = { ...forkControl, signal: AbortSignal.any([forkAbort.signal, ...(forkControl?.signal ? [forkControl.signal] : [])]) }
+            const result = readForkOutcome(await opts.executeForkSession!(command, control), command.operation)
+            if (result.kind === 'ready' || result.kind === 'adopted') knownSessions.add(result.sessionId)
+            return makeSuccess(id, result)
+          } catch (cause) { return forkFailure(id, command.operation, cause) }
+        })
       }
       case "session/model/state": {
         if (opts.modelState === undefined) {
@@ -540,7 +600,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         }
         // Honest answer inside the success payload — a finished/unknown id is
         // a legitimate client question, never an error frame.
-        return makeSuccess(id, service.cancelQueued(p.sessionId, p.id))
+        return makeSuccess(id, await service.cancelQueued(p.sessionId, p.id))
       }
       case "session/tasks": {
         // M49 Task 12: the REAL per-session task projection — serialized
@@ -586,21 +646,30 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/cancel requires a non-empty sessionId")
         }
-        if (service.cancelRunning !== undefined) {
-          const result = service.cancelRunning(p.sessionId)
-          if (result.cancelled) return makeSuccess(id, result)
-          const known = service.liveSession(p.sessionId) !== undefined || knownSessions.has(p.sessionId) || inflight.has(p.sessionId)
-          return makeSuccess(id, { cancelled: false, reason: known ? "not-running" : "not-found" })
-        }
-        const inFlight = inflight.get(p.sessionId)?.values().next().value
-        if (inFlight !== undefined) {
-          inFlight.controller.abort()
-          return makeSuccess(id, { cancelled: true })
-        }
-        const known = service.liveSession(p.sessionId) !== undefined || knownSessions.has(p.sessionId)
-        return known
-          ? makeSuccess(id, { cancelled: false, reason: "not-running" })
-          : makeSuccess(id, { cancelled: false, reason: "not-found" })
+        const sessionId = p.sessionId
+        return requestFlight(async () => {
+          try {
+            if (service.cancelRunning !== undefined) {
+              // Abort and install the original fence before any settlement wait.
+              const result = service.cancelRunning(sessionId)
+              const known = service.liveSession(sessionId) !== undefined || knownSessions.has(sessionId) || inflight.has(sessionId)
+              const response = result.cancelled ? result : { cancelled: false, reason: known ? "not-running" : "not-found" }
+              if (typeof service.awaitDeliveryStop !== 'function') throw new Error('Cancellation settlement unavailable')
+              await service.awaitDeliveryStop(sessionId)
+              return makeSuccess(id, response)
+            }
+            // Explicit legacy compatibility: FIFO abort has no delivery owner.
+            const inFlight = inflight.get(sessionId)?.values().next().value
+            if (inFlight !== undefined) {
+              inFlight.controller.abort()
+              return makeSuccess(id, { cancelled: true })
+            }
+            const known = service.liveSession(sessionId) !== undefined || knownSessions.has(sessionId)
+            return known
+              ? makeSuccess(id, { cancelled: false, reason: "not-running" })
+              : makeSuccess(id, { cancelled: false, reason: "not-found" })
+          } catch (error) { return hostMethodFailure(id, 'session/cancel', error) }
+        })
       }
       case "session/history": {
         // M41a v1: event-log walk over the in-process assembly. A cold durable
@@ -771,9 +840,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         try {
           // The appendEvent closure binds the LIVE session (the same identity
           // session/prompt submits to — the marker's append target)).
-          const result = await surface.execute(parsed.target, parsed.mode, {
-            appendEvent: (event) => { append(live, event as SessionEvent) },
-          })
+          const owner=service.liveAssembly(p.sessionId)?.factOwner??(isNondurableSession(live)?createNondurableFactOwner(live):undefined)
+          if(!owner)throw Object.assign(new Error('Rewind requires its owned source'),{code:'FACT_OWNER_UNSUPPORTED'})
+          const result = await withRewindFacts(owner,appendEvent=>surface.execute(parsed.target,parsed.mode,{appendEvent}))
           return makeSuccess(id, result)
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
@@ -786,6 +855,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         try { return makeSuccess(id, await service.contextState(p.sessionId)) }
         catch (error) { return hostMethodFailure(id, "session/context", error) }
       }
+      case 'session/result/read': return dispatchResultPage(id, params, opts.readResultPage, opts.supportsResultDependencyMembership)
       case "session/prompt": {
         const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown; images?: unknown; clientToken?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
@@ -833,10 +903,12 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeSuccess(id, { sessionId, ok: true })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          statusNotify(sessionId, "error", message)
+          const modelFailure = modelFailureFacts(error)
+          statusNotify(sessionId, "error", message, modelFailure)
           return makeFailure(id, INTERNAL_ERROR, message, {
             sessionId,
             events: liveEventsFor(service, sessionId),
+            ...(modelFailure ? { modelFailure } : {}),
           })
         } finally {
           submissions.delete(submission)
@@ -856,13 +928,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   }
 
   return {
-    async handleLine(line): Promise<string | null> {
+    async handleLine(line, controls): Promise<string | null> {
       if (closed) return null
       const message = decodeFrame(line)
       if (message === undefined) return null // malformed → ignored
       if (isRpcNotification(message)) return null // client → server notifications are accepted-and-ignored in v1
       if (!isRpcRequest(message)) return null
-      const reply = await handleRequest(message.method, message.params, message.id)
+      const reply = await handleRequest(message.method, message.params, message.id, controls?.fork)
       emitMessage(reply)
       return encodeFrame(reply)
     },
@@ -875,15 +947,28 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       notifiers.add(cb)
       return () => { notifiers.delete(cb) }
     },
-    async close() {
-      if (closed) return
+    close() {
+      if (requestContext.getStore()?.active) return Promise.reject(new Error('SDK request callback cannot close its own request'))
+      if (closing) return closing
       closed = true
-      offExecutionState?.()
+      forkAbort.abort()
       for (const submissions of inflight.values()) for (const submission of submissions) submission.controller.abort()
-      await Promise.allSettled([...preparingSessions.values(), ...preparingHistorySessions.values()])
-      offAssembly()
-      for (const unsub of assemblyUnsubscribes.values()) unsub()
-      assemblyUnsubscribes.clear()
+      const original = (async () => {
+        const errors: unknown[] = []
+        if (!executionDetached) {
+          try { offExecutionState?.(); executionDetached = true } catch (cause) { errors.push(cause) }
+        }
+        await Promise.allSettled([...preparingSessions.values(), ...preparingHistorySessions.values(), ...requestFlights])
+        if (!managedDetached) { try { offManaged?.(); await managedEvents.close(); managedDetached = true } catch (cause) { errors.push(cause) } }
+        if (!assemblyDetached) { try { offAssembly(); assemblyDetached = true } catch (cause) { errors.push(cause) } }
+        for (const [sessionId, unsub] of assemblyUnsubscribes) {
+          try { unsub(); if (assemblyUnsubscribes.get(sessionId) === unsub) assemblyUnsubscribes.delete(sessionId) } catch (cause) { errors.push(cause) }
+        }
+        if (errors.length) throw new AggregateError(errors, 'SDK cleanup incomplete')
+      })()
+      closing = original
+      void original.catch(() => { if (closing === original) closing = undefined })
+      return original
     },
   }
 }
@@ -990,7 +1075,7 @@ function isSessionNotFoundError(message: string): boolean {
 
 /** The live session events for an error response (best effort; the submit
  * rejection may arrive before/after the assembly's events are visible). */
-function liveEventsFor(service: SessionService, sessionId: string): SessionEvent[] {
+function liveEventsFor(service: SessionService, sessionId: string): readonly SessionEvent[] {
   const live = service.liveSession(sessionId)
   return live?.events ?? []
 }

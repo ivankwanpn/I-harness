@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import type { SandboxDenial } from "@i-harness/sandbox"
-import { createFsTools } from "../src/index.ts"
+import { createFsTools } from "./helpers/registry-fs.ts"
 
 /**
  * The fs tools must honour the session's write confinement.

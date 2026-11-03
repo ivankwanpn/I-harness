@@ -1,0 +1,28 @@
+{
+  "id": "07-mts",
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "node": "v24.15.0",
+  "argv": [
+    "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+    "--noEmit",
+    "-p",
+    "tsconfig.mixed-retention.json"
+  ],
+  "cwd": "D:\\I-harness-main\\packages\\session-executor",
+  "env": {
+    "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-fix1-1021/config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\07-mts\\fixtures\\mixed",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\07-mts\\fixtures\\integrity",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\07-mts\\fixtures\\native",
+    "IH_PUBLICATION_PINS_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\07-mts\\fixtures\\publication",
+    "IH_PHYSICAL_CRASH_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\07-mts\\fixtures\\physical",
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\07-mts\\fixtures\\structure"
+  },
+  "head": "f9b0dcd79e628e8776a717937a7df126481b1f51",
+  "start": "2026-10-20T21:46:24.325Z",
+  "pid": 30788,
+  "end": "2026-10-20T21:46:29.808Z",
+  "code": 0,
+  "signal": null,
+  "sourceUnchanged": true
+}

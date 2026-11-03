@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["src/owned-host-extensions.ts","src/approval-policy-identity.ts","test/owned-approval-identity.test.ts","test/owned-host-extensions.test.ts"]}

@@ -159,8 +159,9 @@ describe("Desktop SDK runtime manager", () => {
     exits[0]!()
     await new Promise((resolve) => setImmediate(resolve))
 
-    expect(events).toEqual([
-      { kind: "sdk/disconnected", workspaceId: "ws-exit", message: expect.stringContaining("exited") },
+    expect(events.filter(event=>event.kind==='sdk/ready')).toEqual([{kind:'sdk/ready',method:'sdk/ready',workspaceId:'ws-exit',runtimeGeneration:0}])
+    expect(events.filter(event=>event.kind!=='sdk/ready')).toEqual([
+      { kind: "sdk/disconnected", workspaceId: "ws-exit", message: expect.stringContaining("exited"), close: { generation: 0, reason: "subprocess-exited" } },
     ])
     const second = await manager.get(workspace("ws-exit"))
     expect(launch).toHaveBeenCalledTimes(2)
@@ -170,6 +171,26 @@ describe("Desktop SDK runtime manager", () => {
     await manager.close()
   })
 
+  it("fences context diagnostic delivery by the actual runtime generation", async () => {
+    const hosts = [fakeClient(), fakeClient()]
+    let nextHost = 0
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: hosts[nextHost++]!.client, exited: new Promise(() => {}) }) })
+    const events: DesktopEvent[] = []
+    manager.onEvent(event => events.push(event))
+    const notify = (index: number) => { for (const listener of hosts[index]!.listeners) listener({ jsonrpc: "2.0", method: "desktop/context/diagnostic", params: { sessionId: "owned" } } as RpcNotification) }
+    try {
+      await manager.get(workspace("generation"))
+      notify(0)
+      await manager.invalidate!("generation")
+      notify(0)
+      await manager.get(workspace("generation"))
+      notify(0); notify(1)
+      expect(events.filter(event => event.kind === "sdk/notification")).toEqual([
+        { kind: "sdk/notification", workspaceId: "generation", method: "desktop/context/diagnostic", params: { sessionId: "owned", runtimeGeneration: 0 } },
+        { kind: "sdk/notification", workspaceId: "generation", method: "desktop/context/diagnostic", params: { sessionId: "owned", runtimeGeneration: 1 } },
+      ])
+    } finally { await manager.close() }
+  })
   it("forwards declared session, interaction and usage diagnostic notifications", async () => {
     const root = tempRoot()
     const host = fakeClient()
@@ -191,15 +212,18 @@ describe("Desktop SDK runtime manager", () => {
     notify("desktop/interaction/request")
     notify("desktop/interaction/closed")
     notify("desktop/usage/recording-warning")
+    notify("desktop/context/diagnostic")
     notify("desktop/session/subagents/changed")
 
-    expect(events).toEqual([
+    expect(events.filter(event=>event.kind==='sdk/ready')).toEqual([{kind:'sdk/ready',method:'sdk/ready',workspaceId:'ws-notes',runtimeGeneration:0}])
+    expect(events.filter(event=>event.kind!=='sdk/ready')).toEqual([
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/event", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/status", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/execution-state", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/request", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/closed", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/usage/recording-warning", params: { seq: 0 } },
+      { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/context/diagnostic", params: { seq: 0, runtimeGeneration: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/session/subagents/changed", params: { seq: 0 } },
     ])
     await manager.close()

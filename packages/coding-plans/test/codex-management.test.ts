@@ -161,7 +161,7 @@ describe("Codex-compatible management connection", () => {
 
   it("resolves model credentials and catalog from the same validated Codex workspace", async () => {
     const f = await fixture(); const accountId = await f.login()
-    expect(await f.service.token(accountId)).toEqual({ accessToken: "secret-access-0", accountId: "workspace-one" })
+    expect(await f.service.token(accountId)).toEqual({ accessToken: "secret-access-0", accountId: "workspace-one", authEpoch: expect.any(String) })
     expect(await f.service.models(accountId)).toEqual([{ id: "model-codex", name: "Codex Model", inputModalities: ["text", "image"], contextWindow: 128000 }])
     expect((await f.create().state()).models).toEqual([{ id: "model-codex", name: "Codex Model", inputModalities: ["text", "image"], contextWindow: 128000 }])
     const req = f.requests.find(r => r.url.includes("/codex/models"))!
@@ -193,7 +193,7 @@ describe("Codex-compatible management connection", () => {
     const f = await fixture(); const id = await f.login(); f.advance(); f.failJwks(true)
     await expect(f.service.token(id)).rejects.toThrow("temporarily")
     f.failJwks(false)
-    expect(await f.service.token(id)).toEqual({ accessToken: "secret-access-2", accountId: "workspace-one" })
+    expect(await f.service.token(id)).toEqual({ accessToken: "secret-access-2", accountId: "workspace-one", authEpoch: expect.any(String) })
     const grants = f.requests.filter(r => r.url.endsWith("/oauth/token")).map(r => r.body as Record<string, unknown>)
     expect(grants.at(-1)?.refresh_token).toBe("secret-refresh-1")
     f.advance(); f.workspace("different-workspace")
@@ -331,4 +331,17 @@ describe("Codex-compatible management connection", () => {
     await f.service.redeem({ accountId, creditId: "card-one", confirmed: true })
     expect(f.consumes.map(row => row.redeem_request_id)).toEqual([pending.requestId, pending.requestId])
   })
+})
+
+it("observes a private live epoch at the locked token boundary and retains it across refresh", async () => {
+  const f = await fixture(), account = await f.login()
+  const first = await f.service.token(account)
+  expect((first as any).authEpoch).toEqual(expect.any(String))
+  f.advance()
+  const refreshed = await f.service.token(account)
+  expect((refreshed as any).authEpoch).toBe((first as any).authEpoch)
+  await f.service.signOut(account)
+  const nextAccount = await f.login(), next = await f.service.token(nextAccount)
+  expect((next as any).authEpoch).not.toBe((first as any).authEpoch)
+  expect((next as any).authEpoch).not.toMatch(/secret|subject|workspace|person/)
 })

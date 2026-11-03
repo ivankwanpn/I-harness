@@ -2,14 +2,68 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSession, Inbox } from '@i-harness/core-session'
 import { userSteerForTool } from '@i-harness/core-tools'
 import { createCodeModeRuntime } from '../src/runtime.js'
-import type { CodeModeOrigin, CodeModeRuntimeOptions } from '../src/types.js'
+import type { CodeModeOrigin, CodeModeRuntimeEvent, CodeModeRuntimeOptions } from '../src/types.js'
 import { PNG } from '../../image-validation/test/fixtures.ts'
+import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import { readFileSync } from 'node:fs'
 const read = {name:'read',description:'read',inputSchema:{type:'object'}}
 const make = (options: Partial<CodeModeRuntimeOptions> = {}) => createCodeModeRuntime({tools:()=>[read],invoke:async()=>({value:7}), ...options})
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 describe('isolated Code Mode runtime', () => {
+  it('keeps option getters lazy, ordered and called with the original receiver', async () => {
+    const trace: string[] = []
+    const options: CodeModeRuntimeOptions = {
+      get config() { trace.push('config'); return { defaultYieldTimeMs: 5000 } },
+      get retainText() { trace.push('retain'); return undefined },
+      get tools() {
+        trace.push('tools:get')
+        return function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('tools:call'); return [read] }
+      },
+      get restoreStore() {
+        trace.push('restore:get')
+        return function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('restore:call'); return [] }
+      },
+      get invoke() {
+        trace.push('invoke:get')
+        return async function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('invoke:call'); return 7 }
+      },
+      get commitStore() {
+        trace.push('commit:get')
+        return function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('commit:call') }
+      },
+      get onEvent() {
+        trace.push('event:get')
+        return function(this: CodeModeRuntimeOptions, event: CodeModeRuntimeEvent) { expect(this).toBe(options); trace.push(`event:${event.type}`) }
+      },
+    }
+    const r = createCodeModeRuntime(options)
+    try {
+      expect(trace).toEqual(['config'])
+      expect(await r.exec({code: "const value=await tools.read({}); text(value); store('value',value)"})).toMatchObject({status:'completed',text:'7'})
+      // Lazy option access: config first, restore/tools/invoke/commit/event only
+      // when used, and retainText never touched for a result under the preview
+      // budget. Store restoration may be observed once more at the terminal
+      // commit, so the assertion is over the meaningful order rather than one
+      // exact interleaving.
+      expect(trace[0]).toBe('config')
+      expect(trace).not.toContain('retain')
+      expect(trace.indexOf('tools:get')).toBeLessThan(trace.indexOf('tools:call'))
+      expect(trace.indexOf('invoke:get')).toBeLessThan(trace.indexOf('invoke:call'))
+      expect(trace.indexOf('commit:get')).toBeLessThan(trace.indexOf('commit:call'))
+      expect(trace[trace.length - 1]).toBe('event:closed')
+      expect(trace.filter(item => item === 'event:get').length).toBeGreaterThanOrEqual(3)
+    } finally { await r.dispose() }
+  })
+  it('dispatches disposal through the current runtime cancel method once with its receiver', async () => {
+    const r = make(), cancel = r.cancel
+    const calls: string[] = []
+    r.cancel = async function(reason) { expect(this).toBe(r); calls.push(reason!); await cancel(reason) }
+    await r.dispose()
+    await r.dispose()
+    expect(calls).toEqual(['Code Mode disposed'])
+    await expect(r.exec({code:'text(1)'})).rejects.toThrow('disposed')
+  })
   it('repeated steer observations release subscriptions and preserve observer exclusion', async () => {
     const session = createSession(), inbox = new Inbox(session), actual = userSteerForTool({ session })!
     let active = 0
@@ -349,6 +403,31 @@ describe('isolated Code Mode runtime', () => {
     try {
       const out = await r.exec({code:`text('x')`})
       expect(out.status).toBe('failed'); expect(out.error).toContain('event sink failed')
+    } finally { await r.dispose() }
+  })
+  it('holds terminal callback admission until a genuine asynchronous acknowledgement returns', async () => {
+    const entered = Promise.withResolvers<void>(), acknowledgement = Promise.withResolvers<void>()
+    const r = make({ config: { maxActiveCells: 1 }, onEvent(event) {
+      if (event.type === 'closed' && event.status === 'completed') { entered.resolve(); return acknowledgement.promise }
+    } })
+    try {
+      const first = await r.exec({ code: 'text("original")', yield_time_ms: 0 })
+      await entered.promise
+      await expect(r.exec({ code: 'text("must not start")' })).rejects.toThrow('Active cell limit exceeded')
+      acknowledgement.resolve()
+      expect(await r.wait({ cell_id: first.cellId, yield_time_ms: 60000 })).toMatchObject({ status: 'completed', text: 'original' })
+      expect(await r.exec({ code: 'text("next")' })).toMatchObject({ status: 'completed', text: 'next' })
+    } finally { acknowledgement.resolve(); await r.dispose() }
+  })
+  it.each(['failure', 'recovery'] as const)('preserves original asynchronous terminal callback %s instead of committing completed', async kind => {
+    const original = kind === 'failure' ? new Error('original terminal callback failed') : new FactRecoveryRequiredError()
+    const r = make({ onEvent(event) {
+      if (event.type === 'closed' && event.status === 'completed') return Promise.reject(original)
+    } })
+    try {
+      const result = r.exec({ code: 'text("original")', yield_time_ms: 60000 })
+      if (kind === 'recovery') await expect(result).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+      else expect(await result).toMatchObject({ status: 'failed', error: expect.stringContaining('original terminal callback failed') })
     } finally { await r.dispose() }
   })
   it('bounds retained completed cells and truthfully refuses evicted observations', async () => {

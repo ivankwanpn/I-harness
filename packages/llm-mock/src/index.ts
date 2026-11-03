@@ -1,6 +1,9 @@
 import type { LLMRequest, LLMStreamEvent, LLMUsage, ModelClient } from "@i-harness/llm-seam"
+import { ownLocalMock } from './local-execution.ts'
+export { isMockClient, mockExecutionClient, mockPreparedClient } from './local-execution.ts'
 
 export interface MockToolCall {
+  id?: string
   name: string
   args: unknown
 }
@@ -30,7 +33,7 @@ export interface MockStep {
 }
 
 export function createMockClient(script: MockStep[]): ModelClient {
-  return {
+  return ownLocalMock({
     // Each stream() call replays exactly ONE script step (turn-based): the
     // step's tool calls, then its text, then `end`. The next stream() call
     // replays the NEXT step (one model turn each). An exhausted script
@@ -59,5 +62,10 @@ export function createMockClient(script: MockStep[]): ModelClient {
       if (step.refused === true) end.refused = true
       yield end
     },
-  }
+  })
+}
+
+/** Repeat a built-in cassette without granting identity to arbitrary clients. */
+export function createCyclicMockClient(script: MockStep[]): ModelClient {
+  return ownLocalMock({ stream: request => createMockClient(script.map(step => ({ ...step, toolCalls: step.toolCalls?.map(call => ({ ...call })) }))).stream(request) })
 }

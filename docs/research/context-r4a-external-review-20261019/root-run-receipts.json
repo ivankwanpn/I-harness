@@ -1,0 +1,256 @@
+[
+  {
+    "label": "submitted-subagent-focused",
+    "cwd": "D:/I-harness-main/packages/subagent",
+    "node": "C:\\Program Files\\nodejs\\node.exe",
+    "version": "v24.15.0",
+    "args": [
+      "../../node_modules/vitest/vitest.mjs",
+      "run",
+      "test/retained-task-negative.test.ts",
+      "test/retained-task-cold.test.ts",
+      "test/retained-task-body.test.ts",
+      "--maxWorkers=2",
+      "--minWorkers=1"
+    ],
+    "started": "2026-10-19T00:15:26.656Z",
+    "ended": "2026-10-19T00:15:31.496Z",
+    "exitCode": 0,
+    "head": "41e97ecb80149bfe99bb7151c3bd5a0b7c11a9e7",
+    "sourceBefore": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "sourceAfter": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "trackedInputs": 2571,
+    "stdoutSha256": "78958d1ffd5d698a81ec54531813e1f3b6b26cf7466353870c4539d570b685f6",
+    "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdoutBytes": 520,
+    "stderrBytes": 0
+  },
+  {
+    "label": "submitted-executor-focused",
+    "cwd": "D:/I-harness-main/packages/session-executor",
+    "node": "C:\\Program Files\\nodejs\\node.exe",
+    "version": "v24.15.0",
+    "args": [
+      "../../node_modules/vitest/vitest.mjs",
+      "run",
+      "test/retained-state-negative.test.ts",
+      "test/retained-background-exec.test.ts",
+      "test/retained-exec-flow.test.ts",
+      "test/retained-hook-recovery.test.ts",
+      "--maxWorkers=2",
+      "--minWorkers=1"
+    ],
+    "started": "2026-10-19T00:15:40.617Z",
+    "ended": "2026-10-19T00:15:52.990Z",
+    "exitCode": 0,
+    "head": "41e97ecb80149bfe99bb7151c3bd5a0b7c11a9e7",
+    "sourceBefore": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "sourceAfter": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "trackedInputs": 2571,
+    "stdoutSha256": "42120a6699adfe903ada0c56f0cf43fb9aa2cbca9c1a8328c993494d4aeefd0d",
+    "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdoutBytes": 1530,
+    "stderrBytes": 0
+  },
+  {
+    "label": "current-executor-types",
+    "cwd": "D:/I-harness-main/packages/session-executor",
+    "node": "C:\\Program Files\\nodejs\\node.exe",
+    "version": "v24.15.0",
+    "args": [
+      "../../node_modules/typescript/bin/tsc",
+      "--noEmit"
+    ],
+    "started": "2026-10-19T00:18:50.816Z",
+    "ended": "2026-10-19T00:18:58.896Z",
+    "exitCode": 0,
+    "head": "41e97ecb80149bfe99bb7151c3bd5a0b7c11a9e7",
+    "sourceBefore": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "sourceAfter": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "trackedInputs": 2571,
+    "controlsBefore": [
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\run-review-evidence.mjs",
+        "sha256": "6cf56f94e6312e1acbb7a14c2a74c09a5071ddaf07e1954f6850241df515b6a5"
+      }
+    ],
+    "controlsAfter": [
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\run-review-evidence.mjs",
+        "sha256": "6cf56f94e6312e1acbb7a14c2a74c09a5071ddaf07e1954f6850241df515b6a5"
+      }
+    ],
+    "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdoutBytes": 0,
+    "stderrBytes": 0
+  },
+  {
+    "label": "task-roundtrip-probe-v2",
+    "cwd": "D:/I-harness-main",
+    "node": "C:\\Program Files\\nodejs\\node.exe",
+    "version": "v24.15.0",
+    "args": [
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--root",
+      "D:/I-harness-main/.superpowers/sdd/2026-10-19-context-r4a-external-review",
+      "--config",
+      "D:/I-harness-main/.superpowers/sdd/2026-10-19-context-r4a-external-review/vitest.config.ts",
+      "task-roundtrip.probe.test.ts",
+      "--maxWorkers=1",
+      "--minWorkers=1"
+    ],
+    "started": "2026-10-19T00:16:25.708Z",
+    "ended": "2026-10-19T00:16:28.512Z",
+    "exitCode": 1,
+    "head": "41e97ecb80149bfe99bb7151c3bd5a0b7c11a9e7",
+    "sourceBefore": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "sourceAfter": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "trackedInputs": 2571,
+    "controlsBefore": [
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\run-review-evidence.mjs",
+        "sha256": "6cf56f94e6312e1acbb7a14c2a74c09a5071ddaf07e1954f6850241df515b6a5"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\task-roundtrip.probe.test.ts",
+        "sha256": "4120a736ad4c01ceeda81827f7e44194c7992e34c3a92238aae66b49d1f64505"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\vitest.config.ts",
+        "sha256": "6c60f60fb7b376d68ae2a9fc29bf3e4efa301bd9d68a108db7a860d0fe69be93"
+      }
+    ],
+    "controlsAfter": [
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\run-review-evidence.mjs",
+        "sha256": "6cf56f94e6312e1acbb7a14c2a74c09a5071ddaf07e1954f6850241df515b6a5"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\task-roundtrip.probe.test.ts",
+        "sha256": "4120a736ad4c01ceeda81827f7e44194c7992e34c3a92238aae66b49d1f64505"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\vitest.config.ts",
+        "sha256": "6c60f60fb7b376d68ae2a9fc29bf3e4efa301bd9d68a108db7a860d0fe69be93"
+      }
+    ],
+    "stdoutSha256": "518037d625cd2c23aef2b2bd34c409bff6b918796a5d8730f74f54a96c1c8997",
+    "stderrSha256": "e4ef4ba6a52a18de45c291bdeadd9a67ed3b228beada2dd8ff987497a0829cf9",
+    "stdoutBytes": 1524,
+    "stderrBytes": 1217
+  },
+  {
+    "label": "background-catalog-probe-v2",
+    "cwd": "D:/I-harness-main",
+    "node": "C:\\Program Files\\nodejs\\node.exe",
+    "version": "v24.15.0",
+    "args": [
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--root",
+      "D:/I-harness-main/.superpowers/sdd/2026-10-19-context-r4a-external-review",
+      "--config",
+      "D:/I-harness-main/.superpowers/sdd/2026-10-19-context-r4a-external-review/vitest.config.ts",
+      "background-catalog.probe.test.ts",
+      "--maxWorkers=1",
+      "--minWorkers=1"
+    ],
+    "started": "2026-10-19T00:16:41.665Z",
+    "ended": "2026-10-19T00:16:47.989Z",
+    "exitCode": 1,
+    "head": "41e97ecb80149bfe99bb7151c3bd5a0b7c11a9e7",
+    "sourceBefore": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "sourceAfter": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "trackedInputs": 2571,
+    "controlsBefore": [
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\run-review-evidence.mjs",
+        "sha256": "6cf56f94e6312e1acbb7a14c2a74c09a5071ddaf07e1954f6850241df515b6a5"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\background-catalog.probe.test.ts",
+        "sha256": "7678ca9e13ea2fce049e5b84fbe614cdc03824b16f8c916588435b1577a170b6"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\vitest.config.ts",
+        "sha256": "6c60f60fb7b376d68ae2a9fc29bf3e4efa301bd9d68a108db7a860d0fe69be93"
+      }
+    ],
+    "controlsAfter": [
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\run-review-evidence.mjs",
+        "sha256": "6cf56f94e6312e1acbb7a14c2a74c09a5071ddaf07e1954f6850241df515b6a5"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\background-catalog.probe.test.ts",
+        "sha256": "7678ca9e13ea2fce049e5b84fbe614cdc03824b16f8c916588435b1577a170b6"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\vitest.config.ts",
+        "sha256": "6c60f60fb7b376d68ae2a9fc29bf3e4efa301bd9d68a108db7a860d0fe69be93"
+      }
+    ],
+    "stdoutSha256": "d20c54cd8e41efc7e4a265c9d886ba4f29c74726c96f0889cb430e79cdcb3de6",
+    "stderrSha256": "0a2f702a1900b630b9b1c04a950c52024a458b0b880045b14d2bb75ed4b9815c",
+    "stdoutBytes": 912,
+    "stderrBytes": 606
+  },
+  {
+    "label": "background-retry-probe-v2",
+    "cwd": "D:/I-harness-main",
+    "node": "C:\\Program Files\\nodejs\\node.exe",
+    "version": "v24.15.0",
+    "args": [
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "--root",
+      "D:/I-harness-main/.superpowers/sdd/2026-10-19-context-r4a-external-review",
+      "--config",
+      "D:/I-harness-main/.superpowers/sdd/2026-10-19-context-r4a-external-review/vitest.config.ts",
+      "background-retry.probe.test.ts",
+      "--maxWorkers=1",
+      "--minWorkers=1"
+    ],
+    "started": "2026-10-19T00:17:05.094Z",
+    "ended": "2026-10-19T00:17:06.780Z",
+    "exitCode": 1,
+    "head": "41e97ecb80149bfe99bb7151c3bd5a0b7c11a9e7",
+    "sourceBefore": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "sourceAfter": "1289ec627c903294ff9e1d6c10d5ffc791fa972b099b37ba611ae0c6a5bc4554",
+    "trackedInputs": 2571,
+    "controlsBefore": [
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\run-review-evidence.mjs",
+        "sha256": "6cf56f94e6312e1acbb7a14c2a74c09a5071ddaf07e1954f6850241df515b6a5"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\background-retry.probe.test.ts",
+        "sha256": "59ebe271b17bfce7b1d06d05d0ebab592098b9f2eab0344fd825fb779543c3e5"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\vitest.config.ts",
+        "sha256": "6c60f60fb7b376d68ae2a9fc29bf3e4efa301bd9d68a108db7a860d0fe69be93"
+      }
+    ],
+    "controlsAfter": [
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\run-review-evidence.mjs",
+        "sha256": "6cf56f94e6312e1acbb7a14c2a74c09a5071ddaf07e1954f6850241df515b6a5"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\background-retry.probe.test.ts",
+        "sha256": "59ebe271b17bfce7b1d06d05d0ebab592098b9f2eab0344fd825fb779543c3e5"
+      },
+      {
+        "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-19-context-r4a-external-review\\vitest.config.ts",
+        "sha256": "6c60f60fb7b376d68ae2a9fc29bf3e4efa301bd9d68a108db7a860d0fe69be93"
+      }
+    ],
+    "stdoutSha256": "dea8e3495f545134b6c543db5db6bb657ea085e8a6016c388e9e4c6d51182452",
+    "stderrSha256": "fe55c293bf70754fead6889176109c2f0ce123cbb750f3e37eaf36c812afb06f",
+    "stdoutBytes": 1023,
+    "stderrBytes": 969
+  }
+]

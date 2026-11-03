@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-10-20T15:52:43.761Z",
+  "baseline": "c93b056e68e8f87cdb45af287346e4067a42846f",
+  "before": "a52110330c3699eb6e6630297fbdc88270fdc222d1467401d0b13aed6a0c221c",
+  "baseOverlay": "597497f8a18fde0e7904223ecd03c842bbd5e86709c3bae9c16c3d1a76ecc6a8",
+  "restored": "a52110330c3699eb6e6630297fbdc88270fdc222d1467401d0b13aed6a0c221c",
+  "files": [
+    "apps/cli/src/index.ts",
+    "packages/context-output/src/index.ts",
+    "packages/context-output/src/tools.ts",
+    "packages/desktop-gateway/src/host.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/protocol.ts",
+    "packages/sdk/src/server.ts",
+    "packages/session-executor/src/index.ts",
+    "packages/session-executor/src/lifecycle/result-store.ts",
+    "packages/session-executor/src/service.ts"
+  ],
+  "failures": []
+}

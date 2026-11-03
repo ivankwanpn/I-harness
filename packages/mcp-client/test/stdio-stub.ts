@@ -9,6 +9,7 @@
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { McpCallResult } from '../src/client.ts'
 
 const SDK_SERVER_URL = new URL("../node_modules/@modelcontextprotocol/sdk/dist/esm/server/index.js", import.meta.url).href
 const SDK_STDIO_URL = new URL("../node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js", import.meta.url).href
@@ -40,10 +41,29 @@ server.setRequestHandler(ReadResourceRequestSchema, async (req) => ({
 await server.connect(new StdioServerTransport())
 `
 
+// MCP-06: literal wire vectors deliberately bypass the SDK Server's narrower
+// structuredContent record schema. The actual SDK Client/stdio transport and
+// our normalized result schema still consume every response under test.
+const LITERAL_SERVER = `
+import { createInterface } from 'node:readline'
+const callResult = /*CALL_RESULT*/null
+createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line)
+  if (request.id === undefined) return
+  let result
+  if (request.method === 'initialize') result = { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'literal-fixture', version: '1' } }
+  else if (request.method === 'tools/call') result = callResult
+  else if (request.method === 'tools/list') result = { tools: [] }
+  else if (request.method === 'ping') result = {}
+  else { process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'fixture method unavailable' } }) + '\\n'); return }
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n')
+})
+`
+
 /** Write the stub server script into a fresh temp dir and return its path. */
-export function writeStdioStubServer(): string {
+export function writeStdioStubServer(callResult?: McpCallResult & Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), "mcp-stub-"))
   const script = join(dir, "fake-server.mjs")
-  writeFileSync(script, FAKE_SERVER)
+  writeFileSync(script, callResult === undefined ? FAKE_SERVER : LITERAL_SERVER.replace('/*CALL_RESULT*/null', JSON.stringify(callResult)))
   return script
 }

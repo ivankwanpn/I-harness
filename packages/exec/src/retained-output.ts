@@ -1,13 +1,25 @@
 import { statSync } from 'node:fs'
 import { open } from 'node:fs/promises'
+import type { ResultExecution } from '@i-harness/core-session'
 
 type RetainedOutputReader = (access: { maxBytes: number; signal: AbortSignal }) => Promise<{ text: string; complete: boolean; originalBytes?: number }>
 // Only host producers can register object identities. JSON/path fields never
 // confer permission to open a file. Entries vanish with the returned object.
-const retained = new WeakMap<object, RetainedOutputReader>()
-export function registerRetainedOutput(output: object, reader: RetainedOutputReader): void { retained.set(output, reader) }
+interface ExecutionMetadata { reader?: RetainedOutputReader; outcome?: ResultExecution['outcome'] }
+const retained = new WeakMap<object, ExecutionMetadata>()
+export function registerRetainedOutput(output: object, reader: RetainedOutputReader): void { retained.set(output, { ...retained.get(output), reader }) }
 export function retainedOutputReader(output: unknown): RetainedOutputReader | undefined {
-  return output !== null && typeof output === 'object' ? retained.get(output) : undefined
+  return output !== null && typeof output === 'object' ? retained.get(output)?.reader : undefined
+}
+export function registerExecResultOutcome(output: object, outcome: ResultExecution['outcome']): void {
+  retained.set(output, { ...retained.get(output), outcome })
+}
+export function execResultOutcome(output: unknown): ResultExecution['outcome'] | undefined {
+  return output !== null && typeof output === 'object' ? retained.get(output)?.outcome : undefined
+}
+export function transferExecutionMetadata(from: object, to: object): void {
+  const metadata = retained.get(from)
+  if (metadata) retained.set(to, { ...metadata })
 }
 
 export function execOutputReader(streams: readonly { text: string; spillPath?: string; lossy: boolean }[]): RetainedOutputReader {

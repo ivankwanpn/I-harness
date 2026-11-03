@@ -1,0 +1,37 @@
+{
+  "head": "bc83c3999501f5e5ccfc939b2c0109cb7201d251",
+  "donor": "7c1ee4536fdec6ff8ad73beedfd47cfc839ca79b",
+  "integratedBlobs": 36,
+  "receipts": [
+    {
+      "head": "bc83c3999501f5e5ccfc939b2c0109cb7201d251",
+      "donor": "7c1ee4536fdec6ff8ad73beedfd47cfc839ca79b",
+      "gate": "context-fast",
+      "cwd": "D:\\I-harness-main\\packages\\context-output",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "--exclude",
+        "test/legacy-fork-scale.test.ts",
+        "-t",
+        "^(?!.*10001)",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T10:10:14.123Z",
+      "ended": "2026-10-25T10:11:07.245Z",
+      "exit": 1,
+      "stable": true,
+      "sourceFiles": 2951,
+      "outputSha256": "b0f7c02741a3dd33d7fafad2a5c84a83ca8c5b97e3b45f76373d1679784f2bb6",
+      "environment": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399\\structure",
+        "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399\\integrity",
+        "IH_LEGACY_FORK_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399\\legacy",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-fork-retention\\integrated-bc83c399\\mixed"
+      }
+    }
+  ]
+}

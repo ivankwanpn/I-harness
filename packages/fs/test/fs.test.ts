@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { writeFile } from "node:fs/promises"
 import type { TextDiff } from "@i-harness/text-diff"
-import { createFsTools, resolvePath } from "../src/index.ts"
+import { resolvePath } from "../src/index.ts"
+import { createFsTools } from "./helpers/registry-fs.ts"
 
 describe("fs tools", () => {
   let dir: string

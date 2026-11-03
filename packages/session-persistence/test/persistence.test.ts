@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it, vi } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
 import {
@@ -81,7 +82,7 @@ describe("session coordinator", () => {
     // this test pins the round-trip itself, not torn-tail repair.
     await coordinator.append(id, [{ type: "turn/start" }, { type: "user/message", text: "hi" }, { type: "turn/end" }])
     const { session } = await coordinator.load(id)
-    expect(session.formatVersion).toBe(1)
+    expect(session.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(session.events).toMatchObject([{ type: "turn/start" }, { type: "user/message", text: "hi" }, { type: "turn/end" }])
   })
 
@@ -94,7 +95,7 @@ describe("session coordinator", () => {
     await backend.append("old", [{ type: "turn/start" }])
     const coordinator = createSessionCoordinator(backend)
     const { session } = await coordinator.load("old")
-    expect(session.formatVersion).toBe(1)
+    expect(session.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(session.events[0]).toMatchObject({ type: "turn/start", migrated: true })
   })
 
@@ -131,7 +132,7 @@ describe("session coordinator", () => {
 
   it("ignorable guard: unknown type without marker refuses; with marker is dropped", async () => {
     const backend = fakeBackend()
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
+    await backend.create("s1", { formatVersion: 2, sessionId: "s1", createdAt: "x" })
     await backend.append("s1", [
       { type: "turn/start" },
       { type: "future/thing", payload: "x", ignorable: true } as unknown as SessionEvent,
@@ -147,7 +148,7 @@ describe("session coordinator", () => {
 
   it("M20 compaction/reset marker crosses the load gate (registered event type)", async () => {
     const backend = fakeBackend()
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
+    await backend.create("s1", { formatVersion: 2, sessionId: "s1", createdAt: "x" })
     await backend.append("s1", [
       { type: "turn/start" },
       { type: "compaction/reset", removedSeqs: [] },
@@ -248,7 +249,7 @@ describe("session coordinator lineage (M8)", () => {
 
   it("load tolerates subagent/inbox events (known type)", async () => {
     const backend = fakeBackend()
-    await backend.create("child-abc", { formatVersion: 1, sessionId: "child-abc", createdAt: "x" })
+    await backend.create("child-abc", { formatVersion: 2, sessionId: "child-abc", createdAt: "x" })
     await backend.append("child-abc", [
       { type: "turn/start" },
       { type: "subagent/inbox", messageId: "m1", message: "ping" },
@@ -280,7 +281,8 @@ describe("session coordinator lineage (M8)", () => {
       "compaction/end",
       "turn/end",
     ])
-    const summary = session.events.find((e) => e.type === "compaction/summary") as { text: string; shadowedSeqs: number[] }
+    const summary = session.events.find((e) => e.type === "compaction/summary")
+    if (summary?.type !== 'compaction/summary') throw new Error('Expected summary')
     expect(summary.text).toBe("SUMMARY")
     expect(summary.shadowedSeqs).toEqual([1])
   })

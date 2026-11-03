@@ -1,0 +1,835 @@
+{
+  "checkedAt": "2026-10-20T14:00:33.837Z",
+  "base": "538cdb9297bbf6c4f757dfd69d3a48239032e4b8",
+  "head": "1755ee0745de134fc7bd60ba1dc2e3b3dd92170b",
+  "sourceDigest": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+  "sourceFiles": 2616,
+  "receipts": [
+    {
+      "label": "01-stale-format8",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "packages/session-persistence-jsonl/test/format8-predecessor.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:44:52.191Z",
+      "end": "2026-10-20T13:44:57.515Z",
+      "exit": 1,
+      "signal": null,
+      "before": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "after": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "stable": true,
+      "stdoutSha256": "53861613fe64ef4a91894955f5c5a75a82a356f2c46c5ab3749c52e2eb88beb1",
+      "stderrSha256": "b689bd01c449d777edb52ec05e8a38bf51ee6a2414563669cd1880f1d93077f9",
+      "summary": [
+        " Test Files  3 failed | 2 passed (5)",
+        "      Tests  4 failed | 4 passed (8)",
+        "   Duration  4.81s (transform 1.77s, setup 0ms, collect 2.80s, tests 383ms, environment 1ms, prepare 356ms)"
+      ]
+    },
+    {
+      "label": "02-stale-format8-scoped",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "test/format8-predecessor.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:45:14.664Z",
+      "end": "2026-10-20T13:45:16.275Z",
+      "exit": 1,
+      "signal": null,
+      "before": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "after": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "stable": true,
+      "stdoutSha256": "5b44f5e9d1dcbcf049e63042e82da173ff4e34a450d95c87a8149f4fc48c7d30",
+      "stderrSha256": "819d728add29124e38e38a65aeb571225ec64b88eabdc0fc7ac49bdebe797b79",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  2 failed (2)",
+        "   Duration  1.13s (transform 575ms, setup 0ms, collect 846ms, tests 76ms, environment 0ms, prepare 81ms)"
+      ]
+    },
+    {
+      "label": "03-stale-context-scoped",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "test/context-format.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:45:17.071Z",
+      "end": "2026-10-20T13:45:18.649Z",
+      "exit": 1,
+      "signal": null,
+      "before": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "after": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "stable": true,
+      "stdoutSha256": "540f6f0d181761d26aeb67c7bb58600f59600076b41132100259a56795c19bd2",
+      "stderrSha256": "26534ab024086d2bf668e3629cf1022bc56239e9b22b03fea28f854e801f126a",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  4 failed | 6 passed (10)",
+        "   Duration  1.09s (transform 524ms, setup 0ms, collect 776ms, tests 97ms, environment 0ms, prepare 80ms)"
+      ]
+    },
+    {
+      "label": "04-stale-replacement-scoped",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "test/replacement-journal.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:45:19.419Z",
+      "end": "2026-10-20T13:45:21.081Z",
+      "exit": 1,
+      "signal": null,
+      "before": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "after": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "stable": true,
+      "stdoutSha256": "0d3ed26eee168114dc4cc51acbfe223a380d2e581622eeb4df655e7e0fca0b4c",
+      "stderrSha256": "e3f833f62ba57584e0e9b9322fb4be9925d4b4d923db9371140b9c5d06b6224a",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  2 failed | 7 passed (9)",
+        "   Duration  1.16s (transform 536ms, setup 0ms, collect 783ms, tests 148ms, environment 0ms, prepare 87ms)"
+      ]
+    },
+    {
+      "label": "05-stale-conversation-scoped",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence",
+        "test/conversation-format.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:45:21.831Z",
+      "end": "2026-10-20T13:45:23.505Z",
+      "exit": 1,
+      "signal": null,
+      "before": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "after": "ffa2c70ca3655cd98dbe70337b69aef771760bf0623fa09d71174cf412168370",
+      "stable": true,
+      "stdoutSha256": "13e1056e300c59055a7b30d9dce2411683d9ade97460b49753cd54e060f4403b",
+      "stderrSha256": "f67834e133a2308e77f08c40aa34eea92c6e27debf38bb263040cbb4ebb7cf06",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  2 failed | 9 passed (11)",
+        "   Duration  1.18s (transform 503ms, setup 0ms, collect 743ms, tests 230ms, environment 0ms, prepare 83ms)"
+      ]
+    },
+    {
+      "label": "06-owned-characterization",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "test/retained-format-ownership.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:47:09.192Z",
+      "end": "2026-10-20T13:47:10.984Z",
+      "exit": 1,
+      "signal": null,
+      "before": "b89b14f22a0baadce02385e04974ff3f1fd891b7b8d9ca691f6faa30d797d19a",
+      "after": "b89b14f22a0baadce02385e04974ff3f1fd891b7b8d9ca691f6faa30d797d19a",
+      "stable": true,
+      "stdoutSha256": "0e93df309e9fc7f030c26fca0831d595766e0a8101f163e8103274d450f36157",
+      "stderrSha256": "b91718d8cd35c5eaf0a704240210d57bac0ac8163efec836c6323ab3a27cc400",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  14 failed | 10 passed (24)",
+        "   Duration  1.32s (transform 561ms, setup 0ms, collect 822ms, tests 281ms, environment 0ms, prepare 80ms)"
+      ]
+    },
+    {
+      "label": "07-owned-characterization-corrected",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "test/retained-format-ownership.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:47:37.050Z",
+      "end": "2026-10-20T13:47:38.921Z",
+      "exit": 1,
+      "signal": null,
+      "before": "d195c8509637c3c3209c126f3fac1820993972e2d7b3a83d88d8bd0ef91be81c",
+      "after": "d195c8509637c3c3209c126f3fac1820993972e2d7b3a83d88d8bd0ef91be81c",
+      "stable": true,
+      "stdoutSha256": "6cce6d192106ef5288d5bff68a84ea0fc2365fcdcd392ea3045b301edbae8356",
+      "stderrSha256": "0b0fedd6ff03b9d3214db49082138cfe3db3928072cf4bd7c84f2be51c02b951",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  4 failed | 20 passed (24)",
+        "   Duration  1.39s (transform 550ms, setup 0ms, collect 810ms, tests 372ms, environment 0ms, prepare 81ms)"
+      ]
+    },
+    {
+      "label": "08-jsonl-affected",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "test/retained-format-ownership.test.ts",
+        "test/format8-predecessor.test.ts",
+        "test/context-format.test.ts",
+        "test/replacement-journal.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:47:49.594Z",
+      "end": "2026-10-20T13:47:53.064Z",
+      "exit": 0,
+      "signal": null,
+      "before": "fea350cd6faf71fcc7c46de1060e4bc282f677c8d47d7d348562ae1addc531da",
+      "after": "fea350cd6faf71fcc7c46de1060e4bc282f677c8d47d7d348562ae1addc531da",
+      "stable": true,
+      "stdoutSha256": "1f666caf19c965e091ce36c6ae3dfc797deeb80afedd9d0a9e90dc978b7b6cbf",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": [
+        " Test Files  4 passed (4)",
+        "      Tests  45 passed (45)",
+        "   Duration  2.96s (transform 640ms, setup 0ms, collect 1.28s, tests 864ms, environment 1ms, prepare 312ms)"
+      ]
+    },
+    {
+      "label": "09-conversation-affected",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence",
+        "test/conversation-format.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:47:53.841Z",
+      "end": "2026-10-20T13:47:55.485Z",
+      "exit": 0,
+      "signal": null,
+      "before": "fea350cd6faf71fcc7c46de1060e4bc282f677c8d47d7d348562ae1addc531da",
+      "after": "fea350cd6faf71fcc7c46de1060e4bc282f677c8d47d7d348562ae1addc531da",
+      "stable": true,
+      "stdoutSha256": "19992d52b028c6cedc855111eff0920d18ff61f7c04ed0ddcc919a5e000e3a92",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  11 passed (11)",
+        "   Duration  1.17s (transform 506ms, setup 0ms, collect 747ms, tests 204ms, environment 0ms, prepare 79ms)"
+      ]
+    },
+    {
+      "label": "10-types-jsonl",
+      "executable": "node",
+      "args": [
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-persistence-jsonl/tsconfig.json"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:47:56.213Z",
+      "end": "2026-10-20T13:47:59.647Z",
+      "exit": 2,
+      "signal": null,
+      "before": "fea350cd6faf71fcc7c46de1060e4bc282f677c8d47d7d348562ae1addc531da",
+      "after": "fea350cd6faf71fcc7c46de1060e4bc282f677c8d47d7d348562ae1addc531da",
+      "stable": true,
+      "stdoutSha256": "579bfef0bc62d2dd24393fadb31468b74c7cb14bd55e233b4ec58b9677545efa",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "11-types-persistence",
+      "executable": "node",
+      "args": [
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-persistence/tsconfig.json"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:48:00.486Z",
+      "end": "2026-10-20T13:48:03.664Z",
+      "exit": 0,
+      "signal": null,
+      "before": "fea350cd6faf71fcc7c46de1060e4bc282f677c8d47d7d348562ae1addc531da",
+      "after": "fea350cd6faf71fcc7c46de1060e4bc282f677c8d47d7d348562ae1addc531da",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "12-jsonl-full",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:48:34.621Z",
+      "end": "2026-10-20T13:48:46.394Z",
+      "exit": 1,
+      "signal": null,
+      "before": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "after": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "stable": true,
+      "stdoutSha256": "f0b47aa9096847680e2c9e9f3ee34377802e29e97b01de18e4dd41c3f7453103",
+      "stderrSha256": "f22ecf8d7db8792fd27580fb050b6cbadeae38245ba3350b849b5bf7a805335c",
+      "summary": [
+        " Test Files  2 failed | 13 passed (15)",
+        "      Tests  12 failed | 134 passed (146)",
+        "   Duration  11.28s (transform 1.19s, setup 0ms, collect 3.21s, tests 5.24s, environment 2ms, prepare 1.02s)"
+      ]
+    },
+    {
+      "label": "13-persistence-full",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:48:44.789Z",
+      "end": "2026-10-20T13:49:01.900Z",
+      "exit": 1,
+      "signal": null,
+      "before": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "after": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "stable": true,
+      "stdoutSha256": "955940966d59449d89fbb1b07a2213b7427646f53b78d70ad2f4cc987fe03baa",
+      "stderrSha256": "271bf0d3169a1fe01f0f0f6caa8484cc9f0398c04c5dbe6e9138391b0cf290d2",
+      "summary": [
+        " Test Files  6 failed | 20 passed (26)",
+        "      Tests  12 failed | 141 passed (153)",
+        "   Duration  16.61s (transform 852ms, setup 0ms, collect 3.32s, tests 8.50s, environment 3ms, prepare 1.73s)"
+      ]
+    },
+    {
+      "label": "14-jsonl-full-sequential",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:49:28.296Z",
+      "end": "2026-10-20T13:49:39.862Z",
+      "exit": 1,
+      "signal": null,
+      "before": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "after": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "stable": true,
+      "stdoutSha256": "c18f2f2281a2a8bb68c9c186a55f41eeaaff631632f792e68cea6d9139f94770",
+      "stderrSha256": "f22ecf8d7db8792fd27580fb050b6cbadeae38245ba3350b849b5bf7a805335c",
+      "summary": [
+        " Test Files  2 failed | 13 passed (15)",
+        "      Tests  12 failed | 134 passed (146)",
+        "   Duration  11.08s (transform 1.21s, setup 0ms, collect 3.22s, tests 5.08s, environment 2ms, prepare 1.00s)"
+      ]
+    },
+    {
+      "label": "15-persistence-full-sequential",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:49:49.094Z",
+      "end": "2026-10-20T13:50:05.974Z",
+      "exit": 1,
+      "signal": null,
+      "before": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "after": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "stable": true,
+      "stdoutSha256": "e8892567d4ada1ff009d81afa90922d53f564d4f9d0e87759946e53fb768d239",
+      "stderrSha256": "271bf0d3169a1fe01f0f0f6caa8484cc9f0398c04c5dbe6e9138391b0cf290d2",
+      "summary": [
+        " Test Files  6 failed | 20 passed (26)",
+        "      Tests  12 failed | 141 passed (153)",
+        "   Duration  16.40s (transform 802ms, setup 0ms, collect 3.25s, tests 8.37s, environment 3ms, prepare 1.74s)"
+      ]
+    },
+    {
+      "label": "16-types-jsonl-final",
+      "executable": "node",
+      "args": [
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-persistence-jsonl/tsconfig.json"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:50:11.456Z",
+      "end": "2026-10-20T13:50:14.865Z",
+      "exit": 0,
+      "signal": null,
+      "before": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "after": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "17-types-persistence-final",
+      "executable": "node",
+      "args": [
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-persistence/tsconfig.json"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:50:20.905Z",
+      "end": "2026-10-20T13:50:23.967Z",
+      "exit": 0,
+      "signal": null,
+      "before": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "after": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "18-gateway-build",
+      "executable": "node",
+      "args": [
+        "packages/desktop/scripts/build-gateway.mjs",
+        "--out",
+        ".tmp/context-r4a-owned-version-20261020-gateway"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:50:24.709Z",
+      "end": "2026-10-20T13:50:29.258Z",
+      "exit": 0,
+      "signal": null,
+      "before": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "after": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "stable": true,
+      "stdoutSha256": "01ae93c46be6b0ea21e1de6d03555d02502cacb3c041c4c0fefddace22f5fb43",
+      "stderrSha256": "cdc04ffa66c41effdf5f20a933c7f3be4d4e8cbb0a24c3990afd40fa5a5bc9bb",
+      "summary": []
+    },
+    {
+      "label": "19-copy-prepare",
+      "executable": "node",
+      "args": [
+        ".tmp/context-r4a-owned-version-20261020-implementation/prepare-copy.mjs"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:50:49.581Z",
+      "end": "2026-10-20T13:50:49.782Z",
+      "exit": 1,
+      "signal": null,
+      "before": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "after": "dc4150993d18a2f099240aaabc2bf91db44e12e942f4b0515feabdee6dbd95c4",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "3a496215ac484bba98b07e9ecfb2e294e26a5ab0a04fb1f4da76f25167feb850",
+      "summary": []
+    },
+    {
+      "label": "20-jsonl-full-final",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence-jsonl",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:52:34.362Z",
+      "end": "2026-10-20T13:52:46.515Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "79c14de01eb5e4fe96d231eef28a334f69f6c5d3760335356881beac43f0a9d8",
+      "stderrSha256": "09ab203d4c1ee42cfb812143b93fa8f249858c82c30dd794ec9e1906cf4d9d1b",
+      "summary": [
+        " Test Files  15 passed (15)",
+        "      Tests  146 passed (146)",
+        "   Duration  11.68s (transform 1.20s, setup 0ms, collect 3.20s, tests 5.70s, environment 2ms, prepare 1.00s)"
+      ]
+    },
+    {
+      "label": "21-persistence-full-final",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        "packages/session-persistence",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:52:55.254Z",
+      "end": "2026-10-20T13:53:07.241Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "e1d4cdec1fad17da8e5ad3fd11e3d5940fa8665fb2c4eb589866b970a716d52f",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": [
+        " Test Files  26 passed (26)",
+        "      Tests  153 passed (153)",
+        "   Duration  11.52s (transform 846ms, setup 0ms, collect 3.33s, tests 3.38s, environment 3ms, prepare 1.77s)"
+      ]
+    },
+    {
+      "label": "22-types-jsonl-final",
+      "executable": "node",
+      "args": [
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-persistence-jsonl/tsconfig.json"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:53:19.210Z",
+      "end": "2026-10-20T13:53:22.607Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "23-types-persistence-final",
+      "executable": "node",
+      "args": [
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-persistence/tsconfig.json"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:53:23.351Z",
+      "end": "2026-10-20T13:53:26.463Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "24-gateway-final-build",
+      "executable": "node",
+      "args": [
+        "packages/desktop/scripts/build-gateway.mjs",
+        "--out",
+        ".tmp/context-r4a-owned-version-20261020-gateway-final"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:53:27.302Z",
+      "end": "2026-10-20T13:53:31.820Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "b1ce856a3dfc78e8a908ca2a86e95296f345564dae13d59da1ea056a24ec303c",
+      "stderrSha256": "cdc04ffa66c41effdf5f20a933c7f3be4d4e8cbb0a24c3990afd40fa5a5bc9bb",
+      "summary": []
+    },
+    {
+      "label": "25-copy-prepare-final",
+      "executable": "node",
+      "args": [
+        ".tmp/context-r4a-owned-version-20261020-implementation/prepare-copy.mjs"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:53:42.602Z",
+      "end": "2026-10-20T13:53:42.878Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "7c1efb0c743bdb0994aa91276380ae2abb0675baa06e70381cd2c0e97e073f6a",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "26-copy-runtime",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        ".tmp/context-r4a-owned-version-20261020-gateway-final/qualification",
+        "--config",
+        ".tmp/context-r4a-owned-version-20261020-gateway-final/qualification/vitest.config.mjs",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:53:43.666Z",
+      "end": "2026-10-20T13:53:44.061Z",
+      "exit": 1,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "1f9a8439553583b9e42fe6dec705b041b771328e110b3687da1a0e13f079ac9a",
+      "summary": []
+    },
+    {
+      "label": "27-copy-runtime-config-corrected",
+      "executable": "node",
+      "args": [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--root",
+        ".tmp/context-r4a-owned-version-20261020-gateway-final/qualification",
+        "--config",
+        "D:/I-harness-main/.tmp/context-r4a-owned-version-20261020-gateway-final/qualification/vitest.config.mjs",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:53:49.976Z",
+      "end": "2026-10-20T13:53:51.953Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "dd8eedf9300129f3974569ddd2d14e7e1d51714255f64beece28e4618618a206",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  24 passed (24)",
+        "   Duration  1.48s (transform 543ms, setup 0ms, collect 807ms, tests 438ms, environment 0ms, prepare 77ms)"
+      ]
+    },
+    {
+      "label": "28-copy-map-final",
+      "executable": "node",
+      "args": [
+        ".tmp/context-r4a-owned-version-20261020-implementation/prepare-copy.mjs"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:54:31.507Z",
+      "end": "2026-10-20T13:54:31.781Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "504955a02779c4aeaf9c14c1f0dc511979249eaf78d78eeebd576c353c48a527",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "29-whitespace",
+      "executable": "git",
+      "args": [
+        "diff",
+        "--check"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:54:32.530Z",
+      "end": "2026-10-20T13:54:32.573Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "23d1ad6db365f1d42df0a91f009105f4cb3ff0f0cca0c54522779f7682b1c9a7",
+      "summary": []
+    },
+    {
+      "label": "30-staged-whitespace",
+      "executable": "git",
+      "args": [
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:54:46.960Z",
+      "end": "2026-10-20T13:54:46.993Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "31-commit-tests",
+      "executable": "git",
+      "args": [
+        "commit",
+        "-m",
+        "test(session): qualify owned predecessor upgrades and retained version refusal"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:54:47.758Z",
+      "end": "2026-10-20T13:54:47.861Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "17b117e82c8028e9f867ab475aed3b773eb0d17df0c2a030addee8c9e527fcf7",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "32-commit-delivery",
+      "executable": "git",
+      "args": [
+        "commit",
+        "-m",
+        "docs(context): record owned session version qualification evidence"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:56:26.336Z",
+      "end": "2026-10-20T13:56:26.690Z",
+      "exit": 0,
+      "signal": null,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "87cdd8b046d5c05b95680f5a637899a8c81eb38a7fcefd576ac28767e8a57511",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "label": "33-final-seal",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "D:\\I-harness-main\\.tmp\\context-r4a-owned-version-20261020-implementation\\seal.mjs"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "start": "2026-10-20T13:57:08.735Z",
+      "end": "2026-10-20T13:57:09.442Z",
+      "exit": 0,
+      "before": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "after": "c66dc6831267156a2f9dda9974f4d35e0bc1622b5491ca532443aeb4b62dcc43",
+      "stable": true,
+      "stdoutSha256": "e5a083fd81fcc50c006666af8f1994cb49fe8662a6c09f0c595180644bfb5479",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    }
+  ],
+  "excludedOverlap": [
+    [
+      "12-jsonl-full",
+      "13-persistence-full"
+    ]
+  ],
+  "qualifiedReceipts": [
+    "20-jsonl-full-final",
+    "21-persistence-full-final",
+    "22-types-jsonl-final",
+    "23-types-persistence-final",
+    "24-gateway-final-build",
+    "25-copy-prepare-final",
+    "27-copy-runtime-config-corrected",
+    "28-copy-map-final"
+  ],
+  "evidenceFiles": 172,
+  "inventorySha256": "0a7b12170e33de215395210e19b67a67d15175b6a95a4701b2cd1bb23aa9717b",
+  "mappedPackages": 78,
+  "sourceCopies": 1141,
+  "internalEdges": 322,
+  "generatedFiles": 1,
+  "fixtureFiles": 2,
+  "transformedImports": 3,
+  "changed": [
+    "docs/research/2026-10-20-context-r4a-owned-version-delivery.md",
+    "packages/session-persistence-jsonl/test/context-format.test.ts",
+    "packages/session-persistence-jsonl/test/format8-predecessor.test.ts",
+    "packages/session-persistence-jsonl/test/generation-reservations.test.ts",
+    "packages/session-persistence-jsonl/test/jsonl.test.ts",
+    "packages/session-persistence-jsonl/test/replacement-journal.test.ts",
+    "packages/session-persistence-jsonl/test/retained-format-ownership.test.ts",
+    "packages/session-persistence/test/attribution-format4.test.ts",
+    "packages/session-persistence/test/conversation-format.test.ts",
+    "packages/session-persistence/test/coordinator-order.test.ts",
+    "packages/session-persistence/test/fork.test.ts",
+    "packages/session-persistence/test/native-witness-format5.test.ts",
+    "packages/session-persistence/test/ownership.test.ts",
+    "packages/session-persistence/test/persistence.test.ts"
+  ],
+  "failures": []
+}

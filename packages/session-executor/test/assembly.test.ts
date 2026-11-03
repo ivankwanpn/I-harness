@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest"
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
@@ -13,7 +14,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
     if (Date.now() >= deadline) throw new Error("waitFor: condition not met within budget")
   }
 }
-import { append, createSession, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, copyConversationData, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor, type AgentConfig, type AgentDeps } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -23,6 +24,10 @@ import { approxTokens } from "@i-harness/compaction"
 import { createTelemetry, type TelemetryEvent } from "@i-harness/telemetry"
 import type { SubagentRole } from "@i-harness/subagent"
 import { createSessionAssembly, ModelUnavailableError, type AssemblyOptions } from "../src/assembly.ts"
+import { controlledModel } from "./controlled-model.ts"
+afterEach(() => vi.unstubAllGlobals())
+
+function textMock(script: MockStep[]) { return Object.assign(createMockClient(script), { prepare: prepareTextFixture }) }
 
 // ── Observation seams for the two wirings the M33/M56/M57 cases below cover ──
 // Neither has a read-back on the assembly handle: the overhead estimate exists
@@ -73,7 +78,7 @@ vi.mock("@i-harness/mcp-client", async (importOriginal) => {
 describe("createSessionAssembly", () => {
   it("owns live child observation and closes it once before discarding children", async () => {
     const root = await mkdtemp(join(tmpdir(), "assembly-child-observation-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
     await coordinator.create({ sessionId: "observed-root" })
     const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: "observed-root", modelPolicy: "test-mock" })
     const changes: string[] = []
@@ -85,13 +90,14 @@ describe("createSessionAssembly", () => {
       const live = assembly.liveChildSession!(row.sessionId!)!
       expect(live).toBeDefined()
       const before = changes.length
-      append(live, { type: "tool/result", name: "controlled", callId: "controlled-result", output: "unflushed" })
+      const childDocument=await coordinator.openManagedDocument(row.sessionId!)
+      await childDocument.metadata.admit({type:'todo/write',version:1,items:[]})
       expect(changes.length).toBe(before + 1)
       expect(changes.at(-1)).toBe("changed")
       await assembly.dispose()
       expect(assembly.liveChildSession!(row.sessionId!)).toBeUndefined()
       expect(changes.at(-1)).toBe("closed")
-      append(live, { type: "user/message", text: "after disposal" })
+      expect(await childDocument.metadata.admit({type:'todo/write',version:1,items:[]})).toEqual({kind:'not-issued',code:'FACT_CLOSED'})
       expect(changes.filter(kind => kind === "closed")).toHaveLength(1)
       expect(changes.at(-1)).toBe("closed")
     } finally { await assembly.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
@@ -156,7 +162,7 @@ describe("createSessionAssembly", () => {
       workspace: process.cwd(),
       session: seeded,
       contextWindow: 50,
-      model: createMockClient([{ role: "assistant", text: "never reached" }]),
+      model: textMock([{ role: "assistant", text: "never reached" }]),
     })
     try {
       const executor = createSessionExecutor({ session: seeded, agent: assembly.agent, inbox: assembly.inbox })
@@ -174,6 +180,7 @@ describe("createSessionAssembly", () => {
       contextWindow: 200_000,
       compact: { contextWindow: 200_000 },
       model: createMockClient([{ role: "assistant", text: "ok" }]),
+      modelPolicy: "test-mock",
     })
     try {
       const deps = agentCalls.deps.at(-1)!
@@ -201,7 +208,7 @@ describe("createSessionAssembly", () => {
     const noWindow = await createSessionAssembly({
       workspace: process.cwd(),
       session: seeded,
-      model: createMockClient([{ role: "assistant", text: "ok" }]),
+      model: textMock([{ role: "assistant", text: "ok" }]),
     })
     try {
       const executor = createSessionExecutor({ session: seeded, agent: noWindow.agent, inbox: noWindow.inbox })
@@ -219,7 +226,7 @@ describe("createSessionAssembly", () => {
       workspace: process.cwd(),
       session: seeded2,
       contextWindow: 1_000,
-      model: createMockClient([{ role: "assistant", text: "never reached" }]),
+      model: textMock([{ role: "assistant", text: "never reached" }]),
     })
     try {
       const executor = createSessionExecutor({ session: seeded2, agent: withWindow.agent, inbox: withWindow.inbox })
@@ -232,11 +239,11 @@ describe("createSessionAssembly", () => {
 
   it("M33: compactNow binds the agent's compaction seam (manual surface)", async () => {
     const s = createSession()
-    append(s, { type: "user/message", text: "initial work" })
+    append(s, { type: "user/message", text: "initial work".repeat(300) })
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       session: s,
-      model: createMockClient([{ role: "assistant", text: "## Primary Request and Intent\n- " + "work ".repeat(120) }]), // ≥ 500 chars (M34 ⑦c floor)
+      model: textMock([{ role: "assistant", text: checkpointOfLength(600) }]), // ≥ 500 chars (M34 ⑦c floor)
       compact: { contextWindow: 100_000 },
     })
     try {
@@ -244,8 +251,8 @@ describe("createSessionAssembly", () => {
       const res = await assembly.compactNow()
       expect(res.compacted).toBe(true)
       expect(res.shadowedSeqs).toEqual([0])
-      expect(assembly.session.events.slice(-3).map((e) => e.type)).toEqual([
-        "compaction/start", "compaction/summary", "compaction/end",
+      expect(assembly.session.events.slice(-1).map((e) => e.type)).toEqual([
+        "compaction/replacement",
       ])
     } finally {
       await assembly.dispose()
@@ -254,7 +261,7 @@ describe("createSessionAssembly", () => {
 
   it("M40 A1: todo_write (session-scoped) + read_image are mounted model-visible", async () => {
     let toolNames: string[] = []
-    const spy: ModelClient = {
+    const spy: ModelClient = { prepare: prepareTextFixture,
       async *stream(request: LLMRequest) {
         toolNames = request.tools.map((t) => t.name)
         yield { type: "text/chunk", text: "ok" }
@@ -274,7 +281,7 @@ describe("createSessionAssembly", () => {
 
   it("M33: compactNow with instructions forwards them to the summarizer prompt", async () => {
     const s = createSession()
-    append(s, { type: "user/message", text: "kickoff" })
+    append(s, { type: "user/message", text: "kickoff".repeat(500) })
     // M5/D2 changed WHERE the instructions land, so this captures the position
     // rather than just the text. The summarizer now replays the region as real
     // messages and appends the directive as the FINAL user message — that is what
@@ -284,11 +291,11 @@ describe("createSessionAssembly", () => {
     // replayed conversation instead.
     let first: string | undefined
     let last: string | undefined
-    const spy: ModelClient = {
+    const spy: ModelClient = { prepare: prepareTextFixture,
       async *stream(request: LLMRequest) {
         first = request.messages[0]!.content as string
         last = request.messages.at(-1)!.content as string
-        yield { type: "text/chunk", text: "summary".repeat(100) } // ≥ 500 chars (M34 ⑦c floor)
+        yield { type: "text/chunk", text: checkpointOfLength(600) } // ≥ 500 chars (M34 ⑦c floor)
         yield { type: "end" }
       },
     }
@@ -304,7 +311,7 @@ describe("createSessionAssembly", () => {
       expect(last).toContain("## User instructions")
       expect(last).toContain("keep the constraint X in mind")
       // And the conversation before it is the replayed region, not the directive.
-      expect(first).toBe("kickoff")
+      expect(first).toBe("kickoff".repeat(500))
     } finally {
       await assembly.dispose()
     }
@@ -312,7 +319,7 @@ describe("createSessionAssembly", () => {
 
   it("M34: a requested compaction with NO resolvable window is DISABLED and says so", async () => {
     const s = createSession()
-    append(s, { type: "user/message", text: "initial work" })
+    append(s, { type: "user/message", text: "initial work".repeat(300) })
     const warnings: string[] = []
     const original = console.warn
     console.warn = (...args: unknown[]) => {
@@ -323,7 +330,7 @@ describe("createSessionAssembly", () => {
       assembly = await createSessionAssembly({
         workspace: process.cwd(),
         session: s,
-        model: createMockClient([{ role: "assistant", text: "unused" }]),
+        model: textMock([{ role: "assistant", text: "unused" }]),
         // Requested, but neither `contextWindow` nor a window inside the config.
         compact: { auto: true },
       })
@@ -334,7 +341,7 @@ describe("createSessionAssembly", () => {
       // The request cannot be honoured, so the engine is absent and the manual
       // surface reports nothing compacted — but the operator was TOLD, which is
       // the part that used to be missing.
-      await expect(assembly!.compactNow()).resolves.toEqual({ compacted: false, shadowedSeqs: [] })
+      await expect(assembly!.compactNow()).resolves.toEqual({ compacted: false, shadowedSeqs: [],outcome:'unchanged',publication:'none' })
       expect(warnings.some((w) => w.includes("auto-compaction is DISABLED"))).toBe(true)
     } finally {
       await assembly!.dispose()
@@ -343,16 +350,16 @@ describe("createSessionAssembly", () => {
 
   it("reads live automatic compaction without rebuilding the existing Agent", async () => {
     const s = createSession()
-    append(s, { type: "user/message", text: "work ".repeat(400) })
+    append(s, { type: "user/message", text: "work ".repeat(1500) })
     let enabled = false
     const assembly = await createSessionAssembly({
       workspace: process.cwd(), session: s,
-      model: createMockClient([
+      model: textMock([
         { role: "assistant", text: "first done" },
-        { role: "assistant", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) },
+        { role: "assistant", text: checkpointOfLength(600) },
         { role: "assistant", text: "second done" },
       ]),
-      compact: { contextWindow: 100, auto: true }, autoCompactionEnabled: () => enabled,
+      maxOutputTokens:5000, compact: { contextWindow: 20000, thresholdRatio: .8, auto: true, minTurnsBeforeRecompact:0 }, autoCompactionEnabled: () => enabled,
     })
     try {
       const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
@@ -360,7 +367,7 @@ describe("createSessionAssembly", () => {
       expect(s.events.some((event) => event.type.startsWith("compaction/"))).toBe(false)
       enabled = true
       executor.submit({ tier: "send", text: "second" }); await executor.drain()
-      expect(s.events.some((event) => event.type === "compaction/summary")).toBe(true)
+      expect(s.events.some((event) => event.type === "compaction/replacement")).toBe(true)
     } finally { await assembly.dispose() }
   }, 30_000)
   it("M34: a window carried in the compact config ENABLES auto-compaction (the CLI's shape)", async () => {
@@ -370,17 +377,17 @@ describe("createSessionAssembly", () => {
     // window the engine received. Only a turn proves the engine is wired AND that
     // its window is real.
     const s = createSession()
-    append(s, { type: "user/message", text: "work ".repeat(400) }) // ~2000 chars ≈ 500 tokens
+    append(s, { type: "user/message", text: "work ".repeat(1500) }) // literal larger history crosses the new effective-input-budget trigger
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       session: s,
-      model: createMockClient([
-        { role: "assistant", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) },
+      model: textMock([
+        { role: "assistant", text: checkpointOfLength(600) },
         { role: "assistant", text: "done" },
       ]),
       // No `contextWindow` here — the window arrives ONLY in the config, which is
       // exactly how the CLI now supplies it.
-      compact: { contextWindow: 100, auto: true },
+      maxOutputTokens:5000, compact: { contextWindow: 20000, thresholdRatio: .8, auto: true, minTurnsBeforeRecompact:0 },
     })
     try {
       const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
@@ -392,28 +399,30 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
-  it("does not duplicate persistence for a host-owned session", async () => {
+  it("attaches only the actual owner or an explicit detached import and saves each continuation once", async () => {
     const mirrored: SessionEvent[] = []
-    const coordinator = {
-      enqueue: (_sessionId: string, events: SessionEvent[]) => { mirrored.push(...events) },
-      flush: async (_sessionId: string) => {},
-    } as unknown as SessionCoordinator
+    const root=await mkdtemp(join(tmpdir(),'ih-f1-explicit-attachment-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
     const sessionId = "mirror-session"
+    await coordinator.create({sessionId})
     const session = createSession((ev) => {
       mirrored.push(ev)
     })
+    await expect(createSessionAssembly({workspace:root,sessionId,session,coordinator,modelPolicy:'test-mock'})).rejects.toMatchObject({code:'FACT_OWNER_UNSUPPORTED'})
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       sessionId,
-      session,
+      detachedSession:session,
       coordinator,
       model: createMockClient([{ role: "assistant", text: "ok" }]),
+      modelPolicy: "test-mock",
     })
     try {
       await assembly.agent.run("hello")
-      expect(mirrored).toEqual(session.events)
+      expect(mirrored).toEqual([])
+      expect((await backend.read(sessionId)).events).toEqual(assembly.session.events)
+      expect(assembly.session.events.map(event=>event.seq)).toEqual(assembly.session.events.map((_,index)=>index))
     } finally {
-      await assembly.dispose()
+      await assembly.dispose();await coordinator.close()
     }
   }, 30_000)
 })
@@ -433,7 +442,7 @@ describe("createSessionAssembly — task projection (Task 12)", () => {
     let spawned = false
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request: LLMRequest) {
         // The child's requests end with ITS authored task message ("inspect
         // code"); the parent's continuation ends with the spawn tool result.
@@ -520,7 +529,7 @@ import type { LLMStreamEvent } from "@i-harness/llm-seam"
  * then end (the plan's capturingModel fixture contract). */
 function capturingModel(): ModelClient & { requests: LLMRequest[] } {
   const requests: LLMRequest[] = []
-  return {
+  return { prepare: prepareTextFixture,
     requests,
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       requests.push(request)
@@ -580,6 +589,22 @@ describe("createSessionAssembly — default prompt composition (spec §11)", () 
 // assignment reaches THOSE six: they already hold this same object, so none of
 // them is ever re-wired.
 describe("createSessionAssembly — the model handle (R-B1)", () => {
+  it("a preparation keeps its selected client after the stable handle rebinds",async()=>{
+    const first=capturingModel(),second=capturingModel()
+    const dir=mkdtempSync(join(tmpdir(),"ih-prepared-handle-"))
+    const assembly=await createSessionAssembly({workspace:dir,model:first})
+    try {
+      const prepared=await assembly.model.prepare!({systemPrompt:"frozen",messages:[],tools:[]})
+      assembly.setModel(second)
+      for await(const _event of prepared.withOutputCap(4096).stream()){}
+      expect(first.requests).toHaveLength(1)
+      expect(first.requests[0]).toMatchObject({systemPrompt:"frozen",maxOutputTokens:4096})
+      expect(second.requests).toHaveLength(0)
+      const rebound=await assembly.model.prepare!({systemPrompt:"next",messages:[],tools:[]})
+      for await(const _event of rebound.stream()){}
+      expect(second.requests).toHaveLength(1)
+    }finally{await assembly.dispose()}
+  })
   it("a rebound model reaches the handle, and the turn loop reads through it", async () => {
     // The design said "two consumers, one change covers both"; measured, the
     // grouping is in the block header above. This test pins the handle itself
@@ -704,27 +729,11 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
  * packages/agent-team/test/lifecycle.test.ts:515 (`const coordinator = {`
  * … `as unknown as SessionCoordinator` at :533): a coordinator double, NOT a
  * model client — the recorder shapes above are untouched. */
-function memoryCoordinator(): SessionCoordinator {
-  const events = new Map<string, SessionEvent[]>()
-  return {
-    create: async (meta?: { sessionId?: string }) => {
-      const id = meta?.sessionId ?? `mem-${events.size}`
-      events.set(id, [])
-      return { id }
-    },
-    append: async (sessionId: string, evs: SessionEvent[]) => { events.get(sessionId)?.push(...evs) },
-    enqueue: (sessionId: string, evs: SessionEvent[]) => {
-      const list = events.get(sessionId) ?? []
-      list.push(...evs)
-      events.set(sessionId, list)
-    },
-    load: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(events.get(sessionId) ?? [])] } }),
-    list: async () => [...events.keys()],
-    flush: async () => {},
-    close: async () => {},
-    putDocument: async () => {},
-    getDocument: async () => undefined,
-  } as unknown as SessionCoordinator
+async function memoryCoordinator(): Promise<SessionCoordinator> {
+  const root=await mkdtemp(join(tmpdir(),'ih-f1-assembly-team-'))
+  const coordinator=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  await coordinator.create({sessionId:'lead-1'})
+  return coordinator
 }
 
 describe("createSessionAssembly — every handle-reachable holder follows a rebind (Task 2, R-B1)", () => {
@@ -736,10 +745,11 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
    * recorder is `capturingModel`'s and the script is `createMockClient`'s; only
    * the two existing pieces are joined, because these holders are driven by
    * TOOL CALLS and so need scripted replies `capturingModel`'s fixed text cannot give. */
-  function scriptedModel(script: MockStep[]): ModelClient & { requests: LLMRequest[] } {
+  function scriptedModel(script: MockStep[], managed = false): ModelClient & { requests: LLMRequest[] } {
     const requests: LLMRequest[] = []
-    const cassette = createMockClient(script)
-    return {
+    const cassette = textMock(script)
+    if (managed) return Object.assign(controlledModel(async function* (request) { requests.push(request); yield* cassette.stream({ ...request, generation: undefined, confirmExecution: undefined }) }), { requests })
+    return { prepare: prepareTextFixture,
       requests,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         requests.push(request)
@@ -769,11 +779,11 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
     // One user message and nothing else: with the default retention budget
     // (retainTokens 0) the whole surface is shadowable, so compact() has a
     // region to summarize (compaction/src/region.ts selectShadowableRange).
-    append(session, { type: "user/message", text: "kickoff ".repeat(20) })
+    append(session, { type: "user/message", text: "kickoff ".repeat(300) })
     const first = capturingModel()
     // ≥ 500 chars: the M34 ⑦c minSummaryChars floor, so this is a clean success
     // rather than the degenerate-retry path.
-    const second = scriptedModel([{ role: "assistant", text: "## Primary Request and Intent\n- " + "summary ".repeat(80) }])
+    const second = scriptedModel([{ role: "assistant", text: checkpointOfLength(600) }])
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       session,
@@ -886,13 +896,13 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
   }, 30_000)
 
   it("holder 5c — a team-mate's first turn inherits the rebound client", async () => {
-    const coordinator = memoryCoordinator()
+    const coordinator = await memoryCoordinator()
     const first = capturingModel()
     const second = scriptedModel([
       { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
       { role: "assistant", text: "teammate finished" }, // the teammate's own turn
       { role: "assistant", text: "lead finished" }, // the lead's continuation
-    ])
+    ], true)
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       model: first,
@@ -914,6 +924,7 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
       // subject is the TEAMMATE's request — only a teammate turn carries the
       // teammate role's prompt.
       await assembly.agent.run("use the team")
+      expect(assembly.session.events.find(event => event.type === "tool/result" && event.name === "spawn_teammate")).not.toMatchObject({ isError: true })
       await waitFor(() => second.requests.some((r) => r.systemPrompt.includes("You are a teammate in an agent team.")))
       expect(first.requests).toHaveLength(0)
     } finally {
@@ -971,8 +982,8 @@ describe("createSessionAssembly — the two CONFIGURED holders keep winning (Tas
    * script = `createMockClient`'s. */
   function scriptedModel(script: MockStep[]): ModelClient & { requests: LLMRequest[] } {
     const requests: LLMRequest[] = []
-    const cassette = createMockClient(script)
-    return {
+    const cassette = textMock(script)
+    return { prepare: prepareTextFixture,
       requests,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         requests.push(request)
@@ -991,14 +1002,14 @@ describe("createSessionAssembly — the two CONFIGURED holders keep winning (Tas
     // boundary: a `summarizationModel` IS configured. One user message and the
     // default retention budget (retainTokens 0) → the whole surface is
     // shadowable, so compact() has a region to summarize.
-    append(session, { type: "user/message", text: "kickoff ".repeat(20) })
+    append(session, { type: "user/message", text: "kickoff ".repeat(300) })
     const first = capturingModel()
     // Each client's answer is unique, so the summary text names which client
     // actually served — the script-as-proof Task 2's holder 1 uses. Both answers
     // clear the 500-char minSummaryChars floor, so either is a clean pass and
     // WHICH client ran is the only thing the assertions can see.
-    const configured = scriptedModel([{ role: "assistant", text: "CONFIGURED summarizer ran\n" + "configured ".repeat(60) }])
-    const second = scriptedModel([{ role: "assistant", text: "REBOUND summarizer ran\n" + "rebound ".repeat(80) }])
+    const configured = scriptedModel([{ role: "assistant", text: checkpointOfLength(600,"CONFIGURED summarizer ran") }])
+    const second = scriptedModel([{ role: "assistant", text: checkpointOfLength(600,"REBOUND summarizer ran") }])
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       session,
@@ -1102,7 +1113,7 @@ describe("createSessionAssembly — MCP auth refresh-failure binding (M56/M57)",
     const events: TelemetryEvent[] = []
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
-      model: createMockClient([{ role: "assistant", text: "ok" }]),
+      model: textMock([{ role: "assistant", text: "ok" }]),
       telemetry: createTelemetry([{
         onEvent: (ev) => {
           events.push(ev)
@@ -1254,7 +1265,7 @@ describe("createSessionAssembly — MCP auth refresh-failure binding (M56/M57)",
  * assert the SAME reason on the channel it travels. Returns the string
  * "undefined" when no such result exists, so a missing result fails the match
  * instead of raising a shape error. */
-function toolErrorOf(events: SessionEvent[], name: string): string {
+function toolErrorOf(events: readonly SessionEventView[], name: string): string {
   const result = events.find((e): e is Extract<SessionEvent, { type: "tool/result" }> =>
     e.type === "tool/result" && e.name === name)
   return String((result?.output as { error?: string } | undefined)?.error)
@@ -1270,13 +1281,13 @@ describe("createSessionAssembly — pluginAgents", () => {
    * carries `unknown role: X` rather than asserting a rejection (which WAS the
    * old contract). */
   async function spawnVia(roleName: string, pluginAgents?: SubagentRole[]) {
-    const cassette = createMockClient([
+    const cassette = textMock([
       { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { message: "simplify this", task_name: "helper", agent_type: roleName, background: false } }] },
       { role: "assistant", text: "child finished" }, // the child's turn
       { role: "assistant", text: "parent finished" }, // the parent's continuation
     ])
     const requests: LLMRequest[] = []
-    const model: ModelClient = { async *stream(req) { requests.push(req); yield* cassette.stream(req) } }
+    const model: ModelClient = { prepare: prepareTextFixture,  async *stream(req) { requests.push(req); yield* cassette.stream(req) } }
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       model,
@@ -1380,11 +1391,11 @@ describe("createSessionAssembly — resolveRoleModel", () => {
     allowSubagentModelSelection?: boolean,
     roleSelectionFor?: AssemblyOptions["roleSelectionFor"],
   ): Promise<{ run: unknown; events: SessionEvent[] }> {
-    const cassette = createMockClient([
+    const cassette = textMock([
       { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { message: "x", task_name: "helper", agent_type: "rolemodel", background: false } }] },
       { role: "assistant", text: "parent saw the failure" }, // the continuation the soft path reaches
     ])
-    const model: ModelClient = { async *stream(req) { yield* cassette.stream(req) } }
+    const model: ModelClient = { prepare: prepareTextFixture,  async *stream(req) { yield* cassette.stream(req) } }
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       model,
@@ -1398,7 +1409,7 @@ describe("createSessionAssembly — resolveRoleModel", () => {
     })
     try {
       const run = await assembly.agent.run("start")
-      return { run, events: [...assembly.session.events] }
+      return { run, events: copyConversationData(assembly.session.events) }
     } finally {
       await assembly.dispose()
     }
@@ -1454,7 +1465,7 @@ describe("createSessionAssembly — resolveRoleModel", () => {
 function spawnRecordingModel(): { model: ModelClient; childRequests: LLMRequest[] } {
   const childRequests: LLMRequest[] = []
   let spawned = false
-  const model: ModelClient = {
+  const model: ModelClient = { prepare: prepareTextFixture,
     async *stream(request: LLMRequest) {
       const last = request.messages.at(-1)
       const isChild = last?.role === "user" && typeof last.content === "string" && last.content.includes("inspect code")
@@ -1485,8 +1496,8 @@ function spawnRecordingModel(): { model: ModelClient; childRequests: LLMRequest[
 // request carried the numbers.
 function guardianArmModel(parentScript: MockStep[]): ModelClient & { requests: LLMRequest[] } {
   const requests: LLMRequest[] = []
-  const parentCassette = createMockClient(parentScript)
-  return {
+  const parentCassette = textMock(parentScript)
+  return { prepare: prepareTextFixture,
     requests,
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       requests.push(request)
@@ -1534,7 +1545,7 @@ describe("createSessionAssembly — the session's budget reaches its children (M
       sessionId: "s1",
       approveAll: true,
       model,
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
     })
     try {
@@ -1638,7 +1649,7 @@ describe("createSessionAssembly — the session's budget reaches its children (M
 // 3619 and not 4_242), while the `opts.compact?.contextWindow` form is what
 // nothing above can see: the fixture passes the SAME window to both keys
 // (`:144-145`). Hence the DECOY PAIR in
-// every fixture below: `contextWindow: 8_000` sits beside
+// every fixture below: `contextWindow: 12_000` sits beside
 // `maxOutputTokens: 100_000`, and each assertion reads the number the WINDOW
 // half carried, so a swap MOVES it. The two fixtures whose sites can also swap
 // to `opts.compact?.contextWindow` carry a THIRD, again distinct decoy
@@ -1697,18 +1708,12 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
    * assertion below depends on WHO got which step). */
   function teamLeadModel(): ModelClient & { requests: LLMRequest[] } {
     const requests: LLMRequest[] = []
-    const cassette = createMockClient([
+    const cassette = textMock([
       { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
       { role: "assistant", text: "teammate finished" },
       { role: "assistant", text: "lead finished" },
     ])
-    return {
-      requests,
-      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-        requests.push(request)
-        yield* cassette.stream(request)
-      },
-    }
+    return Object.assign(controlledModel(async function* (request) { requests.push(request); yield* cassette.stream({ ...request, generation: undefined, confirmExecution: undefined }) }), { requests })
   }
 
   // hop 1 (`assembly.ts:1146`) + hop 4 (`reviewer.ts:178`, the gate's TRUE arm):
@@ -1720,9 +1725,10 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
     const assembly = await createSessionAssembly({
       workspace: dir,
       model: client,
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
-      compact: { contextWindow: 4_000 }, // the third decoy (see the block header)
+      autoCompactionEnabled: () => false,
+      compact: { contextWindow: 4_000, auto: false }, // the third decoy (see the block header)
       guardian: {}, // no `model` → the reviewer inherits → the gate's TRUE arm
     })
     try {
@@ -1741,7 +1747,7 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       // `opts.maxOutputTokens`, or `opts.compact?.contextWindow` — puts a
       // different number here and reds. At the M73 fixtures' 200 000 window
       // this assertion could not tell the two keys apart at all.
-      expect(reviewed[0]!.budget?.contextWindow).toBe(8_000)
+      expect(reviewed[0]!.budget?.contextWindow).toBe(12_000)
       // Secondary, the wire half: the cap the reviewer's OWN request carries is
       // that 100_000 clamped against the window, so the request is a second
       // witness that the window reached this child (with no window it would be
@@ -1798,16 +1804,17 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
   // hop 2 (`assembly.ts:1182`) + hop 3 (`agent-team/src/scheduler.ts:221`).
   it("hop 2+3: a TEAMMATE's budget carries the session's WINDOW, not its cap", async () => {
     agentCalls.deps.length = 0
-    const coordinator = memoryCoordinator()
+    const coordinator = await memoryCoordinator()
     const model = teamLeadModel()
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       model,
       approveAll: true,
       team: {},
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
-      compact: { contextWindow: 4_000 }, // the third decoy (see the block header)
+      autoCompactionEnabled: () => false,
+      compact: { contextWindow: 4_000, auto: false }, // the third decoy (see the block header)
       // The team's spawn path REQUIRES durable child sessions (roster.ts), which
       // the assembly wires only when BOTH are present — holder 5c's shape (:854).
       sessionId: "lead-1",
@@ -1821,7 +1828,7 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       // The decoy set again: a swap at EITHER hop (the assembly's literal, or
       // the scheduler's) makes this read 100_000, and one to the compact
       // config's window reads 4_000.
-      expect(teammates[0]!.budget?.contextWindow).toBe(8_000)
+      expect(teammates[0]!.budget?.contextWindow).toBe(12_000)
       // …and the observed child is one that really RAN: its own request carries
       // the cap clamped against that window (100_000 reaches the wire verbatim
       // only where the window is wide enough for it).

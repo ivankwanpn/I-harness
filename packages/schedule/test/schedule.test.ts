@@ -5,6 +5,7 @@ import {
   ScheduleInputError,
   ScheduleLogError,
   allocateScheduleId,
+  createScheduleAccumulator,
   createAfterScheduleRecord,
   createAtScheduleRecord,
   createEveryScheduleRecord,
@@ -72,6 +73,21 @@ describe("schedule record creation rules", () => {
 })
 
 describe("fold + allocation (the durable stream IS the state)", () => {
+  it("incremental snapshots match the public fold and are detached", () => {
+    const every = createEveryScheduleRecord("every", "repeat", 600, NOW)
+    const once = createAfterScheduleRecord("once", "one shot", 60, NOW)
+    const unrelated = { type: "user/message", text: "hello" } as SessionEvent
+    const events = [unrelated, createEvent(every), createEvent(once),
+      dispatchEvent("every", "2026-08-31T10:30:00.000Z"), unrelated, deleteEvent("once")]
+    const accumulator = createScheduleAccumulator()
+    for (const [index, event] of events.entries()) {
+      accumulator.apply(event)
+      expect(accumulator.current()).toEqual(foldScheduleEvents(events.slice(0, index + 1)))
+      const snapshot = accumulator.current()
+      if (snapshot.active[0] !== undefined) snapshot.active[0].prompt = "mutated"
+      expect(accumulator.current()).toEqual(foldScheduleEvents(events.slice(0, index + 1)))
+    }
+  })
   it("create/delete/dispatch fold; one-shot dispatch removes; every advances anchor-aligned", () => {
     const after = createAfterScheduleRecord("schedule-1", "a", 60, NOW) // target 10:01:00Z
     const every = createEveryScheduleRecord("schedule-2", "e", 600, NOW) // anchor 10:10:00Z

@@ -1,0 +1,42 @@
+{
+  "at": "2026-10-23T19:53:45.661Z",
+  "base": "80ad360f595a3522857fdb5779836591a69bd1cc",
+  "head": "732a5201bdc7f17c60d75df0f9594a59390205a6",
+  "files": 15,
+  "evidenceFiles": 208,
+  "newFailures": [],
+  "previouslyFailingNowPassing": [
+    {
+      "file": "core-agent/test/model-recovery.test.ts",
+      "name": "timeout recovery discards pending tool effects without repeating accepted steps",
+      "message": "Error: Model-visible input remained unstable during prepared admission"
+    },
+    {
+      "file": "core-agent/test/model-recovery.test.ts",
+      "name": "discards only the failed attempt, preserves audit and earlier effects, and retries the safe history",
+      "message": "Error: Model-visible input remained unstable during prepared admission"
+    },
+    {
+      "file": "core-agent/test/model-recovery.test.ts",
+      "name": "retains fail-closed duplicate call IDs even across discarded attempts",
+      "message": "AssertionError: expected [Function] to throw error including 'duplicate provider tool call id' but got 'Model-visible input remained unstable…'"
+    },
+    {
+      "file": "core-agent/test/model-recovery.test.ts",
+      "name": "closes exhaust recovery without a successful assistant or dispatched tool",
+      "message": "AssertionError: expected 1 to be 2 // Object.is equality"
+    },
+    {
+      "file": "core-agent/test/model-recovery.test.ts",
+      "name": "journals terminal partial text for exhaustion without model replay or tool side effects",
+      "message": "AssertionError: expected 1 to be 2 // Object.is equality"
+    },
+    {
+      "file": "core-agent/test/model-recovery.test.ts",
+      "name": "journals terminal partial text for cancel-retry without model replay or tool side effects",
+      "message": "AssertionError: expected 1 to be 2 // Object.is equality"
+    }
+  ],
+  "remainingAgentFailures": 35,
+  "errors": []
+}

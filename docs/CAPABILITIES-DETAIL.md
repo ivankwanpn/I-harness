@@ -369,8 +369,8 @@ session/start, session/end, session/request, session/queued, session/error, turn
 
 ### 3.6 其他引擎機制
 
-- **runtime context**（packages/runtime-context/src/index.ts）：`installRuntimeContext` 於 `agent/pre-step` 渲染 `## <name> + text` 區段成快照 user/message（僅文字變更時 append；source= `i-harness/runtime-context`；冷重啟以最後快照重構，:30-61）。
-- **指令載入**（packages/instructions）：AGENTS.md 優先於 CLAUDE.md（每目錄至多一個，files.ts:7-24）；順序 global(~ + ~/.claude，unshift 最先=最低優先) → workspace 祖先（無限上行至根）→ workspace（最近最後、最醒目）；**內容逐字讀取（✎ 無註解剝離）**；渲染 = `### <displayPath>` + 內容；截斷 = 直接切 + `"(truncated)"` 附註；總量上限 **24_000 字元**（index.ts:9-53）；mtime+size 快照緩存、變更才重讀。
+- **runtime context**（packages/runtime-context/src/index.ts；session-executor/src/context/instructions/manager.ts）：實際 main Agent 在 owned logical admission 完成 step hooks/claims 後發布完整 `runtime/context` 快照（instructions → skills → subagents），等待原始 managed receipt 才能進入模型；只在語義變更時 append，空 sections 明確清除。current prefix 由日誌投影一次，冷重啟與 rewind 從目前有效快照重構；未決 publication 保留原始 capture 與 observation lease，經相同 receipt reconciliation 後才釋放。
+- **指令載入**（packages/instructions 的 observed service）：依 workspace scope 與明確選定的 global sources 探索，不讀 ambient home 或無限上行的祖先；每目錄 AGENTS.md 優先於 CLAUDE.md。監看候選、相依與 pending writes，在實際 main admission 重新確認完整且 ready 的觀測；UTF-8 byte budget（預設 24_000，含標頭與截斷標記）在有效字元邊界截斷。child/native mutation/UI qualification 仍待驗證。
 - **標題**（packages/session-title）：LLM 建議（≤8 詞、禁引號/markdown/句點，index.ts:9-11）→ 失敗退回 `fallbackTitle`（前 8 詞，:15-22）；`session/title` 事件 + `session-title/<id>` 文件鏡像（:68-102）；`TITLE_MAX_BYTES=120`。
 - **plan mode**（packages/plan-mode）：`plan/mode on` + proposal 亦以 user/message 寫入（:10-19）；系統提示碎片 `PLAN_MODE_SYSTEM_PROMPT`（:5-8）於 systemPrompt 尾部（assembly.ts:371）。
 - **guardian**：見 §1.4。

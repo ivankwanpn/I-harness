@@ -1,0 +1,126 @@
+{
+  "head": "3ba0d782fea3eb3389790e16f47f1f9b9cab0208",
+  "finalSourceDigest": "767b27b6756106fc2d8b3dfdef339c5c6521d7ea9547ac5ceaa7394481e1d291",
+  "sourceInputs": 2576,
+  "sourceCopies": 842,
+  "dependencyEdges": 280,
+  "copiedTests": 3,
+  "importsRewritten": 14,
+  "cliSha256": "495fdd9823c3ba0231c6535d883cbad66c5a7d7aafd56dbd94e0f63f4a2f4391",
+  "cliBytes": 6748442,
+  "reviewSha256": "9573e469a4d436028057fbef977f609ae3391574a4c5f9ca279e816a6eb59233",
+  "verifiedReceipts": [
+    {
+      "label": "all-review-probes",
+      "exitCode": 0,
+      "sourceDigest": "62dc87ce7186d0225d69216c13a05ba4c88e0450dee5d6e0a1ad15a5bf823557"
+    },
+    {
+      "label": "build-cli",
+      "exitCode": 0,
+      "sourceDigest": "767b27b6756106fc2d8b3dfdef339c5c6521d7ea9547ac5ceaa7394481e1d291"
+    },
+    {
+      "label": "build-gateway",
+      "exitCode": 0,
+      "sourceDigest": "767b27b6756106fc2d8b3dfdef339c5c6521d7ea9547ac5ceaa7394481e1d291"
+    },
+    {
+      "label": "copied-library-controls",
+      "exitCode": 0,
+      "sourceDigest": "767b27b6756106fc2d8b3dfdef339c5c6521d7ea9547ac5ceaa7394481e1d291"
+    },
+    {
+      "label": "exec-after-reader-fix",
+      "exitCode": 0,
+      "sourceDigest": "767b27b6756106fc2d8b3dfdef339c5c6521d7ea9547ac5ceaa7394481e1d291"
+    },
+    {
+      "label": "exec-final-types",
+      "exitCode": 0,
+      "sourceDigest": "62dc87ce7186d0225d69216c13a05ba4c88e0450dee5d6e0a1ad15a5bf823557"
+    },
+    {
+      "label": "exec-final",
+      "exitCode": 0,
+      "sourceDigest": "62dc87ce7186d0225d69216c13a05ba4c88e0450dee5d6e0a1ad15a5bf823557"
+    },
+    {
+      "label": "exec-full",
+      "exitCode": 0,
+      "sourceDigest": "01927dd4d4e70b16850816dcd94e80b2d4d91e281aabc2ef79b3e5c3286f742e"
+    },
+    {
+      "label": "exec-types-initial",
+      "exitCode": 0,
+      "sourceDigest": "0f112c1eeae9689b71df8843d71f75bd3f8dd3b8ff3da801ccc29c1136263045"
+    },
+    {
+      "label": "executor-retained-controls",
+      "exitCode": 0,
+      "sourceDigest": "62dc87ce7186d0225d69216c13a05ba4c88e0450dee5d6e0a1ad15a5bf823557"
+    },
+    {
+      "label": "executor-types",
+      "exitCode": 0,
+      "sourceDigest": "62dc87ce7186d0225d69216c13a05ba4c88e0450dee5d6e0a1ad15a5bf823557"
+    },
+    {
+      "label": "foreground-and-background-green",
+      "exitCode": 0,
+      "sourceDigest": "0f112c1eeae9689b71df8843d71f75bd3f8dd3b8ff3da801ccc29c1136263045"
+    },
+    {
+      "label": "foreground-close-recovery",
+      "exitCode": 0,
+      "sourceDigest": "62dc87ce7186d0225d69216c13a05ba4c88e0450dee5d6e0a1ad15a5bf823557"
+    },
+    {
+      "label": "foreground-green",
+      "exitCode": 1,
+      "sourceDigest": "21cdb1e438b263fa1999e5dc2eaad67cc844f09ec51da118e3e3bd64eec92e75"
+    },
+    {
+      "label": "foreground-reader-green",
+      "exitCode": 0,
+      "sourceDigest": "767b27b6756106fc2d8b3dfdef339c5c6521d7ea9547ac5ceaa7394481e1d291"
+    },
+    {
+      "label": "foreground-reader-red",
+      "exitCode": 1,
+      "sourceDigest": "c2fb02f08d0614bd75268249c6a389136f1a58ff05289e692db4189ccca0e7b9"
+    },
+    {
+      "label": "gateway-types",
+      "exitCode": 0,
+      "sourceDigest": "62dc87ce7186d0225d69216c13a05ba4c88e0450dee5d6e0a1ad15a5bf823557"
+    },
+    {
+      "label": "passive-and-observer-green",
+      "exitCode": 0,
+      "sourceDigest": "0f112c1eeae9689b71df8843d71f75bd3f8dd3b8ff3da801ccc29c1136263045"
+    },
+    {
+      "label": "reachability",
+      "exitCode": 1,
+      "sourceDigest": "62dc87ce7186d0225d69216c13a05ba4c88e0450dee5d6e0a1ad15a5bf823557"
+    },
+    {
+      "label": "real-store-lost-receipt",
+      "exitCode": 0,
+      "sourceDigest": "01927dd4d4e70b16850816dcd94e80b2d4d91e281aabc2ef79b3e5c3286f742e"
+    },
+    {
+      "label": "types-after-reader-fix",
+      "exitCode": 0,
+      "sourceDigest": "767b27b6756106fc2d8b3dfdef339c5c6521d7ea9547ac5ceaa7394481e1d291"
+    },
+    {
+      "label": "verify-cli",
+      "exitCode": 0,
+      "sourceDigest": "767b27b6756106fc2d8b3dfdef339c5c6521d7ea9547ac5ceaa7394481e1d291"
+    }
+  ],
+  "errors": [],
+  "limits": "Copied library controls and CLI distribution smoke; not full packaged IPC/session flows. Preserve earlier source-time and failed runs."
+}

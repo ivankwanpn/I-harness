@@ -1,7 +1,7 @@
 import { expect, it } from "vitest"
 import { mkdirSync, mkdtempSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import { createFsTools } from "../src/index.ts"
+import { createFsTools } from "./helpers/registry-fs.ts"
 
 it("retains the host base-authority token through the asynchronous filesystem policy ladder", async () => {
   const parent = resolve(".tmp"); mkdirSync(parent, { recursive: true })

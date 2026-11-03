@@ -1,0 +1,7 @@
+{
+  "checkedUtc": "2026-10-20T20:18:03.8018124Z",
+  "ownedProcesses": [],
+  "count": 0,
+  "strategy": "All awaited native gates exited; real stores/coordinators and held-I/O release/joins use finally; no background helper launched and no unrelated process killed",
+  "limitation": "No retrospective OS temp directory inventory for accidentally matched historical fixtures."
+}

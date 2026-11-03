@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react"
 import { Activity, ArrowDownUp, Coins, Database, RefreshCw, SlidersHorizontal, Zap } from "lucide-react"
-import type { UsageDetail, UsageGroup, UsagePrice, UsageQuery, UsageSnapshot } from "@i-harness/usage-stats"
+import type { UsageDetail, UsageGroup, UsagePrice, UsageQuery, UsageSnapshot } from "@i-harness/usage-stats/types"
 import { useLocale } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { SettingsDialog } from "./SettingsDialog.tsx"
@@ -8,8 +8,11 @@ import { UsageCharts } from "./UsageCharts.tsx"
 import { UsagePricing } from "./UsagePricing.tsx"
 import { localDate, usageDateRange, type UsageRange } from "./usage-statistics-helpers.ts"
 import "./UsageStatistics.css"
+import {decodeUsageConsumerView,matchesUsageQuery,plainUsageWarning} from './usage-consumer-view.ts'
+import {ObservationUsagePanel} from './ObservationUsagePanel.tsx'
+import type {UsageSnapshotV2,ObservationQuery} from '@i-harness/usage-stats/observation-snapshot'
 
-export type UsageStatisticsRequest = { kind: "desktop/usage/query"; query: UsageQuery } | { kind: "desktop/usage/pricing"; price: UsagePrice }
+export type UsageStatisticsRequest = { kind: "desktop/usage/query"; query: ObservationQuery } | { kind: "desktop/usage/pricing"; price: UsagePrice }
 export interface UsageStatisticsProps { active: boolean; projectLabels?: Record<string, string>; workspaceLabels?: Record<string, string>; request(request: UsageStatisticsRequest): Promise<unknown> }
 
 export function UsageStatistics({ active, request, projectLabels = {}, workspaceLabels = {} }: UsageStatisticsProps) {
@@ -22,28 +25,42 @@ export function UsageStatistics({ active, request, projectLabels = {}, workspace
   const [projectId, setProject] = useState("")
   const [providerId, setProvider] = useState("")
   const [modelId, setModel] = useState("")
+  const [unknownRoute,setUnknownRoute]=useState(false)
   const [page, setPage] = useState(1)
   const [sort, setSort] = useState<UsageQuery["sort"]>("newest")
   const [tab, setTab] = useState<"models" | "providers" | "requests">("models")
   const [groupSort, setGroupSort] = useState<"requests" | "totalTokens" | "estimatedCostUsd">("totalTokens")
   const [groupPage, setGroupPage] = useState(1)
   const [revision, setRevision] = useState(0)
-  const [snapshot, setSnapshot] = useState<UsageSnapshot>()
+  const [legacySnapshot,setLegacySnapshot]=useState<UsageSnapshot>()
+  const [observationSnapshot,setObservationSnapshot]=useState<UsageSnapshotV2>()
+  const [observationMode,setObservationMode]=useState(false)
+  const [legacySelected,setLegacySelected]=useState(false)
+  const [observationTab,setObservationTab]=useState<'models'|'providers'|'records'>('models')
+  const [legacyWarnings,setLegacyWarnings]=useState<string[]>([])
+  const retainedSnapshot=legacySnapshot??(legacySelected?observationSnapshot?.legacy:undefined)
+  const [knownOptions,setKnownOptions]=useState<UsageSnapshot['options']>()
+  const viewOptions=knownOptions
   const [error, setError] = useState<string>()
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<UsageDetail>()
   const [pricing, setPricing] = useState(false)
   const range = useMemo(() => usageDateRange(preset, start, end), [preset, start, end, revision, active])
-  const query = useMemo<UsageQuery | null>(() => range ? { ...range, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, workspace: workspace || undefined, projectId: projectId || undefined, providerId: providerId || undefined, modelId: modelId || undefined, page, pageSize: 25, sort } : null, [range, workspace, projectId, providerId, modelId, page, sort])
-  const [loadedQuery, setLoadedQuery] = useState<UsageQuery | null>(null)
+  const query = useMemo<ObservationQuery | null>(() => range ? { ...range, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, workspace: workspace || undefined, projectId: projectId || undefined, providerId: providerId || undefined, modelId: modelId || undefined, page, pageSize: 25, sort,...(unknownRoute?{route:'unknown' as const}:{}) } : null, [range, workspace, projectId, providerId, modelId, page, sort,unknownRoute])
+  const [loadedQuery, setLoadedQuery] = useState<ObservationQuery | null>(null)
+  const scopeCurrent=!!query&&!!loadedQuery&&JSON.stringify(query)===JSON.stringify(loadedQuery)
+  const snapshot=scopeCurrent?retainedSnapshot:undefined
+  const visibleObservation=scopeCurrent?observationSnapshot:undefined
   useEffect(() => {
-    if (!active || !query) { setLoading(false); return }
+    if (!active || !query) { setLoading(false);if(active&&!query){setLegacySnapshot(undefined);setObservationSnapshot(undefined);setDetail(undefined)} return }
     let stale = false
+    if(loadedQuery&&JSON.stringify(loadedQuery)!==JSON.stringify(query)){setLegacySnapshot(undefined);setObservationSnapshot(undefined);setDetail(undefined)}
     setLoading(true)
     setError(undefined)
     Promise.resolve().then(() => request({ kind: "desktop/usage/query", query })).then(value => {
       if (stale) return
-      setSnapshot(value as UsageSnapshot)
+      const view=decodeUsageConsumerView(value)
+      if(view.kind==='observations'){if(!matchesUsageQuery(view.snapshot,query))throw Error('Usage response does not match the requested filters');setObservationMode(true);setKnownOptions(view.snapshot.options);setObservationSnapshot(view.snapshot);setLegacySnapshot(undefined);setLegacyWarnings([])}else{setObservationMode(false);setUnknownRoute(false);setKnownOptions(view.snapshot.options);setLegacySnapshot(view.snapshot);setObservationSnapshot(undefined);setLegacyWarnings(view.warnings)}
       setLoadedQuery(query)
     }).catch(reason => { if (!stale) setError(reason instanceof Error ? reason.message : String(reason)) }).finally(() => { if (!stale) setLoading(false) })
     return () => { stale = true }
@@ -75,10 +92,12 @@ export function UsageStatistics({ active, request, projectLabels = {}, workspace
     </div>
     {preset === "custom" && <div className="usage-custom"><label>{t("開始日期", "Start date")}<input type="date" value={start} onChange={event => changeScope(() => setStart(event.target.value))} /></label><span>—</span><label>{t("結束日期", "End date")}<input type="date" value={end} onChange={event => changeScope(() => setEnd(event.target.value))} /></label></div>}
     {!range && <p role="alert">{t("請選擇有效的日期範圍（最多 366 天）。", "Choose a valid date range (up to 366 days).")}</p>}
-    <div className="usage-filters">{[{ label: t("工作區", "Workspace"), value: workspace, options: snapshot?.options.workspaces ?? [], set: setWorkspace, labels: workspaceLabels }, { label: t("專案", "Project"), value: projectId, options: snapshot?.options.projects ?? [], set: setProject, labels: projectLabels }, { label: t("提供商", "Provider"), value: providerId, options: snapshot?.options.providers ?? [], set: setProvider }, { label: t("模型", "Model"), value: modelId, options: snapshot?.options.models ?? [], set: setModel }].map(filter => <label key={filter.label}><span>{filter.label}</span><select value={filter.value} onChange={event => changeScope(() => filter.set(event.target.value))}><option value="">{t("全部", "All")}</option>{filter.options.map(option => <option value={option} key={option}>{filter.labels?.[option] ?? option}</option>)}</select></label>)}<span className="usage-zone">{query?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}<br />{t("本機日曆日期", "Local calendar dates")}</span></div>
+    <div className="usage-filters">{[{ label: t("工作區", "Workspace"), value: workspace, options: viewOptions?.workspaces ?? [], set: setWorkspace, labels: workspaceLabels }, { label: t("專案", "Project"), value: projectId, options: viewOptions?.projects ?? [], set: setProject, labels: projectLabels }, { label: t("提供商", "Provider"), value: providerId, options: viewOptions?.providers ?? [], set: setProvider }, { label: t("模型", "Model"), value: modelId, options: viewOptions?.models ?? [], set: setModel }].map(filter => <label key={filter.label}><span>{filter.label}</span><select value={filter.value} onChange={event => changeScope(() => filter.set(event.target.value))}><option value="">{t("全部", "All")}</option>{filter.options.map(option => <option value={option} key={option}>{filter.labels?.[option] ?? option}</option>)}</select></label>)}{observationMode&&<label><span>{t('路徑資料','Route coverage')}</span><select value={unknownRoute?'unknown':''} onChange={event=>changeScope(()=>setUnknownRoute(event.target.value==='unknown'))}><option value="">{t('全部','All')}</option><option value="unknown">{t('未知路徑','Unknown route')}</option></select></label>}<span className="usage-zone">{query?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}<br />{t("本機日曆日期", "Local calendar dates")}</span></div>
     {error && <div role="alert" className="usage-notice">{t("無法更新用量。", "Could not refresh usage.")} {error}{snapshot && <p>{t("下方保留上次成功載入的資料。", "Showing the last successfully loaded data below.")}</p>}</div>}
-    {snapshot?.warnings.length ? <div role="status" className="usage-notice">{t("統計可能不完整。請檢視下方記錄警告。", "Statistics may be incomplete. Review the recording warnings below.")}<ul>{snapshot.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div> : null}
-    {!snapshot ? <div className="usage-empty" role="status"><Activity size={30} /><p>{loading ? t("正在讀取用量記錄…", "Loading usage records…") : t("尚未載入用量。", "Usage has not loaded yet.")}</p></div> : <>
+    {snapshot?.warnings.length ? <div role="status" className="usage-notice">{t("統計可能不完整。請檢視下方記錄警告。", "Statistics may be incomplete. Review the recording warnings below.")}<ul>{snapshot.warnings.map((warning, index) => <li key={index}>{plainUsageWarning(warning,t)}</li>)}</ul></div> : null}
+    {visibleObservation&&<><div className="usage-presets" aria-label={t('用量資料','Usage data')}><button type="button" aria-pressed={!legacySelected} onClick={()=>{setLegacySelected(false);setPage(1);setDetail(undefined)}}>{t('動作與傳送','Actions and sends')}</button><button type="button" aria-pressed={legacySelected} onClick={()=>{setLegacySelected(true);setPage(1)}}>{t('舊版記錄','Older records')}</button></div><div role="status" className="usage-notice">{visibleObservation.coverage.recordingMode==='legacy'?t('動作與傳送記錄尚未啟用；僅顯示先前已記錄的觀察資料。','Action and send recording is not enabled; only previously recorded observations are shown.'):t('用量可能不完整。','Usage may be incomplete.')}<ul>{visibleObservation.coverage.warnings.filter(warning=>!/observation recording is not enabled/i.test(warning)).map((warning,index)=><li key={index}>{plainUsageWarning(warning,t)}</li>)}</ul></div>{!legacySelected&&<ObservationUsagePanel key={JSON.stringify(loadedQuery)} snapshot={visibleObservation} locale={locale} tab={observationTab} setTab={setObservationTab} active={active} t={t} number={number} setPage={setPage} setSort={value=>changeScope(()=>setSort(value))}/>}</>}
+    {!visibleObservation&&legacyWarnings.length>0&&<div className="usage-notice" role="status">{t('舊版記錄：動作與傳送次數未提供。','Older records: action and send counts unavailable.')}<ul>{legacyWarnings.map((warning,index)=><li key={index}>{plainUsageWarning(warning,t)}</li>)}</ul></div>}
+    {!snapshot&&!visibleObservation ? <div className="usage-empty" role="status"><Activity size={30} /><p>{loading ? t("正在讀取用量記錄…", "Loading usage records…") : t("尚未載入用量。", "Usage has not loaded yet.")}</p></div> : !snapshot ? null : <>
       {!currentData && !error && <p role="status" className="usage-muted">{loading ? t("正在更新；下方為上次載入的資料。", "Updating; the previous results are shown below.") : t("下方為上次載入的資料。", "The previous results are shown below.")}</p>}
       <div className="usage-summary">
         <article data-testid="usage-requests"><div className="usage-card-label"><Activity size={16} />{t("請求次數", "Requests")}</div><strong>{number(summary!.requests)}</strong><p>{number(summary!.completed)} {t("完成", "completed")} · {number(summary!.failed)} {t("失敗", "failed")}</p></article>
@@ -96,6 +115,6 @@ export function UsageStatistics({ active, request, projectLabels = {}, workspace
       <p className="usage-footnote">{t("本機記錄；未提供的測量值不會當作零。費用是依明確設定的單價估算，並非帳單；訂閱 Token 不代表剩餘額度。", "Local records. Missing measurements are never treated as zero. Costs use explicit prices and are estimates, not bills. Subscription tokens do not represent remaining allowance.")}<br />{snapshot.recordingSince && <>{t("開始記錄：", "Recording since: ")}{new Date(snapshot.recordingSince).toLocaleDateString(locale)} · </>}{t("更新：", "Updated: ")}{new Date(snapshot.generatedAt).toLocaleString(locale)}</p>
     </>}
     {detail && <SettingsDialog title={t("請求詳情", "Request details")} closeLabel={t("關閉", "Close")} active={active} initialFocusSelector="button" onClose={() => setDetail(undefined)}><p className="usage-detail-billing">{billing(detail)}</p><dl className="usage-detail">{[[t("請求 ID", "Request ID"), detail.id], [t("模型", "Model"), detail.modelId], [t("提供商", "Provider"), detail.providerId], [t("工作區", "Workspace"), workspaceLabels[detail.workspace] ?? detail.workspace], [t("專案", "Project"), detail.projectId ? projectLabels[detail.projectId] ?? detail.projectId : "—"], [t("會話", "Session"), detail.sessionId ?? "—"], [t("時間", "Time"), new Date(detail.startedAt).toLocaleString(locale)], [t("狀態", "Status"), status(detail.status)], [t("耗時", "Duration"), `${(detail.durationMs / 1000).toFixed(2)} s`], [t("首個 Token", "First token"), detail.firstTokenMs == null ? "—" : `${detail.firstTokenMs} ms`], [t("總輸入", "Total input"), number(detail.totalInputTokens)], [t("未快取輸入", "Uncached input"), number(detail.uncachedInputTokens)], [t("快取讀取", "Cache read"), number(detail.cacheReadTokens)], [t("快取寫入", "Cache write"), number(detail.cacheCreationTokens)], [t("輸出", "Output"), number(detail.outputTokens)], ["Tokens", number(detail.totalTokens)], [t("輸入語意", "Input semantics"), detail.inputTokenSemantics === "includes-cache" ? t("包含快取", "Includes cache") : detail.inputTokenSemantics === "excludes-cache" ? t("不含快取", "Excludes cache") : "—"]].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>{detail.price && <p className="usage-footnote">{t("定價來源：", "Price source: ")}{detail.price.source}<br />{new Date(detail.price.updatedAt).toLocaleString(locale)}</p>}</SettingsDialog>}
-    {pricing && <UsagePricing active={active} request={request} prices={snapshot?.prices ?? []} providers={snapshot?.options.providers ?? []} models={snapshot?.options.models ?? []} t={t} onClose={() => setPricing(false)} onSaved={() => { setPricing(false); setRevision(value => value + 1) }} />}
+    {pricing && <UsagePricing observations={observationMode} active={active} request={request} prices={visibleObservation?.prices??snapshot?.prices??[]} providers={viewOptions?.providers??[]} models={viewOptions?.models??[]} t={t} onClose={() => setPricing(false)} onSaved={() => { setPricing(false); setRevision(value => value + 1) }} />}
   </section>
 }

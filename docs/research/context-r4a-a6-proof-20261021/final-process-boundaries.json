@@ -1,0 +1,599 @@
+{
+  "provenance": "Selected original JSONL start/exit records from final G6/B4 process/thread traces; extracted after sealing without edits to originals. These effective canonical paths qualify the actual observed Node instances only.",
+  "records": [
+    {
+      "file": "B4-active.12264.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:28.9Z",
+        "pid": 12264,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\b2",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\b2\\ih.mjs",
+          "sdk",
+          "--yes",
+          "--session-dir",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\s"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "B4-active.12264.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:39.179Z",
+        "pid": 12264,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "B4-active.12264.1.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:32.658Z",
+        "pid": 12264,
+        "threadId": 1,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\b2",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\b2\\worker.mjs"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "B4-active.12264.1.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:32.723Z",
+        "pid": 12264,
+        "threadId": 1,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "B4-active.15444.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:30.649Z",
+        "pid": 15444,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\b2",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-worker.mjs",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\release",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\effects",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\started"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "B4-active.15444.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:30.694Z",
+        "pid": 15444,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 7
+      }
+    },
+    {
+      "file": "B4-active.18536.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:39.033Z",
+        "pid": 18536,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\b2",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-worker.mjs",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\stop-release",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\stop-effects",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\stop-started"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "B4-active.3968.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:32.036Z",
+        "pid": 3968,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\b2",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-worker.mjs",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\release",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\foreground-effects",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\foreground-started"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "B4-active.3968.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:32.042Z",
+        "pid": 3968,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 7
+      }
+    },
+    {
+      "file": "B4-cold.11256.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:39.268Z",
+        "pid": 11256,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\b2",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\b2\\ih.mjs",
+          "sdk",
+          "--yes",
+          "--session-dir",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\s"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "B4-cold.11256.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:40.927Z",
+        "pid": 11256,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "B4-legacy-reopen.29048.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:41.794Z",
+        "pid": 29048,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\b2",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\b2\\ih.mjs",
+          "sdk",
+          "--yes",
+          "--session-dir",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\s"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "B4-legacy-reopen.29048.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:42.074Z",
+        "pid": 29048,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "B4-legacy.18636.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:41.005Z",
+        "pid": 18636,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\b2",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\b2\\ih.mjs",
+          "sdk",
+          "--yes",
+          "--session-dir",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\s"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eB4\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "B4-legacy.18636.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:44:41.722Z",
+        "pid": 18636,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "G6-active.23408.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:35.333Z",
+        "pid": 23408,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\g",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-worker.mjs",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\stop-release",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\stop-effects",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\stop-started"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "G6-active.26316.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:31.695Z",
+        "pid": 26316,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\g",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-worker.mjs",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\release",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\foreground-effects",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\foreground-started"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "G6-active.26316.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:31.7Z",
+        "pid": 26316,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 7
+      }
+    },
+    {
+      "file": "G6-active.2836.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:25.589Z",
+        "pid": 2836,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\g",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\g\\cli\\src\\cli.ts",
+          "--session-dir",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\s"
+        ],
+        "execArgv": [
+          "--import",
+          "file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/tsx/dist/loader.mjs"
+        ],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "G6-active.2836.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:35.492Z",
+        "pid": 2836,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "G6-active.2836.1.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:32.597Z",
+        "pid": 2836,
+        "threadId": 1,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\g",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\g\\node_modules\\@i-harness\\code-mode\\src\\worker.mjs"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "G6-active.2836.1.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:32.662Z",
+        "pid": 2836,
+        "threadId": 1,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "G6-active.2848.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:30.001Z",
+        "pid": 2848,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\g",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\f\\native-worker.mjs",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\release",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\effects",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\started"
+        ],
+        "execArgv": [],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "G6-active.2848.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:30.096Z",
+        "pid": 2848,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 7
+      }
+    },
+    {
+      "file": "G6-cold.28200.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:35.571Z",
+        "pid": 28200,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\g",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\g\\cli\\src\\cli.ts",
+          "--session-dir",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\s"
+        ],
+        "execArgv": [
+          "--import",
+          "file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/tsx/dist/loader.mjs"
+        ],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "G6-cold.28200.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:39.152Z",
+        "pid": 28200,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "G6-legacy-reopen.27972.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:42.449Z",
+        "pid": 27972,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\g",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\g\\cli\\src\\cli.ts",
+          "--session-dir",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\s"
+        ],
+        "execArgv": [
+          "--import",
+          "file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/tsx/dist/loader.mjs"
+        ],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "G6-legacy-reopen.27972.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:44.921Z",
+        "pid": 27972,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 0
+      }
+    },
+    {
+      "file": "G6-legacy.15444.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:39.248Z",
+        "pid": 15444,
+        "threadId": 0,
+        "family": "policy-start",
+        "candidate": "D:\\I-harness-main\\.tmp\\r4v1\\g",
+        "execPath": "C:\\Program Files\\nodejs\\node.exe",
+        "argv": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\I-harness-main\\.tmp\\r4v1\\g\\cli\\src\\cli.ts",
+          "--session-dir",
+          "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\s"
+        ],
+        "execArgv": [
+          "--import",
+          "file:///D:/I-harness-main/.tmp/r4v1/g/node_modules/tsx/dist/loader.mjs"
+        ],
+        "cwd": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\w",
+        "effectiveCanonicalPaths": {
+          "TEMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "TMP": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "tmpdir": "D:\\I-harness-main\\.tmp\\r4v1\\t",
+          "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4v1\\eG6\\c"
+        },
+        "NODE_PATH": null,
+        "NODE_OPTIONS": "--import file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-a6-final/runtime-policy.mjs"
+      }
+    },
+    {
+      "file": "G6-legacy.15444.0.jsonl",
+      "record": {
+        "utc": "2026-10-20T23:43:42.361Z",
+        "pid": 15444,
+        "threadId": 0,
+        "family": "policy-exit",
+        "code": 0
+      }
+    }
+  ]
+}

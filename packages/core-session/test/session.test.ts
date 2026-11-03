@@ -1,9 +1,17 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages, toJSONL, fromJSONL, assertVersion } from "../src/index.ts"
 import { deriveSearchText } from "../src/index.ts"
 import type { SessionEvent } from "../src/index.ts"
 
 describe("session log", () => {
+  it('keeps fresh structural header bytes stable across a cold roundtrip', () => {
+    const session = createSession()
+    session.header = { origin: 'literal' }
+    append(session, { type: 'user/message', text: 'H' })
+    const source = toJSONL(session)
+    expect(toJSONL(fromJSONL(source))).toBe(source)
+  })
   it("appends events in order with seq", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hi" })
@@ -144,7 +152,7 @@ describe("session log", () => {
 
   it("parses a legacy user/message without source and derives normally", () => {
     const oldLog =
-      JSON.stringify({ formatVersion: 1 }) + "\n" + JSON.stringify({ type: "user/message", text: "hi" }) + "\n"
+      JSON.stringify({ formatVersion: 2 }) + "\n" + JSON.stringify({ type: "user/message", text: "hi" }) + "\n"
     const s = fromJSONL(oldLog)
     expect(s.events[0]).toMatchObject({ type: "user/message", text: "hi" })
     expect(s.events[0]).not.toHaveProperty("source")
@@ -156,7 +164,7 @@ describe("session log", () => {
     append(s, { type: "user/message", text: "x" })
     const text = toJSONL(s)
     const s2 = fromJSONL(text)
-    expect(s2.formatVersion).toBe(1)
+    expect(s2.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(s2.events.length).toBe(1)
   })
 
@@ -170,10 +178,10 @@ describe("session log", () => {
     expect(() => fromJSONL("   \n\t  ")).toThrow(/session log is empty/)
   })
 
-  it("migrate-on-continue upgrades v1 (no-op in M1) and refuses higher", () => {
+  it("the current writer uses v11 and rejects a mismatched requested version assertion", () => {
     const s = createSession()
-    expect(assertVersion(s, 1)).toBe(1)
-    expect(() => assertVersion(s, 2)).toThrow(/version/i)
+    expect(assertVersion(s, CURRENT_FORMAT_VERSION)).toBe(CURRENT_FORMAT_VERSION)
+    expect(() => assertVersion(s, 1)).toThrow(/version/i)
   })
 
   it("M51/B2: folds a step's text into its tool-call message (M3 shape)", () => {
@@ -436,8 +444,8 @@ describe("compaction events", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hi" })
     append(s, { type: "compaction/reset", removedSeqs: [] })
-    // additive event type: format version must stay 1 (no bump)
-    expect(s.formatVersion).toBe(1)
+    // The reset marker remains additive within the current writer format.
+    expect(s.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     const restored = fromJSONL(toJSONL(s))
     expect(restored.events.map((e) => e.type)).toEqual(["user/message", "compaction/reset"])
     // removedSeqs survives persistence (recovery replays the log ⇒ nothing lost)
@@ -727,4 +735,10 @@ it("defers a post-tool reminder until every parallel tool result after early ass
   append(s, { type: "tool/result", callId: "b", name: "read", output: "second" })
   append(s, { type: "step/end" })
   expect(deriveMessages(s).map((message) => message.role === "user" ? message.content : message.role === "tool" ? message.toolCallId : message.toolCalls?.map((call) => call.id))).toEqual(["inspect", ["a", "b"], "a", "b", "reminder"])
+})
+it('serializes physical 14 with the existing framed journal',()=>{
+ const session=createSession();append(session,{type:'user/message',text:'framed'});session.formatVersion=14
+ const lines=toJSONL(session).trim().split('\n')
+ expect(JSON.parse(lines[0]!).journal.version).toBe(1)
+ expect(JSON.parse(lines[1]!).recordKind).toBe('session/fact-batch')
 })
