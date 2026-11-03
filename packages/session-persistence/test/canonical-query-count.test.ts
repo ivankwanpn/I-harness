@@ -317,6 +317,22 @@ it('measures one original full metadata observation without skipping fold callba
  }finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
 
+it('batches original attachment action and Task parent checks while custom parent retarget stays opaque',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createTaskDocumentOperations}=await import('../src/coordinator/task-document-operation.ts'),{createOwnedMetadataFold}=await import('../../session-executor/src/lifecycle/owned-metadata-fold.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'original-caller-batch-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract),ownership=latestOwners.at(-1)!
+ let changed=false
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),operations=taskDocumentOperationsFor(coordinator)!,parent=operations.parent(execution.owner),action=execution.owner.beginAction()
+  try{
+   console.info('ORIGINAL_CALLER_BATCH_COUNT',{observe:measure(()=>{execution.observe()}),action:measure(()=>action.assertOpen()),parent:measure(()=>operations.assertParentSession(parent,'parent')),task:measure(()=>operations.assertTaskV3Parent(parent,'parent'))})
+   const node=probe.nodes.get(root)!,before={...node};let callbacks=0,effects=0
+   const custom=createTaskDocumentOperations(ownership,probe.owners.get(ownership)!,{captureParent(){return {id:'parent',assertCurrent(){callbacks++;execution.observe().assertCurrent();node.id+=1000;execution.observe().assertCurrent()},assertTaskV3Parent(){execution.observe().assertCurrent()}}},validator:{validate(){}},open(){throw Error('Unexpected custom open')}},async run=>run())
+   const token=custom.parent(execution.owner)
+   try{expect(()=>{custom.assertTaskV3Parent(token,'parent');effects++}).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);changed=true}finally{Object.assign(node,before)}
+   node.id+=1000;try{expect(()=>action.assertOpen()).toThrow();expect(()=>execution.observe()).toThrow();expect(()=>operations.assertTaskV3Parent(parent,'parent')).toThrow()}finally{Object.assign(node,before)}
+  }finally{action.finish()}
+ }finally{if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+
 it('flushes around an opaque original fold snapshot and rejects native retarget before returning observation',async()=>{
  const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createOwnedMetadataFold}=await import('../../session-executor/src/lifecycle/owned-metadata-fold.ts')
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'observe-retarget-'));let armed=false,callbacks=0,effects=0,changed=false

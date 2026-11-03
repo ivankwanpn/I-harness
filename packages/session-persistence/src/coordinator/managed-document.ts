@@ -553,7 +553,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                         return admit(group, guarded, true);
                     }, reconcile: key => document.reconcile(key), status: group => sourceDispositions.get(group), quarantineCapture: failSource };
                 }),
-                assertOpen: () => assertAuthorized(authorization), stop() {
+                assertOpen: originalGuardDependencies ? createArtifactCurrentGuard(() => {assertGuardMethods();assertAuthorized(authorization)}) : () => assertAuthorized(authorization), stop() {
                     action.stopped = true;
                     cancel.abort();
                 },
@@ -813,11 +813,11 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         if(!Object.hasOwn(document,'view')){const compatibility=core.materialize(events,document);originalDelivery!.bindView(compatibility.view);bindPublicState(compatibility);publicObservation=compatibility}return document;
       },beginTaskMetadata:beginTaskMetadataUpdate,captureTaskParent:()=>privateTaskParent(),captureRequiredParent:source=>privateTaskParent(source),invalidateMetadata(revision){metadataRevision=revision;metadataStale=true;invalidateSelected();try{execution!.assertCurrent()}catch(error){core.readinessUnavailable(error,true)}},parent(){
         Reflect.apply(originalReady,document,[]);const revision=metadataRevision;
-        const check=()=>{
+        const rawCheck=()=>{
           if(closed||metadataStale||metadataRevision!==revision||Object.getOwnPropertyDescriptor(document,'assertReady')?.value!==originalReady||pending||quarantined)throw new FactRecoveryRequiredError();
           execution!.assertCurrent();held.assertHeld();
           Reflect.apply(originalReady,document,[]);
-        };check();const proof=Object.freeze({assertOriginal(){if(this!==proof)throw TypeError('Invalid original parent');check()},assertCurrent(){if(this!==proof)throw TypeError('Invalid original parent');check()},assertTask14Ready(){if(this!==proof)throw TypeError('Invalid original parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return proof;
+        };const check=originalGuardDependencies&&isArtifactCurrentGuard(originalReady)?createArtifactCurrentGuard(()=>{assertGuardMethods();rawCheck()}):()=>withImmediateArtifactCurrentChecks(rawCheck);check();const proof=Object.freeze({assertOriginal(){if(this!==proof)throw TypeError('Invalid original parent');check()},assertCurrent(){if(this!==proof)throw TypeError('Invalid original parent');check()},assertTask14Ready(){if(this!==proof)throw TypeError('Invalid original parent');check();if(formatVersion!==14)throw new FactRecoveryRequiredError()}});return proof;
       }});return document;
     }
     function bindPublicState(compatibility: {view:SessionView;observe(suffix:readonly import('@i-harness/core-session').SessionEvent[],report:(error:unknown)=>void):void}) {

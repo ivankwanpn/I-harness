@@ -1,4 +1,6 @@
 import {randomUUID} from 'node:crypto'
+import {originalTaskCallerGuard} from '@i-harness/core-tools/internal/task-caller'
+import {runOriginalCurrentnessRead,runOpaqueCurrentnessRead,callOriginalCurrentnessMethod,wrapOriginalSourceCurrentness} from '../../../core-session/src/managed/currentness-guards.ts'
 import {canonicalJsonData,isManagedFactOwner,type ProducerFactOutcome} from '@i-harness/core-session'
 import {isManagedResultSource} from '../../../core-session/src/managed/view.ts'
 import {bootstrapInitialInputDigest} from '@i-harness/core-session/internal/bootstrap'
@@ -23,9 +25,11 @@ export async function prepareOriginalTaskChildHost(slot:TaskLaunchSlot,deps:Suba
  assertOriginalTaskLaunchSlot(slot)
  const coordinator=deps.childSessions?.coordinator,prepare=deps.prepareTaskChild
  if(!coordinator?.bootstrapChildTargetWithCapture||!coordinator.resumeChildTarget||!prepare)throw Error('Original task child host unavailable')
- const assertCurrent=()=>{slot.assertCurrent();slot.caller.exec.abortSignal?.throwIfAborted()}
+ const nativeGuard=originalTaskCallerGuard(slot.caller)??(()=>{})
+ const assertCurrent=()=>runOriginalCurrentnessRead(nativeGuard,()=>{callOriginalCurrentnessMethod(nativeGuard,slot,'assertCurrent',[]);runOpaqueCurrentnessRead(nativeGuard,()=>slot.caller.exec.abortSignal?.throwIfAborted())})
  if(slot.history){await prepareTaskChildHistory(slot.history);assertCurrent()}
- const host=await prepare({coordinator,parentSessionId:slot.caller.identity.parentSessionId,...slot.history?{history:slot.history}:{},signal:slot.caller.exec.abortSignal,assertSourceCut(){slot.assertSourceCut()},assertCurrent(){assertCurrent();if(slot.history)inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId)},sourceAvailable(){try{assertCurrent();if(slot.history)inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId);return true}catch{return false}},retire:slot.retire.bind(slot),retain:slot.keepRecovery.bind(slot)})
+ const hostCurrent=()=>{assertCurrent();if(slot.history)runOpaqueCurrentnessRead(nativeGuard,()=>inspectTaskChildHistory(slot.history!,slot.caller.identity.parentSessionId))}
+ const host=await prepare({coordinator,parentSessionId:slot.caller.identity.parentSessionId,...slot.history?{history:slot.history}:{},signal:slot.caller.exec.abortSignal,assertSourceCut(){slot.assertSourceCut()},assertCurrent:wrapOriginalSourceCurrentness(nativeGuard,hostCurrent)??hostCurrent,sourceAvailable(){try{hostCurrent();return true}catch{return false}},retire:slot.retire.bind(slot),retain:slot.keepRecovery.bind(slot)})
  assertCurrent()
  if(host.beforeResultIssue)slot.beforeResultIssue(host.beforeResultIssue.bind(host))
  return host

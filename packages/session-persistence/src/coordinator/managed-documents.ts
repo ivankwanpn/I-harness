@@ -1,4 +1,5 @@
-import {createArtifactCurrentGuard} from './artifact-path-association.ts'
+import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
+import {runOriginalCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 import { hasArchiveHistoryPrefixReader } from '../archive-read-internal.ts'
 import { createManagedRestoredRead } from './managed-restored-read.ts'
 import type { ManagedRestoredContextRead } from '../restored-context-internal.ts'
@@ -128,7 +129,14 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError()
       const document=attach(id,original,undefined,{...record.source.prefix},{state,held:record.source.held,assertCurrent:record.source.assertCurrent})
       const exact=originalManagedExecution(document,ownership)
-      const attachment:ManagedExecutionAttachment=Object.freeze({identity:state.identity,owner:document,async prepare(){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepare()})},observe(){if(this!==attachment)throw TypeError('Original execution receiver required');if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.observe()},async prepareRequest(action:ReturnType<ManagedExecutionAttachment['owner']['beginAction']>){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepareRequest(action)})},revokeNewWork(){if(this!==attachment)throw TypeError('Original execution receiver required');document.revokeNewWork()},close(){if(this!==attachment)throw TypeError('Original execution receiver required');return closeOne(id)}})
+      const ready=Object.getOwnPropertyDescriptor(document,'assertReady')?.value
+      const stateObserve=Object.getOwnPropertyDescriptor(state,'observe')?.value,current=exact.assertCurrent
+      const observe=()=>{
+        const read=()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.observe()}
+        if(isArtifactCurrentGuard(current)&&typeof ready==='function'&&isArtifactCurrentGuard(ready)&&Object.getOwnPropertyDescriptor(exact,'assertCurrent')?.value===current&&Object.getOwnPropertyDescriptor(state,'observe')?.value===stateObserve&&Object.getOwnPropertyDescriptor(document,'assertReady')?.value===ready)return runOriginalCurrentnessRead(ready,read)
+        let result:ReturnType<typeof state.observe>;withImmediateArtifactCurrentChecks(()=>{result=read()});return result!
+      }
+      const attachment:ManagedExecutionAttachment=Object.freeze({identity:state.identity,owner:document,async prepare(){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepare()})},observe(){if(this!==attachment)throw TypeError('Original execution receiver required');return observe()},async prepareRequest(action:ReturnType<ManagedExecutionAttachment['owner']['beginAction']>){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepareRequest(action)})},revokeNewWork(){if(this!==attachment)throw TypeError('Original execution receiver required');document.revokeNewWork()},close(){if(this!==attachment)throw TypeError('Original execution receiver required');return closeOne(id)}})
       record.attachment=attachment;
     })();original.flight=flight
     try{await flight;return record.attachment!}finally{if(original.flight===flight)original.flight=undefined}
@@ -184,6 +192,10 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         if (!transitions || entry.headerUnknown) throw new FactRecoveryRequiredError()
         readiness.assertTask14Ready()
       } })
+      const ready=Object.getOwnPropertyDescriptor(document,'assertReady')?.value
+      if(executions.has(entry)&&typeof ready==='function'&&isArtifactCurrentGuard(ready)){
+        for(const key of ['assertOriginal','assertCurrent','assertTaskV3Parent'])associateArtifactCurrentnessReader(parent,key)
+      }
       return parent
     },
     has:(id:string)=>documents.has(id),

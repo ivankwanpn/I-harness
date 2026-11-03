@@ -1,6 +1,7 @@
 import {inspectOriginalTaskDeliveryOpen,inspectManagedTaskDeliveryOpen} from '@i-harness/session-persistence/internal/retained-inspection'
 import {inspectOriginalSpawnStart,inspectManagedSpawnStart,type OriginalSpawnStart} from '../tools/spawn-source.ts'
-import { assertOriginalTaskCaller, type OriginalTaskCaller, type ToolExecutionOwnerContext } from '@i-harness/core-tools/internal/task-caller'
+import { assertOriginalTaskCaller,originalTaskCallerGuard, type OriginalTaskCaller, type ToolExecutionOwnerContext } from '@i-harness/core-tools/internal/task-caller'
+import {runOriginalCurrentnessRead,runOpaqueCurrentnessRead,callOriginalCurrentnessMethod,propagateOriginalCurrentnessReader} from '../../../core-session/src/managed/currentness-guards.ts'
 import type { TaskRecord, TaskRegistry, TaskSubmissionInput, TaskChildBirthBinding } from './types.ts'
 import type { SubagentRole } from '../roles.ts'
 import type { OwnedTaskSave } from './persistence.ts'
@@ -40,7 +41,8 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
  let stopped: {cause:unknown}|undefined
  const slots=new Map<TaskRecord,TaskLaunchSlot>(),states=new Map<TaskLaunchSlot,{retire(cause:unknown):void;close():Promise<void>;snapshot():void}>()
  const orphanHistories=new Set<NonNullable<ReturnType<typeof managedTaskHistoryFor>>['reservation']>()
- const checkCaller=(caller:OriginalTaskCaller)=>{if(stopped)throw stopped.cause;assertOriginalTaskCaller(caller);hooks.current();const actual=caller.context;const same='kind'in context?'kind'in actual&&actual.domain===context.domain:!('kind'in actual)&&actual.view===context.view&&actual.factOwner===context.factOwner;if(!same||actual.context!==context.context||caller.identity.parentSessionId!==context.sessionId)throw Error('Foreign original task mount')}
+ const unassociated=()=>{}
+ const checkCaller=(caller:OriginalTaskCaller)=>{const guard=originalTaskCallerGuard(caller)??unassociated;return runOriginalCurrentnessRead(guard,()=>{if(stopped)throw stopped.cause;assertOriginalTaskCaller(caller);callOriginalCurrentnessMethod(guard,hooks,'current',[]);runOpaqueCurrentnessRead(guard,()=>{const actual=caller.context;const same='kind'in context?'kind'in actual&&actual.domain===context.domain:!('kind'in actual)&&actual.view===context.view&&actual.factOwner===context.factOwner;if(!same||actual.context!==context.context||caller.identity.parentSessionId!==context.sessionId)throw Error('Foreign original task mount')})})}
  const port:TaskLaunchPort={
   inspect(id){for(const [task,slot]of slots)if(task.id===id)return Object.freeze({flight:slot.flight,task});return undefined},
   admit(caller,role){
@@ -65,7 +67,8 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
    let bindingIntent: TaskChildBirthBinding | undefined,removeAbort=()=>{}
    let preparation:Promise<void>|undefined,published=false,startReceipt:OriginalSpawnStart|undefined,deliveryPreparation:object|undefined
    let task:TaskRecord,accepted:Promise<void>=Promise.resolve(),binding:OwnedTaskSave|undefined,started=false,retired:{cause:unknown}|undefined,consumed=false,consumerClean=false,bindingCleanupFailed=false,closing:Promise<void>|undefined
-   const current=()=>{if(retired)throw retired.cause;if(!published)checkCaller(caller);hooks.current(task)}
+   const callerGuard=originalTaskCallerGuard(caller)??unassociated
+   const current=()=>runOriginalCurrentnessRead(callerGuard,()=>{if(retired)throw retired.cause;if(!published)checkCaller(caller);callOriginalCurrentnessMethod(callerGuard,hooks,'current',[task])})
    const retire=(cause:unknown)=>{if(!retired){retired={cause};removeAbort();if(!published){if(!started)completion.reject(cause);void Promise.resolve().then(close).catch(()=>{})}}}
    const close=()=>{if(closing)return closing;const flight=(async()=>{
     const errors:unknown[]=[]
@@ -93,7 +96,7 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
     async retryBinding(){if(this!==slot)throw TypeError('Foreign slot');if(!binding)throw Error('Original binding unavailable');if(retired){await binding.retireConsumer().catch(()=>{});await binding.retry();consumerClean=true}else await binding.retry()},
     consumeBinding(){if(this!==slot)throw TypeError('Foreign slot');slot.assertBinding();binding!.release();consumed=true},
     retire(cause){if(this!==slot)throw TypeError('Foreign slot');retire(cause)},
-   };Object.freeze(slot);issued.add(slot)
+   };Object.freeze(slot);propagateOriginalCurrentnessReader(hooks,'current',slot,'assertCurrent',[callerGuard]);issued.add(slot)
    let result:ReturnType<typeof hooks.insert>
    try{caller.consume();result=hooks.insert(intent);task=result.record}catch(cause){if(managedHistory)orphanHistories.add(managedHistory.reservation);throw cause}
    if(!result.inserted){if(managedHistory)orphanHistories.add(managedHistory.reservation);const old=slots.get(task);if(!old)throw Object.assign(Error('Existing cold task has no original warm slot'),{code:'TASK_COLD_BINDING_UNAVAILABLE'});if(old.caller.identity.parentSessionId!==caller.identity.parentSessionId||old.caller.identity.callEventSeq!==caller.identity.callEventSeq||old.caller.identity.toolCallId!==caller.identity.toolCallId)throw Error('Original caller identity conflict');return {kind:'same',slot:old}}

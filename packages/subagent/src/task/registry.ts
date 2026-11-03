@@ -1,4 +1,6 @@
 import {associateRequiredTaskRegistry,installRequiredTaskData,isInstalledRequiredTaskData,type RequiredTaskSettlement} from './required-settlement.ts'
+import {types as nativeTypes} from 'node:util'
+import {callOriginalCurrentnessMethod,propagateOriginalCurrentnessReader,runOpaqueCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
 import { observeColdExecutionWrites } from '../../../session-persistence/src/coordinator/cold-execution-writes.ts'
 import { managedExecutionStatus } from '../../../session-persistence/src/coordinator/managed-document.ts'
 import { createTaskLaunchPort, type TaskLaunchPort } from './launch-slots.ts'
@@ -29,12 +31,15 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     else {const view=Object.getOwnPropertyDescriptor(document,'view');if(!view||!('value'in view)||view.value!==context.view||context.sessionId!==ownedTask.stateId)throw Error('Foreign task launch parent')}
   }
   type State = { records: TaskRecords; notifications: TaskNotifications; version: 1 | 2 | 3; phase: 'pending' | 'ready' | 'poisoned' | 'retired'; failure?: { cause: unknown } }
+  const launchReady=ownedTask&&isOwnedTaskContext(ownedTask)&&!nativeTypes.isProxy(ownedTask.document)?Object.getOwnPropertyDescriptor(ownedTask.document,'assertReady'):undefined
+  const launchGuard=launchReady&&'value'in launchReady&&typeof launchReady.value==='function'?launchReady.value as ()=>void:undefined
+  const taskStateId=()=>{if(!nativeTypes.isProxy(opts)){const field=Object.getOwnPropertyDescriptor(opts,'stateId');if(field&&'value'in field)return field.value as string|undefined}return launchGuard?runOpaqueCurrentnessRead(launchGuard,()=>opts.stateId):opts.stateId}
   let currentState: State = { records: new TaskRecords(), notifications: new TaskNotifications(), version: opts.results ? 2 : 1, phase: ownedTask ? 'pending' : 'ready' }
   const installedData=Object.freeze({})
   let coldBindings: ReadonlySet<string> = new Set()
   function assertReady() {
     if (currentState.phase !== 'ready') throw Object.assign(new Error('Task registry ' + currentState.phase, { cause: currentState.failure?.cause }), { code: 'TASK_REGISTRY_UNAVAILABLE' })
-    if (ownedTask) ownedTask.operations.assertParentSession(ownedTask.parent, opts.stateId!)
+    if (ownedTask) {if(launchGuard)callOriginalCurrentnessMethod(launchGuard,ownedTask.operations,'assertParentSession',[ownedTask.parent,taskStateId()!]);else ownedTask.operations.assertParentSession(ownedTask.parent, opts.stateId!)}
   }
   const resultOwner = opts.results ? new TaskResultOwner(opts.results) : undefined
   const listeners = new Map<string, Set<(record: Readonly<TaskRecord>) => void>>()
@@ -483,10 +488,11 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     })
     try{await readyParent;check();return result}catch(error){requiredTerminalRoutes.delete(task);requiredClaimRoutes.delete(task);throw error}
   })
-  if (ownedTask && opts.launchContext) launchPort = createTaskLaunchPort(registry, opts.launchContext, {
+  if (ownedTask && opts.launchContext) {
+   const launchHooks:Parameters<typeof createTaskLaunchPort>[2]={
     beforeResultIssue(record,before){assertReady();if(currentState.records.get(record.id)!==record)throw Error('Original task replaced');retentionPrerequisites.set(record,before)},
     retainResult:resumeOriginalRetention,
-    current(record) { assertReady();if(record&&currentState.records.get(record.id)!==record)throw Error('Original slot task replaced'); ownedTask.operations.assertTaskV3Parent(ownedTask.parent, opts.stateId!) },
+    current(record) { assertReady();if(record&&(launchGuard?runOpaqueCurrentnessRead(launchGuard,()=>currentState.records.get(record.id)):currentState.records.get(record.id))!==record)throw Error('Original slot task replaced'); if(launchGuard)callOriginalCurrentnessMethod(launchGuard,ownedTask.operations,'assertTaskV3Parent',[ownedTask.parent,taskStateId()!]);else ownedTask.operations.assertTaskV3Parent(ownedTask.parent, opts.stateId!) },
     insert: input => {const result=currentState.records.submit(input,maxConcurrency);if(result.inserted)liveAccepted.add(result.record);return result},
     protect: record => currentState.records.protectSubmission(record, true),
     accept(record) { const saving=save();publish(record);return saving },
@@ -500,7 +506,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       Object.defineProperty(record,'childBirth',{value:captured,enumerable:true,writable:false,configurable:false});currentState.version=3
       return persistence.captureBindingSave()
     },
-  })
+   }
+   if(launchGuard)propagateOriginalCurrentnessReader(ownedTask.operations,'assertTaskV3Parent',launchHooks,'current',[launchGuard],[[ownedTask.operations,'assertParentSession']])
+   launchPort=createTaskLaunchPort(registry,opts.launchContext,launchHooks)
+  }
   if(ownedTask&&opts.launchContext)stopObserving=observeColdExecutionWrites(ownedTask.coordinator,id=>{
     const context=opts.launchContext!;const owner='kind'in context?context.domain.owner:context.factOwner
     if(id===ownedTask.stateId&&managedExecutionStatus(owner as import('@i-harness/session-persistence').ManagedDocument)==='retired')launchPort?.retireAll(new Error('Original task parent retired'))

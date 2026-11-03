@@ -1,4 +1,5 @@
 import { captureResultTargetIds } from './result-revocation-data.ts'
+import {bindOriginalCurrentnessDescriptors} from '../../../core-session/src/managed/currentness-guards.ts'
 import { reserveOriginalOwnershipBatch, type OriginalOwnershipBatch } from './ownership.ts'
 import { captureOriginalResultRevocationRequest, bindOriginalRevocationLocal, assertOriginalRevocationNative, closeOriginalRevocationCoverage, assertOriginalRevocationClose, type OriginalRevocationCoverage, type ResultRevocationAdmission, type OriginalResultRevocationTicket, type OriginalResultRevocationScope } from './result-revocation.ts'
 import { captureChildBootstrapCaptureRequest, type ChildBootstrapCaptureRequest } from './child-bootstrap-intent.ts'
@@ -316,7 +317,8 @@ export function createBindingObservations(
       const prepared=port?.value===undefined?undefined:captureBootstrapTargetPreparationPort(port.value)
       const targetPreparation=prepared&&originalPreparationReceiver?Object.freeze({confirm(...args:Parameters<NonNullable<BootstrapGuards['targetPreparation']>['confirm']>){return Reflect.apply(prepared.confirm,port!.value,args)},reconcile(...args:Parameters<NonNullable<BootstrapGuards['targetPreparation']>['reconcile']>){return Reflect.apply(prepared.reconcile,port!.value,args)},assertTargetCurrent(){Reflect.apply(prepared.assertTargetCurrent,port!.value,[])}}):prepared
       if(signal!==undefined)Reflect.apply(signalAborted,signal,[])
-      return {signal,assertCurrent(){Reflect.apply(assertCurrent,guards,[])},dependencies:{confirm(...args){return Reflect.apply(confirm,dependencies,args)},reconcile(...args){return Reflect.apply(reconcile,dependencies,args)}},targetPreparation}
+      const current=bindOriginalCurrentnessDescriptors({receiver:guards,method:assertCurrent as ()=>void,before:[],after:[],message:'Invalid capture host guard'})
+      return {signal,assertCurrent:current??function(){Reflect.apply(assertCurrent,guards,[])},dependencies:{confirm(...args){return Reflect.apply(confirm,dependencies,args)},reconcile(...args){return Reflect.apply(reconcile,dependencies,args)}},targetPreparation}
   }
   async function withBootstrapCapture(request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>, run: (request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>) => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
     let captured:BootstrapCaptureRequest,capturedGuards:BootstrapGuards
