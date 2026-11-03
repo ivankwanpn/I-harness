@@ -234,11 +234,11 @@ it('invalidates a held claim on Stop and expires detached work after a throwing 
 })
 
 it('task caller permits same-view nested code preparation and refuses copied exec',async()=>{
- const f=fixture();let entry:ReturnType<typeof import('../src/registry/prepared-body.ts').bindPreparedTaskLaunchLeaf>,claims=0
- const {bindPreparedTaskLaunchLeaf}=await import('../src/registry/prepared-body.ts')
- const task:Tool={name:'spawn_agent',description:'',inputSchema:{},async execute(_args,exec){expect(()=>entry.enter({...exec})).toThrow();const caller=entry.enter(exec)!;caller.consume();claims++;return 'nested'}}
+ const f=fixture();let entry:ReturnType<typeof import('../src/registry/prepared-body.ts').bindPreparedTaskLaunchLeaf>,claims=0,saved:import('../src/registry/prepared-body.ts').OriginalTaskCaller|undefined
+ const {bindPreparedTaskLaunchLeaf,originalTaskCallerGuard}=await import('../src/registry/prepared-body.ts')
+ const task:Tool={name:'spawn_agent',description:'',inputSchema:{},async execute(_args,exec){expect(()=>entry.enter({...exec})).toThrow();const caller=entry.enter(exec)!;saved=caller;expect(originalTaskCallerGuard(caller)).toBeUndefined();expect(()=>originalTaskCallerGuard({...caller})).toThrow();caller.consume();claims++;return 'nested'}}
  entry=bindPreparedTaskLaunchLeaf(task,task.execute);f.registry.register(task);f.registry.register({name:'workflow',description:'',inputSchema:{},async execute(){return f.registry.dispatch(await f.prepare('spawn_agent','code'))}})
- try{expect(await f.registry.dispatch(await f.prepare('workflow'))).toBe('nested');expect(claims).toBe(1)}finally{await f.close()}
+ try{expect(await f.registry.dispatch(await f.prepare('workflow'))).toBe('nested');expect(claims).toBe(1);expect(originalTaskCallerGuard(saved!)).toBeUndefined()}finally{await f.close()}
 })
 it('task caller refuses a foreign active execution context without granting a claim',async()=>{
  const parent=fixture(),child=fixture(parent),{bindPreparedTaskLaunchLeaf}=await import('../src/registry/prepared-body.ts');let claims=0,entry:ReturnType<typeof bindPreparedTaskLaunchLeaf>

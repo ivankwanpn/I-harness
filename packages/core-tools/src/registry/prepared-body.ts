@@ -276,14 +276,14 @@ export interface OriginalTaskCaller extends Omit<PreparedBodyClaim,'context'> {
   readonly call: Readonly<PreparedCall['call']>
   readonly identity: Readonly<{ parentSessionId: string; callEventSeq?: number; toolCallId?: string }>
 }
-const taskCallers = new WeakMap<object,Body>()
+const taskCallers = new WeakMap<object,{body:Body;frame:Frame}>()
 export function assertOriginalTaskCaller(caller: OriginalTaskCaller): void {
   if (!taskCallers.has(caller)) throw new TypeError('Original task caller required')
   caller.assertCurrent()
 }
 /** Returns only the original managed owner's enrolled read marker; no work or
  * authorization is conferred, and ordinary caller checks remain required. */
-export function originalTaskCallerGuard(caller:OriginalTaskCaller):(()=>void)|undefined{const body=taskCallers.get(caller);if(!body)throw TypeError('Original task caller required');caller.assertCurrent();return managedReadGuard(body.managed?.domain)}
+export function originalTaskCallerGuard(caller:OriginalTaskCaller):(()=>void)|undefined{const original=taskCallers.get(caller);if(!original)throw TypeError('Original task caller required');if(!original.frame.active||active.getStore()!==original.frame)return;return managedReadGuard(original.body.managed?.domain)}
 /** Task proof deliberately permits Code Mode and same-view prepared nesting. */
 export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
  const entry=Object.freeze({enter(exec:ToolExec):OriginalTaskCaller|undefined {
@@ -304,7 +304,7 @@ export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
   const claim:OriginalTaskCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
    assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign task caller');check(body,frame)},
    consume(){if(this!==claim)throw TypeError('Foreign task caller');check(body,frame);if(consumed)throw Error('Task caller consumed');consumed=true},
-  });taskCallers.set(claim,body);return claim
+  });taskCallers.set(claim,{body,frame});return claim
  }});return entry
 }
 
