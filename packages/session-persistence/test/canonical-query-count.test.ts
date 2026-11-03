@@ -291,7 +291,7 @@ it('coalesces genuine registered-source currentness during an original durable s
  try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,{},'parent');action=execution.owner.beginAction()
   expect((await action.facts.tools.call({type:'tool/call',callId:'source-call',name:'read',args:{}})).kind).toBe('committed')
   source=action.registerSettlementSource(async()=>{});const capture=source.tools.captureResult({type:'tool/result',callId:'source-call',name:'read',output:'original controlled result'}),outcome=await capture.admit();expect(outcome.kind).toBe('committed')
-  expect(measure(()=>expect(readManagedSourceAcknowledgedMembers(domain,source!,capture,outcome)).toHaveLength(1))).toEqual({captures:0,opens:40})
+  expect(measure(()=>expect(readManagedSourceAcknowledgedMembers(domain,source!,capture,outcome)).toHaveLength(1))).toEqual({captures:0,opens:8})
  }finally{await source?.close();action?.finish();await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
 it('keeps unknown registered-source callbacks immediate before an original source ACK read',async()=>{
