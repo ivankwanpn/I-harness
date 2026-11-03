@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto'
 import {types} from 'node:util'
-import {createArtifactCurrentGuard,composeOriginalArtifactGuards,isArtifactCurrentGuard} from './artifact-path-association.ts'
+import {createArtifactCurrentGuard,composeOriginalArtifactGuards,isArtifactCurrentGuard,associateArtifactCurrentnessReader} from './artifact-path-association.ts'
 import {originalOwnershipArtifactGuard} from './ownership.ts'
 import {FactRecoveryRequiredError,type JournalPrefix,type Session,type SessionView} from '@i-harness/core-session'
 import {restoreManagedExecutionState} from '@i-harness/core-session/internal/execution'
@@ -45,6 +45,7 @@ export function createManagedExecutionSource(ports:{id:string;entry:ManagedEntry
   async close(){if(scope){await scope.close();scope=undefined}retired=true;initial=undefined;proof=undefined},
   appendCommitted(batch,receipt){assertCurrent();if(!prefix||batch.key.firstSeq!==prefix.eventCount||batch.key.previousPrefixDigest!==prefix.prefixDigest||receipt.key!==batch.key)throw new FactRecoveryRequiredError();prefix=Object.freeze({eventCount:prefix.eventCount+batch.key.count,bodyBytes:prefix.bodyBytes+batch.bytes.length,prefixDigest:receipt.prefixDigest})},
  }
+ for(const key of ['prefix','header','formatVersion'] as const)associateArtifactCurrentnessReader(source,key)
  return {
   held,assertCurrent,get prefix(){return source.prefix},
   async initialize(){

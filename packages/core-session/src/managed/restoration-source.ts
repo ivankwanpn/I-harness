@@ -1,4 +1,5 @@
 import { types } from 'node:util';
+import {bindOriginalCurrentnessDescriptors,wrapOriginalSourceCurrentness,propagateOriginalCurrentnessReader} from './currentness-guards.ts';
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts';
 const captured = new WeakSet<object>();
 /** Original method/receiver capture. Passive cleanup always uses the retained
@@ -35,7 +36,8 @@ export function captureOriginalRestorationSource(input: OriginalConversationRest
                 fail();
         }
     };
-    const assert = descriptors.assertCurrent!.value.bind(input) as OriginalConversationRestorationSource['assertCurrent'];
+    const originalAssert=bindOriginalCurrentnessDescriptors({receiver:input,method:descriptors.assertCurrent!.value,before:[],after:[],message:'CONVERSATION_RESTORATION_SOURCE_CHANGED'});
+    const assert = originalAssert??descriptors.assertCurrent!.value.bind(input) as OriginalConversationRestorationSource['assertCurrent'];
     const consume = descriptors.consume!.value.bind(input) as OriginalConversationRestorationSource['consume'];
     const read = descriptors.readEvent!.value.bind(input) as OriginalConversationRestorationSource['readEvent'];
     const settle = descriptors.settle!.value.bind(input) as OriginalConversationRestorationSource['settle'];
@@ -58,7 +60,7 @@ export function captureOriginalRestorationSource(input: OriginalConversationRest
             return metadata('header');
         }, get prefix() {
             return metadata('prefix');
-        }, assertCurrent() {
+        }, assertCurrent: (originalAssert&&wrapOriginalSourceCurrentness(originalAssert,()=>{check();assert();check()}))??function() {
             check();
             assert();
             check();
@@ -82,6 +84,7 @@ export function captureOriginalRestorationSource(input: OriginalConversationRest
         }
     };
     Object.freeze(source);
+    for(const key of ['prefix','header','formatVersion'] as const)propagateOriginalCurrentnessReader(input,key,source,key);
     captured.add(source);
     return source;
 }

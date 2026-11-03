@@ -2,7 +2,7 @@ import { types } from 'node:util'
 import type { PersistenceBackend } from './types.ts'
 import {createArtifactPathOwner,type ArtifactPathCapture} from '@i-harness/fs-lock/internal/artifact-path'
 import {isOriginalCanonicalPathOwner} from './canonical-path-resolution.ts'
-import {associateOriginalCurrentnessGuard,type OriginalCurrentnessExecutor,type OriginalCurrentnessDescriptorRecipe} from '../../../core-session/src/managed/currentness-guards.ts'
+import {associateOriginalCurrentnessGuard,associateOriginalCurrentnessReader,type OriginalCurrentnessExecutor,type OriginalCurrentnessDescriptorRecipe} from '../../../core-session/src/managed/currentness-guards.ts'
 export interface OriginalArtifactPaths {root():string;session(id:string):string;document(key:string):string;taskForParent(id:string):string;prepareRoot():Promise<void>;prepareDocumentParents(key:string):Promise<void>;assertOriginal():void}
 export type ArtifactCapture=ArtifactPathCapture & {readonly provisionalKey?:string}
 export interface OriginalArtifactExclusion {session(id:string):ArtifactCapture;document(key:string):ArtifactCapture;taskForParent(id:string):ArtifactCapture;prepareSession(id:string):Promise<void>;prepareDocument(key:string):Promise<void>;assertOriginal():void;settleResources():void}
@@ -17,6 +17,7 @@ const pureGuards = new WeakSet<Function>()
 const currentnessExecutor:OriginalCurrentnessExecutor=Object.freeze({
   compose(guards:readonly (()=>void)[]){return composeOriginalArtifactGuards(...guards)},
   immediate:withImmediateArtifactCurrentChecks,
+  sourceCheck:(operation:()=>void)=>createArtifactCurrentGuard(operation),
   read<T>(operation:()=>T):T{
     if(types.isProxy(operation)||types.isAsyncFunction(operation))throw TypeError('Original synchronous read required')
     let result:T
@@ -29,6 +30,8 @@ const currentnessExecutor:OriginalCurrentnessExecutor=Object.freeze({
     return createArtifactCurrentGuard(()=>{check(recipe.before);Reflect.apply(recipe.method,recipe.receiver,[]);check(recipe.after)})
   },
 })
+/** Called by the first-party managed producer for its closed scalar getters. */
+export function associateArtifactCurrentnessReader(receiver:object,key:PropertyKey):void{associateOriginalCurrentnessReader(receiver,key,currentnessExecutor)}
 export function createArtifactCurrentGuard(check: () => void): () => void {
   if (typeof check !== 'function' || types.isProxy(check) || types.isAsyncFunction(check)) throw new TypeError('Artifact checks must be synchronous')
   const guard = () => withArtifactCurrentChecks(check)

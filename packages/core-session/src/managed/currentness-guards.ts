@@ -14,6 +14,7 @@ export type OriginalCurrentnessExecutor = Readonly<{
   immediate(check: Guard): void
   bindDescriptors?(recipe: OriginalCurrentnessDescriptorRecipe): Guard
   read?<T>(operation:()=>T):T
+  sourceCheck?(operation:Guard):Guard
 }>
 const guards = new WeakMap<Guard, OriginalCurrentnessExecutor>()
 const functionPrototype=Function.prototype,originalBind=Object.getOwnPropertyDescriptor(functionPrototype,'bind')?.value
@@ -72,4 +73,33 @@ export function runOriginalCurrentnessRead<T>(guard:Guard,operation:()=>T):T {
 export function runOpaqueCurrentnessRead<T>(guard:Guard,operation:()=>T):T {
   const executor=guards.get(guard);if(!executor)return operation()
   let result:T;executor.immediate(()=>{result=operation()});return result!
+}
+/** Only the original source constructor supplies its existing descriptor checks. */
+export function wrapOriginalSourceCurrentness(original:Guard,operation:Guard):Guard|undefined {
+  return guards.get(original)?.sourceCheck?.(operation)
+}
+type Reader={get:()=>unknown;set:unknown;enumerable:boolean|undefined;prototype:object|null;executor:OriginalCurrentnessExecutor}
+const readers=new WeakMap<object,Map<PropertyKey,Reader>>()
+export function associateOriginalCurrentnessReader(receiver:object,key:PropertyKey,executor:OriginalCurrentnessExecutor):void {
+  if(types.isProxy(receiver))throw TypeError('Original metadata receiver required')
+  const field=Object.getOwnPropertyDescriptor(receiver,key)
+  if(!field||typeof field.get!=='function'||types.isProxy(field.get))throw TypeError('Original metadata getter required')
+  let fields=readers.get(receiver);if(!fields){fields=new Map();readers.set(receiver,fields)}
+  fields.set(key,{get:field.get,set:field.set,enumerable:field.enumerable,prototype:Object.getPrototypeOf(receiver),executor})
+}
+function originalReader(receiver:object,key:PropertyKey):Reader|undefined {
+  const record=readers.get(receiver)?.get(key);if(!record)return
+  const field=Object.getOwnPropertyDescriptor(receiver,key)
+  if(!field||field.get!==record.get||field.set!==record.set||field.enumerable!==record.enumerable||Object.getPrototypeOf(receiver)!==record.prototype)throw TypeError('Original metadata getter changed')
+  return record
+}
+/** Propagation is by the original receiver/getter identity, never by its value. */
+export function propagateOriginalCurrentnessReader(from:object,key:PropertyKey,to:object,toKey:PropertyKey,dependencies:readonly Guard[]=[]):void {
+  const record=originalReader(from,key);if(!record||dependencies.some(guard=>guards.get(guard)!==record.executor))return
+  associateOriginalCurrentnessReader(to,toKey,record.executor)
+}
+export function readOriginalCurrentnessMember<T>(guard:Guard,receiver:object,key:PropertyKey):T {
+  const record=originalReader(receiver,key),executor=guards.get(guard)
+  if(record&&record.executor===executor)return Reflect.apply(record.get,receiver,[]) as T
+  return runOpaqueCurrentnessRead(guard,()=>Reflect.get(receiver,key)) as T
 }

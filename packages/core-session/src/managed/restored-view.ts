@@ -1,6 +1,7 @@
 import { createExecutionCodeState } from '../projection/execution-code-state.ts';
 import type { OriginalExecutionFoldFactory, OriginalExecutionFoldSink } from './execution-types.ts';
 import { types } from 'node:util';
+import {propagateOriginalCurrentnessReader} from './currentness-guards.ts';
 import { historyTurns } from '../conversation/history/turns.ts';
 import { selectSeedHistoryFromStructure } from '../conversation/seed-selection.ts';
 import { captureRewrites,type ConversationRewriteDraft,type ConversationCandidate } from '../conversation/candidate.ts';
@@ -200,7 +201,7 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             revision++;resident=undefined;installed=true;installationBlocked=false;
         }};
     }
-    return {
+    const result = {
         /** Structural selection matches native recovery: local ref facts, rewind only. */
         recentNativeRecoverySelection(){check();const facts=owned.index.resultFacts(),visibility=historyVisibility(facts),selected: {ordinal:number;ref:import('../conversation/selected-results-types.ts').LegacyRef}[]=[];for(let i=facts.length-1;i>=0&&selected.length<12;i--){const fact=facts[i]!;if(fact.type==='context/result-ref'&&fact.legacyResult&&visibility.branch(fact))selected.push({ordinal:fact.index,ref:fact.legacyResult})}selected.reverse();return selected},
         reviewerOrdinals(){check();const facts=owned.index.resultFacts(),count=owned.index.eventCount;let latestUser:number|undefined;for(let i=facts.length-1;i>=0;i--)if(facts[i]!.type==='user/message'){latestUser=facts[i]!.index;break}return {tail:Array.from({length:Math.min(12,count)},(_,index)=>count-Math.min(12,count)+index),latestUser}},
@@ -357,6 +358,8 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
             owned.intake.releasePayloads();owned.context.releasePayloads();
         },
     };
+    for(const key of ['prefix','header','formatVersion'] as const)propagateOriginalCurrentnessReader(owned.source,key,result,key,[owned.source.assertCurrent]);
+    return result;
 }
 /** Paired projection/state from one live original preparation. No Session replay. */
 export function readRestoredConversation(lease: PreparedConversationArchive, options: {
