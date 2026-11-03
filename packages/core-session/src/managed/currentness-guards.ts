@@ -18,6 +18,8 @@ export type OriginalCurrentnessExecutor = Readonly<{
 }>
 const guards = new WeakMap<Guard, OriginalCurrentnessExecutor>()
 const functionPrototype=Function.prototype,originalBind=Object.getOwnPropertyDescriptor(functionPrototype,'bind')?.value
+const cloneField=Object.getOwnPropertyDescriptor(globalThis,'structuredClone'),originalClone=cloneField&&'value'in cloneField&&typeof cloneField.value==='function'&&!types.isProxy(cloneField.value)?cloneField.value as typeof structuredClone:undefined
+export function originalCurrentnessClone():typeof structuredClone|undefined{const field=Object.getOwnPropertyDescriptor(globalThis,'structuredClone');return originalClone&&field&&'value'in field&&field.value===originalClone?originalClone:undefined}
 export function associateOriginalCurrentnessGuard(guard: Guard, executor: OriginalCurrentnessExecutor): void {
   const previous = guards.get(guard)
   if (previous && previous !== executor) throw TypeError('Original currentness executor changed')
@@ -93,6 +95,7 @@ export function associateOriginalCurrentnessReader(receiver:object,key:PropertyK
 }
 function originalReader(receiver:object,key:PropertyKey):Reader|undefined {
   const record=readers.get(receiver)?.get(key);if(!record)return
+  if(record.kind==='method'&&!originalCurrentnessClone())return
   const field=Object.getOwnPropertyDescriptor(receiver,key)
   if(!field||(record.kind==='get'?field.get:field.value)!==record.get||field.set!==record.set||field.enumerable!==record.enumerable||Object.getPrototypeOf(receiver)!==record.prototype)return
   return record

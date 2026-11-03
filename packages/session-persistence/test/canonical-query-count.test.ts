@@ -346,3 +346,14 @@ it('reports original native ownership loss after the last readiness callback',as
   try{await new Promise(resolve=>setImmediate(resolve));expect(calls).toBe(1);expect(lost).toBe(2);expect(()=>{execution.observe();effects++}).toThrow();expect(effects).toBe(0);changed=true}finally{Object.assign(node,before)}
  }finally{for(const off of offs)off();if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
+
+it.each(['function','getter'] as const)('keeps a changed structuredClone %s opaque and rejects its native retarget',async mode=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createOwnedMetadataFold}=await import('../../session-executor/src/lifecycle/owned-metadata-fold.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'observe-clone-override-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ const descriptor=Object.getOwnPropertyDescriptor(globalThis,'structuredClone')!,intrinsic=descriptor.value as typeof structuredClone;let calls=0,getters=0,effects=0,changed=false
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),node=probe.nodes.get(root)!,before={...node},opened=probe.opens
+  const custom=(value:unknown)=>{calls++;expect(probe.opens).toBeGreaterThan(opened);node.id+=1000;return intrinsic(value)}
+  Object.defineProperty(globalThis,'structuredClone',mode==='getter'?{configurable:true,get(){getters++;return custom}}:{...descriptor,value:custom})
+  try{expect(()=>{execution.observe();effects++}).toThrow();expect(calls).toBe(1);expect(getters).toBe(mode==='getter'?1:0);expect(effects).toBe(0);changed=true}finally{Object.defineProperty(globalThis,'structuredClone',descriptor);Object.assign(node,before)}
+ }finally{Object.defineProperty(globalThis,'structuredClone',descriptor);if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
