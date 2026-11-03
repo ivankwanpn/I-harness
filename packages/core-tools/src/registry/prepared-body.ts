@@ -8,6 +8,9 @@ import { assertResultPrepared } from './result-finalization.ts'
 import {registerToolInvocation} from './invocation-domain.ts'
 import {isManagedExecutionDomain,isManagedExecutionSource,readManagedAcknowledgedMembers,readManagedActionSourceMembers,readManagedSourceCodeDelivery,getManagedExecutionAdmissionWait,assertManagedWorkflowDeliveryCurrent,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
 import {assertOriginalTeamProvisioningOwner,assertOriginalTeamProvisioningCandidateOwner,assertOriginalTeamProvisioningOwnerWitness,assertOriginalTeamProvisioningHeld,type OriginalTeamProvisioningOwner,type OriginalTeamProvisioningCandidate,type OriginalTeamProvisioning} from '@i-harness/core-session/internal/execution'
+import {runOriginalCurrentnessRead,runOpaqueCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts'
+
+function managedReadGuard(domain:ManagedExecutionDomain|undefined):(()=>void)|undefined{if(!domain)return;const field=Object.getOwnPropertyDescriptor(domain.owner,'assertReady');return field&&'value'in field&&typeof field.value==='function'&&!types.isProxy(field.value)?field.value as ()=>void:undefined}
 
 export interface ToolExecutionOwnerContext { readonly view: SessionView; readonly factOwner: FactOwner; readonly context: PluginContext; readonly sessionId?: string }
 export interface ManagedToolExecutionOwnerContext {readonly kind:'managed-execution';readonly domain:ManagedExecutionDomain;readonly context:PluginContext;readonly sessionId:string}
@@ -49,7 +52,7 @@ type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
 const aborted = (signal: AbortSignal | undefined) => signal !== undefined && signalAborted.call(signal) === true
-function checkIdentity(body: Body) {
+function checkIdentity(body: Body,guard?:()=>void) {
   if (own(body.prepared,'exec') !== body.exec || own(body.prepared,'tool') !== body.tool || own(body.prepared,'call') !== body.call) throw new Error('Prepared body identity changed')
   for (const [key, expected] of body.snapshots) {
     const actual = Object.getOwnPropertyDescriptor(body.exec,key)
@@ -58,20 +61,25 @@ function checkIdentity(body: Body) {
   if(body.context && (body.view!==body.context.view || !body.source || !isOwnedSettlementSource(body.context.view,body.source)
     || own(body.context.factOwner,'view')!==body.context.view || !isManagedFactOwner(body.context.view,body.context.factOwner)&&!isNondurableFactOwner(body.context.view,body.context.factOwner)))throw new Error('Execution owner changed')
   if(body.managed&&(!body.source||body.view!==undefined||!isManagedExecutionDomain(body.managed.domain,body.managed.context)||!isManagedExecutionSource(body.managed.domain,body.source)))throw Error('Managed execution owner changed')
-  const original = assertResultPrepared(body.prepared)
+  const original = guard?runOpaqueCurrentnessRead(guard,()=>assertResultPrepared(body.prepared)):assertResultPrepared(body.prepared)
   if (original.view !== body.view || original.source !== body.source) throw new Error('Prepared result source changed')
   if(original.domain!==body.managed?.domain)throw Error('Prepared managed result domain changed')
 }
 function check(body: Body, frame?: Frame) {
+  const guard=managedReadGuard(body.managed?.domain)
+  const opaque=<T>(operation:()=>T):T=>guard?runOpaqueCurrentnessRead(guard,operation):operation()
+  const work=()=>{
   if (frame && !frame.active) throw new Error('Prepared body expired')
-  checkIdentity(body)
-  body.hooks?.channel.assertCurrent(body.hooks.surface)
+  checkIdentity(body,guard)
+  if(body.hooks)opaque(()=>body.hooks!.channel.assertCurrent(body.hooks!.surface))
   body.managed?.domain.assertCurrent()
-  body.permit?.assertCurrent()
-  body.codeInvocation?.assertCurrent()
+  if(body.permit)opaque(()=>body.permit!.assertCurrent())
+  if(body.codeInvocation)opaque(()=>body.codeInvocation!.assertCurrent())
   for(const key of ['bindingValidation','authorityValidation','approvalValidation'] as const)if(own(body.prepared,key)!==body.validations[key])throw new Error('Prepared validation changed')
-  if (!body.validations.bindingValidation() || body.validations.authorityValidation?.() === false || body.validations.approvalValidation?.() === false) throw new Error('Prepared binding is no longer current')
+  if (!opaque(()=>body.validations.bindingValidation()) || body.validations.authorityValidation&&opaque(()=>body.validations.authorityValidation!()) === false || body.validations.approvalValidation&&opaque(()=>body.validations.approvalValidation!()) === false) throw new Error('Prepared binding is no longer current')
   if (aborted(body.signal) || frame && (own(body.exec,'abortSignal') !== frame.signal || aborted(frame.signal))) throw new Error('Prepared body aborted')
+  }
+  if(guard)runOriginalCurrentnessRead(guard,work);else work()
 }
 export function attachPreparedModelOrigin(prepared: PreparedCall, registry: import('../types.ts').ToolRegistry, proof: object, take: import('../model-origin.ts').ModelOriginTake): void {
   const body = records.get(prepared)
@@ -268,11 +276,14 @@ export interface OriginalTaskCaller extends Omit<PreparedBodyClaim,'context'> {
   readonly call: Readonly<PreparedCall['call']>
   readonly identity: Readonly<{ parentSessionId: string; callEventSeq?: number; toolCallId?: string }>
 }
-const taskCallers = new WeakSet<object>()
+const taskCallers = new WeakMap<object,Body>()
 export function assertOriginalTaskCaller(caller: OriginalTaskCaller): void {
   if (!taskCallers.has(caller)) throw new TypeError('Original task caller required')
   caller.assertCurrent()
 }
+/** Returns only the original managed owner's enrolled read marker; no work or
+ * authorization is conferred, and ordinary caller checks remain required. */
+export function originalTaskCallerGuard(caller:OriginalTaskCaller):(()=>void)|undefined{const body=taskCallers.get(caller);if(!body)throw TypeError('Original task caller required');caller.assertCurrent();return managedReadGuard(body.managed?.domain)}
 /** Task proof deliberately permits Code Mode and same-view prepared nesting. */
 export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
  const entry=Object.freeze({enter(exec:ToolExec):OriginalTaskCaller|undefined {
@@ -293,7 +304,7 @@ export function bindPreparedTaskLaunchLeaf(tool: Tool, leaf: Tool['execute']) {
   const claim:OriginalTaskCaller=Object.freeze({context,source:body.source,exec,call:body.call,identity,
    assertCurrent(){if(this!==claim||active.getStore()!==frame)throw TypeError('Foreign task caller');check(body,frame)},
    consume(){if(this!==claim)throw TypeError('Foreign task caller');check(body,frame);if(consumed)throw Error('Task caller consumed');consumed=true},
-  });taskCallers.add(claim);return claim
+  });taskCallers.set(claim,body);return claim
  }});return entry
 }
 

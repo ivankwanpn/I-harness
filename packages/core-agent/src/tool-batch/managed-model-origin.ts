@@ -7,6 +7,8 @@ import type { ToolRegistry, PreparedCall } from '@i-harness/core-tools';
 import { isManagedExecutionAttachment, type ManagedExecutionAttachment } from '../../../session-persistence/src/execution-internal.ts';
 import type { PluginContext } from '@i-harness/core-plugin';
 import {reserveTeamResultBarrier} from './team-result-barrier.ts';
+import {types} from 'node:util';
+import {runOriginalCurrentnessRead,runOpaqueCurrentnessRead} from '../../../core-session/src/managed/currentness-guards.ts';
 export interface ManagedFactWitness {
     readonly capture: CapturedActionFact<FactOutcome>;
     readonly outcome: Extract<FactOutcome, {
@@ -135,14 +137,17 @@ export function createManagedModelInvocation(origin: Origin, action: ManagedActi
     if (!origins.has(origin) || !origin.consumed || !origin.domain.owner.ownsAction(action))
         throw TypeError('Original private model action required');
     let active = true, input: ManagedFactWitness | undefined;
+    const field=Object.getOwnPropertyDescriptor(origin.domain.owner,'assertReady'),guard=field&&'value'in field&&typeof field.value==='function'&&!types.isProxy(field.value)?field.value as ()=>void:undefined
+    const readInterval=<T>(operation:()=>T):T=>guard&&Object.getOwnPropertyDescriptor(origin.domain.owner,'assertReady')?.value===guard?runOriginalCurrentnessRead(guard,operation):operation()
+    const opaque=<T>(operation:()=>T):T=>guard?runOpaqueCurrentnessRead(guard,operation):operation()
     const retainedProofs = new Set<MemberProof>();
     const expire = (member: MemberProof) => { member.schedule=member.check = () => { throw TypeError('Private model member released'); }; member.action = undefined; retainedProofs.delete(member); };
     const current = () => {
         if (!active)
             throw TypeError('Private model invocation expired');
-        assertManagedActionCurrent(origin.domain, action);
+        opaque(()=>assertManagedActionCurrent(origin.domain, action));
     };
-    const read = (witness: ManagedFactWitness) => readManagedActionMembers(origin.domain, action, witness.capture, witness.outcome);
+    const read = (witness: ManagedFactWitness) => opaque(()=>readManagedActionMembers(origin.domain, action, witness.capture, witness.outcome));
     const batches = new WeakMap<object, {
         accepted: ManagedFactWitness;
         calls: readonly ManagedFactWitness[];
@@ -200,15 +205,15 @@ export function createManagedModelInvocation(origin: Origin, action: ManagedActi
             if (event?.type !== 'tool/call')
                 throw TypeError('Original tool call required');
             record.used.add(index);
-            const schedule = (expected: ManagedModelOriginExpectation) => {
+            const schedule = (expected: ManagedModelOriginExpectation) => readInterval(()=>{
                 if(!active)throw TypeError('Private model invocation expired');
                 read(input!);
                 read(record.accepted);
-                if (!record.closed || expected.registry !== origin.registry || expected.prepared !== prepared || expected.domain !== origin.domain || expected.source !== source || !isManagedExecutionSource(origin.domain, source) || read(witness)[0] !== event || event.callId !== expected.callId || event.seq !== expected.callEventSeq || event.name !== expected.name || canonicalJsonData(event.args) !== canonicalJsonData(expected.args))
+                if (!record.closed || expected.registry !== origin.registry || expected.prepared !== prepared || expected.domain !== origin.domain || expected.source !== source || !isManagedExecutionSource(origin.domain, source) || read(witness)[0] !== event || event.callId !== expected.callId || event.seq !== expected.callEventSeq || event.name !== expected.name || opaque(()=>canonicalJsonData(event.args)) !== opaque(()=>canonicalJsonData(expected.args)))
                     throw TypeError('Original private model member mismatch');
-                source.assertHeld();
-            };
-            const check=(expected:ManagedModelOriginExpectation)=>{current();schedule(expected)};
+                opaque(()=>source.assertHeld());
+            });
+            const check=(expected:ManagedModelOriginExpectation)=>readInterval(()=>{current();schedule(expected)});
             const retainedInput=input!,retainedAccepted=record.accepted,retainedCall=witness
             const retainTeam=(expected:ManagedModelOriginExpectation):import('@i-harness/core-tools/model-origin').OriginalTeamBirthPermit=>{
                 check(expected);const inputEvents=read(retainedInput),acceptedEvents=read(retainedAccepted),callEvents=read(retainedCall),names=['bindingValidation','authorityValidation','approvalValidation'] as const,fields=names.map(name=>Object.getOwnPropertyDescriptor(expected.prepared,name)),callBytes=canonicalJsonData(expected.args),pins:ReturnType<typeof retainAcknowledgedExecutionMembers>[]=[]
