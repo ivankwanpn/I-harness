@@ -9,12 +9,13 @@
 // provider model catalogue, tsx loader). Copying the actual package trees with
 // their resolved dependencies keeps the packaged runtime identical to the
 // launch path the e2e tests already exercise.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
 import { copyWslAssets, verifyWslAssets } from "../../../scripts/runtime-wsl-assets.mjs"
+import { verifyAclWaitSourceAssets } from "../../../scripts/runtime-acl-wait-assets.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
@@ -35,6 +36,7 @@ function dependenciesOf(root) {
 
 const copied = new Set()
 verifyNativeAssets(join(repoRoot, "packages/sandbox-windows-psec"), { sources: true })
+verifyAclWaitSourceAssets(join(repoRoot, "packages/sandbox-windows-acl"))
 
 /** Copy one dependency (and its own deps) into the shipped node_modules.
  * Platform packages for other OSes are optional and simply not installed here. */
@@ -60,9 +62,24 @@ function copyDependency(name, fromDir, required = false) {
 rmSync(outDir, { recursive: true, force: true })
 mkdirSync(modulesDir, { recursive: true })
 
-// The gateway itself, plus every dependency it declares.
-cpSync(join(gatewayRoot, "src"), join(outDir, "cli", "src"), { recursive: true, dereference: true })
+// Keep the real Gateway beside its workspace siblings: its internal relative
+// imports must resolve to the same module instances as package-name imports.
+const shippedGateway = join(modulesDir, "@i-harness", "desktop-gateway")
+copyRuntimePackage(gatewayRoot, shippedGateway)
+copied.add("@i-harness/desktop-gateway")
+mkdirSync(join(outDir, "cli", "src"), { recursive: true })
 cpSync(join(gatewayRoot, "package.json"), join(outDir, "cli", "package.json"))
+writeFileSync(join(outDir, "cli", "src", "host.ts"), 'export * from "../../node_modules/@i-harness/desktop-gateway/src/host.ts"\n')
+writeFileSync(join(outDir, "cli", "src", "cli.ts"), `import { pathToFileURL } from "node:url"
+import { main } from "../../node_modules/@i-harness/desktop-gateway/src/cli.ts"
+export { main }
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main(process.argv.slice(2)).then(code => { process.exitCode = code }, error => {
+    console.error("[desktop-gateway] fatal: " + (error instanceof Error ? error.message : String(error)))
+    process.exitCode = 1
+  })
+}
+`)
 for (const dependency of dependenciesOf(gatewayRoot)) {
   copyDependency(dependency.name, gatewayRoot, dependency.required)
 }
