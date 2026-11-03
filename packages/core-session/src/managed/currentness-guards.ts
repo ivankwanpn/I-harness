@@ -78,28 +78,42 @@ export function runOpaqueCurrentnessRead<T>(guard:Guard,operation:()=>T):T {
 export function wrapOriginalSourceCurrentness(original:Guard,operation:Guard):Guard|undefined {
   return guards.get(original)?.sourceCheck?.(operation)
 }
-type Reader={get:()=>unknown;set:unknown;enumerable:boolean|undefined;prototype:object|null;executor:OriginalCurrentnessExecutor}
+type Reader={kind:'get'|'method';get:(...args:any[])=>unknown;set:unknown;enumerable:boolean|undefined;prototype:object|null;executor:OriginalCurrentnessExecutor}
 const readers=new WeakMap<object,Map<PropertyKey,Reader>>()
+const factories=new WeakMap<Function,OriginalCurrentnessExecutor>()
+export function associateOriginalCurrentnessFactory(factory:Function,executor:OriginalCurrentnessExecutor):void{const previous=factories.get(factory);if(previous&&previous!==executor)throw TypeError('Original reader factory changed');factories.set(factory,executor)}
+export function originalCurrentnessFactoryMatches(factory:Function,receiver:object,key:PropertyKey):boolean{const record=originalReader(receiver,key);return !!record&&factories.get(factory)===record.executor}
 export function associateOriginalCurrentnessReader(receiver:object,key:PropertyKey,executor:OriginalCurrentnessExecutor):void {
   if(types.isProxy(receiver))throw TypeError('Original metadata receiver required')
   const field=Object.getOwnPropertyDescriptor(receiver,key)
-  if(!field||typeof field.get!=='function'||types.isProxy(field.get))throw TypeError('Original metadata getter required')
+  const method=field?.get??field?.value
+  if(!field||typeof method!=='function'||types.isProxy(method))throw TypeError('Original metadata reader required')
   let fields=readers.get(receiver);if(!fields){fields=new Map();readers.set(receiver,fields)}
-  fields.set(key,{get:field.get,set:field.set,enumerable:field.enumerable,prototype:Object.getPrototypeOf(receiver),executor})
+  fields.set(key,{kind:field.get?'get':'method',get:method,set:field.set,enumerable:field.enumerable,prototype:Object.getPrototypeOf(receiver),executor})
 }
 function originalReader(receiver:object,key:PropertyKey):Reader|undefined {
   const record=readers.get(receiver)?.get(key);if(!record)return
   const field=Object.getOwnPropertyDescriptor(receiver,key)
-  if(!field||field.get!==record.get||field.set!==record.set||field.enumerable!==record.enumerable||Object.getPrototypeOf(receiver)!==record.prototype)throw TypeError('Original metadata getter changed')
+  if(!field||(record.kind==='get'?field.get:field.value)!==record.get||field.set!==record.set||field.enumerable!==record.enumerable||Object.getPrototypeOf(receiver)!==record.prototype)return
   return record
 }
 /** Propagation is by the original receiver/getter identity, never by its value. */
-export function propagateOriginalCurrentnessReader(from:object,key:PropertyKey,to:object,toKey:PropertyKey,dependencies:readonly Guard[]=[]):void {
-  const record=originalReader(from,key);if(!record||dependencies.some(guard=>guards.get(guard)!==record.executor))return
+export function propagateOriginalCurrentnessReader(from:object,key:PropertyKey,to:object,toKey:PropertyKey,dependencies:readonly Guard[]=[],readerDependencies:readonly (readonly [object,PropertyKey])[]=[]):void {
+  const record=originalReader(from,key);if(!record||dependencies.some(guard=>guards.get(guard)!==record.executor)||readerDependencies.some(([object,field])=>originalReader(object,field)?.executor!==record.executor))return
   associateOriginalCurrentnessReader(to,toKey,record.executor)
 }
 export function readOriginalCurrentnessMember<T>(guard:Guard,receiver:object,key:PropertyKey):T {
   const record=originalReader(receiver,key),executor=guards.get(guard)
-  if(record&&record.executor===executor)return Reflect.apply(record.get,receiver,[]) as T
+  if(record?.kind==='get'&&record.executor===executor)return Reflect.apply(record.get,receiver,[]) as T
   return runOpaqueCurrentnessRead(guard,()=>Reflect.get(receiver,key)) as T
+}
+export function bindOriginalCurrentnessMethod(receiver:object,key:PropertyKey):((...args:any[])=>unknown)|undefined {
+  const record=originalReader(receiver,key)
+  if(record?.kind!=='method'||Object.getPrototypeOf(record.get)!==functionPrototype||Object.getOwnPropertyDescriptor(record.get,'bind')||Object.getOwnPropertyDescriptor(functionPrototype,'bind')?.value!==originalBind)return
+  return (...args:any[])=>{if(originalReader(receiver,key)===record)return Reflect.apply(record.get,receiver,args);let value:unknown;record.executor.immediate(()=>{value=Reflect.apply(record.get,receiver,args)});return value}
+}
+export function callOriginalCurrentnessMethod<T>(guard:Guard,receiver:object,key:PropertyKey,args:readonly unknown[]):T {
+  const record=originalReader(receiver,key)
+  if(record?.kind==='method'&&record.executor===guards.get(guard))return Reflect.apply(record.get,receiver,args) as T
+  return runOpaqueCurrentnessRead(guard,()=>Reflect.apply(Reflect.get(receiver,key),receiver,args)) as T
 }

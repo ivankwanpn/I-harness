@@ -309,11 +309,11 @@ it('keeps unknown registered-source callbacks immediate before an original sourc
 })
 it('measures one original full metadata observation without skipping fold callbacks',async()=>{
  const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createOwnedMetadataFold}=await import('../../session-executor/src/lifecycle/owned-metadata-fold.ts')
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'observe-interval-'));let snapshots=0
- const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true},originalExecutionFoldFactory:input=>{const fold=createOwnedMetadataFold(input),original=fold.views.todo.snapshot;fold.views.todo.snapshot=prefix=>{snapshots++;return original(prefix)};return fold}},taskDocumentStorageContract)
- try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent');snapshots=0
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'observe-interval-'));
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true},originalExecutionFoldFactory:createOwnedMetadataFold},taskDocumentStorageContract)
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),action=execution.owner.beginAction();try{expect((await action.facts.metadata.admit({type:'todo/write',version:1,items:[{content:'original snapshot',status:'pending'}]})).kind).toBe('committed')}finally{action.finish()}
   let observation:ReturnType<typeof execution.observe>|undefined
-  const count=measure(()=>{observation=execution.observe()});console.info('ACTUAL_OBSERVE_COUNT',count);expect(count.captures).toBe(0);expect(snapshots).toBe(1);expect(observation!.metadata.todo.kind).toBe('available');expect(Object.hasOwn(execution.owner,'view')).toBe(false)
+  const count=measure(()=>{observation=execution.observe()});console.info('ACTUAL_OBSERVE_COUNT',count);expect(count.captures).toBe(0);expect(observation!.metadata.todo).toMatchObject({kind:'available',snapshot:{kind:'present',items:[{content:'original snapshot',status:'pending'}]}});expect(Object.hasOwn(execution.owner,'view')).toBe(false)
  }finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
 

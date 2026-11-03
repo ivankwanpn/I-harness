@@ -1,7 +1,7 @@
 import { createExecutionCodeState } from '../projection/execution-code-state.ts';
 import type { OriginalExecutionFoldFactory, OriginalExecutionFoldSink } from './execution-types.ts';
 import { types } from 'node:util';
-import {propagateOriginalCurrentnessReader} from './currentness-guards.ts';
+import {propagateOriginalCurrentnessReader,bindOriginalCurrentnessMethod,runOpaqueCurrentnessRead,originalCurrentnessFactoryMatches} from './currentness-guards.ts';
 import { historyTurns } from '../conversation/history/turns.ts';
 import { selectSeedHistoryFromStructure } from '../conversation/seed-selection.ts';
 import { captureRewrites,type ConversationRewriteDraft,type ConversationCandidate } from '../conversation/candidate.ts';
@@ -86,6 +86,8 @@ export async function restoreManagedConversation(input: OriginalConversationRest
         throw error;
     };
     let checkViews=()=>{};
+    const originalFactory=!!(supplied&&foldFactory&&originalCurrentnessFactoryMatches(foldFactory,supplied,'snapshot'));
+    const snapshotRead=supplied&&originalFactory?bindOriginalCurrentnessMethod(supplied,'snapshot'):undefined,validatorRead=supplied&&originalFactory?bindOriginalCurrentnessMethod(supplied,'validateSnapshot'):undefined;
     const synchronous = (method: (...args: any[]) => unknown, snapshot = false) => (...args: any[]) => {
         if (foldFailure) throw foldFailure;
         checkViews();
@@ -95,7 +97,7 @@ export async function restoreManagedConversation(input: OriginalConversationRest
         if (snapshot) {
             if (!isStrictFactData(result) || Object.getOwnPropertyDescriptor(supplied!, 'validateSnapshot')?.value !== validator) refuse(result);
             let valid: unknown;
-            try { valid = Reflect.apply(validator, supplied, [result]); }
+            try { valid = validatorRead?validatorRead(result):runOpaqueCurrentnessRead(source.assertCurrent,()=>Reflect.apply(validator,supplied,[result])); }
             catch (cause) { foldFailure ??= new TypeError('Synchronous original fold snapshot validation failed', {cause}); throw foldFailure; }
             if (valid !== true) refuse(valid);
             if (Object.getOwnPropertyDescriptor(supplied!, 'validateSnapshot')?.value !== validator) refuse(result);
@@ -118,15 +120,18 @@ export async function restoreManagedConversation(input: OriginalConversationRest
       if(!snapshot||!('value'in snapshot)||typeof snapshot.value!=='function'||types.isProxy(snapshot.value)||types.isAsyncFunction(snapshot.value)||!validate||!('value'in validate)||typeof validate.value!=='function'||types.isProxy(validate.value)||types.isAsyncFunction(validate.value))throw TypeError('Original fold view methods required');
       viewMethodChecks.push(()=>{if(Object.getOwnPropertyDescriptor(view,'snapshot')?.value!==snapshot.value||Object.getOwnPropertyDescriptor(view,'validateSnapshot')?.value!==validate.value)refuse('Original fold view changed')});
       const checkView=()=>checkViews();
-      named[name]=(prefix)=>{if(foldFailure)throw foldFailure;try{checkView();const result=Reflect.apply(snapshot.value,view,[prefix]);if(!isStrictFactData(result))refuse(result);checkView();const valid=Reflect.apply(validate.value,view,[result]);if(valid!==true)refuse(valid);checkView();if(!isStrictFactData(result))refuse(result);return result}catch(cause){foldFailure??=new TypeError('Original fold view failed',{cause});throw foldFailure}};
+      const read=originalFactory?bindOriginalCurrentnessMethod(view,'snapshot'):undefined,validation=originalFactory?bindOriginalCurrentnessMethod(view,'validateSnapshot'):undefined;
+      named[name]=(prefix)=>{if(foldFailure)throw foldFailure;try{checkView();const result=read?read(prefix):runOpaqueCurrentnessRead(source.assertCurrent,()=>Reflect.apply(snapshot.value,view,[prefix]));if(!isStrictFactData(result))refuse(result);checkView();const valid=validation?validation(result):runOpaqueCurrentnessRead(source.assertCurrent,()=>Reflect.apply(validate.value,view,[result]));if(valid!==true)refuse(valid);checkView();if(!isStrictFactData(result))refuse(result);return result}catch(cause){foldFailure??=new TypeError('Original fold view failed',{cause});throw foldFailure}};
+      if(read&&validation)propagateOriginalCurrentnessReader(view,'snapshot',named,name,[],[[view,'validateSnapshot']]);
     }
     const fold = supplied && Object.freeze({
         assertHealthy(){if(foldFailure)throw foldFailure;checkViews()},
         appendValidated: synchronous(supplied.appendValidated.bind(supplied)),
         finishRestore: synchronous(supplied.finishRestore.bind(supplied)),
-        snapshot: synchronous(supplied.snapshot.bind(supplied), true),
+        snapshot: synchronous(snapshotRead??supplied.snapshot.bind(supplied), true),
         views:Object.freeze(named),
     });
+    if(fold&&snapshotRead&&validatorRead)propagateOriginalCurrentnessReader(supplied!,'snapshot',fold,'snapshot',[],[[supplied!,'validateSnapshot']]);
     const code = createExecutionCodeState(source.header,sessionId);
     let ordinal = 0;
     const scan = createConversationValidationScan({ formatVersion: source.formatVersion, header: { ...source.header, sessionId }, readEvent: source.readEvent.bind(source) });
@@ -359,6 +364,11 @@ export function installRestoredManagedConversation(candidate: object, owner: obj
         },
     };
     for(const key of ['prefix','header','formatVersion'] as const)propagateOriginalCurrentnessReader(owned.source,key,result,key,[owned.source.assertCurrent]);
+    if(owned.fold){
+      propagateOriginalCurrentnessReader(owned.fold,'snapshot',result,'foldSnapshot',[owned.source.assertCurrent]);
+      const views=owned.fold.views;
+      if(views&&['todo','goal','title'].every(name=>Object.hasOwn(views,name)))for(const key of ['foldView','hasFoldView'] as const)propagateOriginalCurrentnessReader(views,'todo',result,key,[owned.source.assertCurrent],[[views,'goal'],[views,'title']]);
+    }
     return result;
 }
 /** Paired projection/state from one live original preparation. No Session replay. */
