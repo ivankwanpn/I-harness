@@ -1,8 +1,9 @@
 {
   "name": "@i-harness/desktop-gateway",
-  "version": "0.1.13-rc.1",
+  "version": "0.1.13",
   "private": true,
   "type": "module",
+  "files": ["src"],
   "exports": { ".": "./src/index.ts", "./src/*": "./src/*" },
   "scripts": {
     "test": "vitest run",

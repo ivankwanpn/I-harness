@@ -7,16 +7,16 @@
 // sibling release folder when an earlier portable app is still open.
 // IH_DESKTOP_GATEWAY_DIR reuses a qualified repository runtime read-only.
 // Assumes `electron-vite build` and `scripts/build-gateway.mjs` already ran.
-import { cpSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { cpSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
-import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
 import { verifyWslAssets } from "../../../scripts/runtime-wsl-assets.mjs"
 import { copyAclWaitAssets, verifyAclWaitAssets } from "../../../scripts/runtime-acl-wait-assets.mjs"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 import { resolvePackagePaths, validateGatewayRuntime } from "./package-inputs.mjs"
+import { createPortableArchive } from "./portable-archive.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
@@ -66,15 +66,7 @@ for (const name of ["koffi", `@koromix/koffi-${process.platform}-${process.arch}
 }
 
 const zipPath = join(releaseDir, `I-harness-${manifest.version}.zip`)
-// Windows' built-in libarchive handles long workspace/dependency paths that
-// PowerShell Compress-Archive rejects. Separate argv also keeps paths literal.
-const archiver = join(process.env.SystemRoot ?? "C:/Windows", "System32", "tar.exe")
-if (!existsSync(archiver)) throw new Error(`Windows archive tool not found: ${archiver}`)
-const zip = spawnSync(archiver, ["-a", "-c", "-f", zipPath, "-C", appDir, "."], { stdio: "inherit", windowsHide: true })
-if (zip.error || zip.status !== 0) throw new Error(`Portable archive failed (exit ${zip.status})`, { cause: zip.error })
-if (!existsSync(zipPath)) throw new Error(`Archive tool reported success but produced no archive: ${zipPath}`)
-const zipBytes = statSync(zipPath).size
-if (zipBytes === 0) throw new Error(`portable zip is empty (0 bytes): ${zipPath}`)
+const zipBytes = createPortableArchive(appDir, zipPath)
 
 console.log(`packaged: ${join(appDir, `${appName}.exe`)}`)
 console.log(`portable zip: ${zipPath} (${zipBytes} bytes)`)

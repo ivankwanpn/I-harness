@@ -107,21 +107,25 @@ it.each(["01.2.3", "1.02.3", "1.2.03", "1.2", "1.2.3-01", "1.2.3-rc..1", "1.2.3+
 })
 
 it("refuses a stable gateway under a prerelease Desktop owner", () => {
-  const f = fixture()
+  const f = versionFixture("0.1.13-rc.1")
   f.put("resources/gateway/cli/package.json", JSON.stringify({ name: "@i-harness/desktop-gateway", version: "0.1.13" }))
-  const result = validate(f.app)
+  const result = spawnSync(process.execPath, [f.script, "--app-dir", f.app, "--validate-only"], { encoding: "utf8", windowsHide: true })
   expect(result.status).not.toBe(0)
   expect(result.stderr).toContain("gateway")
 })
 
 it.each([false, true])("passes full identity and independent PE version to the compiler (isolated fixture: %s)", isolated => {
-  const { root, app } = fixture()
-  if (isolated) writeFileSync(join(root, ".ih-desktop-installer-test-owner.ini"), "[Test]\nOwner=I-harness.Desktop.Installer.Test.v1\nToken=12345678-1234-1234-1234-123456789012\n")
+  const { root, app, script: fixtureScript } = versionFixture("0.1.13-rc.1")
+  const testRoot = join(root, ".tmp", "owned-installer")
+  if (isolated) {
+    mkdirSync(testRoot, { recursive: true })
+    writeFileSync(join(testRoot, ".ih-desktop-installer-test-owner.ini"), "[Test]\nOwner=I-harness.Desktop.Installer.Test.v1\nToken=12345678-1234-1234-1234-123456789012\n")
+  }
   const compiler = join(root, "fake-makensis.exe")
   writeFileSync(compiler, "synthetic compiler fixture; never execute")
   const runner = join(root, "compiler-runner.mjs")
   writeFileSync(runner, `
-import { buildInstaller } from ${JSON.stringify(pathToFileURL(script).href)}
+import { buildInstaller } from ${JSON.stringify(pathToFileURL(fixtureScript).href)}
 import { readFileSync, writeFileSync } from "node:fs"
 const calls = []
 const run = (_file, args) => {
@@ -135,7 +139,7 @@ const run = (_file, args) => {
     writeFileSync(definitions.OUTPUT_FILE, "MZsynthetic setup output")
     return { status: 0, stdout: "fixture compiler accepted definitions", stderr: "" }
 }
-const metadata = buildInstaller(${JSON.stringify({ appDir: app, outDir: join(root, "setup"), nsis: compiler, ...(isolated ? { testRoot: root } : {}) })}, run)
+const metadata = buildInstaller(${JSON.stringify({ appDir: app, outDir: join(root, "setup"), nsis: compiler, ...(isolated ? { testRoot } : {}) })}, run)
 console.log(JSON.stringify({ calls, metadata }))
 `)
   const result = spawnSync(process.execPath, [runner], { encoding: "utf8", windowsHide: true })
@@ -152,9 +156,9 @@ console.log(JSON.stringify({ calls, metadata }))
   expect(expanded).toContain('"DisplayVersion" "0.1.13-rc.1"')
   expect(expanded).toContain('${If} $0 != "0.1.13-rc.1"')
   if (isolated) {
-    expect(definitions.TEST_ROOT).toBe(root)
+    expect(definitions.TEST_ROOT).toBe(testRoot)
     expect(definitions.TEST_TOKEN).toBe("12345678-1234-1234-1234-123456789012")
-    expect(definitions.TEST_HOOKS).toBe(join(packageRoot, "test", "installer-fixture-hooks.nsh"))
+    expect(definitions.TEST_HOOKS).toBe(join(root, "packages", "desktop", "test", "installer-fixture-hooks.nsh"))
     expect(readFileSync(definitions.TEST_HOOKS, "utf8")).toContain("FailUninstallerBootstrap")
   } else expect(definitions.TEST_ROOT).toBeUndefined()
   expect(calls).toHaveLength(2)

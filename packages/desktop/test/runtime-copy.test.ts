@@ -1,5 +1,5 @@
 import { expect, it } from "vitest"
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createRequire } from "node:module"
@@ -20,6 +20,40 @@ it("ships native packages exposing only a package subpath and native binary", ()
     expect(source).toBe(pkg)
     copyRuntimePackage(source, join(root, "shipped"))
     expect(existsSync(join(root, "shipped", "sharp.node"))).toBe(true)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it("uses the gateway release manifest to omit local test state from the payload", () => {
+  const root = mkdtempSync(join(tmpdir(), "ih-gateway-payload-"))
+  try {
+    const source = join(root, "source"), target = join(root, "out")
+    mkdirSync(join(source, "src"), { recursive: true })
+    mkdirSync(join(source, "build", "native-child-tests"), { recursive: true })
+    writeFileSync(join(source, "package.json"), readFileSync(new URL("../../desktop-gateway/package.json", import.meta.url)))
+    writeFileSync(join(source, "src", "host.ts"), "export {}")
+    writeFileSync(join(source, "build", "native-child-tests", "session.json"), "test state must not ship")
+    copyRuntimePackage(source, target)
+    expect(existsSync(join(target, "src", "host.ts"))).toBe(true)
+    expect(existsSync(join(target, "package.json"))).toBe(true)
+    expect(existsSync(join(target, "build"))).toBe(false)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it("omits undeclared workspace build state while preserving third-party build runtimes", () => {
+  const root = mkdtempSync(join(tmpdir(), "ih-runtime-build-"))
+  try {
+    for (const [name, files, expectedBuild] of [["@i-harness/fixture", undefined, false], ["native-addon", undefined, true], ["@i-harness/declared", ["src", "build"], true]] as const) {
+      const source = join(root, name.replaceAll("/", "-")), target = source + "-out"
+      for (const path of ["src/index.ts", "build/runtime.node", ".superpowers/evidence.json"]) {
+        mkdirSync(join(source, path, ".."), { recursive: true })
+        writeFileSync(join(source, path), "fixture")
+      }
+      writeFileSync(join(source, "package.json"), JSON.stringify({ name, files }))
+      copyRuntimePackage(source, target)
+      expect(existsSync(join(target, "src/index.ts"))).toBe(true)
+      expect(existsSync(join(target, "build/runtime.node"))).toBe(expectedBuild)
+      if (name.startsWith("@i-harness/")) expect(existsSync(join(target, ".superpowers"))).toBe(false)
+    }
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
