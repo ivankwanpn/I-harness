@@ -80,7 +80,7 @@ export function runOpaqueCurrentnessRead<T>(guard:Guard,operation:()=>T):T {
 export function wrapOriginalSourceCurrentness(original:Guard,operation:Guard):Guard|undefined {
   return guards.get(original)?.sourceCheck?.(operation)
 }
-type Reader={kind:'get'|'method';get:(...args:any[])=>unknown;set:unknown;enumerable:boolean|undefined;prototype:object|null;executor:OriginalCurrentnessExecutor}
+type Reader={kind:'get'|'method';get:(...args:any[])=>unknown;set:unknown;enumerable:boolean|undefined;prototype:object|null;immutable:boolean;executor:OriginalCurrentnessExecutor}
 const readers=new WeakMap<object,Map<PropertyKey,Reader>>()
 const factories=new WeakMap<Function,OriginalCurrentnessExecutor>()
 export function associateOriginalCurrentnessFactory(factory:Function,executor:OriginalCurrentnessExecutor):void{const previous=factories.get(factory);if(previous&&previous!==executor)throw TypeError('Original reader factory changed');factories.set(factory,executor)}
@@ -91,11 +91,12 @@ export function associateOriginalCurrentnessReader(receiver:object,key:PropertyK
   const method=field?.get??field?.value
   if(!field||typeof method!=='function'||types.isProxy(method))throw TypeError('Original metadata reader required')
   let fields=readers.get(receiver);if(!fields){fields=new Map();readers.set(receiver,fields)}
-  fields.set(key,{kind:field.get?'get':'method',get:method,set:field.set,enumerable:field.enumerable,prototype:Object.getPrototypeOf(receiver),executor})
+  fields.set(key,{kind:field.get?'get':'method',get:method,set:field.set,enumerable:field.enumerable,prototype:Object.getPrototypeOf(receiver),immutable:Object.isFrozen(receiver),executor})
 }
 function originalReader(receiver:object,key:PropertyKey):Reader|undefined {
   const record=readers.get(receiver)?.get(key);if(!record)return
   if(record.kind==='method'&&!originalCurrentnessClone())return
+  if(record.immutable)return record
   const field=Object.getOwnPropertyDescriptor(receiver,key)
   if(!field||(record.kind==='get'?field.get:field.value)!==record.get||field.set!==record.set||field.enumerable!==record.enumerable||Object.getPrototypeOf(receiver)!==record.prototype)return
   return record

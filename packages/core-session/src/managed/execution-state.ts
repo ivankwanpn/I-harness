@@ -230,6 +230,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   const readSource=source.readEvent.bind(source)
   const sourceCurrent=bindOriginalCurrentnessDescriptors({receiver:source,method:source.assertCurrent,before:[['assertCurrent',source.assertCurrent]],after:[],message:'CONVERSATION_RESTORATION_SOURCE_CHANGED'})
   const originalSource:OriginalConversationRestorationSource={get formatVersion(){return source.formatVersion},get header(){return source.header},get prefix(){return source.prefix},assertCurrent:sourceCurrent??source.assertCurrent.bind(source),consume:source.consume.bind(source),async readEvent(ordinal){const event=await readSource(ordinal);return compatibility?.view.events[ordinal]??liveEvents.get(ordinal)?.deref()??event},settle:source.settle.bind(source),close:source.close.bind(source),appendCommitted:source.appendCommitted.bind(source)}
+  Object.freeze(originalSource)
   for(const key of ['prefix','header','formatVersion'] as const)propagateOriginalCurrentnessReader(source,key,originalSource,key)
   if(!binding||types.isProxy(binding))throw new TypeError('Original held writer binding required')
   const tokenField=Object.getOwnPropertyDescriptor(binding,'token'),heldField=Object.getOwnPropertyDescriptor(binding,'assertHeld'),openField=Object.getOwnPropertyDescriptor(binding,'openDependencies')

@@ -24,7 +24,9 @@ export function captureOriginalRestorationSource(input: OriginalConversationRest
         if (!field || !('value' in field) || typeof field.value !== 'function' || types.isProxy(field.value))
             return fail();
     }
+    let immutableVerified=false;
     const check = () => {
+        if(immutableVerified)return;
         if (Object.getPrototypeOf(input) !== prototype)
             fail();
         const keys = Reflect.ownKeys(input);
@@ -35,8 +37,10 @@ export function captureOriginalRestorationSource(input: OriginalConversationRest
             if (!now || now.enumerable !== original.enumerable || ('value' in original ? !('value' in now) || now.value !== original.value : 'value' in now || now.get !== original.get || now.set !== original.set))
                 fail();
         }
+        immutableVerified=immutableInput;
     };
     const originalAssert=bindOriginalCurrentnessDescriptors({receiver:input,method:descriptors.assertCurrent!.value,before:[],after:[],message:'CONVERSATION_RESTORATION_SOURCE_CHANGED'});
+    const immutableInput=!!originalAssert&&Object.isFrozen(input);
     const assert = originalAssert??descriptors.assertCurrent!.value.bind(input) as OriginalConversationRestorationSource['assertCurrent'];
     const consume = descriptors.consume!.value.bind(input) as OriginalConversationRestorationSource['consume'];
     const read = descriptors.readEvent!.value.bind(input) as OriginalConversationRestorationSource['readEvent'];

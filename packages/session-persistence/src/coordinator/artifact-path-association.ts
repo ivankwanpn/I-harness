@@ -12,6 +12,9 @@ export function isOriginalCanonicalExclusion(binding:OriginalArtifactExclusion|u
 // One pure synchronous owner guard can request the same original proof repeatedly.
 // Validate each distinct proof before returning; never retain work across an await.
 type ArtifactAssertion = { capture: ArtifactPathCapture; method: () => void }
+// Constructor-held frozen native captures cannot replace their method. This
+// stores only that descriptor fact; the actual native assertion still runs.
+const immutableCaptureMethods=new WeakMap<ArtifactPathCapture,()=>void>()
 let assertionWork: Map<ArtifactPathCapture, ArtifactAssertion> | undefined
 const pureGuards = new WeakSet<Function>()
 const currentnessExecutor:OriginalCurrentnessExecutor=Object.freeze({
@@ -27,7 +30,9 @@ const currentnessExecutor:OriginalCurrentnessExecutor=Object.freeze({
   bindDescriptors(recipe:OriginalCurrentnessDescriptorRecipe){
     if(!pureGuards.has(recipe.method)||types.isProxy(recipe.receiver))throw TypeError('Original artifact descriptor guard required')
     const check=(fields:typeof recipe.before)=>{for(const [key,value,message]of fields){const field=Object.getOwnPropertyDescriptor(recipe.receiver,key);if(!field||!('value'in field)||field.value!==value)throw TypeError(message??recipe.message)}}
-    return createArtifactCurrentGuard(()=>{check(recipe.before);Reflect.apply(recipe.method,recipe.receiver,[]);check(recipe.after)})
+    const immutable=Object.isFrozen(recipe.receiver)
+    let beforeVerified=false,afterVerified=false
+    return createArtifactCurrentGuard(()=>{if(!beforeVerified){check(recipe.before);beforeVerified=immutable}Reflect.apply(recipe.method,recipe.receiver,[]);if(!afterVerified){check(recipe.after);afterVerified=immutable}})
   },
 })
 /** Called by the first-party managed producer for its closed scalar getters. */
@@ -53,8 +58,8 @@ export function assertHeldWithArtifactGuard(held: () => void, guard: Function, r
 }
 function flushArtifactChecks(work: Map<ArtifactPathCapture, ArtifactAssertion>): void {
   for (const {capture, method} of work.values()) {
-    const descriptor = Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
-    if (!descriptor || !('value' in descriptor) || descriptor.value !== method) throw new TypeError('Changed original artifact assertion')
+    if(immutableCaptureMethods.get(capture)!==method){const descriptor = Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
+    if (!descriptor || !('value' in descriptor) || descriptor.value !== method) throw new TypeError('Changed original artifact assertion')}
     Reflect.apply(method, capture, [])
   }
 }
@@ -65,12 +70,13 @@ export function withImmediateArtifactCurrentChecks(check: () => void): void {
   finally { assertionWork = outer }
 }
 export function assertArtifactCurrent(capture: ArtifactPathCapture): void {
-  const descriptor = Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
-  if (!descriptor || !('value' in descriptor) || typeof descriptor.value !== 'function' || types.isProxy(descriptor.value)) throw new TypeError('Invalid original artifact assertion')
+  const immutable=immutableCaptureMethods.get(capture),descriptor=immutable?undefined:Object.getOwnPropertyDescriptor(capture, 'assertCurrent')
+  if (!immutable&&(!descriptor || !('value' in descriptor) || typeof descriptor.value !== 'function' || types.isProxy(descriptor.value))) throw new TypeError('Invalid original artifact assertion')
+  const method=immutable??descriptor!.value as ()=>void
   const original = assertionWork?.get(capture)
-  if (original && original.method !== descriptor.value) throw new TypeError('Changed original artifact assertion')
-  if (assertionWork) assertionWork.set(capture, {capture, method: descriptor.value})
-  else Reflect.apply(descriptor.value, capture, [])
+  if (original && original.method !== method) throw new TypeError('Changed original artifact assertion')
+  if (assertionWork) {if(!original)assertionWork.set(capture, {capture, method})}
+  else Reflect.apply(method, capture, [])
 }
 export function withArtifactCurrentChecks(check: () => void): void {
   if (typeof check !== 'function' || types.isProxy(check) || types.isAsyncFunction(check)) throw new TypeError('Artifact checks must be synchronous')
@@ -86,11 +92,13 @@ export function associateArtifactPaths(backend:PersistenceBackend,owner:Original
   if(associations.has(backend))throw TypeError('Backend already associated')
   const methods=['root','session','document','taskForParent','prepareRoot','prepareDocumentParents','assertOriginal'] as const
   const captured=Object.fromEntries(methods.map(name=>{const d=Object.getOwnPropertyDescriptor(owner,name);if(!d||!('value'in d)||typeof d.value!=='function')throw TypeError('Invalid original artifact owner');return[name,d.value]})) as unknown as OriginalArtifactPaths
-  function methodsCurrent(){for(const name of methods){const d=Object.getOwnPropertyDescriptor(owner,name);if(!d||!('value'in d)||d.value!==captured[name])throw TypeError('Changed artifact owner')}}
+  const immutableOwner=isOriginalCanonicalPathOwner(owner)&&Object.isFrozen(owner)
+  let methodsVerified=false
+  function methodsCurrent(){if(methodsVerified)return;for(const name of methods){const d=Object.getOwnPropertyDescriptor(owner,name);if(!d||!('value'in d)||d.value!==captured[name])throw TypeError('Changed artifact owner')}methodsVerified=immutableOwner}
   function check(){methodsCurrent();const invoke=()=>{if(Reflect.apply(captured.assertOriginal,owner,[])!==undefined)throw TypeError('Artifact owner check must be synchronous');methodsCurrent()};if(isArtifactCurrentGuard(captured.assertOriginal))invoke();else withImmediateArtifactCurrentChecks(invoke)}
   check();const root=Reflect.apply(captured.root,owner,[]),platform=createArtifactPathOwner(root)
   // Capture wrapper keeps the exact native capture receiver and original methods.
-  function capture(kind:'session'|'document'|'taskForParent',id:string):ArtifactCapture{check();const target=Reflect.apply(captured[kind],owner,[id]),original=platform.capture(target);const result=Object.freeze({...original,...(original.kind==='ready'?{}:{provisionalKey:'artifact-provisional:'+JSON.stringify(target)}),assertCurrent(){if(this!==result)throw TypeError('Invalid artifact capture receiver');check();assertArtifactCurrent(original)}});return result}
+  function capture(kind:'session'|'document'|'taskForParent',id:string):ArtifactCapture{check();const target=Reflect.apply(captured[kind],owner,[id]),original=platform.capture(target);if(!types.isProxy(original)&&Object.isFrozen(original)){const field=Object.getOwnPropertyDescriptor(original,'assertCurrent');if(field&&'value'in field&&typeof field.value==='function'&&!types.isProxy(field.value))immutableCaptureMethods.set(original,field.value)}const result=Object.freeze({...original,...(original.kind==='ready'?{}:{provisionalKey:'artifact-provisional:'+JSON.stringify(target)}),assertCurrent(){if(this!==result)throw TypeError('Invalid artifact capture receiver');check();assertArtifactCurrent(original)}});return result}
   const ensureRoot=async(c:ArtifactCapture)=>{if(c.kind==='needs-root'){c.assertCurrent();await Reflect.apply(captured.prepareRoot,owner,[]);check()}}
   const binding:OriginalArtifactExclusion=Object.freeze({session(id:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');return capture('session',id)},document(key:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');return capture('document',key)},taskForParent(id:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');return capture('taskForParent',id)},async prepareSession(id:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');await ensureRoot(capture('session',id));const session=capture('session',id);if(session.kind!=='ready')throw Error('Original session parent unavailable');let task=capture('taskForParent',id);if(task.kind!=='ready'){await Reflect.apply(captured.prepareDocumentParents,owner,['task-'+id]);check();session.assertCurrent();task=capture('taskForParent',id)}if(task.kind!=='ready')throw Error('Original task artifact parent unavailable');task.assertCurrent()},async prepareDocument(key:string){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');await ensureRoot(capture('document',key));let c=capture('document',key);if(c.kind!=='ready'){await Reflect.apply(captured.prepareDocumentParents,owner,[key]);check();c=capture('document',key)}if(c.kind!=='ready')throw Error('Original document parent unavailable');c.assertCurrent()},assertOriginal(){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');check()},settleResources(){if(this!==binding)throw TypeError('Invalid artifact exclusion receiver');platform.settleResources()}})
   associations.set(backend,binding)
