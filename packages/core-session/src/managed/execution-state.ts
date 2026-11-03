@@ -296,11 +296,13 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     const member=<T>(key:'prefix'|'header'|'formatVersion')=>readOriginalCurrentnessMember<T>(assertHeld,original,key)
     const method=<T>(key:'foldSnapshot'|'foldView'|'hasFoldView',...args:unknown[])=>callOriginalCurrentnessMethod<T>(assertHeld,original,key,args)
     assertNewWork();const bound=owners.get(identity);if(!bound)throw TypeError('Original execution owner unbound');bound.current()
-    const expected=member<Readonly<JournalPrefix>>('prefix'),delivery=opaque(()=>originalDeliveryObservation(original.delivery)),fence=opaque(()=>delivery.revision());
+    // The frozen original delivery witness is issued by a private WeakMap;
+    // revision closes only over its scalar, never a supplied callback.
+    const expected=member<Readonly<JournalPrefix>>('prefix'),delivery=originalDeliveryObservation(original.delivery),fence=delivery.revision();
     // This is only a batching prerequisite, never an authority certificate.
     const immutablePrefix=isStrictFactData(expected)&&Object.isFrozen(expected)&&Reflect.ownKeys(expected).length===3&&typeof expected.eventCount==='number'&&typeof expected.bodyBytes==='number'&&typeof expected.prefixDigest==='string'
     const construct=()=>{
-    const current=(reading?:OriginalWriterDependencyScope)=>runOriginalCurrentnessRead(assertHeld,()=>{assertFresh(reading);bound.current();if(member<Readonly<JournalPrefix>>('prefix')!==expected||opaque(()=>delivery.revision())!==fence)throw TypeError('Original execution observation expired')})
+    const current=(reading?:OriginalWriterDependencyScope)=>runOriginalCurrentnessRead(assertHeld,()=>{assertFresh(reading);bound.current();if(member<Readonly<JournalPrefix>>('prefix')!==expected||delivery.revision()!==fence)throw TypeError('Original execution observation expired')})
     const floor=(value:number)=>{if(!Number.isSafeInteger(value)||value<0||value>expected.eventCount)throw RangeError('Invalid original inbox floor')}
     const inbox:ExecutionObservation['inbox']=Object.freeze({pending(fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.pending(fromSeq)},isPending(inputId:string,fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.isPending(inputId)&&(original.intake.admission(inputId)??-1)>=fromSeq},everAdmitted(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.everAdmitted(inputId)},isExecutable(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return delivery.isExecutable(inputId)},
       lastCancellationSeq(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.lastCancellationSeq(inputId)},
