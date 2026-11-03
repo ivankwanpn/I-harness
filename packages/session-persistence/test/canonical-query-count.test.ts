@@ -278,7 +278,7 @@ it('preserves original held-binding and owner descriptor provenance through genu
  let action:ReturnType<Awaited<ReturnType<typeof acquireManagedExecution>>['owner']['beginAction']>|undefined
  try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,{},'parent');action=execution.owner.beginAction()
   const capture=action.captureMetadata!({type:'plan/mode',mode:'off'}),outcome=await capture.admit();expect(outcome.kind).toBe('committed')
-  expect(measure(()=>expect(readManagedAcknowledgedMembers(domain,capture,outcome)).toHaveLength(1))).toEqual({captures:0,opens:16})
+  expect(measure(()=>expect(readManagedAcknowledgedMembers(domain,capture,outcome)).toHaveLength(1))).toEqual({captures:0,opens:8})
   const document=execution.owner as unknown as import('../src/coordinator/fact-types.ts').ManagedDocument,ready=document.assertReady;let replacements=0;document.assertReady=()=>{replacements++}
   try{expect(()=>readManagedAcknowledgedMembers(domain,capture,outcome)).toThrow('Original owner readiness changed');expect(replacements).toBe(0)}finally{document.assertReady=ready}
  }finally{action?.finish();await coordinator.close();await rm(root,{recursive:true,force:true})}
@@ -291,7 +291,7 @@ it('coalesces genuine registered-source currentness during an original durable s
  try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,{},'parent');action=execution.owner.beginAction()
   expect((await action.facts.tools.call({type:'tool/call',callId:'source-call',name:'read',args:{}})).kind).toBe('committed')
   source=action.registerSettlementSource(async()=>{});const capture=source.tools.captureResult({type:'tool/result',callId:'source-call',name:'read',output:'original controlled result'}),outcome=await capture.admit();expect(outcome.kind).toBe('committed')
-  expect(measure(()=>expect(readManagedSourceAcknowledgedMembers(domain,source!,capture,outcome)).toHaveLength(1))).toEqual({captures:0,opens:48})
+  expect(measure(()=>expect(readManagedSourceAcknowledgedMembers(domain,source!,capture,outcome)).toHaveLength(1))).toEqual({captures:0,opens:40})
  }finally{await source?.close();action?.finish();await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
 it('keeps unknown registered-source callbacks immediate before an original source ACK read',async()=>{
@@ -331,6 +331,47 @@ it('batches original attachment action and Task parent checks while custom paren
    node.id+=1000;try{expect(()=>action.assertOpen()).toThrow();expect(()=>execution.observe()).toThrow();expect(()=>operations.assertTaskV3Parent(parent,'parent')).toThrow()}finally{Object.assign(node,before)}
   }finally{action.finish()}
  }finally{if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+
+it('measures the actual original domain action and acknowledged model-member currentness chain',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createManagedExecutionDomain,assertManagedActionCurrent,readManagedActionMembers}=await import('../../core-session/src/managed/execution-state.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'original-action-member-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ let action:ReturnType<Awaited<ReturnType<typeof acquireManagedExecution>>['owner']['beginAction']>|undefined
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,{},'parent');action=execution.owner.beginAction()
+  const capture=action.captureMetadata!({type:'plan/mode',mode:'off'}),outcome=await capture.admit();expect(outcome.kind).toBe('committed')
+  let members:ReturnType<typeof readManagedActionMembers>|undefined
+  console.info('ACTUAL_ACTION_MEMBER_CHAIN_COUNT',{domain:measure(()=>domain.assertCurrent()),action:measure(()=>assertManagedActionCurrent(domain,action!)),member:measure(()=>{members=readManagedActionMembers(domain,action!,capture,outcome)}),chain:measure(()=>{assertManagedActionCurrent(domain,action!);for(let i=0;i<3;i++)readManagedActionMembers(domain,action!,capture,outcome)})});expect(members).toHaveLength(1);expect(members![0]).toMatchObject({type:'plan/mode',mode:'off'})
+  const node=probe.nodes.get(root)!,before={...node};node.id+=1000;try{expect(()=>assertManagedActionCurrent(domain,action!)).toThrow();expect(()=>readManagedActionMembers(domain,action!,capture,outcome)).toThrow()}finally{Object.assign(node,before)}
+ }finally{action?.finish();await expect(coordinator.close()).rejects.toThrow();await rm(root,{recursive:true,force:true})}
+})
+
+it('keeps unknown source callbacks immediate in the original action and member chain',async()=>{
+ const {acquireManagedExecution}=await import('../src/execution-internal.ts'),{createManagedExecutionDomain,assertManagedActionCurrent}=await import('../../core-session/src/managed/execution-state.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'original-action-unknown-'));let armed=false,callbacks=0,effects=0,changed=false
+ probe.sourceCurrent=()=>{if(armed){callbacks++;probe.nodes.get(root)!.id+=1000}}
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ let action:ReturnType<Awaited<ReturnType<typeof acquireManagedExecution>>['owner']['beginAction']>|undefined
+ try{await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),domain=createManagedExecutionDomain(execution.identity,execution.owner,{},'parent');action=execution.owner.beginAction();const node=probe.nodes.get(root)!,before={...node};armed=true
+  try{expect(()=>{assertManagedActionCurrent(domain,action!);effects++}).toThrow();expect(callbacks).toBe(1);expect(effects).toBe(0);changed=true}finally{armed=false;Object.assign(node,before)}
+ }finally{probe.sourceCurrent=undefined;action?.finish();if(changed)await expect(coordinator.close()).rejects.toThrow();else await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+
+it('measures an actual prepared Task caller through the original managed model opaque wrappers',async()=>{
+ const {createContext}=await import('../../core-plugin/src/index.ts'),{createToolRegistryWithModelOrigin}=await import('../../core-tools/src/model-origin.ts'),{bindPreparedTaskLaunchLeaf}=await import('../../core-tools/src/registry/prepared-body.ts'),{acquireManagedExecution}=await import('../src/execution-internal.ts'),{createManagedAgentModelOriginOwner,consumeManagedAgentModelOrigin,createManagedModelInvocation}=await import('../../core-agent/src/tool-batch/managed-model-origin.ts'),{readManagedActionMembers}=await import('../../core-session/src/managed/execution-state.ts')
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'original-prepared-caller-')),coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract),ctx=createContext();await coordinator.create({sessionId:'parent'});const execution=await acquireManagedExecution(coordinator,'parent'),origin=createManagedAgentModelOriginOwner(ctx,execution),pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:'parent'}},origin.verifier)
+ let entry:ReturnType<typeof bindPreparedTaskLaunchLeaf>,effects=0,count:{captures:number;opens:number}|undefined
+ const tool:import('../../core-tools/src/types.ts').Tool={name:'spawn_agent',description:'original prepared count',inputSchema:{},async execute(_args,exec){const caller=entry.enter(exec);expect(caller).toBeDefined();count=measure(()=>caller!.assertCurrent());caller!.consume();effects++;return 'original'}};entry=bindPreparedTaskLaunchLeaf(tool,tool.execute);pair.registry.register(tool)
+ const binding=origin.bind(pair.registry,pair.driver),state=consumeManagedAgentModelOrigin(binding,origin.domain,pair.registry),action=execution.owner.beginAction(),invocation=createManagedModelInvocation(state,action),source=action.registerSettlementSource(async()=>{})
+ const admit=async(capture:import('@i-harness/core-session').CapturedActionFact<import('@i-harness/core-session').FactOutcome>)=>{const outcome=await capture.admit();if(outcome.kind!=='committed')throw Error('Original committed fixture required');return {capture,outcome}}
+ try{
+  await admit(action.captureLifecycle!({type:'conversation/semantics',version:1,mode:'accepted-exchange-v1'}));const input=await admit(action.captureInputPromotion({kind:'input-start',turn:{type:'turn/start'},message:{type:'user/message',text:'original'}},()=>true));invocation.input(input)
+  const started=await admit(action.captureLifecycle!({type:'step/start',actionId:'a',attemptId:'b'})),start=readManagedActionMembers(origin.domain,action,started.capture,started.outcome)[0]!,called=await admit(action.captureToolCall!({type:'tool/call',callId:'one',name:'spawn_agent',args:{}})),event=readManagedActionMembers(origin.domain,action,called.capture,called.outcome)[0]!
+  if(event.type!=='tool/call')throw Error('Original call absent')
+  const accepted=await admit(action.captureModelExchange({type:'assistant/message',text:''},{type:'model/exchange-accepted',version:1,exchangeId:'one',actionId:'a',attemptId:'b',stepStartSeq:{kind:'prior',seq:start.seq!,expectedType:'step/start'},assistantSeq:{kind:'group',position:0,expectedType:'assistant/message'},callSeqs:[{kind:'prior',seq:event.seq!,expectedType:'tool/call'}]})),batch=invocation.accepted(accepted,[called]);invocation.closed(batch)
+  await admit(action.captureToolDispatch!(event.callId,{kind:'prior',seq:event.seq!,expectedType:'tool/call'}))
+  const prepared=await pair.registry.prepare({name:event.name,args:event.args},action.signal,{sessionId:'parent',callId:event.callId,callEventSeq:event.seq,settlementSource:source});invocation.attach(batch,0,prepared,source)
+  expect(await pair.registry.dispatch(prepared)).toBe('original');expect(effects).toBe(1);console.info('ACTUAL_PREPARED_TASK_CALLER_COUNT',count);expect(count!.captures).toBe(0);expect(count!.opens).toBeGreaterThan(0)
+ }finally{invocation.invalidate();await source.close();action.finish();await coordinator.close();await ctx.scope.unmount();await rm(root,{recursive:true,force:true})}
 })
 
 it('flushes around an opaque original fold snapshot and rejects native retarget before returning observation',async()=>{

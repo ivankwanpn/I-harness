@@ -1,6 +1,6 @@
 import {taskParentMetadataProjection} from './task-parent-metadata.ts'
 import {types} from 'node:util'
-import {createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
+import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts';
 import { canJoinOriginalNativePrewrite } from '../native-fact-writer-internal.ts';
 import { createDeliveryControl,createOwnerDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
@@ -757,6 +757,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
     if(originalGuardDependencies){
       const originalReady=document.assertReady
       document.assertReady=createArtifactCurrentGuard(()=>{assertGuardMethods();Reflect.apply(originalReady,document,[])})
+      associateArtifactCurrentnessReader(document,'ownsAction')
     }
     const originalPrivateReady=document.assertReady;
     function beginTaskMetadataUpdate() {
