@@ -142,6 +142,11 @@
 
 **尚未完成**：移除 task document 的可變寫入（write-behind／廢除）、pending intent 的自動 reconcile，會影响 desktop catalog、required settlement 與 v3 parent 契約，屬獨立重構。
 
+## 2026-11-05 第 85 輪（最終建置）
+
+- 修正 `backend-wrap-hooks` 測試的 reconcile 參數簽名（全庫 typecheck 抓到）。
+- `pnpm -r --no-bail typecheck`：82 packages 全綠（exit 0）。
+- 安裝檔重建：SHA-256 `53b9827ff9503e765ff14bba8448d1cc7f5c4e8c82466441f7ae4c07f78c635a`，189,635,410 bytes，builtAt 2026-11-04T20:19:00Z。
 ## 2026-11-05 第 82–84 輪
 
 | 範圍 | 項目 | Commit／結果 |
