@@ -58,3 +58,4 @@
 owned 路徑的 task document 同時是**寫入所有權的 witness**（`observe → confirm → handoff`）；在 document 缺失時用 job record 偽造一份文件，會繞過 read confirmation／ownership 契約，因此**不做自動 fallback**。
 
 降級模式改為唯讀：`readRecoveredTaskRows(coordinator, parentSessionId)` 從 job record fold 出任務列（status／outcome／error／childSessionId／agentPath），供 host 在 registry unavailable 時顯示與診斷；此模式**明確不可 admit 新工作**。下一步是在 desktop 的 task projection 接上這個降級來源與 banner。
+- **降級顯示（2026-11-05）**：`SessionService.tasksAsync()` 在 `TASK_REGISTRY_UNAVAILABLE` 時改讀 job record，回傳 `AgentTaskView`（`canCancel:false`、summary 標明 recovered read-only）；SDK `session/tasks` 已優先使用 `tasksAsync`。這讓 desktop 在 task document／registry 不可用時仍看到最後已知任務，而不是整個清單失敗。

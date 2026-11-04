@@ -60,7 +60,8 @@ import { runPostSubmit } from './service/post-submit.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
-import { registerSubagent, projectWorkflowRows, ParentNotificationStoppedError, inspectTaskProjection, reconcileTaskProjection, inspectJobRecordProjection, type AgentTaskView, type ParentInputAdmission, type RegisterSubagentOptions, type RegisterSubagentResult, type TaskProjectionIssue } from "@i-harness/subagent"
+import { projectRecoveredTaskRows } from './task-fallback.ts'
+import { registerSubagent, projectWorkflowRows, ParentNotificationStoppedError, inspectTaskProjection, reconcileTaskProjection, inspectJobRecordProjection, readRecoveredTaskRows, type AgentTaskView, type ParentInputAdmission, type RegisterSubagentOptions, type RegisterSubagentResult, type TaskProjectionIssue } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -317,6 +318,9 @@ export interface SessionService {
    * session's list). Never fabricated: a session with no live assembly answers
    * an honest empty list. */
   tasks(sessionId: string): AgentTaskView[]
+  /** D-01: async task rows that fall back to durable job records when the task
+   * registry is unavailable (read-only, cannot admit or cancel work). */
+  tasksAsync?(sessionId: string): Promise<AgentTaskView[]>
   /** M49 Task 12: cancel ONE task through the owning assembly (its registries
    * hold the authority). An id with no owner (unknown session/unknown id)
    * throws the registry's not-found error — never a silent success. */
@@ -1827,6 +1831,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     // session whose assembly does not exist (or was closed) has NO tasks
     // (honest empty, never a fabricated row).
     tasks: (sessionId) => assemblies.get(sessionId)?.tasks() ?? [...(managedTaskOwners.get(sessionId)?.projectTasks()??[]),...projectWorkflowRows(managedWorkflowOwners.get(sessionId)?.list()??[],sessionId)],
+    async tasksAsync(sessionId) {
+      try { return service.tasks(sessionId) }
+      catch (error) {
+        if ((error as { code?: string }).code !== 'TASK_REGISTRY_UNAVAILABLE' || !opts.coordinator?.storageRoot) throw error
+        return projectRecoveredTaskRows(await readRecoveredTaskRows(opts.coordinator, sessionId))
+      }
+    },
     cancelTask: (sessionId, id) => {
       const assembly = assemblies.get(sessionId)
       if (assembly !== undefined) return assembly.cancelTask(id)

@@ -610,7 +610,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/tasks requires a non-empty sessionId")
         }
-        return makeSuccess(id, { items: service.tasks(p.sessionId) })
+        return makeSuccess(id, { items: service.tasksAsync ? await service.tasksAsync(p.sessionId) : service.tasks(p.sessionId) })
       }
       case "session/tasks/cancel": {
         const p = params as { sessionId?: unknown; id?: unknown } | undefined
