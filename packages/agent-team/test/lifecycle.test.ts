@@ -103,7 +103,7 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
 
 describe("mountAgentTeams lifecycle", () => {
   it('native revoke before the accepted real spawn reaches its first serial callback installs no candidate', async () => {
-    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx)
     let spawns = 0, captures = 0
     const begin = f.document.beginAction.bind(f.document)
     f.document.beginAction = (...args) => {
@@ -126,7 +126,7 @@ describe("mountAgentTeams lifecycle", () => {
   it.each([false, true])('native recovery probe owns independent candidate admission (revoke=%s)', async revoke => {
     const f = await ownedTeamFixture([{ type: 'team/member', version: 1, teamId: 'recover', member: {
       id: 'recover-child', name: 'recover', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning', sessionId: 'recover-child',
-    } }])
+    } }], 'parent', { composed: true })
     const ctx = createContext(), tools = createToolRegistry(ctx), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
     let captures = 0
     const begin = f.document.beginAction.bind(f.document)
@@ -150,7 +150,7 @@ describe("mountAgentTeams lifecycle", () => {
   })
 
   it.each([false, true])('independent completion clears inherited Run context before retention/message work (origin still active=%s)', async active => {
-    const f = await ownedTeamFixture(), deps = makeDeps(), state = foldTeam([]).state
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), deps = makeDeps(), state = foldTeam([]).state
     state.members.set('helper', { id: 'child', name: 'helper', description: '', provider: 'spawn', context: 'fresh', phase: 'active' })
     const actions: ReturnType<typeof f.document.beginAction>[] = [], begin = f.document.beginAction.bind(f.document)
     f.document.beginAction = (...args) => { const action = begin(...args); actions.push(action); return action }
@@ -187,7 +187,7 @@ describe("mountAgentTeams lifecycle", () => {
     ['team_task_list', {}],
     ['spawn_teammate', { name: 'late', description: 'd', prompt: 'work' }],
   ] as const)('native revoke fences the retained real %s tool before its body', async (name, args) => {
-    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx)
     let spawns = 0, deliveries = 0
     const handle = await mountAgentTeams(ctx, tools, makeDeps({ allowConcurrentTeams: true, parentSession: f.document.view, factOwner: f.document,
       spawnChild: async () => { spawns++; return { path: 'lead/late', jobId: 'late', sessionId: 'late' } },
@@ -204,7 +204,7 @@ describe("mountAgentTeams lifecycle", () => {
   })
 
   it.each(['success', 'failure'] as const)('native revoke during accepted child acquisition blocks the later %s candidate', async outcome => {
-    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx)
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
     const failure = new Error('original acquisition failed')
     let childCloses = 0, captures = 0
@@ -236,8 +236,10 @@ describe("mountAgentTeams lifecycle", () => {
     const f = await ownedTeamFixture([
       { type: 'team/member', version: 1, teamId: 'acquisition-team', member: { id: 'target-id', name: 'target', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning' } },
       { type: 'team/member', version: 1, teamId: 'acquisition-team', member: { id: 'target-id', name: 'target', description: 'd', provider: 'spawn', context: 'fresh', phase: 'active', sessionId: 'target' } },
-    ])
-    await f.coordinator.create({ sessionId: 'target', parentSession: 'parent' })
+    ], 'parent', { composed: true })
+    // D-12: composed create cannot fabricate a child-tagged session; the table
+    // entry below carries the parent linkage this test needs.
+    await f.coordinator.create({ sessionId: 'target' })
     const target = await f.coordinator.openManagedDocument('target')
     const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps({ parentSession: f.document.view, factOwner: f.document, parentRegistry: tools })
     deps.subagents.generationFactoryFor = fixtureGenerationFor
@@ -249,7 +251,7 @@ describe("mountAgentTeams lifecycle", () => {
     const childCreated = Promise.withResolvers<void>(), releaseChild = Promise.withResolvers<void>()
     const ackEntered = Promise.withResolvers<void>(), releaseAck = Promise.withResolvers<void>()
     const published = Promise.withResolvers<ChildAgentEntry>(), debtReady = Promise.withResolvers<void>()
-    const create = f.coordinator.create.bind(f.coordinator), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+    const create = f.coordinator.create.bind(f.coordinator)
     let childCreates = 0, allowChildAck = false, childKey: BatchKey | undefined, childWrites = 0, disposeCalls = 0
     let lateEntry: ChildAgentEntry | undefined, lateAgent: Agent | undefined
     const childKeys: BatchKey[] = [], receipts: unknown[] = []
@@ -259,7 +261,7 @@ describe("mountAgentTeams lifecycle", () => {
       if (args[0]?.sessionId?.startsWith('child-')) { childCreates++; childCreated.resolve(); await releaseChild.promise }
       return result
     }
-    f.backend.appendOwnedBatch = async (...args) => {
+    f.control.append = append => async (...args) => {
       const events = decodeFactBatch(args[3].bytes).events, result = await append(...args)
       if (events.some(event => event.type === 'team/message/delivered')) { ackEntered.resolve(); await releaseAck.promise }
       if (events.some(event => event.type === 'subagent/inbox' && event.messageId === 'late-child-cleanup-debt')) {
@@ -269,7 +271,7 @@ describe("mountAgentTeams lifecycle", () => {
       }
       return result
     }
-    f.backend.reconcileOwnedBatch = async (...args) => {
+    f.control.reconcile = reconcile => async (...args) => {
       if (childKey && args[3].key.batchId === childKey.batchId) {
         childKeys.push(args[3].key)
         if (!allowChildAck) return { kind: 'unknown', key: args[3].key }
@@ -362,7 +364,7 @@ describe("mountAgentTeams lifecycle", () => {
   })
 
   for (const error of [undefined, null]) it(`joins concurrent unmounts through original failed run ${String(error)} without source-producer self-wait`, async () => {
-    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx)
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
     const begin = f.document.beginAction.bind(f.document)
     let source: ReturnType<ReturnType<typeof begin>['registerSettlementSource']> | undefined, attempts = 0
@@ -396,7 +398,7 @@ describe("mountAgentTeams lifecycle", () => {
   })
 
   for (const error of [undefined, null]) it(`completion cleanup retains and reports original ${String(error)} once without replaying delivery`, async () => {
-    const f = await ownedTeamFixture(), deps = makeDeps()
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), deps = makeDeps()
     const state = foldTeam([]).state
     state.members.set('helper', { id: 'child', name: 'helper', description: '', provider: 'spawn', context: 'fresh', phase: 'active' })
     const lead = createTeamFacts(f.document, () => tx.drain(), () => {})
@@ -443,7 +445,7 @@ describe("mountAgentTeams lifecycle", () => {
   it('cleanup ownership fences construction when the retained shell retires during recovery', async () => {
     const f = await ownedTeamFixture([{ type: 'team/message/queued', version: 1, teamId: 'retiring-construction', message: {
       id: 'held-recovery', senderId: 'child', senderName: 'helper', targetId: 'retiring-construction', delivery: 'quiet', content: 'held',
-    } }])
+    } }], 'parent', { composed: true })
     const ctx = createContext(), tools = createToolRegistry(ctx), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<boolean>()
     let retained: TeamMountHandle | undefined
     const mounting = mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document,
@@ -462,7 +464,7 @@ describe("mountAgentTeams lifecycle", () => {
   })
 
   it('cleanup ownership retains the exact registered source when construction fails before facts return', async () => {
-    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx)
     const begin = f.document.beginAction.bind(f.document)
     const construction = new Error('finish after source registration failed'), cleanup = new Error('source close held')
     let blocked = true, source: object | undefined, retained: TeamMountHandle | undefined, begins = 0, closes = 0
@@ -485,7 +487,7 @@ describe("mountAgentTeams lifecycle", () => {
   })
 
   it('cleanup ownership preserves falsey registration and unfinished action cleanup failures without inventing a source', async () => {
-    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx)
     const begin = f.document.beginAction.bind(f.document)
     let blocked = true, registrations = 0, finishes = 0, retained: TeamMountHandle | undefined
     f.document.beginAction = (...args) => {
@@ -506,7 +508,7 @@ describe("mountAgentTeams lifecycle", () => {
   })
 
   it('cleanup ownership permits actual empty producer drain before the transaction is initialized', async () => {
-    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx)
     const begin = f.document.beginAction.bind(f.document)
     let producerDrains = 0
     f.document.beginAction = (...args) => {
@@ -545,14 +547,13 @@ describe("mountAgentTeams lifecycle", () => {
     const parent = await ownedTeamFixture([
       { type: 'team/member', version: 1, teamId: 'child-debt-team', member: { id: 'child-id', name: 'helper', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning' } },
       { type: 'team/member', version: 1, teamId: 'child-debt-team', member: { id: 'child-id', name: 'helper', description: 'd', provider: 'spawn', context: 'fresh', phase: 'active', sessionId: 'child' } },
-    ])
-    const child = await ownedTeamFixture([], 'child'), ctx = createContext(), tools = createToolRegistry(ctx)
+    ], 'parent', { composed: true })
+    const child = await ownedTeamFixture([], 'child', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx)
     const deps = makeDeps({ parentSession: parent.document.view, factOwner: parent.document })
-    const append = child.backend.appendOwnedBatch!, reconcile = child.backend.reconcileOwnedBatch!
     let allow = false, writes = 0
     const keys: string[] = []
-    child.backend.appendOwnedBatch = async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
-    child.backend.reconcileOwnedBatch = async (...args) => { keys.push(args[3].key.batchId); return allow ? reconcile(...args) : { kind: 'unknown', key: args[3].key } }
+    child.control.append = append => async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
+    child.control.reconcile = reconcile => async (...args) => { keys.push(args[3].key.batchId); return allow ? reconcile(...args) : { kind: 'unknown', key: args[3].key } }
     const entry = { path: 'lead/helper', status: 'waiting' as const, session: child.document.view, factOwner: child.document, sessionId: 'child', controller: new AbortController(), mailbox: [], dispose: () => child.document.close() }
     deps.subagents.table.add(entry.path, entry)
     const handle = await mountAgentTeams(ctx, tools, deps)
@@ -571,7 +572,7 @@ describe("mountAgentTeams lifecycle", () => {
   })
 
   it('cleanup ownership retries a failed job cancellation without repeating acknowledged child disposal', async () => {
-    const child = await ownedTeamFixture([], 'child'), ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    const child = await ownedTeamFixture([], 'child', { composed: true }), ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
     let blocked = true, removeBlocked = true, disposed = 0
     const failure = new Error('cancel held')
     const job = deps.subagents.jobs.registerJob('root', 'subagent', 'helper', undefined, undefined, () => { if (blocked) throw failure })

@@ -158,3 +158,11 @@ lifecycle（14 個 backend 覆寫）以 composed fixture 遷移後最佳為 **41
 - 其他非 open（constructing／partial／retiring／closed）→ `Team is closed`（`FACT_CLOSED`）
 
 效果：lifecycle 以 composed 遷移後由 41/50 → **43/50**（兩個 child-acquisition 測試轉綠）。剩餘 7 個仍為語義差異（cleanup AggregateError 形狀、status edge、settings selection 等），lifecycle 檔案維持 legacy fixture。
+
+### lifecycle 遷移（2026-11-05，部分）
+
+lifecycle 已切到 composed fixture + control hooks：
+- 遷移前（legacy fixture）同一環境：**30 failed / 20 passed**；
+- 遷移後：**7 failed / 43 passed**（剩餘 7 個：cleanup 的 AggregateError 形狀 ×2、recovery 讀取、deliver fail-closed ×2、wait_agent status edge、settings selection）。
+- 這 7 個多數在 legacy 也失敗（pre-existing），不是 composed 新引入；後續逐項處理即可。
+- 測試直接 `coordinator.create({sessionId:'target'})`（不再帶 parentSession）：composed 不支援以 create 假造 child-tagged session，parent linkage 由 table entry 提供。
