@@ -29,7 +29,7 @@ function safeContextBudget(value: unknown): RuntimeDiagnosticEntry["contextBudge
     || typeof value.recoveryRequired !== "boolean" || typeof value.fullByProvider !== "boolean") return
   return Object.fromEntries(["estimatedInputTokens", "outputReserve", "contextWindow", "effectiveOutputCap", "safetyMargin", "coverage", "estimateSource", "capSupport", "admission", "recoveryRequired", "fullByProvider"].map(key => [key, value[key]])) as RuntimeDiagnosticEntry["contextBudget"]
 }
-const kinds: RuntimeDiagnosticKind[] = ["model/retry", "model/recovered", "model/connecting", "model/quiet", "model/settled", "session/error", "session/cancelled", "gateway/disconnected", "runtime/error", "context/budget", "context/request", "context/compaction"]
+const kinds: RuntimeDiagnosticKind[] = ["model/retry", "model/recovered", "model/connecting", "model/quiet", "model/settled", "session/error", "session/cancelled", "gateway/disconnected", "runtime/error", "context/budget", "context/request", "context/compaction", "task/projection"]
 const codes = new Set(["http_400", "http_401", "http_402", "http_403", "http_408", "http_413", "http_429", "http_500", "http_502", "http_503", "http_504", "network", "timeout", "authentication", "quota", "context_limit", "invalid_arguments", "cancelled", "model_error", "gateway_disconnected", "runtime_error", "TEAM_RECOVERY_REQUIRED", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EAI_AGAIN"])
 for (const code of ["UNKNOWN", "ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS", "RATE_LIMIT", "TIMEOUT", "TRANSPORT", "SERVER", "CAPACITY"]) codes.add(code)
 
@@ -109,6 +109,10 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       ? { generation: value.close.generation, reason: value.close.reason as NonNullable<RuntimeDiagnosticEntry["close"]>["reason"] } : undefined
     const contextBudget = safeContextBudget(value.contextBudget)
     const contextAdmission = validAdmissionObservation(value.contextAdmission) ? structuredClone(value.contextAdmission) : undefined
+    const projectionIssues = Array.isArray(value.projectionIssues)
+      && value.projectionIssues.length > 0 && value.projectionIssues.length <= 32
+      && value.projectionIssues.every(issue => issue === "terminal-without-turn-end" || issue === "missing-child-session")
+      ? [...value.projectionIssues] as NonNullable<RuntimeDiagnosticEntry["projectionIssues"]> : undefined
     const code = typeof value.code === "string" && codes.has(value.code) ? value.code : undefined
     const waitingFor = kind.startsWith("model/") && ["first-response", "progress"].includes(String(value.waitingFor)) ? value.waitingFor as ModelActivityInfo["waitingFor"] : undefined
     const outcome = kind === "model/settled" && ["completed", "failed", "cancelled"].includes(String(value.outcome)) ? value.outcome as ModelActivityInfo["outcome"] : undefined
@@ -123,16 +127,17 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       : kind === "context/request" ? "Prepared physical request facts."
       : kind === "context/compaction" ? "Context compaction facts."
       : kind === "context/budget" ? "Prepared context admission facts."
+      : kind === "task/projection" ? "Task projection disagreed with durable child sessions."
       : code === "TEAM_RECOVERY_REQUIRED" ? "The task could not finish recovering. Retry to continue."
       : modelFailure && modelFailure.reason !== "unknown" ? `${modelFailure.message}${httpStatus ? ` (HTTP ${httpStatus})` : ""}`
       : `${code === "CAPACITY" ? "Model temporarily at capacity. " : ""}Model request failed${httpStatus ? ` (HTTP ${httpStatus})` : code ? ` (${code})` : ""}.`
-    return { id: safeId(value.id)!, timestamp: value.timestamp, kind, level: kind === "model/retry" ? "warning" : kind === "session/cancelled" || kind === "model/recovered" || kind.startsWith("model/") || kind.startsWith("context/") ? "info" : "error", message,
+    return { id: safeId(value.id)!, timestamp: value.timestamp, kind, level: kind === "model/retry" || kind === "task/projection" ? "warning" : kind === "session/cancelled" || kind === "model/recovered" || kind.startsWith("model/") || kind.startsWith("context/") ? "info" : "error", message,
       ...(safeId(value.workspaceId) ? { workspaceId: safeId(value.workspaceId) } : {}), ...(safeId(value.sessionId) ? { sessionId: safeId(value.sessionId) } : {}),
       ...(safeId(value.projectId) ? { projectId: safeId(value.projectId) } : {}), ...(safeId(value.providerId) ? { providerId: safeId(value.providerId) } : {}), ...(safeId(value.modelId) ? { modelId: safeId(value.modelId) } : {}),
       ...(integer(value.runtimeGeneration, 0, Number.MAX_SAFE_INTEGER) ? { runtimeGeneration: value.runtimeGeneration } : {}),
       ...(safeId(value.requestId) ? { requestId: safeId(value.requestId) } : {}), ...(code ? { code } : {}), ...(httpStatus ? { httpStatus } : {}), ...(retry ? { retry } : {}),
       ...(modelFailure ? { modelFailure } : {}),
-      ...(requestMetrics ? { requestMetrics } : {}), ...(compaction ? { compaction } : {}), ...(close ? { close } : {}),
+      ...(requestMetrics ? { requestMetrics } : {}), ...(compaction ? { compaction } : {}), ...(close ? { close } : {}), ...(projectionIssues ? { projectionIssues } : {}),
       ...(contextAdmission ? { contextAdmission } : {}),
       ...(contextBudget ? { contextBudget: { estimatedInputTokens: contextBudget.estimatedInputTokens, outputReserve: contextBudget.outputReserve, contextWindow: contextBudget.contextWindow,
         effectiveOutputCap: contextBudget.effectiveOutputCap, safetyMargin: contextBudget.safetyMargin, coverage: contextBudget.coverage, estimateSource: contextBudget.estimateSource,
@@ -250,6 +255,15 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
         for (const key of executionStates.keys()) if (JSON.parse(key)[0] === event.workspaceId) executionStates.delete(key)
         const state = scope(event.workspaceId)
         add({ kind: "gateway/disconnected", workspaceId: event.workspaceId, code: "gateway_disconnected", ...(event.close ? { close: event.close } : {}) }, JSON.stringify([event.workspaceId, state.turn, "disconnect"]))
+        return
+      }
+      if (event.kind === "sdk/notification" && event.method === "desktop/tasks/projection" && record(event.params)
+        && identifier(event.params.sessionId) && Array.isArray(event.params.issues)
+        && event.params.issues.length > 0 && event.params.issues.length <= 32
+        && event.params.issues.every(issue => issue === "terminal-without-turn-end" || issue === "missing-child-session")) {
+        const issues = [...event.params.issues] as NonNullable<RuntimeDiagnosticEntry["projectionIssues"]>
+        add({ kind: "task/projection", workspaceId: event.workspaceId, sessionId: event.params.sessionId, projectionIssues: issues },
+          JSON.stringify([event.workspaceId, event.params.sessionId, issues]))
         return
       }
       if (event.kind === "sdk/notification" && event.method === "desktop/context/diagnostic" && record(event.params)) {

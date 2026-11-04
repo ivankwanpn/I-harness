@@ -312,3 +312,14 @@ it('retains the explicit managed Team recovery code in session diagnostics',asyn
  const service=createRuntimeDiagnostics(await root());service.observe({kind:'sdk/notification',workspaceId:'ws',method:'session/status',params:{sessionId:'s',status:'failed',code:'TEAM_RECOVERY_REQUIRED'}})
  const entries=(await service.list()).entries;expect(entries).toHaveLength(1);expect(entries[0]).toMatchObject({kind:'session/error',code:'TEAM_RECOVERY_REQUIRED',workspaceId:'ws',sessionId:'s'});await service.flush()
 })
+
+it('records a task projection warning with kinds only (D-01)', async () => {
+  const service = createRuntimeDiagnostics(await root())
+  service.observe({ kind: 'sdk/notification', workspaceId: 'ws', method: 'desktop/tasks/projection', params: { sessionId: 's', issues: ['missing-child-session', 'terminal-without-turn-end'] } })
+  service.observe({ kind: 'sdk/notification', workspaceId: 'ws', method: 'desktop/tasks/projection', params: { sessionId: 's', issues: ['bogus'] } })
+  await service.flush()
+  const entries = (await service.list()).entries
+  expect(entries).toHaveLength(1)
+  expect(entries[0]).toMatchObject({ kind: 'task/projection', level: 'warning', sessionId: 's', projectionIssues: ['missing-child-session', 'terminal-without-turn-end'] })
+  expect(entries[0]?.message).toContain('Task projection')
+})

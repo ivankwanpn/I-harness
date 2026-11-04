@@ -2,7 +2,7 @@ import type { ModelRetryInfo, ModelActivityInfo } from "../../../core-session/sr
 import type { ModelFailureFacts } from "@i-harness/sdk"
 
 export type RuntimeDiagnosticLevel = "info" | "warning" | "error"
-export type RuntimeDiagnosticKind = "model/retry" | "model/recovered" | "model/connecting" | "model/quiet" | "model/settled" | "session/error" | "session/cancelled" | "gateway/disconnected" | "runtime/error" | "context/budget" | "context/request" | "context/compaction"
+export type RuntimeDiagnosticKind = "model/retry" | "model/recovered" | "model/connecting" | "model/quiet" | "model/settled" | "session/error" | "session/cancelled" | "gateway/disconnected" | "runtime/error" | "context/budget" | "context/request" | "context/compaction" | "task/projection"
 export interface RuntimeActivity { workspaceId: string; sessionId: string; activity: ModelActivityInfo }
 /** Native generated facts only; no request bodies, tool arguments or stderr. */
 export interface RuntimeDiagnosticEntry {
@@ -14,6 +14,9 @@ export interface RuntimeDiagnosticEntry {
   compaction?: import("@i-harness/desktop-gateway/src/context-diagnostics.ts").CompactionDiagnostic
   contextBudget?: { estimatedInputTokens: number; outputReserve: number; contextWindow?: number; effectiveOutputCap?: number; safetyMargin: number; coverage: string; estimateSource: string; capSupport: string; admission: string; recoveryRequired: boolean; fullByProvider: boolean }
   contextAdmission?: import('../../../core-session/src/events/admission.ts').RequestBudgetSnapshotV2
+  /** D-01: task projection kinds that disagreed with durable child sessions.
+   * Kinds only — never task ids, prompts or child content. */
+  projectionIssues?: Array<"terminal-without-turn-end" | "missing-child-session">
   close?: { generation: number; reason: "scope-changed" | "subprocess-exited" | "manager-closed" }
   id: string
   timestamp: number

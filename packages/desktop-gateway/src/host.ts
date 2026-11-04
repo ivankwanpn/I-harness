@@ -474,7 +474,12 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     await drainSession(sessionId)
     // D-01: a reload is the natural point to CHECK the task projection against
     // durable child sessions. Read-only: reconcile remains an explicit request.
-    await reportTaskProjectionIssues(service, sessionId)
+    const issues = await reportTaskProjectionIssues(service, sessionId)
+    if (issues.length > 0) {
+      try {
+        options.onWrite(makeNotification("desktop/tasks/projection", { sessionId, issues: issues.map(issue => issue.kind) }))
+      } catch { /* diagnostics must not break a reload */ }
+    }
   }
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())

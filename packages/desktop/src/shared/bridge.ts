@@ -171,6 +171,7 @@ export type DesktopNotificationMethod =
   | "desktop/session/subagents/changed"
   | "desktop/usage/recording-warning"
   | "desktop/context/diagnostic"
+  | "desktop/tasks/projection"
   | "desktop/instructions/changed"
   | "desktop/surface/changed"
 
@@ -185,6 +186,7 @@ export const DESKTOP_NOTIFICATION_METHODS = [
   "desktop/session/subagents/changed",
   "desktop/usage/recording-warning",
   "desktop/context/diagnostic",
+  "desktop/tasks/projection",
   "desktop/instructions/changed",
   "desktop/surface/changed",
 ] as const satisfies readonly DesktopNotificationMethod[]
