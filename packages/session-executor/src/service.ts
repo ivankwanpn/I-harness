@@ -1349,7 +1349,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         }
         const priorAssembly = liveAssembly(sessionId), priorDocument = priorAssembly?.managedDocument
         if (deliveryOwner && priorAssembly !== deliveryOwner) throw new ParentNotificationStoppedError()
-        try { await awaitDeliveryStop(sessionId); await priorAssembly?.settleRuntimeContextPublications(); await priorDocument?.settleFinishedActions() }
+        // A notification wake consumes an input that owns the required
+        // settlement source; settleFinishedActions can only close finished
+        // sources whose close was requested, so running it before the turn
+        // leaves that required entry pending forever. Defer it for the turn
+        // that adopts the admitted input; later submissions settle normally.
+        try { await awaitDeliveryStop(sessionId); await priorAssembly?.settleRuntimeContextPublications(); if (options?.admittedInputId === undefined) await priorDocument?.settleFinishedActions() }
         catch (failure) {
           if (priorAssembly && !options?.admittedInputId && !controller.signal.aborted && !closed && !closing.has(sessionId) && !failedClose.has(sessionId)) {
             try { await priorAssembly.inbox.admit(input, controller.signal) }

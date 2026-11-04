@@ -118,3 +118,12 @@
 1. notification admission 完成後，明確等待 `document.settleFinishedActions()`（或等價 drain）再 `wake`；或
 2. `submit` 帶 `admittedInputId` 時，允許先消費該 input，再 settle 先前的 finished actions（順序調整，需保留 fail-closed 檢查）。
 兩者都需先確認 pending frame 的來源（team spawn transaction vs notification input admission）。
+
+### 修正（2026-11-05）
+
+`submit` 在帶 `admittedInputId`（notification wake）時，現在**先跳過** `priorDocument.settleFinishedActions()`：
+- 該 pending 是 required settlement source（`qualified:false, eligible:0`），它的 close 由這個 turn 消費 input 時觸發；
+- 在 turn 前 settle 只會撞上 circular dependency，永遠 `FACT_RECOVERY_REQUIRED`。
+- 非 notification 的 submit 仍照舊先 settle；後續 submit 也會正常 settle。
+
+**效果**：composed `completion-delivery` 由 6/13 → **10/13**（喚醒流程的測試已通過）。剩餘 3 個是 close 階段的 `PROCESS_READ_UNAVAILABLE`（artifact path association）與 evidence-root 環境依賴，另外追蹤。
