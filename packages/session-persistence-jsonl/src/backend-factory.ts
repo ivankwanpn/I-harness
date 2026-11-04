@@ -135,7 +135,12 @@ export function createJsonlTaskTransitionCoordinator(root: string, options: Coor
 // (honest-bounding: it may have content — never guessed blank).
 const BLANK_PROBE_MAX_BYTES = 1024
 
-export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
+export function createJsonlBackend(root: string, options?: {
+  /** Test/instrumentation seam: wrap the owned-batch writer BEFORE the
+   * canonical-path guard captures its descriptor. Patching the backend after
+   * this call is rejected as PROCESS_READ_UNAVAILABLE by design. */
+  wrapOwnedBatch?: (append: NonNullable<PersistenceBackend['appendOwnedBatch']>) => NonNullable<PersistenceBackend['appendOwnedBatch']>
+}): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const nativePrewrite = createOriginalNativePrewriteOwner()
   const pathResolution = createOriginalJsonlPathResolution(root)
   const rootPath = pathResolution.rootPath
@@ -234,8 +239,12 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     return serializeHeader({ ...meta, journal }) + '\n'
   }
   const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO)
+  const factJournal = createFactJournalBackend(filePath, assertNotDeleted, Object.freeze({ filePath, assertNotDeleted, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }))
+  const wrappedAppend = options?.wrapOwnedBatch !== undefined && factJournal.appendOwnedBatch !== undefined
+    ? options.wrapOwnedBatch(factJournal.appendOwnedBatch) : undefined
   const backend: PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>; selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } = {
-    ...createFactJournalBackend(filePath, assertNotDeleted, Object.freeze({ filePath, assertNotDeleted, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) })),
+    ...factJournal,
+    ...(wrappedAppend !== undefined ? { appendOwnedBatch: wrappedAppend } : {}),
     ...bootstrapBackend,
     // Original private selected lane shares capture IO with bootstrap.
     selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO),

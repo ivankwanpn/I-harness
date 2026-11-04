@@ -18,12 +18,14 @@ import { localTestGeneration } from './fixtures/generation.ts'
 
 it('uses the actual managed input, acceptance and dispatch receipts before exactly one tool effect', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-agent-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const frames: string[][] = []
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
+    frames.push(decodeFactBatch(args[3].bytes).events.map(event => event.type)); return append(...args)
+  } })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   await document.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId: 'u', text: 'request', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'fixture.input' } })
-  const ctx = createContext(), tools = createToolRegistry(ctx), frames: string[][] = []
-  const actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { frames.push(decodeFactBatch(args[3].bytes).events.map(event => event.type)); return actual(...args) }
+  const ctx = createContext(), tools = createToolRegistry(ctx)
   let effects = 0
   tools.register({ name: 'write', description: 'write', inputSchema: { type: 'object' }, execute: async (_args, exec) => {
     const facts = (await backend.read(id)).events
@@ -68,19 +70,19 @@ it('rechecks the actual action recovery latch before model preparation after a p
 
 it('preserves the actual outer Agent tool result when a completed Code Mode store is unknown and later reconciled', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-parent-code-outcome-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let key: import('@i-harness/core-session').BatchKey | undefined
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
+    const outcome = await append(...args)
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) { key = args[3].key; return { kind: 'unknown', key } }
+    return outcome
+  } })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  let bodies = 0, nestedFinalizations = 0, outerFinalizations = 0, sends = 0, key: import('@i-harness/core-session').BatchKey | undefined
+  let bodies = 0, nestedFinalizations = 0, outerFinalizations = 0, sends = 0
   tools.register({ name: 'probe', description: '', inputSchema: {}, execute: async () => { bodies++; return 7 } })
   ctx.on('tools/post-execute', event => { if ((event as { name: string }).name === 'probe') nestedFinalizations++; else if ((event as { name: string }).name === 'code_exec') outerFinalizations++ })
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
-  const actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await actual(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) { key = args[3].key; return { kind: 'unknown', key } }
-    return outcome
-  }
   const model = observeModelClient(createMockClient([{ role: 'assistant', toolCalls: [{ id: 'outer', name: 'code_exec', args: { code: 'store("key", await tools.probe({})); text("actual output")', yield_time_ms: 5000 } }] }]), { start() { sends++ }, finish() {} })
   const agent = createAgent(ctx, { session: document.view, factOwner: document, generationFactory: localTestGeneration(document, id, model), tools, sessionId: id, systemPrompt: '', model })
   try {
