@@ -183,3 +183,10 @@ lifecycle 已切到 composed fixture + control hooks：
 `retired=true → flight → state.close() → history=undefined`，若 `hasFailure` 再 `transitions.joinIO()`；
 錯誤（cleanup unresolved）來自這條路徑的其中一步。也就是 restore-path team mount（seed 內含 queued message）讓 parent 走進 restored-read 狀態，並在 close 時留下未完成的 IO／state。
 下一步：在 `createManagedRestoredRead.close()` 區分「read 已 failure／retired」與「IO debt」；若 team 已 unmount 且沒有任何 writer，允許 release 而不是 join（或由 mountAgentTeams 在 unmount 時先 settle）。
+
+**實驗結果（2026-11-05，未採用）**：嘗試兩個假設都未讓 lifecycle restore-path 測試轉綠，已全部還原：
+
+1. `createTeamDeliveryFacts`：not-issued 時提早 `source.close()`（避免 delivery settlement 留 hold）。
+2. `managed-document.finish`：not-issued 時無條件 `staged.discardUnissued()`（issued 後也丟棄 staged group）。
+
+`closeOne` 診斷仍顯示 step 1 = **document close 回 `Managed facts require reconciliation`**，所以留下 debt 的不是 delivery source 或 discard 與否。下一步需在 document close 路徑列出實際的 `pending`／`recoveryHolds`／`sourceDrains` 條目（含 group 名稱或 action 來源），才能定位是哪個 fact group。
