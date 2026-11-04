@@ -57,3 +57,13 @@
 - S-06 剩餘：document 大小上限／串流寫入的格式決策
 
 方案與風險見 `2026-11-05-remaining-redesigns.md`，交接步驟見 `2026-11-05-handoff.md`。
+
+## 封裝後 gateway 冒煙測試（第 123 輪）
+
+從 `packages/desktop/release/I-harness/resources/gateway` 直接以 Node 載入打包後的 CLI：
+
+```powershell
+node --import tsx cli/src/cli.ts --help
+```
+
+輸出 `usage: desktop-gateway --session-dir ABSOLUTE_DIR`，代表打包的 runtime、tsx loader 與 gateway entry 都能正確解析（缺參數時如預期 exit 1）。這也驗證了 release appDir 的 gateway runtime 不是壞的。
