@@ -81,12 +81,14 @@ export function completedTurnPrefix(
         break
       }
     }
-    if (boundaryIndex === -1 && atSeq > events.length - 1) {
-      for (let index = events.length - 1; index >= 0; index--) {
-        if (events[index]!.type === "turn/end") {
-          boundaryIndex = index
-          break
-        }
+    // An out-of-range atSeq used to fall back to the LAST completed turn, i.e.
+    // fork the whole history while the caller believed it cut at its seq. Reject
+    // it instead: a boundary that does not exist is a caller error, not a
+    // different legitimate prefix.
+    if (boundaryIndex === -1) {
+      const maxSeq = events.reduce((max, event, index) => Math.max(max, event.seq ?? index), -1)
+      if (atSeq > maxSeq) {
+        throw new SessionForkUnavailableError(`atSeq ${String(atSeq)} is beyond this session's last event (${String(maxSeq)})`)
       }
     }
   }
