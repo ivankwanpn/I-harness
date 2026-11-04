@@ -63,6 +63,10 @@ export async function main(args: string[]): Promise<number> {
   rl.on("line", (line) => {
     const frame = decodeFrame(line)
     const method = isRpcRequest(frame) ? frame.method : undefined
+    // NG-09: the protocol's shutdown is a request, but older clients (and the
+    // SDK before this fix) send a bare notification. Either form must start
+    // teardown instead of waiting for the 2s kill.
+    const shutdown = method === "shutdown" || (typeof frame === "object" && frame !== null && "method" in frame && frame.method === "shutdown")
     if (method === "initialize") {
       handshake = host.handleLine(line)
       track(handshake)
@@ -70,7 +74,7 @@ export async function main(args: string[]): Promise<number> {
     }
     const work = (handshake ?? Promise.resolve()).then(() => host.handleLine(line))
     track(work)
-    if (method === "shutdown") void work.finally(() => close())
+    if (shutdown) void work.then(() => close(), () => close())
   })
   rl.on("close", () => { void close() })
   const onSignal = () => { void close() }

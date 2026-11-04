@@ -1790,3 +1790,26 @@ describe("createSdkServer assembly bridge (W2)", () => {
     }
   })
 })
+
+it("client.close() shuts down through the request form (NG-09)", async () => {
+  const { service, cleanup } = await makeService()
+  try {
+    const input = new PassThrough(), output = new PassThrough()
+    const client = new HarnessClient(output, input)
+    let shutdowns = 0
+    const server = createSdkServer(service, {
+      onShutdown: () => { shutdowns++ },
+      onWrite: message => output.write(encodeFrame(message)),
+    })
+    const rl = createInterface({ input })
+    rl.on("line", line => { void server.handleLine(line) })
+    await client.initialize()
+    await client.close()
+    await new Promise(resolve => setTimeout(resolve, 10))
+    expect(shutdowns).toBe(1)
+    rl.close()
+    await server.close()
+  } finally {
+    await cleanup()
+  }
+})

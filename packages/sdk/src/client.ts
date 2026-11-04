@@ -430,14 +430,26 @@ export class HarnessClient {
     return result as RewindExecuteResponse
   }
 
-  /** Graceful close: shutdown notification, end the write side, await the
-   * subprocess exit (kill after 2s when the server does not exit). */
+  /** Graceful close: shutdown REQUEST (the protocol's `{ ok: true }` reply is
+   * the host's acknowledgement that teardown began), end the write side, await
+   * the subprocess exit (kill after 2s when the server does not exit).
+   * A notification is sent only when the peer does not answer the request. */
   async close(): Promise<void> {
     if (this.closed) return
-    this.closed = true
+    let acknowledged = false
     try {
-      this.notify("shutdown")
-    } catch { /* best-effort */ }
+      await this.request("shutdown", {}, 1500)
+      acknowledged = true
+    } catch {
+      // Older hosts ignore the request form; the legacy notification is still
+      // sent below before the write side ends.
+    }
+    this.closed = true
+    if (!acknowledged) {
+      try {
+        this.notify("shutdown")
+      } catch { /* best-effort */ }
+    }
     try {
       this.transport.endWrite()
     } catch { /* already ended */ }
