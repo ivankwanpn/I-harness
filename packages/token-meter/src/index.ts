@@ -5,6 +5,7 @@ export {
   ROLE_OVERHEAD,
   estimateContent,
   estimateMessage,
+  estimateTextTokens,
 } from "./estimate.ts"
 export { activeTokens, breakdown } from "./breakdown.ts"
 export type { TokenBreakdown } from "./breakdown.ts"

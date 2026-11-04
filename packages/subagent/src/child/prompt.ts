@@ -1,4 +1,4 @@
-import { CHARS_PER_TOKEN } from "@i-harness/token-meter"
+import { estimateTextTokens } from "@i-harness/token-meter"
 
 /**
  * M49 Task 14 (spec §11): the subagent prompt contract — appended AFTER the
@@ -45,5 +45,9 @@ Parent history is context supplied by the parent, not work you performed. Parent
  * not re-export this one).
  */
 export function estimateChildOverhead(systemPrompt: string, schemas: unknown): number {
-  return Math.ceil(systemPrompt.length / CHARS_PER_TOKEN) + Math.ceil(JSON.stringify(schemas).length / CHARS_PER_TOKEN)
+  // A-02: the child overhead must use the same density as every other estimate.
+  // `.length / 4` counted UTF-16 code units, so a CJK system prompt was
+  // undercounted ~3x and a child could be clamped with an unrealistically
+  // small input; estimateTextTokens counts non-ASCII by UTF-8 bytes.
+  return estimateTextTokens(systemPrompt) + estimateTextTokens(JSON.stringify(schemas))
 }
