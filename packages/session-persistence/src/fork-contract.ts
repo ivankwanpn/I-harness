@@ -44,8 +44,10 @@ export interface ForkCommand { operation: ForkOperation; mode: 'begin'|'retry' }
 export type ForkCaptureState = 'uncaptured'|'captured'|'unknown'
 export interface ForkReceiptSummary { version: 1; invocation: BootstrapInvocation; manifestDigest: string; seedLength: number; dependencyClosureDigest: string }
 export type ForkSuccess = { version: 1; kind: 'ready'|'adopted'; operation: ForkOperation; capture: 'captured'; sessionId: string; seedLength: number; receipt: ForkReceiptSummary; title?: string }
-export type ForkNotIssuedReason = 'cancelled'|'stale-source'|'unsupported'|'busy'|'source-unavailable'|'policy'|'unavailable'
-export type ForkRefusal = 'conflict'|'nonempty'|'cached-unprepared'|'wrong-view'|'incompatible'|'manifest-invalid'|'target-policy'|'invalid-selection'|'source-unsupported'|'ambiguous-boundary'|'no-completed-boundary'|'straddling-group'|'unsafe-input-component'|'invalid-seed'|'source-changed'|'legacy-anchor-unsupported'
+const FORK_NOT_ISSUED_REASONS = ['cancelled','stale-source','unsupported','busy','source-unavailable','policy','unavailable'] as const
+const FORK_REFUSALS = ['conflict','nonempty','cached-unprepared','wrong-view','incompatible','manifest-invalid','target-policy','invalid-selection','source-unsupported','ambiguous-boundary','no-completed-boundary','straddling-group','unsafe-input-component','invalid-seed','source-changed','legacy-anchor-unsupported'] as const
+export type ForkNotIssuedReason = (typeof FORK_NOT_ISSUED_REASONS)[number]
+export type ForkRefusal = (typeof FORK_REFUSALS)[number]
 export type ForkOutcome = ForkSuccess
   | { version: 1; kind: 'not-issued'; operation: ForkOperation; capture: ForkCaptureState; reason: ForkNotIssuedReason }
   | { version: 1; kind: 'blocked'; operation: ForkOperation; capture: ForkCaptureState; reason: 'unknown'|'payload-required'|'dependency-unavailable'|'source-changed'; token: BootstrapResumeToken }
@@ -107,8 +109,8 @@ export function readForkCommand(input: unknown): ForkCommand {
   if (r.mode !== 'begin' && r.mode !== 'retry') invalid()
   return Object.freeze({ operation: readForkOperation(r.operation), mode: r.mode })
 }
-const notIssued = ['cancelled','stale-source','unsupported','busy','source-unavailable','policy','unavailable']
-const refused = ['conflict','nonempty','cached-unprepared','wrong-view','incompatible','manifest-invalid','target-policy','invalid-selection','source-unsupported','ambiguous-boundary','no-completed-boundary','straddling-group','unsafe-input-component','invalid-seed','source-changed','legacy-anchor-unsupported']
+const notIssued: readonly ForkNotIssuedReason[] = FORK_NOT_ISSUED_REASONS
+const refused: readonly ForkRefusal[] = FORK_REFUSALS
 export function readForkOutcome(input: unknown, expectedOperation: ForkOperation): ForkOutcome {
   const r = fields(input, ['version','kind','operation','capture'], ['reason','token','sessionId','seedLength','receipt','title'])
   const operation = readForkOperation(r.operation), expected = readForkOperation(expectedOperation)

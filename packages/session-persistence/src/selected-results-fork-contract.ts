@@ -78,8 +78,8 @@ export function readSelectedResultsPrepareResult(input:unknown): ForkPrepareResu
 
 const count = (v:unknown): v is number => Number.isSafeInteger(v) && (v as number)>=0
 const captures=['uncaptured','captured','unknown']
-const issued=['cancelled','stale-source','unsupported','busy','source-unavailable','policy','unavailable']
-const refused=['conflict','nonempty','cached-unprepared','wrong-view','incompatible','manifest-invalid','target-policy','invalid-selection','source-unsupported','ambiguous-boundary','no-completed-boundary','straddling-group','unsafe-input-component','invalid-seed','source-changed','legacy-anchor-unsupported','ambiguous','unsupported-history','metadata-limit']
+const issued=['cancelled','stale-source','unsupported','busy','source-unavailable','policy','unavailable'] as const
+const refused=['conflict','nonempty','cached-unprepared','wrong-view','incompatible','manifest-invalid','target-policy','invalid-selection','source-unsupported','ambiguous-boundary','no-completed-boundary','straddling-group','unsafe-input-component','invalid-seed','source-changed','legacy-anchor-unsupported','ambiguous','unsupported-history','metadata-limit'] as const
 export function readSelectedResultsOutcome(input:unknown, expected:ForkOperationV2): ForkOutcomeV2 {
   const r=fields(input,['version','kind','operation','capture'],['reason','token','sessionId','seedLength','receipt','title'])
   const operation=readSelectedResultsOperation(r.operation)
@@ -112,8 +112,8 @@ export function readSelectedResultsHostError(input:unknown,expected:ForkOperatio
 export type CaptureStateV2 = 'uncaptured'|'captured'|'unknown'
 export type ResumeTokenV2 = DeepReadonly<{version:2;invocation:BootstrapInvocation;phase:'header';manifest:'unknown'} | {version:2;invocation:BootstrapInvocation;phase:'header'|'dependencies'|'seed'|'completion';manifestDigest:string}>
 export type ForkReceiptSummaryV2 = DeepReadonly<{version:2;invocation:BootstrapInvocation;manifestDigest:string;seedLength:number;dependencyClosureDigest:string;seedDigest:string;sourceObservation:{kind:'semantic';digest:string};results:{version:1;rows:number;pages:number;digest:string}}>
-export type NotIssuedV2 = 'cancelled'|'stale-source'|'unsupported'|'busy'|'source-unavailable'|'policy'|'unavailable'
-export type RefusalV2 = 'conflict'|'nonempty'|'cached-unprepared'|'wrong-view'|'incompatible'|'manifest-invalid'|'target-policy'|'invalid-selection'|'source-unsupported'|'ambiguous-boundary'|'no-completed-boundary'|'straddling-group'|'unsafe-input-component'|'invalid-seed'|'source-changed'|'legacy-anchor-unsupported'|'ambiguous'|'unsupported-history'|'metadata-limit'
+export type NotIssuedV2 = (typeof issued)[number]
+export type RefusalV2 = (typeof refused)[number]
 export type ForkOutcomeV2 = DeepReadonly<{version:2;kind:'ready'|'adopted';operation:ForkOperationV2;capture:'captured';sessionId:string;seedLength:number;receipt:ForkReceiptSummaryV2;title?:string} | {version:2;kind:'not-issued';operation:ForkOperationV2;capture:CaptureStateV2;reason:NotIssuedV2} | {version:2;kind:'blocked';operation:ForkOperationV2;capture:CaptureStateV2;reason:'unknown'|'payload-required'|'dependency-unavailable'|'source-changed';token:ResumeTokenV2} | {version:2;kind:'refused';operation:ForkOperationV2;capture:CaptureStateV2;reason:RefusalV2}>
 export type ForkHostErrorDataV2 = DeepReadonly<{version:2;kind:'session-fork-error';operation:ForkOperationV2;capture:CaptureStateV2;reason:'host-unavailable'|'cleanup-incomplete'|'internal';lastOutcome?:ForkOutcomeV2}>
 export type ForkPrepareResultV2 = DeepReadonly<{kind:'prepared';prepared:ForkPreparedV2}|{kind:'unavailable';reason:'unsupported'|'source-unavailable'|'policy'|'unavailable'}>
