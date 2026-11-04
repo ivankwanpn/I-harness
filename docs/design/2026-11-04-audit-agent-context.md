@@ -74,6 +74,8 @@
 
 **單檔測試**：可。`selectReductionRuns(snapshot, policy)` 在 `retainTokens:0` 下的 `tail` 集合大小 = 1。
 
+**覆核（2026-11-05）：維持設計，不改預設。** `retainTokens:0` 仍保留最新一個完整 exchange（`exchanges === 0` 短路），不是「零近期上下文」；`maxTokens:1024` 是摘要「保留文字大小」（`maxTokens*4` chars），wire 上限另由 `summaryMaxOutputTokens:4096` 控制，不是 1024 token 的硬天花板。改成 8k–15k 會改變每次壓縮的保留量與成本，屬於產品決策而非一致性修正；在沒有量測資料前不動預設，僅保留 `retainTokens` 作 per-model 覆寫介面。
+
 ---
 
 ## A-04 摘要請求沿用主 system prompt＋全部 tool schema，卻又關閉 prompt cache；摘要器一旦回 tool_call 就整個 blocked，最後回合以 `prompt_too_long` 收場（H）
@@ -94,6 +96,8 @@
 **建議方向**：摘要改用獨立 prompt、空的 tools（`inherited` 只保留 system 的「專案背景」段落，不帶工具）；`promptCache` 與「沿用前綴」兩個目標擇一；`result.compacted === false && pruned` 時允許以 prune 後的情境重試 admission，而不是直接判死。
 
 **單檔測試**：可。以 fake `ModelClient` 在摘要請求中吐 `tool_call`，斷言 `readSummaryStream` 丟 `SummaryBlockedError('tool-output')`，且 `reduceContext` 回 `{outcome:'blocked', publication:'none'}`。
+
+**修復（2026-11-05，`e5bbe5cf`）**：摘要請求已改為獨立請求——`systemPrompt: ''`、`tools: []`（不再隨 inherited 帶入主 prompt 與工具目錄）；checkpoint 指令本身自足。新增 `summary-dedicated-request` 測試，`live-overhead`／`summarizer-prefix` 改為斷言 dedicated request。A-04 提到的「blocked 時 prune 被丟棄／無降級路徑」尚未改，另案處理。
 
 ---
 
