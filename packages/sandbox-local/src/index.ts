@@ -7,6 +7,7 @@ import {
   type SandboxProvider,
 } from "@i-harness/sandbox"
 import { BWRAP_DENIAL_SIGNATURES, BWRAP_RUNNER_FAILURE_RULES, bwrapProfileArgs, probeBwrap } from "./profiles.ts"
+import { WINDOWS_ACL_DENIAL_SIGNATURES } from "@i-harness/sandbox-windows-acl"
 export { probeBwrap } from "./profiles.ts"
 export { createLocalExecutionBackends, type LocalExecutionBackends, type LocalExecutionOptions } from "./execution-backends.ts"
 export { createLegacyWindowsBackend, type LegacyWindowsBackend } from "./windows-legacy.ts"
@@ -32,7 +33,7 @@ const STATIC_ENFORCEMENT: Record<Runner, SandboxEnforcement> = {
 
 const DENIAL_SIGNATURES: Record<Runner, readonly string[]> = {
   bwrap: BWRAP_DENIAL_SIGNATURES,
-  "windows-acl": ["access is denied", "access to the path", "permission denied"],
+  "windows-acl": WINDOWS_ACL_DENIAL_SIGNATURES,
 }
 
 export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProvider {

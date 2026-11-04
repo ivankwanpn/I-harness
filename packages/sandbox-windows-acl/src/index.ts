@@ -422,7 +422,9 @@ export class AclSandbox {
  * denied file effect produces under it — carried on every wrap as the
  * seam's `ConfinedArgv.denialSignatures`).
  */
-const DENIAL_SIGNATURES = ['access is denied', 'access to the path', 'permission denied']
+/** One vocabulary for every consumer (the backend's own runner handle and the
+ * sandbox-local wrapper): the denial strings are a public contract, not a copy. */
+export const WINDOWS_ACL_DENIAL_SIGNATURES = Object.freeze(['access is denied', 'access to the path', 'permission denied'])
 
 /**
  * The windows-acl runner's documented failure exit (its own
@@ -702,7 +704,7 @@ export function createWindowsAclSandbox(options: AclSandboxOptions & {
     return {
       argv: [...aclRunnerArgv(policy), ...(hideChildWindows ? ['--windows-hide', 'true'] : []), ...(argumentEncoding === 'cmd-verbatim' ? ['--argument-encoding', argumentEncoding] : []), '--', ...argv],
       enforcement: 'partial',
-      denialSignatures: DENIAL_SIGNATURES,
+      denialSignatures: WINDOWS_ACL_DENIAL_SIGNATURES,
       runnerFailureRules: RUNNER_FAILURE_RULES,
     }
   }
