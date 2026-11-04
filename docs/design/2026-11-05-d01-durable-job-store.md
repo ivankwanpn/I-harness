@@ -59,3 +59,5 @@ owned 路徑的 task document 同時是**寫入所有權的 witness**（`observe
 
 降級模式改為唯讀：`readRecoveredTaskRows(coordinator, parentSessionId)` 從 job record fold 出任務列（status／outcome／error／childSessionId／agentPath），供 host 在 registry unavailable 時顯示與診斷；此模式**明確不可 admit 新工作**。下一步是在 desktop 的 task projection 接上這個降級來源與 banner。
 - **降級顯示（2026-11-05）**：`SessionService.tasksAsync()` 在 `TASK_REGISTRY_UNAVAILABLE` 時改讀 job record，回傳 `AgentTaskView`（`canCancel:false`、summary 標明 recovered read-only）；SDK `session/tasks` 已優先使用 `tasksAsync`。這讓 desktop 在 task document／registry 不可用時仍看到最後已知任務，而不是整個清單失敗。
+
+- **write-behind（2026-11-05，legacy/non-owned）**：`TaskPersistence` 對非 strict／非 owned 的 document 寫入做 coalescing——同一 microtask 內多次 save 只寫一次「最新 snapshot」，`flush()` 會等 in-flight 寫入完成；strict／owned 仍保持有序且可 capture 的寫入契約。這降低了每次狀態變化重寫整份文件的成本，但 document 本身仍是可變來源。
