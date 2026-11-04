@@ -13,8 +13,12 @@ describe('owned approval identity', () => {
     plan = { active: true }
     const second = approvalPolicyIdentityFromSources(sources, options)
     expect(second?.revision).not.toBe(first?.revision)
+    // D-05: tool-surface changes must not invalidate a prepared approval.
     catalog = [{ name: 'write' }]
-    expect(approvalPolicyIdentityFromSources(sources, options)?.revision).not.toBe(second?.revision)
+    expect(approvalPolicyIdentityFromSources(sources, options)?.revision).toBe(second?.revision)
+    // A real policy input (sandbox mode) still changes the identity.
+    const third = approvalPolicyIdentityFromSources(sources, { ...options, sandbox: 'read-only' })
+    expect(third?.revision).not.toBe(second?.revision)
     available = false
     expect(approvalPolicyIdentityFromSources(sources, options)).toBeUndefined()
   })

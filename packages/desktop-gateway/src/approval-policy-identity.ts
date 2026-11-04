@@ -43,9 +43,7 @@ export function approvalPolicyIdentityFromSources(sources: () => ApprovalIdentit
       caller: { role: "main" },
       project: project ?? { roots: [options.workspace], primaryRoot: options.workspace },
       executionAuthority,
-      roles: source.roles, catalog: source.catalog, deferred: source.deferred,
-      modelTools: source.modelTools, plugins: options.pluginAuthority,
-      mcp: source.mcp, agents: source.agents,
+      roles: source.roles, plugins: options.pluginAuthority,
       hooks, grants: options.grantPaths.map(path => [path, optional(path)]),
     }
     return { workspaceId: options.workspace, revision: createHash("sha256").update(JSON.stringify(authority)).digest("hex") }

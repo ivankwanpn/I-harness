@@ -123,3 +123,5 @@
 5. 測試基礎（D-12）與 native build（D-13）另行排程。
 
 每一步都以「3 並行 + 2 序列 spawn 全成功、單一失敗不影響其他、child 可執行 shell」為驗收。
+
+**D-05 已修（2026-11-05）**：`approvalPolicyIdentityFromSources` 不再把工具表面（`catalog`／`deferred`／`modelTools`／`mcp`／`agents`）納入雜湊，只保留 policy 輸入（sandbox、approval mode、plan、project、execution authority、roles、plugins、hooks、grants）。工具物件本身仍由 prepared approval 的 binding validation 驗證，因此工具註冊／延遲索引變動不會再讓 in-flight 審批因 identity 改變而失效。
