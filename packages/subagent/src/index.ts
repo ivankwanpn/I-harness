@@ -81,6 +81,8 @@ import {isManagedExecutionDomain} from '@i-harness/core-session/internal/executi
 
 export interface RegisterSubagentOptions extends RoleModelHost {
   prepareTaskChild?: import('./child/task-host.ts').PrepareTaskChild
+  /** Host-supplied child execution factory (child-exec L2). */
+  childShellFactory?: import('./child/types.ts').SpawnOptions['childShellFactory']
   residentActivation?: import('./followup/activation.ts').ResidentInboxActivation
   results?: import("./task/result.ts").TaskResultStore
   reportPolicy?: ReportPolicy
@@ -341,7 +343,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     summaryFactory: opts.summaryFactory,
     results: opts.results,
     reportPolicy: opts.reportPolicy,
-    table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, managedParent:managed, parentCtx: ctx,
+    table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, managedParent:managed, parentCtx: ctx, ...(opts.childShellFactory ? { childShellFactory: opts.childShellFactory } : {}),
     get parentModel(){const model=modelAccessor?modelAccessor():parentModel;if(!model)throw TypeError('Original parent model unavailable');return model}, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
     codeMode: opts.codeMode, codeModeFactory: opts.codeModeFactory,

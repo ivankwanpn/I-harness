@@ -33,6 +33,8 @@ export interface SubagentToolDeps extends RoleModelHost {
   factOwner?: FactOwner
   parentCtx: PluginContext
   parentModel: ModelClient
+  /** Host-supplied child execution factory (child-exec L2). */
+  childShellFactory?: import('../child/types.ts').SpawnOptions['childShellFactory']
   /** Resolve a selection to a live client through the HOST's provider plane —
    * the same one the session's own model went through, so a role gets the same
    * credentials, the same card table and the same protocol chain.

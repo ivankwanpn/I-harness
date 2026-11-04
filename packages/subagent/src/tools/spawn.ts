@@ -189,6 +189,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           parentRegistry: deps.parentRegistry,
           parentSession: deps.parentSession,
           parentCtx: deps.parentCtx,
+          ...(deps.childShellFactory ? { childShellFactory: deps.childShellFactory } : {}),
           role,
           parentModel: deps.parentModel,
           codeMode: deps.codeMode, codeModeFactory: deps.codeModeFactory,

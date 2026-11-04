@@ -33,7 +33,10 @@ export function resolveRoleTools(
     if (name === "code_exec" || name === "code_wait") continue
     const tool = parent.get(name)
     if (tool) {
-      child.register(tool)
+      // A host factory may already have mounted a child-scoped replacement
+      // (same name, its own execution context); never overwrite it with the
+      // parent-bound object, which cannot run in a child context anyway.
+      if (!child.get(name)) child.register(tool)
       // The role has already selected these exact bindings. A child has no
       // parent discovery tool, so expose its allowed deferred schemas locally
       // without cloning bindings or promoting anything in the parent.

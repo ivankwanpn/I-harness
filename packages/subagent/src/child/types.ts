@@ -25,6 +25,15 @@ export interface SpawnOptions extends RoleModelHost {
   parentCtx: PluginContext
   role: SubagentRole
   parentModel: ModelClient
+  /** Host-supplied child execution factory (child-exec L2): when present the
+   * child gets its own shell tools instead of the parent's context-bound ones. */
+  childShellFactory?: (input: {
+    readonly ctx: PluginContext
+    readonly tools: ToolRegistry
+    readonly session: SessionView
+    readonly factOwner: import('@i-harness/core-session').FactOwner
+    readonly sessionId?: string
+  }) => Promise<void>
   /** Resolve a selection to a live client through the HOST's provider plane —
    * the same one the session's own model went through, so a role gets the same
    * credentials, the same card table and the same protocol chain.

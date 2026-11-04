@@ -29,6 +29,10 @@ export async function assembleChild(
   const modelPair = modelOrigins ? createToolRegistryWithModelOrigin(childCtx, { inheritResultRetention: opts.parentRegistry, executionOwner: {view:childSession,factOwner,context:childCtx,...sessionId!==undefined?{sessionId}:{}} }, modelOrigins.verifier) : undefined
   const childReg = modelPair?.registry ?? createToolRegistry(childCtx, { inheritResultRetention: opts.parentRegistry, executionOwner: {view:childSession,factOwner,context:childCtx,...sessionId!==undefined?{sessionId}:{}} })
   const modelCallOrigin = modelPair && modelOrigins!.bind(childReg, modelPair.driver)
+  // The host factory mounts the child's OWN shell tools (its own execution
+  // context). Without it, resolveRoleTools falls back to the legacy inherited
+  // tools, whose parent-bound direct entry cannot run in a child context.
+  if (opts.childShellFactory) await opts.childShellFactory({ ctx: childCtx, tools: childReg, session: childSession, factOwner, ...(sessionId !== undefined ? { sessionId } : {}) })
   resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
   const codeModeMount = opts.role.tools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
     session: childSession, factOwner, sessionId, config: opts.codeMode,
