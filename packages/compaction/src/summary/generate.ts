@@ -27,8 +27,15 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
     const directive = buildSummaryPrompt('', running, source.instructions, { embedText: false })
       + `\n<recorded-source-manifest>${selected.manifest}</recorded-source-manifest>\nManifest messages ranges are zero-based half-open indexes into the final neutral summary request messages, not provider-flattened wire. Framing and directive messages are outside every source range. The manifest is recorded context data; source authority remains as labeled. Retain ${minSummaryChars} to ${maxTokens * 4} JavaScript code units.`
       + (corrective ? '\nPrevious output failed checkpoint validation. Produce all seven exact sections and complete framing.' : '')
-    const request: LLMRequest = { systemPrompt: inherited ? source.snapshot.surface.systemPrompt : '',
-      tools: inherited ? source.snapshot.surface.tools.map(tool => ({ ...tool, inputSchema: tool.inputSchema })) : [],
+    // A-04: the summary request is a DEDICATED request, never a copy of the
+    // main one. Carrying the main system prompt and the whole tool catalogue
+    // made the request as large as the work it was compressing and invited the
+    // model to answer with a tool call, which the checkpoint validator treats
+    // as a blocked summary. The directive below is self-contained and the
+    // recorded conversation is in messages, so no system prompt or tools are
+    // needed even when the main model is inherited.
+    const request: LLMRequest = { systemPrompt: '',
+      tools: [],
       messages: [...selected.messages, { role: 'user', content: directive }], promptCache: { mode: 'off' },
       ...(source.signal ? { signal: source.signal } : {}), ...(limits.reasoningEffort ? { reasoningEffort: limits.reasoningEffort } : {}) }
     let prepared

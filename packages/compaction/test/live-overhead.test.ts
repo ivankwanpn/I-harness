@@ -8,5 +8,9 @@ it('reads the actual live system/schema surface on every probe without rebuildin
   expect(f.requests).toEqual([])
   systemPrompt = 'current small system'
   expect((await engine.compact(session)).compacted).toBe(true)
-  expect(f.requests[0]?.systemPrompt).toBe(systemPrompt)
+  // A-04: the probe still reads the live surface for admission, but the
+  // summary request itself is dedicated and carries neither the main system
+  // prompt nor its tool catalogue.
+  expect(f.requests[0]?.systemPrompt).toBe('')
+  expect(f.requests[0]?.tools).toEqual([])
 })

@@ -13,7 +13,9 @@ it('replays selected native bundles in exact order, excludes protected holes and
   const before = deriveMessages(session)
   const result = await createCompactionHarness({ model: f.model, config: { ...autoConfig, contextWindow: 100000 }, requestShape: () => ({ systemPrompt: 'actual system', tools: [{ name: 'read', description: 'actual schema', inputSchema: { type: 'object' } }] }) }).compact(session)
   expect(result.compacted).toBe(true); expect(f.requests).toHaveLength(1)
-  expect(f.requests[0]?.systemPrompt).toBe('actual system')
+  // A-04: dedicated summary request — no main system prompt, no main schemas.
+  expect(f.requests[0]?.systemPrompt).toBe('')
+  expect(f.requests[0]?.tools).toEqual([])
   expect(f.requests[0]?.messages.slice(1, -1)).toEqual(before.slice(1, 5))
   const directive = String(f.requests[0]!.messages.at(-1)!.content)
   expect(directive).toContain('<recorded-source-manifest>'); expect(directive).toContain('"authority":"observation"')
