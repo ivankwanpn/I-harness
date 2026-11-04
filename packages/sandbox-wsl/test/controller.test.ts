@@ -4,12 +4,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { CompiledSandboxPolicy, ProcessSpec } from "@i-harness/sandbox"
 
 const state = vi.hoisted(() => ({ mode: "normal", commands: [] as Record<string, unknown>[],
-  launches: [] as { path: string; args: string[]; options: Record<string, unknown> }[],
+  launches: [] as { path: string; args: string[]; options: Record<string, unknown> }[], lists: 0,
   close: undefined as (() => void) | undefined, prepared: undefined as (() => void) | undefined }))
 
 // A module mock controls launcher events deterministically. Production construction has no injected launcher.
 vi.mock("node:child_process", () => ({
   execFile: (_path: string, _args: string[], _options: unknown, cb: (error: null, bytes: Buffer, stderr: Buffer) => void) => {
+    state.lists += 1
     queueMicrotask(() => cb(null, Buffer.from("  NAME    STATE    VERSION\n* Ubuntu    Running    2\n", "utf16le"), Buffer.alloc(0)))
   },
   spawn: (path: string, args: string[], options: Record<string, unknown>) => {
@@ -258,4 +259,16 @@ it("a refused frame without settlement acknowledgement remains incomplete", asyn
   const backend = createWslExecutionBackend({ distribution: "Ubuntu" })
   await expect(backend.prepare(spec(), policy())).rejects.toThrow("cleanup incomplete")
   await expect(backend.dispose()).rejects.toThrow("disposal incomplete")
+})
+
+it("verifies the WSL distribution once per backend instead of every execution (A-12)", async () => {
+  state.mode = "normal"
+  const before = state.lists
+  const backend = createWslExecutionBackend({ distribution: "Ubuntu" })
+  const first = await backend.prepare(spec(), policy())
+  await first.rollback()
+  const second = await backend.prepare(spec(), policy())
+  await second.rollback()
+  expect(state.lists - before).toBe(1)
+  await backend.dispose()
 })

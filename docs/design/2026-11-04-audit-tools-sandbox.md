@@ -199,3 +199,4 @@
 - 因此**還原**該修改，維持 dispose 拋錯。要安全降級，必須先在 attempt/owner 上區分「descriptor debt」與「job-only debt」，否則會吞掉真正需要 recovery 的訊號。
 - **A-11（MCP 後代行程）**：stdio transport 現在在 SDK 關閉直系子行程前，先用 `taskkill /PID <pid> /T /F` 終止整個 process tree（Windows）；helper 有單元測試，非 Windows 行為不變。
 - **A-08（assurance）**：`minimumAssurance` 不再硬編 `unverified`。`IH_MINIMUM_EXEC_ASSURANCE=verified|experimental|unverified` 可設定後端等級下限；`launchExecution` 在 probe 後以 `checkBackendRequirements` fail-closed（例如 `verified` 下 experimental 後端會被拒絕）。預設 `unverified` 與舊行為相同。
+- **A-12（WSL worker 重用）部分完成**：`verifyDistribution` 現在每個 backend 只做一次（成功後快取，失敗可重試），不再每條命令都跑 `wsl --list --verbose`，移除了每次 execution 的 10s 冷啟動 timeout 風險。**worker 本身仍是一 execution 一 launcher**：`WorkerClient` 的 protocol 是單一 workload 設計，要支援 prepare/commit 循環需要重新設計 frame 所有權、輸出邊界與取消語義，屬獨立重構；本次先做安全且可測的快取部分。

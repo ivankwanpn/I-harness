@@ -162,8 +162,20 @@ export function createWslExecutionBackend(options: WslExecutionOptions): WslExec
     if (disposed) throw new Error("WSL backend disposed")
     if (entry.stopped) throw new Error("WSL execution admission aborted")
   }
+  // A-12: distribution availability used to be re-listed on every execution,
+  // putting a cold `wsl --list` on each command's critical path. The answer is
+  // stable for the backend lifetime; a removed distro still fails at spawn.
+  let verified: Promise<void> | undefined
+  function ensureDistribution(): Promise<void> {
+    if (!verified) {
+      const pending = verifyDistribution(distribution)
+      verified = pending
+      void pending.catch(() => { if (verified === pending) verified = undefined })
+    }
+    return verified
+  }
   async function open(entry: Entry): Promise<WorkerClient> {
-    await verifyDistribution(distribution)
+    await ensureDistribution()
     check(entry)
     const nonce = randomBytes(32).toString("hex")
     const client = new WorkerClient(distribution, nonce, envelope(nonce), digest)
