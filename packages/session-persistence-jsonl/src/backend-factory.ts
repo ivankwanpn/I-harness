@@ -479,7 +479,8 @@ export function createJsonlBackend(root: string, options?: {
       // rename (putDocument pattern) — a concurrent reader sees either the
       // old or the new file, never a truncated one.
       const raw = await readFile(path), end=raw.indexOf(10)
-      if(end<0||end+1>HEADER_READ_MAX_BYTES||!raw.subarray(0,end).toString('utf8').trim())throw new Error(`empty session file: ${sessionId}`)
+      if(end<0||!raw.subarray(0,end).toString('utf8').trim())throw new Error(`empty session file: ${sessionId}`)
+      if(end+1>HEADER_READ_MAX_BYTES)throw Object.assign(new Error(`Session header is ${end+1} bytes, above the ${HEADER_READ_MAX_BYTES}-byte readable limit`),{code:'SESSION_HEADER_TOO_LARGE',bytes:end+1,limit:HEADER_READ_MAX_BYTES})
       const previous=parseHeader(raw.subarray(0,end).toString('utf8'))
       const birth=previous.semanticSeed?.version===3 ? await resolveSelectedBirth(path,sessionId,assertNotDeleted,{stage:ordinaryStageIO(path),readJournal:()=>readFile(path)}) : undefined
       // Bind the rewrite to the same observed bytes, including the real resolver reread.
@@ -647,7 +648,8 @@ async function readHeader(path: string): Promise<SessionMeta> {
     await handle.read(buffer, 0, HEADER_READ_MAX_BYTES, 0)
     // Unread tail is zeros, so a newline found anywhere was inside the window.
     const end = buffer.indexOf(0x0a, 0) // "\n"
-    const line = (end === -1 ? buffer : buffer.subarray(0, end)).toString("utf8")
+    if (end === -1) throw Object.assign(new Error(`Session header is not terminated within ${HEADER_READ_MAX_BYTES} bytes`), { code: 'SESSION_HEADER_TOO_LARGE', limit: HEADER_READ_MAX_BYTES })
+    const line = buffer.subarray(0, end).toString("utf8")
     return parseHeader(line)
   } finally {
     await handle.close()

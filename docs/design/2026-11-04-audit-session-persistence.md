@@ -313,3 +313,5 @@
 **S-08 部分完成（2026-11-05）**：`list()` 已排除 0-byte 的 create／fork 半成品（完成第一次 durable write 前不會出現在會話清單）。完整修法仍需跨 `fork-controller`／backend 的原子發佈設計（例如先寫 `<id>.pending`、完成後 rename；或把 reservation 完成狀態放進可低成本檢查的位置），目前維持 deferred。
 
 **S-06 document preimage（2026-11-05）**：`createOwnedDocumentWrite` 不再保留 preimage 的第二份完整 copy，改存 SHA-256 digest ＋ byte length；preimage 驗證改成以 64 KiB 視窗串流讀取並比對 digest（峰值記憶體與文件大小無關）。tamper 仍會被判 `conflict`。16 MiB／64 MiB 的 document 上限與格式未變（降低上限需要格式／契約決策）。
+
+**S-10 殘餘修正（2026-11-05）**：`readHeader` 在 64 KiB 視窗內找不到換行時，現在丟出 `SESSION_HEADER_TOO_LARGE`，不再把 64 KiB 的垃圾當成 header 丟 `SyntaxError`；`updateMeta` 也把「空檔案」與「header 超過上限」拆成不同錯誤。測試：`header-limit-read`（70 KiB 無換行檔 → 明確 code）。
