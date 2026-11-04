@@ -1,5 +1,7 @@
 # 子代理執行模型重設計（2026-11-04）
 
+> 決策（2026-11-04）：採 **方案 A（漸進）**。理由：child session 已是 durable，job store 與 write-behind projection 能在不破壞 legacy 讀取的前提下拆掉 spawn 交易；方案 B 的 migration（cold recovery／fork／v1–v3）風險過高，等 A 穩定後再評估。
+
 > 觸發事件：同一個 session 內 3 個並行 + 2 個序列 `spawn_agent` 全數失敗（`Original writer dependency cleanup unresolved`、`Original issued write needs reconciliation`、`Earlier owned task save requires resolution`），且失敗會累積、越試越糟。這不是權限或 prompt 問題，是資料模型問題。
 
 ## 1. IH 目前的做法（問題所在）
