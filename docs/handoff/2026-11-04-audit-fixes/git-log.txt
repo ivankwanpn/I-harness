@@ -1,0 +1,29 @@
+815655c8 fix(desktop): stop rendering internal bookkeeping as conversation rows
+3f5ac1d4 refactor(fs): bind fs approvals to an explicit implementation version
+6af50d99 feat(exec): surface a sandbox denial as an advisory result field
+696b845a refactor(sandbox): one denial vocabulary for the windows ACL backend
+a514afe7 test(guard-approval): pin the policy service contract
+a5e1be9c fix(core-tools): classify approval through the policy service, not the racy slot
+dfbaf5cc refactor(session-persistence): single-source the fork reason vocabularies
+3a527b56 refactor(desktop): one source for the forwarded notification set
+b5593900 fix(session-persistence): never extend a shrunk journal on rollback
+fc12f5e4 ci: stop the package boundary from degrading further
+e5c473ab revert(compaction): restore the generation-wide malformed-output retry budget
+f1a06cdb fix(token-meter): stop undercounting CJK text by an order of magnitude
+e250e0ea fix(credentials): protect the API-key document with a Windows DACL
+f8817dfb fix(shell): a forged sandbox-failure line can no longer steer the model to full access
+a1879118 perf(context-output): decode text windows in chunks, not byte by byte
+fe98a157 fix(subagent): bound the durable job snapshot
+1a0a45f8 fix(subagent): nested spawns live under their caller's agent path
+71fd3a56 fix(workflow): bound the process-wide job store
+07284d00 fix(settings): removing a value from a section now actually persists
+e536fa5f fix(guard-timeout): enforce the deadline instead of awaiting a cooperative tool
+1fd7acd4 fix: close two zero-approval and lost-write paths
+1263ee55 fix: three small correctness fixes
+9b166b73 fix(context-output): fsync owners/manifests before they are published
+bbe45f64 fix(kernel): actually dispose mounted child scopes
+0c05039f fix(security): a plugin hook's allow can no longer skip host approval
+eb90db96 fix: stop three silent data/protocol losses
+48b225ff fix(types): clear the last four typecheck failures shipped in v0.1.13
+a8ee534c fix(test): narrow piped stdio so sandbox-local typecheck passes
+7df1353b fix: close the v0.1.13 audit P0 gaps
