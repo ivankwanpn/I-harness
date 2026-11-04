@@ -61,3 +61,9 @@ owned 路徑的 task document 同時是**寫入所有權的 witness**（`observe
 - **降級顯示（2026-11-05）**：`SessionService.tasksAsync()` 在 `TASK_REGISTRY_UNAVAILABLE` 時改讀 job record，回傳 `AgentTaskView`（`canCancel:false`、summary 標明 recovered read-only）；SDK `session/tasks` 已優先使用 `tasksAsync`。這讓 desktop 在 task document／registry 不可用時仍看到最後已知任務，而不是整個清單失敗。
 
 - **write-behind（2026-11-05，legacy/non-owned）**：`TaskPersistence` 對非 strict／非 owned 的 document 寫入做 coalescing——同一 microtask 內多次 save 只寫一次「最新 snapshot」，`flush()` 會等 in-flight 寫入完成；strict／owned 仍保持有序且可 capture 的寫入契約。這降低了每次狀態變化重寫整份文件的成本，但 document 本身仍是可變來源。
+
+## D-07 持久化寫入意圖（2026-11-05）
+
+每次 task document 寫入前，先在 `jobs/<stateId>.write-intents.jsonl` 追加 `pending`；成功後追加 `settled`。重啟後 `readPendingDocumentWrites(coordinator, stateId)` 會回報未匹配的 pending intent——這就是「fail-closed 的 debt 有 durable 證據」，不再只靠記憶體。
+
+尚未自動 reconcile（把 pending 清除或重試）；目前提供唯讀證據，供 recovery 判斷與後續的顯式 reconcile 流程。

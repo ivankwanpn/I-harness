@@ -8,6 +8,8 @@ export type { TaskResultStore, RetainedTaskResult, TaskResultBody, TaskResultPag
 export { createJobRegistry } from "./jobs.ts"
 export type { JobRegistry, JobSnapshot, JobStatus } from "./jobs.ts"
 export { createJobRecordStore, readRecoveredTaskRows } from "./job-record.ts"
+export { createDocumentIntentStore, readPendingDocumentWrites } from "./task/document-intent.ts"
+export type { DocumentWriteIntentV1, PendingDocumentWrite, DocumentIntentStore } from "./task/document-intent.ts"
 export type { JobRecordV1, JobLoadResult, JobRecordStore, RecoveredTaskRow } from "./job-record.ts"
 export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkflowRows } from "./projection.ts"
 export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"

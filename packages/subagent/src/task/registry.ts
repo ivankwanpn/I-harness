@@ -19,6 +19,8 @@ import {captureTaskSnapshot} from '@i-harness/session-persistence/internal/task-
 import { TaskRecords } from "./records.ts"
 import { join } from "node:path"
 import { createJobRecordStore } from "../job-record.ts"
+import { createDocumentIntentStore } from "./document-intent.ts"
+import { randomUUID } from "node:crypto"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput, type TaskStatus } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
   let stopObserving: (()=>void)|undefined
@@ -66,6 +68,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   // Best-effort until step 3 makes it authoritative; a failure must not block
   // the task path (D-08).
   let jobWrite: Promise<void> = Promise.resolve()
+  let intentWrite: Promise<void> = Promise.resolve()
+  const documentIntents = opts.coordinator?.storageRoot && opts.stateId
+    ? createDocumentIntentStore(join(opts.coordinator.storageRoot, "jobs", opts.stateId + ".write-intents.jsonl"))
+    : undefined
   const jobRecords = opts.coordinator?.storageRoot && opts.stateId
     ? createJobRecordStore(join(opts.coordinator.storageRoot, "jobs", `${opts.stateId}.jobs.jsonl`))
     : undefined
@@ -95,7 +101,20 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   // D-08: remember document-write failures so an admission drain can report
   // them without failing the task path (job records remain durable).
   const persistenceFailures: unknown[] = []
-  const save = async () => { assertReady(); try { await persistence.save() } catch (error) { if (persistenceFailures.length < 16) persistenceFailures.push(error); throw error } }
+  const save = async () => {
+    assertReady()
+    // D-07: the pending intent is durable before the write is attempted; a
+    // settled record is appended only after success, so a crash leaves evidence.
+    const intentId = randomUUID()
+    if (documentIntents) intentWrite = intentWrite.then(() => documentIntents.pending(intentId)).catch(() => {})
+    try {
+      await persistence.save()
+      if (documentIntents) intentWrite = intentWrite.then(() => documentIntents.settled(intentId)).catch(() => {})
+    } catch (error) {
+      if (persistenceFailures.length < 16) persistenceFailures.push(error)
+      throw error
+    }
+  }
 
   function snapshot():TaskProtocolDocument {assertReady();return snapshotData()}
   function snapshotData(): TaskProtocolDocument {
@@ -447,12 +466,12 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     save,
     // Cleanup joins original initialization/writes even after work is retired.
     // Failed initialization retains its original rejection; no work is admitted.
-    flushPersistence: async () => { await ready; await persistence.flush(); await jobWrite },
+    flushPersistence: async () => { await ready; await persistence.flush(); await jobWrite; await intentWrite },
     async flushPersistenceBestEffort() {
       let error: unknown
       try { await ready; await persistence.flush() }
       catch (cause) { error = cause }
-      finally { await jobWrite }
+      finally { await jobWrite; await intentWrite }
       if (error === undefined && persistenceFailures.length) error = persistenceFailures[0]
       return error === undefined ? { ok: true } : { ok: false, error }
     },
