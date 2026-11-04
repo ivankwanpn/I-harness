@@ -4,14 +4,21 @@ import { providerFailureFacts } from "./facts.ts"
 import { errorRecord, terminalErrorCodes } from "./types.ts"
 
 const ERROR_BODY_BYTES = 8192
-async function readErrorBody(response: Response): Promise<string> {
+async function readErrorBody(response: Response, signal?: AbortSignal): Promise<string> {
   if (!response.body) return ""
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
+  // Stop cannot cancel a body it never observes: an error body that trickles
+  // (or a proxy that keeps the connection open) used to park the whole turn
+  // here even though the request signal had already aborted.
+  const onAbort = () => { void reader.cancel().catch(() => {}) }
+  if (signal?.aborted) onAbort()
+  else signal?.addEventListener("abort", onAbort, { once: true })
   let bytes = 0, text = ""
   try {
     while (bytes < ERROR_BODY_BYTES) {
       const next = await reader.read()
+      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted")
       if (next.done) return text + decoder.decode()
       const remaining = ERROR_BODY_BYTES - bytes
       text += decoder.decode(next.value.subarray(0, remaining), { stream: true })
@@ -21,16 +28,19 @@ async function readErrorBody(response: Response): Promise<string> {
     // upstream producer to cooperate after its diagnostic bound is reached.
     void reader.cancel().catch(() => {})
     return text + decoder.decode()
-  } finally { reader.releaseLock() }
+  } finally {
+    signal?.removeEventListener("abort", onAbort)
+    reader.releaseLock()
+  }
 }
 
-export async function describeHttpError(label: string, response: Response, request?: Pick<LLMRequest, "onTerminalResponse">): Promise<Error> {
+export async function describeHttpError(label: string, response: Response, request?: Pick<LLMRequest, "onTerminalResponse" | "signal">): Promise<Error> {
   const status = response.status
   if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
     const code = status === 401 || status === 403 ? "AUTH" : status === 402 ? "QUOTA" : "INVALID_ARGUMENT"
     try { request?.onTerminalResponse?.({ code, httpStatus: status }) } catch { /* diagnostic observer */ }
   }
-  const body = await readErrorBody(response)
+  const body = await readErrorBody(response, request?.signal)
   let source: Record<string, unknown> = {}
   let bodyRequestId: unknown
   try { const parsed = errorRecord(JSON.parse(body)); source = errorRecord(parsed?.error) ?? parsed ?? {}; bodyRequestId = parsed?.request_id ?? source.request_id ?? source.requestId } catch { /* A bounded plain diagnostic may still carry a precise reason. */ }

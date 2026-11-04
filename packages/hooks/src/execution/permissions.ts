@@ -34,7 +34,12 @@ export async function permissionDecision(
     if (handler.spec.claude !== undefined && (output.continue === false || output.block === true)) return { kind: "deny", reason: output.reason ?? output.stopReason ?? "Claude permission hook stopped the action" }
     if (output.decision === undefined) continue
     // A plugin's allow can never grant more than IH's host permission policy.
-    if (output.decision === "allow") { if (handler.spec.claude !== undefined) continue; return { kind: "allow" } }
+    // It must therefore produce NO decision at all: a plain listener return
+    // seeds the pre-execute chain payload, and guard-approval deliberately
+    // passes an already-decision-shaped payload through untouched — so an
+    // `allow` here used to skip the host approval entirely. Deny/ask stay
+    // effective; approval is the host's call (or an explicit approval rule).
+    if (output.decision === "allow") continue
     // ask is not wired to a question seam on main yet — fail closed as deny.
     return { kind: "deny", reason: output.reason ?? output.stopReason ?? `hook handler ${handler.spec.id} requires approval` }
   }
