@@ -7,6 +7,7 @@ import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
 import { SessionFormatUnsupportedError } from '../format/registry.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import { notIssuedFailure } from './not-issued.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts'
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
@@ -31,6 +32,9 @@ export function createLoads(
       // the process-wide poison that blocked every later spawn and cold read.
       processLatches?.clear(id)
       return value
+    } catch (error) {
+      if (notIssuedFailure(error)) outcome = 'settled'
+      throw error
     } finally { token?.end(outcome) }
   }
   const read = async (sessionId: string) => {

@@ -1,4 +1,5 @@
 import {taskParentMetadataProjection} from './task-parent-metadata.ts'
+import { notIssuedFailure } from './not-issued.ts'
 import {types} from 'node:util'
 import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts';
@@ -451,7 +452,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
             const outcome = await admitCore(draft, authorization, captured, settle);
             settle(outcome);
             return outcome;
-        } catch (error) { if (!settled) token?.end('unknown'); throw error; }
+        } catch (error) { if (!settled) token?.end(notIssuedFailure(error) ? 'settled' : 'unknown'); throw error; }
     }
     const rootAuthorization: Authorization = { action: { stopped: false }, required: false };
     const ports = createFactPorts(draft => admit(draft, rootAuthorization));

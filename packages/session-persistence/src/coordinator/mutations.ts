@@ -8,6 +8,7 @@ import { ensureWritableFormatUnlocked } from "./writable-format.ts"
 import { preflightBatchShape } from "../format/validation.ts"
 import { createConversationIndexes } from "./conversation-index.ts"
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import { notIssuedFailure } from './not-issued.ts'
 import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
 export function createMutations(
@@ -86,7 +87,9 @@ export function createMutations(
     observations?.assertOutsideOwnedOperations([id])
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
-    try { const value = await run(); outcome = 'settled'; return value } finally { token?.end(outcome) }
+    try { const value = await run(); outcome = 'settled'; return value }
+    catch (error) { if (notIssuedFailure(error)) outcome = 'settled'; throw error }
+    finally { token?.end(outcome) }
   }
   return {
     ensureWritableFormat(sessionId: string) { observations?.assertOutsideObservedSession(sessionId); return processMutation(sessionId, () => withSessionOperation(sessionId, async () => { assertWritable(sessionId); await ensureOwnership(sessionId); await ensureWritableFormatUnlocked(backend, sessionId); conversation.invalidate(sessionId); return { formatVersion: CURRENT_FORMAT_VERSION } })) },

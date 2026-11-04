@@ -258,7 +258,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
             const raw = readFile(path)
             return raw.then(bytes => {
               const end = bytes.indexOf(0x0a), journal = readFactJournal(bytes.subarray(end + 1), header.journal!, header.formatVersion, header)
-              if (journal.torn) throw new Error('Journal recovery required')
+              if (journal.torn) throw Object.assign(new Error('Journal recovery required'), { code: 'JOURNAL_RECOVERY_REQUIRED', notIssued: true })
               const addressed = events.map((event, position) => event.seq === undefined ? { ...event, seq: journal.prefix.eventCount + position } : event)
               validateDeliveryFrame(addressed,header.formatVersion)
               if(addressed.some(event=>event.type.startsWith('agent/delivery-') || event.type==='agent/input/admitted' && event.provenance?.producer==='session.delivery.subagent'))validateConversationHistory([...journal.events,...addressed],header.formatVersion,header)
