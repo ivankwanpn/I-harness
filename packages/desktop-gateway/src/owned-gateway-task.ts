@@ -19,6 +19,7 @@ export function createOwnedGatewayTaskOptions(options:{
  allowSubagentModelSelection:NonNullable<RegisterSubagentOptions['allowSubagentModelSelection']>
  autoCompactionEnabled:NonNullable<RegisterSubagentOptions['autoCompactionEnabled']>
  childOptions:Pick<RegisterSubagentOptions,'generationFactoryFor'|'modelActionTimeoutMs'|'modelActionMaxAttempts'|'summaryFactory'|'inheritedBindingForStep'|'codeModeFactory'|'inheritedSystemContext'|'contextWindow'|'budgetBinding'|'contextMetadata'|'reasoningEffort'|'maxOutputTokens'>
+ childShellFactory?:RegisterSubagentOptions['childShellFactory']
 }) {
  return async (original:ManagedRegistryConstruction,live:{shell?:ExecService;output?:OwnedShellOutput;codeConfig?:import('../../code-mode/src/index.ts').CodeModeConfig}):Promise<TaskOptions> => {
   original.assertCurrent()
@@ -33,6 +34,7 @@ export function createOwnedGatewayTaskOptions(options:{
   const configured={exec:live.shell,resolveModel:options.resolveModel,prepareTaskChild:options.prepareTaskChild,
    createInstructionContext:child.create,results:createTaskResultRetention(live.output.service,live.output.sourceFor,original.domain.sessionId),
    reportPolicy:SHIPPING_REPORT_POLICY,includeAgentShell:true,includeNativeContext:true,
+   ...(options.childShellFactory ? { childShellFactory: options.childShellFactory } : {}),
    roleSelectionFor:options.roleSelectionFor,allowSubagentModelSelection:options.allowSubagentModelSelection,autoCompactionEnabled:options.autoCompactionEnabled,
    persist:{coordinator:options.coordinator,stateId:original.domain.sessionId,parentSessionId:original.domain.sessionId}}
   if(types.isProxy(options.childOptions)||![null,Object.prototype].includes(Object.getPrototypeOf(options.childOptions)))throw TypeError('Original child options required')

@@ -25,6 +25,8 @@ import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
 import { createDurableSessionLoader, createSessionService, createInstructionEnvironment, type SessionServiceOptions } from "@i-harness/session-executor"
+import { acquireChildManagedExecution } from '../../session-executor/src/host-managed-execution.ts'
+import { mountChildShellTools } from '../../session-executor/src/child-shell.ts'
 import { createFsWatchService } from '@i-harness/fs-watch'
 import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
@@ -308,6 +310,22 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     if(!original.instructions)throw Error('Original instruction binding unavailable')
     const parts=createOwnedGatewayPromptParts(original,{workspace:options.workspace,rewindEnabled:true,mode:()=>mode,authority:original.instructions.authority,project:()=>projectContexts.get(id)?.(),shell:()=>ownedNative.agentShellFor(id)})
     const result=await createOwnedGatewayTaskOptions({bindChildHost(childId,host){if(childId!==id||ownedChildHosts.has(id))throw Error('Original child instruction host already bound');original.retain(()=>{if(ownedChildHosts.get(id)===host)ownedChildHosts.delete(id)});ownedChildHosts.set(id,host)},coordinator,prepareTaskChild:nativeContext.prepareTaskChild,resolveModel:selection=>runtime.resolveModel({sessionSelection:selection}),roleSelectionFor:subagents.selectionFor,allowSubagentModelSelection:()=>roleModelsEnabled,autoCompactionEnabled:()=>autoCompactionEnabled,
+      childShellFactory:async({ctx,tools,sessionId})=>{
+        if(!sessionId)return
+        let acquired:Awaited<ReturnType<typeof acquireChildManagedExecution>>
+        try{acquired=await acquireChildManagedExecution(service,sessionId)}catch{return}
+        const retained:(()=>void|Promise<void>)[]=[]
+        try{
+          const host=await ownedNative.acquireExecution(sessionId,cleanup=>retained.push(cleanup),acquired.execution)
+          const output=await ownedNative.acquireOutput(sessionId,cleanup=>retained.push(cleanup))
+          mountChildShellTools({ctx,tools,workspace:options.workspace,execution:acquired.execution,host,output:output.service,release:async()=>{for(const cleanup of retained.reverse())await cleanup();await acquired.release()}})
+        }catch{
+          // Best effort: without a child execution host the child keeps the
+          // previous (unavailable) behavior; a spawn must not fail because of it.
+          for(const cleanup of retained.reverse())await Promise.resolve(cleanup()).catch(()=>{})
+          await acquired.release().catch(()=>{})
+        }
+      },
       childOptions:{generationFactoryFor:(owner,sessionId,selected)=>(action,deps)=>createGenerationLifecycle(owner.view,sessionId,action,{enabled:false,selectedClient:selected},usageObservations?{...deps,beforeDrain:deps?.beforeDrain??(async()=>{}),passiveGeneration:usageObservations.observer}:deps),summaryFactory,
        inheritedBindingForStep:()=>{const value=binding();return {identity:value.model,executionIdentity:value.model.executionIdentity,contextMetadata:value.contextMetadata,budgetBinding:value.budgetBinding,contextWindow:value.contextWindow,maxOutputTokens:value.maxOutputTokens,reasoningEffort:value.reasoningEffort}},
        get contextWindow(){return binding().contextWindow},get budgetBinding(){return binding().budgetBinding},get contextMetadata(){return binding().contextMetadata},get reasoningEffort(){return binding().reasoningEffort},get maxOutputTokens(){return binding().maxOutputTokens},
