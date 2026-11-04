@@ -73,6 +73,7 @@ export type { ExchangeAcceptedEventV2 } from "./events/conversation.ts"
 export { contextUsageAnchorId } from "./events/usage-anchor.ts"
 export type { DeepReadonly, SessionView, SessionEventView, SeqRef, OwnerToken, BatchKey, FactReceipt, FactCode, FactOutcome, JournalPrefix, JournalMetadata, EncodedFactBatch } from './managed/types.ts'
 export { FactRecoveryRequiredError } from './managed/types.ts'
+export { aggregateErrors, errorCode } from './managed/error-classification.ts'
 export { captureLegacyFact, isStrictFactData, freezeJsonData } from './managed/capture.ts'
 export { validSettlementEvent, type SettlementEventKind } from './managed/settlement-event.ts'
 export { createManagedSessionState, isManagedFactOwner } from './managed/view.ts'

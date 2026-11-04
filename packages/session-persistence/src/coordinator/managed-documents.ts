@@ -4,7 +4,7 @@ import { hasArchiveHistoryPrefixReader } from '../archive-read-internal.ts'
 import { createManagedRestoredRead } from './managed-restored-read.ts'
 import type { ManagedRestoredContextRead } from '../restored-context-internal.ts'
 import type { Session, JournalPrefix } from '@i-harness/core-session'
-import { FactRecoveryRequiredError } from '@i-harness/core-session'
+import { FactRecoveryRequiredError, aggregateErrors } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
@@ -62,7 +62,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
           await entry.flight?.catch(()=>{})
           await bootstrap.settleCapture(entry)
           if(entry.headerUnknown)throw new FactRecoveryRequiredError()
-          const cleanup=await Promise.allSettled([restoredEntries.get(entry)?.close(),(async()=>{await revokeTaskOperations(id);await close()})()]);const errors=cleanup.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw new AggregateError(errors,'Managed restored read/document cleanup unresolved');await bootstrap.releaseCapture(entry)
+          const cleanup=await Promise.allSettled([restoredEntries.get(entry)?.close(),(async()=>{await revokeTaskOperations(id);await close()})()]);const errors=cleanup.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(errors.length)throw aggregateErrors(errors,'Managed restored read/document cleanup unresolved');await bootstrap.releaseCapture(entry)
           if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}
           outcome='settled';closeComplete=true
         }finally{token?.end(outcome)}

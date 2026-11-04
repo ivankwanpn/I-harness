@@ -6,6 +6,7 @@ import {bindOriginalCurrentnessDescriptors,composeOriginalCurrentnessGuards,runU
 import { restoreManagedConversation,installRestoredManagedConversation } from './restored-view.ts'
 import { createExecutionMemberOwner,isExecutionMemberOf,isExecutionCaptureSource,readAcknowledgedExecutionMembers,retainAcknowledgedExecutionMembers } from './execution-members.ts'
 import { captureWriterDependencies } from './writer-dependencies.ts'
+import { aggregateErrors } from './error-classification.ts'
 import { factPrefixDigest } from '../serialization/fact-journal.ts'
 import type { OriginalConversationRestorationSource } from '../conversation/restoration-input.ts'
 import type { CapturedFactGroup } from './groups.ts'
@@ -287,7 +288,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     owner.newWork();observe();return false
   },subscribe(listener,onUnavailable){assertHeld();const owner=owners.get(identity);if(stopped||closed||!owner)throw TypeError('Original readiness owner retired');owner.current();const item={listener,onUnavailable,delivered:-1};readinessListeners.add(item);try{if(!pendingWrite&&!debt.size&&!ownerRecoveryBlocked){if(!owner.newWork)throw TypeError('Original readiness unavailable');owner.newWork();observe();readinessFailure=undefined;if(!readinessWasReady){readinessWasReady=true;readinessEpoch++}queueReadiness()}else if(readinessFailure){const failure=readinessFailure;queueMicrotask(()=>{if(!readinessListeners.has(item))return;try{item.onUnavailable?.(failure.error,failure.terminal)}catch{}if(failure.terminal)readinessListeners.delete(item)})}}catch(error){readinessListeners.delete(item);throw error}let active=true;return()=>{if(active){active=false;readinessListeners.delete(item)}}}})
   let dependencyFailure:{cause:unknown}|undefined
-  const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);debt.delete(scope)}catch(error){errors.push(error)}if(errors.length){const error=new AggregateError(errors,'Exact writer dependency cleanup unresolved');signalUnavailable(error,!sameHeldOwner());throw error};dependencyFailure=undefined;readinessFailure=undefined;signalReady()}
+  const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);debt.delete(scope)}catch(error){errors.push(error)}if(errors.length){const error=aggregateErrors(errors,'Exact writer dependency cleanup unresolved');signalUnavailable(error,!sameHeldOwner());throw error};dependencyFailure=undefined;readinessFailure=undefined;signalReady()}
   const assertFresh=(reading?:OriginalWriterDependencyScope)=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if([...debt].some(scope=>scope!==reading&&!taskHistoryScopes.has(scope)))throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
   const assertNewWork=()=>assertFresh()
   const requestActions=new WeakMap<object,()=>void>()
@@ -429,7 +430,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     const actionCurrent=requestActions.get(action);if(!actionCurrent)throw TypeError('Original request action required')
     actionCurrent();const observation=observe(),archive=await original.prepare();let active=true,settled=false,settling:Promise<void>|undefined
     const current=()=>{if(!active)throw TypeError('Original request preparation expired');actionCurrent();observation.assertCurrent();archive.assertCurrent()}
-    try{current()}catch(primary){try{await archive.settle()}catch(cleanup){throw new AggregateError([primary,cleanup],'Request preparation and original lease cleanup failed')}throw primary}
+    try{current()}catch(primary){try{await archive.settle()}catch(cleanup){throw aggregateErrors([primary,cleanup],'Request preparation and original lease cleanup failed')}throw primary}
     const request:PreparedExecutionRequest=Object.freeze({archive,observation,assertCurrent(){if(this!==request)throw TypeError('Original request receiver required');current()},settle(){if(this!==request)return Promise.reject(TypeError('Original request receiver required'));active=false;if(settled)return Promise.resolve();if(settling)return settling;const flight=archive.settle().then(()=>{settled=true});settling=flight;void flight.finally(()=>{if(settling===flight)settling=undefined}).catch(()=>{});return flight}})
     return request
   }
