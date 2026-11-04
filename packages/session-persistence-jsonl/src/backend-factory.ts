@@ -6,6 +6,7 @@ import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-ha
 import { createOriginalNativePrewriteOwner } from '@i-harness/session-persistence/internal/native-fact-writer'
 import { createOriginalTaskNativeStage } from '@i-harness/session-persistence/internal/task-document-operations'
 import {associateOwnedExecutionReader} from './backend/owned-execution-read.ts'
+import { decodeFactBatch } from '@i-harness/core-session'
 import { HEADER_READ_MAX_BYTES, assertHeaderLineReadable } from './backend/header-limit.ts'
 import { lstat, mkdir, open, readFile, readdir, stat, unlink } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
@@ -141,6 +142,23 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
   const artifactPath = pathResolution.artifactPath
   const captureIO = createBootstrapCaptureIO()
   const archiveReads = createArchiveReadOwner()
+  // S-06: every append used to read and re-hash the whole journal. The writer
+  // owns the session, so a decoded-journal cache keyed by the exact file size is
+  // safe: any append (ours or another writer's) changes the size and misses.
+  type CachedJournal = { size: number; journal: ReturnType<typeof readFactJournal> }
+  const journalCache = new Map<string, CachedJournal>()
+  const JOURNAL_CACHE_LIMIT = 4
+  // Retaining a decoded journal keeps its events (and the frames' bytes slice)
+  // alive; never do that for a large session, where the read cost is acceptable
+  // only once per append anyway.
+  const JOURNAL_CACHE_MAX_BYTES = 8 * 1024 * 1024
+  function rememberJournal(id: string, size: number, journal: CachedJournal['journal']) {
+    if (size > JOURNAL_CACHE_MAX_BYTES) { journalCache.delete(id); return }
+    journalCache.delete(id)
+    journalCache.set(id, { size, journal })
+    while (journalCache.size > JOURNAL_CACHE_LIMIT) journalCache.delete(journalCache.keys().next().value!)
+  }
+  function forgetJournal(id: string) { journalCache.delete(id) }
   const filePath = pathResolution.session
   async function assertPublicBootstrap(sessionId: string, creating = false, observed?: {header:SessionMeta;birth:Buffer}, stageIO?:import('./backend/bootstrap-stage.ts').StageLookupIO) {
     const path = filePath(sessionId)
@@ -254,17 +272,23 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
         const lastByte = Buffer.alloc(1)
         if (committedBytes > 0) await handle.read(lastByte, 0, 1, committedBytes - 1)
         const separator = events.length > 0 && committedBytes > 0 && lastByte[0] !== 0x0a ? "\n" : ""
+        let cachedJournal: CachedJournal['journal'] | undefined
+        let addressed: SessionEvent[] = []
+        let encoded: ReturnType<typeof encodeFactBatch> | undefined
         const data = [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion)
           ? (() => {
-            const raw = readFile(path)
+            const cached = journalCache.get(sessionId)
+            const raw = cached && cached.size === committedBytes ? Promise.resolve(undefined) : readFile(path)
             return raw.then(bytes => {
-              const end = bytes.indexOf(0x0a), journal = readFactJournal(bytes.subarray(end + 1), header.journal!, header.formatVersion, header)
+              const journal = bytes === undefined ? cached!.journal : readFactJournal(bytes.subarray(bytes.indexOf(0x0a) + 1), header.journal!, header.formatVersion, header)
               if (journal.torn) throw Object.assign(new Error('Journal recovery required'), { code: 'JOURNAL_RECOVERY_REQUIRED', notIssued: true })
-              const addressed = events.map((event, position) => event.seq === undefined ? { ...event, seq: journal.prefix.eventCount + position } : event)
+              cachedJournal = journal
+              addressed = events.map((event, position) => event.seq === undefined ? { ...event, seq: journal.prefix.eventCount + position } : event)
               validateDeliveryFrame(addressed,header.formatVersion)
               if(addressed.some(event=>event.type.startsWith('agent/delivery-') || event.type==='agent/input/admitted' && event.provenance?.producer==='session.delivery.subagent'))validateConversationHistory([...journal.events,...addressed],header.formatVersion,header)
               validateSemanticBootstrapHistory([...journal.events, ...addressed], header.formatVersion, header)
-              return addressed.length ? encodeFactBatch(randomUUID(), journal.prefix.prefixDigest, addressed).bytes : new Uint8Array()
+              encoded = addressed.length ? encodeFactBatch(randomUUID(), journal.prefix.prefixDigest, addressed) : undefined
+              return encoded?.bytes ?? new Uint8Array()
             })
           })()
           : Promise.resolve(Buffer.from(separator + events.map((e) => JSON.stringify(e)).join("\n") + "\n"))
@@ -276,6 +300,14 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
           offset += bytesWritten
         }
         await handle.sync()
+        if (cachedJournal && bytes.length > 0) {
+          const prefixDigest = encoded ? decodeFactBatch(encoded.bytes).prefixDigest : cachedJournal.prefix.prefixDigest
+          rememberJournal(sessionId, committedBytes + bytes.length, {
+            ...cachedJournal,
+            events: [...cachedJournal.events, ...addressed],
+            prefix: { eventCount: cachedJournal.prefix.eventCount + addressed.length, bodyBytes: cachedJournal.prefix.bodyBytes + bytes.length, prefixDigest },
+          })
+        }
       } catch (err) {
         // F01-2 rollback: truncate back to the committed byte length so a
         // clean retry never duplicates seqs. Only truncate when the file still
@@ -310,6 +342,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     },
 
     async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
+      forgetJournal(sessionId)
       await assertPublicBootstrap(sessionId)
       await assertNotDeleted("session", sessionId)
       const path = filePath(sessionId)
@@ -353,6 +386,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     },
 
     async replaceEvents(sessionId, events) {
+      forgetJournal(sessionId)
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
       const path = filePath(sessionId)
@@ -382,6 +416,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     },
 
     async upgradeSessionFormat(sessionId, expected, target) {
+      forgetJournal(sessionId)
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
       if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
@@ -427,6 +462,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       // A title/archive change must not be able to lose the transcript: reuse
       // the fsync+rename replacement rather than a bare writeFile+rename.
       await replaceRawSessionFile(path, Buffer.concat([Buffer.from(snapshot.line+'\n'),raw.subarray(end+1)]))
+      forgetJournal(sessionId)
       return snapshot.meta
     },
 
@@ -470,6 +506,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       return text === undefined ? { kind: 'absent' } : { kind: 'present', value: JSON.parse(text) as unknown }
     },
     async deleteOwnedSession(sessionId, manifest) {
+      forgetJournal(sessionId)
       if (!sessionId || /[\\/]/.test(sessionId) || sessionId.includes("..")) throw new Error("Invalid owned session identity")
       if (!Array.isArray(manifest.documents) || manifest.documents.length > 32 || new Set(manifest.documents).size !== manifest.documents.length) throw new Error("Invalid owned document manifest")
       const digest = createHash("sha256").update(sessionId).digest("hex")
