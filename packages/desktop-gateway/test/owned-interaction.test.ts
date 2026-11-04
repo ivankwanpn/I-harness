@@ -69,3 +69,17 @@ it("approving through rememberPending grants the rule and settles the pending re
     bridge.close()
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })
+
+it("cancelling a session settles its pending cards so they cannot be approved later", async () => {
+  const ctx = createContext()
+  const bridge = createInteractionBridge(() => {})
+  bridge.attachOwned({ ctx, sessionId: "s" })
+  const approve = ctx.services.get<(request: ApprovalRequest) => Promise<boolean>>("approval/answerer")
+  const decision = approve({ name: "write", reason: "edit" })
+  const row = bridge.pending("s")[0]!
+  bridge.cancelSession("s")
+  await expect(decision).resolves.toBe(false)
+  expect(bridge.pending("s")).toHaveLength(0)
+  expect(() => bridge.reply({ requestId: row.requestId, sessionId: "s", decision: { kind: "approval", approved: true } })).toThrow()
+  bridge.close()
+})

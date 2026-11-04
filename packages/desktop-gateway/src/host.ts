@@ -447,6 +447,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     onApprovalModeChanged(next) { approvalMode = next },
     onAutoCompactionChanged(next) { autoCompactionEnabled = next },
   })
+  // Reloading a session retires its live interaction cards first: the tool call
+  // they belong to no longer exists after the session is closed, so leaving a
+  // card approving/remembering it would grant a rule for a vanished operation.
+  const reloadSession = async (sessionId: string) => { interaction.cancelSession(sessionId); await drainSession(sessionId) }
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = onOriginalHostAssembly(service,(assembly) => { interaction.attach(assembly);liveIndexJobOwners();if(assembly.sessionId)indexJobOwners.set(assembly.sessionId,new WeakRef(assembly)) })
@@ -497,7 +501,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
     diagnostics: createDesktopDiagnostics(service, { shell: agentShell }),
     draftSession: createDraftSession(coordinator),
-    sessionReload: sessionId => drainSession(sessionId),
+    sessionReload: reloadSession,
     contextPicker: createContextPicker(options.workspace, coordinator, review, { visible: isConversation, projectFor: projects.projectFor, query: createConversationQuery(coordinator, sessionQuery) }),
     workflow, agentShell, wslSettings, input, projects: { ...projects, bind: (id, projectId) => fence.run(id, () => projects.bind(id, projectId)) },
     resources,
