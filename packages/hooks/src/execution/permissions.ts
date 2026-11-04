@@ -40,7 +40,11 @@ export async function permissionDecision(
     // `allow` here used to skip the host approval entirely. Deny/ask stay
     // effective; approval is the host's call (or an explicit approval rule).
     if (output.decision === "allow") continue
-    // ask is not wired to a question seam on main yet — fail closed as deny.
+    // NG-11: `ask` must reach the host approval chain, not become a silent deny.
+    // core-tools treats `ask` as an approval request and fails closed when no
+    // answerer exists, so this keeps the fail-closed guarantee while letting a
+    // human see and answer the hook's question.
+    if (output.decision === "ask") return { kind: "ask", reason: output.reason ?? output.stopReason ?? `hook handler ${handler.spec.id} requires approval` }
     return { kind: "deny", reason: output.reason ?? output.stopReason ?? `hook handler ${handler.spec.id} requires approval` }
   }
   return undefined

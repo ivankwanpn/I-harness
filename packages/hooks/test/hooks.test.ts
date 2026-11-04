@@ -272,6 +272,25 @@ describe("registry wiring (createHookRegistry mounts)", () => {
     await expect(tools.execute({ name: "read", args: { path: "a.txt" } })).resolves.toMatchObject({ name: "read" })
   })
 
+
+  it("permission ask becomes an approval decision, not a silent deny (NG-11)", async () => {
+    const dir = await tmpDir()
+    const script = await writeHandler(dir, "perm-ask.js", jsonBody({ decision: "ask", reason: "needs human approval" }))
+    const configPath = await configWith(dir, [{
+      id: "perm-ask", event: "permission", type: "command", matcher: { toolRegex: "^bash$" },
+      command: { cmd: process.execPath, args: [script] },
+      trust: { script, sha256: await sha256File(script) },
+    }])
+    const ctx = createContext()
+    await createHookRegistry(ctx, { configPath, configDir: dir })
+    const tools = makeTools(ctx)
+    const error = await tools.execute({ name: "bash", args: {} }).catch((cause: unknown) => cause)
+    expect(error).toBeInstanceOf(Error)
+    // deny would throw `denied: ...`; ask must reach the approval seam and fail
+    // closed there (no answerer in this fixture), carrying the hook's reason.
+    expect(String((error as Error).message)).not.toMatch(/^denied:/)
+    expect(String((error as Error).message)).toMatch(/needs human approval|approval/i)
+  })
   it("permission malformed output is fail-closed deny (never allow)", async () => {
     const dir = await tmpDir()
     const script = await writeHandler(dir, "bad-perm.js", "process.stdout.write('garbage')")
