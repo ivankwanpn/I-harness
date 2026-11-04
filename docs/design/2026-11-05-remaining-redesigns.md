@@ -58,6 +58,7 @@
 - 逐檔遷移 agent-team 測試；剩餘 `FACT_INVALID_GROUP` 需逐案確認是 fixture 前置狀態還是產品組合問題。
 - **2026-11-05 進展**：`acknowledgement-settlement` 已全數遷移到 composed coordinator＋control hooks（**37/37**），fixture 的 hooks 延遲分派，可在建立後指定。其餘 agent-team 測試仍用 legacy fixture，需逐檔遷移。
 - **`transact`** 已遷移（13/13；需要 `IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT` 的兩個證據測試在設定後全綠）。
+- **`managed-transact`** 已遷移（1/1，unknown-outcome hook 在 backend 建立前注入）。
 
 ---
 
