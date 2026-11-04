@@ -74,3 +74,13 @@
 以 composed coordinator 跑 `completion-delivery` 時，session-executor teardown 會出現 `Team cleanup incomplete → Task registry retired (TASK_REGISTRY_UNAVAILABLE)`：composed 的 task registry 比 legacy 更早 retire，而 team scheduler 的 cleanup 仍會呼叫 `jobs.kill`／`table.remove`／`table.update({closing})`。
 
 已修：subagent 對 runtime 的 guarded facade 在 retirement／registry unavailable 時，允許上述**純 cleanup** 操作（kill 回 `already-finished`、remove 走 staged table、closing update 直通 staged table），不再讓整個 service teardown 失敗。屬於真正的組合修正（desktop 也用 composed coordinator）。
+
+## D-12 尚未解決的產品差異：team completion 在 composed coordinator 下不喚醒 Lead
+
+以 composed coordinator 跑 `completion-delivery` 時（teardown 修正後）：
+
+- 13 個測試中 6 個通過，7 個失敗在「Lead 沒有收到完成通知」：`spawn_teammate` 完成後，idle Lead 的模型從未被喚醒（`seen` 為空）。
+- 失敗不是 cleanup，也不是 fixture hook；通知在 composed 路徑某處被丟棄。legacy coordinator 下同一測試會喚醒 Lead。
+- 需要追的路徑：`onTaskTerminalCommitted` → `parentNotify.wake`／task-notification drain → `service.wake`／assembly 的 live session 綁定。composed 的 parent session 是由 fact document 持有，live view 可能不是通知系統比對的那個 identity。
+
+這是 desktop（composed）與 team 完成通知的**真實組合風險**，優先度高於剩餘 harness 遷移；在修正前 `completion-delivery` 維持 legacy fixture。
