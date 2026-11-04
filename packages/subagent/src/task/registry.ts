@@ -17,7 +17,9 @@ import { TaskPersistence, originalCapturedTaskAcknowledgment, capturedTaskAcknow
 import { associateTaskSaveOwner } from './save-owner.ts'
 import {captureTaskSnapshot} from '@i-harness/session-persistence/internal/task-document-operations'
 import { TaskRecords } from "./records.ts"
-import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
+import { join } from "node:path"
+import { createJobRecordStore } from "../job-record.ts"
+import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput, type TaskStatus } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
   let stopObserving: (()=>void)|undefined
   let launchPort: TaskLaunchPort | undefined
@@ -60,6 +62,22 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const maxConcurrency = opts.maxConcurrency ?? Infinity
   const requiredSaveAuthorities=new WeakMap<object,{parent:object;capture:()=>TaskProtocolDocument;beforeIssue:()=>Promise<void>}>()
   const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, ownedTask,authority=>{const original=requiredSaveAuthorities.get(authority);if(!original)throw Error('Original required Task capture unavailable');return original})
+  // D-01 step 2: dual-write a durable job record next to the existing sources.
+  // Best-effort until step 3 makes it authoritative; a failure must not block
+  // the task path (D-08).
+  let jobWrite: Promise<void> = Promise.resolve()
+  const jobRecords = opts.coordinator?.storageRoot && opts.stateId
+    ? createJobRecordStore(join(opts.coordinator.storageRoot, "jobs", `${opts.stateId}.jobs.jsonl`))
+    : undefined
+  const recordJob = (task: TaskRecord, status: TaskStatus, extra: { terminal?: { at: number; reason?: string } } = {}): void => {
+    if (!jobRecords) return
+    const now = Date.now()
+    jobWrite = jobWrite.then(() => jobRecords.append({
+      version: 1, jobId: task.id, parentSessionId: task.parentSessionId || opts.stateId!,
+      ...(task.childSessionId !== undefined ? { childSessionId: task.childSessionId } : {}),
+      status, createdAt: task.timeCreated ?? now, updatedAt: now, ...extra,
+    })).catch(error => { if (process.env.IH_JOB_RECORD_DEBUG) console.error('[job-record]', error) })
+  }
   const requiredClaimRoutes=new WeakMap<TaskRecord,()=>void>()
   const requiredTerminalRoutes=new WeakMap<TaskRecord,()=>Promise<void>>()
   const retentionSaves = new WeakMap<TaskRecord, import('./persistence.ts').OwnedTaskSave>()
@@ -197,6 +215,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     launchPort?.retireTask(input.taskId, new Error('Task terminalized'))
     const task = currentState.records.get(input.taskId)
     if (!settleTaskRecord(task, input, resultOwner)) return false
+    recordJob(task, task.outcome!, task.outcome === "recovery-required" ? {} : { terminal: { at: Date.now(), ...(task.error !== undefined ? { reason: task.error } : {}) } })
     announceTerminal(task)
     return true
   }
@@ -325,6 +344,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       const { record, inserted } = currentState.records.submit(input, maxConcurrency)
       if (currentState.version === 3) currentState.records.protectSubmission(record)
       if (!inserted) return record
+      recordJob(record, "accepted")
       liveAccepted.add(record)
       void save().catch(() => {})
       publish(record)
@@ -345,6 +365,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       assertReady()
       const t = currentState.records.claim(taskId, childSessionId, modelLabel, jobId)
       if (!t) return false
+      recordJob(t, "running")
       const required=requiredClaimRoutes.get(t);if(required)required();else void save().catch(() => {})
       publish(t)
       return true
@@ -372,6 +393,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         if (t.outcome !== undefined) continue
         launchPort?.retireTask(t.id, new Error(error))
         settleTaskRecord(t, { taskId: t.id, outcome: 'cancelled', error }, resultOwner)
+        recordJob(t, 'cancelled', { terminal: { at: Date.now(), reason: error } })
         taskIds.push(t.id)
         cancelled += 1
       }
@@ -421,7 +443,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     save,
     // Cleanup joins original initialization/writes even after work is retired.
     // Failed initialization retains its original rejection; no work is admitted.
-    flushPersistence: async () => { await ready; await persistence.flush() },
+    flushPersistence: async () => { await ready; await persistence.flush(); await jobWrite },
   }
   const requiredTasks=new WeakSet<TaskRecord>()
   associateRequiredTaskRegistry(registry,async(task,source,producer)=>{

@@ -41,7 +41,7 @@
 ## 落地步驟
 
 1. **（本輪）** schema + `createJobRecordStore` + fold/validation 測試。不動任何現有路徑。
-2. 在 spawn / status transition / terminal 時 append job record（與現有 journal/document 雙寫，先不改讀取）。
+2. **（已完成）** 在 TaskRegistry 的 submit / claim / 	erminalize / cancelTree append job record，寫入序列化並由 lushPersistence() 一起 drain；與現有 journal/document 雙寫，讀取路徑未變。append 失敗只影響該 job（best-effort，IH_JOB_RECORD_DEBUG 可觀察）。
 3. recovery / desktop catalog 改讀 job record；task document 只作為 projection，不一致時用既有 `inspectTaskProjection` 產生 warning。
 4. 移除 task document 的可變寫入（或改成 write-behind），讓父會話不再因單一 job 的 debt 而封鎖。
 5. 端到端測試：spawn → child session → job record → 父通知；崩潰重啟後只靠 child session + job record 重建。
