@@ -1,5 +1,8 @@
 import type {SessionService} from './service.ts'
 import type {ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
+import {isManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
+import {createManagedExecutionDomain,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution'
+import type {PluginContext} from '@i-harness/core-plugin'
 
 export type OriginalManagedRuntime=Readonly<{execution:ManagedExecutionAttachment;domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;tools:import('@i-harness/core-tools').ToolRegistry;assertCurrent():void}>
 type Owner={read(id:string):ManagedExecutionAttachment|undefined;runtime(id:string):OriginalManagedRuntime|undefined;prepareRuntime(id:string):Promise<OriginalManagedRuntime|undefined>;retain(id:string,execution:ManagedExecutionAttachment,cleanup:()=>Promise<void>):void;acquireChild?(id:string):Promise<Readonly<{execution:ManagedExecutionAttachment;release():Promise<void>}>>}
@@ -16,5 +19,13 @@ export async function acquireChildManagedExecution(service:SessionService,id:str
   const owner=owners.get(service)
   if(!owner?.acquireChild)throw TypeError('Original managed execution unavailable')
   return owner.acquireChild(id)
+}
+
+/** Child execution domain for a child plugin context (L2 of the child-exec
+ * design). The domain is the authority a child-scoped shell/exec factory needs;
+ * it is valid only while the child's execution attachment is held. */
+export function createChildExecutionDomain(execution:ManagedExecutionAttachment,context:PluginContext):ManagedExecutionDomain{
+  if(!isManagedExecutionAttachment(execution))throw TypeError('Original private execution attachment required')
+  return createManagedExecutionDomain(execution.identity,execution.owner,context)
 }
 export function retainManagedExecutionCleanup(service:SessionService,id:string,execution:ManagedExecutionAttachment,cleanup:()=>Promise<void>):void{const owner=owners.get(service);if(!owner)throw TypeError('Original managed execution unavailable');owner.retain(id,execution,cleanup)}
