@@ -114,11 +114,17 @@ export function sandboxUnavailableFailure(
     const mode = policy?.mode ?? "read-only"
     return {
       stdout: "",
+      // The classification is exit-gated, but BOTH the exit code and the
+      // stderr signature are chosen by the confined program, so the diagnosis is
+      // evidence, not proof. It therefore carries NO escalation target: naming
+      // a wider mode here let a repository script print the signature and exit
+      // 3221225794 to steer the model toward danger-full-access. A genuine
+      // failure still tells the model what happened; the user decides the mode.
       stderr: JSON.stringify(denialFor(
         surface,
         mode,
-        `the ${mode} sandbox could not run this ${tool} command, so it was not run unconfined: ${detail}`,
-        "danger-full-access",
+        `the ${mode} sandbox could not run this ${tool} command, so it was not run unconfined: ${detail}. Retrying with a wider mode requires the user's decision.`,
+        null,
       )),
       exitCode: -1,
     }

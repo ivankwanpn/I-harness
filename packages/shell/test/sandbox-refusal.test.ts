@@ -182,17 +182,16 @@ describe("a sandbox-unavailable refusal is RETURNED on every path", () => {
     // sandbox mode … could not run this command…"), which is what the first
     // draft of this change shipped; the refusal has to carry the RAW cause.
     expect(denial.reason).toBe(
-      `the workspace-write sandbox could not run this pwsh command, so it was not run unconfined: ${detail}`,
+      `the workspace-write sandbox could not run this pwsh command, so it was not run unconfined: ${detail}. Retrying with a wider mode requires the user's decision.`,
     )
+    // A child-chosen exit code + stderr signature must never hand the model an
+    // escalation suggestion; the user decides whether to widen the mode.
+    expect(denial.escalation).toBeUndefined()
     // Both of these are FALSE here: a native child DOES run under this backend
     // (verified: confined cmd.exe/node.exe/git.exe exit 0), and a wider mode is
     // exactly what fixes it.
     expect(denial.reason).not.toContain("no sandbox backend is usable on this host")
     expect(denial.reason).not.toContain("cannot help")
-    // EVERY confined mode refuses this program, so the only mode worth naming is
-    // the unconfined one — denialFor's first-wider-mode default would name a
-    // mode that refuses identically, which is advice the model cannot act on.
-    expect(denial.escalation).toContain('sandbox_permissions set to "danger-full-access"')
     expect(result.exitCode).toBe(-1)
   })
 
