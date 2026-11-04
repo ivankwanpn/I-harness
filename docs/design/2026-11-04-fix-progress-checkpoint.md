@@ -122,6 +122,7 @@
 
 ## 驗證現狀
 
+- **2026-11-05（第 51 輪）**：`pnpm -r --no-bail typecheck` 全庫 82 packages **全綠（exit 0）**——第 1–49 輪的累積修改（含 protocol／notification／hooks／shell／workflow／session-executor／gateway／desktop）在型別層一致。
 - `pnpm -r --no-bail typecheck` 最後一次全綠；每個修復都附單檔測試（workflow 63/63、fs 110/110、sdk failure-events 3/3、session-persistence latch 10/10、jsonl append-cache 2/2、header-limit 3/3、torn-tail 1/1、document 2/2、desktop-gateway 相關 4/4+3/3+1/1、core-session rewind 2/2、fork-prefix 3/3）。
 - 完整 `pnpm test` 仍受測試基礎債限制，不能作為 gate。
 
