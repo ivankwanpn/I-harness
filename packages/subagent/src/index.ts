@@ -39,7 +39,7 @@ export type { ResidentInboxActivation } from './followup/activation.ts'
 export { restoreState, wireSubagentPersistence, snapshotState, settlePersistentJob } from "./persist.ts"
 export { retainedResultWitness } from './result-publication.ts'
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
-export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, inspectTaskProjection, inspectJobRecordProjection, rebuildTaskDocumentFromJobRecords, restoreTaskDocument, reconcileTaskProjection, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
+export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, inspectTaskProjection, inspectJobRecordProjection, inspectDocumentWriteIntents, rebuildTaskDocumentFromJobRecords, restoreTaskDocument, reconcileTaskProjection, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
 export type { TaskProjectionIssue } from "./task-protocol.ts"
 export type { TaskRegistry, TaskRecord, TaskStatus, TaskOutcome, TaskDelivery, TaskIdentity, TaskNotificationRecord, TaskProtocolDocument, OutboxStatus, RecoveryReason } from "./task-protocol.ts"
 export { createNotificationDrain, ParentNotificationStoppedError, DeliverySuppressedError, isParentNotificationStopped } from "./task-notification.ts"

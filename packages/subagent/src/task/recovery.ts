@@ -1,6 +1,7 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { TaskRecord, TaskRegistry, TaskProtocolDocument } from "./types.ts"
 import { loadJobRecords } from "../job-record.ts"
+import { readPendingDocumentWrites } from "./document-intent.ts"
 import { taskDocKey } from "./persistence.ts"
 
 /** D-01 step 1: read-only projection integrity report. A task document is a
@@ -8,6 +9,7 @@ import { taskDocKey } from "./persistence.ts"
  * rows that contradict it without mutating the document. */
 export type TaskProjectionIssueKind = "missing-child-session" | "terminal-without-turn-end"
   | "job-record-missing" | "job-record-terminal-ahead" | "job-record-terminal-missing" | "job-record-child-mismatch"
+  | "document-write-pending"
 export interface TaskProjectionIssue {
   kind: TaskProjectionIssueKind
   taskId: string
@@ -29,6 +31,14 @@ export async function inspectTaskProjection(tasks: TaskRegistry, coordinator: Se
     }
   }
   return issues
+}
+
+/** D-07: an unmatched durable write intent means the task document write may
+ * not have settled before a crash. Reported read-only, one issue per intent;
+ * taskId carries the intent id so the diagnostic surfaces the unresolved write
+ * without pretending it belongs to a specific task row. */
+export async function inspectDocumentWriteIntents(coordinator: SessionCoordinator, stateId: string): Promise<TaskProjectionIssue[]> {
+  return (await readPendingDocumentWrites(coordinator, stateId)).map(intent => ({ kind: 'document-write-pending', taskId: intent.intentId }))
 }
 
 /** D-01 step 3: compare the shadow job records with the task projection. The

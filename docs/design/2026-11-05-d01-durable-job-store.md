@@ -67,3 +67,5 @@ owned 路徑的 task document 同時是**寫入所有權的 witness**（`observe
 每次 task document 寫入前，先在 `jobs/<stateId>.write-intents.jsonl` 追加 `pending`；成功後追加 `settled`。重啟後 `readPendingDocumentWrites(coordinator, stateId)` 會回報未匹配的 pending intent——這就是「fail-closed 的 debt 有 durable 證據」，不再只靠記憶體。
 
 尚未自動 reconcile（把 pending 清除或重試）；目前提供唯讀證據，供 recovery 判斷與後續的顯式 reconcile 流程。
+
+**已接上診斷（2026-11-05）**：`inspectDocumentWriteIntents` 會把未匹配的 pending intent 轉成 `document-write-pending` projection issue；session-executor 的 `taskProjectionIntegrity`／`reconcileProjection` 已附帶這些問題，desktop reload 的 `desktop/tasks/projection` 通知會列出它們。

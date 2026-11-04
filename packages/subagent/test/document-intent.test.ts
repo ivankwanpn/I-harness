@@ -5,6 +5,7 @@ import { expect, it, vi } from 'vitest'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createDocumentIntentStore, readPendingDocumentWrites } from '../src/task/document-intent.ts'
 import { createTaskRegistry } from '../src/index.ts'
+import { inspectDocumentWriteIntents } from '../src/task/recovery.ts'
 
 it('folds intent records and reports only unmatched pending writes (D-07)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-intent-'))
@@ -32,5 +33,15 @@ it('keeps a durable pending intent when a task-document write fails (D-07)', asy
     // The failed write stays visible; the later successful save settles its own intent.
     expect(pending).toHaveLength(1)
     expect(putDocument).toHaveBeenCalledTimes(2)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+
+it('surfaces unmatched intents as projection diagnostics (D-07)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-intent-'))
+  try {
+    const store = createDocumentIntentStore(join(root, 'jobs', 'parent.write-intents.jsonl'))
+    await store.pending('p1')
+    await expect(inspectDocumentWriteIntents({ storageRoot: root } as SessionCoordinator, 'parent')).resolves.toEqual([{ kind: 'document-write-pending', taskId: 'p1' }])
   } finally { await rm(root, { recursive: true, force: true }) }
 })
