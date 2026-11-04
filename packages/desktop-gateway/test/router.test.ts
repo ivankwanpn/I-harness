@@ -81,6 +81,24 @@ it("advertises a read-only work-state method only when wired and validates its s
   } finally { await router.close(); await service.close() }
 })
 
+it("reloads a session only through the wired handler and validates its identity", async () => {
+  const sent: RpcMessage[] = []
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })
+  const reload = vi.fn(async () => {})
+  const handlers: DesktopHandlers = { sessionReload: reload }
+  const send = (frame: RpcMessage) => { sent.push(frame) }
+  const router = createDesktopRouter(createSdkServer(service, { onWrite: createGatewayWrite(send, handlers) }), send, handlers)
+  try {
+    await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    await router.handleLine(encodeFrame(makeRequest(2, "desktop/session/reload", { sessionId: "" })))
+    expect(isRpcFailure(sent.at(-1))).toBe(true)
+    expect(reload).not.toHaveBeenCalled()
+    await router.handleLine(encodeFrame(makeRequest(3, "desktop/session/reload", { sessionId: "s1" })))
+    expect(reload).toHaveBeenCalledWith("s1")
+    expect(sent.at(-1)).toMatchObject({ result: { reloaded: true } })
+  } finally { await router.close(); await service.close() }
+})
+
 it("advertises and validates session reminder methods only when the schedule handler is wired", async () => {
   const sent: RpcMessage[] = []
   const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", mockScript: [] })

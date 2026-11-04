@@ -591,6 +591,16 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         workState: workStateResult?.scope === selection.current ? workStateResult.view : undefined,
         workStateError: workStateFailure?.scope === selection.current ? workStateFailure.message : undefined,
         onRetryWorkState: () => { void refreshWorkState(selectedWorkspaceId, selectedSessionId) },
+        onReloadSession: async () => {
+          const scope = selection.current
+          if (!scope.workspaceId || !scope.sessionId) return
+          try {
+            await bridge.request({ kind: "desktop/session/reload", workspaceId: scope.workspaceId, sessionId: scope.sessionId })
+            await refreshWorkState(scope.workspaceId, scope.sessionId)
+          } catch (reason) {
+            setWorkStateFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) })
+          }
+        },
         onWriteTodos: async (input: import("@i-harness/desktop-gateway/src/work-state.ts").DesktopTodoWriteInput) => {
           const scope = selection.current
           try {

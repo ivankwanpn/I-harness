@@ -76,6 +76,7 @@ export interface ConversationView {
   workState?: DesktopWorkStateView
   workStateError?: string
   onRetryWorkState?(): void
+  onReloadSession?(): Promise<void>
   onWriteTodos?(input: import("@i-harness/desktop-gateway/src/work-state.ts").DesktopTodoWriteInput): Promise<void>
   taskError?: string
   historyError?: string
@@ -440,7 +441,7 @@ export function Workbench({
             ? (
               <>
                 {conversation.historyError ? <p role="alert" className="notice error-text">{conversation.historyError}<button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button></p> : null}
-                {capabilities["desktop-work-state"]?.includes("1") && conversation.workStateError ? <p role="alert" className="notice error-text">{t("工作狀態讀取失敗")}：{conversation.workStateError}{conversation.onRetryWorkState ? <button type="button" className="link-button" onClick={conversation.onRetryWorkState}>{t("重試")}</button> : null}</p> : null}
+                {capabilities["desktop-work-state"]?.includes("1") && conversation.workStateError ? <p role="alert" className="notice error-text">{t("工作狀態讀取失敗")}：{conversation.workStateError}{conversation.onRetryWorkState ? <button type="button" className="link-button" onClick={conversation.onRetryWorkState}>{t("重試")}</button> : null}{conversation.onReloadSession ? <button type="button" className="link-button" onClick={() => { void conversation.onReloadSession?.() }}>{t("重新載入會話")}</button> : null}</p> : null}
                 {conversation.historyNotice ? <p className="notice history-notice">{conversation.historyNotice}</p> : null}
                 {capabilities["desktop-work-state"]?.includes("1") && !conversation.workStateError && conversation.workState?.goal ? <div className="conversation-goal" title={conversation.workState.goal.objective}>
                   <span className="conversation-goal-label">{t("目前目標")}</span><span className="conversation-goal-objective">{conversation.workState.goal.objective}</span>

@@ -64,6 +64,8 @@ export interface DesktopHandlers {
   plugins?: ReturnType<typeof createDesktopPlugins>
   rewind?: ReturnType<typeof createDesktopRewind>
   sessions?: ReturnType<typeof createSessionManagement>
+  /** Drop the session's in-memory execution so the next request rebuilds it from durable state. */
+  sessionReload?(sessionId: string): Promise<void>
   provider?: ProviderRuntime
   codingPlans?: ReturnType<typeof import("./coding-plans.ts").createCodingPlans>
   memory?: MemoryStore

@@ -497,6 +497,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
     diagnostics: createDesktopDiagnostics(service, { shell: agentShell }),
     draftSession: createDraftSession(coordinator),
+    sessionReload: sessionId => drainSession(sessionId),
     contextPicker: createContextPicker(options.workspace, coordinator, review, { visible: isConversation, projectFor: projects.projectFor, query: createConversationQuery(coordinator, sessionQuery) }),
     workflow, agentShell, wslSettings, input, projects: { ...projects, bind: (id, projectId) => fence.run(id, () => projects.bind(id, projectId)) },
     resources,

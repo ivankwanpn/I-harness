@@ -222,7 +222,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         }catch(error){send(makeFailure(message.id,INVALID_PARAMS,error instanceof Error?error.message:String(error)))}
         return
       }
-      if (["desktop/model-wait/state", "desktop/model-wait/configure", "desktop/model-retry/state", "desktop/model-retry/configure", "desktop/auto-title/state", "desktop/auto-title/configure", "desktop/code-mode/state", "desktop/code-mode/configure", "desktop/environment/diagnostics", "desktop/session/execution/read", "desktop/session/execution/stop", "desktop/session/processes/read", "desktop/session/processes/control", "desktop/session/processes/job-output", "desktop/session/processes/terminal-output", "desktop/approval-rules/state", "desktop/approval-rules/add", "desktop/approval-rules/revoke", "desktop/session/batch"].includes(message.method)) {
+      if (["desktop/model-wait/state", "desktop/model-wait/configure", "desktop/model-retry/state", "desktop/model-retry/configure", "desktop/auto-title/state", "desktop/auto-title/configure", "desktop/code-mode/state", "desktop/code-mode/configure", "desktop/environment/diagnostics", "desktop/session/execution/read", "desktop/session/execution/stop", "desktop/session/processes/read", "desktop/session/processes/control", "desktop/session/processes/job-output", "desktop/session/processes/terminal-output", "desktop/approval-rules/state", "desktop/approval-rules/add", "desktop/approval-rules/revoke", "desktop/session/batch", "desktop/session/reload"].includes(message.method)) {
         const params = asRecord(message.params)
         try {
           if (!params) throw new Error("Invalid Desktop parameters")
@@ -252,6 +252,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
             case "desktop/approval-rules/revoke": if (!handlers.approvalRules || !handlers.workspace || typeof params.ruleId !== "string") throw new Error("Approval rules unavailable"); handlers.approvalRules.revoke(handlers.workspace, params.ruleId); result = { revoked: true }; break
             case "desktop/approval-rules/add": if (!sessionId || !handlers.interaction?.rememberPending || typeof params.requestId !== "string") throw new Error("Approval rules unavailable"); result = await handlers.interaction.rememberPending({ sessionId, requestId: params.requestId, remember: params.remember as import("./approval-rules.ts").RememberApprovalOptions }); break
             case "desktop/session/batch": if (!handlers.sessions) throw new Error("Session management unavailable"); result = await handlers.sessions.batch(params.command as import("./session-management.ts").SessionBatchCommand); break
+            case "desktop/session/reload": if (!sessionId || !handlers.sessionReload) throw new Error("Session reload unavailable"); await handlers.sessionReload(sessionId); result = { reloaded: true }; break
           }
           send(makeSuccess(message.id, result))
         } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }

@@ -625,6 +625,12 @@ export async function dispatchDesktopRequest(
       }
       return runtime.client.request(value.kind, { sessionId })
     }
+    case "desktop/session/reload": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      return runtime.client.request("desktop/session/reload", { sessionId })
+    }
     case "desktop/plugins/mutate": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const command = requireRecord(value.command)
