@@ -140,6 +140,9 @@ export function createJsonlBackend(root: string, options?: {
    * canonical-path guard captures its descriptor. Patching the backend after
    * this call is rejected as PROCESS_READ_UNAVAILABLE by design. */
   wrapOwnedBatch?: (append: NonNullable<PersistenceBackend['appendOwnedBatch']>) => NonNullable<PersistenceBackend['appendOwnedBatch']>
+  /** S-08/D-12: same pre-bind seam for the reconcile path. Tests need to inject
+   * unknown/conflict outcomes without patching the guarded backend afterwards. */
+  wrapOwnedReconcile?: (reconcile: NonNullable<PersistenceBackend['reconcileOwnedBatch']>) => NonNullable<PersistenceBackend['reconcileOwnedBatch']>
 }): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const nativePrewrite = createOriginalNativePrewriteOwner()
   const pathResolution = createOriginalJsonlPathResolution(root)
@@ -242,9 +245,12 @@ export function createJsonlBackend(root: string, options?: {
   const factJournal = createFactJournalBackend(filePath, assertNotDeleted, Object.freeze({ filePath, assertNotDeleted, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }))
   const wrappedAppend = options?.wrapOwnedBatch !== undefined && factJournal.appendOwnedBatch !== undefined
     ? options.wrapOwnedBatch(factJournal.appendOwnedBatch) : undefined
+  const wrappedReconcile = options?.wrapOwnedReconcile !== undefined && factJournal.reconcileOwnedBatch !== undefined
+    ? options.wrapOwnedReconcile(factJournal.reconcileOwnedBatch) : undefined
   const backend: PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>; selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } = {
     ...factJournal,
     ...(wrappedAppend !== undefined ? { appendOwnedBatch: wrappedAppend } : {}),
+    ...(wrappedReconcile !== undefined ? { reconcileOwnedBatch: wrappedReconcile } : {}),
     ...bootstrapBackend,
     // Original private selected lane shares capture IO with bootstrap.
     selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO),

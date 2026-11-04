@@ -53,7 +53,7 @@
 **已完成**：證明 composed coordinator + action wrapper 本身可正常送出 team message；`composed-team-write` 2/2 固定了邊界。
 
 **待做**：
-- backend 增加 pre-bind seam：`wrapOwnedBatch`（已有）＋`wrapOwnedReconcile`（缺）；
+- backend 增加 pre-bind seam：`wrapOwnedBatch`（已有）＋`wrapOwnedReconcile`（2026-11-05 已補，含 `backend-wrap-hooks` 測試）；
 - `ownedTeamFixture` 接受 control hooks，測試改用 hook 記錄 batch／注入 unknown outcome，而不是事後覆寫 backend；
 - 逐檔遷移 agent-team 測試；剩餘 `FACT_INVALID_GROUP` 需逐案確認是 fixture 前置狀態還是產品組合問題。
 - 先前實驗曾到 20/37；建議以 `acknowledgement-settlement` 為第一個全綠目標。
