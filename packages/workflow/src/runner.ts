@@ -271,13 +271,26 @@ function resolveParams(def: WorkflowDefinition, params: Record<string, string>):
   return values
 }
 
+/** A process-shared store retains every finished run, so an unbounded aggregate
+ * would let one chatty workflow exhaust memory (A-07). The cap is per stream and
+ * truncation is explicit so the model can tell output is missing. */
+const MAX_JOB_OUTPUT_CHARS = 1_000_000
+const TRUNCATION_NOTICE = `\n[workflow output truncated: exceeded ${MAX_JOB_OUTPUT_CHARS} characters]\n`
+
+function appendOutput(job: WorkflowJobEntry, field: "stdout" | "stderr", text: string): void {
+  const current = job[field]
+  if (current.length >= MAX_JOB_OUTPUT_CHARS) return
+  const room = MAX_JOB_OUTPUT_CHARS - current.length
+  job[field] = text.length <= room ? current + text : current + text.slice(0, room) + TRUNCATION_NOTICE
+}
+
 function appendLine(job: WorkflowJobEntry, line: string): void {
-  job.stdout += line + "\n"
+  appendOutput(job, "stdout", line + "\n")
 }
 
 function appendRaw(job: WorkflowJobEntry, text: string): void {
   // Stream step output as-is; keep the buffer line-oriented for progress lines.
-  job.stdout += text.endsWith("\n") ? text : text + "\n"
+  appendOutput(job, "stdout", text.endsWith("\n") ? text : text + "\n")
 }
 
 function stepCommand(step: WorkflowStep, values: Record<string, string>, defaultCwd?: string): ExecCommand {
@@ -397,7 +410,7 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
         store.update(job.id, { stdout: job.stdout })
         continue
       }
-      if (final.stderr.length > 0) job.stderr += final.stderr
+      if (final.stderr.length > 0) appendOutput(job, "stderr", final.stderr)
       store.update(job.id, { stdout: job.stdout, stderr: job.stderr })
       firstFailedExit ??= final.exitCode
       if ((step.on_failure ?? "stop") === "stop") {
@@ -414,7 +427,7 @@ function startWorkflowLoop(def: WorkflowDefinition, values: Record<string, strin
     // on the job and fail the run.
     failures.push(Object.freeze({ phase: 'loop', cause: e }))
     try {
-      job.stderr += `workflow runner error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`
+      appendOutput(job, "stderr", `workflow runner error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`)
       setStatus("error", -1)
     } catch (cause) { failures.push(Object.freeze({ phase: 'loop', cause })) }
   }).then(() => {
