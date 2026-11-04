@@ -277,8 +277,12 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
         await handle.sync()
       } catch (err) {
         // F01-2 rollback: truncate back to the committed byte length so a
-        // clean retry never duplicates seqs.
-        await handle.truncate(committedBytes).catch(() => {})
+        // clean retry never duplicates seqs. Only truncate when the file still
+        // extends past that point: node's truncate() EXTENDS a shorter file
+        // with zeros, so a concurrent shrink must not turn a failed append into
+        // a padded journal.
+        const sizeNow = await handle.stat().then((stat) => stat.size).catch(() => undefined)
+        if (sizeNow !== undefined && sizeNow > committedBytes) await handle.truncate(committedBytes).catch(() => {})
         await handle.sync().catch(() => {})
         throw err
       } finally {
