@@ -26,8 +26,11 @@ export async function ownedTeamFixture(
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-team-owner-'))
   const control = options.control ?? {}
   const backend = createJsonlBackend(root, options.composed ? {
-    wrapOwnedBatch: original => (control.append ? control.append(original) : original),
-    wrapOwnedReconcile: original => (control.reconcile ? control.reconcile(original) : original),
+    // Deferred dispatch: tests may assign control hooks after the fixture is
+    // created, mirroring the old patch-after-creation style without touching
+    // the guarded backend.
+    wrapOwnedBatch: original => (...args) => (control.append ? control.append(original) : original)(...args),
+    wrapOwnedReconcile: original => (...args) => (control.reconcile ? control.reconcile(original) : original)(...args),
   } : undefined)
   const coordinator = options.composed
     ? composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)

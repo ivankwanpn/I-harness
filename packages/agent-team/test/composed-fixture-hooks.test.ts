@@ -30,3 +30,20 @@ it('lets a composed fixture observe owned batches and reconciles through pre-bin
     await f.coordinator.close().catch(() => {})
   }
 })
+
+it('honours an append hook assigned after fixture creation (D-12)', async () => {
+  const appends: unknown[] = []
+  const f = await ownedTeamFixture([], 'team', { composed: true })
+  try {
+    f.control.append = original => (...args) => { appends.push(args[3]); return original(...args) }
+    const state = createFoldState()
+    state.members.set('helper', { id: 'child', name: 'helper', description: '', provider: 'fixture', context: 'fresh', phase: 'active' })
+    let tx: ReturnType<typeof createTeamTransact>
+    const lead = createTeamFacts(f.document, () => tx.drain(), () => {})
+    tx = createTeamTransact(lead, state)
+    const queued = (): DeliveryOutcome => ({ kind: 'queued', via: 'bridge-false', sendFailure: { occurred: false } })
+    const mailbox = createMailbox({ teamId: 'team', state, transact: tx, deliver: async () => queued(), memberStatus: () => 'idle', maxPendingMessagesPerMember: 8 })
+    await expect(mailbox.sendMessage({ id: 'team', name: 'lead', role: 'lead' }, 'helper', 'hello', 'quiet')).resolves.toMatchObject({ status: 'queued' })
+    expect(appends.length).toBeGreaterThan(0)
+  } finally { await f.coordinator.close().catch(() => {}) }
+})

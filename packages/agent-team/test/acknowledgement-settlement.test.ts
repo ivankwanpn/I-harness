@@ -31,7 +31,7 @@ it('forwards the exact registration tuple through the acknowledgement source ada
 })
 
 async function fixture(deliver: MailboxDeps['deliver'], maxPendingMessagesPerMember = 64) {
-  const f = await ownedTeamFixture()
+  const f = await ownedTeamFixture([], 'parent', { composed: true })
   const captures: AckCapture[] = []
   let actions = 0
   const beginAction = f.document.beginAction
@@ -53,8 +53,8 @@ async function fixture(deliver: MailboxDeps['deliver'], maxPendingMessagesPerMem
 it('holds source close until actual consumption and captures exactly one required ack after revocation', async () => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<DeliveryOutcome>()
   const f = await fixture(async () => { entered.resolve(); return release.promise })
-  const captured: unknown[] = [], actual = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => { const outcome = await actual(...args); captured.push({ batch: decodeFactBatch(args[3].bytes), outcome }); return outcome }
+  const captured: unknown[] = []
+  f.control.append = original => async (...args) => { const outcome = await original(...args); captured.push({ batch: decodeFactBatch(args[3].bytes), outcome }); return outcome }
   const sending = f.send()
   await entered.promise
   let closed = false
@@ -78,8 +78,7 @@ it('holds source close until actual consumption and captures exactly one require
 it('serializes real max1 admission before reserving or calling a second delivery', async () => {
   let calls = 0, writes = 0
   const f = await fixture(async () => { calls++; return { kind: 'queued', via: 'bridge-false', sendFailure: { occurred: false } } }, 1)
-  const actual = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => { writes++; return actual(...args) }
+  f.control.append = actual => async (...args) => { writes++; return actual(...args) }
   try {
     const results = await Promise.allSettled([f.send(), f.send()])
     expect(results[0]).toMatchObject({ status: 'fulfilled', value: { status: 'queued' } })
@@ -119,8 +118,7 @@ it('joins an exact original tuple before admission and ignores replacement callb
 it('reconciles an unknown original queue and installs it without calling the failed sends unreached target', async () => {
   let calls = 0, writes = 0, key: BatchKey | undefined
   const f = await fixture(async () => { calls++; return consumed() })
-  const actual = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => { writes++; await actual(...args); key = args[3].key; return { kind: 'unknown', key } }
+  f.control.append = actual => async (...args) => { writes++; await actual(...args); key = args[3].key; return { kind: 'unknown', key } }
   try {
     await expect(f.send()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     expect([calls, f.state.queued.size]).toEqual([0, 0])
@@ -133,9 +131,8 @@ it('reconciles an unknown original queue and installs it without calling the fai
 it('keeps an unknown required ack on the same capture and settles close without replaying the caller rejection', async () => {
   let calls = 0, writes = 0, ackKey: BatchKey | undefined
   const f = await fixture(async () => { calls++; return consumed() })
-  const actual = f.backend.appendOwnedBatch!
   const outcomes: unknown[] = []
-  f.backend.appendOwnedBatch = async (...args) => {
+  f.control.append = actual => async (...args) => {
     writes++
     const result = await actual(...args)
     if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'team/message/delivered')) { ackKey = args[3].key; const reported = { kind: 'unknown' as const, key: ackKey }; outcomes.push({ actual: result, reported }); return reported }
@@ -157,13 +154,12 @@ for (const error of [new Error('ensure failed'), undefined, null]) {
   it(`preserves the exact ensureResident rejection (${String(error)}) without target audit or Team ack`, async () => {
     let realDeliver: ReturnType<typeof createTaskDelivery>
     const f = await fixture((...args) => realDeliver(...args))
-    const child = await ownedTeamFixture([], 'child')
+    const child = await ownedTeamFixture([], 'child', { composed: true })
     const table = createAgentTable(), jobs = createJobRegistry()
     const entry: ChildAgentEntry = { path: 'lead/helper', status: 'error', session: child.document.view, factOwner: child.document, controller: new AbortController(), mailbox: [] }
     table.add(entry.path, entry)
     let rebuilds = 0, targetWrites = 0
-    const actual = child.backend.appendOwnedBatch!
-    child.backend.appendOwnedBatch = async (...args) => { targetWrites++; return actual(...args) }
+    child.control.append = actual => async (...args) => { targetWrites++; return actual(...args) }
     realDeliver = createTaskDelivery('team', f.state, { parentSession: f.document.view, factOwner: f.document }, { table, jobs, agents: createAgentRegistry(), ensureResident: async () => { rebuilds++; throw error } }, jobs, { notify() {} }, () => false)
     try {
       const result = await f.send().then(() => ({ occurred: false }), error => ({ occurred: true, error }))
@@ -178,14 +174,13 @@ for (const error of [new Error('ensure failed'), undefined, null]) {
 it('leaves unknown target audit with its original owner while Team close succeeds with no ack', async () => {
   let realDeliver: ReturnType<typeof createTaskDelivery>
   const f = await fixture((...args) => realDeliver(...args))
-  const child = await ownedTeamFixture([], 'child')
+  const child = await ownedTeamFixture([], 'child', { composed: true })
   const table = createAgentTable(), jobs = createJobRegistry()
   const entry: ChildAgentEntry = { path: 'lead/helper', status: 'waiting', session: child.document.view, factOwner: child.document, controller: new AbortController(), mailbox: [] }
   table.add(entry.path, entry)
-  const append = child.backend.appendOwnedBatch!, reconcile = child.backend.reconcileOwnedBatch!
   let writes = 0, reconciles = 0, allow = false
-  child.backend.appendOwnedBatch = async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
-  child.backend.reconcileOwnedBatch = async (...args) => { reconciles++; return allow ? reconcile(...args) : { kind: 'unknown', key: args[3].key } }
+  child.control.append = append => async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
+  child.control.reconcile = reconcile => async (...args) => { reconciles++; return allow ? reconcile(...args) : { kind: 'unknown', key: args[3].key } }
   realDeliver = createTaskDelivery('team', f.state, { parentSession: f.document.view, factOwner: f.document }, { table, jobs, agents: createAgentRegistry() }, jobs, { notify() {} }, () => false)
   try {
     expect(await f.send()).toMatchObject({ status: 'queued' })
@@ -255,14 +250,13 @@ for (const error of [undefined, null]) {
 it('retries a target-owned unknown audit only through an explicit OPEN recovery and reuses its original capture', async () => {
   let realDeliver: ReturnType<typeof createTaskDelivery>
   const f = await fixture((...args) => realDeliver(...args))
-  const child = await ownedTeamFixture([], 'child')
+  const child = await ownedTeamFixture([], 'child', { composed: true })
   const jobs = createJobRegistry(), table = createAgentTable()
   const entry: ChildAgentEntry = { path: 'lead/helper', status: 'waiting', session: child.document.view, factOwner: child.document, controller: new AbortController(), mailbox: [], lastInboxSeq: -1 }
   table.add(entry.path, entry)
-  const append = child.backend.appendOwnedBatch!, reconcile = child.backend.reconcileOwnedBatch!
   let allow = false, writes = 0
-  child.backend.appendOwnedBatch = async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
-  child.backend.reconcileOwnedBatch = async (...args) => allow ? reconcile(...args) : { kind: 'unknown', key: args[3].key }
+  child.control.append = append => async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
+  child.control.reconcile = reconcile => async (...args) => allow ? reconcile(...args) : { kind: 'unknown', key: args[3].key }
   realDeliver = createTaskDelivery('team', f.state, { parentSession: f.document.view, factOwner: f.document }, { table, jobs, agents: createAgentRegistry() }, jobs, { notify() {} }, () => false)
   try {
     const result = await f.send()
@@ -282,13 +276,12 @@ for (const debt of ['absent', 'conflict'] as const) {
   it(`retains the original ack on ${debt} without a reissue or callback replay`, async () => {
     let calls = 0, writes = 0, allow = false
     const f = await fixture(async () => { calls++; return consumed() })
-    const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    f.control.append = append => async (...args) => {
       writes++
       const result = await append(...args)
       return decodeFactBatch(args[3].bytes).events.some(e => e.type === 'team/message/delivered') ? { kind: 'unknown', key: args[3].key } : result
     }
-    f.backend.reconcileOwnedBatch = async (...args) => allow ? reconcile(...args) : { kind: debt, key: args[3].key }
+    f.control.reconcile = reconcile => async (...args) => allow ? reconcile(...args) : { kind: debt, key: args[3].key }
     try {
       await expect(f.send()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
       await expect(f.lead.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
@@ -312,9 +305,8 @@ for (const debt of ['absent', 'conflict'] as const) {
   it(`keeps ${debt} queue debt on the original record and never reaches its target`, async () => {
     let calls = 0, writes = 0, allow = false
     const f = await fixture(async () => { calls++; return consumed() })
-    const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
-    f.backend.reconcileOwnedBatch = async (...args) => allow ? reconcile(...args) : { kind: debt, key: args[3].key }
+    f.control.append = append => async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
+    f.control.reconcile = reconcile => async (...args) => allow ? reconcile(...args) : { kind: debt, key: args[3].key }
     try {
       await expect(f.send()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
       await expect(f.lead.close()).rejects.toThrow()
@@ -334,8 +326,7 @@ for (const debt of ['absent', 'conflict'] as const) {
 it('recovers local queue installation debt without running the failed original target', async () => {
   let calls = 0, writes = 0
   const f = await fixture(async () => { calls++; return consumed() })
-  const append = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => {
+  f.control.append = append => async (...args) => {
     writes++
     const outcome = await append(...args)
     // The journal commits, but this live projection cannot accept the insert.
@@ -411,11 +402,10 @@ for (const disposition of ['missing', 'no-rebuild', 'rebuild-false', 'killed'] a
   it(`keeps ${disposition} target queued without attempting a message audit`, async () => {
     let bridge: ReturnType<typeof createTaskDelivery>
     const f = await fixture((...args) => bridge(...args))
-    const child = await ownedTeamFixture([], 'child')
+    const child = await ownedTeamFixture([], 'child', { composed: true })
     const jobs = createJobRegistry(), table = createAgentTable()
     let audits = 0, rebuilds = 0
-    const append = child.backend.appendOwnedBatch!
-    child.backend.appendOwnedBatch = async (...args) => { audits++; return append(...args) }
+    child.control.append = append => async (...args) => { audits++; return append(...args) }
     if (disposition !== 'missing') table.add('lead/helper', { path: 'lead/helper', status: disposition === 'killed' ? 'killed' : 'error', session: child.document.view, factOwner: child.document, controller: new AbortController(), mailbox: [] })
     bridge = createTaskDelivery('team', f.state, { parentSession: f.document.view, factOwner: f.document }, {
       table, jobs, agents: createAgentRegistry(), ...(disposition === 'rebuild-false' ? { ensureResident: async () => { rebuilds++; return false } } : {}),
@@ -432,8 +422,7 @@ for (const disposition of ['missing', 'no-rebuild', 'rebuild-false', 'killed'] a
 it('settles a failed original queue without dispatch, then permits a separate explicit OPEN recovery attempt', async () => {
   let calls = 0, key: BatchKey | undefined, first = true
   const f = await fixture(async () => { calls++; return consumed() })
-  const append = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => {
+  f.control.append = append => async (...args) => {
     const outcome = await append(...args)
     if (first) { first = false; key = args[3].key; return { kind: 'unknown', key } }
     return outcome
@@ -456,15 +445,14 @@ for (const overlap of ['two transaction drains', 'transaction drain and source c
       const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
       let calls = 0, writes = 0, installs = 0, observers = 0, ackKey: BatchKey | undefined
       const f = await fixture(async () => { calls++; return { kind: 'consumed', via: 'target', sendFailure: { occurred: true, error: originalError } } })
-      const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
       const reconciliationKeys: BatchKey[] = []
-      f.backend.appendOwnedBatch = async (...args) => {
+      f.control.append = append => async (...args) => {
         writes++
         const outcome = await append(...args)
         if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'team/message/delivered')) { ackKey = args[3].key; return { kind: 'unknown', key: ackKey } }
         return outcome
       }
-      f.backend.reconcileOwnedBatch = async (...args) => {
+      f.control.reconcile = reconcile => async (...args) => {
         reconciliationKeys.push(args[3].key)
         entered.resolve()
         await release.promise
@@ -504,9 +492,8 @@ for (const overlap of ['two transaction drains', 'transaction drain and source c
 it('releases an authoritative never-issued queue with its native refusal and accepts later optional work', async () => {
   let calls = 0
   const f = await fixture(async () => { calls++; return queued() })
-  const append = f.backend.appendOwnedBatch!
   let first = true
-  f.backend.appendOwnedBatch = async (...args) => {
+  f.control.append = append => async (...args) => {
     if (first) { first = false; throw Object.assign(new Error('pre-issue guard'), { code: 'FACT_PRECONDITION_STALE' }) }
     return append(...args)
   }

@@ -56,7 +56,7 @@
 - backend 增加 pre-bind seam：`wrapOwnedBatch`（已有）＋`wrapOwnedReconcile`（2026-11-05 已補，含 `backend-wrap-hooks` 測試）；
 - `ownedTeamFixture` 已可選 `{ composed: true, control: { append, reconcile } }`，hooks 在 backend 建立前注入（`composed-fixture-hooks` 測試）；測試改用 hook 記錄 batch／注入 unknown outcome，而不是事後覆寫 backend；
 - 逐檔遷移 agent-team 測試；剩餘 `FACT_INVALID_GROUP` 需逐案確認是 fixture 前置狀態還是產品組合問題。
-- 先前實驗曾到 20/37；建議以 `acknowledgement-settlement` 為第一個全綠目標。
+- **2026-11-05 進展**：`acknowledgement-settlement` 已全數遷移到 composed coordinator＋control hooks（**37/37**），fixture 的 hooks 延遲分派，可在建立後指定。其餘 agent-team 測試仍用 legacy fixture，需逐檔遷移。
 
 ---
 
