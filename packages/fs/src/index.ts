@@ -472,9 +472,9 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       } finally { mutation.settle() }
     }),
   }
-  const apply_patch: Tool<{ patch_content: string; sandbox_permissions?: string; justification?: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } | FsToolFailure> = {
+  const apply_patch: Tool<{ patch_content: string; sandbox_permissions?: string; justification?: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff; movedTo?: string }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } | FsToolFailure> = {
     name: "apply_patch",
-    description: "apply a multi-file structured patch (*** Begin/End Patch + Add/Delete/Update + @@ context)",
+    description: "apply a multi-file structured patch (*** Begin/End Patch + Add/Delete/Update/Move to + @@ context)",
     inputSchema: { type: "object", properties: { patch_content: { type: "string" }, sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" }, justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" } }, required: ["patch_content"] },
     isReadOnly: false,
     captureNativePlan(args) {
@@ -483,12 +483,17 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
           // Partial-effect results retain the original lexical label, which
           // may be much longer than its normalized executable target.
           if (hunk.path.length > 4096) throw new FsToolError('FS_TOO_LARGE', `patch path exceeds the 4096-character effect label limit: ${hunk.path}`)
+          if (hunk.moveTo !== undefined && hunk.moveTo.length > 4096) throw new FsToolError('FS_TOO_LARGE', `patch path exceeds the 4096-character effect label limit: ${hunk.moveTo}`)
           return { ...hunk, absolutePath: resolvePath(deps.workspace, hunk.path) }
         })
         // Parser-internal optional fields may be undefined; the executable data
         // contains only JSON values and is frozen by the registry.
         const operation = JSON.parse(JSON.stringify({ kind: 'patch', args, hunks }))
-        return { targets: hunks.map(hunk => ({ path: hunk.absolutePath, kind: 'file' as const, mode: 'mutate' as const })), operation }
+        const targets = hunks.flatMap(hunk => [
+          { path: hunk.absolutePath, kind: 'file' as const, mode: 'mutate' as const },
+          ...(hunk.moveTo !== undefined ? [{ path: resolvePath(deps.workspace, hunk.moveTo), kind: 'file' as const, mode: 'mutate' as const }] : []),
+        ])
+        return { targets, operation }
       } catch (error) {
         if (error instanceof FsToolError) throw nativePlanValidationFailure({ error: error.message, code: error.code })
         throw error
@@ -500,7 +505,10 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       const { args: { patch_content, sandbox_permissions, justification }, hunks } = nativeOperation<{ args: { patch_content: string; sandbox_permissions?: string; justification?: string }; hunks: (PatchHunk & { absolutePath: string })[] }>(exec)
       const mutation = nativeMutation(exec)
       try {
-      const byPath = new Map(hunks.map(hunk => [hunk.path, hunk.absolutePath]))
+      const byPath = new Map(hunks.flatMap(hunk => [
+        [hunk.path, hunk.absolutePath] as const,
+        ...(hunk.moveTo !== undefined ? [[hunk.moveTo, resolvePath(deps.workspace, hunk.moveTo)] as const] : []),
+      ]))
       const resolved = (path: string) => { const target = byPath.get(path); if (!target) throw new Error('Patch path outside captured plan'); return target }
       // M62: the ladder runs ONCE for this call, before the first hunk is
       // guarded. Awaiting it inside the guard would ask the human once per hunk
@@ -527,7 +535,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       const { applied, errors, replan } = await applyPatch(resolved, hunks, patchRewind, (target) => guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot), boundary => mutation.before(boundary))
       // M49: aggregate per-file changes when the parser exposed before/after
       // (update hunks); anything else keeps the original patch text as rawPatch.
-      const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string; instruction_replan?: import('@i-harness/core-tools').InstructionReplanData } = {
+      const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff; movedTo?: string }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string; instruction_replan?: import('@i-harness/core-tools').InstructionReplanData } = {
         ok: errors.length === 0,
         applied,
         errors,

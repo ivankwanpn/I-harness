@@ -91,13 +91,6 @@ describe("apply_patch tool", () => {
     }, {})
     expect(await readFile(join(dir, "a.txt"), "utf-8")).toBe("first\nlast\n")
   })
-  it("returns a failure for *** Move to: (fail-closed)", async () => {
-    await writeFile(join(dir, "a.txt"), "x\n")
-    const fail = await failureOf(tool().execute({
-      patch_content: `*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-x\n+y\n*** End Patch\n`,
-    }, {}))
-    expect(fail.error).toMatch(/Move to|not supported/i)
-  })
   it("applies replacements by document order when pure-append precedes replace (regression)", async () => {
     // 合法補丁：純插入 chunk（+X，落檔尾）在文件序上先出現，後面才是指向較早行的 replace。
     // 記錄序＝[append(idx2), replace(idx0)] ≠ 文件序 → 未排序直接倒序會把 X 插到 A1/A2 與 b 之間。
@@ -129,6 +122,36 @@ describe("apply_patch tool", () => {
     expect(out.ok).toBe(true)
     expect(await readFile(join(dir, "a.txt"), "utf-8")).toBe("old\nheader\nnew\n")
     expect(await readFile(join(dir, "a.txt"), "utf-8")).not.toBe("new\nheader\nold\n") // 錯位結果不得復發
+  })
+  it("moves a file while updating it (*** Move to:)", async () => {
+    await writeFile(join(dir, "src.txt"), "a\nold\nb\n")
+    const out = (await tool().execute({
+      patch_content: "*** Begin Patch\n*** Update File: src.txt\n*** Move to: moved.txt\n@@\n-old\n+new\n*** End Patch\n",
+    }, {})) as { ok: boolean; applied: { path: string; action: string; movedTo?: string }[] }
+    expect(out.ok).toBe(true)
+    expect(out.applied[0]?.movedTo).toBe("moved.txt")
+    expect(await readFile(join(dir, "moved.txt"), "utf-8")).toBe("a\nnew\nb\n")
+    await expect(access(join(dir, "src.txt"))).rejects.toThrow()
+  })
+  it("moves a file without content changes", async () => {
+    await writeFile(join(dir, "plain.txt"), "same\n")
+    const out = (await tool().execute({
+      patch_content: "*** Begin Patch\n*** Update File: plain.txt\n*** Move to: renamed.txt\n*** End Patch\n",
+    }, {})) as { ok: boolean }
+    expect(out.ok).toBe(true)
+    expect(await readFile(join(dir, "renamed.txt"), "utf-8")).toBe("same\n")
+    await expect(access(join(dir, "plain.txt"))).rejects.toThrow()
+  })
+  it("refuses to move onto an existing path and keeps the source", async () => {
+    await writeFile(join(dir, "src.txt"), "content\n")
+    await writeFile(join(dir, "taken.txt"), "occupied\n")
+    const out = (await tool().execute({
+      patch_content: "*** Begin Patch\n*** Update File: src.txt\n*** Move to: taken.txt\n*** End Patch\n",
+    }, {})) as { ok: boolean; errors: { path: string; message: string }[] }
+    expect(out.ok).toBe(false)
+    expect(out.errors[0]?.message).toContain("already exists")
+    expect(await readFile(join(dir, "src.txt"), "utf-8")).toBe("content\n")
+    expect(await readFile(join(dir, "taken.txt"), "utf-8")).toBe("occupied\n")
   })
   it("accepts blank lines before *** End Patch and between hunks", async () => {
     await writeFile(join(dir, "b.txt"), "one\n")

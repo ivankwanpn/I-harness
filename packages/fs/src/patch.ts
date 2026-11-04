@@ -16,6 +16,9 @@ export interface PatchChunk {
 export interface PatchHunk {
   kind: "add" | "delete" | "update"
   path: string
+  /** Codex `*** Move to:` target: the updated content is written here and the
+   * source path is removed. */
+  moveTo?: string
   contents?: string
   chunks?: PatchChunk[]
 }
@@ -78,9 +81,14 @@ export function parsePatch(patchContent: string): PatchHunk[] {
       if (seen.has(path)) throw new FsToolError("FS_EDIT_NOT_FOUND", `duplicate path in patch: ${path}`)
       seen.add(path)
       i++
+      let moveTo: string | undefined
       if (lines[i]?.startsWith("*** Move to: ")) {
-        // fail-closed：v0 不支援 move（codex 的臨時檔重排屬 best-effort）——用 delete+add 替代
-        throw new FsToolError("FS_EDIT_NOT_FOUND", `line ${i + 1}: *** Move to: is not supported (v0: delete + add instead)`)
+        moveTo = lines[i].slice("*** Move to: ".length).trim()
+        if (!moveTo) throw new FsToolError("FS_EDIT_NOT_FOUND", `line ${i + 1}: Move to requires a path`)
+        if (moveTo === path) throw new FsToolError("FS_EDIT_NOT_FOUND", `line ${i + 1}: Move to must differ from the updated path`)
+        if (seen.has(moveTo)) throw new FsToolError("FS_EDIT_NOT_FOUND", `duplicate path in patch: ${moveTo}`)
+        seen.add(moveTo)
+        i++
       }
       const chunks: PatchChunk[] = []
       while (i < lines.length && lines[i] !== "*** End Patch" && !lines[i].startsWith("*** ") && lines[i].trim() !== "") {
@@ -102,8 +110,8 @@ export function parsePatch(patchContent: string): PatchHunk[] {
         if (lines[i] === "*** End of File") { chunk.isEndOfFile = true; i++ }
         chunks.push(chunk)
       }
-      if (chunks.length === 0) throw new FsToolError("FS_EDIT_NOT_FOUND", `line ${i + 1}: Update File requires at least one change line`)
-      hunks.push({ kind: "update", path, chunks })
+      if (chunks.length === 0 && moveTo === undefined) throw new FsToolError("FS_EDIT_NOT_FOUND", `line ${i + 1}: Update File requires at least one change line`)
+      hunks.push({ kind: "update", path, ...(moveTo !== undefined ? { moveTo } : {}), chunks })
       continue
     }
     // 未知行（含空行／不支援指令）→ 錯誤（strict；空行若在 chunk 迴圈外仍會落到這裡，避免静默吞掉）
@@ -187,8 +195,8 @@ export async function applyPatch(
    *  reported alongside the others instead of aborting the whole patch. */
   guard?: (absPath: string) => void,
   before?: (boundary: NativeBoundary) => void,
-): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[]; errors: { path: string; message: string }[]; replan?: { error: InstructionReplanError; entered: boolean; remaining: string[] } }> {
-  const applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[] = []
+): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean; movedTo?: string }[]; errors: { path: string; message: string }[]; replan?: { error: InstructionReplanError; entered: boolean; remaining: string[] } }> {
+  const applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean; movedTo?: string }[] = []
   const errors: { path: string; message: string }[] = []
   for (const [index, hunk] of hunks.entries()) {
     const target = resolve(hunk.path)
@@ -256,7 +264,30 @@ export async function applyPatch(
           if (r.blobId !== null) preImageRef = r.blobId
         }
         guard?.(target)
-        await writeFileAtomic(target, restoreLineEndings(result.text, style), undefined, boundary)
+        const nextText = restoreLineEndings(result.text, style)
+        let movedTo: string | undefined
+        if (hunk.moveTo !== undefined) {
+          const destination = resolve(hunk.moveTo)
+          const existing = await stat(destination).catch(() => null)
+          if (existing !== null) throw new FsToolError("FS_ALREADY_EXISTS", `Move to: target already exists: ${hunk.moveTo}`)
+          guard?.(destination)
+          // The destination is a new file for rewind purposes; capture it BEFORE
+          // the write so a rollback restores both sides.
+          if (rewind !== undefined) rewind.take(hunk.moveTo, null)
+          await writeFileAtomic(destination, nextText, undefined, boundary)
+          try {
+            guard?.(target)
+            before?.({ target, operation: 'unlink' }); entered = true
+            await unlink(target)
+          } catch (error) {
+            await unlink(destination).catch(() => {})
+            throw error
+          }
+          movedTo = hunk.moveTo
+        } else {
+          guard?.(target)
+          await writeFileAtomic(target, nextText, undefined, boundary)
+        }
         // M49: structured change — the pre-image text and the post-edit text
         // are both known here, so the change can always be built (bounded).
         applied.push({
@@ -264,6 +295,7 @@ export async function applyPatch(
           action: "updated",
           change: createTextDiff(hunk.path, normalized, result.text),
           ...(preImageRef !== undefined ? { preImageRef } : {}),
+          ...(movedTo !== undefined ? { movedTo } : {}),
         })
       }
     } catch (err) {
