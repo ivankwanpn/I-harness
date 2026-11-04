@@ -5,7 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  chokidar@5.0.0: e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0
+  chokidar@5.0.0:
+    hash: e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0
+    path: patches/chokidar@5.0.0.patch
 
 importers:
 
@@ -673,12 +675,12 @@ importers:
 
   packages/exec:
     dependencies:
-      '@i-harness/core-session':
-        specifier: workspace:*
-        version: link:../core-session
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
@@ -1103,12 +1105,12 @@ importers:
 
   packages/provider-runtime:
     dependencies:
-      '@i-harness/context-engine':
-        specifier: workspace:*
-        version: link:../context-engine
       '@i-harness/coding-plans':
         specifier: workspace:*
         version: link:../coding-plans
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session

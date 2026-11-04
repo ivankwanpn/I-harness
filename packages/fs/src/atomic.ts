@@ -1,4 +1,4 @@
-import { rename, writeFile, mkdir } from "node:fs/promises"
+import { rename, writeFile, mkdir, stat } from "node:fs/promises"
 import { randomBytes } from "node:crypto"
 import { dirname, join, basename } from "node:path"
 import type { NativeBoundary } from '@i-harness/core-tools'
@@ -15,10 +15,13 @@ export async function writeFileAtomic(
 ): Promise<void> {
   before?.({ target: path, operation: 'mkdir' })
   await mkdir(dirname(path), { recursive: true })
+  // The destination's permission bits must survive the replace: a fresh temp
+  // file would otherwise drop 0755 (and setuid/setgid) on every edit.
+  const effectiveMode = mode ?? await stat(path).then((s) => s.mode & 0o7777).catch(() => undefined)
   const tmp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`)
   try {
     before?.({ target: path, operation: 'temp-write' })
-    await writeFile(tmp, content, mode === undefined ? "utf-8" : { encoding: "utf-8", mode })
+    await writeFile(tmp, content, effectiveMode === undefined ? "utf-8" : { encoding: "utf-8", mode: effectiveMode })
     before?.({ target: path, operation: 'rename' })
     await rename(tmp, path)
   } catch (err) {

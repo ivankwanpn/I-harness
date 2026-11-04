@@ -7,14 +7,16 @@ export function runMediaProcess(executable: string, args: string[], options: { m
     const child = spawn(executable, args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
     const chunks: Buffer[] = []
     let bytes = 0, diagnostic = "", failure: Error | undefined, settled = false
-    const stop = (error: Error) => { failure ??= error; child.kill("SIGKILL") }
-    const abort = () => stop(new Error("Video reading cancelled"))
-    const timer = setTimeout(() => stop(new Error("Video decoder exceeded its time limit")), options.timeoutMs)
     const finish = (error?: Error) => {
       if (settled) return
       settled = true; clearTimeout(timer); options.signal?.removeEventListener("abort", abort)
       if (error) reject(error); else resolve(Buffer.concat(chunks, bytes))
     }
+    // A deadline or cancel must settle HERE: 'close' waits for the stdio pipes,
+    // and a grandchild that inherited stdout can hold them open after the kill.
+    const stop = (error: Error) => { failure ??= error; child.kill("SIGKILL"); finish(error) }
+    const abort = () => stop(new Error("Video reading cancelled"))
+    const timer = setTimeout(() => stop(new Error("Video decoder exceeded its time limit")), options.timeoutMs)
     options.signal?.addEventListener("abort", abort, { once: true })
     if (options.signal?.aborted) abort()
     child.stdout.on("data", (chunk: Buffer) => {

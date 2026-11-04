@@ -1,0 +1,50 @@
+name: verify
+
+# The repo shipped v0.1.13 with `pnpm typecheck` and the reachability gate red
+# because nothing ever ran them. This workflow is the missing trigger.
+on:
+  push:
+    branches: [main, "experiment/**"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * *"
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    name: typecheck (all packages)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # --no-bail on purpose: the fail-fast prefix hides every package after the
+      # first failure, which is exactly how four broken packages shipped.
+      - run: pnpm -r --no-bail typecheck
+
+  full:
+    name: verify:all
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/verify-all.mjs

@@ -1,4 +1,4 @@
-import { readFile, writeFile, readdir, mkdir } from "node:fs/promises"
+import { readFile, readdir, mkdir } from "node:fs/promises"
 import { filesystemApprovalIdentity } from "./approval-identity.ts"
 import { resolve, relative, isAbsolute, dirname } from "node:path"
 import { nativeMutation, nativeOperation, nativePlanValidationFailure, isInstructionReplan, declareInstructionReplan, declareToolResultOutcome, type InstructionReplanError } from "@i-harness/core-tools"
@@ -348,7 +348,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       await mkdir(dirname(target), { recursive: true })
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
       mutation.before({ target, operation: 'write' })
-      await writeFile(target, text, "utf-8")
+      await writeFileAtomic(target, text)
       const { beforeBytes, preImageRef, isNewFile } = captured
       const out: { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } = { ok: true }
       if (preImageRef !== undefined) out.preImageRef = preImageRef
