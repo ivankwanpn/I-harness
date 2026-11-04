@@ -130,4 +130,13 @@ describe("apply_patch tool", () => {
     expect(await readFile(join(dir, "a.txt"), "utf-8")).toBe("old\nheader\nnew\n")
     expect(await readFile(join(dir, "a.txt"), "utf-8")).not.toBe("new\nheader\nold\n") // 錯位結果不得復發
   })
+  it("accepts blank lines before *** End Patch and between hunks", async () => {
+    await writeFile(join(dir, "b.txt"), "one\n")
+    const out = (await tool().execute({
+      patch_content: "*** Begin Patch\n*** Add File: blank.txt\n+ok\n\n*** Update File: b.txt\n@@\n-one\n+two\n\n*** End Patch\n",
+    }, {})) as { ok: boolean }
+    expect(out.ok).toBe(true)
+    expect(await readFile(join(dir, "blank.txt"), "utf-8")).toBe("ok\n")
+    expect(await readFile(join(dir, "b.txt"), "utf-8")).toBe("two\n")
+  })
 })

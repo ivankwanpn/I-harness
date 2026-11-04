@@ -44,6 +44,10 @@ export function parsePatch(patchContent: string): PatchHunk[] {
   const seen = new Set<string>()
   while (i < lines.length) {
     const line = lines[i]
+    // Codex accepts blank separation before/after hunks (models routinely emit
+    // one before *** End Patch). Blank lines are only ignored OUTSIDE a chunk;
+    // inside a chunk the +/-/space grammar still decides.
+    if (line.trim() === "") { i++; continue }
     if (line === "*** End Patch") { endIndex = i; break }
     if (line.startsWith("*** Add File: ")) {
       const path = line.slice("*** Add File: ".length).trim()
