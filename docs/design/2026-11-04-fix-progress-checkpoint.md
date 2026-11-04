@@ -136,8 +136,11 @@
 | 4d | legacy restore 自動 fallback 到重建文件 | `d9df3b3f` |
 | 4e | owned／v3 不偽造 witness；改提供 `readRecoveredTaskRows` 唯讀降級 | `d981489a` |
 | 4f | `tasksAsync` → SDK `session/tasks` 降級回傳 read-only rows | `7d3b90da` |
+| 5a | legacy／non-owned document write-behind（microtask coalescing，flush 等待 in-flight） | `0fbc2f59` |
+| D-07a | 持久化 document 寫入意圖（pending/settled JSONL，`readPendingDocumentWrites`） | `8b95c022` |
+| D-07b | 未結算意圖轉成 `document-write-pending` projection issue，接上 reload 診斷 | `c8947dc9` |
 
-**尚未完成**：移除 task document 的可變寫入（write-behind／廢除），會影响 desktop catalog、required settlement 與 v3 parent 契約，屬獨立重構。
+**尚未完成**：移除 task document 的可變寫入（write-behind／廢除）、pending intent 的自動 reconcile，會影响 desktop catalog、required settlement 與 v3 parent 契約，屬獨立重構。
 
 ## D-12 測試基礎：已遷移與新發現（2026-11-05）
 
