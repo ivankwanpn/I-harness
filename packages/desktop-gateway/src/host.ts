@@ -24,7 +24,7 @@ import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-s
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
-import { createDurableSessionLoader, createSessionService, createInstructionEnvironment, type SessionServiceOptions } from "@i-harness/session-executor"
+import { createDurableSessionLoader, createSessionService, createInstructionEnvironment, readPendingRewindIntents, type SessionServiceOptions } from "@i-harness/session-executor"
 import { acquireChildManagedExecution } from '../../session-executor/src/host-managed-execution.ts'
 import { mountChildShellTools } from '../../session-executor/src/child-shell.ts'
 import { reportTaskProjectionIssues } from './task-projection-diagnostics.ts'
@@ -477,9 +477,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     // D-01: a reload is the natural point to CHECK the task projection against
     // durable child sessions. Read-only: reconcile remains an explicit request.
     const issues = await reportTaskProjectionIssues(service, sessionId)
-    if (issues.length > 0) {
+    // S-07: a pending rewind intent means files may have been restored without
+    // the marker; surface it through the same reload diagnostic notification.
+    const pendingRewinds = await readPendingRewindIntents(coordinator.storageRoot, sessionId).catch(() => [])
+    const kinds = [...issues.map(issue => issue.kind), ...pendingRewinds.map(() => "rewind-intent-pending" as const)].slice(0, 32)
+    if (kinds.length > 0) {
       try {
-        options.onWrite(makeNotification("desktop/tasks/projection", { sessionId, issues: issues.map(issue => issue.kind) }))
+        options.onWrite(makeNotification("desktop/tasks/projection", { sessionId, issues: kinds }))
       } catch { /* diagnostics must not break a reload */ }
     }
   }

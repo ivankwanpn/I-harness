@@ -29,6 +29,7 @@ function safeContextBudget(value: unknown): RuntimeDiagnosticEntry["contextBudge
     || typeof value.recoveryRequired !== "boolean" || typeof value.fullByProvider !== "boolean") return
   return Object.fromEntries(["estimatedInputTokens", "outputReserve", "contextWindow", "effectiveOutputCap", "safetyMargin", "coverage", "estimateSource", "capSupport", "admission", "recoveryRequired", "fullByProvider"].map(key => [key, value[key]])) as RuntimeDiagnosticEntry["contextBudget"]
 }
+const projectionKinds = new Set(["terminal-without-turn-end", "missing-child-session", "job-record-missing", "job-record-terminal-ahead", "job-record-terminal-missing", "job-record-child-mismatch", "document-write-pending", "rewind-intent-pending"])
 const kinds: RuntimeDiagnosticKind[] = ["model/retry", "model/recovered", "model/connecting", "model/quiet", "model/settled", "session/error", "session/cancelled", "gateway/disconnected", "runtime/error", "context/budget", "context/request", "context/compaction", "task/projection"]
 const codes = new Set(["http_400", "http_401", "http_402", "http_403", "http_408", "http_413", "http_429", "http_500", "http_502", "http_503", "http_504", "network", "timeout", "authentication", "quota", "context_limit", "invalid_arguments", "cancelled", "model_error", "gateway_disconnected", "runtime_error", "TEAM_RECOVERY_REQUIRED", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EAI_AGAIN"])
 for (const code of ["UNKNOWN", "ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS", "RATE_LIMIT", "TIMEOUT", "TRANSPORT", "SERVER", "CAPACITY"]) codes.add(code)
@@ -111,7 +112,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     const contextAdmission = validAdmissionObservation(value.contextAdmission) ? structuredClone(value.contextAdmission) : undefined
     const projectionIssues = Array.isArray(value.projectionIssues)
       && value.projectionIssues.length > 0 && value.projectionIssues.length <= 32
-      && value.projectionIssues.every(issue => issue === "terminal-without-turn-end" || issue === "missing-child-session")
+      && value.projectionIssues.every(issue => projectionKinds.has(issue))
       ? [...value.projectionIssues] as NonNullable<RuntimeDiagnosticEntry["projectionIssues"]> : undefined
     const code = typeof value.code === "string" && codes.has(value.code) ? value.code : undefined
     const waitingFor = kind.startsWith("model/") && ["first-response", "progress"].includes(String(value.waitingFor)) ? value.waitingFor as ModelActivityInfo["waitingFor"] : undefined
@@ -127,7 +128,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       : kind === "context/request" ? "Prepared physical request facts."
       : kind === "context/compaction" ? "Context compaction facts."
       : kind === "context/budget" ? "Prepared context admission facts."
-      : kind === "task/projection" ? "Task projection disagreed with durable child sessions."
+      : kind === "task/projection" ? "Task or rewind projection needs attention."
       : code === "TEAM_RECOVERY_REQUIRED" ? "The task could not finish recovering. Retry to continue."
       : modelFailure && modelFailure.reason !== "unknown" ? `${modelFailure.message}${httpStatus ? ` (HTTP ${httpStatus})` : ""}`
       : `${code === "CAPACITY" ? "Model temporarily at capacity. " : ""}Model request failed${httpStatus ? ` (HTTP ${httpStatus})` : code ? ` (${code})` : ""}.`
@@ -260,7 +261,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       if (event.kind === "sdk/notification" && event.method === "desktop/tasks/projection" && record(event.params)
         && identifier(event.params.sessionId) && Array.isArray(event.params.issues)
         && event.params.issues.length > 0 && event.params.issues.length <= 32
-        && event.params.issues.every(issue => issue === "terminal-without-turn-end" || issue === "missing-child-session")) {
+        && event.params.issues.every(issue => projectionKinds.has(issue))) {
         const issues = [...event.params.issues] as NonNullable<RuntimeDiagnosticEntry["projectionIssues"]>
         add({ kind: "task/projection", workspaceId: event.workspaceId, sessionId: event.params.sessionId, projectionIssues: issues },
           JSON.stringify([event.workspaceId, event.params.sessionId, issues]))

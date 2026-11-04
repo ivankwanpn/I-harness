@@ -16,7 +16,9 @@ export interface RuntimeDiagnosticEntry {
   contextAdmission?: import('../../../core-session/src/events/admission.ts').RequestBudgetSnapshotV2
   /** D-01: task projection kinds that disagreed with durable child sessions.
    * Kinds only — never task ids, prompts or child content. */
-  projectionIssues?: Array<"terminal-without-turn-end" | "missing-child-session">
+  projectionIssues?: Array<"terminal-without-turn-end" | "missing-child-session"
+    | "job-record-missing" | "job-record-terminal-ahead" | "job-record-terminal-missing" | "job-record-child-mismatch"
+    | "document-write-pending" | "rewind-intent-pending">
   close?: { generation: number; reason: "scope-changed" | "subprocess-exited" | "manager-closed" }
   id: string
   timestamp: number
