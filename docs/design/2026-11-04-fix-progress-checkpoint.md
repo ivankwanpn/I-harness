@@ -182,6 +182,10 @@
 | S-07 | managed rewind 接上同一 intent（`runRewindRestoration` ordering） | `7bca8805` |
 | S-07 | pending rewind ＋ D-01／D-07 新 kind 接進 reload diagnostics | `d4a42a26` |
 | S-06 | append 在 warm cache 只驗新增事件（增量語意驗證） | `654bbc29` |
+## 2026-11-05 第 105 輪
+
+- 全庫 typecheck 全綠（82 packages）。
+- 安裝檔重建：SHA-256 `9e8d23228bd8b75afa2c7ac04431a34447cb1aef233b8133766f920b97d24ec0`，189,639,726 bytes，builtAt 2026-11-04T21:21:19Z；含 closed-vs-recovery gate 修正（`af478dbb`）與 lifecycle 遷移。
 ## 2026-11-05 第 101 輪
 
 - 安裝檔重建：SHA-256 `68e4be474fe5ab581a03b5be3d706a3f3f0f255e13cde0a2495b73b4c96ebff1`，189,682,971 bytes，builtAt 2026-11-04T21:02:06Z；含 retirement cleanup、admitted-input wake 修正、S-10。
