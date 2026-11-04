@@ -1,14 +1,36 @@
 import { randomUUID } from 'node:crypto'
-import { link, lstat, open, rename, unlink, writeFile, type FileHandle } from 'node:fs/promises'
+import { link, lstat, open, rename, unlink, type FileHandle } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import type { TaskDocumentAck, TaskDocumentWrite, TaskWriteOutcome } from '@i-harness/session-persistence'
 import { captureOriginalTaskWriteProducer } from '@i-harness/session-persistence/internal/task-document-operations'
 async function publishDocument(temp: string, path: string, mode: 'replace' | 'initialize') { if (mode === 'replace') await rename(temp, path); else await link(temp, path) }
+/** Best-effort directory sync: POSIX needs it for rename durability, Windows
+ * cannot open a directory for sync and the rename is already atomic there. */
+async function syncDirectory(directory: string): Promise<void> {
+  let handle: FileHandle | undefined
+  try { handle = await open(directory, 'r'); await handle.sync() }
+  catch { /* best effort; the rename itself is already atomic */ }
+  finally { await handle?.close().catch(() => {}) }
+}
 
 /** Original generic document publication; owned operations will share this owner. */
 export async function writeLegacyDocument(path: string, data: unknown): Promise<void> {
   const tmp = `${path}.${randomUUID()}.tmp`
-  await writeFile(tmp, JSON.stringify(data) + '\n', { encoding: 'utf-8' })
-  await publishDocument(tmp, path, 'replace')
+  try {
+    // File-level durability: a crash between write and rename must not leave a
+    // renamed-but-unsynced document. The temp is always removed on failure so a
+    // failed save cannot accumulate orphans next to the document.
+    const handle = await open(tmp, 'wx', 0o600)
+    try {
+      await handle.writeFile(JSON.stringify(data) + '\n', 'utf-8')
+      await handle.sync()
+    } finally { await handle.close() }
+    await publishDocument(tmp, path, 'replace')
+  } catch (error) {
+    await unlink(tmp).catch(() => {})
+    throw error
+  }
+  await syncDirectory(dirname(path))
 }
 
 type Identity = { dev: bigint; ino: bigint }
