@@ -182,6 +182,10 @@
 | S-07 | managed rewind 接上同一 intent（`runRewindRestoration` ordering） | `7bca8805` |
 | S-07 | pending rewind ＋ D-01／D-07 新 kind 接進 reload diagnostics | `d4a42a26` |
 | S-06 | append 在 warm cache 只驗新增事件（增量語意驗證） | `654bbc29` |
+## 2026-11-05 第 101 輪
+
+- 安裝檔重建：SHA-256 `68e4be474fe5ab581a03b5be3d706a3f3f0f255e13cde0a2495b73b4c96ebff1`，189,682,971 bytes，builtAt 2026-11-04T21:02:06Z；含 retirement cleanup、admitted-input wake 修正、S-10。
+- 回歸批次：agent-team 已遷移檔案（ack／completion／transact／managed-transact／hooks）**67/67**；subagent persist + job-record recovery **28/28**。
 ## 2026-11-05 第 85–100 輪（D-12 遷移與組合修正）
 
 | 範圍 | 項目 | Commit |
