@@ -104,3 +104,17 @@
 也就是：通知 admission 寫入的 fact group／delivery hold 尚未 reconcile，就被同一次 wake 的 submit 視為「新工作必須先恢復」。legacy coordinator 沒有這層 hold，所以同一流程可行。
 
 **修正方向（下一步）**：在 composed 路徑上，notification admission 必須以可 settle 的方式完成（或在 submit 前 reconcile 該 input 的 hold／以 `admittedInputId` 直接採用而不觸發 assertNewWork），不能讓 notification 自己把父會話鎖成 recovery-required。
+
+### 更深一層根因（2026-11-05）
+
+`FactRecoveryRequiredError` 的實際 throw 位置（debug stack）：
+
+- `managed-document.ts` 的 `settleFinishedActions()`（`pending` 未清 → throw `FACT_RECOVERY_REQUIRED`，約 694/707 行）。
+- 呼叫端：`service.ts:1352`，在 `submit` 真正開始 turn 之前：`awaitDeliveryStop(...); priorDocument?.settleFinishedActions()`。
+
+也就是通知喚醒的 submit 在「開始新 turn 前先 settle 舊 action」這一步失敗；pending frame（team spawn 或 notification admission 留下的 action）尚未 settle，於是整個 wake 被拒。
+
+**修正選項**：
+1. notification admission 完成後，明確等待 `document.settleFinishedActions()`（或等價 drain）再 `wake`；或
+2. `submit` 帶 `admittedInputId` 時，允許先消費該 input，再 settle 先前的 finished actions（順序調整，需保留 fail-closed 檢查）。
+兩者都需先確認 pending frame 的來源（team spawn transaction vs notification input admission）。
