@@ -182,6 +182,24 @@
 | S-07 | managed rewind 接上同一 intent（`runRewindRestoration` ordering） | `7bca8805` |
 | S-07 | pending rewind ＋ D-01／D-07 新 kind 接進 reload diagnostics | `d4a42a26` |
 | S-06 | append 在 warm cache 只驗新增事件（增量語意驗證） | `654bbc29` |
+## 2026-11-05 第 85–100 輪（D-12 遷移與組合修正）
+
+| 範圍 | 項目 | Commit |
+|---|---|---|
+| 持久化 | S-10 殘餘：oversized header 明確錯誤 `SESSION_HEADER_TOO_LARGE` | `e15a4db3` |
+| 測試 | agent-team fixture 加 pre-bind control hooks | `e95e8b8e` |
+| 測試 | acknowledgement-settlement 遷移 composed（37/37，後續 38/38） | `6fe0b102` |
+| 測試 | transact 遷移（13/13，需 evidence root） | `b4b8825e` |
+| 測試 | managed-transact 遷移（1/1） | `025a4bb2` |
+| 產品 | team cleanup 在 registry 已 retire 時降級（teardown 不再失敗） | `4aeb3f6f` |
+| 診斷 | team completion wake gap：identity → nondurable holds → `settleFinishedActions` pending | `3515c9aa`～`fd2fafb4` |
+| 產品 | **admitted-input submit 延後 `settleFinishedActions`**（喚醒修正） | `d72dde63` |
+| 測試 | completion-delivery 遷移 composed（**13/13**） | `a01d603b` |
+| 測試 | seeded composed fixture 回歸（3/3）；lifecycle 41/50 後還原 | `07a2424f` |
+
+**第 100 輪驗證**：`pnpm -r --no-bail typecheck` 82 packages 全綠。
+
+**尚未完成**：lifecycle 的兩個語義差異（cleanup 後 `closed` vs `Team recovery required`、以 `coordinator.create({parentSession})` 假造 child session）、initial-input-proof 的 probe 定義、其餘 legacy fixture 檔、S-08/A-12/D-01 final 的架構重設計。安裝檔需在這些修正後重建。
 ## D-12 測試基礎：已遷移與新發現（2026-11-05）
 
 - 已遷移並全綠：`desktop-gateway/execution-surfaces`（10/10，含 cold restart 後 job_output／PTY 的 saved facts 讀取）、`sdk/server.test`（54/54，fork 流程約 20s，該檔放寬 testTimeout 至 30s）、`core-agent/accepted-exchange`（14/14，透過 `createJsonlBackend({ wrapOwnedBatch })` 在 canonical-path guard 綁定前注入）。
