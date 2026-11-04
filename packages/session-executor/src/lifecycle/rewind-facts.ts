@@ -7,7 +7,7 @@ import {receivedExecutionInputsFor,isOriginalPrivateExecRecipient} from './execu
  * source; document drain settles its fact without restoring files again. */
 export async function withRewindFacts<T>(owner: FactOwner, restore: (append: (event: Extract<SessionEvent, {
     type: 'rewind/point';
-}>) => Promise<void>) => Promise<T>): Promise<T> {
+}>) => Promise<void>) => Promise<T>, intent?: import('./rewind-intent.ts').RewindIntentHooks): Promise<T> {
     // The cached received source owns both the synchronous fence and its
     // original durable close. No restoration action/effect starts on debt.
     await receivedInputsFor(owner).delivery.requestClose('rewind').settled;
@@ -20,11 +20,15 @@ export async function withRewindFacts<T>(owner: FactOwner, restore: (append: (ev
     let primary: unknown, failed = false;
     try {
         action.assertOpen();
-        return await restore(async (event) => {
+        // S-07: the intent must be durable before any file restoration starts.
+        await intent?.begin();
+        const result = await restore(async (event) => {
             if (fact) throw new Error('Rewind marker source was already captured');
             fact = source.rewind.capture(event);
             await settle();
         });
+        await intent?.complete();
+        return result;
     }
     catch (error) {
         primary = error;

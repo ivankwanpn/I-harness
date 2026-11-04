@@ -299,3 +299,5 @@
 - `packages/session-persistence/src/coordinator/task-document-transition.ts`（48 KB）與 `task-document-operation.ts`（35 KB）只讀了守衛與 poison 使用點，未逐條審查其狀態機。
 - `packages/core-session/src/managed/execution-state.ts`（96 KB）與 `restored-view.ts`（44 KB）只讀了對外 API 與 currentness guard 的形狀，未逐條追蹤 fold／restore 流程。
 - SQLite backend 不存在（`PersistenceBackend` 只有 JSONL 實作），因此「coordinator 抽象是否適合 SQLite」未評估。
+
+**S-07 部分完成（2026-11-05）**：非 managed 的 rewind 現在會在**還原檔案之前**寫入 durable intent（`rewind-intents/<sessionId>.jsonl` 的 `begin`），還原與 marker settle 後寫 `complete`；crash 留在 `begin` 即為「檔案可能已還原但沒有 marker」的證據，`readPendingRewindIntents` 可查詢。managed 路徑（`managed.execute`）尚未接上 intent；desktop／SDK 的 rewind 入口已把 intent 傳入 `withRewindFacts`。

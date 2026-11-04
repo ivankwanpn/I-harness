@@ -74,7 +74,7 @@ import { readForkPrepareRequest, readForkPrepareResult, readForkCommand, readFor
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
 import { createNondurableFactOwner, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
-import { withRewindFacts } from '@i-harness/session-executor'
+import { createRewindIntentLog, withRewindFacts } from '@i-harness/session-executor'
 import { transportSessionEvents } from "./image-transport.ts"
 import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
 export { parseResultPageQuery } from '@i-harness/session-executor'
@@ -842,7 +842,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           // session/prompt submits to — the marker's append target)).
           const owner=service.liveAssembly(p.sessionId)?.factOwner??(isNondurableSession(live)?createNondurableFactOwner(live):undefined)
           if(!owner)throw Object.assign(new Error('Rewind requires its owned source'),{code:'FACT_OWNER_UNSUPPORTED'})
-          const result = await withRewindFacts(owner,appendEvent=>surface.execute(parsed.target,parsed.mode,{appendEvent}))
+          const result = await withRewindFacts(owner,appendEvent=>surface.execute(parsed.target,parsed.mode,{appendEvent}), createRewindIntentLog(opts.coordinator?.storageRoot, p.sessionId, typeof parsed.target === 'number' ? parsed.target : 0, String(parsed.mode)))
           return makeSuccess(id, result)
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

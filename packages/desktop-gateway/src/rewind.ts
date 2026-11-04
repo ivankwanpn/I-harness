@@ -1,6 +1,6 @@
 import {originalManagedRewindFor} from '../../session-executor/src/host-managed-rewind.ts'
 import { createHash } from "node:crypto"
-import { withRewindFacts } from '@i-harness/session-executor'
+import { createRewindIntentLog, withRewindFacts } from '@i-harness/session-executor'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { RewindStore, RewindService, createGitProbeForStore, type RewindMode } from "@i-harness/rewind"
@@ -34,7 +34,7 @@ export function createDesktopRewind(root: string, workspace: string, coordinator
       if(live&&live!==document.view)throw Object.assign(new Error('Rewind requires the owned document view'),{code:'FACT_OWNER_UNSUPPORTED'})
       const plan = await rewind.plan(target, mode)
       if (fingerprint(plan) !== expected) throw new Error("Rewind preview changed; preview again before confirming")
-      return withRewindFacts(document,appendEvent=>rewind.execute(target,mode,{appendEvent}))
+      return withRewindFacts(document,appendEvent=>rewind.execute(target,mode,{appendEvent}), createRewindIntentLog(coordinator.storageRoot, sessionId, target, mode))
     },
   }
 }
