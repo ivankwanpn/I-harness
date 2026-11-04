@@ -41,3 +41,26 @@ it('returns stable empty stdout and excludes an oversized scalar without replace
 it('does not decode bytes beyond the selected complete window', async () => {
   expect(await fixture(Buffer.from([97, 255])).window(0, 1)).toEqual({ text: 'a', next: 1 })
 })
+
+// One large frame (production pages carry up to 32 KiB per frame), so the
+// internal 8 KiB decode chunks split multi-byte scalars mid-character.
+function bulk(stdout: Buffer) {
+  const record = encodeExecFrameRecord({ channel: 'stdout', frame: 0, offset: 0, end: true, data: stdout.toString('base64') })
+  const body = Buffer.from('IHEXEC01\n' + record)
+  const ref: ManagedArtifactRef = { version: 1, id: 'ctxv1_' + 'a'.repeat(64), revision: 'b'.repeat(64), codec: 'exec-frames-v1', contentDigest: createHash('sha256').update(body).digest('hex'), encodedBytes: body.length, completeness: 'complete' }
+  const read = (cursor: { recordOffset: number; sliceOffset: number }, _maxBytes: number) => readExecFramePage(ref, { cursor, maxBytes: 32768 }, async (o, n) => body.subarray(o, o + n))
+  return (offset: number, budget: number) => readExecTextWindow(ref, stdout.length, offset, budget, read)
+}
+
+it('keeps multi-byte scalars intact across the internal decode-chunk boundary', async () => {
+  const raw = Buffer.from('\u6F22'.repeat(6000)) // 18000 bytes, split at 8192/16384
+  const window = bulk(raw)
+  const result = await window(3 * 5000, 9)
+  expect(result.text).toBe('\u6F22'.repeat(3))
+  expect(result.next).toBe(3 * 5003)
+})
+
+it('rejects an offset inside a scalar that sits past a chunk boundary', async () => {
+  const window = bulk(Buffer.from('\u6F22'.repeat(6000)))
+  await expect(window(8194, 9)).rejects.toThrow('invalid-range')
+})
