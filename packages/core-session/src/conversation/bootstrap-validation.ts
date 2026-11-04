@@ -22,6 +22,39 @@ export function validateSemanticBootstrapHistory(events: readonly SessionEventVi
   validateBootstrapReadiness(events, formatVersion, header)
 }
 
+/** S-06 step 2: validate only the events being appended. The caller guarantees
+ * that the existing prefix was already validated for this exact file extent
+ * (the backend journal cache), so the per-append cost is O(added), not
+ * O(history). Positions below seedLength cannot be appended. */
+export function validateSemanticBootstrapAppend(prefixCount: number, added: readonly SessionEventView[], formatVersion: number, scope: GenerationHistoryScope = {}): void {
+  const header = scope.semanticSeed
+  const seedTypes = ['conversation/seed-manifest', 'conversation/seed-results', 'conversation/seed-group', 'session/bootstrap']
+  if (!header) { if (added.some(event => seedTypes.includes(event.type))) seedInvalid(); return }
+  validateSeedHeader(header)
+  const layout = seedLayout(header)
+  if (![11, 12, 13, 14].includes(formatVersion) || scope.seedLength !== header.seedLength) seedInvalid()
+  for (const [index, event] of added.entries()) {
+    const position = prefixCount + index
+    validateSeedEventShape(event, formatVersion)
+    if (position < header.seedLength) seedInvalid()
+    else if (position === header.seedLength) {
+      if (event.type !== 'session/bootstrap' || event.seq !== position || event.operationId !== header.operationId || event.manifestDigest !== header.manifestDigest
+        || event.seedLength !== header.seedLength || event.initialInputId !== header.initialInputId || event.initialStartedAt !== header.initialStartedAt || event.initialExpiresAt !== header.initialExpiresAt) seedInvalid()
+    } else {
+      if (seedTypes.includes(event.type)) seedInvalid()
+      if (position === header.seedLength + 1 && header.initialInputId !== undefined) {
+        if (event.type !== 'agent/input/admitted' || event.inputId !== header.initialInputId || event.seq !== position) seedInvalid()
+        seedData(event)
+        seedFields(event, ['type', 'version', 'seq', 'inputId', 'text', 'delivery', 'intent'], ['provenance', 'preparationPolicy', 'supplementalContext', 'synthetic', 'images', 'clientToken'])
+        validateConversationEventShape(event, formatVersion)
+        validateAdmitted(event as unknown as AdmittedInput)
+        if (bootstrapInitialInputDigest(event, header.initialStartedAt!, header.initialExpiresAt!) !== header.initialInputDigest) seedInvalid()
+      }
+    }
+    void layout
+  }
+}
+
 export function validateSeedHeader(header: SeedHeader): void {
   seedData(header)
   seedFields(header, ['version', 'codec', 'operationId', 'requestDigest', 'manifestDigest', 'seedDigest', 'dependencyDigest', 'seedLength', 'groupCount', ...(header.version === 3 ? ['profile', 'results', 'resultPageCount'] : [])],

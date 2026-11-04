@@ -305,3 +305,5 @@
 **S-07 managed 路徑（2026-11-05）**：`withManagedRewindFacts` 與 `OriginalManagedRewind.execute` 已接受同一組 intent hooks，desktop 的 managed rewind 也會在還原前寫 `begin`、完成後寫 `complete`；ordering 由共用的 `runRewindRestoration` 固定（begin → restore → complete，restore 失敗不寫 complete）。尚未做：pending rewind intent 的 UI／reload 診斷。
 
 **S-07 診斷（2026-11-05）**：desktop reload 會讀取 pending rewind intents，並以 `rewind-intent-pending` 併入 `desktop/tasks/projection` 通知；desktop 的 runtime diagnostics 已接受新增的 job-record／document-write／rewind 類 issue（先前只允許兩個舊 kind，會把新問題丟掉）。
+
+**S-06 step 2 完成（2026-11-05）**：append 在 journal cache hit（size 與已驗證 prefix 相同）時，改用 `validateSemanticBootstrapAppend(prefixCount, added, …)` 只驗新增事件（O(added)），不再每次重建整個歷史陣列做 semantic fold；cache miss 仍完整驗一次並快取。delivery 事件仍走完整 `validateConversationHistory`（低頻、需跨歷史配對）。剩餘的 O(n) 成本在 cache miss 的首次驗證與 document 全量寫入。

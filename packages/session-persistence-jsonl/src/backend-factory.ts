@@ -11,7 +11,7 @@ import { HEADER_READ_MAX_BYTES, assertHeaderLineReadable } from './backend/heade
 import { lstat, mkdir, open, readFile, readdir, stat, unlink } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname } from "node:path"
-import { canonicalJsonData, validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, validateSubagentHeader, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
+import { canonicalJsonData, validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, validateSemanticBootstrapAppend, validateSubagentHeader, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMetadataUpdate } from "./format.ts"
 import { createSessionFile, stageOwnedSessionFile, replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
@@ -287,7 +287,8 @@ export function createJsonlBackend(root: string, options?: {
         const data = [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion)
           ? (() => {
             const cached = journalCache.get(sessionId)
-            const raw = cached && cached.size === committedBytes ? Promise.resolve(undefined) : readFile(path)
+            const reused = cached !== undefined && cached.size === committedBytes
+            const raw = reused ? Promise.resolve(undefined) : readFile(path)
             return raw.then(bytes => {
               const journal = bytes === undefined ? cached!.journal : readFactJournal(bytes.subarray(bytes.indexOf(0x0a) + 1), header.journal!, header.formatVersion, header)
               if (journal.torn) throw Object.assign(new Error('Journal recovery required'), { code: 'JOURNAL_RECOVERY_REQUIRED', notIssued: true })
@@ -295,7 +296,10 @@ export function createJsonlBackend(root: string, options?: {
               addressed = events.map((event, position) => event.seq === undefined ? { ...event, seq: journal.prefix.eventCount + position } : event)
               validateDeliveryFrame(addressed,header.formatVersion)
               if(addressed.some(event=>event.type.startsWith('agent/delivery-') || event.type==='agent/input/admitted' && event.provenance?.producer==='session.delivery.subagent'))validateConversationHistory([...journal.events,...addressed],header.formatVersion,header)
-              validateSemanticBootstrapHistory([...journal.events, ...addressed], header.formatVersion, header)
+              // S-06 step 2: a cache hit means this exact prefix was already
+              // validated; only the appended events need semantic validation.
+              if (reused) validateSemanticBootstrapAppend(journal.prefix.eventCount, addressed, header.formatVersion, header)
+              else validateSemanticBootstrapHistory([...journal.events, ...addressed], header.formatVersion, header)
               encoded = addressed.length ? encodeFactBatch(randomUUID(), journal.prefix.prefixDigest, addressed) : undefined
               return encoded?.bytes ?? new Uint8Array()
             })
