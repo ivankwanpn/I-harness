@@ -28,6 +28,15 @@ export interface RewindIntentHooks {
   complete(): Promise<void>
 }
 
+/** S-07 ordering: begin must settle before file restoration starts, and
+ * completion only after the restoration/marker work returned. */
+export async function runRewindRestoration<T>(intent: RewindIntentHooks | undefined, restore: () => Promise<T>): Promise<T> {
+  await intent?.begin()
+  const result = await restore()
+  await intent?.complete()
+  return result
+}
+
 const valid = (value: unknown): value is RewindIntentV1 => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const row = value as Record<string, unknown>

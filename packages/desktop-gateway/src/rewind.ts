@@ -26,7 +26,7 @@ export function createDesktopRewind(root: string, workspace: string, coordinator
       const queue = service.queueState(sessionId)
       if (queue.running || queue.queued || service.tasks(sessionId).some((task) => ["queued", "running", "waiting"].includes(task.status))) throw new Error("Session is busy")
       const {rewind,managed} = await engine(sessionId)
-      if(managed?.kind==='ready'){const plan=await rewind.plan(target,mode);if(fingerprint(plan)!==expected)throw new Error('Rewind preview changed; preview again before confirming');return managed.execute(appendEvent=>rewind.execute(target,mode,{appendEvent}))}
+      if(managed?.kind==='ready'){const plan=await rewind.plan(target,mode);if(fingerprint(plan)!==expected)throw new Error('Rewind preview changed; preview again before confirming');return managed.execute(appendEvent=>rewind.execute(target,mode,{appendEvent}), createRewindIntentLog(coordinator.storageRoot, sessionId, target, mode))}
       await coordinator.flush(sessionId)
       // Obtain ownership even for a cold session, before any file restoration.
       const live=await service.writableSessionFor?.(sessionId)??service.liveSession(sessionId)

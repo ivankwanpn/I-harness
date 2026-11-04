@@ -1890,7 +1890,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if(!runtime||closed||closing.has(id))throw Error('Original managed Rewind unavailable')
     if(!row||row.runtime!==runtime)return {kind:'unavailable'}
     const check=()=>{if(closed||closing.has(id)||managedRuntimes.get(id)!==runtime||managedRewinds.get(id)!==row)throw Error('Original managed Rewind retired');runtime.domain.assertCurrent()}
-    return {kind:'ready',store:row.handle.store,assertCurrent:check,async drain(){check();await row.handle.drain();check()},async execute(work){check();const value=await withManagedRewindFacts(runtime.execution,runtime.domain,work);check();return value}}
+    return {kind:'ready',store:row.handle.store,assertCurrent:check,async drain(){check();await row.handle.drain();check()},async execute(work,intent){check();const value=await withManagedRewindFacts(runtime.execution,runtime.domain,work,intent);check();return value}}
   })
   associateOriginalHostAssemblyObserver(service,(listener,options)=>{if(closed)return()=>{};hostAssemblyHooks.add(listener);try{if(options?.includeExisting)for(const [id,assembly] of [...assemblies])if(assemblies.get(id)===assembly)listener(assembly)}catch(error){hostAssemblyHooks.delete(listener);throw error}return()=>{hostAssemblyHooks.delete(listener)}})
   return service

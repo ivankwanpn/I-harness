@@ -301,3 +301,5 @@
 - SQLite backend 不存在（`PersistenceBackend` 只有 JSONL 實作），因此「coordinator 抽象是否適合 SQLite」未評估。
 
 **S-07 部分完成（2026-11-05）**：非 managed 的 rewind 現在會在**還原檔案之前**寫入 durable intent（`rewind-intents/<sessionId>.jsonl` 的 `begin`），還原與 marker settle 後寫 `complete`；crash 留在 `begin` 即為「檔案可能已還原但沒有 marker」的證據，`readPendingRewindIntents` 可查詢。managed 路徑（`managed.execute`）尚未接上 intent；desktop／SDK 的 rewind 入口已把 intent 傳入 `withRewindFacts`。
+
+**S-07 managed 路徑（2026-11-05）**：`withManagedRewindFacts` 與 `OriginalManagedRewind.execute` 已接受同一組 intent hooks，desktop 的 managed rewind 也會在還原前寫 `begin`、完成後寫 `complete`；ordering 由共用的 `runRewindRestoration` 固定（begin → restore → complete，restore 失敗不寫 complete）。尚未做：pending rewind intent 的 UI／reload 診斷。

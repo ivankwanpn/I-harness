@@ -1,5 +1,6 @@
 import { committedFactSeqs, type CapturedSettlementFact, type FactOwner, type ProducerFactOutcome, type SessionEvent } from '@i-harness/core-session';
 import { receivedInputsFor } from './received-inputs.ts';
+import {runRewindRestoration} from './rewind-intent.ts';
 import {isManagedExecutionDomain,type ManagedExecutionDomain} from '@i-harness/core-session/internal/execution';
 import {isManagedExecutionAttachment,type ManagedExecutionAttachment} from '../../../session-persistence/src/execution-internal.ts';
 import {receivedExecutionInputsFor,isOriginalPrivateExecRecipient} from './execution-inputs.ts';
@@ -21,13 +22,11 @@ export async function withRewindFacts<T>(owner: FactOwner, restore: (append: (ev
     try {
         action.assertOpen();
         // S-07: the intent must be durable before any file restoration starts.
-        await intent?.begin();
-        const result = await restore(async (event) => {
+        const result = await runRewindRestoration(intent, () => restore(async (event) => {
             if (fact) throw new Error('Rewind marker source was already captured');
             fact = source.rewind.capture(event);
             await settle();
-        });
-        await intent?.complete();
+        }));
         return result;
     }
     catch (error) {
@@ -48,7 +47,7 @@ export async function withRewindFacts<T>(owner: FactOwner, restore: (append: (ev
 
 /** The private writer's own recipient fences delivery before the original
  * action registers its required marker settlement source. */
-export async function withManagedRewindFacts<T>(execution:ManagedExecutionAttachment,domain:ManagedExecutionDomain,restore:(append:(event:Extract<SessionEvent,{type:'rewind/point'}>)=>Promise<void>)=>Promise<T>):Promise<T>{
+export async function withManagedRewindFacts<T>(execution:ManagedExecutionAttachment,domain:ManagedExecutionDomain,restore:(append:(event:Extract<SessionEvent,{type:'rewind/point'}>)=>Promise<void>)=>Promise<T>,intent?:import('./rewind-intent.ts').RewindIntentHooks):Promise<T>{
     if(!isManagedExecutionAttachment(execution)||!isManagedExecutionDomain(domain)||domain.identity!==execution.identity||domain.owner!==execution.owner)throw TypeError('Original managed Rewind execution required');
     const recipient=receivedExecutionInputsFor(execution).execDelivery(domain);
     if(!isOriginalPrivateExecRecipient(recipient,execution,domain))throw TypeError('Original managed Rewind recipient required');
@@ -58,7 +57,7 @@ export async function withManagedRewindFacts<T>(execution:ManagedExecutionAttach
     const settle=async()=>{if(fact)committedFactSeqs(await fact.reconcile())};
     const source=action.registerSettlementSource(async()=>{await finished.promise;await settle()});
     let primary:unknown,failed=false;
-    try{action.assertOpen();return await restore(async event=>{if(fact)throw Error('Rewind marker source was already captured');fact=source.rewind.capture(event);await settle()})}
+    try{action.assertOpen();return await runRewindRestoration(intent,()=>restore(async event=>{if(fact)throw Error('Rewind marker source was already captured');fact=source.rewind.capture(event);await settle()}))}
     catch(error){primary=error;failed=true;throw error}
     finally{action.finish();finished.resolve();try{await source.close()}catch(cleanup){if(failed)throw new AggregateError([primary,cleanup],'Rewind restoration and marker settlement failed',{cause:primary});throw cleanup}}
 }
