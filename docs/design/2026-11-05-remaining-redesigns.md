@@ -193,3 +193,7 @@ lifecycle 已切到 composed fixture + control hooks：
 
 **source-facts drain 實驗（2026-11-05，未採用）**：在 `drainSnapshot` 對 `not-issued` 直接 `remove(fact)`（視為沒有 durable debt）仍無法讓 restore-path 測試通過；teardown 仍以 `Required source facts need recovery` 失敗，表示該 record 的 reconcile outcome 不是 `not-issued`（很可能是 `unknown`，即先前 attempt 已 issued 但結果未知）。已還原，避免放寬真正需要 recovery 的情況。
 下一步：在同一位置列出每個 pending fact 的 `outcome.kind/code` 與 group 種類，確認是 delivery admission、team-input-admission 還是 task delivery 的 record。
+
+**reconcile-by-batch-key 實驗（2026-11-05，未採用）**：把注入的失敗改成 `{kind:'unknown', key}` 並在 finally 以 `document.reconcile(key)` 清理，teardown 仍失敗（`Coordinator cleanup is unresolved`）。表示留下的 debt **不是那個 batch key 對應的 fact**，而是另一個 source／document（可能是 child 或 restored source）的 required fact。已還原。
+
+**結論**：這個 restore-path 測試用「backend 直接回 not-issued／unknown」模擬 flush 失敗，與 composed 的 fail-closed debt 模型衝突；要嘛測試要拿到**實際 captured settlement fact** 去 reconcile（不是 batch key），要嘛接受 close 會 reject（符合 fail-closed）。在產品端放寬會計入未確認寫入，不建議。
