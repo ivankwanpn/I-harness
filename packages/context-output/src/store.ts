@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Dir } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile, open } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { resolve, dirname } from 'node:path'
 import { LegacyIndexLifecycle, type IndexUse, type RebuildSink, type PendingCaptureIndex } from './legacy/index-lifecycle.ts'
 import type { LegacyUseGate, LegacyUseLease } from './legacy/use-gate.ts'
 import { checkAbort, lexicalChunks } from './bytes.ts'
@@ -35,7 +35,14 @@ const REF_ID = /^ctx_[a-f0-9]{64}$/
 async function atomicJson(path: string, value: unknown): Promise<void> {
   const temporary = `${path}.${randomUUID()}.tmp`
   try {
-    await writeFile(temporary, Buffer.isBuffer(value) ? value : JSON.stringify(value), { flag: 'wx' })
+    // fsync before rename: an owners/manifests file that is renamed into place
+    // but whose bytes never reached the disk can come back as a zero-length
+    // file, and open() used to abort the whole workspace on one of those.
+    const handle = await open(temporary, 'wx')
+    try {
+      await handle.writeFile(Buffer.isBuffer(value) ? value : Buffer.from(JSON.stringify(value)))
+      await handle.sync()
+    } finally { await handle.close() }
     // Windows briefly rejects replacement while another reader's handle is
     // closing. Keep the complete ledger at its old name until rename succeeds.
     for (let attempt = 0; ; attempt++) {
@@ -46,6 +53,8 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
         await new Promise((settle) => setTimeout(settle, 5))
       }
     }
+    // Directory fsync is not uniformly supported on Windows; keep it best-effort.
+    try { const directory = await open(dirname(path), 'r'); try { await directory.sync() } finally { await directory.close() } } catch { /* best-effort */ }
   } finally { await rm(temporary, { force: true }) }
 }
 
