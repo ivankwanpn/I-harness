@@ -38,11 +38,18 @@ export function createApprovalRulesAdapter(options: ApprovalRulesAdapterOptions)
         return () => {
           const currentPolicy = policyNow()
           const currentChild = rootCaller ? undefined : childCallerFor?.(input)
+          // An owned host (managed execution) has no parent assembly to supply a
+          // child-caller table, so child calls are validated by their exact
+          // registry/tool binding instead: a forged sessionId cannot pass the
+          // registry identity check, and the policy must still be the same one.
+          const childValid = childCaller !== undefined
+            ? childCaller.validate() && currentChild !== undefined && currentChild.sessionId === childCaller.sessionId
+              && currentChild.role === childCaller.role && currentChild.snapshot === childCaller.snapshot
+            : childCallerFor === undefined && input.sessionId !== undefined && input.registry !== undefined
+              && input.registry.get(input.call.name) === input.tool
           return (rootCaller ? (input.sessionId === undefined || input.sessionId === assembly.sessionId)
               && (assembly.tools === undefined || input.registry === assembly.tools)
-            : policy !== undefined && currentPolicy !== undefined && childCaller !== undefined && childCaller.validate()
-              && currentChild !== undefined && currentChild.sessionId === childCaller.sessionId
-              && currentChild.role === childCaller.role && currentChild.snapshot === childCaller.snapshot)
+            : policy !== undefined && currentPolicy !== undefined && childValid)
             && input.validateBinding?.() !== false
             && currentPolicy?.workspaceId === workspaceId && currentPolicy?.revision === revision
         }
