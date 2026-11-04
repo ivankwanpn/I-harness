@@ -6,11 +6,11 @@ import { createContext } from "@i-harness/core-plugin"
 import type { ApprovalAuthorityProvider, Tool } from "@i-harness/core-tools"
 import { createApprovalRulesAdapter } from "../src/approval-rules.ts"
 
-function fixture() {
+function fixture(identityAvailable = true) {
   const ctx = createContext()
   const tool = { name: "read", description: "read", inputSchema: { type: "object" } } as unknown as Tool
   const registry = { get: (name: string) => (name === "read" ? tool : undefined) } as never
-  const adapter = createApprovalRulesAdapter({ filePath: join(tmpdir(), `ih-owned-rules-${randomUUID()}.json`), policyIdentity: () => undefined, ownedPolicyIdentity: () => ({ workspaceId: "workspace", revision: "revision" }) })
+  const adapter = createApprovalRulesAdapter({ filePath: join(tmpdir(), `ih-owned-rules-${randomUUID()}.json`), policyIdentity: () => undefined, ownedPolicyIdentity: () => identityAvailable ? { workspaceId: "workspace", revision: "revision" } : undefined })
   adapter.attachOwned({ ctx, sessionId: "root", tools: registry })
   const authority = ctx.services.get<ApprovalAuthorityProvider>("approval/authority")
   return { tool, registry, authority }
@@ -29,6 +29,12 @@ describe("owned approval authority", () => {
     const replacement = { ...tool } as Tool
     expect(authority({ tool: replacement, registry, call: { name: "read", args: {} }, sessionId: "child", validateBinding: () => true })()).toBe(false)
     expect(authority({ tool, registry: undefined, call: { name: "read", args: {} }, sessionId: "child", validateBinding: () => true })()).toBe(false)
+  })
+
+  it("fails closed when the policy identity is unavailable", () => {
+    const { tool, registry, authority } = fixture(false)
+    expect(authority({ tool, registry, call: { name: "read", args: {} }, sessionId: "root" })()).toBe(false)
+    expect(authority({ tool, registry, call: { name: "read", args: {} }, sessionId: "child", validateBinding: () => true })()).toBe(false)
   })
 
   it("still requires the exact root registry", () => {

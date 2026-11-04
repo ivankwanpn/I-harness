@@ -47,11 +47,16 @@ export function createApprovalRulesAdapter(options: ApprovalRulesAdapterOptions)
               && currentChild.role === childCaller.role && currentChild.snapshot === childCaller.snapshot
             : childCallerFor === undefined && input.sessionId !== undefined && input.registry !== undefined
               && input.registry.get(input.call.name) === input.tool
-          return (rootCaller ? (input.sessionId === undefined || input.sessionId === assembly.sessionId)
-              && (assembly.tools === undefined || input.registry === assembly.tools)
-            : policy !== undefined && currentPolicy !== undefined && childValid)
+          // Both the captured and the current identity must exist. Comparing
+          // optional fields with `===` made two unavailable identities
+          // (undefined === undefined) pass as "unchanged", so a revoked host
+          // authority validated as valid.
+          return policy !== undefined && currentPolicy !== undefined
+            && (rootCaller ? (input.sessionId === undefined || input.sessionId === assembly.sessionId)
+                && (assembly.tools === undefined || input.registry === assembly.tools)
+              : childValid)
             && input.validateBinding?.() !== false
-            && currentPolicy?.workspaceId === workspaceId && currentPolicy?.revision === revision
+            && currentPolicy.workspaceId === workspaceId && currentPolicy.revision === revision
         }
       }
       assembly.ctx.services.register("approval/authority", authority)

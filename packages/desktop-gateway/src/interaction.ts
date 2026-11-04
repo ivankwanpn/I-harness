@@ -312,7 +312,17 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
       const row = waiting.get(input.requestId)
       if (closed || !row || row.view.sessionId !== input.sessionId || row.view.kind !== "approval" || !row.settle || row.view.state === "interrupted" || (row.view.expiresAt ?? 0) <= Date.now()) throw new Error("only a live owned human approval can create a rule")
       if (!options.approvalRules) throw new Error("approval rules are unavailable")
-      options.approvalRules.grant(row.view.payload as ApprovalRequest, input.sessionId, input.remember)
+      // "Remember" is an explicit approval action, matching its UI label
+      // ("approve and save rule"). Granting the rule without settling the card
+      // left a persistent allow behind even if the human later denied it, and
+      // the tool call could still be refused while the rule already applied.
+      const rule = options.approvalRules.grant(row.view.payload as ApprovalRequest, input.sessionId, input.remember)
+      try {
+        bridge.reply({ requestId: input.requestId, sessionId: input.sessionId, decision: { kind: "approval", approved: true } })
+      } catch (error) {
+        options.approvalRules.revoke(rule.evidence.workspaceId, rule.id)
+        throw error
+      }
       return { accepted: true }
     },
     cancelSession(sessionId) {
