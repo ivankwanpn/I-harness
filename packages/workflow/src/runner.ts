@@ -94,8 +94,22 @@ export function createWorkflowJobStore(): WorkflowJobStore {
     }
   }
 
+  /** Completed runs are retained for job_output, but not forever: the store is a
+   * process-wide singleton, so an editor that runs workflows all day used to
+   * accumulate every run's stdout/stderr (and its AbortController) until exit. */
+  const MAX_RETAINED_FINISHED_JOBS = 64
+  function evictFinished(): void {
+    const finished = [...jobs.values()].filter(job => job.status !== "running" && (listeners.get(job.id)?.size ?? 0) === 0)
+    for (let index = 0; index < finished.length - MAX_RETAINED_FINISHED_JOBS; index += 1) {
+      const job = finished[index]!
+      jobs.delete(job.id)
+      listeners.delete(job.id)
+    }
+  }
+
   return {
     createJob(owner?: string): WorkflowJobEntry {
+      evictFinished()
       counter += 1
       const job: WorkflowJobEntry = { id: `workflow-${counter}`, status: "running", stdout: "", stderr: "", controller: new AbortController(), ...(owner !== undefined ? { owner } : {}) }
       jobs.set(job.id, job)
@@ -127,6 +141,7 @@ export function createWorkflowJobStore(): WorkflowJobStore {
         ...(status === undefined ? {} : { status }), ...(exitCode === undefined ? {} : { exitCode }),
       })
       publish(job)
+      if (job.status !== "running") evictFinished()
     },
     list(): BackgroundJobView[] {
       return [...jobs.values()].map(toView)
