@@ -68,8 +68,11 @@ function createRetryingExecution(client: ModelClient, policy: ResolvedRetryPolic
         attemptNo++
         const capacityLimited = isModelCapacityError(failure)
         // Model capacity is temporary service load, not account quota. Give it
-        // a fixed ten-second minimum while retaining any longer server advice.
-        const delayMs = Math.max(serverWait, capacityLimited ? 10_000 : backoffDelay(policy, attemptNo))
+        // a fixed ten-second minimum while retaining any longer server advice —
+        // with jitter: every client that sees the same capacity window would
+        // otherwise retry in lockstep and reconverge on the overloaded model.
+        const capacityDelay = Math.round(10_000 * (1 + (Math.random() * 2 - 1) * policy.jitterRatio))
+        const delayMs = Math.max(serverWait, capacityLimited ? Math.max(1_000, capacityDelay) : backoffDelay(policy, attemptNo))
         recovery = {
           requestId, phase: "waiting", attempt: attemptNo,
           ...(policy.mode === "normal" ? { maxRetries: policy.maxRetries } : {}),

@@ -64,8 +64,9 @@ export function createPluginLifecycle(
   // on its own.
   function runDisposer(name: string, disposer: void | Promise<void>): Promise<void> {
     let timedOut = false
+    let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         timedOut = true
         resolve()
       }, UNMOUNT_TIMEOUT_MS)
@@ -75,7 +76,7 @@ export function createPluginLifecycle(
       if (timedOut) {
         d.error(`[core-plugin] unmount disposer for '${name}' timed out after 5s`)
       }
-    })
+    }).finally(() => { if (timer !== undefined) clearTimeout(timer) })
   }
 
   function disposeAll(): void {
