@@ -142,6 +142,15 @@
 
 **尚未完成**：移除 task document 的可變寫入（write-behind／廢除）、pending intent 的自動 reconcile，會影响 desktop catalog、required settlement 與 v3 parent 契約，屬獨立重構。
 
+## 2026-11-05 第 78–81 輪
+
+| 範圍 | 項目 | Commit／結果 |
+|---|---|---|
+| 持久化 | S-09：`enqueue` 標記 deprecated（無 producer），CLI 失敗報告改寫 | `62771bfb` |
+| 持久化 | S-08 部分：`list()` 排除 0-byte 半成品；完整原子發佈 deferred | `53ea918e` |
+| 持久化 | S-06 document：preimage 改 digest＋64 KiB 串流驗證（不再保留全量 copy） | `4720e252` |
+| 驗證 | 全庫 typecheck 全綠（82 packages） | 第 81 輪 |
+| 建置 | 安裝檔重建（`f1dae2ae…`） | 第 81 輪 |
 ## 2026-11-05 第 75–77 輪
 
 | 範圍 | 項目 | Commit／結果 |
