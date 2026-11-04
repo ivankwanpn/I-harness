@@ -179,3 +179,14 @@
 4. **A-06 / A-07**：workflow 的授權面與輸出上限。
 5. **A-05 / A-08 / A-12**：資料正確性、assurance 閘門、WSL 生命週期。
 6. **A-10 / A-11**：桌面建置路徑收斂與 MCP 孤兒行程，排在第 2 項之後但要在下一個 release 前。
+
+## 修復與覆核狀態（2026-11-05）
+
+- **A-02（截斷可見性）**：shell 的 `retainedRunResult` 已有 `truncated: {stdoutBytes, stderrBytes}` 與 spill notice（`packages/shell/src/tools/retention.ts:40-120`）；保留路徑有覆蓋，未另改。
+- **A-03（背景工作）**：**部分已由 saved-fact projection 覆蓋**。`saved-process-index.ts` 由 `tool/call`＋`tool/result` 重建 job id、native identity、宣告與輸出預覽，execution surface 對還原列一律標 `live:false`／`saved-preview`／`retained-unverified`，不會謊稱程序仍在跑；`saved-process-index` 31/31（含新增「重啟後 shell job 仍可定位」案例）。**仍缺**：exec service 本身的 job store 注入與 `dispose()` 失敗降級（無法讓模型對舊 job id 執行 `job_kill`）。
+- **A-04／A-05（patch 文法）**：`*** Move to:` 已支援（`4b686a50`）；`*** End Patch` 前空行已支援（`2123874b`）；`*** Begin Patch` 前導空白仍未放寬。
+- **A-06（workflow 授權）**：已改為 per-session owner 過濾（`863a2841`）。
+- **A-07（workflow 輸出）**：stdout/stderr 各自 1M 字元上限＋截斷提示（`1764f32d`）。
+- **A-09（原生資產）**：ACL wait bridge 五個檔案已入版控並附 provenance（`297b496e`）。
+- **A-01（shell deadline）**：**覆核後不改**——exec 的 `timeoutMs` timer 會連 promoted 背景工作一起中止，前景 deadline 已由 guard 的 abortSignal 生效。
+- **仍待處理**：A-08（assurance/qualification）、A-10（desktop 以 TS+tsx 出貨）、A-11（MCP 後代行程）、A-12（WSL worker 重用）。
