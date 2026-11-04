@@ -28,6 +28,7 @@ export function createResultRetention(deps: Pick<ShellToolDeps, "retention">) {
       exitCode: number
       stdoutSpillPath?: string
       truncated?: { stdout: boolean; stderr: boolean }
+      sandboxDenial?: { signatures: readonly string[] }
     },
     label: string,
   ) {
@@ -40,7 +41,7 @@ export function createResultRetention(deps: Pick<ShellToolDeps, "retention">) {
       if(reader) registerRetainedOutput(output,reader)
       return output
     }
-    if (retention === null) return bind({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode })
+    if (retention === null) return bind({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, ...(result.sandboxDenial === undefined ? {} : { sandboxDenial: result.sandboxDenial }) })
     const so = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     const se = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     so.push(result.stdout)
@@ -69,6 +70,7 @@ export function createResultRetention(deps: Pick<ShellToolDeps, "retention">) {
       stderr: re.text,
       exitCode: result.exitCode,
       ...(truncated ? { truncated: { stdoutBytes: rs.omittedBytes, stderrBytes: re.omittedBytes } } : {}),
+      ...(result.sandboxDenial === undefined ? {} : { sandboxDenial: result.sandboxDenial }),
     })
   }
   // execute: `return retainedRunResult(result)`——async fn 回 promise 自動展平（既有呼叫面不變）

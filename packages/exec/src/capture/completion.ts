@@ -93,6 +93,13 @@ export async function completeCapture({
     registerExecResultOutcome(result, outcome)
     if (!metadata) registerRetainedOutput(result, execOutputReader([sOut, sErr]))
     const runner = handle.runner
+    // Advisory only: the stderr bytes are program-controlled, so a match is a
+    // hint that the SANDBOX refused the operation (rather than the command
+    // failing) — never an authorization or escalation input.
+    if (result.exitCode !== 0 && execution.policy.mode !== "danger-full-access") {
+      const denied = matchedDenialSignatures(result.stderr, runner?.denialSignatures)
+      if (denied.length > 0) result.sandboxDenial = { signatures: denied }
+    }
     if (stop() !== "timeout" && result.exitCode !== 0 && runner?.runnerFailureRules.length && execution.policy.mode !== "danger-full-access") {
       const failure = classifyRunnerFailure({ exitCode: result.exitCode, stderr: { text: result.stderr } }, runner.runnerFailureRules)
       if (failure) throw new SandboxUnavailableError(execution.policy.mode, failure.detail, "command-not-run")
@@ -107,4 +114,17 @@ export async function completeCapture({
     const cleanup = finalizeOutput()
     if (cleanup.length) throw new AggregateError(failed ? [primary, ...cleanup] : cleanup, "Execution output cleanup failed")
   }
+}
+
+/** Case-insensitive line match against the backend's denial vocabulary. */
+function matchedDenialSignatures(stderr: string, signatures: readonly string[] | undefined): string[] {
+  if (signatures === undefined || signatures.length === 0) return []
+  const found: string[] = []
+  for (const line of stderr.split("\n")) {
+    const lowered = line.toLowerCase()
+    for (const signature of signatures) {
+      if (!found.includes(signature) && lowered.includes(signature.toLowerCase())) found.push(signature)
+    }
+  }
+  return found.slice(0, 3)
 }

@@ -41,6 +41,10 @@ export interface ExecResult {
   truncated?: { stdout: boolean; stderr: boolean }
   /** Trusted presentation loss, separate from stdout/stderr and root status. */
   outputDiagnostics?: { outputAbandoned: boolean; discardedOutputBytes: number }
+  /** Advisory: a confined command's stderr matched the backend's denial
+   * vocabulary. Program-controlled bytes, so this is a hint for the model that
+   * the sandbox refused the operation — never an authorization decision. */
+  sandboxDenial?: { signatures: readonly string[] }
   stream?: {
     bytesRead: { stdout: number; stderr: number }
     bytesAdmitted: { stdout: number; stderr: number }

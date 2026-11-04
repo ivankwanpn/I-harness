@@ -53,3 +53,47 @@ it("classifies a selected backend runner failure from its frozen metadata", asyn
   })
   await exec.dispose()
 })
+
+it("marks matching confined stderr as an advisory sandbox denial", async () => {
+  const workspaceRoot = resolve(".")
+  const authority = { kind: "unbound" as const, revision: "denial-test", workspaceRoot }
+  const owner: ExecutionOwner = { sessionId: "denial-owner" }
+  let consumed!: () => void
+  const settled = new Promise<void>((resolve) => { consumed = resolve })
+  const backend: TransportExecutionBackend = {
+    async probe() { return { id: "denial", availability: "available", assurance: "unverified",
+      features: { writeIsolation: true, readIsolation: false, denyPaths: false, pipes: true, pty: false, retainedTree: false } } },
+    async prepare(spec, policy) {
+      return {
+        policy,
+        async commit(validateAuthority) {
+          validateAuthority()
+          const lease = createExecutionLease({
+            receipt: { executionId: "denial-1", backendId: "denial", policyFingerprint: policy.fingerprint, owner: spec.owner, assurance: "unverified" },
+            rootExited: Promise.resolve({ exitCode: 1 }), waitTreeEmpty: async () => {}, settleIo: () => settled,
+            releaseResources: async () => {}, terminate: async () => {},
+          })
+          return {
+            receipt: lease.receipt, rootExited: lease.rootExited, get settled() { return lease.settled },
+            cancel: lease.cancel, release: lease.release, pid: 1,
+            io: {
+              output: (async function* () { try { yield { channel: "stderr" as const, data: Buffer.from("Access is denied.") } } finally { consumed() } })(),
+              write: async () => {}, endInput: async () => {},
+            },
+            runner: Object.freeze({ enforcement: "partial" as const, denialSignatures: Object.freeze(["access is denied"]), runnerFailureRules: Object.freeze([]) }),
+          }
+        },
+        async rollback() {},
+      }
+    },
+  }
+  const exec = registerExec(createContext(), { execution: {
+    defaultOwner: owner, selectBackend: () => backend,
+    resolvePolicy: actualOwner => compileExecutionPolicy({ mode: "workspace-write", owner: actualOwner, authority }),
+    validateAuthority: policy => assertExecutionAuthority(policy, compileExecutionPolicy({ mode: "workspace-write", owner: policy.owner, authority })),
+  } })
+  const result = await exec.run({ argv: ["denied"], sandbox: { mode: "workspace-write", workspaceRoot } })
+  expect(result.sandboxDenial?.signatures).toEqual(["access is denied"])
+  expect(result.exitCode).toBe(1)
+  await exec.dispose()
+})
