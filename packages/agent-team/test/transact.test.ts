@@ -22,7 +22,7 @@ function memberEvent(name: string, phase: "provisioning" | "active" | "failed"):
 
 describe('native candidate admission', () => {
   it('transfers the genuine pre-callback action and finishes unadopted noevent, throw, and validation actions once', async () => {
-    const f = await ownedTeamFixture(), begin = f.document.beginAction.bind(f.document)
+    const f = await ownedTeamFixture([], 'parent', { composed: true }), begin = f.document.beginAction.bind(f.document)
     const actions: { action: ReturnType<typeof begin>; finished: number; captures: (readonly TeamEvent[])[]; admits: number; reconciles: number }[] = []
     f.document.beginAction = (...args) => {
       const action = begin(...args), finish = action.finish.bind(action), capture = action.captureTeamTransaction.bind(action)
@@ -64,7 +64,7 @@ describe('native candidate admission', () => {
   })
 
   it.each([false, true])('refuses the first queued pure callback after revoke (outer Run=%s)', async outer => {
-    const f = await ownedTeamFixture()
+    const f = await ownedTeamFixture([], 'parent', { composed: true })
     const lead = createTeamFacts(f.document, () => tx.drain(), () => {})
     const tx = createTeamTransact(lead)
     let calls = 0
@@ -80,7 +80,7 @@ describe('native candidate admission', () => {
   })
 
   it('rejects raw inherited expired Run while explicitly independent original work gets its own action', async () => {
-    const f = await ownedTeamFixture()
+    const f = await ownedTeamFixture([], 'parent', { composed: true })
     const lead = createTeamFacts(f.document, () => tx.drain(), () => {})
     const tx = createTeamTransact(lead), release = Promise.withResolvers<void>()
     let stale!: Promise<unknown>, independent!: Promise<unknown>, calls = 0
@@ -100,11 +100,11 @@ describe('native candidate admission', () => {
   })
 
   it('settles the original captured unknown before refusing a new candidate under its expired Run', async () => {
-    const f = await ownedTeamFixture(), append = f.backend.appendOwnedBatch!.bind(f.backend)
+    const f = await ownedTeamFixture([], 'parent', { composed: true })
     const lead = createTeamFacts(f.document, () => tx.drain(), () => {})
     const state = createFoldState(), tx = createTeamTransact(lead, state)
     let key!: BatchKey, writes = 0, calls = 0
-    f.backend.appendOwnedBatch = async (...args) => { writes++; await append(...args); key = args[3].key; return { kind: 'unknown', key } }
+    f.control.append = append => async (...args) => { writes++; await append(...args); key = args[3].key; return { kind: 'unknown', key } }
     const release = Promise.withResolvers<void>()
     let stale!: Promise<unknown>
     try {
