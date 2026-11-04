@@ -18,7 +18,17 @@ export function acceptedResultPage(value: unknown, query: ResultPageQuery): Page
   const ref = value.ref as unknown as Ref
   if (resultRefIdentity(ref) !== resultRefIdentity(query.ref) || typeof value.eof !== "boolean") return
   try { if (new TextEncoder().encode(JSON.stringify(value)).length > 16384) return } catch { return }
-  if (ref.codec !== "exec-frames-v1") {
+  if (ref.codec === "code-output-manifest-v1") {
+    if (!record(value.header) || !record(value.footer) || !Array.isArray(value.items)) return
+    if (!safe(value.footer.count) || value.items.length > 1000) return
+    if (value.eof !== (value.nextCursor === null)) return
+    if (value.nextCursor !== null && (!record(value.nextCursor) || !safe(value.nextCursor.offset))) return
+    for (const item of value.items) {
+      if (!record(item) || !safe(item.ordinal) || !record(item.member) || !record(item.item)) return
+      const kind = item.item.kind
+      if (kind !== "text" && kind !== "image" && kind !== "audio") return
+    }
+  } else if (ref.codec !== "exec-frames-v1") {
     if (!safe(value.offset) || value.offset !== (query.offset ?? 0) || value.offset > ref.encodedBytes || !record(value.data)) return
     if (value.eof !== (value.nextOffset === null) || value.nextOffset !== null && (!safe(value.nextOffset) || value.nextOffset <= value.offset || value.nextOffset > ref.encodedBytes)) return
     const length = value.data.kind === "text" && typeof value.data.text === "string" ? new TextEncoder().encode(value.data.text).length : value.data.kind === "bytes" ? bytes(value.data.base64)?.length : undefined
@@ -29,7 +39,7 @@ export function acceptedResultPage(value: unknown, query: ResultPageQuery): Page
   } else {
     if (!cursor(value.cursor) || value.cursor.recordOffset < 9 || value.cursor.recordOffset > ref.encodedBytes || !Array.isArray(value.frames)) return
     // The owner consumes its nine-byte magic header on the initial request.
-    if (!sameCursor(value.cursor, query.cursor ?? {recordOffset:9,sliceOffset:0})) return
+    if (!sameCursor(value.cursor, cursor(query.cursor) ? query.cursor : {recordOffset:9,sliceOffset:0})) return
     if (value.eof !== (value.nextCursor === null)) return
     if (value.nextCursor !== null && (!cursor(value.nextCursor) || value.nextCursor.recordOffset > ref.encodedBytes || value.nextCursor.recordOffset < value.cursor.recordOffset || value.nextCursor.recordOffset === value.cursor.recordOffset && value.nextCursor.sliceOffset <= value.cursor.sliceOffset)) return
     let previous: {channel:unknown;frame:number;offset:number;length:number;end:unknown} | undefined

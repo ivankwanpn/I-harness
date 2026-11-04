@@ -36,9 +36,8 @@ export function createDesktopWindow(preferences?: LocalPreferences): BrowserWind
   // The preload bridge is bound to this webContents, so ANY other document that
   // replaces the trusted one would inherit window.ihDesktop. Refuse navigation
   // everywhere except the app's own renderer (drag-drop, redirects, links).
-  for (const event of ["will-navigate", "will-redirect"] as const) {
-    window.webContents.on(event, (navigation, url) => { if (!isAppNavigation(url)) navigation.preventDefault() })
-  }
+  window.webContents.on("will-navigate", (navigation, url) => { if (!isAppNavigation(url)) navigation.preventDefault() })
+  window.webContents.on("will-redirect", (navigation, url) => { if (!isAppNavigation(url)) navigation.preventDefault() })
   window.once("ready-to-show", () => { if (preferences?.maximized) window.maximize(); window.show() })
   window.webContents.setWindowOpenHandler(({ url }) => {
     const external = externalWebUrl(url)

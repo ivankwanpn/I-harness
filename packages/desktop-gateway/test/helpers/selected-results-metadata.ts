@@ -74,6 +74,8 @@ export async function createMetadataRecorder(mode: 'off' | 'only') {
     path,
     async record(source: ResultSourceObservation | undefined, phase: string, document: FactOwner) {
       if (!source) throw new Error('Actual held Gateway source observation missing')
+      // Only a public observation carries the session view this helper projects.
+      if (source.kind !== 'public') throw new Error('Public held Gateway source observation required')
       source.assertCurrent()
       if (document.view !== source.view) throw new Error('Projection must use the actual observed document owner')
       const held = createCompletedPassiveContext({ kind: 'held-public-fork', sourceSessionId: source.sessionId, view: source.view, factOwner: document, assertCurrent: source.assertCurrent }, { kind: 'completed' })

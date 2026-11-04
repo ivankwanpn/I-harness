@@ -34,7 +34,7 @@ export async function createNativeConsumerOwners(coordinator: SessionCoordinator
     projectFor: projects.nativeScopeFor, resultReadScopeFor: projects.resultReadScopeFor,
     withBindingObservation: projects.withBindingObservation, prepareBootstrapInheritance: projects.prepareBootstrapInheritance,
     visibleRefsFor: async id => {
-      const view = runtime.observations.current(id)?.view ?? (await coordinator.snapshot!(id)).session, cuts = rewindCuts(view)
+      const observation = runtime.observations.current(id), view = observation?.kind === 'public' ? observation.view : (await coordinator.snapshot!(id)).session, cuts = rewindCuts(view)
       return [...semanticSeedResultRefs(view), ...view.events.flatMap(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq)
         ? [...managedResultRefs(event), ...(event.type === 'context/result-ref' ? [event.ref] : [])] : [])]
     },

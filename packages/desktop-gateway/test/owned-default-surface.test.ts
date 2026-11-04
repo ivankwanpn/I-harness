@@ -22,7 +22,7 @@ it('uses original plan and metadata, live prompt and schemas, and preserves an e
  const model=controlledModel(async function*(){yield {type:'text/chunk',text:'done'};yield {type:'end'}})
  let surface:OwnedDefaultSurface|undefined, section='policy one', original:any
  try {
-  const runtime=await createManagedExecutionRuntimeWithRegistry({execution:entry.execution,systemPrompt:'system',tools:[],assertConstructionCurrent(){},retainConstructionCleanup:c=>cleanups.push(c),async configureRegistry(value){original=value;surface=await createOwnedDefaultSurface(value,{initialPlanMode:true,policyPrompt:()=>section,shellPrompt:()=>'',projectPrompt:()=>'',hookPrompt:()=>'',recoveryPrompt:()=>'',skillsPrompt:()=>'',rolesPrompt:()=>'',schemas:()=>value.tools.schemas(),prepareInput:async text=>`expanded ${text}`,reconcileAuthority:async()=>{},goalChanged(){}})},resolveModel(){return {model}}})
+  const runtime=await createManagedExecutionRuntimeWithRegistry({execution:entry.execution,systemPrompt:'system',tools:[],assertConstructionCurrent(){},retainConstructionCleanup:c=>cleanups.push(c),async configureRegistry(value){original=value;surface=await createOwnedDefaultSurface(value,{initialPlanMode:true,policyPrompt:()=>section,shellPrompt:()=>'',projectPrompt:()=>'',hookPrompt:()=>'',recoveryPrompt:()=>'',schemas:()=>value.tools.schemas(),prepareInput:async text=>`expanded ${text}`,reconcileAuthority:async()=>{},goalChanged(){}})},resolveModel(){return {model}}})
   expect(entry.execution.observe().plan().active).toBe(false)
   expect(surface!.systemPrompt()).toContain('policy one')
   const before=surface!.modelOverheadTokens();section='policy two '.repeat(100)
