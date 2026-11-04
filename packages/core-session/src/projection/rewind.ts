@@ -12,6 +12,13 @@ export interface RewindCut {
   markerSeq: number // the rewind/point event's own seq (exclusive bound)
 }
 export interface OriginalWindow extends RewindCut { markerIndex: number; startRank: number; endRank: number }
+
+/** Does a fact at `seq` fall inside the rewind window? Both bounds are seq
+ * space; comparing them with an array index (the old inheritedCutGuard) is
+ * wrong whenever repair/synthetic closers make index !== seq. */
+export function rewindWindowCovers(window: RewindCut, seq: number | undefined): boolean {
+  return seq !== undefined && window.cutFrom <= seq && seq < window.markerSeq
+}
 function originalPoints(session: Session) {
   const result: (RewindCut & { markerIndex: number })[] = []
   for (const [markerIndex, event] of session.events.entries()) {

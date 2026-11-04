@@ -3,6 +3,7 @@ import type { SeedOriginAddress, TurnExtent } from '../seed-types.ts'
 import type { ResultAddress, ResultBasis, ResultClassification, SelectedResultRow } from '../selected-results-types.ts'
 import type { HistoryFact } from './facts.ts'
 import { historyVisibility } from './visibility.ts'
+import { rewindWindowCovers } from '../../projection/rewind.ts'
 import { createNativeResultIndex } from './result-native.ts'
 import { resultAt, resultUnits, unitBasis, type ResultUnit } from './result-units.ts'
 
@@ -36,7 +37,7 @@ export function createResultResourceLedger(context: CompletedPassiveContext) {
   }
   const inheritedCutGuard = (extent: TurnExtent): Denied | undefined => {
     for (const window of context.source.originalWindows) for (const fact of facts) {
-      if (!fact.seedExtent || fact.index < window.cutFrom || fact.index >= window.markerIndex) continue
+      if (!fact.seedExtent || !rewindWindowCovers(window, fact.seq)) continue
       const affected = fact.seedExtent
       if (affected.kind === 'unframed' && extent.kind === 'unframed') return { kind: 'excluded', reason: 'rewound' }
       if (affected.kind !== 'framed' || extent.kind !== 'framed' || affected.last < extent.first || affected.first > extent.last) continue
