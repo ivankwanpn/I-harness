@@ -38,6 +38,10 @@ export interface TaskRecord {
   retention?: "memory" | "pending" | "durable" | "failed"
   retentionError?: string
   recoveryReason?: RecoveryReason
+  /** D-01: the projection disagreed with the durable child session at the last
+   * explicit reconcile. Status and result stay untouched; this is a warning
+   * marker for diagnostics/UI, cleared when the evidence agrees again. */
+  projectionWarning?: "terminal-without-turn-end" | "missing-child-session"
   timeCreated: number
   timeStarted?: number
   timeCompleted?: number
@@ -122,6 +126,9 @@ export interface TaskRegistry {
   updateNotification(id: string, patch: Partial<Omit<TaskNotificationRecord, "id" | "submissionId">>): boolean
   claim(taskId: string, childSessionId?: string, modelLabel?: string, jobId?: string): boolean
   terminalize(input: TaskTerminalizeInput): boolean
+  /** D-01: record or clear a projection-integrity warning without changing the
+   * task's status, outcome or result. Returns whether the record changed. */
+  annotateProjection(taskId: string, warning: TaskRecord["projectionWarning"] | undefined): boolean
   cancelTree(taskId: string, error?: string): { taskIds: string[]; cancelled: number }
   runningCount(): number
   wait(taskId: string, timeoutMs: number): Promise<TaskRecord | undefined>

@@ -350,6 +350,17 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       return true
     },
     terminalize,
+    annotateProjection(taskId, warning) {
+      assertReady()
+      const task = currentState.records.get(taskId)
+      if (!task) throw new Error('unknown task')
+      if (task.projectionWarning === warning) return false
+      if (warning === undefined) delete task.projectionWarning
+      else task.projectionWarning = warning
+      void save().catch(() => {})
+      publish(task)
+      return true
+    },
     cancelTree(taskId, error = "task cancelled by owner") {
       assertReady()
       const root = currentState.records.get(taskId)

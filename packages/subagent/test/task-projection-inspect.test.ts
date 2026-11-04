@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
-import { createTaskRegistry, inspectTaskProjection, taskDocKey, type TaskProtocolDocument } from '../src/index.ts'
+import { createTaskRegistry, inspectTaskProjection, reconcileTaskProjection, taskDocKey, type TaskProtocolDocument } from '../src/index.ts'
 
-it('reports a terminal task whose durable child session has no completed turn (D-01 step 1)', async () => {
+it('reports and annotates a terminal task whose durable child session has no completed turn (D-01)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'task-projection-'))
   const coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
@@ -27,6 +27,19 @@ it('reports a terminal task whose durable child session has no completed turn (D
     expect(await inspectTaskProjection(cold, coordinator)).toEqual([
       { kind: 'terminal-without-turn-end', taskId: task.id, childSessionId: 'child' },
     ])
+    expect(await reconcileTaskProjection(cold, coordinator)).toHaveLength(1)
+    await cold.flushPersistence()
+    expect((await coordinator.getDocument(taskDocKey('parent')) as TaskProtocolDocument).tasks.find(row => row.id === task.id)?.projectionWarning)
+      .toBe('terminal-without-turn-end')
+
+    // The child later completes a turn: the next reconcile clears the warning
+    // without touching status/outcome.
+    await coordinator.append('child', [{ type: 'turn/start' }, { type: 'assistant/message', text: 'done' }, { type: 'turn/end' }])
+    expect(await reconcileTaskProjection(cold, coordinator)).toEqual([])
+    await cold.flushPersistence()
+    const row = (await coordinator.getDocument(taskDocKey('parent')) as TaskProtocolDocument).tasks.find(item => item.id === task.id)!
+    expect(row.projectionWarning).toBeUndefined()
+    expect(row.outcome).toBe('completed')
   } finally {
     await coordinator.close()
     await rm(root, { recursive: true, force: true })

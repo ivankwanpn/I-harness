@@ -27,6 +27,24 @@ export async function inspectTaskProjection(tasks: TaskRegistry, coordinator: Se
   return issues
 }
 
+/** D-01 step 2: write the inspection result into the projection as a warning
+ * marker. Status, outcome and result are never changed here; warnings that no
+ * longer apply are cleared. Returns the issues that were found. */
+export async function reconcileTaskProjection(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<TaskProjectionIssue[]> {
+  const issues = await inspectTaskProjection(tasks, coordinator)
+  const current = new Map(issues.map(issue => [issue.taskId, issue.kind]))
+  for (const t of tasks.list()) {
+    if (t.childSessionId === undefined) continue
+    const kind = current.get(t.id)
+    if (kind === undefined) {
+      if (t.projectionWarning !== undefined) tasks.annotateProjection(t.id, undefined)
+    } else if (t.projectionWarning !== kind) {
+      tasks.annotateProjection(t.id, kind)
+    }
+  }
+  return issues
+}
+
 export async function classifyRestoredTasks(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<number> {
   let classified = 0
   for (const t of tasks.list()) {
