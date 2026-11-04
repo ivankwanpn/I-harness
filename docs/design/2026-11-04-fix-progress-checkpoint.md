@@ -74,6 +74,26 @@
 - D-06 RPC 錯誤無 code（同 NG-03）
 - D-13 Electron 二進位未納入安裝流程、CI 無 build gate
 
+## 2026-11-05 追加修復（第 16–29 輪）
+
+| 範圍 | 項目 | Commit |
+|---|---|---|
+| 子代理 | child exec L1：child execution 取得 + release | `70c139c6` |
+| 子代理 | L2a：child execution domain | `9563e4ce` |
+| 子代理 | L2b：childShellFactory 管線（registerSubagent → child assembly） | `7a479c7a` |
+| 子代理 | L2c：child 專屬 shell 工具 + desktop host factory（best-effort） | `6ca2f52e` |
+| provider | A-01：OpenAI／Anthropic EOF 無終止事件 → error | `637e774c` |
+| provider | A-01：Gemini／Bedrock 同上 | `6c657764` |
+| token | A-02：child overhead 改用共用密度 | `aadfdc09` |
+| token | A-02：`approxTokens` 改用共用密度（compaction/assembly overhead） | `43641d02` |
+| compaction | A-04：摘要請求改為獨立（無主 system prompt／tools） | `e5bbe5cf` |
+| sdk | NG-03：failure `{kind,retryable}`、overload 分類 | `20fdbcef` |
+| sdk/gateway | NG-09：close() 以 request 關閉、CLI 接受舊通知 | `eafeddde` |
+| workflow | A-07：job stdout/stderr 上限 1M 字元 + 截斷提示 | `1764f32d` |
+| 審計 | A-03 覆核維持設計；A-04 修復記錄 | `3a29bc11` |
+
+同時覆核但**不改**：A-01（tools）shell timeout（exec 的 timer 會連背景 promoted job 一起殺，前景 deadline 已由 guard abort 生效）、A-05（agent）未知 window（context state 已回 `unavailable` + reason）。
+
 ## 驗證現狀
 
 - `pnpm -r --no-bail typecheck` 最後一次全綠；每個修復都附單檔測試（workflow 63/63、fs 110/110、sdk failure-events 3/3、session-persistence latch 10/10、jsonl append-cache 2/2、header-limit 3/3、torn-tail 1/1、document 2/2、desktop-gateway 相關 4/4+3/3+1/1、core-session rewind 2/2、fork-prefix 3/3）。
