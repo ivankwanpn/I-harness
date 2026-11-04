@@ -79,6 +79,10 @@ export function createCascades(
     return run(0)
   }
 
+  function disposeAll(): void {
+    cascades.clear(); revisions.clear(); pluginCascades.clear()
+  }
+
   function reclaim(name: string): void {
     for (const { event, handler } of pluginCascades.get(name) ?? []) {
       const list = cascades.get(event)
@@ -90,5 +94,5 @@ export function createCascades(
     pluginCascades.delete(name)
   }
 
-  return { register: registerCascade, localCascades, dispatch: dispatchCascade, reclaim,surface(event:string){const list=cascades.get(event)??[];return {version:String(revisions.get(event)??0),compatible:list.every(entry=>entry.executionAware)}} }
+  return { register: registerCascade, localCascades, dispatch: dispatchCascade, reclaim, disposeAll,surface(event:string){const list=cascades.get(event)??[];return {version:String(revisions.get(event)??0),compatible:list.every(entry=>entry.executionAware)}} }
 }

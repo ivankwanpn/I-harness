@@ -78,5 +78,10 @@ export function createPluginLifecycle(
     })
   }
 
-  return { mount, unmount, mountingPlugin: () => mountingPlugin }
+  function disposeAll(): void {
+    for (const name of [...plugins.keys()]) reclaim(name, [])
+    nestedPlugins.clear()
+  }
+
+  return { mount, unmount, disposeAll, mountingPlugin: () => mountingPlugin }
 }

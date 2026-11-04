@@ -14,6 +14,17 @@ describe("scope extraction contracts", () => {
     expect(grandchild.services.get("own")).toBe(late)
   })
 
+  it("disposes a mounted child scope: its listeners stop firing and it leaves the parent's children", async () => {
+    const root = createContext()
+    let calls = 0
+    const child = root.scope.mount()
+    child.on("probe", () => { calls += 1 })
+    await child.emit("probe", {})
+    expect(calls).toBe(1)
+    child.scope.unmount()
+    await child.emit("probe", {})
+    expect(calls).toBe(1)
+  })
   it("snapshots listeners and waterfalls before a listener registers more handlers", async () => {
     const root = createContext()
     const child = root.scope.mount()

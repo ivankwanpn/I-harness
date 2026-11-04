@@ -58,6 +58,10 @@ export function createWaterfalls(getMountingPlugin: () => string | null) {
     return run(0, payload)
   }
 
+  function disposeAll(): void {
+    waterfalls.clear(); revisions.clear(); pluginWaterfalls.clear()
+  }
+
   function reclaim(name: string): void {
     for (const { event, handler } of pluginWaterfalls.get(name) ?? []) {
       const list = waterfalls.get(event)
@@ -74,6 +78,7 @@ export function createWaterfalls(getMountingPlugin: () => string | null) {
     snapshot: (event: string): WaterfallHandler[] => (waterfalls.get(event) ?? []).map(entry=>entry.handler),
     run: runWaterfall,
     reclaim,
+    disposeAll,
     surface:(event:string)=>({version:revisions.get(event)??0,compatible:(waterfalls.get(event)??[]).every(entry=>entry.executionAware)}),
   }
 }

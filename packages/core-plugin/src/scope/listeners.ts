@@ -148,6 +148,10 @@ export function createListeners(
     return payload
   }
 
+  function disposeAll(): void {
+    listeners.clear(); revisions.clear(); pluginListeners.clear(); guards.clear(); decisions.clear()
+  }
+
   function reclaim(name: string): void {
     for (const { event, handler } of pluginListeners.get(name) ?? []) {
       const list = listeners.get(event)
@@ -175,6 +179,7 @@ export function createListeners(
     resolveDecision,
     resolveAncestorDecision,
     reclaim,
+    disposeAll,
     surface:(event:string)=>({version:revisions.get(event)??0,compatible:(listeners.get(event)??[]).every(entry=>entry.executionAware)}),
   }
 }

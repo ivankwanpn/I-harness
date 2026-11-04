@@ -11,6 +11,7 @@ export function createScope(
   parentStore: ServiceStore | null,
   parentScope: InternalScope | null,
   parentEmit: (event: string, payload: unknown,current?:()=>void) => Promise<unknown>,
+  detachFromParent?: () => void,
 ): PluginContext {
   const { store, services,lookup } = createServices(parentStore)
   const scopes = new Set<PluginContext>()
@@ -35,13 +36,20 @@ export function createScope(
     services,
     scope: {
       mount(): PluginContext {
-        const child = createScope(store, ctx, listeners.emit)
+        const child = createScope(store, ctx, listeners.emit, () => { scopes.delete(child) })
         scopes.add(child)
         return child
       },
       unmount(): void {
-        // Preserve the existing local-Set behavior; I4/E2 owns its repair.
-        scopes.delete(ctx)
+        // Dispose THIS scope: detach it from the parent's child set, then
+        // reclaim every handler it owns. Previously this deleted `ctx` from
+        // its own child set (a no-op), so each subagent scope stayed reachable
+        // for the parent's lifetime with its listeners and plugins intact.
+        detachFromParent?.()
+        listeners.disposeAll()
+        waterfall.disposeAll()
+        cascades.disposeAll()
+        lifecycle.disposeAll()
       },
     },
     on: (event,handler)=>listeners.register(event,handler),
