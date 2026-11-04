@@ -1,3 +1,4 @@
+import { agentAbortedError } from '../agent/aborted.ts'
 import type {BatchSource} from './managed-source.ts'
 import { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_MID_FLIGHT, TOOL_CANCELLED_BY_SIBLING, TOOL_FAILED } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
@@ -109,7 +110,7 @@ export async function finishCancelledBatch(_session: BatchSource, batch: BatchCa
   }
   try { await records.drainSettled() }
   catch (cause) { throw Object.assign(new Error('agent aborted; real tool settlement requires recovery', { cause }), { code: 'FACT_RECOVERY_REQUIRED' }) }
-  throw new Error("agent aborted")
+  throw agentAbortedError()
 }
 
 export async function finishCheckpointFailure(_session: BatchSource, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<void> {

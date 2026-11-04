@@ -1,3 +1,4 @@
+import { agentAbortedError } from './aborted.ts'
 import { createResponseRunner } from './response.ts'
 import { agentFacts, committedFactSeqs } from "./facts.ts"
 import { ensureWritableContext } from "./context-readiness.ts"
@@ -56,7 +57,7 @@ export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies
     let promptSubmitted = false
     let firstGeneration = options?.generation ?? direct?.generation
     while (needsContinuation) {
-      if (abort?.aborted) throw new Error("agent aborted")
+      if (abort?.aborted) throw agentAbortedError()
       steps += 1
       if (maxTurns !== undefined && steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
       deps.generationAction = firstGeneration ?? await deps.generationLifecycle?.open('main', generationOrigin, { signal: abort, timeoutMs: deps.modelActionTimeoutMs, maxAttempts: deps.modelActionMaxAttempts })
@@ -142,8 +143,8 @@ export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies
         try {
           verdict = await ctx.emit("agent/pre-stop", stopInput) as typeof verdict
           hookVerdict = await hookRuntime(ctx)?.beforeStop(stopInput)
-        } catch (error) { if (abort?.aborted) throw new Error("agent aborted"); throw error }
-        if (abort?.aborted) throw new Error("agent aborted")
+        } catch (error) { if (abort?.aborted) throw agentAbortedError(); throw error }
+        if (abort?.aborted) throw agentAbortedError()
         const reason = [verdict?.continuation?.reason, hookVerdict?.reason].filter(value => typeof value === "string" && value.trim()).join("\n\n")
         if (typeof reason === "string" && reason.trim()) {
           stopContinuations += 1

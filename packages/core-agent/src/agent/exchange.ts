@@ -1,3 +1,4 @@
+import { agentAbortedError } from './aborted.ts'
 import { retainModelAcceptance, type LiveInvocation } from '../tool-batch/live-continuation.ts'
 import { randomUUID } from "node:crypto"
 import { isNondurableSession, type AcceptedRequestAttributionV1, type ExchangeAcceptedEvent, type AcceptedDraft, type ProducerFactOutcome, type CapturedActionFact } from "@i-harness/core-session"
@@ -13,7 +14,7 @@ export async function ensureConversationSemantics(deps: Pick<AgentDeps, 'session
 /** Assistant and acceptance share one receipt before any effect preparation. */
 export async function acceptModelExchange(deps: Pick<AgentDeps, "flush" | 'facts' | 'captureModelExchange'> & {generationAction?:Pick<NonNullable<AgentDeps['generationAction']>,'acceptance'>;liveInvocation?: LiveInvocation} & ({session:AgentDeps['session'];readAccepted?:never}|{session?:never;readAccepted(capture:object,outcome:ProducerFactOutcome):ExchangeAcceptedEvent}), input: { identity: ModelAttemptIdentity; step: ModelStep; request?: AcceptedRequestAttributionV1; onAccepted?: (event: ExchangeAcceptedEvent) => void; onOutcome?: (outcome: ProducerFactOutcome) => void; onCapture?: (capture: CapturedActionFact<ProducerFactOutcome>) => void; signal?: AbortSignal }): Promise<import('./request-context.ts').AcceptedExchange> {
   const { identity, step, signal } = input
-  if (signal?.aborted) throw new Error("agent aborted")
+  if (signal?.aborted) throw agentAbortedError()
   if (!step.providerEnded) throw Object.assign(new Error("Model response ended without an explicit completion"), { code: "MODEL_RESPONSE_INCOMPLETE" })
   const request = input.request
   if (request && (!step.receipt || step.receipt.candidateId !== request.candidateId || step.receipt.sendId !== request.sendId || step.receipt.payloadId !== request.payloadId || step.receipt.semanticId !== request.semanticId || step.receipt.payloadKind !== request.payloadKind || step.receipt.identity?.authEpoch !== request.executionEpochId || step.receipt.actionId !== identity.actionId || step.receipt.attemptId !== identity.attemptId)) throw new Error("Acceptance receipt does not match physical attempt")
