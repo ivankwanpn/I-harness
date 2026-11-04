@@ -372,7 +372,7 @@ export async function mountAgentTeams(
       activity,
     }
     const collisions = new Set(["send_message", "followup_task", "wait_agent", "interrupt_agent"])
-    const teamTools = createTeamTools(toolDeps).map(tool=>({...tool,execute:(args:unknown,exec:ToolExec)=>{if(phase!=='open')throw Object.assign(Error('Team recovery required'),{code:'FACT_RECOVERY_REQUIRED'});return lead!.run(exec.abortSignal,()=>Promise.resolve(tool.execute(args,exec)))}})).map((tool) => deps.preserveSubagentTools && collisions.has(tool.name)
+    const teamTools = createTeamTools(toolDeps).map(tool=>({...tool,execute:(args:unknown,exec:ToolExec)=>{if(phase!=='open')throw phase==='recovery'?Object.assign(Error('Team recovery required'),{code:'FACT_RECOVERY_REQUIRED'}):Object.assign(Error('Team is closed'),{code:'FACT_CLOSED'});return lead!.run(exec.abortSignal,()=>Promise.resolve(tool.execute(args,exec)))}})).map((tool) => deps.preserveSubagentTools && collisions.has(tool.name)
       ? { ...tool, name: `team_${tool.name}` } : tool)
     if(managed){launchTool=teamTools.find(tool=>tool.name==='spawn_teammate');if(!launchTool)throw TypeError('Original Team leaf unavailable');teamEntry=bindPreparedTeamLaunchLeaf(launchTool,launchTool.execute,provisioningOwner!)}
     // Tool names DERIVED from the created tools (Ruling 19) — mount and

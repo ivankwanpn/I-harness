@@ -148,3 +148,13 @@ lifecycle（14 個 backend 覆寫）以 composed fixture 遷移後最佳為 **41
 - 部分測試直接以 `coordinator.create({ sessionId, parentSession })` 假造 child session，composed 的 task transition 路徑不支援這種建立方式（需走 bootstrap child API）。
 - 已還原 lifecycle 檔案，維持 legacy fixture；其餘已完成遷移的檔案不受影響。
 - 另外已把「seeded composed fixture」加入 `composed-fixture-hooks` 作為回歸測試（3/3）。
+
+### 修正：team gate 的 closed vs recovery（2026-11-05）
+
+`mountAgentTeams` 的 team tool gate 原本只要 `phase !== 'open'` 就拋 `Team recovery required`（`FACT_RECOVERY_REQUIRED`）。這讓 **unmount 進行中**（`phase==='retiring'`）的新工作得到 recovery 錯誤，與 legacy 測試預期的 `/closed/` 不符。
+
+已改為：
+- `phase === 'recovery'` → `Team recovery required`（`FACT_RECOVERY_REQUIRED`）
+- 其他非 open（constructing／partial／retiring／closed）→ `Team is closed`（`FACT_CLOSED`）
+
+效果：lifecycle 以 composed 遷移後由 41/50 → **43/50**（兩個 child-acquisition 測試轉綠）。剩餘 7 個仍為語義差異（cleanup AggregateError 形狀、status edge、settings selection 等），lifecycle 檔案維持 legacy fixture。
