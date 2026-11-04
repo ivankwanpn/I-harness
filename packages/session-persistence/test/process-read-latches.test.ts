@@ -93,4 +93,24 @@ describe('process read mutation latches', () => {
         reader.retire();
         expect(() => reader.markVerified()).toThrow();
     });
+
+    it('clears a session and document poison after a proven recovery', () => {
+        const latches = createProcessReadLatches();
+        latches.beginMutation({ sessionIds: ['s'], documentKeys: ['task-s'], kind: 'other' }).end('unknown');
+        expect(() => latches.assertUnpoisoned('s', ['task-s'])).toThrow(/PROCESS_READ_UNAVAILABLE/);
+        expect(() => latches.capture({ sessionId: 's', documentKeys: ['task-s'], mode: 'cold' })).toThrow(/PROCESS_READ_UNAVAILABLE/);
+
+        latches.clear('s', ['task-s']);
+        expect(() => latches.assertUnpoisoned('s', ['task-s'])).not.toThrow();
+        expect(() => latches.capture({ sessionId: 's', documentKeys: ['task-s'], mode: 'cold' })).not.toThrow();
+    });
+
+    it('clears only the recovered session', () => {
+        const latches = createProcessReadLatches();
+        latches.beginMutation({ sessionIds: ['a'], documentKeys: [], kind: 'other' }).end('unknown');
+        latches.clear('b');
+        expect(() => latches.assertUnpoisoned('a', [])).toThrow(/PROCESS_READ_UNAVAILABLE/);
+        latches.clear('a');
+        expect(() => latches.assertUnpoisoned('a', [])).not.toThrow();
+    });
 });

@@ -23,7 +23,15 @@ export function createLoads(
   async function processMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
-    try { const value = await work(); outcome = 'settled'; return value } finally { token?.end(outcome) }
+    try {
+      const value = await work()
+      outcome = 'settled'
+      // A successful load/mutation proves the session reads from a consistent
+      // durable prefix; an earlier unknown write is no longer a reason to keep
+      // the process-wide poison that blocked every later spawn and cold read.
+      processLatches?.clear(id)
+      return value
+    } finally { token?.end(outcome) }
   }
   const read = async (sessionId: string) => {
     try { return await backend.read(sessionId) }

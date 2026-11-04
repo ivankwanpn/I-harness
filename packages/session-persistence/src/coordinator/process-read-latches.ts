@@ -20,6 +20,16 @@ export function createProcessReadLatches(scope: (ids: readonly string[], keys: r
         assertUnpoisoned(sessionId: string, documentKeys: readonly string[]) {
             if (poisoned.size > 0 && scope([sessionId], documentKeys).keys.some(key => poisoned.has(key))) denied();
         },
+        /** A proven recovery (the session and its documents load from a
+         * consistent durable prefix) ends the poisons for that session. Without
+         * this, one failed append disabled every later spawn/settlement/cold
+         * read in the process until a restart. Readers already invalidated stay
+         * invalid; only new captures observe the cleared state. */
+        clear(sessionId: string, documentKeys: readonly string[] = []) {
+            for (const key of scope([sessionId], documentKeys).keys) poisoned.delete(key);
+            poisonedSessions.delete(sessionId);
+            for (const key of documentKeys) poisonedDocuments.delete(key);
+        },
         beginMutation(input: Mutation) {
             const mutation: Mutation = { ...input, sessionIds: [...new Set(input.sessionIds)], documentKeys: [...new Set(input.documentKeys)] };
             mutationResources.set(mutation, scope(input.sessionIds, input.documentKeys));
