@@ -84,3 +84,10 @@
 - 需要追的路徑：`onTaskTerminalCommitted` → `parentNotify.wake`／task-notification drain → `service.wake`／assembly 的 live session 綁定。composed 的 parent session 是由 fact document 持有，live view 可能不是通知系統比對的那個 identity。
 
 這是 desktop（composed）與 team 完成通知的**真實組合風險**，優先度高於剩餘 harness 遷移；在修正前 `completion-delivery` 維持 legacy fixture。
+
+### 追查線索（2026-11-05，尚未修）
+
+- `session-executor/src/service.ts:590 parentNotifyFor()` 的 `wake(sessionId)` 只在 `sessionId === id`、`assemblies.get(id) === assembly`、`owner() === assembly` 時才 signal `deliveryDrains`；任何 identity 不一致都會靜默 return。
+- `admit()` 比對 `input.sessionId !== id` 與 `assembly !== owner()`；`assembly.inbox.pending()` 需含 `parent-notify-*` 的 input。
+- `assembly.ts:1324 registerSubagent(... persist: { coordinator, stateId, parentSessionId })` 與 `mountAgentTeams(..., parentNotify: opts.parentNotify)` 都有接線。
+- 建議的最小 probe：以 composed fixture 傳入自訂 `parentNotify`（記錄 `wake`／`admit`／`prepareTaskDelivery` 呼叫），斷言 spawn_teammate 完成後 `wake('lead')` 是否被呼叫；若沒有，往 task-notification drain／`onTaskTerminalCommitted` 查；若有，往 `deliveryDrains`／inbox admission 查。
