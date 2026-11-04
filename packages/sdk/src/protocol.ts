@@ -402,6 +402,15 @@ export type SessionModelState =
   | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: string; reasoningEfforts?: string[]; imageInput?: true }
 
 export type { SessionContextState } from "@i-harness/core-session"
+/** NG-08: the one lifecycle vocabulary for session/status notifications.
+ * Emitters use these values; consumers normalize legacy spellings. */
+export type SessionStatus = "queued" | "running" | "completed" | "error" | "cancelled"
+export function normalizeSessionStatus(value: unknown): SessionStatus | undefined {
+  if (value === "idle") return "completed"
+  if (value === "failed") return "error"
+  if (value === "canceled") return "cancelled"
+  return value === "queued" || value === "running" || value === "completed" || value === "error" || value === "cancelled" ? value : undefined
+}
 
 // ── M41b v1.1: session/cancel + session/rewind/* wire types ─────────────────
 // All shapes below STRUCTURALLY MIRROR packages/rewind's types (the wire can't

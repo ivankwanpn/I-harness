@@ -15,7 +15,7 @@ export function createManagedEventBridge(emit:(message:RpcMessage)=>void) {
    const current=()=>!row.retired&&active.get(sessionId)===row
    row.off=owner.subscribe(event=>{
     let captured:SessionEvent
-    try{captured=copyConversationData(event)}catch(error){row.tail=row.tail.then(()=>{if(current())emit(makeNotification('session/status',{sessionId,status:'failed',error:error instanceof Error?error.message:String(error)}))});return}
+    try{captured=copyConversationData(event)}catch(error){row.tail=row.tail.then(()=>{if(current())emit(makeNotification('session/status',{sessionId,status:'error',error:error instanceof Error?error.message:String(error)}))});return}
     row.tail=row.tail.then(async()=>{
      if(!current())return
      let wire:SessionEvent=captured
@@ -29,7 +29,7 @@ export function createManagedEventBridge(emit:(message:RpcMessage)=>void) {
       wire={...captured,images:copyConversationData(admission.images)}
      }
      if(current())emit(makeNotification('session/event',{sessionId,event:wire}))
-    }).catch(error=>{if(current())emit(makeNotification('session/status',{sessionId,status:'failed',error:error instanceof Error?error.message:String(error)}))})
+    }).catch(error=>{if(current())emit(makeNotification('session/status',{sessionId,status:'error',error:error instanceof Error?error.message:String(error)}))})
    })
    active.set(sessionId,row)
   },

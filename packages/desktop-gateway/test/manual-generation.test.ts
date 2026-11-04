@@ -65,7 +65,7 @@ it.each(['session/prompt', 'desktop/session/input/submit'] as const)('configured
   await writeFile(settingsPath, JSON.stringify({ sandboxMode: 'read-only', webSearchMode: 'disabled', llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'https://main-host.fixture.invalid', apiKeyEnv: 'IH_MAIN_FIXTURE_KEY', models: [{ id: 'fixture', contextWindow: 100000, maxTokens: 10000 }] } }, defaultModel: { provider: 'fixture', model: 'fixture' } } }))
   await writeFile(credentialsPath, JSON.stringify({ refs: { IH_MAIN_FIXTURE_KEY: 'fixture-only' } }))
   const frames: RpcMessage[] = [], finished = Promise.withResolvers<void>()
-  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, onWrite: frame => { frames.push(frame); if ('method' in frame && frame.method === 'session/status' && ['failed', 'completed'].includes(String((frame.params as { status?: string }).status))) finished.resolve() } })
+  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, onWrite: frame => { frames.push(frame); if ('method' in frame && frame.method === 'session/status' && ['failed', 'error', 'completed'].includes(String((frame.params as { status?: string }).status))) finished.resolve() } })
   let next = 0
   const rpc = async (operation: string, params: unknown) => { const id = ++next; await host.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method: operation, params })); return frames.find(frame => 'id' in frame && frame.id === id) }
   const entered = Promise.withResolvers<void>(), released = Promise.withResolvers<void>()

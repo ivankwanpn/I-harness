@@ -16,7 +16,7 @@ it('serializes original events, hydrates earlier admission, and fences retiremen
 it('reports missing image admission rather than emitting an incomplete event',async()=>{
  const sent:any[]=[];let listener:(event:any)=>void=()=>{}
  const owner={subscribe(fn:(event:any)=>void){listener=fn;return()=>{}},observe(){return {assertCurrent(){},inbox:{async admitted(){return undefined}}}}} as any
- const bridge=createManagedEventBridge(message=>sent.push(message));bridge.attach('s',owner);listener({type:'user/message',text:'x',imageInputId:'missing',seq:2});await new Promise(resolve=>setTimeout(resolve,0));expect(sent[0].method).toBe('session/status');expect(sent[0].params.status).toBe('failed');await bridge.close()
+ const bridge=createManagedEventBridge(message=>sent.push(message));bridge.attach('s',owner);listener({type:'user/message',text:'x',imageInputId:'missing',seq:2});await new Promise(resolve=>setTimeout(resolve,0));expect(sent[0].method).toBe('session/status');expect(sent[0].params.status).toBe('error');await bridge.close()
 })
 
 it('does not retire a replacement owner when an old retirement arrives',async()=>{

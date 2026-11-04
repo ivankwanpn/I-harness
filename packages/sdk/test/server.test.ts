@@ -375,8 +375,11 @@ describe("createSdkServer", () => {
         .map((n) => (n.params as { event: { type: string; text?: string } }).event.text)
         .find((t) => typeof t === "string" && t.includes("mock"))
       expect(text).toContain("hello from the mock")
-      // lifecycle status notifications present
-      expect(notifications.some((n) => n.method === "session/status")).toBe(true)
+      // lifecycle status notifications present, with the canonical vocabulary
+      const statuses = notifications.filter((n) => n.method === "session/status").map((n) => (n.params as { status: string }).status)
+      expect(statuses).toContain("queued")
+      expect(statuses).toContain("completed")
+      expect(statuses).not.toContain("idle")
       await server.close()
     } finally {
       await service.close()

@@ -326,7 +326,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
           failure(event.workspaceId, sessionId, event.params.code==='TEAM_RECOVERY_REQUIRED'?{code:'TEAM_RECOVERY_REQUIRED'}:modelFailure ? { message: event.params.error, modelFailure } : event.params.error)
         }
         else if (status === "cancelled" || status === "canceled") failure(event.workspaceId, sessionId, "cancelled")
-        else if (status === "completed" && !executionBusy(event.workspaceId, sessionId)) { state.status = status; closeAttempt(JSON.stringify([event.workspaceId, sessionId])) }
+        else if ((status === "completed" || status === "idle") && !executionBusy(event.workspaceId, sessionId)) { state.status = status; closeAttempt(JSON.stringify([event.workspaceId, sessionId])) }
       } else if (event.method === "session/execution-state") {
         const key = JSON.stringify([event.workspaceId, sessionId])
         const revision = event.params.revision

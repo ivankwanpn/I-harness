@@ -308,7 +308,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       try {
         emitMessage(makeNotification("session/event", { sessionId: assembly.sessionId, event: transportSessionEvents(assembly.session, [event])[0]! }))
       } catch (error) {
-        emitMessage(makeNotification("session/status", { sessionId: assembly.sessionId, status: "failed", error: error instanceof Error ? error.message : String(error) }))
+        emitMessage(makeNotification("session/status", { sessionId: assembly.sessionId, status: "error", error: error instanceof Error ? error.message : String(error) }))
       }
     })
     assemblyUnsubscribes.set(assembly.sessionId, unsubscribe)
@@ -899,7 +899,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         try {
           if (typeof p.context === "string" || images?.length || typeof p.clientToken === "string") await service.submit(sessionId, prompt, controller.signal, { ...(typeof p.context === "string" ? { context: p.context } : {}), ...(images?.length ? { images } : {}), ...(typeof p.clientToken === "string" ? { clientToken: p.clientToken } : {}) })
           else await service.submit(sessionId, prompt, controller.signal)
-          statusNotify(sessionId, "idle")
+          statusNotify(sessionId, "completed")
           return makeSuccess(id, { sessionId, ok: true })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

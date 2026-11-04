@@ -417,7 +417,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       ownedTask: { options: ownedTaskOptions }, ownedWorkflow: true,
       ownedRewind: { root: options.sessionDir, workspace: options.workspace },
       ownedTitle: { get enabled() { return autoTitle.enabled() }, titleMaxOutputTokens: 2048, timeoutMs: 8000 },
-      onTeamRecoveryRequired: sessionId => options.onWrite(makeNotification('session/status', { sessionId, status: 'failed', code: 'TEAM_RECOVERY_REQUIRED' })),
+      onTeamRecoveryRequired: sessionId => options.onWrite(makeNotification('session/status', { sessionId, status: 'error', code: 'TEAM_RECOVERY_REQUIRED' })),
       async mountDefaultSurface(original, live) {
         const id=original.domain.sessionId
         if(!live.task||!live.output||!live.shell||!live.parentNotify||!original.instructions)throw Error('Original Gateway owners unavailable')
@@ -444,7 +444,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const rawInput = createDesktopInput(coordinator, service, {
     managedPreparation: true,
     prepare: async (id, text) => expandPluginPrompt(await service.assemblyFor(id), text),
-    onStatus: (sessionId, running, error, modelFailure) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) })),
+    onStatus: (sessionId, running, error, modelFailure) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "error" : "completed", ...(error ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) })),
   })
   const input = { ...rawInput, admit: (id: string, raw: Parameters<typeof rawInput.admit>[1]) => fence.run(id, () => rawInput.admit(id, raw)),
     resume: (id: string) => fence.run(id, () => rawInput.resume(id)), cancel: (id: string, inputId: string) => fence.run(id, () => rawInput.cancel(id, inputId)) }
@@ -509,7 +509,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const managedWorkflowUis=new Map<string,{execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment;ui:ReturnType<typeof createManagedWorkflowUi>}>()
   const workflowUiFor=(id:string)=>{const runtime=originalManagedRuntimeFor(service,id);if(!runtime)return undefined;const existing=managedWorkflowUis.get(id);if(existing?.execution===runtime.execution){runtime.assertCurrent();return existing.ui}if(existing)throw Error('Original managed workflow owner changed');const retain=(close:()=>Promise<void>)=>retainManagedExecutionCleanup(service,id,runtime.execution,close);const ui=createManagedWorkflowUi({id,...runtime,retain,coordinator,service,teamEnabled:true,async jobEvents(documentJobIds){runtime.assertCurrent();const observation=runtime.execution.observe(),events=await observation.jobStatusEvents(documentJobIds);observation.assertCurrent();runtime.assertCurrent();return events},async lastStepSince(ordinal){runtime.assertCurrent();const observation=runtime.execution.observe(),end=await observation.lastStepEndSince(ordinal);observation.assertCurrent();runtime.assertCurrent();return end}});retain(async()=>{if(managedWorkflowUis.get(id)?.ui===ui)managedWorkflowUis.delete(id)});managedWorkflowUis.set(id,{execution:runtime.execution,ui});return ui}
   const rawWorkflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,managed:workflowUiFor,async managedForMutation(id){const runtime=await prepareOriginalManagedRuntime(service,id);return runtime?workflowUiFor(id):undefined},
-    onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
+    onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "error" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }
   management = createSessionManagement(coordinator, service, isConversation, { workspace: options.workspace, sessionDir: options.sessionDir, fence,
     projectFor: projects.projectFor, onVisibilityWithdrawn: id => instructions.revokeSession(id), moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),

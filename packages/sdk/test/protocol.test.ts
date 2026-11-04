@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream"
 import { createInterface } from "node:readline"
 import {
   encodeFrame,
+  normalizeSessionStatus,
   decodeFrame,
   makeRequest,
   makeNotification,
@@ -504,4 +505,12 @@ describe("HarnessClient session lifecycle and model helpers", () => {
       await client.close()
     }
   })
+})
+
+it("normalizes legacy session status spellings to the canonical vocabulary (NG-08)", () => {
+  expect(normalizeSessionStatus("idle")).toBe("completed")
+  expect(normalizeSessionStatus("failed")).toBe("error")
+  expect(normalizeSessionStatus("canceled")).toBe("cancelled")
+  expect(normalizeSessionStatus("queued")).toBe("queued")
+  expect(normalizeSessionStatus("nonsense")).toBeUndefined()
 })
