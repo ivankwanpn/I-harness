@@ -3,6 +3,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { registerApprovalAnswerer, registerAskUserInput, registerQuestionProvider } from "@i-harness/interaction"
 import { createApprovalPolicy, type ApprovalConfig } from "../src/index.ts"
+import { APPROVAL_POLICY_SERVICE } from "@i-harness/core-tools"
 
 function setup(config: ApprovalConfig) {
   const ctx = createContext()
@@ -309,4 +310,12 @@ describe("guard-approval policy", () => {
     const result = await registry.execute({ name: "bash", args: { command: "rm -rf /tmp/x" } })
     expect(result.output).toEqual({ stdout: "ran", exitCode: 0 })
   })
+})
+
+it("exposes the policy as a scope service so a descendant dispatch classifies its own call", () => {
+  const { ctx, registry } = setup({ workspace: process.cwd() })
+  registry.register(makeBashTool((args) => args.command.split(" ")))
+  const service = ctx.services.get(APPROVAL_POLICY_SERVICE) as { decide(payload: unknown): unknown }
+  expect(service.decide({ name: "bash", args: { command: "rm -rf /tmp/x" } })).toMatchObject({ kind: "ask" })
+  expect(service.decide({ name: "bash", args: { command: "echo hi" } })).toBeUndefined()
 })
