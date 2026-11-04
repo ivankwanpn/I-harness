@@ -13,16 +13,19 @@ import { mkdtemp, rm, writeFile, readFile, readdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { recordFixture } from "./managed-fixture.ts"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { createJsonlBackend, createJsonlSessionCoordinator } from "@i-harness/session-persistence-jsonl"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import { createDesktopExecution, createCodeModeSettings } from "../src/execution.ts"
+const createCoordinator = (directory: string) => composeJsonlTaskTransitionCoordinator(createJsonlBackend(directory), { lock: { enabled: true } }, taskDocumentStorageContract)
+
 import { createAgentProcesses } from "../src/agent-processes.ts"
 import { createDesktopDiagnostics, probeExecutable } from "../src/environment-diagnostics.ts"
 
 it.each(["tool", "code"] as const)("restores actual registered job_output snapshots from saved %s records without duplication or cold execution", async kind => {
   const root = await mkdtemp(join(tmpdir(), "ih-saved-job-dto-")), sessionDir = join(root, "sessions"), script = join(root, "output.cjs")
-  let coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
+  let coordinator = createCoordinator(sessionDir)
   await coordinator.create({ sessionId: "s" }); await coordinator.create({ sessionId: "other" })
   await writeFile(script, 'process.stdout.write(process.argv[2] === "large" ? "QA_LIMIT_" + "x".repeat(150000) : "QA_JOB_OUTPUT\\n");process.stderr.write("QA_ERR\\n")')
   const live = createSessionService({ workspace: root, modelPolicy: "test-mock", approveAll: true, sandbox: "danger-full-access", codeMode: { mode: "mixed" }, coordinator, sessionFor: createDurableSessionLoader(coordinator) })
@@ -143,7 +146,7 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
     await recordFixture(assembly.factOwner, { type: "tool/call", callId: "failed-output", name: "job_output", args: { job_id: smallId } })
     await recordFixture(assembly.factOwner, { type: "tool/result", callId: "failed-output", name: "job_output", output: { ...snapshot, text: "failed output" }, isError: true })
     await coordinator.flush("s"); await live.close(); await coordinator.close()
-    coordinator = createJsonlSessionCoordinator(sessionDir, { lock: { enabled: true } }); coldBroker = createProjectScopeBroker(coordinator, root, undefined, { async assertIdle() { if (cold?.hasAssembly("s")) throw new Error("Fixture owner is live") } }); cold = createSessionService({ workspace: root, modelPolicy: "required", coordinator, resultReadScopeFor: id => coldBroker!.resultReadScopeFor(id) })
+    coordinator = createCoordinator(sessionDir); coldBroker = createProjectScopeBroker(coordinator, root, undefined, { async assertIdle() { if (cold?.hasAssembly("s")) throw new Error("Fixture owner is live") } }); cold = createSessionService({ workspace: root, modelPolicy: "required", coordinator, resultReadScopeFor: id => coldBroker!.resultReadScopeFor(id) })
     const before = await readFile(join(sessionDir, "s.jsonl"), "utf8"), processes = createAgentProcesses(coordinator, cold)
     expect(await processes.jobOutput("s", smallId)).toEqual({ text: snapshot.text, truncated: false, ownerSessionId: "s", live: false })
     expect(await processes.jobOutput("s", largeId)).toEqual({ text: String(largeSnapshot.text), truncated: true, ownerSessionId: "s", live: false })
@@ -238,7 +241,7 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
 
 it("projects saved tool/code PTYs and partial output after restart without an assembly or log writes", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-saved-pty-")), sessionDir = join(root, "sessions")
-  let coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
+  let coordinator = createCoordinator(sessionDir)
   await coordinator.create({ sessionId: "cold" }); await coordinator.create({ sessionId: "other" })
   const document = await coordinator.openManagedDocument("cold")
   await recordFixture(document, { type: "tool/call", callId: "open", name: "terminal_open", args: { command: "node", cols: 90, rows: 25 } })
@@ -248,7 +251,7 @@ it("projects saved tool/code PTYs and partial output after restart without an as
   await recordFixture(document, { type: "code/call", cellId: "cell", callId: "spawn", name: "process_spawn", args: { command: "pwsh" } })
   await recordFixture(document, { type: "code/result", cellId: "cell", callId: "spawn", name: "process_spawn", output: { id: "no-output", pid: 456, cols: 80, rows: 24 } })
   await coordinator.flush("cold"); await coordinator.close()
-  coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
+  coordinator = createCoordinator(sessionDir)
   const service = createSessionService({ workspace: root, modelPolicy: "required" })
   const bytes = async () => { const files = (await readdir(sessionDir)).filter(name => name.endsWith(".jsonl")); return Promise.all(files.map(async name => [name, await readFile(join(sessionDir, name), "utf8")])) }
   const before = await bytes()
@@ -266,7 +269,7 @@ it("projects saved tool/code PTYs and partial output after restart without an as
 
 it("reads actual nested cell history and stops its live owner while a model observer is waiting", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-execution-ui-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = createCoordinator(join(root, "sessions"))
   await coordinator.create({ sessionId: "owned" }); await coordinator.create({ sessionId: "other" })
   let modelCalls = 0
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), codeMode: { mode: "mixed" }, sandbox: "danger-full-access", model: { async *stream() { modelCalls++; yield { type: "end" } } } })
@@ -301,7 +304,7 @@ it("reads actual nested cell history and stops its live owner while a model obse
 
 it("keeps saved running cells read only and bounds paginated cell content without mounting", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-cold-execution-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = createCoordinator(join(root, "sessions"))
   await coordinator.create({ sessionId: "cold" })
   const document = await coordinator.openManagedDocument("cold")
   await recordFixture(document, { type: "code/cell", cellId: "old", sessionId: "cold", state: "started", source: "saved source" })
@@ -326,7 +329,7 @@ it("saves mode under the settings lease, preserving provider fields and current 
   const root = await mkdtemp(join(tmpdir(), "ih-mode-settings-"))
   const path = join(root, "settings.json")
   await writeFile(path, JSON.stringify({ codeMode: { mode: "mixed", maxActiveCells: 2 }, agentShell: "auto", llm: { defaultModel: { provider: "fixture", model: "x" } } }))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = createCoordinator(join(root, "sessions"))
   await coordinator.create({ sessionId: "s" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", codeMode: { mode: "mixed" } })
   try {
@@ -344,7 +347,7 @@ it("saves mode under the settings lease, preserving provider fields and current 
 
 it("controls actual owner PTY through role/hooks/sandbox registry and rejects cold or unrelated IDs", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-owned-pty-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = createCoordinator(join(root, "sessions"))
   await coordinator.create({ sessionId: "s" }); await coordinator.create({ sessionId: "other" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", approveAll: true, sandbox: "danger-full-access", coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const processes = createAgentProcesses(coordinator, service)
@@ -390,7 +393,7 @@ it("reports actual executable versions and missing/unavailable probes without a 
 
 it("shows and cancels actual background shell jobs through the current execution registry", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-process-jobs-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = createCoordinator(join(root, "sessions"))
   await coordinator.create({ sessionId: "s" }); await coordinator.create({ sessionId: "other" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", approveAll: true, sandbox: "danger-full-access", coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const processes = createAgentProcesses(coordinator, service)
