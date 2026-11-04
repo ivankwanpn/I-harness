@@ -40,11 +40,19 @@ function resolveExecutable(argv: readonly string[], cwd: string, env: Readonly<R
   return argv
 }
 
+/** A-08: assurance is a policy input, not a decorative field. The default stays
+ * "unverified" for compatibility; a host can require experimental/verified
+ * backends through IH_MINIMUM_EXEC_ASSURANCE and get a fail-closed refusal. */
+export function minimumExecutionAssurance(env: Readonly<Record<string, string | undefined>> = process.env): BackendRequirements["minimumAssurance"] {
+  const value = env.IH_MINIMUM_EXEC_ASSURANCE
+  return value === "verified" || value === "experimental" || value === "unverified" ? value : "unverified"
+}
+
 function requirements(policy: CompiledSandboxPolicy, request: ExecTransportRequest): BackendRequirements {
   return Object.freeze({
     writeIsolation: policy.mode !== "danger-full-access", readIsolation: request.sandbox?.requireReadIsolation === true,
     denyPaths: false, referenceProtection: policy.referenceRoots.length > 0, transport: request.transport, lifetime: request.lifetime,
-    minimumAssurance: "unverified" as const,
+    minimumAssurance: minimumExecutionAssurance(),
   })
 }
 
