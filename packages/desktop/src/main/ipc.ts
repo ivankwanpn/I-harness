@@ -13,6 +13,7 @@ import { dispatchResultReadRequest } from "./result-pages.ts"
 import { contextQuery, contextReference, type ContextItem } from "../../../desktop-gateway/src/context-picker.ts"
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
 import { dispatchProjectFilesRequest } from "./project-files.ts"
+import { isRecoveryFailure, isSessionScopedRequest } from "./session-recovery.ts"
 import { createDesktopProjectContentSearch, notifyDesktopProjectContentScopesChanged } from "./project-content-search.ts"
 import type { createGlobalProviderSettings } from "./global-provider-settings.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
@@ -746,7 +747,17 @@ export function registerDesktopIpc(
   const ownedDependencies = { ...dependencies, projectContentSearch, surfaceObservation }
   let removed = false
   let windows=ipcWindows.get(ipc)
-  if(!windows){windows=new Map();ipcWindows.set(ipc,windows);ipc.handle(DESKTOP_REQUEST_CHANNEL,async(event,request)=>{const owned=windows!.get(event.sender);if(!owned)throw Error('untrusted IPC sender');return dispatchDesktopRequest(request,owned)})}
+  if(!windows){windows=new Map();ipcWindows.set(ipc,windows);ipc.handle(DESKTOP_REQUEST_CHANNEL,async(event,request)=>{const owned=windows!.get(event.sender);if(!owned)throw Error('untrusted IPC sender');
+    try{return await dispatchDesktopRequest(request,owned)}
+    catch(error){
+      // Recovery-gated failures are repairable: the journal is durable, only the
+      // in-memory execution is poisoned. Rebuild the session once, then tell the
+      // user to retry instead of surfacing an opaque RpcError.
+      if(!isRecoveryFailure(error)||!isSessionScopedRequest(request))throw error
+      try{await dispatchDesktopRequest({kind:'desktop/session/reload',workspaceId:request.workspaceId,sessionId:request.sessionId},owned)}
+      catch{throw error}
+      throw new Error('會話狀態已重新載入，請重試剛才的操作。')
+    }})}
   if(windows.has(registeredWebContents))throw Error('Desktop window already registered')
   windows.set(registeredWebContents,ownedDependencies)
   const offEvent = dependencies.runtimes.onEvent((desktopEvent) => {
