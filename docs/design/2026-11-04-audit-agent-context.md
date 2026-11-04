@@ -139,6 +139,8 @@
 
 **單檔測試**：可。對 `createRecovery` 餵兩次 `CONTEXT_WINDOW_EXCEEDED` 的 measurement 序列，斷言第二次回 `blocked`（修正後應允許第 3、4 次）。
 
+**覆核（2026-11-05）：維持設計，不改。** `context-recovery.test.ts` 的「a second confirmed overflow blocks durably across calibration loss and reload」明確把「第二次 confirmed overflow 即持久 blocked」固定為安全屬性（含重啟後仍 blocked、不再嘗試）；改成 N 次 shrink 需要同時改 managed-turn 的重建迴圈、`context/recovery` fact 的 schema（`retryAttempts`）與所有 durable 消費者，不是單點修改。若要做，應以獨立設計（含 provider 永遠拒絕時的終止證明）進行，不能在本輪硬改。
+
 ---
 
 ## A-07 provider tool-call id 被要求全 session 唯一，重複即丟錯；managed 與 legacy 路徑行為不一致（H）
@@ -158,6 +160,8 @@
 **建議方向**：唯一性只在本 step（或本 turn）內檢查；跨 step 衝突時由 IH 重新命名並保留 `providerCallId` mapping，而不是丟錯；legacy／managed 兩條路徑共用同一個規則。
 
 **單檔測試**：可。兩個 step 都送 `{id:'call_0'}` 的 fake 串流，斷言第二個 step 在目前會拋錯（修正後應被接受並改名）。
+
+**覆核（2026-11-05）：維持 fail-closed，不改。** `model-recovery.test.ts` 的「retains fail-closed duplicate call IDs even across discarded attempts」明確要求重試 attempt 重用同一 id 時整回合失敗（避免同一 id 對到兩個 attempt 的呼叫）；managed 端 `hasToolCallId` 是同一契約。跨 step 重新命名需要 `providerCallId` mapping 與 projection/壓縮的配合，屬獨立設計；目前選擇以明確錯誤拒絕不安全的相容端點，而不是默默改名。
 
 ---
 
