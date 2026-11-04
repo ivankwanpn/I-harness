@@ -91,3 +91,16 @@
 - `admit()` 比對 `input.sessionId !== id` 與 `assembly !== owner()`；`assembly.inbox.pending()` 需含 `parent-notify-*` 的 input。
 - `assembly.ts:1324 registerSubagent(... persist: { coordinator, stateId, parentSessionId })` 與 `mountAgentTeams(..., parentNotify: opts.parentNotify)` 都有接線。
 - 建議的最小 probe：以 composed fixture 傳入自訂 `parentNotify`（記錄 `wake`／`admit`／`prepareTaskDelivery` 呼叫），斷言 spawn_teammate 完成後 `wake('lead')` 是否被呼叫；若沒有，往 task-notification drain／`onTaskTerminalCommitted` 查；若有，往 `deliveryDrains`／inbox admission 查。
+
+### 根因（2026-11-05，已定位未修）
+
+用 `IH_WAKE_DEBUG` 診斷 composed completion 流程：
+
+1. `parentNotify.admit` 正常（identity 全對），input 進入 `assembly.inbox.pending()`。
+2. `parentNotify.wake` 正常，找到對應的 `parent-notify-*` input。
+3. `wake` 接著呼叫 `submit(id, input.text, …, { admittedInputId })`；submit **立即失敗**：
+   `Managed facts require reconciliation (FACT_RECOVERY_REQUIRED)`（`core-session/src/managed/nondurable.ts` 的 `assertNewWork`：`recoveryHolds.size` 或 sticky state 非空）。
+
+也就是：通知 admission 寫入的 fact group／delivery hold 尚未 reconcile，就被同一次 wake 的 submit 視為「新工作必須先恢復」。legacy coordinator 沒有這層 hold，所以同一流程可行。
+
+**修正方向（下一步）**：在 composed 路徑上，notification admission 必須以可 settle 的方式完成（或在 submit 前 reconcile 該 input 的 hold／以 `admittedInputId` 直接採用而不觸發 assertNewWork），不能讓 notification 自己把父會話鎖成 recovery-required。
