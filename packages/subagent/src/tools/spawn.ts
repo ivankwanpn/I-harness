@@ -30,6 +30,19 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
     required: ["message", "task_name"],
   }
   let metadataRevision = -1
+  // Admission is a per-parent queue, like opencode's background job queue and
+  // Codex's thread registry: the child still runs concurrently once launched,
+  // but the parent-side admission (task record, subagent/start, birth and task
+  // document save) runs one call at a time. The parent has a single-writer
+  // execution contract; two concurrent admissions interleaved their writes and
+  // the loser left an unresolved write that poisoned every later spawn.
+  let admissionTail: Promise<void> = Promise.resolve()
+  function withAdmission<T>(work: () => Promise<T>): Promise<T> {
+    const previous = admissionTail
+    let release!: () => void
+    admissionTail = new Promise<void>(resolve => { release = resolve })
+    return previous.catch(() => {}).then(work).finally(release)
+  }
   let roleDescription = ""
   let roleInputSchema: typeof baseSpawnSchema = baseSpawnSchema
   const roleMetadata = () => {
@@ -111,7 +124,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       const admitted=deps.taskLaunchCallerFor?.(exec)
       if(admitted?.kind==='same')return admitted.slot.flight
       const originalSlot=admitted?.slot
-      const run=async()=>{
+      const runBody=async()=>{
       const role=originalSlot?.role??deps.roles.get(args.agent_type??'general')!
       const declared=originalSlot?originalSlot.captureSelection(()=>declaredRoleModel(role,deps)):declaredRoleModel(role,deps)
       if(subagentModelSelectionGated(deps,declared))throw subagentModelSelectionDisabled(role.name)
@@ -321,6 +334,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       }
       finally { try{if(originalSlot)closeRetained()}finally{source.finish()} }
       }
+      const run=()=>withAdmission(runBody)
       if(originalSlot){originalSlot.start(run);return originalSlot.flight}
       return run()
     },
