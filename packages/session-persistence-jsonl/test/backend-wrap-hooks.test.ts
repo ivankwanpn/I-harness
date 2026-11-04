@@ -15,7 +15,7 @@ it('installs pre-bind append and reconcile wrappers before the canonical guard (
     expect(typeof backend.appendOwnedBatch).toBe('function')
     expect(typeof backend.reconcileOwnedBatch).toBe('function')
     await Promise.resolve(backend.appendOwnedBatch!.apply(backend, [{} as never, {} as never, {} as never, {} as never])).catch(() => {})
-    await Promise.resolve(backend.reconcileOwnedBatch!.apply(backend, [{} as never])).catch(() => {})
+    await Promise.resolve(backend.reconcileOwnedBatch!.apply(backend, [{} as never, {} as never, {} as never, {} as never])).catch(() => {})
     expect(counts).toEqual({ append: 1, reconcile: 1 })
   } finally { await rm(root, { recursive: true, force: true }) }
 })
