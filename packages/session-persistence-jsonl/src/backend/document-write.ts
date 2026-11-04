@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { link, lstat, open, rename, unlink, type FileHandle } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { TaskDocumentAck, TaskDocumentWrite, TaskWriteOutcome } from '@i-harness/session-persistence'
+import { TASK_DOCUMENT_MAX_BYTES, type TaskDocumentAck, type TaskDocumentWrite, type TaskWriteOutcome } from '@i-harness/session-persistence'
 import { captureOriginalTaskWriteProducer } from '@i-harness/session-persistence/internal/task-document-operations'
 async function publishDocument(temp: string, path: string, mode: 'replace' | 'initialize') { if (mode === 'replace') await rename(temp, path); else await link(temp, path) }
 /** Best-effort directory sync: POSIX needs it for rename durability, Windows
@@ -40,7 +40,7 @@ const meaningful = (value: Identity) => typeof value.dev === 'bigint' && typeof 
 class Conflict extends Error {}
 /** One retained candidate. Replacement excludes cooperative writers via the original lease. */
 export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Array; preimage?: { bytes: Uint8Array; identity: Identity }; maxBytes?: number | null; guard(): void; verifyRoot(): Promise<void> }) {
-  if (input.maxBytes !== null && input.bytes.byteLength > (input.maxBytes ?? 64 * 1024 * 1024)) throw new RangeError('Task document too large')
+  if (input.maxBytes !== null && input.bytes.byteLength > (input.maxBytes ?? TASK_DOCUMENT_MAX_BYTES)) throw new RangeError('Task document too large')
   if (input.preimage && !meaningful(input.preimage.identity)) throw new Error('Task document identity unavailable')
   // S-06: keep only a digest of the preimage instead of a second full copy.
   const bytes = Buffer.from(input.bytes), bytesDigest = createHash('sha256').update(bytes).digest('hex'), before = input.preimage && { digest: createHash('sha256').update(input.preimage.bytes).digest('hex'), size: input.preimage.bytes.byteLength, identity: input.preimage.identity }, temp = `${input.path}.${randomUUID()}.tmp`
@@ -77,24 +77,28 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
     if (failed) throw cause
     return result as T
   }
-  async function readBounded(resource: Resource, identity: Identity, limit: number) {
-    guard(); const before = await resource.handle.stat({ bigint: true }); guard()
-    if (!before.isFile() || !sameIdentity(before, identity) || before.size < 0n || before.size > BigInt(limit)) throw new Conflict()
-    const buffer = Buffer.alloc(limit + 1); let offset = 0
-    while (offset < buffer.length) {
-      guard()
-      const read = await resource.handle.read(buffer, offset, Math.min(65536, buffer.length - offset), offset); guard()
-      if (!read.bytesRead) break
-      offset += read.bytesRead
-    }
-    const after = await resource.handle.stat({ bigint: true }); guard()
-    if (!sameIdentity(after, identity) || after.size !== before.size || offset !== Number(before.size) || offset > limit) throw new Conflict()
-    return buffer.subarray(0, offset)
-  }
-  async function readOwned(path: string, identity: Identity, limit: number) {
-    const resource = await openOwned(path, 'r')
-    const value = await usingResource(resource, () => readBounded(resource, identity, limit))
-    guard(); return value
+  /** S-06: the partial-temp resume check used to read the whole candidate back
+   * into memory only to compare a prefix. Stream the comparison instead: peak
+   * memory is one 64 KiB window regardless of the document size. */
+  async function tempPrefixLength(identity: Identity, limit: number): Promise<number> {
+    guard(); await input.verifyRoot(); guard()
+    const resource = await openOwned(temp, 'r')
+    return usingResource(resource, async () => {
+      const before = await resource.handle.stat({ bigint: true }); guard()
+      if (!before.isFile() || !sameIdentity(before, identity) || before.size < 0n || before.size > BigInt(limit)) throw new Conflict()
+      const size = Number(before.size), chunk = Buffer.alloc(65536); let offset = 0
+      while (offset < size) {
+        guard()
+        const read = await resource.handle.read(chunk, 0, Math.min(chunk.length, size - offset), offset); guard()
+        if (!read.bytesRead) break
+        const part = chunk.subarray(0, read.bytesRead)
+        if (!part.equals(bytes.subarray(offset, offset + read.bytesRead))) throw new Conflict()
+        offset += read.bytesRead
+      }
+      const after = await resource.handle.stat({ bigint: true }); guard()
+      if (!sameIdentity(after, identity) || after.size !== before.size || offset !== size) throw new Conflict()
+      return offset
+    })
   }
   /** S-06: verify a preimage/candidate by streaming digest instead of comparing
    * a retained full copy; the 64 KiB window keeps peak memory constant. */
@@ -120,10 +124,18 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
   }
   async function confirmCandidate(): Promise<TaskWriteOutcome> {
     if (!tempIdentity) throw new Error('Original candidate identity unavailable')
-    await exactDigest(input.path, tempIdentity, bytesDigest, bytes.length)
+    // S-06: the confirmation used to read the candidate into memory to compare
+    // it. Verify the published bytes by streaming digest, fsync the same
+    // inode, then verify again so an in-place writer cannot slip between.
     const resource = await openOwned(input.path, 'r+')
     let failed = false, cause: unknown
-    try { guard(); const data = await readBounded(resource, tempIdentity, bytes.length); guard(); if (!data.equals(bytes)) throw new Conflict(); guard(); await resource.handle.sync(); guard(); await exactDigest(input.path, tempIdentity, bytesDigest, bytes.length); ack ??= Object.freeze({}) as TaskDocumentAck; phase = 'acknowledged'; result = Object.freeze({ kind: 'committed', ack, durability: 'file-synced-process-restart-v1', cleanupPending: false }) } catch (error) { failed = true; cause = error }
+    try {
+      guard(); const opened = await resource.handle.stat({ bigint: true }); guard()
+      if (!sameIdentity(opened, tempIdentity)) throw new Conflict()
+      guard(); await resource.handle.sync(); guard()
+      await exactDigest(input.path, tempIdentity, bytesDigest, bytes.length)
+      ack ??= Object.freeze({}) as TaskDocumentAck; phase = 'acknowledged'; result = Object.freeze({ kind: 'committed', ack, durability: 'file-synced-process-restart-v1', cleanupPending: false })
+    } catch (error) { failed = true; cause = error }
     try { await closeResource(resource) } catch (error) { if (result?.kind === 'committed') result = Object.freeze({ ...result, cleanupPending: true }); else if (failed) throw new AggregateError([cause, error], 'Task confirmation and close failed'); else throw error }
     if (failed) throw cause
     return result!
@@ -143,8 +155,8 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
       if (phase === 'temp') {
         if (!tempIdentity) throw new Error('Missing original temp identity')
         const stat = await lstat(temp, { bigint: true }); guard(); if (!stat.isFile() || stat.isSymbolicLink() || !sameIdentity(stat, tempIdentity) || stat.size > BigInt(bytes.length)) throw new Conflict()
-        const current = await readOwned(temp, tempIdentity, bytes.length); if (current.length > bytes.length || !current.equals(bytes.subarray(0, current.length))) throw new Conflict()
-        const resource = await openOwned(temp, 'r+'); await usingResource(resource, async () => { guard(); const stat = await resource.handle.stat({ bigint: true }); guard(); if (!sameIdentity(stat, tempIdentity!)) throw new Conflict(); let offset = current.length; while (offset < bytes.length) { guard(); const write = await resource.handle.write(bytes, offset, bytes.length - offset, offset); guard(); if (!write.bytesWritten) throw new Error('Task write made no progress'); offset += write.bytesWritten }; await resource.handle.sync(); guard() }); phase = 'closed'
+        const current = await tempPrefixLength(tempIdentity, bytes.length)
+        const resource = await openOwned(temp, 'r+'); await usingResource(resource, async () => { guard(); const stat = await resource.handle.stat({ bigint: true }); guard(); if (!sameIdentity(stat, tempIdentity!)) throw new Conflict(); let offset = current; while (offset < bytes.length) { guard(); const write = await resource.handle.write(bytes, offset, bytes.length - offset, offset); guard(); if (!write.bytesWritten) throw new Error('Task write made no progress'); offset += write.bytesWritten }; await resource.handle.sync(); guard() }); phase = 'closed'
       }
       if (!tempIdentity) throw new Error('Missing original temp identity')
       await exactDigest(temp, tempIdentity, bytesDigest, bytes.length)

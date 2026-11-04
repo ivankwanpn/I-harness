@@ -14,6 +14,13 @@ import type { TaskDocumentWrite, TaskWriteOutcome } from './task-document-types.
 import type { createProcessReadLatches } from './process-read-latches.ts'
 
 type Parent = { id: string; assertCurrent(): void; assertOriginal?():void; assertTaskV3Parent?(): void; joinIssuedWriter?():Promise<void>;acquireWriter?():Promise<Readonly<{resume():Promise<void>;park():void;release():void}>> }
+/**
+ * S-06: one task-document size limit shared by the staging, observation and
+ * publication layers. The format is a single JSON object replaced atomically,
+ * so a document that cannot fit this bound is a caller error, not a format
+ * gap; raising it silently would only move the failure to a later layer.
+ */
+export const TASK_DOCUMENT_MAX_BYTES = 64 * 1024 * 1024
 export type TaskDocumentConfiguration = { captureParent(document: ManagedExecutionOwner): Parent; captureRequiredParent?(document:ManagedExecutionOwner,source:import('@i-harness/core-session').SettlementFacts):Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
 export interface TaskDocumentReadHandoff { consume(): void; abandon(): void }
 type Operation = { assertCapturedWriteRecovery():void; ordinarySaveOpen():boolean; retirementAcknowledged(ack:import('./task-document-types.ts').TaskDocumentAck):boolean; retirementDisposition(): 'unissued'|'issued'|undefined; observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; prepareReadHandoff(witness: TaskDocumentWitness): TaskDocumentReadHandoff; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; assertHandoff(): void; close(): Promise<void>; retryClose(): Promise<void> }
@@ -210,7 +217,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
           active(); if (readPhase !== 'none' || stageConsumed || staged || !observedReady || !witness || witness !== input || confirmationPending || retrying || ioDebt || lastConfirmation?.kind === 'conflict' || lastConfirmation?.kind === 'unknown') fail()
           const detached = captureTaskSnapshot(snapshot); if (validate(detached) !== undefined) throw new TypeError('Task validator must be synchronous')
           const serialized = JSON.stringify(detached); if (serialized === undefined) throw new TypeError('Invalid task snapshot')
-          const bytes = Buffer.from(serialized + '\n'); if (bytes.length > 64 * 1024 * 1024) throw new RangeError('Task document too large')
+          const bytes = Buffer.from(serialized + '\n'); if (bytes.length > TASK_DOCUMENT_MAX_BYTES) throw new RangeError('Task document too large')
           active(); if (!rawStage) throw new Error('TASK_DOCUMENT_WRITE_UNSUPPORTED'); stageConsumed = true; const original = rawStage(input, bytes);nativeLifetime=originalTaskWriteLifetime(original)
           const issue = method(original, 'issue'), reconcile = method(original, 'reconcile'), retry = method(original, 'retry'), outcome = method(original, 'outcome')
           const writeDescriptors = Object.getOwnPropertyDescriptors(original)

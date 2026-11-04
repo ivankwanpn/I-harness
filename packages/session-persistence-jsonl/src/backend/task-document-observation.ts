@@ -2,12 +2,12 @@ import { lstat, open } from 'node:fs/promises'
 import type { BigIntStats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
-import { isHeldTaskDocumentScope, type HeldTaskDocumentScope, type RawTaskObservation, type TaskDocumentWitness, type TaskDocumentAck, type Confirmation, type TaskDocumentBackendSession } from '@i-harness/session-persistence'
+import { isHeldTaskDocumentScope, TASK_DOCUMENT_MAX_BYTES, type HeldTaskDocumentScope, type RawTaskObservation, type TaskDocumentWitness, type TaskDocumentAck, type Confirmation, type TaskDocumentBackendSession } from '@i-harness/session-persistence'
 import { createOwnedDocumentWrite } from './document-write.ts'
 import { constructOriginalTaskWrite,isHeldTeamBirthScope,type HeldTeamBirthScope } from '@i-harness/session-persistence/internal/task-document-operations'
 import {parseTeamBirthBinding} from '../../../session-persistence/src/coordinator/team-birth-binding.ts'
 
-const LIMIT = 64 * 1024 * 1024
+const LIMIT = TASK_DOCUMENT_MAX_BYTES
 const CHUNK = 64 * 1024
 type Opener = (path: string, flags: 'r' | 'r+') => Promise<FileHandle>
 type Resource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }

@@ -63,3 +63,4 @@ export type { SelectedResultsHeaderStageV2 } from './coordinator/selected-result
 export type { HeldTaskDocumentScope, TaskDocumentWitness, TaskDocumentAck, TaskObservation, Confirmation, RawTaskObservation, TaskDocumentBackendSession, OpenTaskDocumentSession } from './coordinator/task-document-types.ts'
 export type { TaskWriteOutcome, TaskDocumentWrite } from './coordinator/task-document-types.ts'
 export { isHeldTaskDocumentScope } from './coordinator/task-document-scope.ts'
+export { TASK_DOCUMENT_MAX_BYTES } from './coordinator/task-document-operation.ts'
