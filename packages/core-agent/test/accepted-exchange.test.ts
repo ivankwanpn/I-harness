@@ -185,3 +185,20 @@ it("keeps an accepted fact when a stop hook throws", async () => {
   expect(session.events.some(event => event.type === "step/failed")).toBe(false)
   expect(projectConversation(session).items.find(item => item.exchange)?.exchange?.acceptance).toBe("explicit")
 })
+
+it('reports discarded usage on the managed truncated path (A-09)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-managed-truncated-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  await document.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId: 'u', text: 'request', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'fixture.input' } })
+  const ctx = createContext(), tools = createToolRegistry(ctx), emitted: import('@i-harness/telemetry').TelemetryEvent[] = []
+  const telemetry = { emit: (event: import('@i-harness/telemetry').TelemetryEvent) => { emitted.push(event) }, close() {} }
+  const model = createMockClient([{ role: 'assistant', text: 'discard me', usage: { inputTokens: 7, outputTokens: 3 }, truncated: true }])
+  try {
+    const agent = createAgent(ctx, { session: document.view, factOwner: document, generationFactory: localTestGeneration(document, id, model), tools, sessionId: id, systemPrompt: '', model, telemetry })
+    await expect(agent.run('request', undefined, undefined, 'u')).rejects.toMatchObject({ code: 'MODEL_OUTPUT_TRUNCATED' })
+    const usage = emitted.filter(event => event.type === 'provider/usage')
+    expect(usage).toHaveLength(1)
+    expect((usage[0] as { data?: { inputTokens?: number; outputTokens?: number } }).data).toMatchObject({ inputTokens: 7, outputTokens: 3 })
+  } finally { await coordinator.close().catch(() => {}) }
+})

@@ -284,6 +284,10 @@ export function createManagedTurnRunner(_ctx: PluginContext, host: ManagedAgentH
                             for (const call of calls)
                                 if (call.call && step.batch.includes(call.call))
                                     call.handled = true;
+                            // A-09: the provider billed this response even though
+                            // its content is discarded; legacy reports usage before
+                            // discarding, managed must too (parity, not new data).
+                            reportModelUsage(host, step);
                             await stream.discard();
                             throw Object.assign(Error('Model response refused or truncated'), { code: step.refusedThisStep ? 'MODEL_REFUSED' : 'MODEL_OUTPUT_TRUNCATED' });
                         }
