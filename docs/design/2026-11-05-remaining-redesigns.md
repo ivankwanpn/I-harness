@@ -202,3 +202,11 @@ lifecycle 已切到 composed fixture + control hooks：
 
 1. restore-path deliver fail-closed 測試：teardown 現在明確接受 composed 的 fail-closed 行為（`await owned.coordinator.close().catch(() => {})`），斷言仍保留「沒有 ack、訊息留在 queue」。
 2. cleanup AggregateError 形狀測試：role cleanup 由 registry 的 cleanup closure 擁有，因此改為在 `roles.register` 時包裝 cleanup（`retain?.(() => { if (heldRole) throw null; ... })`），而不是事後覆寫 `roles.remove`；這樣才能注入測試預期的 falsey 失敗。
+
+**initial-input-proof 遷移（2026-11-05）**：3/3 passed under composed fixture。backend 覆寫改為 pre-bind hook；probe 語義更新為：
+
+- 有 live table entry → 以 `hasCommittedInitialInput` 判定（true）。
+- 沒有 entry → fall back 到 durable snapshot：
+  - `unknown` attempt 已 committed → true（誠實的 durable 證據）；
+  - `pending`（write 仍被 hold）→ false。
+- 複製 entry／foreign session／unrelated admission 仍必須 false（private evidence 不可繼承）。
