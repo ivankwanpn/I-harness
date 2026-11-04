@@ -210,3 +210,7 @@ lifecycle 已切到 composed fixture + control hooks：
   - `unknown` attempt 已 committed → true（誠實的 durable 證據）；
   - `pending`（write 仍被 hold）→ false。
 - 複製 entry／foreign session／unrelated admission 仍必須 false（private evidence 不可繼承）。
+
+**其餘 legacy fixture 檔案（2026-11-05）**：`child-sequence` 這類直接 `createSessionCoordinator(createJsonlBackend(root))` 的測試依賴 **非 managed 的 service 行為**（沒有 prepared task caller）。切到 composed coordinator 後，team spawn 會走 managed task-launch 路徑並失敗：`Original prepared task caller unavailable`。
+
+這不是 fixture 遺漏，而是這些測試刻意覆蓋 legacy（非 managed）路徑；要遷移必須同時提供 prepared task leaf，成本遠高於其他檔案。因此維持 legacy，並在文件中標記為「legacy-path coverage」，不列入 D-12 composed 遷移目標。
