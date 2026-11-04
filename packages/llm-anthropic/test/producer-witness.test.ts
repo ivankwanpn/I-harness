@@ -76,6 +76,7 @@ it('withholds a witness when overwritten response indices leave incomplete actua
     { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: 's' } }, { type: 'content_block_stop', index: 0 },
     { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'a', name: 'read', input: {} } },
     { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'b', name: 'read', input: {} } }, { type: 'content_block_stop', index: 1 },
+    { type: 'message_stop' },
   ].map(event => `data: ${JSON.stringify(event)}\n\n`).join('')))
   let end: any
   for await (const event of createAnthropicClient({ apiKey: 'controlled', model: 'fixture' }).stream({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'go' }] })) if (event.type === 'end') end = event

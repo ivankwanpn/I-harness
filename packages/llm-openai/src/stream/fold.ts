@@ -6,6 +6,9 @@ import { mapUsage } from "./usage.ts"
 export function createResponseFold(config: Pick<OpenAIConfig, "model" | "providerId">, codexSubscription: boolean, onToolArguments: () => void) {
   let receivedDone = false
   let receivedCompleted = false
+  // A-01: any of response.completed / response.incomplete / [DONE] is a real
+  // terminal wire event. EOF without one is a dropped connection.
+  let receivedTerminal = false
   // M72 Ⅱ: the Responses wire's own truncation literal lives in
   // `response.incomplete.incomplete_details.reason` — set in `handleEvent`
   // below, read once at the ending. Absent stays absent: only `true` writes
@@ -138,6 +141,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     // bit keys on the REASON, never on the event name. M77: the refusal
     // reason now sets its own bit, the sibling of the truncation above.
     if (t === "response.incomplete") {
+      receivedTerminal = true
       const reason = (event.response as { incomplete_details?: { reason?: string } } | undefined)?.incomplete_details?.reason
       if (codexSubscription) return [{ type: "error", error: new Error(`Codex subscription response incomplete: ${reason ?? "unknown reason"}`) }]
       if (reason === "max_output_tokens") truncated = true
@@ -146,6 +150,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     }
     if (t === "response.completed") {
       receivedCompleted = true
+      receivedTerminal = true
       if (codexSubscription) receivedDone = true
       // M72 Ⅲ: the Responses API reports this round-trip's usage HERE and
       // nowhere else — the arm used to drop the payload on the floor. The
@@ -157,6 +162,7 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
     }
     if (t === "[DONE]") {
       receivedDone = true
+      receivedTerminal = true
       return []
     }
     // M72 Ⅰ: the Responses API signals failure on the stream (`response.failed`)
@@ -188,6 +194,13 @@ export function createResponseFold(config: Pick<OpenAIConfig, "model" | "provide
   const finish = (): LLMStreamEvent => {
     if (codexSubscription && !receivedCompleted) {
       return { type: "error", error: new Error("Codex subscription stream ended without response.completed") }
+    }
+    // A-01: a normal Responses stream terminates with response.completed (some
+    // compatible endpoints use the Chat-Completions [DONE] sentinel instead).
+    // EOF without either is a dropped connection, not a completed turn; before
+    // this check it was reported as an empty success.
+    if (!receivedTerminal && !receivedCompleted && !receivedDone) {
+      return { type: "error", error: new Error("OpenAI stream ended without response.completed") }
     }
     // M77: the two bits are independent — each is written on its own, so a
     // response that was both truncated and refused carries both. Both absent

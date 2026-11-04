@@ -21,8 +21,12 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
   const toolBindings: { id?: string; name: string; inputJson: string }[] = []
   const pendingThinking = new Map<number, { thinking: string; signature: string }>()
   const pendingToolUses = new Map<number, { id?: string; name: string; argsBuffer: string; ordinal: number }>()
+  // A-01: the Messages wire terminates with message_stop. Its absence means the
+  // connection dropped mid-turn; previously EOF was reported as a clean end.
+  let receivedStop = false
   const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
     const t = event.type as string
+    if (t === "message_stop") { receivedStop = true; return [] }
     const index = event.index as number
     // M5 T2: the two events that carry usage, until now falling through to
     // `return []` with their numbers unread. They arrive on DIFFERENT ends
@@ -153,6 +157,7 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
     return []
   }
   const finish = (): LLMStreamEvent => {
+    if (!receivedStop) return { type: "error", error: new Error("Anthropic stream ended without message_stop") }
     // M77: each bit is written on its own (a response can be both), and both
     // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
     const contentOrder = [...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry)

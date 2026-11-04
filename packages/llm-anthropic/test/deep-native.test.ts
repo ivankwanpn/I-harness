@@ -7,7 +7,8 @@ it.each([2000, 6000])('captures and replays actual native tool arguments at dept
   vi.stubGlobal('fetch', async () => new Response('data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":"sig"}}\n\n'
     + 'data: {"type":"content_block_stop","index":0}\n\n'
     + 'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"a","name":"read","input":' + raw + '}}\n\n'
-    + 'data: {"type":"content_block_stop","index":1}\n\n'))
+    + 'data: {"type":"content_block_stop","index":1}\n\n'
+    + 'data: {"type":"message_stop"}\n\n'))
   const client = createAnthropicClient({ apiKey: 'controlled', model: 'fixture' })
   const events: LLMStreamEvent[] = []
   for await (const event of (await client.prepare!({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'go' }] })).withOutputCap(4096).stream()) events.push(event)

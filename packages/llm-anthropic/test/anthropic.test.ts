@@ -900,7 +900,7 @@ describe("M72 Ⅱ: the truncation bit (anthropic)", () => {
   })
 
   it("M72 Ⅱ: stop_reason max_tokens reaches the seam as truncated", async () => {
-    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 5 } })}\n\n`
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 5 } })}\n\n` + `event: message_stop\ndata: {"type":"message_stop"}\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
     const events: LLMStreamEvent[] = []
@@ -909,7 +909,7 @@ describe("M72 Ⅱ: the truncation bit (anthropic)", () => {
   })
 
   it("M72 Ⅱ: a clean ending carries NO truncated field", async () => {
-    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } })}\n\n`
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } })}\n\n` + `event: message_stop\ndata: {"type":"message_stop"}\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
     const events: LLMStreamEvent[] = []
@@ -937,7 +937,7 @@ describe("M77: the refusal bit and the context cap (anthropic)", () => {
   })
 
   it("M77: stop_reason refusal reaches the seam as refused", async () => {
-    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 5 } })}\n\n`
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 5 } })}\n\n` + `event: message_stop\ndata: {"type":"message_stop"}\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
     const events: LLMStreamEvent[] = []
