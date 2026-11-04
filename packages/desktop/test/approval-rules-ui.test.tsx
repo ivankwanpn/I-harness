@@ -63,3 +63,15 @@ it("keeps a new rule action owned by the current visit after returning to the sa
   await act(async () => { finishCurrent({ accepted: true }) })
   await waitFor(() => expect((screen.getByRole("button", { name: "撤銷規則" }) as HTMLButtonElement).disabled).toBe(false))
 })
+
+it("refetches rules when the host announces a change (NG-12)", async () => {
+  const listeners = new Set<(event: unknown) => void>()
+  const state = { rules: [], candidates: [] }
+  const request = vi.fn(async (action: any) => action.kind === "desktop/approval-rules/state" ? state : { accepted: true })
+  const bridge = { request, onEvent(listener: (event: unknown) => void) { listeners.add(listener); return () => { listeners.delete(listener) } } } as unknown as DesktopBridge
+  render(<ApprovalRuleManager bridge={bridge} workspaceId="w" />)
+  const states = () => request.mock.calls.filter(([action]: any) => action.kind === "desktop/approval-rules/state").length
+  await waitFor(() => expect(states()).toBe(1))
+  act(() => { for (const listener of listeners) listener({ kind: "sdk/notification", workspaceId: "w", method: "desktop/approval-rules/changed", params: { workspace: "w" } }) })
+  await waitFor(() => expect(states()).toBe(2))
+})

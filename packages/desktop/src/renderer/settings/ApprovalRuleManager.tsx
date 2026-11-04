@@ -29,6 +29,14 @@ export function ApprovalRuleManager({ bridge, workspaceId }: { bridge: DesktopBr
     }).catch((reason: unknown) => { if (active) setError(String(reason)) })
     return () => { active = false; if (current === generation.current) generation.current++ }
   }, [bridge, workspaceId, reload])
+  // NG-12: rules can change from the approval card (remember), another window,
+  // or session deletion; refetch instead of showing a stale snapshot.
+  useEffect(() => {
+    if (typeof bridge.onEvent !== "function") return
+    return bridge.onEvent(event => {
+      if (event.kind === "sdk/notification" && event.method === "desktop/approval-rules/changed") setReload((value) => value + 1)
+    })
+  }, [bridge])
   async function mutate(action: unknown): Promise<void> {
     if (lock.current) return
     const current = generation.current

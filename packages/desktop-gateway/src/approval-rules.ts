@@ -113,3 +113,14 @@ export function createApprovalRulesAdapter(options: ApprovalRulesAdapterOptions)
   }
 }
 export type ApprovalRulesAdapter = ReturnType<typeof createApprovalRulesAdapter>
+
+/** NG-12: wrap the mutations that change the durable rule set so the host can
+ * announce the change (settings UI, approval card, session deletion). */
+export function notifyApprovalRuleChanges(adapter: ApprovalRulesAdapter, notify: () => void): ApprovalRulesAdapter {
+  return Object.freeze({
+    ...adapter,
+    grant: (...args: Parameters<ApprovalRulesAdapter["grant"]>) => { const rule = adapter.grant(...args); notify(); return rule },
+    revoke: (...args: Parameters<ApprovalRulesAdapter["revoke"]>) => { adapter.revoke(...args); notify() },
+    removeSession: (...args: Parameters<ApprovalRulesAdapter["removeSession"]>) => { adapter.removeSession(...args); notify() },
+  })
+}

@@ -63,7 +63,7 @@ import { createCodeModeSettings, createDesktopExecution } from "./execution.ts"
 import { createExecutionHostObservation } from "./execution-host-observation.ts"
 import { createAgentProcesses } from "./agent-processes.ts"
 import { createDesktopDiagnostics } from "./environment-diagnostics.ts"
-import { createApprovalRulesAdapter } from "./approval-rules.ts"
+import { createApprovalRulesAdapter, notifyApprovalRuleChanges } from "./approval-rules.ts"
 import { createOwnedApprovalBindings } from "./owned-approval-bindings.ts"
 import { createOwnedGatewayNative } from './owned-gateway-native.ts'
 import { createOwnedGatewayInstructions } from './owned-gateway-instructions.ts'
@@ -274,12 +274,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const mcp = createDesktopMcp(mcpPath)
   const autoTitle = createAutoTitleSettings(settingsPath)
   const ownedApprovalBindings = createOwnedApprovalBindings()
-  const approvalRules = createApprovalRulesAdapter({ ownedPolicyIdentity: ownedApprovalBindings.identity, filePath: join(options.sessionDir, "approval-rules-v1.json"), policyIdentity: assembly => {
+  const approvalRulesBase = createApprovalRulesAdapter({ ownedPolicyIdentity: ownedApprovalBindings.identity, filePath: join(options.sessionDir, "approval-rules-v1.json"), policyIdentity: assembly => {
     const project = assembly.sessionId ? projectContexts.get(assembly.sessionId) : undefined
     const inputs = assembly.sessionId ? extensionInputs.get(assembly.sessionId) : undefined
     return project && inputs ? approvalPolicyIdentity(assembly, { workspace: options.workspace, sandbox: mode, approval: approvalMode, project, executionAuthority: executionAuthorities.get(assembly.sessionId!),
       hookConfigs: inputs.hookConfigs, hookAuthority: () => mountedHookAuthority(assembly, inputs.hookConfigs), grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
+  const approvalRulesChanged = () => { try { options.onWrite(makeNotification("desktop/approval-rules/changed", { workspace: options.workspace })) } catch { /* settings UI refresh is best effort */ } }
+  const approvalRules = notifyApprovalRuleChanges(approvalRulesBase, approvalRulesChanged)
 
   const instructionEnvironment = createInstructionEnvironment({ settingsPath, watch: instructionWatch })
   const isolatedGuardianFor=(sessionId:string):GuardianIsolatedConfig=>({

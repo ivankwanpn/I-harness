@@ -172,6 +172,7 @@ export type DesktopNotificationMethod =
   | "desktop/usage/recording-warning"
   | "desktop/context/diagnostic"
   | "desktop/tasks/projection"
+  | "desktop/approval-rules/changed"
   | "desktop/instructions/changed"
   | "desktop/surface/changed"
 
@@ -187,6 +188,7 @@ export const DESKTOP_NOTIFICATION_METHODS = [
   "desktop/usage/recording-warning",
   "desktop/context/diagnostic",
   "desktop/tasks/projection",
+  "desktop/approval-rules/changed",
   "desktop/instructions/changed",
   "desktop/surface/changed",
 ] as const satisfies readonly DesktopNotificationMethod[]
