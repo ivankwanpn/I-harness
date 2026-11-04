@@ -293,10 +293,27 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
           // Original resident retirement must retain its closing event after
           // new work is fenced, without scheduling another persistence save.
           const patch = args[2] as Partial<ChildAgentEntry> | undefined
-          if (runtimeRetiring && kind === 'table' && name === 'update' && patch?.closing === true && Reflect.ownKeys(patch).length === 1) {
+          if (kind === 'table' && name === 'update' && patch?.closing === true && Reflect.ownKeys(patch).length === 1) {
             return stagedRuntime.table.update(args[0] as string, args[1] as ChildAgentEntry, { closing: true })
           }
-          if(kind==='roles')assertCatalogWork();else assertRuntimeWork()
+          // Retirement-time cleanup (kill/remove/closing marker) is not new work:
+          // the coordinator may already have retired the task registry. Route it
+          // to the staged runtime instead of failing teardown.
+          if (kind === 'jobs' && name === 'kill' && runtimeRetiring) return 'already-finished'
+          if (kind === 'table' && name === 'remove') {
+            try { assertRuntimeWork() }
+            catch (error) {
+              if (runtimeRetiring || (error as { code?: string }).code === 'TASK_REGISTRY_UNAVAILABLE') return stagedRuntime.table.remove(args[0] as string)
+              throw error
+            }
+          }
+          if(kind==='roles')assertCatalogWork();else {
+            try { assertRuntimeWork() }
+            catch (error) {
+              if (kind === 'jobs' && name === 'kill' && (error as { code?: string }).code === 'TASK_REGISTRY_UNAVAILABLE') return 'already-finished'
+              throw error
+            }
+          }
           const target = mountedRuntime[kind] as T
           if (kind === 'roles' && name === 'register' && typeof args[1] === 'function') {
             const retain = args[1] as (cleanup: import('./roles.ts').RoleCleanup) => void

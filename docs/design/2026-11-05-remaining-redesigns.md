@@ -68,3 +68,9 @@
 2. D-01 最後一步（產品價值最高，但風險也最高）
 3. D-12（純測試基礎，可分批）
 4. A-12（效能，需要協議版本）
+
+## D-12 遷移中發現的組合問題（2026-11-05）
+
+以 composed coordinator 跑 `completion-delivery` 時，session-executor teardown 會出現 `Team cleanup incomplete → Task registry retired (TASK_REGISTRY_UNAVAILABLE)`：composed 的 task registry 比 legacy 更早 retire，而 team scheduler 的 cleanup 仍會呼叫 `jobs.kill`／`table.remove`／`table.update({closing})`。
+
+已修：subagent 對 runtime 的 guarded facade 在 retirement／registry unavailable 時，允許上述**純 cleanup** 操作（kill 回 `already-finished`、remove 走 staged table、closing update 直通 staged table），不再讓整個 service teardown 失敗。屬於真正的組合修正（desktop 也用 composed coordinator）。
