@@ -1,5 +1,32 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { TaskRegistry } from "./types.ts"
+
+/** D-01 step 1: read-only projection integrity report. A task document is a
+ * projection; the durable child session is the source of truth. This reports
+ * rows that contradict it without mutating the document. */
+export interface TaskProjectionIssue {
+  kind: "missing-child-session" | "terminal-without-turn-end"
+  taskId: string
+  childSessionId: string
+}
+
+export async function inspectTaskProjection(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<TaskProjectionIssue[]> {
+  const issues: TaskProjectionIssue[] = []
+  for (const t of tasks.list()) {
+    if (t.childSessionId === undefined) continue
+    const evidence = await completedTurnEvidence(coordinator, t.childSessionId)
+    if (evidence === undefined) {
+      issues.push({ kind: "missing-child-session", taskId: t.id, childSessionId: t.childSessionId })
+      continue
+    }
+    // cancellation/recovery outcomes do not claim a completed child turn.
+    if (t.outcome !== undefined && t.outcome !== "cancelled" && t.outcome !== "recovery-required" && evidence.turnEnd === false) {
+      issues.push({ kind: "terminal-without-turn-end", taskId: t.id, childSessionId: t.childSessionId })
+    }
+  }
+  return issues
+}
+
 export async function classifyRestoredTasks(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<number> {
   let classified = 0
   for (const t of tasks.list()) {
