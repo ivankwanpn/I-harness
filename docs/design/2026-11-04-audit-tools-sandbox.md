@@ -190,3 +190,10 @@
 - **A-09（原生資產）**：ACL wait bridge 五個檔案已入版控並附 provenance（`297b496e`）。
 - **A-01（shell deadline）**：**覆核後不改**——exec 的 `timeoutMs` timer 會連 promoted 背景工作一起中止，前景 deadline 已由 guard 的 abortSignal 生效。
 - **仍待處理**：A-08（assurance/qualification）、A-10（desktop 以 TS+tsx 出貨）、A-11（MCP 後代行程）、A-12（WSL worker 重用）。
+
+### A-03 dispose 降級的覆核（2026-11-05）
+
+嘗試把 `attempt.retire()` 失敗降級為 job-level `error`（native supervisor／retention 仍拋錯）：
+
+- 修改後 `capture-lifecycle` 的兩個 recovery 測試由「dispose rejects」變成 resolve——它們的 retire 失敗同時代表 **descriptor/spill 尚未結算的 recovery debt**，不只是 job 狀態。
+- 因此**還原**該修改，維持 dispose 拋錯。要安全降級，必須先在 attempt/owner 上區分「descriptor debt」與「job-only debt」，否則會吞掉真正需要 recovery 的訊號。
