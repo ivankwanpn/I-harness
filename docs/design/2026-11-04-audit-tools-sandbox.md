@@ -197,3 +197,4 @@
 
 - 修改後 `capture-lifecycle` 的兩個 recovery 測試由「dispose rejects」變成 resolve——它們的 retire 失敗同時代表 **descriptor/spill 尚未結算的 recovery debt**，不只是 job 狀態。
 - 因此**還原**該修改，維持 dispose 拋錯。要安全降級，必須先在 attempt/owner 上區分「descriptor debt」與「job-only debt」，否則會吞掉真正需要 recovery 的訊號。
+- **A-11（MCP 後代行程）**：stdio transport 現在在 SDK 關閉直系子行程前，先用 `taskkill /PID <pid> /T /F` 終止整個 process tree（Windows）；helper 有單元測試，非 Windows 行為不變。
