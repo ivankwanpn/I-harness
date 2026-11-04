@@ -127,3 +127,12 @@
 - 非 notification 的 submit 仍照舊先 settle；後續 submit 也會正常 settle。
 
 **效果**：composed `completion-delivery` 由 6/13 → **10/13**（喚醒流程的測試已通過）。剩餘 3 個是 close 階段的 `PROCESS_READ_UNAVAILABLE`（artifact path association）與 evidence-root 環境依賴，另外追蹤。
+
+### 剩餘 composed close 問題（2026-11-05，未修）
+
+`completion-delivery` 遷移後剩下 2 個測試在 close 階段失敗：
+
+- 錯誤：`PROCESS_READ_UNAVAILABLE`，throw 於 `canonical-path-resolution.ts` 的 descriptor guard。
+- 呼叫路徑：`artifact-path-association.ts:artifactScope()` → `paths.session/document` → guard → `assertOriginal`。
+- 表示在 teardown 時，某個已綁定的 backend descriptor 與建立時不同；但 `session-persistence` 內沒有直接重寫 backend 屬性的地方，需進一步確認 composed 包裝層是否在 close 時替換了 descriptor（下一步：在 guard 內比對並印出**哪個 key** changed）。
+- 目前 `completion-delivery` 維持 legacy fixture；composed 遷移暫停在 10/13。
