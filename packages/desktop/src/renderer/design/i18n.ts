@@ -21,6 +21,7 @@ const english = {
   "重試失敗，請稍後再試。": "Retry failed. Please try again.",
   "診斷記錄": "Diagnostic Log", "檢視安全的模型重試、錯誤與連線記錄。": "Review safe records of model retries, errors and connections.",
   "連線與錯誤通知": "Connection and error notifications", "請求未完成": "Request did not complete", "詳細資料": "Details", "關閉錯誤通知": "Dismiss error notification",
+  "工作狀態與子代理紀錄不一致": "Work state differs from subagent records", "部分子代理工作的狀態可能未正確反映；請查看診斷記錄了解詳情。": "Some subagent work may not be reflected correctly. See the Diagnostic Log for details.", "關閉工作狀態提示": "Dismiss work-state notice",
   "{seconds} 秒後重試": "Retrying in {seconds}s", "所選模型暫時已達容量，將重試同一模型。": "The selected model is temporarily at capacity. Retrying the same model.",
   "模型連線暫時中斷，正在自動重試。": "The model connection was interrupted. Retrying automatically.", "重試第 {attempt} 次": "Retry {attempt}", "重試 {attempt} / {max}": "Retry {attempt} / {max}",
   "診斷詳細資料": "Diagnostic details", "複製安全詳細資料": "Copy safe details", "已複製安全詳細資料。": "Safe details copied.", "無法複製安全詳細資料。": "Could not copy safe details.",

@@ -32,8 +32,12 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   const [recovering,setRecovering]=useState(false)
   const [recoveryFailed,setRecoveryFailed]=useState(false)
   const recoveryFlight=useRef<object|undefined>(undefined)
+  // D-01: a reload-time projection check names its session; only that session
+  // shows the warning, and it is dismissed/cleared locally (never persisted).
+  const [projection, setProjection] = useState<{ id: string; issues: string[] }>()
   useEffect(() => {
     setScopes(previous => new Map([...previous].map(([key, value]) => [key, { ...value, activity: undefined }])))
+    setProjection(undefined)
   }, [workspaceId, activeSessionId])
   useEffect(() => {
     seen.current.clear(); executionStates.current.clear(); setScopes(new Map()); setDetails(undefined)
@@ -94,6 +98,15 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         })
         return
       }
+      if (event.kind === "sdk/notification" && event.method === "desktop/tasks/projection") {
+        const params = event.params as { sessionId?: unknown; issues?: unknown } | null
+        if (!params || typeof params.sessionId !== "string" || sessionId === undefined || params.sessionId !== sessionId) return
+        if (!Array.isArray(params.issues) || params.issues.length === 0) return
+        const issues = params.issues.filter((value): value is string => value === "terminal-without-turn-end" || value === "missing-child-session")
+        if (issues.length === 0) return
+        setProjection({ id: `${params.sessionId}:${issues.join(",")}`, issues })
+        return
+      }
       if (event.kind !== "sdk/notification" || (event.method !== "session/status" && event.method !== "session/event" && event.method !== "session/execution-state")) return
       const params = event.params as { sessionId?: unknown; status?: unknown; event?: { type?: unknown; text?: unknown; delta?: unknown } } | null
       if (!params || typeof params.sessionId !== "string") return
@@ -139,7 +152,15 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   const seconds = retry?.nextAttemptAt ? Math.max(0, Math.ceil((retry.nextAttemptAt - now) / 1000)) : 0
   const waiting = retry?.phase === "waiting" && seconds > 0
   return <>
-    {retry || quiet || failure ? <aside className="runtime-feedback" aria-label={t("連線與錯誤通知")}>
+    {retry || quiet || failure || projection ? <aside className="runtime-feedback" aria-label={t("連線與錯誤通知")}>
+      {projection ? <div className="runtime-feedback-card runtime-feedback-warning" role="status" aria-live="polite">
+        <AlertCircle size={18} aria-hidden="true" />
+        <div><strong>{t("工作狀態與子代理紀錄不一致")}</strong>
+          <p>{t("部分子代理工作的狀態可能未正確反映；請查看診斷記錄了解詳情。")}</p>
+          <div className="runtime-feedback-actions"><Button variant="ghost" size="small" onClick={onOpenLog}>{t("診斷記錄")}</Button></div>
+        </div>
+        <Button variant="ghost" size="small" className="runtime-feedback-close" aria-label={t("關閉工作狀態提示")} icon={<X size={15} />} onClick={() => setProjection(undefined)} />
+      </div> : null}
       {retry ? <div className="runtime-feedback-card runtime-feedback-retry" role="status" aria-live="polite">
         <LoaderCircle size={18} aria-hidden="true" />
         <div><strong>{t(waiting ? "{seconds} 秒後重試" : "重新連線中…", { seconds })}</strong>

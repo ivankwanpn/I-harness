@@ -231,3 +231,16 @@ it('retries only the same session recovery through the existing queue resume act
  expect(f.bridge.request).toHaveBeenCalledWith({kind:'desktop/session/input/resume',workspaceId:'w',sessionId:'a'})
  expect(screen.queryByRole('alert')).toBeNull()
 })
+
+it("shows a projection warning for the selected session and can dismiss or open the log", () => {
+  const f = fixture(); const onOpenLog = vi.fn()
+  render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={onOpenLog} />)
+  f.emit({ kind: "sdk/notification", workspaceId: "w", method: "desktop/tasks/projection", params: { sessionId: "b", issues: ["missing-child-session"] } })
+  expect(screen.queryByRole("status")).toBeNull()
+  f.emit({ kind: "sdk/notification", workspaceId: "w", method: "desktop/tasks/projection", params: { sessionId: "a", issues: ["missing-child-session", "bogus"] } })
+  expect(screen.getByRole("status").textContent).toContain("不一致")
+  fireEvent.click(screen.getByText("診斷記錄"))
+  expect(onOpenLog).toHaveBeenCalledTimes(1)
+  fireEvent.click(screen.getByLabelText("關閉工作狀態提示"))
+  expect(screen.queryByRole("status")).toBeNull()
+})
