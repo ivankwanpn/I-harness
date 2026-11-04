@@ -54,6 +54,19 @@ describe("classifyDanger", () => {
   it("powershell without -Command in-workspace is dangerous", () => {
     expect(classifyDanger(["powershell", "Remove-Item", `${WS}/build`, "-Recurse", "-Force"], WS)).toBe("dangerous")
   })
+  it("dangerous: a script file cannot classify as harmless from its name", () => {
+    expect(classifyDanger(["./build.sh"], WS)).toBe("dangerous")
+    expect(classifyDanger(["bash", "scripts/release.ps1"], WS)).toBe("dangerous")
+    expect(classifyDanger(["node", "tool.mjs"], WS)).toBe("dangerous")
+  })
+  it("dangerous: package-manager script execution and task runners", () => {
+    expect(classifyDanger(["npm", "run", "build"], WS)).toBe("dangerous")
+    expect(classifyDanger(["pnpm", "exec", "foo"], WS)).toBe("dangerous")
+    expect(classifyDanger(["make"], WS)).toBe("dangerous")
+  })
+  it("none: package-manager install stays an ordinary command", () => {
+    expect(classifyDanger(["npm", "install"], WS)).toBe("none")
+  })
   // M22 final-review F1 回歸：預設清單含混合大小寫 "Remove-Item"，而 basenamePath
   // 一律 lowercase——兩側未 normalize 時這兩例回傳 "none"（force-less 刪除 fail-open）。
   it("mixed-case Remove-Item (no force) → dangerous (default list case-insensitive)", () => {

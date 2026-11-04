@@ -119,6 +119,21 @@ const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
  *
  * @param documentPath - where the refs map lives (e.g. `~/.i-harness/credentials.json`).
  */
+/**
+ * Per-document write queue. set()/unset() are load → mutate → atomic write;
+ * two saves issued in the same tick both read the pre-write document, so the
+ * second persists a map that lacks the first key (silently: the ref then
+ * reports configured:false). One process owns this file, so serialising the
+ * whole transaction here is enough.
+ */
+const writeQueues = new Map<string, Promise<unknown>>()
+function serializeWrite<T>(path: string, work: () => Promise<T>): Promise<T> {
+  const previous = writeQueues.get(path) ?? Promise.resolve()
+  const next = previous.then(work, work)
+  writeQueues.set(path, next.then(() => undefined, () => undefined))
+  return next
+}
+
 export function createCredentialStore(documentPath: string): CredentialStore {
   return {
     describe(refs) {
@@ -136,17 +151,21 @@ export function createCredentialStore(documentPath: string): CredentialStore {
       validateRef(ref)
       validateValue(value)
       throwIfEnvShadowed(ref)
-      const refs = loadRefsSync(documentPath)
-      refs[ref] = value
-      await persistRefs(documentPath, refs)
+      await serializeWrite(documentPath, async () => {
+        const refs = loadRefsSync(documentPath)
+        refs[ref] = value
+        await persistRefs(documentPath, refs)
+      })
     },
     async unset(ref) {
       validateRef(ref)
       throwIfEnvShadowed(ref)
-      const refs = loadRefsSync(documentPath)
-      if (!(ref in refs)) return // already absent → idempotent no-op
-      delete refs[ref]
-      await persistRefs(documentPath, refs)
+      await serializeWrite(documentPath, async () => {
+        const refs = loadRefsSync(documentPath)
+        if (!(ref in refs)) return // already absent → idempotent no-op
+        delete refs[ref]
+        await persistRefs(documentPath, refs)
+      })
     },
     resolve(ref) {
       validateRef(ref)

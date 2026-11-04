@@ -322,6 +322,18 @@ export function classifyDanger(
   const flagSet = new Set(dangerousFlags.map((f) => f.toLowerCase()))
   if (argv.some((a) => cmdSet.has(basenamePath(a)))) return "dangerous"
   if (argv.some((a) => flagSet.has(a.toLowerCase()))) return "dangerous"
+  // The argv of a script or task runner says nothing about its effects: a repo
+  // can ship ./build.sh, `npm run build` or a Makefile that does anything. The
+  // classifier above can only see the command NAME, so these were the cheapest
+  // zero-approval path to arbitrary code (`./x.sh` classified "none").
+  const SCRIPT_FILE = /\.(?:sh|bash|zsh|ps1|cmd|bat|js|mjs|cjs|ts|py|rb|pl)$/
+  if (argv.some((a) => SCRIPT_FILE.test(basenamePath(a)))) return "dangerous"
+  const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"])
+  const RUN_SUBCOMMANDS = new Set(["run", "run-script", "exec", "dlx", "x", "test", "start"])
+  for (let index = 0; index < argv.length - 1; index += 1) {
+    if (PACKAGE_MANAGERS.has(basenamePath(argv[index]!)) && RUN_SUBCOMMANDS.has(argv[index + 1]!.toLowerCase())) return "dangerous"
+  }
+  if (argv.some((a) => ["make", "just", "task"].includes(basenamePath(a)))) return "dangerous"
   return "none"
 }
 
