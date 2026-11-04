@@ -72,12 +72,25 @@ export function parseHeader(line: string): SessionMeta {
 
 // Parse event lines up to the first torn/invalid record — the contiguous
 // committed prefix (F01-2). A torn tail is a crash mid-write.
+//
+// ONLY the final non-empty record may be torn. An unparseable record anywhere
+// earlier is corruption, not a tail: returning the prefix for it used to make
+// `repair()` rewrite the file without every turn after the damage, turning a
+// recoverable bit-flip into permanent data loss.
 export function parseEventLines(lines: string[]): SessionEvent[] {
+  let lastNonEmpty = -1
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index]!.trim() !== "") { lastNonEmpty = index; break }
+  }
   const events: SessionEvent[] = []
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!
     if (line.trim() === "") continue
     let parsed: unknown
-    try { parsed = JSON.parse(line) } catch { break }
+    try { parsed = JSON.parse(line) } catch {
+      if (index === lastNonEmpty) break
+      throw new Error(`session record ${index + 1} is not valid JSON; refusing to truncate the history silently`)
+    }
     events.push(parsed as SessionEvent)
   }
   return events

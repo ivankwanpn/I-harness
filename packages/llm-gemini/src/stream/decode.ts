@@ -1,22 +1,17 @@
-import { SSEParseError, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
 import { createGeminiFold } from "./fold.ts"
 
 export function parseSSE(text: string): Record<string, unknown>[] {
-  return text
-    .split("\n\n")
-    .filter((chunk) => chunk.includes("data:"))
-    .map((chunk) => {
-      const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))!
-      const data = dataLine.slice(5).trim()
-      try {
-        return JSON.parse(data) as Record<string, unknown>
-      } catch (err) {
-        throw new SSEParseError(data)
-      }
-    })
+  return parseSseFrames(text).map(({ data }) => {
+    if (data.trim() === "[DONE]") return { type: "[DONE]" }
+    try {
+      return JSON.parse(data) as Record<string, unknown>
+    } catch (err) {
+      throw new SSEParseError(data)
+    }
+  })
 }
-
 const emit = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
   for (const ev of events) {
     if (ev.type === "error") {
@@ -38,7 +33,7 @@ export async function* decodeGeminiStream(body: ReadableStream<Uint8Array>, requ
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n")
       const chunks = buffer.split("\n\n")
       buffer = chunks.pop() ?? ""
       for (const chunk of chunks) {

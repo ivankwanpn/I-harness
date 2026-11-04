@@ -1,21 +1,16 @@
-import { SSEParseError, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { SSEParseError, parseSseFrames, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { createAnthropicFold } from "./fold.ts"
 
 export function parseSSE(text: string): Record<string, unknown>[] {
-  return text
-    .split("\n\n")
-    .filter((chunk) => chunk.includes("data:"))
-    .map((chunk) => {
-      const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))!
-      const data = dataLine.slice(5).trim()
-      try {
-        return JSON.parse(data) as Record<string, unknown>
-      } catch (err) {
-        throw new SSEParseError(data)
-      }
-    })
+  return parseSseFrames(text).map(({ data }) => {
+    if (data.trim() === "[DONE]") return { type: "[DONE]" }
+    try {
+      return JSON.parse(data) as Record<string, unknown>
+    } catch (err) {
+      throw new SSEParseError(data)
+    }
+  })
 }
-
 /** Own byte decoding and the reader lock; EOF alone produces the clean end. */
 export async function* decodeAnthropicStream(body: ReadableStream<Uint8Array>, fold: ReturnType<typeof createAnthropicFold>, request: Pick<LLMRequest, "signal">): AsyncIterable<LLMStreamEvent> {
   const reader = body.getReader()
@@ -35,7 +30,7 @@ export async function* decodeAnthropicStream(body: ReadableStream<Uint8Array>, f
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n")
       // split on SSE boundaries; each data: line is one event
       const chunks = buffer.split("\n\n")
       buffer = chunks.pop() ?? ""

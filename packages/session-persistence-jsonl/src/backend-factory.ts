@@ -6,7 +6,7 @@ import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-ha
 import { createOriginalNativePrewriteOwner } from '@i-harness/session-persistence/internal/native-fact-writer'
 import { createOriginalTaskNativeStage } from '@i-harness/session-persistence/internal/task-document-operations'
 import {associateOwnedExecutionReader} from './backend/owned-execution-read.ts'
-import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
+import { lstat, mkdir, open, readFile, readdir, stat, unlink } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname } from "node:path"
 import { canonicalJsonData, validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, validateSubagentHeader, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
@@ -417,9 +417,9 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       // Bind the rewrite to the same observed bytes, including the real resolver reread.
       if(birth&&!(await readFile(path)).equals(raw))throw TypeError('Selected journal changed during metadata update')
       const snapshot=birth ? snapshotSelectedMetadataUpdate(birth,patch) : snapshotMetadataUpdate(previous,patch)
-      const tmp = `${path}.${randomUUID()}.tmp`
-      await writeFile(tmp, Buffer.concat([Buffer.from(snapshot.line+'\n'),raw.subarray(end+1)]))
-      await rename(tmp, path)
+      // A title/archive change must not be able to lose the transcript: reuse
+      // the fsync+rename replacement rather than a bare writeFile+rename.
+      await replaceRawSessionFile(path, Buffer.concat([Buffer.from(snapshot.line+'\n'),raw.subarray(end+1)]))
       return snapshot.meta
     },
 
