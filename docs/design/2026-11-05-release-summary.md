@@ -77,3 +77,25 @@ $null | node --import tsx cli/src/cli.ts --session-dir <temp>
 ```
 
 結果：乾淨 `exit=0`（stdin EOF 後正常關閉），代表封裝後的 host 初始化、registry 載入與關閉流程都能跑完，不只是 `--help`。
+
+## 封裝後 gateway JSON-RPC E2E（第 126 輪）
+
+用 repo 的 SDK client 直接驅動 release appDir 內的 gateway：
+
+```js
+const client = createHarnessClient({
+  command: process.execPath,
+  args: ['--import','tsx','cli/src/cli.ts','--session-dir', tempDir],
+  cwd: '<release>/resources/gateway',
+})
+await client.initialize()
+await client.listSessions()
+```
+
+結果：
+
+- `initialize` 回傳 `{"name":"i-harness","version":"0.1.0","protocolVersion":3, ...}`，含 `session-list` 等 capabilities。
+- `session/list` 回傳 `{"sessions":[]}`（空目錄）。
+- `client.close()` 乾淨結束。
+
+這驗證了封裝後的協定握手、method dispatch、session listing 與關閉，不只是程序能啟動。
