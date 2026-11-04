@@ -6,6 +6,7 @@ import { associateArtifactPaths, createOriginalJsonlPathResolution } from '@i-ha
 import { createOriginalNativePrewriteOwner } from '@i-harness/session-persistence/internal/native-fact-writer'
 import { createOriginalTaskNativeStage } from '@i-harness/session-persistence/internal/task-document-operations'
 import {associateOwnedExecutionReader} from './backend/owned-execution-read.ts'
+import { HEADER_READ_MAX_BYTES, assertHeaderLineReadable } from './backend/header-limit.ts'
 import { lstat, mkdir, open, readFile, readdir, stat, unlink } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname } from "node:path"
@@ -415,12 +416,14 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       // rename (putDocument pattern) — a concurrent reader sees either the
       // old or the new file, never a truncated one.
       const raw = await readFile(path), end=raw.indexOf(10)
-      if(end<0||end+1>65536||!raw.subarray(0,end).toString('utf8').trim())throw new Error(`empty session file: ${sessionId}`)
+      if(end<0||end+1>HEADER_READ_MAX_BYTES||!raw.subarray(0,end).toString('utf8').trim())throw new Error(`empty session file: ${sessionId}`)
       const previous=parseHeader(raw.subarray(0,end).toString('utf8'))
       const birth=previous.semanticSeed?.version===3 ? await resolveSelectedBirth(path,sessionId,assertNotDeleted,{stage:ordinaryStageIO(path),readJournal:()=>readFile(path)}) : undefined
       // Bind the rewrite to the same observed bytes, including the real resolver reread.
       if(birth&&!(await readFile(path)).equals(raw))throw TypeError('Selected journal changed during metadata update')
       const snapshot=birth ? snapshotSelectedMetadataUpdate(birth,patch) : snapshotMetadataUpdate(previous,patch)
+      // Never write a header that the 64 KiB reader could not read back.
+      assertHeaderLineReadable(snapshot.line)
       // A title/archive change must not be able to lose the transcript: reuse
       // the fsync+rename replacement rather than a bare writeFile+rename.
       await replaceRawSessionFile(path, Buffer.concat([Buffer.from(snapshot.line+'\n'),raw.subarray(end+1)]))
@@ -570,7 +573,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
 // C5 header-only read (profile on a large artifact): the header is always
 // line 0 and bounded (ids ~40 chars, titles capped at 200), so reading one
 // 64 KiB window never touches the event body of a multi-megabyte log.
-const HEADER_READ_MAX_BYTES = 64 * 1024
+// The bound lives in backend/header-limit.ts and is enforced on write too.
 
 async function readHeader(path: string): Promise<SessionMeta> {
   const handle = await open(path, "r")
