@@ -1,3 +1,8 @@
+1ad4051d diagnostics(subagent): record failed child and team birth outcomes
+601a930f fix(subagent): reserve FACT_RECOVERY_REQUIRED for genuinely uncertain births
+cba08449 feat(desktop): add an explicit session reload recovery outlet
+9bbd898d fix(core-session): keep FACT_RECOVERY_REQUIRED visible through cleanup aggregation
+8813066a docs(handoff): branch handoff for continuing on another machine
 815655c8 fix(desktop): stop rendering internal bookkeeping as conversation rows
 3f5ac1d4 refactor(fs): bind fs approvals to an explicit implementation version
 6af50d99 feat(exec): surface a sandbox denial as an advisory result field

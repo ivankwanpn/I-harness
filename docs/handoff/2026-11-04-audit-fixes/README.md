@@ -7,7 +7,7 @@
 - Repo：`https://github.com/ivankwanpn/I-harness.git`
 - 分支：`experiment/audit-fixes-v0.1.13`（已推上 GitHub）
 - 基底：tag `v0.1.13`（commit `46a6311f`）
-- 目前：**29 個 commit**、75 個檔案、+1100/−233
+- 目前：**34 個 commit**、94 個檔案、+2365/−240
 - 檢查：
 
 ```powershell
@@ -92,11 +92,15 @@ pnpm --filter @i-harness/desktop installer   # 安裝版：release/I-harness-Set
 
 ## 5. 未完成／待驗證
 
-1. **spawn_agent child birth 失敗會卡死整個會話**（最優先）。
+1. **spawn_agent child birth 失敗會卡死整個會話** — 已修（待實機驗證）。
    - 現象：`subagent/end` = `Original child birth requires recovery`，之後所有請求 `Managed facts require reconciliation`。
-   - 已確認：session journal 完整可載入（322 events, format 14）；卡住的是執行中 gateway 的記憶體 recovery 狀態，重啟 App 可清。
-   - 已加：錯誤訊息現在帶 outcome kind/reason；下次重現可從 journal 直接看到原因。
-   - 待做：用新的 outcome 訊息重現並修 rollback（失敗的 spawn 不應污染父會話）。
+   - 已確認：session journal 完整可載入（322 events, format 14）；卡住的是執行中 gateway 的記憶體 recovery 狀態。
+   - 修復：
+     - `9bbd898d` recovery 錯誤穿過 cleanup 聚合時保留 `FACT_RECOVERY_REQUIRED`（unit tests + 原本失敗的 claim-failure 案例轉綠）。
+     - `cba08449` 新增 `desktop/session/reload` 與「重新載入會話」按鈕：關閉該會話讓下一次請求從 durable journal 重建，不必重啟整個 App（router 11/11）。
+     - `601a930f` 只有真正不確定的 `blocked` 才進 recovery；`refused`/`not-issued` 以 `FACT_BIRTH_REFUSED` 正常回報（unit 6/6）。
+     - `1ad4051d` birth 失敗現在會把 outcome kind/reason 與 target/parent/task id 寫進 runtime diagnostics。
+   - 待做：用新安裝版重測 A5；若再失敗，從 journal 的 `(<kind>: <reason>)` 與 runtime diagnostics 找根因。底層 write error 仍只存在 backend ledger，尚未接到訊息。
 2. **UI 時間軸噪音**已修（白名單），需要用新安裝版在真實會話確認位置與數量。
 3. 審計未修項目：F8（append O(n²)）、F12（雙寫入協定）、F13（四種磁碟格式）、F16 完整重構、F25（env 過濾）、F40/F41（信任模型 UI）、D2/D4/O 系列。理由見 audit 文件第 9 節。
 
