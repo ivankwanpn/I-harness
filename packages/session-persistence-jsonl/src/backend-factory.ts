@@ -351,7 +351,16 @@ export function createJsonlBackend(root: string, options?: {
       const ids = names
         .filter((n) => n.endsWith(".jsonl") && !n.endsWith(".doc.jsonl"))
         .map((n) => basename(n, ".jsonl"))
-      return (await Promise.all(ids.map(async id => { try { await assertNotDeleted("session", id); return id } catch (error) { if ((error as Error).message.includes("permanently deleted")) return undefined; throw error } }))).filter((id): id is string => id !== undefined)
+      return (await Promise.all(ids.map(async id => {
+        try {
+          await assertNotDeleted("session", id)
+          // S-08: a zero-byte file is a create/fork that died before its first
+          // durable write; it is not a session yet, so it must not appear.
+          const info = await stat(filePath(id)).catch(() => undefined)
+          if (info !== undefined && info.size === 0) return undefined
+          return id
+        } catch (error) { if ((error as Error).message.includes("permanently deleted")) return undefined; throw error }
+      }))).filter((id): id is string => id !== undefined)
     },
 
     async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
