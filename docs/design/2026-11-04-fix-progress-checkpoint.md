@@ -182,6 +182,13 @@
 | S-07 | managed rewind 接上同一 intent（`runRewindRestoration` ordering） | `7bca8805` |
 | S-07 | pending rewind ＋ D-01／D-07 新 kind 接進 reload diagnostics | `d4a42a26` |
 | S-06 | append 在 warm cache 只驗新增事件（增量語意驗證） | `654bbc29` |
+## 2026-11-05 第 116 輪（最終驗證）
+
+- 全庫 typecheck：82 packages 全綠。
+- agent-team composed 測試（ack／completion／transact／managed-transact／lifecycle／initial-input-proof／hooks）：**120/120**。
+- subagent D-01／D-07 測試（job record、write-behind、document intent、persist）：**39/39**。
+- D-12 composed 遷移完成：所有 backend-patch 檔案全綠；其餘直接使用 legacy coordinator 的檔案屬 legacy-path coverage，維持 legacy。
+- 安裝檔 `9e8d2322…`（第 105 輪）已包含全部產品修正；本輪無產品變更。
 ## 2026-11-05 第 105 輪
 
 - 全庫 typecheck 全綠（82 packages）。
