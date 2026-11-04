@@ -1,5 +1,6 @@
 import {taskParentMetadataProjection} from './task-parent-metadata.ts'
 import { notIssuedFailure } from './not-issued.ts'
+import { resolveUnissuedConflict } from './unissued-conflict.ts'
 import {types} from 'node:util'
 import {associateArtifactCurrentnessReader,createArtifactCurrentGuard,isArtifactCurrentGuard,withImmediateArtifactCurrentChecks} from './artifact-path-association.ts'
 import type { createColdExecutionWrites } from './cold-execution-writes.ts';
@@ -632,9 +633,15 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                 held.assertHeld();
                 await settleSelected();
                 if(bootstrap?.selected&&!current.receipt)selectedIOStarted=true;
-                const outcome = current.receipt ? { kind: 'committed' as const, receipt: current.receipt }
+                const reconciled = current.receipt ? { kind: 'committed' as const, receipt: current.receipt }
                     : bootstrap?.selected ? await selectedJournal!.reconcileOwnedBatch(id,held,selectedLane!,current.prefix,current.batch) : await backend.reconcileOwnedBatch!(id, held, current.prefix, current.batch);
-                completed = finish(current, outcome);
+                // A conflict/unknown on a batch that was never issued is not an
+                // ambiguous durable state: no byte of it reached the journal, so
+                // the frame is provably absent. Treating it as such gives the
+                // quarantine a real exit instead of requiring a restart. An issued
+                // batch keeps the fail-closed path (its fate may be unknown).
+                const resolved = resolveUnissuedConflict(reconciled, current.issued);
+                completed = finish(current, resolved);
             });
             if (!current || !completed) {
                 outcome = 'settled';
