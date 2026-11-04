@@ -1,6 +1,7 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { TaskRecord, TaskRegistry, TaskProtocolDocument } from "./types.ts"
 import { loadJobRecords } from "../job-record.ts"
+import { taskDocKey } from "./persistence.ts"
 
 /** D-01 step 1: read-only projection integrity report. A task document is a
  * projection; the durable child session is the source of truth. This reports
@@ -94,6 +95,19 @@ export async function rebuildTaskDocumentFromJobRecords(coordinator: SessionCoor
     } as TaskRecord
   })
   return { formatVersion: 1, tasks, notifications: [] }
+}
+
+/** D-01 step 4 production seam: restore the task document, or rebuild it from
+ * job records when the mutable document is missing or unreadable. Returns which
+ * source was used so hosts can surface a rebuilt projection. */
+export async function restoreTaskDocument(tasks: TaskRegistry, coordinator: SessionCoordinator, stateId: string): Promise<'document' | 'rebuilt' | 'empty'> {
+  let doc: unknown
+  try { doc = await coordinator.getDocument(taskDocKey(stateId)) } catch { doc = undefined }
+  if (doc !== undefined) { tasks.restore(doc as TaskProtocolDocument); return 'document' }
+  const rebuilt = await rebuildTaskDocumentFromJobRecords(coordinator, stateId)
+  if (rebuilt === undefined) return 'empty'
+  tasks.restore(rebuilt)
+  return 'rebuilt'
 }
 
 export async function classifyRestoredTasks(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<number> {

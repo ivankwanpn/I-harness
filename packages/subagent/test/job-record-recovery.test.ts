@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createJobRecordStore, type JobRecordV1 } from '../src/job-record.ts'
-import { classifyRestoredTasks, inspectJobRecordProjection, rebuildTaskDocumentFromJobRecords } from '../src/task/recovery.ts'
+import { classifyRestoredTasks, inspectJobRecordProjection, rebuildTaskDocumentFromJobRecords, restoreTaskDocument } from '../src/task/recovery.ts'
 import { createTaskRegistry } from '../src/index.ts'
 import { vi } from 'vitest'
 import type { TaskRecord, TaskRegistry } from '../src/task/types.ts'
@@ -94,5 +94,21 @@ it('rebuilds a missing task document from job records and restores it (D-01 e2e)
     reader.restore(doc!)
     expect(reader.get(task.id)).toMatchObject({ status: 'completed', outcome: 'completed', childSessionId: 'child-session', agentPath: 'helper', description: 'do work' })
     await expect(classifyRestoredTasks(reader, coordinator)).resolves.toBe(0)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+
+it('restores a missing task document by rebuilding it from job records (D-01 production seam)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-job-rebuild-'))
+  try {
+    const coordinator = { storageRoot: root, getDocument: async () => undefined } as unknown as SessionCoordinator
+    const writer = createTaskRegistry({ coordinator, stateId: 'parent' })
+    const task = writer.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'helper', description: 'd', prompt: 'p', agent: 'general', delivery: 'tool' })
+    writer.claim(task.id, 'child-session')
+    writer.terminalize({ taskId: task.id, outcome: 'cancelled', error: 'stopped' })
+    await writer.flushPersistence().catch(() => {})
+    const reader = createTaskRegistry({ coordinator, stateId: 'parent' })
+    await expect(restoreTaskDocument(reader, coordinator, 'parent')).resolves.toBe('rebuilt')
+    expect(reader.get(task.id)).toMatchObject({ status: 'cancelled', outcome: 'cancelled', error: 'stopped', childSessionId: 'child-session' })
   } finally { await rm(root, { recursive: true, force: true }) }
 })

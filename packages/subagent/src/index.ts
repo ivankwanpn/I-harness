@@ -37,7 +37,7 @@ export type { ResidentInboxActivation } from './followup/activation.ts'
 export { restoreState, wireSubagentPersistence, snapshotState, settlePersistentJob } from "./persist.ts"
 export { retainedResultWitness } from './result-publication.ts'
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
-export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, inspectTaskProjection, inspectJobRecordProjection, rebuildTaskDocumentFromJobRecords, reconcileTaskProjection, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
+export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, inspectTaskProjection, inspectJobRecordProjection, rebuildTaskDocumentFromJobRecords, restoreTaskDocument, reconcileTaskProjection, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
 export type { TaskProjectionIssue } from "./task-protocol.ts"
 export type { TaskRegistry, TaskRecord, TaskStatus, TaskOutcome, TaskDelivery, TaskIdentity, TaskNotificationRecord, TaskProtocolDocument, OutboxStatus, RecoveryReason } from "./task-protocol.ts"
 export { createNotificationDrain, ParentNotificationStoppedError, DeliverySuppressedError, isParentNotificationStopped } from "./task-notification.ts"
@@ -66,7 +66,7 @@ import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./child.
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
 import { emitRestoredJobTransitions, restoreState, snapshotState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
-import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, taskDocKey, type TaskProtocolDocument, type TaskRegistry } from "./task-protocol.ts"
+import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, restoreTaskDocument, type TaskRegistry } from "./task-protocol.ts"
 import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
 import type { ReportPolicy } from "./report-policy.ts"
 import { subagentFactOwner } from './facts.ts'
@@ -591,9 +591,9 @@ async function restoreTasksAndSweep(
   // dependency), and `ready` still gates the whole chain for hosts.
   await restoreMirrorsAndSweep(deps, table)
   if (deps.childSessions) {
-    let doc: unknown
-    try { doc = await deps.childSessions.coordinator.getDocument(taskDocKey(persist.stateId)) } catch { /* Missing/corrupt legacy document stays unavailable. */ }
-    if (doc !== undefined) tasks.restore(doc as TaskProtocolDocument)
+    // D-01 step 4 fallback: a missing/corrupt task document is rebuilt from the
+    // durable job records instead of leaving the registry unavailable.
+    await restoreTaskDocument(tasks, deps.childSessions.coordinator, persist.stateId).catch(() => 'empty')
     await tasks.qualifyRestoredResults()
     await classifyRestoredTasks(tasks, deps.childSessions.coordinator)
   }

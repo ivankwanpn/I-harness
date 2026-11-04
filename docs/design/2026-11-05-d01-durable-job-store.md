@@ -46,7 +46,7 @@
 4. **（部分完成）** recovery 的 `classifyRestoredTasks` 先看 job record：terminal job 可直接結案（child session 遺失時仍能恢復 completed／error／cancelled，error 取 job terminal 的 reason，completed 則在 child session 仍在時補 resultText）。task document 仍是可變寫入來源；移除可變寫入留待下一步。
    - **D-08（部分完成）**：spawn 的 admission drain 改用 `flushPersistenceBestEffort()`：document 寫入失敗只回報（`{ok:false,error}`，且 registry 會保留最近失敗），不再讓該次 spawn 或後續任務被 debt 擋住；job record 已先寫入，父 journal 仍照常 append。close 路徑仍用 strict `flushPersistence()`，清理失敗不會被吞掉。
 5. **（e2e 已完成重建層）** `rebuildTaskDocumentFromJobRecords` 可在 task document 遺失時，用 job record（含 agentPath／description／agent／delivery 等 projection metadata）重建 v1 文件，再走正常 `restore()` 驗證與 counter seeding。測試覆蓋 writer → job records → 空 registry 重建 → 終態與 classifyRestoredTasks 無額外動作。
-   尚未接上 production：document 載入失敗時自動 fallback 到 job record 重建，以及移除可變 document 寫入。
+   **（已接上 legacy restore 路徑）** `restoreTaskDocument` 在 `getDocument` 缺失或拋錯時，自動用 job record 重建文件再 restore；`restoreTasksAndSweep` 已改用它。owned／v3（desktop）路徑仍走原本的 stage restore，尚未接 fallback；移除可變 document 寫入也尚未做。
 
 ## 驗證
 
