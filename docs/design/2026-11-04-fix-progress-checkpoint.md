@@ -111,6 +111,16 @@
 
 同時覆核但**不改**：A-03 的 `dispose()` 降級（attempt retire 失敗同時承載 descriptor/spill recovery debt，降級會吞掉真正需要 recovery 的訊號）、agent-team harness 卡住（已證實是覆寫 action 方法，不是 coordinator 拒絕 team 寫入）。
 
+## 2026-11-05 追加修復（第 50–53 輪）
+
+| 範圍 | 項目 | Commit |
+|---|---|---|
+| 建置 | 安裝檔重建（`751e1f36…`）＋第 40–49 輪 checkpoint | `9226f8d4` |
+| 驗證 | `pnpm -r --no-bail typecheck` 全庫 82 packages 全綠 | `36bbbf1e` |
+| mcp-client | A-11：Windows 關閉時 `taskkill /T` 終止 MCP 後代行程 | `8ad5584d` |
+| 審計 | A-06／A-07 覆核：維持 fail-closed（既有測試已固定安全屬性） | `ec9a9b1e` |
+| exec | A-08：`IH_MINIMUM_EXEC_ASSURANCE` 設定後端 assurance 下限，admission fail-closed | `32409b1c` |
+
 ## D-12 測試基礎：已遷移與新發現（2026-11-05）
 
 - 已遷移並全綠：`desktop-gateway/execution-surfaces`（10/10，含 cold restart 後 job_output／PTY 的 saved facts 讀取）、`sdk/server.test`（54/54，fork 流程約 20s，該檔放寬 testTimeout 至 30s）、`core-agent/accepted-exchange`（14/14，透過 `createJsonlBackend({ wrapOwnedBatch })` 在 canonical-path guard 綁定前注入）。
