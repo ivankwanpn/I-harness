@@ -139,3 +139,12 @@
 - 目前 `completion-delivery` 維持 legacy fixture；composed 遷移暫停在 10/13。
 
 **修正後記（2026-11-05，最終）**：先前看到的 close 階段 `PROCESS_READ_UNAVAILABLE` **不是產品問題**，而是那次探針只改了 coordinator 建立、沒有把 `configure` 裡的 `backend.appendOwnedBatch` 覆寫轉成 control hook（事後替換 descriptor 被 guard 抓到）。完成完整 hook 轉換後，composed `completion-delivery` **13/13 全綠**（搭配 `d72dde63` 的 admitted-input settle 修正）。
+
+### lifecycle 遷移狀態（2026-11-05）
+
+lifecycle（14 個 backend 覆寫）以 composed fixture 遷移後最佳為 **41/50**；剩餘 9 個是語義差異，不是 fixture 問題：
+
+- cleanup/stop 之後的錯誤由 legacy 的 `/closed/` 變成 `Team recovery required`（composed 的 recovery 狀態更早 sticky）；
+- 部分測試直接以 `coordinator.create({ sessionId, parentSession })` 假造 child session，composed 的 task transition 路徑不支援這種建立方式（需走 bootstrap child API）。
+- 已還原 lifecycle 檔案，維持 legacy fixture；其餘已完成遷移的檔案不受影響。
+- 另外已把「seeded composed fixture」加入 `composed-fixture-hooks` 作為回歸測試（3/3）。

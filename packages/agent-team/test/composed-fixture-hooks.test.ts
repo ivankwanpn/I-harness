@@ -47,3 +47,8 @@ it('honours an append hook assigned after fixture creation (D-12)', async () => 
     expect(appends.length).toBeGreaterThan(0)
   } finally { await f.coordinator.close().catch(() => {}) }
 })
+it('supports a composed fixture created with a seed transaction (D-12)', async () => {
+  const f = await ownedTeamFixture([{ type: 'team/member', version: 1, teamId: 'team', member: { id: 'm', name: 'm', description: '', provider: 'p', context: 'fresh', phase: 'active' } }], 'team', { composed: true })
+  try { expect(f.document.view.events.map(event => event.type)).toEqual(['team/member']) }
+  finally { await f.coordinator.close().catch(() => {}) }
+})
