@@ -131,3 +131,30 @@ it('derives read-only recovered rows when the task document is unavailable (D-01
     expect(rows[1]).toMatchObject({ error: 'child crashed' })
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+it('keeps admission and recovery working when the task document cannot be written (D-01 final)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-job-projection-'))
+  try {
+    let documentWrites = 0
+    const coordinator = {
+      storageRoot: root,
+      async putDocument() { documentWrites += 1; throw new Error('document store unavailable') },
+      async getDocument() { throw new Error('document store unavailable') },
+    } as unknown as SessionCoordinator
+    const writer = createTaskRegistry({ coordinator, stateId: 'parent' })
+    const task = writer.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'helper', description: 'do work', prompt: 'p', agent: 'general', delivery: 'tool' })
+    // The projection write is fire-and-forget: a broken document store cannot
+    // reject admission or the running transition.
+    expect(writer.claim(task.id, 'child-1')).toBe(true)
+    expect(writer.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'ok' })).toBe(true)
+    expect(writer.get(task.id)).toMatchObject({ status: 'completed', outcome: 'completed', childSessionId: 'child-1' })
+    const flush = await writer.flushPersistenceBestEffort()
+    expect(documentWrites).toBeGreaterThan(0)
+    // The failed projection is reported, not hidden -- job records carry recovery.
+    expect(flush).toMatchObject({ ok: false })
+    const reader = createTaskRegistry({ coordinator, stateId: 'parent' })
+    await expect(restoreTaskDocument(reader, coordinator, 'parent')).resolves.toBe('rebuilt')
+    expect(reader.get(task.id)).toMatchObject({ status: 'completed', outcome: 'completed', childSessionId: 'child-1', agentPath: 'helper' })
+    await expect(classifyRestoredTasks(reader, coordinator)).resolves.toBe(0)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

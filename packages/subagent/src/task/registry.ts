@@ -75,6 +75,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const jobRecords = opts.coordinator?.storageRoot && opts.stateId
     ? createJobRecordStore(join(opts.coordinator.storageRoot, "jobs", `${opts.stateId}.jobs.jsonl`))
     : undefined
+  // D-01 final: the job record is the durable task fact, the document is a
+  // projection. Neither write may block the task path (D-08), but a failed job
+  // record must be reported by the flush instead of vanishing.
+  const jobRecordFailures: unknown[] = []
   const recordJob = (task: TaskRecord, status: TaskStatus, extra: { terminal?: { at: number; reason?: string } } = {}): void => {
     if (!jobRecords) return
     const now = Date.now()
@@ -83,7 +87,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       ...(task.childSessionId !== undefined ? { childSessionId: task.childSessionId } : {}),
       status, createdAt: task.timeCreated ?? now, updatedAt: now,
       agentPath: task.agentPath, description: task.description, agent: task.agent, delivery: task.delivery, ...extra,
-    })).catch(error => { if (process.env.IH_JOB_RECORD_DEBUG) console.error('[job-record]', error) })
+    })).catch(error => {
+      if (jobRecordFailures.length < 16) jobRecordFailures.push(error)
+      if (process.env.IH_JOB_RECORD_DEBUG) console.error('[job-record]', error)
+    })
   }
   const requiredClaimRoutes=new WeakMap<TaskRecord,()=>void>()
   const requiredTerminalRoutes=new WeakMap<TaskRecord,()=>Promise<void>>()
@@ -473,6 +480,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       catch (cause) { error = cause }
       finally { await jobWrite; await intentWrite }
       if (error === undefined && persistenceFailures.length) error = persistenceFailures[0]
+      if (error === undefined && jobRecordFailures.length) error = jobRecordFailures[0]
       return error === undefined ? { ok: true } : { ok: false, error }
     },
   }
