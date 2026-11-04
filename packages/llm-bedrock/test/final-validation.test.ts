@@ -11,7 +11,7 @@ it('retains unsigned native no-call reasoning and produces a selected-command wi
   let sent: any
   const client = createBedrockClient({ model: 'fixture' }, { destroy() {}, send: async command => {
     sent = command.input
-    return { $metadata: {}, stream: (async function* () { yield { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: 'plan' } } } }; yield { contentBlockStop: { contentBlockIndex: 0 } } })() }
+    return { $metadata: {}, stream: (async function* () { yield { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: 'plan' } } } }; yield { contentBlockStop: { contentBlockIndex: 0 } }; yield { messageStop: { stopReason: 'end_turn' } } })() }
   } })
   let end: any
   for await (const event of (await client.prepare!({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'go' }] })).stream()) if (event.type === 'end') end = event

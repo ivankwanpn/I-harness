@@ -12,6 +12,7 @@ async function capture(signed = true) {
       yield { contentBlockStart: { contentBlockIndex: 1, start: { toolUse: { toolUseId: 'a', name: 'read' } } } }
       yield { contentBlockDelta: { contentBlockIndex: 1, delta: { toolUse: { input: '{"x":1}' } } } }
       yield { contentBlockStop: { contentBlockIndex: 1 } }
+      yield { messageStop: { stopReason: 'end_turn' } }
     })() }
   } }
   const client = createBedrockClient({ model: 'fixture' }, runtime as any)

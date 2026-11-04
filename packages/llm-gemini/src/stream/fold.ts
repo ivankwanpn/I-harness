@@ -44,6 +44,9 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
   // — set in `handleChunk` below, read once at the ending. Absent stays
   // absent: only `true` writes the field.
   let truncated = false
+  // A-01: a candidate finishReason (or an input-side blockReason) is this
+  // wire's terminal event. EOF without one is a dropped connection.
+  let receivedTerminal = false
   // M77: this wire has TWO refusal carriers and neither was read: a
   // candidate's `finishReason` of `SAFETY` or `RECITATION` (the model's
   // own answer was blocked), and `promptFeedback.blockReason` on the chunk
@@ -116,6 +119,7 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
     const events: LLMStreamEvent[] = []
     const candidates = event.candidates as { content?: { parts?: { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { id?: string; name?: string; args?: unknown } }[] } }[] | undefined
     const finishReason = (candidates?.[0] as { finishReason?: string } | undefined)?.finishReason
+    if (typeof finishReason === "string" && finishReason.length > 0) receivedTerminal = true
     if (finishReason === "MAX_TOKENS") truncated = true
     // M77 (fix wave): the candidate-side carrier, over the WHOLE set of
     // content-block reasons the vendor's enum documents (see
@@ -143,7 +147,7 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
     // is installed in this tree to type against, so the residual is the DOC
     // being right, not a measurement here.)
     const blockReason = (event.promptFeedback as { blockReason?: unknown } | undefined)?.blockReason
-    if (typeof blockReason === "string") refused = true
+    if (typeof blockReason === "string") { refused = true; receivedTerminal = true }
     const parts = candidates?.[0]?.content?.parts ?? []
     for (const [index, part] of parts.entries()) {
       if (part.thought === true) {
@@ -200,6 +204,7 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
     return events
   }
   const finish = (): LLMStreamEvent => {
+    if (!receivedTerminal) return { type: "error", error: new Error("Gemini stream ended without a finishReason") }
     // M77: each bit is written on its own (a response can be both), and both
     // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
     const visibleText = partOrder.filter((part): part is Extract<ProviderBlockOrderEntry, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("")

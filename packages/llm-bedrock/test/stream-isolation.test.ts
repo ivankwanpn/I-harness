@@ -135,6 +135,7 @@ it("keeps injected construction lazy and freezes input config/callbacks at prepa
   const fixture = trackedStream([
     { contentBlockDelta: { delta: { reasoningContent: { text: "plan", signature: "sig" } } } },
     { contentBlockStop: {} },
+    { messageStop: {} },
   ])
   const runtime = runtimeFor([fixture.stream])
   const client = createBedrockClient(config, runtime.runtime)

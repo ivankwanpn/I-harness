@@ -119,6 +119,7 @@ it("captures baseUrl once and freezes dispatch and continuation identity at prep
   model = "terminal"; providerId = "last"
   bodyController!.enqueue(bytes({ candidates: [{ content: { parts: [{ thought: true, text: "plan", thoughtSignature: "signed" }] } }] }))
   expect(await pending).toEqual({ done: false, value: { type: "reasoning", blockId: "0", text: "plan" } })
+  bodyController!.enqueue(bytes({ candidates: [{ finishReason: "STOP" }] }))
   bodyController!.close()
   const end = await iterator.next()
   expect(stream.locked).toBe(false)

@@ -12,10 +12,13 @@ const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwA
 // a type-level fixture only — no network, no AWS credential chain.
 function fakeRuntime(events: unknown[]): { fake: BedrockRuntimeFace; sent: unknown[] } {
   const sent: unknown[] = []
+  // The real Converse stream ends with messageStop; fixtures that only
+  // synthesize content members get the terminal the real wire sends.
+  const terminated = [...events, { messageStop: { stopReason: "end_turn" } }]
   const fake = {
     send: vi.fn(async (command: unknown) => {
       sent.push(command)
-      return { stream: events }
+      return { stream: terminated }
     }),
     destroy: vi.fn(),
   }

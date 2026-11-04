@@ -10,7 +10,7 @@ it.each([
   ["validationException", "always", "INVALID_ARGUMENT", 1],
 ] as const)("classifies %s from its stream member identity in %s mode", async (kind, mode, expectedCode, expectedCalls) => {
   let calls = 0
-  const runtime = { send: async () => ({ stream: ++calls === 1 ? [{ [kind]: { message: "opaque fixture detail" } }] : [] }), destroy() {} } as unknown as BedrockRuntimeFace
+  const runtime = { send: async () => ({ stream: ++calls === 1 ? [{ [kind]: { message: "opaque fixture detail" } }] : [{ messageStop: { stopReason: "end_turn" } }] }), destroy() {} } as unknown as BedrockRuntimeFace
   const client = createRetryingClient(createBedrockClient({ model: "fixture" }, runtime), resolveRetryPolicy({ mode, backoff: { initialDelayMs: 1 } }))
   const events: LLMStreamEvent[] = []
   for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)

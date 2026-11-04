@@ -4,8 +4,10 @@ import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
+// The real wire ends the stream with a finishReason on the last chunk; fixtures
+// that only synthesize content chunks get the terminal the real wire sends.
 const sseResponse = (chunks: unknown[]): Response =>
-  new Response(chunks.map((c) => `data: ${JSON.stringify(c)}`).join("\n\n"), {
+  new Response([...chunks, { candidates: [{ finishReason: "STOP" }] }].map((c) => `data: ${JSON.stringify(c)}`).join("\n\n"), {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   })
@@ -152,7 +154,7 @@ describe("llm-gemini protocol", () => {
   })
 
   it("replays Gemini thought signatures on the original function-call part", async () => {
-    const sse = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: "read", args: {} }, thoughtSignature: "signed" }] } }] })}\n\n`
+    const sse = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: "read", args: {} }, thoughtSignature: "signed" }] } }] })}\n\ndata: {"candidates":[{"finishReason":"STOP"}]}\n\n`
     const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 })).mockResolvedValueOnce(new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
     const client = createGeminiClient({ apiKey: "k", model: "gemini-3-flash" })

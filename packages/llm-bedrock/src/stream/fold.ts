@@ -20,6 +20,9 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
   // "max_tokens"`) — set in `handleMember` below, read once at the ending.
   // Absent stays absent: only `true` writes the field.
   let truncated = false
+// A-01: messageStop is the Converse stream's terminal member. EOF without it
+// is a dropped connection, not a completed turn.
+let receivedTerminal = false
   // M77: the same `stopReason` carries this wire's refusal literal,
   // `guardrail_intervened` (a guardrail stopped the exchange) — which
   // arrives as an ordinary HTTP 200 stream, so before M77 the seam reported
@@ -135,7 +138,8 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
     // `TokenUsage`) — until M72 Ⅲ this adapter documented that wire position
     // here instead of surfacing it; the arm below now maps it onto the
     // seam's own `usage` event (`{ type: "usage"; usage: LLMUsage }`).
-    if (m.messageStop?.stopReason === "max_tokens") truncated = true
+    if (m.messageStop !== undefined) receivedTerminal = true
+  if (m.messageStop?.stopReason === "max_tokens") truncated = true
     // M77: the refusal on the very same field — a sibling test, never the
     // `else` of the truncation above.
     if (m.messageStop?.stopReason === "guardrail_intervened") refused = true
@@ -160,6 +164,7 @@ export function createBedrockFold(config: BedrockConfig, request: LLMRequest, wi
     return []
   }
   const end = (): LLMStreamEvent => {
+    if (!receivedTerminal) return { type: "error", error: new Error("Bedrock stream ended without messageStop") }
     // M77: each bit is written on its own (a response can be both), and both
     // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
     const contentOrder = [...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry)

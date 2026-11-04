@@ -4,7 +4,7 @@ import type { LLMStreamEvent } from '@i-harness/llm-seam'
 afterEach(() => vi.unstubAllGlobals())
 it.each([2000, 6000])('captures and replays actual signed function arguments at depth%s', async depth => {
   const raw = '{"x":'.repeat(depth) + '1' + '}'.repeat(depth), args = JSON.parse(raw)
-  vi.stubGlobal('fetch', async () => new Response('data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"a","name":"read","args":' + raw + '},"thoughtSignature":"sig"}]}}]}\n\n'))
+  vi.stubGlobal('fetch', async () => new Response('data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"a","name":"read","args":' + raw + '},"thoughtSignature":"sig"}]}}]}\n\ndata: {"candidates":[{"finishReason":"STOP"}]}\n\n'))
   const client = createGeminiClient({ apiKey: 'controlled', model: 'fixture' })
   const events: LLMStreamEvent[] = []
   for await (const event of (await client.prepare!({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'go' }] })).withOutputCap(4096).stream()) events.push(event)
