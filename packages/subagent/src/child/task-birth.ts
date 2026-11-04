@@ -13,6 +13,7 @@ import type {SubagentToolDeps} from '../tools/types.ts'
 import type {RoleModelSelection} from './model-binding.ts'
 import type {TaskChildHostPreparation} from './task-host.ts'
 import {inspectTaskChildHistory,prepareTaskChildHistory} from './task-history.ts'
+import {birthFailure} from './birth-outcome.ts'
 
 export interface CommittedTaskChildBirth {readonly kind:'original-task-child-birth'}
 type Birth={document:ManagedDocument;request:ChildBootstrapCaptureRequest;payload:BootstrapRequest;receipt:BootstrapReceipt;start:{wall:number;monotonic:number};declared:RoleModelSelection|undefined;slot:TaskLaunchSlot;adopted:boolean;claimed:boolean;assertDependencyReceipt?:(receipt:BootstrapReceipt,seed:ReturnType<typeof compileSemanticSeed>)=>void}
@@ -65,7 +66,7 @@ export async function bootstrapTaskChild(slot:TaskLaunchSlot,deps:SubagentToolDe
   }
   return result
  })
- if(outcome.kind!=='ready'&&outcome.kind!=='already-ready'){const detail='reason' in outcome&&outcome.reason!==undefined?`: ${String(outcome.reason)}`:'';throw Object.assign(Error(`Original child birth requires recovery (${outcome.kind}${detail})`),{code:'FACT_RECOVERY_REQUIRED',outcome})}
+ if(outcome.kind!=='ready'&&outcome.kind!=='already-ready')throw birthFailure('child',outcome)
  const birth=retainedBirth!
  verifyTaskChildBirth(birth)
  await transfer.releaseSource?.()
