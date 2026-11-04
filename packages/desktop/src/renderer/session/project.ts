@@ -154,10 +154,14 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
       || event.type === "step/start" || event.type === "step/end") {
       // Structural markers carry no readable content.
       if (event.type !== "step/end") streamIndex = undefined
-    } else {
+    } else if (ACTIVITY_EVENT_TYPES.has(event.type)) {
       const detail = readableEventDetail(event)
       appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, ...(detail ? { detail } : {}) })
     }
+    // Anything else is internal bookkeeping (context budget/attempt/usage,
+    // model exchange, delivery sources, session status, …). It used to become a
+    // row labelled by the generic fallback, which flooded the timeline with
+    // "會話狀態已更新" lines between the messages.
   }
   // Tool-only rounds still persist an assistant/message for provider replay.
   // They carry no visible prose and must not become empty final bubbles.
@@ -214,18 +218,24 @@ export function projectHistoryTimeline(events: readonly WireEvent[]): TimelineRo
   return rows
 }
 
+/** Events that earn a row in the timeline. Internal bookkeeping is absent on
+ * purpose: it is not a user-meaningful activity, and rendering it used to fill
+ * the conversation with "會話狀態已更新" lines. */
+const ACTIVITY_LABELS: Record<string, Message> = {
+  reasoning: "思考過程", "todo/write": "待辦清單已更新", "goal/change": "目標已更新", "job/status": "背景任務狀態已更新",
+  "compaction/start": "正在壓縮上下文", "compaction/end": "上下文已整理完成。", "compaction/summary": "上下文摘要", "compaction/reset": "上下文已重設", "compaction/prune": "工具輸出已整理",
+  "sandbox/mode": "執行權限已更新", "team/member": "協作成員已更新", "team/task": "協作任務已更新",
+  "team/message/queued": "協作訊息已排入佇列", "team/message/delivered": "協作訊息已送達",
+  "subagent/start": "子代理已啟動", "subagent/end": "子代理執行已結束", "subagent/inbox": "收到子代理訊息",
+  "agent/input/admitted": "輸入已排入佇列", "agent/input/promoted": "正在處理佇列輸入", "agent/input/cancelled": "佇列輸入已取消",
+  "agent/input/system": "背景訊息",
+  "plan/mode": "計畫模式已更新", "command/run": "正在執行命令", "command/done": "命令執行已結束", "schedule/change": "排程已更新", "operator/run-end": "執行記錄已更新", "rewind/point": "會話已回復", "step/failed": "模型回應已中斷",
+}
+
+const ACTIVITY_EVENT_TYPES: ReadonlySet<string> = new Set([...Object.keys(ACTIVITY_LABELS), "context/recovery"])
+
 export function activityLabel(type: string, t: (message: Message) => string): string {
-  const labels: Record<string, Message> = {
-    reasoning: "思考過程", "todo/write": "待辦清單已更新", "goal/change": "目標已更新", "job/status": "背景任務狀態已更新",
-    "compaction/start": "正在壓縮上下文", "compaction/end": "上下文已整理完成。", "compaction/summary": "上下文摘要", "compaction/reset": "上下文已重設", "compaction/prune": "工具輸出已整理",
-    "sandbox/mode": "執行權限已更新", "team/member": "協作成員已更新", "team/task": "協作任務已更新",
-    "team/message/queued": "協作訊息已排入佇列", "team/message/delivered": "協作訊息已送達",
-    "subagent/start": "子代理已啟動", "subagent/end": "子代理執行已結束", "subagent/inbox": "收到子代理訊息",
-    "agent/input/admitted": "輸入已排入佇列", "agent/input/promoted": "正在處理佇列輸入", "agent/input/cancelled": "佇列輸入已取消",
-    "agent/input/system": "背景訊息",
-    "plan/mode": "計畫模式已更新", "command/run": "正在執行命令", "command/done": "命令執行已結束", "schedule/change": "排程已更新", "operator/run-end": "執行記錄已更新", "rewind/point": "會話已回復", "step/failed": "模型回應已中斷",
-  }
-  return t(labels[type] ?? "會話狀態已更新")
+  return t(ACTIVITY_LABELS[type] ?? "會話狀態已更新")
 }
 
 export function outcomeLabel(flags: { refused?: true; truncated?: true; empty?: true }, t: (message: Message) => string = (message) => message): string {

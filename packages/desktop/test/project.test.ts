@@ -141,6 +141,21 @@ describe("projectTimeline", () => {
     ])
   })
 
+  it("drops internal bookkeeping instead of rendering state rows", () => {
+    const events = [
+      { type: "user/message", text: "hi", seq: 0 },
+      { type: "context/action", seq: 1 },
+      { type: "context/attempt", seq: 2 },
+      { type: "model/exchange-accepted", seq: 3 },
+      { type: "agent/delivery-source", seq: 4 },
+      { type: "assistant/message", text: "hello", seq: 5 },
+    ] as unknown as WireEvent[]
+
+    expect(projectTimeline(events)).toEqual([
+      { id: "message:0", kind: "message", role: "user", text: "hi" },
+      { id: "message:5", kind: "message", role: "assistant", text: "hello" },
+    ])
+  })
   it("keeps user and assistant messages in order with stable ids", () => {
     const rows = projectTimeline([
       { type: "user/message", text: "hi", seq: 0 },

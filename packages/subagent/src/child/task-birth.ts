@@ -65,7 +65,7 @@ export async function bootstrapTaskChild(slot:TaskLaunchSlot,deps:SubagentToolDe
   }
   return result
  })
- if(outcome.kind!=='ready'&&outcome.kind!=='already-ready')throw Object.assign(Error('Original child birth requires recovery'),{code:'FACT_RECOVERY_REQUIRED',outcome})
+ if(outcome.kind!=='ready'&&outcome.kind!=='already-ready'){const detail='reason' in outcome&&outcome.reason!==undefined?`: ${String(outcome.reason)}`:'';throw Object.assign(Error(`Original child birth requires recovery (${outcome.kind}${detail})`),{code:'FACT_RECOVERY_REQUIRED',outcome})}
  const birth=retainedBirth!
  verifyTaskChildBirth(birth)
  await transfer.releaseSource?.()
