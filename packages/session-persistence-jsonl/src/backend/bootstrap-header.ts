@@ -9,6 +9,7 @@ import { isHeldFactOwner, parseBootstrapHeaderStage, parseBootstrapCaptureReserv
 import { parseHeader } from '../format.ts'
 import { createBootstrapCaptureBackend } from './bootstrap-capture.ts'
 import { createBootstrapCaptureIO, type BootstrapCaptureIO } from './bootstrap-capture-io.ts'
+import { createPublicationOwner, type PublicationOwner } from './publication.ts'
 import { bootstrapPaths, bootstrapNamespace, bootstrapPathsForRoute, lookupBootstrapStage, ordinaryStageIO } from './bootstrap-stage.ts'
 export { bootstrapPaths } from './bootstrap-stage.ts'
 import { captureBootstrapRoute, routeInvocation,parseOwnedCaptureReservation,routeForReservation, type BootstrapRoute, type BootstrapRouteBackend, type BootstrapReadState } from '@i-harness/session-persistence'
@@ -52,8 +53,8 @@ function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOp
       &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
   }catch{return false}
 }
-export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string,captureIO:BootstrapCaptureIO=createBootstrapCaptureIO()):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {selectedCapture:Pick<ReturnType<typeof createBootstrapCaptureBackend>,'readSelectedCapture'|'reserveSelectedCapture'|'prepareSelectedHeader'|'reconcileSelectedHeader'|'confirmSelectedBirthHeader'>; bootstrapRoutes:BootstrapRouteBackend; trackHeaderOwner(id:string, owner:HeldFactOwner):void; settleTrackedHeaderIO(id:string, owner:HeldFactOwner):Promise<void>; readTrackedState(route:BootstrapRoute,owner:HeldFactOwner):Promise<BootstrapReadState>; hasTrackedHeaderDebt(id:string,owner:HeldFactOwner):boolean; trackedStageIO(id:string,owner:HeldFactOwner):import('./bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id:string,owner:HeldFactOwner):Promise<{route:BootstrapRoute; stage:import('@i-harness/session-persistence').BootstrapHeaderStage; stageBytes:Uint8Array; digest:string} | {route:import('@i-harness/session-persistence').SelectedResultsRoute; stage:import('@i-harness/session-persistence').SelectedResultsHeaderStageV2; stageBytes:Uint8Array; digest:string} | undefined>} {
-  const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath, captureIO)
+export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string,captureIO:BootstrapCaptureIO=createBootstrapCaptureIO(),publisher:PublicationOwner=createPublicationOwner(rootPath)):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {selectedCapture:Pick<ReturnType<typeof createBootstrapCaptureBackend>,'readSelectedCapture'|'reserveSelectedCapture'|'prepareSelectedHeader'|'reconcileSelectedHeader'|'confirmSelectedBirthHeader'>; bootstrapRoutes:BootstrapRouteBackend; trackHeaderOwner(id:string, owner:HeldFactOwner):void; settleTrackedHeaderIO(id:string, owner:HeldFactOwner):Promise<void>; readTrackedState(route:BootstrapRoute,owner:HeldFactOwner):Promise<BootstrapReadState>; hasTrackedHeaderDebt(id:string,owner:HeldFactOwner):boolean; trackedStageIO(id:string,owner:HeldFactOwner):import('./bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id:string,owner:HeldFactOwner):Promise<{route:BootstrapRoute; stage:import('@i-harness/session-persistence').BootstrapHeaderStage; stageBytes:Uint8Array; digest:string} | {route:import('@i-harness/session-persistence').SelectedResultsRoute; stage:import('@i-harness/session-persistence').SelectedResultsHeaderStageV2; stageBytes:Uint8Array; digest:string} | undefined>} {
+  const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath, captureIO, publisher)
   type HeaderResource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
   type HeaderLedger = { id: string; handles: Set<HeaderResource>; pending: Set<Promise<unknown>>; settling?: Promise<void> }
   const headerLedgers = new WeakMap<object, HeaderLedger>()
@@ -263,7 +264,7 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
         if(operation.target.kind==='existing-empty'&&!target)return {kind:'conflict'}
         before();await mkdir(dirname(path),{recursive:true})
         await continueFile(paths.stage,operation.stageBytes)
-        if(operation.target.kind==='new'){ await continueFile(path,operation.headerBytes); if(headerLedgers.has(owner.owner) && !await syncExact(path,operation.headerBytes,id,owner))return {kind:'unknown'} }
+        if(operation.target.kind==='new'){ await publisher.begin(id,path); await continueFile(path,operation.headerBytes); if(headerLedgers.has(owner.owner) && !await syncExact(path,operation.headerBytes,id,owner))return {kind:'unknown'} }
         else if(!await syncExact(path,operation.headerBytes,id,owner)) {
           await continueFile(paths.publish,operation.headerBytes)
           const actual=await optional(path)

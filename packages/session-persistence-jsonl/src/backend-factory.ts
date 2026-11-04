@@ -18,6 +18,7 @@ import { createSessionFile, stageOwnedSessionFile, replaceSessionFile, replaceRa
 import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact-journal.ts'
 import { upgradeFactJournal, stageOwnedUpgrade } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
+import { createPublicationOwner, publicationMarkerId } from './backend/publication.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
 import { ordinaryStageIO } from './backend/bootstrap-stage.ts'
 import { createBootstrapCaptureIO } from './backend/bootstrap-capture-io.ts'
@@ -149,6 +150,7 @@ export function createJsonlBackend(root: string, options?: {
   const rootPath = pathResolution.rootPath
   const artifactPath = pathResolution.artifactPath
   const captureIO = createBootstrapCaptureIO()
+  const publication = createPublicationOwner(rootPath)
   const archiveReads = createArchiveReadOwner()
   // S-06: every append used to read and re-hash the whole journal. The writer
   // owns the session, so a decoded-journal cache keyed by the exact file size is
@@ -191,6 +193,9 @@ export function createJsonlBackend(root: string, options?: {
     for (let index = 0; index < frames; index++) { boundary = raw.indexOf(10, boundary + 1); if (boundary < 0) throw Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' }) }
     const birth=raw.subarray(0,boundary+1),decoded=readFactJournal(birth.subarray(end+1),meta.journal!,meta.formatVersion,meta)
     await preserveBootstrapBirth(path,birth,meta,decoded.events,stageIO)
+    // S-08: observing a complete bootstrap birth is the publication point for
+    // a forked/child session; the marker only hides files that never get here.
+    await publication.end(sessionId,path)
   }
   const docPath = pathResolution.document
   const tombPath = (kind: string, id: string) => artifactPath(`desktop-deleted-${kind}-${createHash("sha256").update(id).digest("hex")}`, ".tombstone")
@@ -241,8 +246,8 @@ export function createJsonlBackend(root: string, options?: {
     const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
     return serializeHeader({ ...meta, journal }) + '\n'
   }
-  const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO)
-  const factJournal = createFactJournalBackend(filePath, assertNotDeleted, Object.freeze({ filePath, assertNotDeleted, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }))
+  const { trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth, ...bootstrapBackend } = createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO, publication)
+  const factJournal = createFactJournalBackend(filePath, assertNotDeleted, Object.freeze({ filePath, assertNotDeleted, enter: (id, owner, batch) => nativePrewrite.enter(id, owner, batch) }), publication)
   const wrappedAppend = options?.wrapOwnedBatch !== undefined && factJournal.appendOwnedBatch !== undefined
     ? options.wrapOwnedBatch(factJournal.appendOwnedBatch) : undefined
   const wrappedReconcile = options?.wrapOwnedReconcile !== undefined && factJournal.reconcileOwnedBatch !== undefined
@@ -253,7 +258,7 @@ export function createJsonlBackend(root: string, options?: {
     ...(wrappedReconcile !== undefined ? { reconcileOwnedBatch: wrappedReconcile } : {}),
     ...bootstrapBackend,
     // Original private selected lane shares capture IO with bootstrap.
-    selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO),
+    selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO, publication),
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.
@@ -353,15 +358,18 @@ export function createJsonlBackend(root: string, options?: {
 
     async list(): Promise<string[]> {
       const names = await readdir(rootPath).catch(() => [] as string[])
-      // Skip `.doc.jsonl` document sidecars — they are not sessions.
+      // S-08: a zero-byte file is a create/fork that died before its first
+      // durable write; a session file that is still marked publishing has a
+      // durable header but no committed bootstrap birth yet. Neither is a
+      // session, so neither may appear.
+      const markers = new Set(names.map(publicationMarkerId).filter((id): id is string => id !== undefined))
       const ids = names
         .filter((n) => n.endsWith(".jsonl") && !n.endsWith(".doc.jsonl"))
         .map((n) => basename(n, ".jsonl"))
       return (await Promise.all(ids.map(async id => {
         try {
           await assertNotDeleted("session", id)
-          // S-08: a zero-byte file is a create/fork that died before its first
-          // durable write; it is not a session yet, so it must not appear.
+          if (markers.has(id)) return undefined
           const info = await stat(filePath(id)).catch(() => undefined)
           if (info !== undefined && info.size === 0) return undefined
           return id

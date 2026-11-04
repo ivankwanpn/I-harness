@@ -16,6 +16,7 @@ import { selectedBootstrapPaths } from './selected-results-route-path.ts'
 type SelectedCaptureInspection = {kind:'absent'} | {kind:'reserved';reservation:SelectedResultsReservationV1} | {kind:'materialized';route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2} | {kind:'conflict'|'unavailable'}
 
 import { createBootstrapCaptureIO, type BootstrapCaptureIO, type CaptureLedger as Ledger, type CaptureResource as Resource } from './bootstrap-capture-io.ts'
+import { createPublicationOwner, type PublicationOwner } from './publication.ts'
 // Capture caller containers without evaluating properties or proxy traps.
 function selectedFields<K extends string>(input:unknown,keys:readonly K[]):Record<K,unknown> {
   if(!input||typeof input!=='object'||types.isProxy(input))throw new TypeError('Invalid selected header operation')
@@ -42,7 +43,7 @@ function selectedByteSnapshot(input:unknown,limit:number):Buffer {
   selectedByteSet.call(snapshot,input)
   return snapshot
 }
-export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string, captureIO: BootstrapCaptureIO = createBootstrapCaptureIO()) {
+export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string, captureIO: BootstrapCaptureIO = createBootstrapCaptureIO(), publication: PublicationOwner = createPublicationOwner(rootPath)) {
   const { scope, tracked, acquire, close, bytes, settleBootstrapCaptureIO } = captureIO
   // A retry confirms the same original path revision under the retained owner.
   // Equal bytes on a replacement inode cannot mint a new acknowledgment.
@@ -194,6 +195,7 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
           if (!promoted?.equals(Buffer.from(operation.stageBytes))) return { kind: 'unknown' }
         }
         const target = await bytes(ledger, path, 65536, guard)
+        if (target === undefined) await publication.begin(id, path)
         await writeExact(ledger, path, operation.headerBytes, owner, target)
         await assertNotDeleted('session', id); guard()
         return { kind: 'committed', headerDigest: rawHeaderDigest(operation.headerBytes) }
@@ -273,6 +275,7 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
         } else if(!Buffer.from(selected.exactBytes).equals(captured.stageBytes))return {kind:'conflict'}
         const target=await bytes(ledger,path,65536,guard)
         if(target&&!captured.headerBytes.subarray(0,target.length).equals(target))return {kind:'conflict'}
+        if(issue&&target===undefined)await publication.begin(id,path)
         // Stage promotion uses the same owner and ledger, but only this original
         // target write boundary can record target-header issuance provenance.
         if(issue)await writeExact(ledger,path,captured.headerBytes,issuer,target,()=>{issued=true;onHeaderIssue?.()})

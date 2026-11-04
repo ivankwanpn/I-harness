@@ -7,6 +7,7 @@ import { readBootstrapFactJournal } from '@i-harness/core-session/internal/boots
 import type { BootstrapBackend } from '@i-harness/session-persistence'
 import { lookupBootstrapStage, ordinaryStageIO, type StageLookupIO } from './bootstrap-stage.ts'
 import { resolveSelectedBirth } from './selected-birth.ts'
+import type { PublicationOwner } from './publication.ts'
 
 /** Ordinary replacement may rewrite a suffix, never the actual birth frames
  * whose keys/bytes establish the retained operation's historical receipts. */
@@ -104,7 +105,7 @@ async function checkPrefix(handle: FileHandle, h: { meta: SessionMeta; bytes: nu
 
 /** Only the coordinator creates owner contexts. This leaf owns complete writes,
  * fsync evidence and same-issued-batch reconciliation; no write-behind retry. */
-export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, nativePrewrite?: Readonly<{ filePath: typeof filePath; assertNotDeleted: typeof assertNotDeleted; enter(id: string, owner: import('@i-harness/session-persistence').IssuingFactOwner, batch: EncodedFactBatch): () => void }>): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
+export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, nativePrewrite?: Readonly<{ filePath: typeof filePath; assertNotDeleted: typeof assertNotDeleted; enter(id: string, owner: import('@i-harness/session-persistence').IssuingFactOwner, batch: EncodedFactBatch): () => void }>, publication?: PublicationOwner): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
   if (nativePrewrite && (nativePrewrite.filePath !== filePath || nativePrewrite.assertNotDeleted !== assertNotDeleted)) throw new TypeError('Changed original native writer prerequisites')
   const receipt = (owner: HeldFactOwner, batch: EncodedFactBatch, prefixDigest: string): FactReceipt => ({
     owner: { ...owner.owner }, key: { ...batch.key }, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest,
@@ -194,6 +195,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
           else if (!synced && issued) outcome = { kind: 'unknown', key: batch.key }
         }
       }
+      if (outcome!.kind === 'committed' && decoded.events.some(event => event.type === 'session/bootstrap')) await publication?.end(id, filePath(id))
       return outcome!
     },
     async reconcileOwnedBatch(id, owner, prefix, batch) {
@@ -230,6 +232,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
           if (outcome.kind === 'committed') outcome = { ...outcome, cleanupDiagnostic: 'file-close-failed' }
         })
       }
+      if (outcome.kind === 'committed' && decoded.events.some(event => event.type === 'session/bootstrap')) await publication?.end(id, filePath(id))
       return outcome
     },
   }

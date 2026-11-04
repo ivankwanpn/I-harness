@@ -42,7 +42,7 @@ function captureBatch(prefixInput:import('@i-harness/core-session').JournalPrefi
  return {prefix,key,bytes,batch}
 }
 /** Private factory; no selected bootstrap authoring capability is advertised. */
-export function createSelectedFactJournalBackend(filePath:(id:string)=>string,assertNotDeleted:(kind:string,id:string)=>Promise<void>,captureIO:BootstrapCaptureIO) {
+export function createSelectedFactJournalBackend(filePath:(id:string)=>string,assertNotDeleted:(kind:string,id:string)=>Promise<void>,captureIO:BootstrapCaptureIO,publication?:import('./publication.ts').PublicationOwner) {
  const scopes=new WeakMap<object,ScopeData>()
  const checkedBirths=new WeakMap<object,{id:string;owner:HeldFactOwner['owner'];birthBody:Buffer;history:ReturnType<typeof readBootstrapFactJournal>;meta:ReturnType<typeof parseHeader>}>()
  const birthLanes=new WeakMap<object,WeakMap<object,SelectedLaneScope>>()
@@ -286,11 +286,18 @@ async function confirmSelectedFrames(path:string,id:string,owner:HeldFactOwner,s
   readJournalPrefix(id:string,owner:HeldFactOwner,scope:SelectedLaneScope){check(id,owner,scope);return captureIO.tracked(id,owner,ledger=>readSelectedJournalPrefix(filePath(id),id,owner,scope,assertNotDeleted,ledger))},
   appendOwnedBatch(id:string,owner:import('@i-harness/session-persistence').IssuingFactOwner,scope:SelectedLaneScope,prefix:import('@i-harness/core-session').JournalPrefix,batch:import('@i-harness/core-session').EncodedFactBatch){
    check(id,owner,scope);const snapshot=captureBatch(prefix,batch)
-   return captureIO.tracked(id,owner,ledger=>appendSelectedOwnedBatch(filePath(id),id,owner,scope,snapshot.prefix,{key:snapshot.key,bytes:snapshot.bytes},assertNotDeleted,ledger))
+   return captureIO.tracked(id,owner,ledger=>appendSelectedOwnedBatch(filePath(id),id,owner,scope,snapshot.prefix,{key:snapshot.key,bytes:snapshot.bytes},assertNotDeleted,ledger)).then(async outcome=>{
+    // S-08: the completion frame is the publication point for a selected child.
+    if(outcome.kind==='committed'&&snapshot.key.batchId.endsWith(':complete'))await publication?.end(id,filePath(id))
+    return outcome
+   })
   },
   reconcileOwnedBatch(id:string,owner:HeldFactOwner,scope:SelectedLaneScope,prefix:import('@i-harness/core-session').JournalPrefix,batch:import('@i-harness/core-session').EncodedFactBatch){
    check(id,owner,scope);const snapshot=captureBatch(prefix,batch)
-   return captureIO.tracked(id,owner,ledger=>reconcileSelectedOwnedBatch(filePath(id),id,owner,scope,snapshot.prefix,{key:snapshot.key,bytes:snapshot.bytes},assertNotDeleted,ledger))
+   return captureIO.tracked(id,owner,ledger=>reconcileSelectedOwnedBatch(filePath(id),id,owner,scope,snapshot.prefix,{key:snapshot.key,bytes:snapshot.bytes},assertNotDeleted,ledger)).then(async outcome=>{
+    if(outcome.kind==='committed'&&snapshot.key.batchId.endsWith(':complete'))await publication?.end(id,filePath(id))
+    return outcome
+   })
   },
   confirmFrames(id:string,owner:HeldFactOwner,scope:SelectedLaneScope,input:readonly import('../../../session-persistence/src/coordinator/bootstrap-types.ts').BootstrapFrame[]){
    check(id,owner,scope)
