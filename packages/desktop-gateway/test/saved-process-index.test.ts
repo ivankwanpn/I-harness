@@ -298,3 +298,11 @@ it('accepts observed format14 and continues to reject unknown future formats',()
  expect(buildObservedSavedProcessIndex({session:{formatVersion:14,events:[]},highWater:0} as never,'owner').candidates).toEqual([])
  expect(()=>buildObservedSavedProcessIndex({session:{formatVersion:15,events:[]},highWater:0} as never,'owner')).toThrow('Unsupported process read initial')
 })
+
+it('keeps a background shell job addressable from saved facts alone (A-03 review)', () => {
+  const index = buildSavedProcessIndex(startingFacts(), 'owner')
+  expect(index.candidates).toHaveLength(1)
+  expect(index.candidates[0]).toMatchObject({ id: 'j' })
+  expect(index.candidates[0]?.declaration).toMatchObject({ name: 'shell' })
+  expect(index.select('j').kind).toBe('selected')
+})
