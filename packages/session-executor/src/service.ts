@@ -60,7 +60,7 @@ import { runPostSubmit } from './service/post-submit.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
-import { registerSubagent, projectWorkflowRows, ParentNotificationStoppedError, type AgentTaskView, type ParentInputAdmission, type RegisterSubagentOptions, type RegisterSubagentResult } from "@i-harness/subagent"
+import { registerSubagent, projectWorkflowRows, ParentNotificationStoppedError, inspectTaskProjection, reconcileTaskProjection, type AgentTaskView, type ParentInputAdmission, type RegisterSubagentOptions, type RegisterSubagentResult, type TaskProjectionIssue } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -262,6 +262,9 @@ export interface SessionService {
   /** Actual owned prepared budget or validated saved facts; no provider request. */
   contextState(sessionId: string): Promise<SessionContextState>
   readResultPage?(sessionId: string, query: ResultPageQuery): Promise<ResultPageResult>
+  /** Host-only Task projection integrity (D-01): read-only inspection, or an
+   * explicit reconcile that writes warning markers. Never called by a tool. */
+  taskProjectionIntegrity?(sessionId: string, options?: { reconcile?: boolean }): Promise<TaskProjectionIssue[]>
   /** Task 4 (F1): install a HOST-RESOLVED model binding for a session — the
    * `session/model/set` rebind. The host resolves because only it owns the
    * runtime and the wire's optional protocol (§4.2②); this method makes the
@@ -361,7 +364,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const managedTitles=new Map<string,ReturnType<typeof createOwnedPostTurnLifetime>>()
   const managedRecipients=new Map<string,ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>>()
   const managedPrepubSettlers=new Map<string,()=>Promise<void>>()
-  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>;projectTasks():AgentTaskView[];cancelTask(id:string):'cancellation-requested'|'already-finished'}
+  type TaskLifecycle={dispose():Promise<void>;drain():Promise<void>;journal():Promise<void>;activate():void;ready:Promise<void>;projectTasks():AgentTaskView[];cancelTask(id:string):'cancellation-requested'|'already-finished';projectionIntegrity():Promise<TaskProjectionIssue[]>;reconcileProjection():Promise<TaskProjectionIssue[]>}
   const managedTaskOwners=new Map<string,TaskLifecycle>()
   const managedWorkflowOwners=new Map<string,{list():import('@i-harness/exec').BackgroundJobView[];kill(id:string):'cancellation-requested'|'already-finished';journal():Promise<void>}>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
@@ -1179,7 +1182,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const taskAdditions={...workflowMount?{workflow:workflowMount.executor}:{},managedParent:{domain:original.domain,execution:original.execution},parentNotify:notify,deferRestoredWork:true,getParentModel:()=>{const model=taskOptions.parentModel??(runtime?runtime.selectedModelBinding().model:initialTaskModel);if(!model)throw Error('Original parent model not bound');return model}}
         taskMount=registerSubagent(original.ctx,original.tools,Object.defineProperties({}, {...taskFields,...Object.getOwnPropertyDescriptors(taskAdditions)}) as Parameters<typeof registerSubagent>[2])
         const mounted=taskMount,dispose=mounted.dispose,drain=mounted.drainParentNotifications,journal=mounted.settleParentDeliveryJournalDebt,activate=mounted.activateRestoredWork,catalogReady=mounted.catalogReady,ready=mounted.ready,project=mounted.projectTasks.bind(mounted),table=mounted.table,jobs=mounted.jobs,tasks=mounted.tasks,entriesMethod=table.entries,getMethod=table.get,listJobsMethod=jobs.listAll,listTasksMethod=tasks.list,tableGet=getMethod.bind(table),kill=jobs.kill.bind(jobs)
-        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready,projectTasks(){const check=()=>{if(table.entries!==entriesMethod||table.get!==getMethod||jobs.listAll!==listJobsMethod||tasks.list!==listTasksMethod)throw Error('Original Task projection changed')};check();const rows=project();check();return rows},cancelTask(id:string){const entry=tableGet(id);if(entry!==undefined){if(entry.status!=='running')return 'already-finished';entry.controller.abort();return entry.jobId!==undefined?kill(entry.jobId):'cancellation-requested'}return kill(id)}})
+        taskLifecycle=Object.freeze({dispose:()=>Reflect.apply(dispose,mounted,[]),drain:()=>Reflect.apply(drain,mounted,[]),journal:()=>Reflect.apply(journal,mounted,[]),activate:()=>Reflect.apply(activate,mounted,[]),ready,projectTasks(){const check=()=>{if(table.entries!==entriesMethod||table.get!==getMethod||jobs.listAll!==listJobsMethod||tasks.list!==listTasksMethod)throw Error('Original Task projection changed')};check();const rows=project();check();return rows},projectionIntegrity(){if(!opts.coordinator)return Promise.reject(Error('Task projection integrity requires the original coordinator'));return inspectTaskProjection(tasks,opts.coordinator)},reconcileProjection(){if(!opts.coordinator)return Promise.reject(Error('Task projection integrity requires the original coordinator'));return reconcileTaskProjection(tasks,opts.coordinator)},cancelTask(id:string){const entry=tableGet(id);if(entry!==undefined){if(entry.status!=='running')return 'already-finished';entry.controller.abort();return entry.jobId!==undefined?kill(entry.jobId):'cancellation-requested'}return kill(id)}})
         original.retain(taskLifecycle.dispose);await catalogReady;original.assertCurrent()
        }if(opts.managedRuntime!.ownedCode){if(!shellOutput?.sourceFor)throw Error('Original Code output source required');if(!opts.managedRuntime!.ownedShell){for(const tool of createContextOutputTools(shellOutput.service))original.tools.register(tool);original.tools.promote(['context_output_read'])}codeMount=await mountOwnedCode(original,{service:shellOutput.service,sourceFor:shellOutput.sourceFor},codeConfig!)}let surface=registrySurface;if(opts.managedRuntime!.mountDefaultSurface){original.assertCurrent();surface=await opts.managedRuntime!.mountDefaultSurface(original,{modelToolSchemas:()=>codeMount?codeMount.schemas():original.tools.schemas(),modelBinding:()=>{original.assertCurrent();const selected=runtime?runtime.selectedModelBinding():initialBinding;if(!selected)throw Error('Original parent model not bound');return selected},retainTeamRecovery(handle,port){original.assertCurrent();if(row.teamRecovery||!isOriginalTeamRecoveryPort(port,original.domain,handle))throw TypeError('Original Team recovery port required');const resume=Object.getOwnPropertyDescriptor(port,'resume')?.value,close=Object.getOwnPropertyDescriptor(port,'close')?.value;if(typeof resume!=='function'||typeof close!=='function')throw TypeError('Original Team recovery methods required');const gate=Promise.withResolvers<void>();void gate.promise.catch(()=>{});row.teamRecovery={domain:original.domain,handle,port,resume,close,gate,pending:false,stopped:false};original.retain(()=>Reflect.apply(close,port,[]))},...taskMount?{task:taskMount}:{},...taskNotify?{parentNotify:taskNotify}:{},...shellMount?{shell:shellMount.service}:{},...shellOutput?{output:shellOutput}:{}});original.assertCurrent()}if(taskMount){const selected=await resolveModel();original.assertCurrent();initialBinding=selected;initialTaskModel=selected.model;taskLifecycle!.activate();await taskLifecycle!.ready;original.assertCurrent()}if(surface&&types.isProxy(surface))throw TypeError('Original default surface required');const activate=surface&&Object.getOwnPropertyDescriptor(surface,'activateAfterTaskReady');if(activate){if(!taskMount||!('value'in activate)||typeof activate.value!=='function'||types.isProxy(activate.value))throw TypeError('Original staged Team activation required');try{await Reflect.apply(activate.value,surface,[])}catch(error){const state=row.teamRecovery;if(!(error instanceof TeamMountRecoveryRequired)||!state||state.handle!==error.handle||!isOriginalTeamRecoveryPort(state.port,original.domain,state.handle))throw error;state.pending=true;const notify=opts.managedRuntime!.onTeamRecoveryRequired;if(!notify){state.pending=false;throw new AggregateError([error,Error('Team recovery notification unavailable')],'Team recovery cannot await retry',{cause:error})}try{notify(sessionId)}catch(notification){state.pending=false;throw new AggregateError([error,notification],'Team recovery notification failed',{cause:error})}await state.gate.promise}original.assertCurrent();if(Object.getOwnPropertyDescriptor(surface!,'activateAfterTaskReady')?.value!==activate.value)throw Error('Original staged Team activation changed')}return surface},resolveModel,assertConstructionCurrent(){if(retired)throw Error('Original construction retired');assertWritableOpen(sessionId)}})
       }else runtime=createManagedExecutionRuntime({...common,...await resolveModel()})
@@ -1708,6 +1711,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
+  async function taskProjectionIntegrity(sessionId: string, options?: { reconcile?: boolean }): Promise<TaskProjectionIssue[]> {
+    const owner = managedTaskOwners.get(sessionId)
+    if (!owner) throw new TypeError('Original Task projection owner required')
+    return options?.reconcile === true ? owner.reconcileProjection() : owner.projectionIntegrity()
+  }
+
   const service:SessionService = {
     async refreshExtensions() {
       if (closed) return
@@ -1774,6 +1783,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     assemblyFor: getOrCreate,
     modelState,
     contextState,
+    taskProjectionIntegrity,
     ...(opts.contextOutput || opts.coordinator?.storageRoot ? { readResultPage: resultReader.read } : {}),
     rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,

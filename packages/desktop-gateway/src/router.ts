@@ -222,7 +222,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         }catch(error){send(makeFailure(message.id,INVALID_PARAMS,error instanceof Error?error.message:String(error)))}
         return
       }
-      if (["desktop/model-wait/state", "desktop/model-wait/configure", "desktop/model-retry/state", "desktop/model-retry/configure", "desktop/auto-title/state", "desktop/auto-title/configure", "desktop/code-mode/state", "desktop/code-mode/configure", "desktop/environment/diagnostics", "desktop/session/execution/read", "desktop/session/execution/stop", "desktop/session/processes/read", "desktop/session/processes/control", "desktop/session/processes/job-output", "desktop/session/processes/terminal-output", "desktop/approval-rules/state", "desktop/approval-rules/add", "desktop/approval-rules/revoke", "desktop/session/batch", "desktop/session/reload"].includes(message.method)) {
+      if (["desktop/model-wait/state", "desktop/model-wait/configure", "desktop/model-retry/state", "desktop/model-retry/configure", "desktop/auto-title/state", "desktop/auto-title/configure", "desktop/code-mode/state", "desktop/code-mode/configure", "desktop/environment/diagnostics", "desktop/session/execution/read", "desktop/session/execution/stop", "desktop/session/processes/read", "desktop/session/processes/control", "desktop/session/processes/job-output", "desktop/session/processes/terminal-output", "desktop/approval-rules/state", "desktop/approval-rules/add", "desktop/approval-rules/revoke", "desktop/session/batch", "desktop/session/reload", "desktop/session/tasks/integrity"].includes(message.method)) {
         const params = asRecord(message.params)
         try {
           if (!params) throw new Error("Invalid Desktop parameters")
@@ -242,6 +242,12 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
             case "desktop/code-mode/state": if (!handlers.codeSettings) throw new Error("Code Mode settings unavailable"); result = await handlers.codeSettings.state(sessionId); break
             case "desktop/code-mode/configure": if (!handlers.codeSettings) throw new Error("Code Mode settings unavailable"); result = await handlers.codeSettings.configure(params.patch, sessionId); break
             case "desktop/environment/diagnostics": if (!handlers.diagnostics) throw new Error("Diagnostics unavailable"); result = await handlers.diagnostics.read(sessionId, params.probe as boolean | undefined); break
+            case "desktop/session/tasks/integrity": {
+              if (!sessionId || !handlers.taskProjection) throw new Error("Task projection unavailable")
+              if (params.reconcile !== undefined && typeof params.reconcile !== "boolean") throw new Error("Invalid task projection query")
+              result = await handlers.taskProjection(sessionId, params.reconcile === true ? { reconcile: true } : {})
+              break
+            }
             case "desktop/session/execution/read": if (!sessionId || !handlers.execution) throw new Error("Execution unavailable"); result = await handlers.execution.read(sessionId, { offset: params.offset as number | undefined, limit: params.limit as number | undefined }); break
             case "desktop/session/execution/stop": if (!sessionId || !handlers.execution || typeof params.cellId !== "string") throw new Error("Execution unavailable"); result = await handlers.execution.stop(sessionId, params.cellId); break
             case "desktop/session/processes/read": if (!sessionId || !handlers.agentProcesses) throw new Error("Processes unavailable"); result = await handlers.agentProcesses.read(sessionId); break

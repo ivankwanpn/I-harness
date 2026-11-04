@@ -39,6 +39,9 @@ export interface DesktopHandlers {
   execution?: ReturnType<typeof import("./execution.ts").createDesktopExecution>
   agentProcesses?: ReturnType<typeof import("./agent-processes.ts").createAgentProcesses>
   diagnostics?: ReturnType<typeof import("./environment-diagnostics.ts").createDesktopDiagnostics>
+  /** D-01 host diagnostic: inspect (or explicitly reconcile) the task document
+   * against durable child sessions. Never exposed to a model tool. */
+  taskProjection?: (sessionId: string, options: { reconcile?: boolean }) => Promise<import('@i-harness/subagent').TaskProjectionIssue[]>
   approvalRules?: import("./approval-rules.ts").ApprovalRulesAdapter
   workspace?: string
   assertSession?: (id: string) => Promise<void>

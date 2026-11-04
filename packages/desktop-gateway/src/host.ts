@@ -518,6 +518,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
     diagnostics: createDesktopDiagnostics(service, { shell: agentShell }),
+    taskProjection: async (id, options) => {
+      if (!service.taskProjectionIntegrity) throw new Error("Task projection unavailable")
+      return service.taskProjectionIntegrity(id, options)
+    },
     draftSession: createDraftSession(coordinator),
     sessionReload: reloadSession,
     contextPicker: createContextPicker(options.workspace, coordinator, review, { visible: isConversation, projectFor: projects.projectFor, query: createConversationQuery(coordinator, sessionQuery) }),
