@@ -174,3 +174,7 @@ lifecycle 已切到 composed fixture + control hooks：
 2. restore-path deliver fail-closed 測試在最後 `coordinator.close()` 得到 `Coordinator cleanup is unresolved`——composed 對未結算 action 的 fail-closed 較嚴格，需補明確 reconcile（測試或產品）。
 
 **lifecycle 第 2 個失敗的診斷（2026-11-05）**：`Coordinator cleanup is unresolved` 的內層原因是 **`Managed restored read/document cleanup unresolved`**（`managed-documents.close()` 的 `closeOne` 對某個 document 回報 restored-read 未結清），不是 delivery write 的 pending。也就是 restore-path 測試在 finally 直接 `coordinator.close()` 時，仍有一個由測試流程留下的 managed read handoff；需要先讓該 document 的 read handoff 被 consume／abandon（或測試在 close 前關閉文件）。尚未修。
+
+**lifecycle 失敗 document 定位（2026-11-05）**：`managed-close` 診斷顯示失敗的是 **`parent` document**（`Managed restored read/document cleanup unresolved`）。`restoredEntries` 的 `close()` 在 coordinator teardown 前未被 consume／abandon；測試在 finally 先 `owned.document.close()` 也無效（該 handoff 屬於 managed restored read，不是一般 document handle）。
+
+**下一步**：檢查 `mountAgentTeams` 的 managed parent 收尾（unmount → `managed.parent.close()`）是否應 consume/abandon 這個 restored read；或在 `managed-documents.closeOne` 對「team 已 unmount 的 parent」允許 release。修正後 lifecycle 應達 49/50。
