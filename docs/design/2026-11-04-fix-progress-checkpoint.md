@@ -142,6 +142,14 @@
 
 **尚未完成**：移除 task document 的可變寫入（write-behind／廢除）、pending intent 的自動 reconcile，會影响 desktop catalog、required settlement 與 v3 parent 契約，屬獨立重構。
 
+## 2026-11-05 第 75–77 輪
+
+| 範圍 | 項目 | Commit／結果 |
+|---|---|---|
+| 建置 | 安裝檔（`d81dac58…`）＋第 69–74 輪 checkpoint | `c3e96274` |
+| gateway | D-05：approval policy identity 不再雜湊工具表面 | `018ed36d` |
+| 驗證 | 全庫 typecheck 再次全綠（82 packages，exit 0） | 第 77 輪 |
+| 建置 | 安裝檔重建（`efaf04f8…`）含 D-05 | 第 77 輪 |
 ## 2026-11-05 第 69–74 輪（D-01／D-07／S-07／S-06）
 
 | 範圍 | 項目 | Commit |
