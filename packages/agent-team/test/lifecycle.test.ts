@@ -651,7 +651,7 @@ describe("mountAgentTeams lifecycle", () => {
     const owned = await ownedTeamFixture([
       { type: 'team/member', version: 1, teamId: 'held-team', member: { id: 'child', name: 'helper', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning' } },
       { type: 'team/member', version: 1, teamId: 'held-team', member: { id: 'child', name: 'helper', description: 'd', provider: 'spawn', context: 'fresh', phase: 'active', sessionId: 'child' } },
-    ])
+    ], 'parent', { composed: true })
     const deps = makeDeps({ parentSession: owned.document.view, factOwner: owned.document })
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<boolean>()
     deps.deliver = async () => { entered.resolve(); return release.promise }
@@ -677,11 +677,10 @@ describe("mountAgentTeams lifecycle", () => {
     const ctx = createContext(), tools = createToolRegistry(ctx)
     const f = await ownedTeamFixture([{ type: "team/message/queued", version: 1, teamId: "lead-order", message: {
       id: "msg-order", senderId: "child-helper", senderName: "helper", targetId: "lead-order", delivery: "quiet", content: "recovered",
-    } }])
+    } }], 'parent', { composed: true })
     const parentSession = f.document.view
     const flushed = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), order: string[] = []
-    const actual = f.backend.appendOwnedBatch!
-    f.backend.appendOwnedBatch = async (...args) => {
+    f.control.append = actual => async (...args) => {
       const events = decodeFactBatch(args[3].bytes).events
       const result = await actual(...args)
       expect(tools.get('send_message')).toBeUndefined()
@@ -872,7 +871,7 @@ describe("mountAgentTeams lifecycle", () => {
       { type: "team/member", version: 1, teamId: "lead-t", member: { id: "child-abc", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active", sessionId: "sess-1" } },
     )
     const table = createAgentTable()
-    const child = await ownedTeamFixture([], 'sess-1')
+    const child = await ownedTeamFixture([], 'sess-1', { composed: true })
     const entrySession = child.document.view
     table.add("lead/helper", { path: "lead/helper", status: "waiting", session: entrySession, factOwner: child.document, controller: new AbortController(), mailbox: [], sessionId: "sess-1" })
     // coordinator whose flush fails ONLY on the CHILD session ("sess-1") —
@@ -948,9 +947,9 @@ describe("mountAgentTeams lifecycle", () => {
     const owned = await ownedTeamFixture([{
       type: "team/message/queued", version: 1, teamId: "lead-abc",
       message: { id: "msg-old", senderId: "child-z", senderName: "helper", targetId: "lead-abc", delivery: "wakeup", content: "report" },
-    }])
-    const parentSession = owned.document.view, actualAppend = owned.backend.appendOwnedBatch!
-    owned.backend.appendOwnedBatch = async (...args) => decodeFactBatch(args[3].bytes).events.some(event => event.type === 'subagent/inbox')
+    }], 'parent', { composed: true })
+    const parentSession = owned.document.view
+    owned.control.append = actualAppend => async (...args) => decodeFactBatch(args[3].bytes).events.some(event => event.type === 'subagent/inbox')
       ? { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' } : actualAppend(...args)
     const deps = makeDeps({
       parentSession,
@@ -974,7 +973,6 @@ describe("mountAgentTeams lifecycle", () => {
       expect(deliv).toHaveLength(0)
       expect(parentSession.events.filter((e) => e.type === "team/message/queued")).toHaveLength(1)
     } finally {
-      owned.backend.appendOwnedBatch = actualAppend
       await handle.unmount()
       await owned.coordinator.close()
     }
@@ -1072,7 +1070,7 @@ describe("mountAgentTeams lifecycle", () => {
     const tools = createToolRegistry(ctx)
     const parentSession = createSession()
 
-    const owned = await ownedTeamFixture([], 'sess-parent')
+    const owned = await ownedTeamFixture([], 'sess-parent', { composed: true })
     const coordinator = owned.coordinator
 
     // The child's turn blocks on the gate, so it is provably still RUNNING
@@ -1243,7 +1241,7 @@ describe("mountAgentTeams lifecycle", () => {
     // Durable child sessions are a roster precondition (spawn must return a
     // sessionId and the checkpoint must pass) — an in-memory coordinator keeps
     // the REAL bridge under test.
-    const owned = await ownedTeamFixture([], 'sess-parent')
+    const owned = await ownedTeamFixture([], 'sess-parent', { composed: true })
     const coordinator = owned.coordinator
     const calls: Array<{ provider: string; model: string }> = []
     const handle = await mountAgentTeams(ctx, tools, makeDeps({
