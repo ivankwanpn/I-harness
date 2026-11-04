@@ -52,3 +52,9 @@
 
 - `packages/subagent/test/job-record.test.ts`：fold／terminal 不可逆／壞行容錯／schema 拒絕，3/3。
 - 後續步驟需補：重啟重建、與 task projection 的一致性、desktop 顯示。
+
+## Owned／v3 restore 的決策（2026-11-05）
+
+owned 路徑的 task document 同時是**寫入所有權的 witness**（`observe → confirm → handoff`）；在 document 缺失時用 job record 偽造一份文件，會繞過 read confirmation／ownership 契約，因此**不做自動 fallback**。
+
+降級模式改為唯讀：`readRecoveredTaskRows(coordinator, parentSessionId)` 從 job record fold 出任務列（status／outcome／error／childSessionId／agentPath），供 host 在 registry unavailable 時顯示與診斷；此模式**明確不可 admit 新工作**。下一步是在 desktop 的 task projection 接上這個降級來源與 banner。

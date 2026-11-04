@@ -5,7 +5,7 @@ import { expect, it } from 'vitest'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createJobRecordStore, type JobRecordV1 } from '../src/job-record.ts'
 import { classifyRestoredTasks, inspectJobRecordProjection, rebuildTaskDocumentFromJobRecords, restoreTaskDocument } from '../src/task/recovery.ts'
-import { createTaskRegistry } from '../src/index.ts'
+import { createTaskRegistry, readRecoveredTaskRows } from '../src/index.ts'
 import { vi } from 'vitest'
 import type { TaskRecord, TaskRegistry } from '../src/task/types.ts'
 
@@ -110,5 +110,24 @@ it('restores a missing task document by rebuilding it from job records (D-01 pro
     const reader = createTaskRegistry({ coordinator, stateId: 'parent' })
     await expect(restoreTaskDocument(reader, coordinator, 'parent')).resolves.toBe('rebuilt')
     expect(reader.get(task.id)).toMatchObject({ status: 'cancelled', outcome: 'cancelled', error: 'stopped', childSessionId: 'child-session' })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+
+it('derives read-only recovered rows when the task document is unavailable (D-01 degraded mode)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-job-rows-'))
+  try {
+    const store = createJobRecordStore(join(root, 'jobs', 'parent.jobs.jsonl'))
+    await store.append(record('done', 'completed', { agentPath: 'helper', description: 'do work' }))
+    await store.append(record('failed', 'error', { terminal: { at: 2, reason: 'child crashed' } }))
+    await store.append(record('live', 'running', { childSessionId: 'child' }))
+    const rows = await readRecoveredTaskRows({ storageRoot: root }, 'parent')
+    expect(rows.map(row => [row.taskId, row.status, row.outcome])).toEqual([
+      ['done', 'completed', 'completed'],
+      ['failed', 'error', 'error'],
+      ['live', 'running', undefined],
+    ])
+    expect(rows[0]).toMatchObject({ agentPath: 'helper', description: 'do work' })
+    expect(rows[1]).toMatchObject({ error: 'child crashed' })
   } finally { await rm(root, { recursive: true, force: true }) }
 })

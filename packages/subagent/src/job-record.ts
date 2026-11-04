@@ -91,3 +91,33 @@ export async function loadJobRecords(coordinator: Pick<SessionCoordinator, 'stor
   if (!coordinator.storageRoot) return { records: [], warnings: ['job record storage root unavailable'] }
   return createJobRecordStore(join(coordinator.storageRoot, 'jobs', `${parentSessionId}.jobs.jsonl`)).load()
 }
+
+/** D-01 degraded mode: read-only task rows derived from durable job records.
+ * Used when the mutable task document is unavailable; never used to admit work
+ * (write ownership requires the real document). */
+export interface RecoveredTaskRow {
+  taskId: string
+  parentSessionId: string
+  childSessionId?: string
+  status: TaskStatus
+  outcome?: 'completed' | 'error' | 'cancelled' | 'recovery-required'
+  error?: string
+  agentPath?: string
+  description?: string
+  createdAt: number
+  updatedAt: number
+}
+
+export async function readRecoveredTaskRows(coordinator: Pick<SessionCoordinator, 'storageRoot'>, parentSessionId: string): Promise<RecoveredTaskRow[]> {
+  const loaded = await loadJobRecords(coordinator, parentSessionId)
+  return loaded.records.map(record => ({
+    taskId: record.jobId, parentSessionId: record.parentSessionId,
+    ...(record.childSessionId !== undefined ? { childSessionId: record.childSessionId } : {}),
+    status: record.status,
+    ...(record.terminal !== undefined ? { outcome: (record.status === 'completed' ? 'completed' : record.status === 'cancelled' ? 'cancelled' : record.status === 'error' ? 'error' : 'recovery-required') as RecoveredTaskRow['outcome'] } : {}),
+    ...(record.terminal?.reason !== undefined ? { error: record.terminal.reason } : record.detail !== undefined ? { error: record.detail } : {}),
+    ...(record.agentPath !== undefined ? { agentPath: record.agentPath } : {}),
+    ...(record.description !== undefined ? { description: record.description } : {}),
+    createdAt: record.createdAt, updatedAt: record.updatedAt,
+  }))
+}
