@@ -192,7 +192,7 @@ export function createDocuments(
     pendingWrites: () => docChain,
     async joinTaskDocumentIO() { await taskOperations?.joinTaskDocumentIO(); await taskTransitions?.joinIO() },
     putDocumentStrict,
-    async putDocument(key: string, data: unknown) { observations.assertOutsideObservedDocument(key); try { await putDocumentStrict(key, data) } catch (error) { report(error) } },
+    async putDocument(key: string, data: unknown) { observations.assertOutsideObservedDocument(key); try { await putDocumentStrict(key, data) } catch (error) { report(error); throw error } },
     async getDocument(key: string) {
       if(!taskOperations||!lockEnabled||typeof key!=='string'||!key.startsWith('task-')||!hasOriginalNativeWriter(backend))return backend.getDocument(key)
       observations.assertOutsideOwnedOperations([], [key])

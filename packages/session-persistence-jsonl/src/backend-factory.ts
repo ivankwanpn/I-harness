@@ -441,8 +441,14 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       await writeLegacyDocument(path, data)
     },
     async getDocument(key: string): Promise<unknown | undefined> {
-      const text = await readFile(docPath(key), "utf-8").catch(() => undefined)
-      if (text === undefined) return undefined
+      let text: string
+      try { text = await readFile(docPath(key), "utf-8") }
+      catch (error) {
+        // Only a missing document is absent; a permission/IO failure must not be
+        // reported as "no document" (the caller would silently lose durable state).
+        if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return undefined
+        throw error
+      }
       return JSON.parse(text) as unknown
     },
     async readDocumentObserved(key) {
