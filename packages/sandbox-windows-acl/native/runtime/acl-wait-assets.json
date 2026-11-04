@@ -1,0 +1,24 @@
+{
+  "protocol": 1,
+  "platform": "win32",
+  "arch": "x64",
+  "koffiVersion": "3.1.6",
+  "export": "ih_acl_unregister_wait_and_drain",
+  "abi": {
+    "return": "DWORD",
+    "arguments": [
+      "HANDLE"
+    ],
+    "convention": "WINAPI"
+  },
+  "build": {
+    "compiler": "MSVC14.41.34120",
+    "sdk": "10.0.22621.0"
+  },
+  "files": {
+    "ih-acl-wait-bridge.dll": "4c58cf192ccff25fee230b81132e80c667fc9e71b9a504572ee7d48191a5a1a3",
+    "native-wait-worker.mjs": "a5fc434d7963de1e3ce921ac9a7fce68445e5083055254670b0364847e29fdc4",
+    "native-wait-protocol.mjs": "e28c72497217269c754587eeb5d279845bb2d699dbf5546eabbffa22cd6670cf",
+    "acl-wait-bridge.c": "9ccd62e589639bae86ff7c8acb38af80eb008890d6754d66bbf33ffae8f59d55"
+  }
+}
