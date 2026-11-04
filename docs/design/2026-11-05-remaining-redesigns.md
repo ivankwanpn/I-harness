@@ -166,3 +166,9 @@ lifecycle 已切到 composed fixture + control hooks：
 - 遷移後：**7 failed / 43 passed**（剩餘 7 個：cleanup 的 AggregateError 形狀 ×2、recovery 讀取、deliver fail-closed ×2、wait_agent status edge、settings selection）。
 - 這 7 個多數在 legacy 也失敗（pre-existing），不是 composed 新引入；後續逐項處理即可。
 - 測試直接 `coordinator.create({sessionId:'target'})`（不再帶 parentSession）：composed 不支援以 create 假造 child-tagged session，parent linkage 由 table entry 提供。
+
+**lifecycle 遷移更新（2026-11-05）**：完成剩餘 seed／backend 覆寫轉換後為 **48 passed / 2 failed**（先前 43/50 的註記以此為準）。
+
+剩餘 2 個：
+1. cleanup AggregateError 形狀（`errors[1]` 預期 `null`）——legacy fixture 下同樣失敗，屬 pre-existing 測試假設。
+2. restore-path deliver fail-closed 測試在最後 `coordinator.close()` 得到 `Coordinator cleanup is unresolved`——composed 對未結算 action 的 fail-closed 較嚴格，需補明確 reconcile（測試或產品）。
