@@ -57,6 +57,7 @@
 - `ownedTeamFixture` 已可選 `{ composed: true, control: { append, reconcile } }`，hooks 在 backend 建立前注入（`composed-fixture-hooks` 測試）；測試改用 hook 記錄 batch／注入 unknown outcome，而不是事後覆寫 backend；
 - 逐檔遷移 agent-team 測試；剩餘 `FACT_INVALID_GROUP` 需逐案確認是 fixture 前置狀態還是產品組合問題。
 - **2026-11-05 進展**：`acknowledgement-settlement` 已全數遷移到 composed coordinator＋control hooks（**37/37**），fixture 的 hooks 延遲分派，可在建立後指定。其餘 agent-team 測試仍用 legacy fixture，需逐檔遷移。
+- **`completion-delivery`** 已遷移（**13/13**；需要 `d72dde63` 的 admitted-input settle 修正，以及 fixture control hooks）。
 - **`transact`** 已遷移（13/13；需要 `IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT` 的兩個證據測試在設定後全綠）。
 - **`managed-transact`** 已遷移（1/1，unknown-outcome hook 在 backend 建立前注入）。
 
@@ -136,3 +137,5 @@
 - 呼叫路徑：`artifact-path-association.ts:artifactScope()` → `paths.session/document` → guard → `assertOriginal`。
 - 表示在 teardown 時，某個已綁定的 backend descriptor 與建立時不同；但 `session-persistence` 內沒有直接重寫 backend 屬性的地方，需進一步確認 composed 包裝層是否在 close 時替換了 descriptor（下一步：在 guard 內比對並印出**哪個 key** changed）。
 - 目前 `completion-delivery` 維持 legacy fixture；composed 遷移暫停在 10/13。
+
+**修正後記（2026-11-05，最終）**：先前看到的 close 階段 `PROCESS_READ_UNAVAILABLE` **不是產品問題**，而是那次探針只改了 coordinator 建立、沒有把 `configure` 裡的 `backend.appendOwnedBatch` 覆寫轉成 control hook（事後替換 descriptor 被 guard 抓到）。完成完整 hook 轉換後，composed `completion-delivery` **13/13 全綠**（搭配 `d72dde63` 的 admitted-input settle 修正）。

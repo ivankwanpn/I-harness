@@ -5,6 +5,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { expect, it, vi } from "vitest"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/backend-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { createDurableSessionLoader, createSessionService } from "../../session-executor/src/index.ts"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
@@ -12,12 +14,15 @@ import type { ParentInputAdmission } from "@i-harness/subagent"
 import { SYSTEM_INPUT_PLUGIN, decodeFactBatch, subscribe, type SessionEvent, type SettlementFacts, type ReceivedInputSource, type BatchKey } from "@i-harness/core-session"
 import { admitTeam, releaseTeam } from '../src/scheduler/admission.ts'
 
-async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: ParentInputAdmission, seed?: SessionEvent[], configure?: (coordinator: ReturnType<typeof createSessionCoordinator>, backend: ReturnType<typeof createJsonlBackend>) => void) {
+type CompletionControl = { append?: (original: NonNullable<ReturnType<typeof createJsonlBackend>['appendOwnedBatch']>) => NonNullable<ReturnType<typeof createJsonlBackend>['appendOwnedBatch']> }
+async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: ParentInputAdmission, seed?: SessionEvent[], configure?: (coordinator: ReturnType<typeof createSessionCoordinator>, backend: ReturnType<typeof createJsonlBackend>, control: CompletionControl) => void) {
   const root = await mkdtemp(join(tmpdir(), "team-completion-"))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const control: CompletionControl = {}
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: original => (...args) => (control.append ? control.append(original) : original)(...args) })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "lead" })
   if (seed?.length) await coordinator.append("lead", seed)
-  configure?.(coordinator, backend)
+  configure?.(coordinator, backend, control)
   const service = createSessionService({
     workspace: root, model: lead, coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true,
     roleSelectionFor: (role) => role === "teammate" ? { provider: "local", model: "fixture" } : undefined,
@@ -28,14 +33,14 @@ async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: Par
   })
   const assembly = await service.assemblyFor("lead")
   const execute = (name: string, args: unknown) => assembly.tools.get(name)!.execute(args, { sessionId: "lead" })
-  return { root, service, assembly, coordinator, backend, execute, close: async () => {
+  return { root, service, assembly, coordinator, backend, control, execute, close: async () => {
     try { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
     catch (error) { console.info('completion-fixture-close-failure', JSON.stringify({ root, error: boundedError(error) })); throw error }
   } }
 }
 
 async function assertColdDoesNotWake(root: string, marker: string) {
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const seen: LLMRequest[] = []
   const model: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { seen.push(request); yield { type: "text/chunk", text: "Unexpected wake" }; yield { type: "end" } })
   const service = createSessionService({ workspace: root, model, coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true })
@@ -135,7 +140,7 @@ async function qualifyServiceOrder(order: 'stop-before-return' | 'ack-before-sto
   const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
     childTurns++; note('child-model', { turn: childTurns }); yield { type: 'text/chunk', text: marker }; yield { type: 'end' }
   })
-  const f = await fixture(lead, child, undefined, undefined, (coordinator, backend) => {
+  const f = await fixture(lead, child, undefined, undefined, (coordinator, _backend, control) => {
     const open = coordinator.openManagedDocument.bind(coordinator)
     coordinator.openManagedDocument = async (...args) => {
       const document = await open(...args)
@@ -175,8 +180,7 @@ async function qualifyServiceOrder(order: 'stop-before-return' | 'ack-before-sto
       } else expect(documents.get(args[0])!.document).toBe(document)
       return document
     }
-    const append = backend.appendOwnedBatch!
-    backend.appendOwnedBatch = async (...args) => {
+    control.append = append => async (...args) => {
       const result = await append(...args)
       const batch = decodeFactBatch(args[3].bytes)
       batches.push({ sessionId: args[0], key: args[3].key, bytesBase64: Buffer.from(args[3].bytes).toString('base64'), batch, result })
@@ -635,8 +639,7 @@ it("cancels an admitted notification if Stop arrives during its persistence flus
   let release!: () => void
   const held = new Promise<void>((done) => { release = done })
   let flushing = false
-  const originalAppend = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => {
+  f.control.append = originalAppend => async (...args) => {
     if (!flushing && args[0] === 'lead' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/admitted' && event.text.includes('STOP_DURING_FLUSH'))) { flushing = true; await held }
     return originalAppend(...args)
   }
