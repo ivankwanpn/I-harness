@@ -27,6 +27,7 @@ import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-
 import { createDurableSessionLoader, createSessionService, createInstructionEnvironment, type SessionServiceOptions } from "@i-harness/session-executor"
 import { acquireChildManagedExecution } from '../../session-executor/src/host-managed-execution.ts'
 import { mountChildShellTools } from '../../session-executor/src/child-shell.ts'
+import { reportTaskProjectionIssues } from './task-projection-diagnostics.ts'
 import { createFsWatchService } from '@i-harness/fs-watch'
 import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
@@ -468,7 +469,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   // Reloading a session retires its live interaction cards first: the tool call
   // they belong to no longer exists after the session is closed, so leaving a
   // card approving/remembering it would grant a rule for a vanished operation.
-  const reloadSession = async (sessionId: string) => { interaction.cancelSession(sessionId); await drainSession(sessionId) }
+  const reloadSession = async (sessionId: string) => {
+    interaction.cancelSession(sessionId)
+    await drainSession(sessionId)
+    // D-01: a reload is the natural point to CHECK the task projection against
+    // durable child sessions. Read-only: reconcile remains an explicit request.
+    await reportTaskProjectionIssues(service, sessionId)
+  }
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = onOriginalHostAssembly(service,(assembly) => { interaction.attach(assembly);liveIndexJobOwners();if(assembly.sessionId)indexJobOwners.set(assembly.sessionId,new WeakRef(assembly)) })
