@@ -93,7 +93,7 @@ export class LayeredSettingsStore {
     this.current = normalizeSettings(this.rawsByPath.size === 0 ? undefined : merged)
   }
 
-  set(input: Partial<Settings>, guard?: SettingsRevisionGuard): Promise<Settings> {
+  set(input: Partial<Settings>, guard?: SettingsRevisionGuard, options?: { replaceSections?: readonly string[] }): Promise<Settings> {
     if (this.disposed) return Promise.reject(new Error("Settings store is closed"))
     assertInstructionData(input)
     if (Object.hasOwn(input, "instructions")) validateInstructions(input.instructions)
@@ -107,7 +107,7 @@ export class LayeredSettingsStore {
       }
       // First durable writes retain the new-store web default.
       if (this.rawsByPath.size === 0 && patch.webSearchMode === undefined) patch = { ...patch, webSearchMode: this.current.webSearchMode }
-      await this.writeMaster(patch, Object.keys(patch))
+      await this.writeMaster(patch, Object.keys(patch), ["instructions", ...(options?.replaceSections ?? [])])
       return this.get()
     })
   }

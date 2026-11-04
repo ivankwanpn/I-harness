@@ -61,7 +61,7 @@ export interface SettingsStoreSurface {
   get(): Settings
   isLoaded(): boolean
   load(): Promise<Settings>
-  set(patch: Partial<Settings>, guard?: SettingsRevisionGuard): Promise<Settings>
+  set(patch: Partial<Settings>, guard?: SettingsRevisionGuard, options?: { replaceSections?: readonly string[] }): Promise<Settings>
   reset(): Promise<Settings>
   getSectionRevision(name: string): number
   /** Optional unprojected source for stores that expose migrated effective views. */

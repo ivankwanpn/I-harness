@@ -613,6 +613,10 @@ export async function mutateSection(
       : name === "instructions" ? { instructions: next as unknown as SettingsInstructions }
       : { onboarding: next as unknown as SettingsOnboarding },
     { section: name, expectedRevision: actual },
+    // `next` is the COMPLETE section after the ops (including deletions), so it
+    // must replace the persisted one. A deep merge silently restored every
+    // removed key while the revision still advanced.
+    { replaceSections: [name] },
   )
   return describeSection(name, store)
 }
