@@ -142,6 +142,17 @@
 
 **尚未完成**：移除 task document 的可變寫入（write-behind／廢除）、pending intent 的自動 reconcile，會影响 desktop catalog、required settlement 與 v3 parent 契約，屬獨立重構。
 
+## 2026-11-05 第 69–74 輪（D-01／D-07／S-07／S-06）
+
+| 範圍 | 項目 | Commit |
+|---|---|---|
+| 建置 | 安裝檔重建（`17d449c5…`）＋ D-01 checkpoint | `c7853684` |
+| 驗證 | 全庫 `pnpm -r --no-bail typecheck` 82 packages 全綠 | （第 70 輪） |
+| 審計 | A-10 desktop 以 source tree 出貨：維持現狀；D-12 timeout 主因（backend 事後覆寫） | `22b891a1` |
+| S-07 | 非 managed rewind：還原前寫 durable intent、完成後寫 complete | `0de776ba` |
+| S-07 | managed rewind 接上同一 intent（`runRewindRestoration` ordering） | `7bca8805` |
+| S-07 | pending rewind ＋ D-01／D-07 新 kind 接進 reload diagnostics | `d4a42a26` |
+| S-06 | append 在 warm cache 只驗新增事件（增量語意驗證） | `654bbc29` |
 ## D-12 測試基礎：已遷移與新發現（2026-11-05）
 
 - 已遷移並全綠：`desktop-gateway/execution-surfaces`（10/10，含 cold restart 後 job_output／PTY 的 saved facts 讀取）、`sdk/server.test`（54/54，fork 流程約 20s，該檔放寬 testTimeout 至 30s）、`core-agent/accepted-exchange`（14/14，透過 `createJsonlBackend({ wrapOwnedBatch })` 在 canonical-path guard 綁定前注入）。
