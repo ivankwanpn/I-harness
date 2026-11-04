@@ -315,3 +315,5 @@
 **S-06 document preimage（2026-11-05）**：`createOwnedDocumentWrite` 不再保留 preimage 的第二份完整 copy，改存 SHA-256 digest ＋ byte length；preimage 驗證改成以 64 KiB 視窗串流讀取並比對 digest（峰值記憶體與文件大小無關）。tamper 仍會被判 `conflict`。16 MiB／64 MiB 的 document 上限與格式未變（降低上限需要格式／契約決策）。
 
 **S-10 殘餘修正（2026-11-05）**：`readHeader` 在 64 KiB 視窗內找不到換行時，現在丟出 `SESSION_HEADER_TOO_LARGE`，不再把 64 KiB 的垃圾當成 header 丟 `SyntaxError`；`updateMeta` 也把「空檔案」與「header 超過上限」拆成不同錯誤。測試：`header-limit-read`（70 KiB 無換行檔 → 明確 code）。
+
+**S-06 document 候選驗證（2026-11-05）**：`createOwnedDocumentWrite` 的 candidate 驗證也改為串流 digest（先前只改了 preimage）。`exact()` 的全量 read/compare 被移除；publish/reconcile/confirm 都用 SHA-256＋byte length 以 64 KiB 視窗驗證，峰值記憶體不再隨文件大小成長。測試：document-write-preimage + task-document-write 10/10。
