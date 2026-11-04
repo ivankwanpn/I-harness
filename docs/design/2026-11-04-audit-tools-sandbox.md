@@ -200,3 +200,5 @@
 - **A-11（MCP 後代行程）**：stdio transport 現在在 SDK 關閉直系子行程前，先用 `taskkill /PID <pid> /T /F` 終止整個 process tree（Windows）；helper 有單元測試，非 Windows 行為不變。
 - **A-08（assurance）**：`minimumAssurance` 不再硬編 `unverified`。`IH_MINIMUM_EXEC_ASSURANCE=verified|experimental|unverified` 可設定後端等級下限；`launchExecution` 在 probe 後以 `checkBackendRequirements` fail-closed（例如 `verified` 下 experimental 後端會被拒絕）。預設 `unverified` 與舊行為相同。
 - **A-12（WSL worker 重用）部分完成**：`verifyDistribution` 現在每個 backend 只做一次（成功後快取，失敗可重試），不再每條命令都跑 `wsl --list --verbose`，移除了每次 execution 的 10s 冷啟動 timeout 風險。**worker 本身仍是一 execution 一 launcher**：`WorkerClient` 的 protocol 是單一 workload 設計，要支援 prepare/commit 循環需要重新設計 frame 所有權、輸出邊界與取消語義，屬獨立重構；本次先做安全且可測的快取部分。
+
+- **A-10（desktop 以 TS+tsx 出貨）覆核（2026-11-05）：維持現狀。** `build-gateway.mjs` 明確以 source tree 出貨，原因是 gateway 的依賴圖用 `import.meta.url` 解析真實檔案（sandbox ACL runner、WSL assets、provider model catalogue、tsx loader）；打包成單檔需要額外的資產抽取與路徑重寫，且會與 e2e 驗證過的啟動路徑分歧。目前已用 source-tree 複製 + native asset 驗證，啟動成本可接受；若要做 bundle，應另建一條有獨立驗證的 packaging pipeline。

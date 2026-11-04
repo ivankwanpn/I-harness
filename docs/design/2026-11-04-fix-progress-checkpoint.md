@@ -162,3 +162,9 @@
 1. **調查 `FACT_INVALID_GROUP`**：在 composed coordinator 下重現最小的 team transaction 寫入，判斷是缺少 session 前置（team parent meta／adapter）還是 `prepareWrite` 真的拒絕 team 群組；這是 agent-team 測試與 desktop team 功能的共同關鍵。
 2. 依結論修產品或補 fixture，再批量遷移 agent-team 測試。
 3. 之後回到 A-03 的 exec job store／`dispose()` 降級。
+
+## D-12 進度補充（2026-11-05）
+
+- 用 composed coordinator + 直接覆寫 `document.beginAction`／`captureTeamTransaction`／`registerSettlementSource` 的 probe 已可正常送出 team message；目前卡點不是 action wrapper 本身。
+- `acknowledgement-settlement` 多數測試另外**直接覆寫 `f.backend.appendOwnedBatch`**；composed backend 在建立時綁定 canonical-path guard，事後覆寫會得到 `PROCESS_READ_UNAVAILABLE`（或測試等待的 promise 永不 resolve），這才是 timeout 主因。
+- 因此完整遷移需要先提供 fixture 級別的 **control hooks**（在 backend 建立前注入），再逐檔改寫；先前實驗只完成到 20/37，剩餘失敗涉及 `FACT_INVALID_GROUP` 的語義差異。此項維持 deferred，优先處理產品線項目。
