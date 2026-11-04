@@ -42,6 +42,8 @@
 
 若 crash 發生在「completion frame 已 commit」與「marker unlink」之間（微秒級窗口），child 會保持隱藏，直到下一次以 id 開啟它（retry/resume 會走 completed-birth 讀取並清除 marker）。這是**寧可暫時隱藏，也不顯示半成品**的取捨；先前行為是直接列出無法開啟的 child。
 
+另一個可接受的副作用：desktop 的「是否有子會話」檢查（專案搬移、協同刪除）走 `coordinator.list()`，因此**進行中**的 child 不計入。若 fork 永久中斷（marker 留存），它的 parent 可以被搬移／刪除，磁碟上會留下 orphan 的 header/stage/marker 檔（不可開啟、不佔用會話清單）。這比「把無法開啟的 child 當成正常子會話阻擋操作」更符合實際語意；若日後要做清理，應以維護掃描處理 marker 檔案，而不是讓它重新出現在清單。
+
 ---
 
 ## 2. S-06：document 大小上限／串流寫入（已完成，`40591c73`）
