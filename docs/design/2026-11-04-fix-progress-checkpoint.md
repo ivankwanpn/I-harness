@@ -94,6 +94,23 @@
 
 同時覆核但**不改**：A-01（tools）shell timeout（exec 的 timer 會連背景 promoted job 一起殺，前景 deadline 已由 guard abort 生效）、A-05（agent）未知 window（context state 已回 `unavailable` + reason）。
 
+## 2026-11-05 追加修復（第 40–49 輪）
+
+| 範圍 | 項目 | Commit |
+|---|---|---|
+| tools | A-10：shell head+tail 加可見省略標記，且標記計入 byte budget | `3576461d` |
+| core-agent | A-11：`agent aborted` 帶 `AGENT_ABORTED` code | `76c2c6a7` |
+| hooks | NG-11：`permission: ask` 進入 approval seam（無 answerer 仍 fail-closed） | `2ce4e6b5` |
+| desktop | NG-12：核准規則 grant／revoke／removeSession 後通知，頁面自動重讀 | `fa22fcb9` |
+| protocol | NG-08：統一 `queued/running/completed/error/cancelled`，legacy 拼法由 `normalizeSessionStatus` 接收 | `4722c2ed` |
+| 測試 | execution-surfaces 改 composed coordinator（10/10） | `f8c96754` |
+| 測試 | sdk fork 路由改 composed coordinator（54/54） | `22d9eada` |
+| 測試 | accepted-exchange 改用 pre-bind `wrapOwnedBatch`（14/14） | `3b612378` |
+| 測試 | agent-team composed 寫入與完整 delivery 邊界（2/2） | `1ea6cebe` |
+| 審計 | A-03 dispose 降級嘗試與還原理由 | `a0e818fd` |
+
+同時覆核但**不改**：A-03 的 `dispose()` 降級（attempt retire 失敗同時承載 descriptor/spill recovery debt，降級會吞掉真正需要 recovery 的訊號）、agent-team harness 卡住（已證實是覆寫 action 方法，不是 coordinator 拒絕 team 寫入）。
+
 ## D-12 測試基礎：已遷移與新發現（2026-11-05）
 
 - 已遷移並全綠：`desktop-gateway/execution-surfaces`（10/10，含 cold restart 後 job_output／PTY 的 saved facts 讀取）、`sdk/server.test`（54/54，fork 流程約 20s，該檔放寬 testTimeout 至 30s）、`core-agent/accepted-exchange`（14/14，透過 `createJsonlBackend({ wrapOwnedBatch })` 在 canonical-path guard 綁定前注入）。
