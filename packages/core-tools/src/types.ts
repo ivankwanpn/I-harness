@@ -98,6 +98,21 @@ export type ToolDecision =
   | { kind: "deny"; reason: string }
   | { kind: "ask"; reason: string }
 
+/**
+ * The host approval policy, reachable through the scope service chain.
+ *
+ * It is a SERVICE rather than a per-scope decision slot because `emit`
+ * propagates child → parent: a policy mounted on an ancestor runs after the
+ * child's own waterfall, so the only way a child dispatch could see it was a
+ * mutable slot keyed by scope+event — which concurrent dispatches shared and
+ * clobbered. A service lookup walks the same scope chain without any shared
+ * state, so every dispatch classifies its own call.
+ */
+export interface ApprovalPolicyService {
+  decide(payload: unknown): ToolDecision | undefined
+}
+export const APPROVAL_POLICY_SERVICE = "approval/policy"
+
 // spec §2.6: a POLICY refusal — "you may not do this" — as opposed to a tool
 // body that tried and failed. Policy refusals stay LOUD (the turn fails); a
 // body failure is soft (the failed call gets a result and the turn continues).

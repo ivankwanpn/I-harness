@@ -17,12 +17,13 @@ export type { ResultFinalization, ResultProgram, ToolResultRetention, SyntheticR
 export { currentToolResultProducer, registerToolResultDependency, toolResultDependencies } from './registry/result-dependencies.ts'
 export type { ToolResultDependency } from './registry/result-dependencies.ts'
 
+export { APPROVAL_POLICY_SERVICE } from "./types.ts"
 export { isPolicyRefusal, INVALID_ARGS, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_ABORTED_MID_FLIGHT, TOOL_TIMEOUT } from "./types.ts"
 export type { MediaGenerationAction, ToolModelGeneration, CodeGenerationLineage, CodeGenerationScope } from './types.ts'
 export type { NativeTarget, NativePlan, NativeMutation, NativeBoundary, CapturedToolCall, AcceptedInstructionCall, AcceptedCallDescriptor, AcceptedInstructionBatch, InstructionBatchEntry, InstructionCellOrigin, InstructionCellLease, ToolPrepareIdentity } from './types.ts'
 export { NativePlanValidationError, nativePlanValidationFailure, isNativePlanValidationError, nativeOperation, nativeMutation, capturedToolRegistry,capturedManagedExecutionDomain, instructionReplan, isInstructionReplan, InstructionReplanError, declareInstructionReplan, instructionReplanDisposition, retainInstructionCell, bindInstructionInvocation, preflightInstructionInvocations, releaseInstructionCell, isOriginalInstructionCellRequest } from './instructions.ts'
 export type { InstructionReplanData } from './instructions.ts'
-export type { ToolExposure, Tool, PreparedToolIdentity, PreparedApprovalInput, ApprovalRememberView, PreparedApprovalProvider, ApprovalAuthorityProvider, ToolExec, ToolDecision, PolicyRefusal, ToolCall, ToolResult, PreparedCall, ToolDispatchMetadata, ToolSchema, SearchableTool, GuardianRequest, GuardianVerdict, ApprovalGuardian, ToolRegistry } from "./types.ts"
+export type { ToolExposure, Tool, PreparedToolIdentity, PreparedApprovalInput, ApprovalRememberView, PreparedApprovalProvider, ApprovalAuthorityProvider, ToolExec, ToolDecision, PolicyRefusal, ToolCall, ToolResult, PreparedCall, ToolDispatchMetadata, ToolSchema, SearchableTool, GuardianRequest, GuardianVerdict, ApprovalGuardian, ApprovalPolicyService, ToolRegistry } from "./types.ts"
 export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 export { waitForObservation, userSteerForTool, backgroundEventForTool, type UserSteerSource } from "./observation.ts"
 export { retainedToolOutcome, hasRetainedToolBody, type RetainedToolOutcome, type RetainedOutcomeSink } from './registry/retained-outcome.ts'

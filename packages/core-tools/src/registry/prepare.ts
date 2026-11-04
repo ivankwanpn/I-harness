@@ -3,7 +3,7 @@ import {captureExecutionHookChannel} from '@i-harness/core-plugin'
 import { assertToolSettlementScope, bindPreparedSettlement } from './retained-outcome.ts'
 import { registerResultPrepared } from './result-finalization.ts'
 import { validateJsonSchemaValue, type JsonSchemaNode } from "../json-schema.ts"
-import { ToolArgsError, type ToolCall, type PreparedCall, type ToolExec, type ToolDecision, type PreparedApprovalInput, type ApprovalGuardian, type ToolRegistry } from "../types.ts"
+import { APPROVAL_POLICY_SERVICE, ToolArgsError, type ApprovalPolicyService, type ToolCall, type PreparedCall, type ToolExec, type ToolDecision, type PreparedApprovalInput, type ApprovalGuardian, type ToolRegistry } from "../types.ts"
 import { freezeArguments } from "../approval/arguments.ts"
 import { captureToolCall, ordinaryJson } from '../approval/capture-call.ts'
 import { isAbsolute, win32 } from 'node:path'
@@ -114,6 +114,21 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     try{chainValue=hooks?await hooks.emit('tools/pre-execute',policyInput,hookSurface):await ctx.emit("tools/pre-execute",policyInput)}finally{releasePolicy()}
     const decision: ToolDecision = isDecision(chainValue) ? chainValue : { kind: "allow" }
 
+    // 1a. Consult the host policy DIRECTLY through the scope service chain.
+    //     emit runs child → parent, so a policy mounted on an ancestor is only
+    //     reachable after this registry's own waterfall. The old answer was a
+    //     per-scope decision slot keyed by event, which concurrent dispatches
+    //     shared and clobbered; a service lookup walks the scope chain without
+    //     any shared state, so this dispatch classifies its own call even when a
+    //     sibling is in flight. Mount order no longer matters.
+    let policyService: ApprovalPolicyService | undefined
+    try { policyService = ctx.services.get<ApprovalPolicyService>(APPROVAL_POLICY_SERVICE) } catch { /* no host policy on this scope chain */ }
+    let policyDecision: ToolDecision | undefined
+    // A producer that already seeded a decision in THIS dispatch owns it (the
+    // single-producer contract); only an unseeded chain needs the fallback.
+    if (!isDecision(chainValue)) policyDecision = policyService?.decide(policyInput)
+    const localDecision = mergeDecision(decision, policyDecision)
+
     // 1b. Cross-scope fail-open fix (Task 10 mechanism B): `emit` propagates
     //     CHILD → PARENT, so a policy mounted on an ancestor scope (e.g.
     //     guard-approval on the parent) runs and may decide, but its decision
@@ -132,8 +147,14 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     //     (the same race the emit-return refactor removes for the closure
     //     slot). Only ancestor decisions cannot be derived from the local emit,
     //     so only they are looked up.
-    const ancestorDecision = ctx.resolveAncestorDecision("tools/pre-execute", policyInput)
-    const resolved = mergeDecision(decision, ancestorDecision)
+    // With a host policy service on the chain the ancestor slot is both
+    // redundant and racy: it is ONE mutable entry per scope+event, shared by
+    // concurrent dispatches, so a sibling's allow could be merged into this
+    // call. The service classified this call directly, so the slot is ignored;
+    // it remains only for hosts that mount no policy service at all.
+    const resolved = policyService === undefined
+      ? mergeDecision(localDecision, ctx.resolveAncestorDecision("tools/pre-execute", policyInput))
+      : localDecision
 
     // 2. monotonic guards run UNCONDITIONALLY before any dispatch (audit F03-1):
     //    a decision-shaped object can never short-circuit the guard layer.
