@@ -24,6 +24,10 @@ export function createSurfaceSubscriptions(source: Source, notify: (notice: Surf
         closing?: Promise<void>;
     };
     const entries = new Map<string, Entry>(), keys = new Map<string, Entry>();
+    // Request keys whose acquisition failed. A retry with the same key (the
+    // client's idempotency contract) must be able to start a fresh attempt, and
+    // a failed attempt must not occupy one of the 32 live slots forever.
+    const failedKeys = new Set<string>();
     let closed = false, high = 0;
     let closing:Promise<void>|undefined
     const publish = (entry: Entry, notice: SurfaceNotice) => {
@@ -67,29 +71,39 @@ export function createSurfaceSubscriptions(source: Source, notify: (notice: Surf
                     throw Error('Conflicting surface request');
                 return prior.flight;
             }
-            if (sequence <= high || entries.size >= 32)
+            if (sequence < high || (sequence === high && !failedKeys.has(key)) || entries.size >= 32)
                 throw Error('Surface capacity or obsolete request');
-            high = sequence;
+            high = Math.max(high, sequence);
             if (keys.size >= 64) {
                 const old = [...keys].find(([, item]) => !entries.has(item.id));
                 if (!old)
                     throw Error('Surface idempotency capacity');
                 keys.delete(old[0]);
+                failedKeys.delete(old[0]);
             }
             const ready = Promise.withResolvers<SurfaceLease>(), entry: Entry = { id: randomUUID(), key, scope: { surface: 'execution', sessionId: id }, flight: ready.promise, stamp: { epoch: 'pending', revision: 0 }, active: true, ack: false };
             void ready.promise.catch(() => { });
             entries.set(entry.id, entry);
             keys.set(key, entry);
+            // A failed acquisition releases its slot and its idempotency record:
+            // the same requestKey may retry, and the 32-slot budget is not leaked.
+            const fail = (error: unknown) => {
+                if (entry.admitted) return;
+                if (entry.active) { entry.active = false; failedKeys.add(key) }
+                if (keys.get(key) === entry) keys.delete(key);
+                entries.delete(entry.id);
+                ready.reject(error);
+            };
             void source.subscribe(id, notice => { if (!entry.active)
                 return; if (notice.kind === 'retired')
                 entry.active = false; publish(entry, { subscriptionId: entry.id, stamp: { epoch: notice.epoch, revision: notice.revision }, kind: notice.kind }); }).then(lease => {
                 entry.lease = lease;
                 if (closed || !entry.active) {
-                    ready.reject(Error('Surface retired during acquisition'));
+                    fail(Error('Surface retired during acquisition'));
                     return;
                 }
-                lease.withCurrent(stamp => { entry.stamp = stamp;entry.admitted={ subscriptionId: entry.id, requestKey: key, scope: entry.scope, stamp }; ready.resolve(entry.admitted); });
-            }, error => { entry.active = false; ready.reject(error); }).catch(error => { entry.active = false; ready.reject(error); });
+                lease.withCurrent(stamp => { entry.stamp = stamp;entry.admitted={ subscriptionId: entry.id, requestKey: key, scope: entry.scope, stamp }; failedKeys.delete(key); ready.resolve(entry.admitted); });
+            }, fail).catch(fail);
             return ready.promise;
         },
         acknowledge(id: string, write: (lease: SurfaceLease) => void) { const entry = entries.get(opaque(id)); if (!entry)
