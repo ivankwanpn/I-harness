@@ -154,6 +154,44 @@ export type DesktopRequest =
   | { kind: "desktop/review/stage" | "desktop/review/unstage"; workspaceId: string; path: string }
   | { kind: "desktop/review/commit"; workspaceId: string; message: string }
 
+/** Every gateway notification the Desktop forwards to the renderer. Kept as a
+ * named union + a runtime array so the forwarder is a lookup, not a hand-written
+ * `!==` chain: the chain and the union had to be edited together and a missed
+ * name was silently dropped. The exhaustiveness assertion at the bottom of this
+ * block makes a new member fail typecheck until it is listed. */
+export type DesktopNotificationMethod =
+  | "session/event"
+  | "session/status"
+  | "session/execution-state"
+  | "desktop/interaction/request"
+  | "desktop/interaction/closed"
+  | "desktop/workflow/changed"
+  | "desktop/session/navigation/changed"
+  | "desktop/session/subagents/changed"
+  | "desktop/usage/recording-warning"
+  | "desktop/context/diagnostic"
+  | "desktop/instructions/changed"
+  | "desktop/surface/changed"
+
+export const DESKTOP_NOTIFICATION_METHODS = [
+  "session/event",
+  "session/status",
+  "session/execution-state",
+  "desktop/interaction/request",
+  "desktop/interaction/closed",
+  "desktop/workflow/changed",
+  "desktop/session/navigation/changed",
+  "desktop/session/subagents/changed",
+  "desktop/usage/recording-warning",
+  "desktop/context/diagnostic",
+  "desktop/instructions/changed",
+  "desktop/surface/changed",
+] as const satisfies readonly DesktopNotificationMethod[]
+
+type UnforwardedNotification = Exclude<DesktopNotificationMethod, (typeof DESKTOP_NOTIFICATION_METHODS)[number]>
+const _everyNotificationIsForwarded: UnforwardedNotification extends never ? true : never = true
+void _everyNotificationIsForwarded
+
 export type DesktopEvent =
   | {kind:"sdk/ready";workspaceId:string;runtimeGeneration:number;method:"sdk/ready";params?:never}
   | { kind: "runtime/diagnostic"; entry: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry }
@@ -162,7 +200,7 @@ export type DesktopEvent =
   | {
       kind: "sdk/notification"
       workspaceId: string
-      method: "session/event" | "session/status" | "session/execution-state" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/session/subagents/changed" | "desktop/usage/recording-warning" | "desktop/context/diagnostic" | 'desktop/instructions/changed' | 'desktop/surface/changed'
+      method: DesktopNotificationMethod
       params: unknown
     }
   | { kind: "sdk/disconnected"; workspaceId: string; message: string; close?: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry["close"] }

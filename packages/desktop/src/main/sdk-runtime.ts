@@ -3,7 +3,10 @@ import { mkdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { HarnessClient, type ServerInfo } from "@i-harness/sdk"
-import type { DesktopEvent } from "../shared/bridge.ts"
+import { DESKTOP_NOTIFICATION_METHODS, type DesktopEvent, type DesktopNotificationMethod } from "../shared/bridge.ts"
+
+const FORWARDED_NOTIFICATIONS = new Set<DesktopNotificationMethod>(DESKTOP_NOTIFICATION_METHODS)
+function isForwardedNotification(method: string): method is DesktopNotificationMethod { return FORWARDED_NOTIFICATIONS.has(method as DesktopNotificationMethod) }
 import type { WorkspaceEntry } from "./workspaces.ts"
 import type { DesktopProjectContext } from "./project-runtime.ts"
 
@@ -173,18 +176,10 @@ export function createWorkspaceRuntimeManager(options: {
       }
       launched.client.onNotification((frame) => {
         if (closed || (generations.get(workspace.id) ?? 0) !== generation || children.get(workspace.id) !== launched) return
-        if (frame.method !== "session/event"
-          && frame.method !== "session/status"
-          && frame.method !== "session/execution-state"
-          && frame.method !== "desktop/interaction/request"
-          && frame.method !== "desktop/interaction/closed"
-          && frame.method !== "desktop/workflow/changed"
-          && frame.method !== "desktop/session/subagents/changed"
-          && frame.method !== 'desktop/instructions/changed'
-          && frame.method !== 'desktop/surface/changed'
-          && frame.method !== "desktop/usage/recording-warning"
-          && frame.method !== "desktop/context/diagnostic"
-          && frame.method !== "desktop/session/navigation/changed") return
+        // One lookup derived from the shared method list; bridge.ts asserts at
+        // compile time that every DesktopNotificationMethod is listed there, so
+        // a new notification cannot be silently dropped by a stale chain.
+        if (!isForwardedNotification(frame.method)) return
         const params = frame.method === "desktop/context/diagnostic" && frame.params && typeof frame.params === "object" && !Array.isArray(frame.params)
           ? { ...frame.params, runtimeGeneration: generation } : frame.params
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params })
