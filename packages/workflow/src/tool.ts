@@ -150,6 +150,8 @@ export interface WorkflowMountConfig {
   exec: ExecService
   steps?: import('@i-harness/exec/direct-reservation').WorkflowStepFactory
   managed?:ManagedWorkflowLaunch
+  /** Session that owns this mount's workflow jobs; queries are scoped to it. */
+  owner?: string
 }
 
 // run.ts wiring: registers the "workflow/executor" service + the
@@ -161,7 +163,7 @@ export function registerWorkflow(ctx: PluginContext, tools: ToolRegistry, config
   // process cwd. Absent workspace → registry falls back to process.cwd() and
   // the executor leaves step cwd unset (exec's own contract).
   const registry = createWorkflowRegistry({ workspace: config.workspace ?? process.cwd() })
-  const executor = createWorkflowExecutor({ exec: config.exec, steps: config.steps, ...(config.workspace !== undefined ? { cwd: config.workspace } : {}) })
+  const executor = createWorkflowExecutor({ exec: config.exec, steps: config.steps, ...(config.workspace !== undefined ? { cwd: config.workspace } : {}), ...(config.owner !== undefined ? { owner: config.owner } : {}) })
   ctx.services.register(workflowExecutorServiceName, executor)
   const runTool = createWorkflowRunTool({ registry, executor,...config.managed?{managed:config.managed,reserve:executor.reserveWorkflow.bind(executor)}:{} })
   const listTool = createWorkflowListTool({ registry })

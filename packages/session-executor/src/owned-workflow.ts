@@ -12,7 +12,7 @@ export function mountOwnedWorkflow(original:ManagedRegistryConstruction,workspac
  let cancelRun:((run:import('../../workflow/src/runner.ts').OwnedWorkflowRunHandle)=>void)|undefined
  const recipient=receivedExecutionInputsFor(original.execution).workflowDelivery(original.domain)
  const managed=createManagedWorkflowLaunch(original.domain,createWorkflowResultRetention({service:output.service,sourceFor:output.sourceFor.bind(output),domain:original.domain}),run=>{if(!cancelRun)throw Error('Original Workflow cancellation owner unavailable');cancelRun(run)},async input=>{const prepared=await recipient.prepareWorkflowLaunch(input);if(prepared.kind!=='bound')throw Object.assign(Error('Private Workflow launch unavailable'),{reason:prepared.reason});return prepared})
- const mount=registerWorkflow(original.ctx,original.tools,{workspace,exec:shell.service,steps:shell.workflowSteps,managed:managed.launch})
+ const mount=registerWorkflow(original.ctx,original.tools,{workspace,exec:shell.service,steps:shell.workflowSteps,managed:managed.launch,owner:original.domain.sessionId})
  const executor=mount.executor,kill=executor.killJob;cancelRun=run=>{Reflect.apply(kill,executor,[run.jobId])}
  original.retain(async()=>{await managed.close();await mount.unmount()});original.assertCurrent();return Object.assign(mount,{reconcileCapturedHandoffs:managed.reconcileCapturedHandoffs})
 }

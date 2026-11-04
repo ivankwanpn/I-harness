@@ -102,3 +102,17 @@ it('preserves source-limited native output in the original workflow completion',
  const jobs=createWorkflowJobStore(),reservation=reserveWorkflowIn(definition(),{},service(async()=>({...ok,stdout:'partial',truncated:{stdout:true,stderr:false}})),jobs)
  const completion=await reservation.start().join();expect(completion.resultCompleteness).toBe('source-limited');expect(completion.result.steps[0]?.stdout).toBe('partial')
 })
+
+it('scopes an owner-bound executor to its own workflow jobs', async () => {
+  const jobs = createWorkflowJobStore(), exec = service(async () => ok)
+  const ownerA = createWorkflowExecutor({ exec, jobs, owner: 'session-a' })
+  const ownerB = createWorkflowExecutor({ exec, jobs, owner: 'session-b' })
+  const handle = ownerA.runWorkflow(definition())
+  await handle.join()
+
+  expect(ownerA.listJobs()).toHaveLength(1)
+  expect(ownerB.listJobs()).toEqual([])
+  expect(() => ownerB.getOutput(handle.jobId)).toThrow(/unknown job/i)
+  expect(() => ownerB.killJob(handle.jobId)).toThrow(/unknown job/i)
+  expect(ownerA.getOutput(handle.jobId).id).toBe(handle.jobId)
+})

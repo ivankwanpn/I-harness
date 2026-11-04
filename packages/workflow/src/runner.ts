@@ -62,12 +62,13 @@ export interface WorkflowJobStore {
   createJob(owner?: string): WorkflowJobEntry
   get(jobId: string): WorkflowJobEntry | undefined
   // Copy of the public BackgroundJobView shape (never the internal entry).
-  view(jobId: string): BackgroundJobView
+  // An owner-filtered call hides jobs that belong to another session.
+  view(jobId: string, owner?: string): BackgroundJobView
   subscribeJobs?(listener: () => void): () => void
-  subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
+  subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void, owner?: string): () => void
   update(jobId: string, patch: Partial<Pick<WorkflowJobEntry, "status" | "stdout" | "stderr" | "exitCode">>): void
-  list(): BackgroundJobView[]
-  kill(jobId: string): "cancellation-requested" | "already-finished"
+  list(owner?: string): BackgroundJobView[]
+  kill(jobId: string, owner?: string): "cancellation-requested" | "already-finished"
 }
 
 export function createWorkflowJobStore(): WorkflowJobStore {
@@ -92,6 +93,14 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
       ...(job.owner !== undefined ? { owner: job.owner } : {}),
     }
+  }
+
+  /** Owner-scoped lookup: an owner-bound caller sees another session's job as
+   * absent rather than learning its content or killing it (A-06). */
+  function ownedJob(jobId: string, owner?: string): WorkflowJobEntry {
+    const job = jobs.get(jobId)
+    if (!job || (owner !== undefined && job.owner !== owner)) throw new Error(`unknown job: ${jobId}`)
+    return job
   }
 
   /** Completed runs are retained for job_output, but not forever: the store is a
@@ -119,14 +128,13 @@ export function createWorkflowJobStore(): WorkflowJobStore {
     get(jobId: string): WorkflowJobEntry | undefined {
       return jobs.get(jobId)
     },
-    view(jobId: string): BackgroundJobView {
-      const job = jobs.get(jobId)
-      if (!job) throw new Error(`unknown job: ${jobId}`)
+    view(jobId: string, owner?: string): BackgroundJobView {
+      const job = ownedJob(jobId, owner)
       return toView(job)
     },
     subscribeJobs(listener) { collection.add(listener); return () => { collection.delete(listener) } },
-    subscribeJob(jobId, listener) {
-      if (!jobs.has(jobId)) throw new Error(`unknown job: ${jobId}`)
+    subscribeJob(jobId, listener, owner) {
+      ownedJob(jobId, owner)
       let group = listeners.get(jobId)
       if (!group) listeners.set(jobId, group = new Set())
       group.add(listener)
@@ -143,12 +151,12 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       publish(job)
       if (job.status !== "running") evictFinished()
     },
-    list(): BackgroundJobView[] {
-      return [...jobs.values()].map(toView)
+    list(owner?: string): BackgroundJobView[] {
+      const rows = [...jobs.values()]
+      return (owner === undefined ? rows : rows.filter(job => job.owner === owner)).map(toView)
     },
-    kill(jobId: string): "cancellation-requested" | "already-finished" {
-      const job = jobs.get(jobId)
-      if (!job) throw new Error(`unknown job: ${jobId}`)
+    kill(jobId: string, owner?: string): "cancellation-requested" | "already-finished" {
+      const job = ownedJob(jobId, owner)
       if (job.status !== "running") return "already-finished"
       job.status = "killed" // immediate, like ExecService; late loop writes are guarded no-ops
       publish(job)
@@ -446,6 +454,9 @@ interface WorkflowExecutorDeps {
   jobs?: WorkflowJobStore
   // D1 (m55): default cwd for steps without one — the mount's workspace.
   cwd?: string
+  // Session that owns every job this executor creates or queries. An
+  // owner-bound executor cannot read or kill another session's workflow job.
+  owner?: string
 }
 
 export function createWorkflowExecutor(deps: WorkflowExecutorDeps): Omit<WorkflowExecutor, 'runWorkflow'> & {
@@ -454,20 +465,20 @@ export function createWorkflowExecutor(deps: WorkflowExecutorDeps): Omit<Workflo
 } {
   const jobs = deps.jobs ?? sharedJobs
   return {
-    reserveWorkflow(def, params = {}, owner) { return reserveWorkflowIn(def, params, deps.exec, jobs, owner, deps.cwd, deps.steps) },
+    reserveWorkflow(def, params = {}, owner) { return reserveWorkflowIn(def, params, deps.exec, jobs, owner ?? deps.owner, deps.cwd, deps.steps) },
     runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): OwnedWorkflowRunHandle {
-      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner, deps.cwd, deps.steps)
+      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner ?? deps.owner, deps.cwd, deps.steps)
     },
     getOutput(jobId: string): BackgroundJobView {
-      return jobs.view(jobId)
+      return jobs.view(jobId, deps.owner)
     },
     subscribeJobs(listener) { return jobs.subscribeJobs?.(listener) ?? (() => {}) },
-    subscribeJob(jobId, listener) { return jobs.subscribeJob(jobId, listener) },
+    subscribeJob(jobId, listener) { return jobs.subscribeJob(jobId, listener, deps.owner) },
     listJobs(): BackgroundJobView[] {
-      return jobs.list()
+      return jobs.list(deps.owner)
     },
     killJob(jobId: string): "cancellation-requested" | "already-finished" {
-      return jobs.kill(jobId)
+      return jobs.kill(jobId, deps.owner)
     },
   }
 }

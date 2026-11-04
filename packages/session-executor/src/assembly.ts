@@ -1309,7 +1309,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     for (const cfg of opts.lsp ?? []) {
       lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
     }
-    workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService, steps: createScopedWorkflowExec(assemblyExecPair, opts.workspace, sandboxPolicyNow) })
+    workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService, steps: createScopedWorkflowExec(assemblyExecPair, opts.workspace, sandboxPolicyNow), ...(opts.sessionId !== undefined ? { owner: opts.sessionId } : {}) })
     // ONE resolver for every role-carrying spawn in this assembly: the subagent
     // tools, the approval guardian and team teammates all hand their role's
     // selection to the host's provider plane — the same runtime call the
