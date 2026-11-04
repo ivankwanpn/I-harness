@@ -106,6 +106,16 @@ guest **supervisor-fork**：supervisor 只持有 trusted constants 與 pipe，�
 
 ---
 
-## 5. 後續建議（最大的測試債務）
+## 5. 交付物與封裝驗證
+
+- 安裝檔：`packages/desktop/release/I-harness-Setup-0.1.13.exe`
+  - SHA-256 `94cd1fcc64a26f4a37c774b5cfd7c69cde0662bb5a7dee95f50db5c2ac7f7b95`
+  - 189,643,574 bytes；builtAt `2026-11-04T23:58:05.347Z`
+- 封裝後 gateway 冒煙（`release/I-harness/resources/gateway`，`node --import tsx cli/src/cli.ts`）：
+  - `--help` 印出 usage；
+  - 空 stdin 啟動 **exit 0**；
+  - JSON-RPC `initialize` + `session/list` → `{"sessions":[]}`，**exit 0**。
+
+## 6. 後續建議（最大的測試債務）
 
 整個 `session-persistence-jsonl` suite 的 379 個紅測試幾乎都是同一個根因：**legacy `createSessionCoordinator` 在 format 14 不能 `create`**（`TASK_TRANSITION_UNSUPPORTED`）。要讓它們轉綠，需要把這些測試遷移到 `composeJsonlTaskTransitionCoordinator`（或提供 legacy create 的相容層）。這是 D-12 的剩餘主體，建議以「每個測試檔一次」的方式推進，並以本次的 baseline 比對方法確認沒有新增失敗。

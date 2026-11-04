@@ -49,14 +49,19 @@
 4. 觸發一次 rewind（若可用），確認 reload 後沒有「pending rewind」警告。
 5. 若使用 WSL sandbox，確認第一條命令之後的延遲明顯下降。
 
-## 仍待架構重設計（尚未完成）
+## 仍待架構重設計（第二階段結果）
 
-- S-08：fork 原子發佈（目前只排除 zero-byte 半成品）
-- A-12：WSL worker 重用（需協議 v2）
-- D-01 最後一步：移除可變 task document 寫入
-- S-06 剩餘：document 大小上限／串流寫入的格式決策
+- **S-08 已完成**：fork 以 durable publication marker 延後可見性；`list()` 不再顯示未完成 bootstrap birth 的 child。見 `2026-11-05-final-decisions.md` §1。
+- **S-06 已完成**：document confirmation／partial resume 改 64 KiB 串流；大小上限統一為 `TASK_DOCUMENT_MAX_BYTES`。§2。
+- **D-01 final 決策**：task document 定位為 projection／checkpoint，job record + child session 是權威來源；以測試鎖定（document store 全失敗仍可 admission、可由 job records 重建）。§3。
+- **A-12 決策**：不做 worker 重用（單 workload trust boundary）；已保留 distribution 檢查快取。§4。
 
-方案與風險見 `2026-11-05-remaining-redesigns.md`，交接步驟見 `2026-11-05-handoff.md`。
+## 最新安裝檔（第二階段）
+
+- `packages/desktop/release/I-harness-Setup-0.1.13.exe`
+  - SHA-256 `94cd1fcc64a26f4a37c774b5cfd7c69cde0662bb5a7dee95f50db5c2ac7f7b95`
+  - 189,643,574 bytes；builtAt `2026-11-04T23:58:05.347Z`
+- 封裝後 gateway `initialize` + `session/list` → `{"sessions":[]}`，exit 0。
 
 ## 封裝後 gateway 冒煙測試（第 123 輪）
 
