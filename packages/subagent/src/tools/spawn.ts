@@ -126,11 +126,19 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       const source = createSpawnSource(deps.managedParent?.domain.owner ?? subagentFactOwner(deps.parentSession!, deps.factOwner), exec.abortSignal, retained, args.background !== false,
         () => { unregisterDelivery?.(); deps.onTaskTerminalCommitted?.() }, deps.onTaskTerminalRecovery,originalSlot?cleanup=>originalSlot.keep(cleanup):undefined,deps.managedParent?.domain)
       cleanupSource=source
+      // A nested spawn belongs under the CALLER's path, not always under root.
+      // Cancel and projection walk the agentPath prefix tree, so a flat
+      // "root/<name>" made stop_task unable to reach grandchildren and made two
+      // same-named tasks under different parents collide.
+      const callerEntry = [...deps.table.entries().values()].find(entry => entry.sessionId !== undefined && entry.sessionId === exec.sessionId)
+      // Replay path: the task record already exists; stay under ITS parent.
+      const reusedPath = originalSlot?.task.agentPath, reusedParent = reusedPath?.slice(0, reusedPath.lastIndexOf('/'))
+      const parentPath = originalSlot ? (reusedParent || "root") : (callerEntry?.path ?? "root")
       let task: TaskRecord
       try {
         task = originalSlot?deps.tasks.get(originalSlot.task.id)!:deps.tasks.submit({
           identity,
-          agentPath: `root/${args.task_name}`,
+          agentPath: `${parentPath}/${args.task_name}`,
           description: args.task_name,
           prompt: args.message,
           agent: role.name,
@@ -164,7 +172,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           generationFactoryFor: deps.generationFactoryFor, modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,
           taskName: args.task_name,
           message: args.message,
-          parentPath: "root",
+          parentPath,
           parentRegistry: deps.parentRegistry,
           parentSession: deps.parentSession,
           parentCtx: deps.parentCtx,
