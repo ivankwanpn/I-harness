@@ -142,6 +142,13 @@
 
 **尚未完成**：移除 task document 的可變寫入（write-behind／廢除）、pending intent 的自動 reconcile，會影响 desktop catalog、required settlement 與 v3 parent 契約，屬獨立重構。
 
+## 2026-11-05 第 82–84 輪
+
+| 範圍 | 項目 | Commit／結果 |
+|---|---|---|
+| 文件 | 剩餘四項重設計（S-08、A-12、D-01 final、D-12）的具體方案 | `df039e69` |
+| jsonl | D-12 前置：pre-bind `wrapOwnedReconcile` seam | `bee5d619` |
+| 驗證 | 跨套件回歸批次：jsonl 34、subagent 39、executor 4、shell 31、sdk protocol 20、desktop 34、gateway 4（合計 166 全綠） | 第 84 輪 |
 ## 2026-11-05 第 78–81 輪
 
 | 範圍 | 項目 | Commit／結果 |
