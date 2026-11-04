@@ -907,7 +907,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           statusNotify(sessionId, "error", message, modelFailure)
           return makeFailure(id, INTERNAL_ERROR, message, {
             sessionId,
-            events: liveEventsFor(service, sessionId),
+            events: boundedFailureEvents(liveEventsFor(service, sessionId)),
             ...(modelFailure ? { modelFailure } : {}),
           })
         } finally {
@@ -1078,6 +1078,24 @@ function isSessionNotFoundError(message: string): boolean {
 function liveEventsFor(service: SessionService, sessionId: string): readonly SessionEvent[] {
   const live = service.liveSession(sessionId)
   return live?.events ?? []
+}
+
+/** A failure frame may carry events for the client to reconstruct the run, but
+ * never the whole session log: on a large history that payload can exceed the
+ * bounded writer's limit and turn a model error into a dropped connection.
+ * Keeps the newest events within the budget, in order. */
+const FAILURE_EVENT_BUDGET_BYTES = 256 * 1024
+export function boundedFailureEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  const kept: SessionEvent[] = []
+  let bytes = 0
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!
+    const size = Buffer.byteLength(JSON.stringify(event), "utf8")
+    if (kept.length > 0 && bytes + size > FAILURE_EVENT_BUDGET_BYTES) break
+    kept.push(event)
+    bytes += size
+  }
+  return kept.reverse()
 }
 
 /** M41b v1.1: validate the shared rewind target/mode params (mode defaults to
