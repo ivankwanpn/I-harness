@@ -1062,11 +1062,29 @@ function serializeModelState(state: SessionModelState): SessionModelState {
   throw new Error("invalid ready model state")
 }
 
+const RETRYABLE_RPC_KINDS = new Set([
+  'FACT_RECOVERY_REQUIRED',
+  'JOURNAL_RECOVERY_REQUIRED',
+  'PROCESS_READ_UNAVAILABLE',
+  'GENERATION_STALE',
+  'SERVER_OVERLOAD',
+])
+
+/** Machine-readable classification for a service failure (NG-03). Clients use
+ * `kind`/`retryable` instead of parsing the human message. */
+export function classifyHostFailure(error: unknown): Readonly<{ kind: string; retryable: boolean }> | undefined {
+  const message = error instanceof Error ? error.message : String(error)
+  if (isSessionNotFoundError(message)) return Object.freeze({ kind: 'session-not-found', retryable: false })
+  const code = error !== null && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
+  if (typeof code === 'string' && code.length > 0 && code.length <= 128) return Object.freeze({ kind: code, retryable: RETRYABLE_RPC_KINDS.has(code) })
+  return undefined
+}
+
 function hostMethodFailure(id: number | string, method: string, error: unknown): RpcMessage {
   const message = error instanceof Error ? error.message : String(error)
-  return isSessionNotFoundError(message)
-    ? makeFailure(id, INVALID_PARAMS, `${method}: ${message}`)
-    : makeFailure(id, INTERNAL_ERROR, `${method}: ${message}`)
+  const classification = classifyHostFailure(error)
+  if (classification === undefined) return makeFailure(id, INTERNAL_ERROR, `${method}: ${message}`)
+  return makeFailure(id, classification.kind === 'session-not-found' ? INVALID_PARAMS : INTERNAL_ERROR, `${method}: ${message}`, classification)
 }
 
 function isSessionNotFoundError(message: string): boolean {

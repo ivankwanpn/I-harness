@@ -137,6 +137,7 @@ export function createBoundedWriter(opts: BoundedWriterOptions): BoundedWriter {
         null,
         SERVER_OVERLOAD,
         `output bound exceeded: ${at} bytes queued over ${opts.boundBytes} (${dropped} frame(s) dropped); closing — reconnect and resume via session/history`,
+        { kind: 'overload', retryable: true },
       )))
     } catch { /* the terminal frame is best effort */ }
     try {

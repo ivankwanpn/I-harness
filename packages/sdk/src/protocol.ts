@@ -570,6 +570,18 @@ export class RpcError extends Error {
     this.data = data
     this.modelFailure = safeModelFailureFacts(data !== null && typeof data === "object" ? (data as { modelFailure?: unknown }).modelFailure : undefined)
   }
+
+  /** NG-03: stable machine-readable failure kind when the server classified it. */
+  get kind(): string | undefined {
+    if (this.data === null || typeof this.data !== "object") return undefined
+    const value = (this.data as { kind?: unknown }).kind
+    return typeof value === "string" ? value : undefined
+  }
+
+  /** NG-03: whether retrying the same request can succeed without user action. */
+  get retryable(): boolean {
+    return this.data !== null && typeof this.data === "object" && (this.data as { retryable?: unknown }).retryable === true
+  }
 }
 
 export function makeRequest(id: number | string, method: string, params?: unknown): RpcRequest {
