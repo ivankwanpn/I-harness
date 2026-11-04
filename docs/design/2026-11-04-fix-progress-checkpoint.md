@@ -94,6 +94,13 @@
 
 同時覆核但**不改**：A-01（tools）shell timeout（exec 的 timer 會連背景 promoted job 一起殺，前景 deadline 已由 guard abort 生效）、A-05（agent）未知 window（context state 已回 `unavailable` + reason）。
 
+## D-12 測試基礎：已遷移與新發現（2026-11-05）
+
+- 已遷移並全綠：`desktop-gateway/execution-surfaces`（10/10，含 cold restart 後 job_output／PTY 的 saved facts 讀取）、`sdk/server.test`（54/54，fork 流程約 20s，該檔放寬 testTimeout 至 30s）、`core-agent/accepted-exchange`（14/14，透過 `createJsonlBackend({ wrapOwnedBatch })` 在 canonical-path guard 綁定前注入）。
+- **agent-team 的 `TASK_TRANSITION_UNSUPPORTED` 只是第一層**：把 `ownedTeamFixture` 改成 composed coordinator 後，`acknowledgement-settlement` 由全失敗變成 20/37 通過；其餘 17 個在 managed execution 的 `prepareWrite` 被拒，錯誤為 `FACT_INVALID_GROUP`（`managed-document.ts:336` 的 executionStage.rejected 路徑）。這可能是「team transaction group 在 composed coordinator 下被拒」的**產品級組合問題**（desktop 用的正是 composed coordinator），也可能只是 fixture 缺少 team session 的前置狀態；需要專門調查，不能只改測試。
+- 該實驗（fixture + control hooks）已**還原**，避免留下半綠套件；`backend-factory` 的 `wrapOwnedBatch`（core-agent 使用）保留。
+- 其餘 100+ agent-team 失敗多為同一 TASK_TRANSITION 源頭，待上述問題釐清後才能批量遷移。
+
 ## 驗證現狀
 
 - `pnpm -r --no-bail typecheck` 最後一次全綠；每個修復都附單檔測試（workflow 63/63、fs 110/110、sdk failure-events 3/3、session-persistence latch 10/10、jsonl append-cache 2/2、header-limit 3/3、torn-tail 1/1、document 2/2、desktop-gateway 相關 4/4+3/3+1/1、core-session rewind 2/2、fork-prefix 3/3）。
@@ -101,6 +108,6 @@
 
 ## 下一輪
 
-1. **L1 child execution 存取**（coordinator/ session-executor），用小測試證明 domain 屬於 child。
-2. 接著 **L2/L3 child shell factory**。
-3. 之後 A-01（模型回應完整性）與 A-02（token 估算）。
+1. **調查 `FACT_INVALID_GROUP`**：在 composed coordinator 下重現最小的 team transaction 寫入，判斷是缺少 session 前置（team parent meta／adapter）還是 `prepareWrite` 真的拒絕 team 群組；這是 agent-team 測試與 desktop team 功能的共同關鍵。
+2. 依結論修產品或補 fixture，再批量遷移 agent-team 測試。
+3. 之後回到 A-03 的 exec job store／`dispose()` 降級。
