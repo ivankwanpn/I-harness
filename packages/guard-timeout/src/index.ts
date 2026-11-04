@@ -37,13 +37,23 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
         else if (upstream) upstream.addEventListener("abort", onUpstreamAbort, { once: true })
 
         let timedOut = false
-        const timer = setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
+        let rejectDeadline!: (error: unknown) => void
+        const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject })
+        const timer = setTimeout(() => {
+          timedOut = true
+          controller.abort()
+          // A tool that ignores the abort signal must not hang the gate: settle
+          // the race ourselves and let the catch below emit TOOL_TIMEOUT.
+          rejectDeadline(Object.assign(new Error(`tool call timed out after ${timeoutMs}ms`), { code: TOOL_TIMEOUT }))
+        }, timeoutMs)
         d.exec.abortSignal = controller.signal // swap: the tool honors this
         try {
-          // `next()` resolves to the RAW tool output (unknown); treat it as a
-          // plain object so the spread below preserves its fields unchanged
-          // (type-only cast, no runtime effect).
-          const result = (await next()) as Record<string, unknown>
+          const running = next() as Promise<Record<string, unknown>>
+          // The loser of the race must not surface as an unhandled rejection.
+          running.catch(() => {})
+          // The deadline is enforced, not merely advertised: previously this
+          // awaited a cooperative tool forever.
+          const result = (await Promise.race([running, deadline])) as Record<string, unknown>
           // OUR timer fired (not an upstream cancel) → the tool saw the abort
           // and reached quiescence; replace whatever it returned.
           if (timedOut) {
