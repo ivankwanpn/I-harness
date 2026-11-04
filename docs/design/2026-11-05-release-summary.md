@@ -67,3 +67,13 @@ node --import tsx cli/src/cli.ts --help
 ```
 
 輸出 `usage: desktop-gateway --session-dir ABSOLUTE_DIR`，代表打包的 runtime、tsx loader 與 gateway entry 都能正確解析（缺參數時如預期 exit 1）。這也驗證了 release appDir 的 gateway runtime 不是壞的。
+
+## 封裝後 gateway 啟動測試（第 125 輪）
+
+以臨時 `--session-dir` 與空 stdin 啟動打包後的 gateway：
+
+```powershell
+$null | node --import tsx cli/src/cli.ts --session-dir <temp>
+```
+
+結果：乾淨 `exit=0`（stdin EOF 後正常關閉），代表封裝後的 host 初始化、registry 載入與關閉流程都能跑完，不只是 `--help`。
