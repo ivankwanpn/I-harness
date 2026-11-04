@@ -1,5 +1,6 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
+import type { SessionCoordinator } from '@i-harness/session-persistence'
 import type { TaskStatus } from './task/types.ts'
 
 /** D-01 step 1: one durable, append-only job record per subagent task.
@@ -75,3 +76,8 @@ export function createJobRecordStore(filePath: string) {
 }
 
 export type JobRecordStore = ReturnType<typeof createJobRecordStore>
+
+export async function loadJobRecords(coordinator: Pick<SessionCoordinator, 'storageRoot'>, parentSessionId: string): Promise<JobLoadResult> {
+  if (!coordinator.storageRoot) return { records: [], warnings: ['job record storage root unavailable'] }
+  return createJobRecordStore(join(coordinator.storageRoot, 'jobs', `${parentSessionId}.jobs.jsonl`)).load()
+}

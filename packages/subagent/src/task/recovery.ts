@@ -1,13 +1,16 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { TaskRegistry } from "./types.ts"
+import { loadJobRecords } from "../job-record.ts"
 
 /** D-01 step 1: read-only projection integrity report. A task document is a
  * projection; the durable child session is the source of truth. This reports
  * rows that contradict it without mutating the document. */
+export type TaskProjectionIssueKind = "missing-child-session" | "terminal-without-turn-end"
+  | "job-record-missing" | "job-record-terminal-ahead" | "job-record-terminal-missing" | "job-record-child-mismatch"
 export interface TaskProjectionIssue {
-  kind: "missing-child-session" | "terminal-without-turn-end"
+  kind: TaskProjectionIssueKind
   taskId: string
-  childSessionId: string
+  childSessionId?: string
 }
 
 export async function inspectTaskProjection(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<TaskProjectionIssue[]> {
@@ -27,12 +30,36 @@ export async function inspectTaskProjection(tasks: TaskRegistry, coordinator: Se
   return issues
 }
 
+/** D-01 step 3: compare the shadow job records with the task projection. The
+ * job file is the intended source of truth; disagreement is reported read-only
+ * (it never changes task status). Sessions written before step 2 have no file
+ * and are treated as "job records not active" rather than as errors. */
+export async function inspectJobRecordProjection(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<TaskProjectionIssue[]> {
+  const rows = tasks.list()
+  const parentSessionId = rows[0]?.parentSessionId
+  if (parentSessionId === undefined) return []
+  const loaded = await loadJobRecords(coordinator, parentSessionId)
+  if (loaded.records.length === 0) return []
+  const jobs = new Map(loaded.records.map(record => [record.jobId, record]))
+  const issues: TaskProjectionIssue[] = []
+  for (const task of rows) {
+    const job = jobs.get(task.id)
+    const childSessionId = task.childSessionId
+    const base = { taskId: task.id, ...(childSessionId !== undefined ? { childSessionId } : {}) }
+    if (!job) { issues.push({ kind: 'job-record-missing', ...base }); continue }
+    if (job.childSessionId !== undefined && childSessionId !== undefined && job.childSessionId !== childSessionId) issues.push({ kind: 'job-record-child-mismatch', ...base })
+    if (job.terminal !== undefined && task.outcome === undefined) issues.push({ kind: 'job-record-terminal-ahead', ...base })
+    else if (job.terminal === undefined && task.outcome !== undefined && task.outcome !== 'recovery-required') issues.push({ kind: 'job-record-terminal-missing', ...base })
+  }
+  return issues
+}
+
 /** D-01 step 2: write the inspection result into the projection as a warning
  * marker. Status, outcome and result are never changed here; warnings that no
  * longer apply are cleared. Returns the issues that were found. */
 export async function reconcileTaskProjection(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<TaskProjectionIssue[]> {
   const issues = await inspectTaskProjection(tasks, coordinator)
-  const current = new Map(issues.map(issue => [issue.taskId, issue.kind]))
+  const current = new Map(issues.flatMap(issue => issue.kind === 'missing-child-session' || issue.kind === 'terminal-without-turn-end' ? [[issue.taskId, issue.kind] as const] : []))
   for (const t of tasks.list()) {
     if (t.childSessionId === undefined) continue
     const kind = current.get(t.id)
