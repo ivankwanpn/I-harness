@@ -161,7 +161,7 @@ describe("failureReport — a run that ends badly says WHICH run and WHAT surviv
     // THE DIAGNOSE-ABILITY PART: the reader learns what is at risk without
     // reading the JSONL. This is the loss contract, and it had never been
     // written down anywhere (backlog §6.2).
-    expect(out).toMatch(/flush/i)
+    expect(out).toMatch(/synchronous|append/i)
     expect(out).toMatch(/tail/i)
   })
 

@@ -307,3 +307,5 @@
 **S-07 診斷（2026-11-05）**：desktop reload 會讀取 pending rewind intents，並以 `rewind-intent-pending` 併入 `desktop/tasks/projection` 通知；desktop 的 runtime diagnostics 已接受新增的 job-record／document-write／rewind 類 issue（先前只允許兩個舊 kind，會把新問題丟掉）。
 
 **S-06 step 2 完成（2026-11-05）**：append 在 journal cache hit（size 與已驗證 prefix 相同）時，改用 `validateSemanticBootstrapAppend(prefixCount, added, …)` 只驗新增事件（O(added)），不再每次重建整個歷史陣列做 semantic fold；cache miss 仍完整驗一次並快取。delivery 事件仍走完整 `validateConversationHistory`（低頻、需跨歷史配對）。剩餘的 O(n) 成本在 cache miss 的首次驗證與 document 全量寫入。
+
+**S-09 處理（2026-11-05）**：確認 `SessionCoordinator.enqueue` 在產品程式碼沒有任何 caller（只有實作與測試）；已將其標記 `@deprecated`，明確指出同步 `append` 才是唯一耐久契約。CLI 的失敗報告改寫為「accepted event 已同步寫入；仍在跑的 turn 可能缺少 tail」，不再聲稱 200 ms write-behind 批次。close／delete 仍保留防禦性的 `flushWriteBehinds()`（無 producer 時 no-op），避免刪除路徑回歸。

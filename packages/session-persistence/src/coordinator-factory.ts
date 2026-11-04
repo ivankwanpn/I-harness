@@ -156,6 +156,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       let captured: typeof events; try { captured = captureTaskSnapshot(events) as typeof events } catch (error) { return Promise.reject(error) }
       return loads.transitionLoad(sessionId, (check, markIssue) => mutations.appendTransitionUnlocked(sessionId, captured, check, markIssue)).then(() => {})
     },
+    // S-09 deprecated: kept for compatibility, not used by product code.
     enqueue(sessionId, events) {
       assertDurableTransition()
       if (managed.has(sessionId)) throw new Error('Managed document requires fact admission')

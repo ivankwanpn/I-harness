@@ -355,10 +355,10 @@ function isSubagentStateSnapshot(doc: unknown): doc is SubagentStateSnapshot {
  * JSONL" — which is exactly the `session` and `durable` lines.
  *
  * The `durable` line is the LOSS CONTRACT, written here because this is the moment
- * somebody needs it: `session-persistence`'s write-behind batches on a 200 ms
- * deadline, flushes on `turn/end`, and is drained by `coordinator.close()` — so
- * everything already flushed survives and the tail of the in-flight turn may not.
- * Measured (write-behind.ts + the runner's onAppend), never assumed.
+ * somebody needs it: every accepted event is appended synchronously, so it is on
+ * disk before the caller resumes; only the tail of a turn that was still running
+ * (for example a missing final turn/end) may not be. The legacy write-behind path
+ * has no producer (S-09).
  *
  * Pure and total: a rejection can carry anything, so this takes `unknown` and
  * never throws.
@@ -374,10 +374,9 @@ export function failureReport(err: unknown, ctx: { sessionId?: string; kind: "cr
     `  error    : ${message}`,
     ...(frame !== undefined ? [`  at       : ${frame}`] : []),
     "",
-    "  durable  : every event already flushed is on disk. The write-behind",
-    "             batches on a 200 ms deadline and flushes at turn end, so the",
-    "             TAIL of a turn that was still running may not be — that is the",
-    "             one part of this run to re-check before resuming it.",
+    "  durable  : every accepted event was appended synchronously and is on disk.",
+    "             A turn that was still running may be missing its tail (final record(s))",
+    "             — that is the one part of this run to re-check before resuming.",
     "────────────────────────────────────────────────────────────────",
   ].join("\n")
 }

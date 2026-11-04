@@ -139,6 +139,9 @@ export interface SessionCoordinator {
   deletionReceipt?(sessionId: string): Promise<{ visibility: { origin?: string; parentSession?: string }; manifest: SessionArtifactManifest } | undefined>
   create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
+  /** @deprecated S-09: no product caller; every real event goes through the
+   * synchronous append path. Kept only for API compatibility and retired as a
+   * durability barrier (close/delete still flush it defensively). */
   enqueue(sessionId: string, events: SessionEvent[]): void
   load(sessionId: string): Promise<{ session: Session }>
   /** Read the durable prefix without ownership, disk repair or runtime creation. */
