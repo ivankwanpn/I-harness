@@ -33,6 +33,20 @@ describe("subagent state snapshot", () => {
     expect(snapshotState(state).jobs[0]).toMatchObject({ agentPath: "lead/env-probe", sessionId: "old-child" })
   })
 
+  it("bounds the durable snapshot to running jobs plus the newest finished ones", () => {
+    const state = makeState()
+    const oldest = state.jobs.registerJob("root", "subagent", "oldest")
+    state.jobs.updateJob(oldest.id, { status: "completed", output: "old output" })
+    for (let index = 0; index < 40; index += 1) {
+      const job = state.jobs.registerJob("root", "subagent", "job-" + index)
+      state.jobs.updateJob(job.id, { status: "completed", output: "output-" + index })
+    }
+    state.jobs.registerJob("root", "subagent", "still-running")
+    const snap = snapshotState(state)
+    expect(snap.jobs.filter((job) => job.status === "running")).toHaveLength(1)
+    expect(snap.jobs.filter((job) => job.status !== "running")).toHaveLength(32)
+    expect(snap.jobs.some((job) => job.id === oldest.id)).toBe(false)
+  })
   it("does not resurrect live plugin roles from a durable snapshot", () => {
     const state = makeState()
     state.roles.register({ name: "plugin-live", description: "plugin", systemPrompt: "plugin", tools: [], ephemeral: true })

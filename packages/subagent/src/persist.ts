@@ -76,10 +76,19 @@ export interface SubagentPersistence {
   factOwner?: FactOwner
 }
 
+/** Finished job rows kept in the durable snapshot. The live registry keeps
+ * every row for the session; the document is rewritten on every job transition,
+ * so carrying all of them made save cost grow with session age. */
+const MAX_DURABLE_FINISHED_JOBS = 32
+
 export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry }): SubagentStateSnapshot {
   // The harness registers all subagent jobs under owner "root" (spawnChild uses
   // registerJob("root", "subagent", ...)); list("root") is the enumeration.
-  const jobSnaps = state.jobs.list("root")
+  const allJobs = state.jobs.list("root")
+  const jobSnaps = [
+    ...allJobs.filter((job) => job.status === "running"),
+    ...allJobs.filter((job) => job.status !== "running").slice(-MAX_DURABLE_FINISHED_JOBS),
+  ]
   const jobsOut: DurableJobRecord[] = jobSnaps.map((j) => ({
     id: j.id, owner: "root", kind: j.kind, label: j.label, status: j.status, output: j.output, ...(j.result ? { result: j.result } : {}),
     terminal: j.status !== "running", ...(j.publication ? { publication: j.publication } : {}), ...(j.savedObservation ? { savedObservation: j.savedObservation } : {}), ...(j.taskId ? { taskId: j.taskId } : {}),
