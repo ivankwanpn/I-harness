@@ -98,7 +98,8 @@
 
 - 已遷移並全綠：`desktop-gateway/execution-surfaces`（10/10，含 cold restart 後 job_output／PTY 的 saved facts 讀取）、`sdk/server.test`（54/54，fork 流程約 20s，該檔放寬 testTimeout 至 30s）、`core-agent/accepted-exchange`（14/14，透過 `createJsonlBackend({ wrapOwnedBatch })` 在 canonical-path guard 綁定前注入）。
 - **agent-team 的 `TASK_TRANSITION_UNSUPPORTED` 只是第一層**：把 `ownedTeamFixture` 改成 composed coordinator 後，`acknowledgement-settlement` 由全失敗變成 20/37 通過；其餘 17 個失敗，其中一個曾出現 `FACT_INVALID_GROUP`（`managed-document.ts` 的 executionStage.rejected 路徑），但**最小重現推翻了「所有 team 寫入都被拒」的假設**：直接用 composed coordinator + `createTeamFacts`／`createTeamTransact`／`createMailbox` 發送訊息會成功（`sendMessage` 回 `{status:'queued'}`）。
-- 後續把同一測試單獨跑並提高 timeout，失敗形態變成**流程卡住**（30s timeout，不是 `prepareWrite` 拒絕），因此現階段判斷是**測試 harness 與 composed coordinator 的互動**（`document.beginAction` wrapper、`observeAckSources` monkey-patch、`createTaskDelivery` 的 delivery 路徑）而非單純產品拒絕。需要逐步 bisect 這些 wrapper。
+- 後續把同一測試單獨跑並提高 timeout，失敗形態變成**流程卡住**（30s timeout，不是 `prepareWrite` 拒絕），因此現階段判斷是**測試 harness 與 composed coordinator 的互動**（`document.beginAction` wrapper、`observeAckSources` monkey-patch、`createTaskDelivery` 的 delivery 路徑）而非單純產品拒絕。
+- **已用完整 delivery 流程證實**：`composed-team-write.test.ts` 第二個案例在 composed coordinator 上完成 queued → consumed → `team/message/delivered`（2/2 通過），所以卡住來自 harness 覆寫 action 方法（beginAction／registerSettlementSource），不是 coordinator 拒絕 team 寫入。下一步是改寫 harness 使用 control hooks，而不是修產品。
 - 該實驗（fixture + control hooks）已**還原**，避免留下半綠套件；`backend-factory` 的 `wrapOwnedBatch`（core-agent 使用）保留。
 - 其餘 100+ agent-team 失敗多為同一 TASK_TRANSITION 源頭，待上述問題釐清後才能批量遷移。
 

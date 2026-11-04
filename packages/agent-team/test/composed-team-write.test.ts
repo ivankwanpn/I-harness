@@ -33,3 +33,29 @@ it('accepts a plain team message write on the composed coordinator', async () =>
     await rm(root, { recursive: true, force: true })
   }
 })
+
+it('completes an accepted team message delivery on the composed coordinator', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-team-deliver-'))
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await coordinator.create({ sessionId: 'team' })
+    const document = await coordinator.openManagedDocument('team')
+    const state = createFoldState()
+    state.members.set('helper', { id: 'child', name: 'helper', description: '', provider: 'fixture', context: 'fresh', phase: 'active' })
+    let tx: ReturnType<typeof createTeamTransact>
+    const lead = createTeamFacts(document, () => tx.drain(), () => {})
+    tx = createTeamTransact(lead, state)
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<DeliveryOutcome>()
+    const mailbox = createMailbox({ teamId: 'team', state, transact: tx, memberStatus: () => 'idle', maxPendingMessagesPerMember: 8,
+      deliver: async () => { entered.resolve(); return release.promise } })
+    const sending = mailbox.sendMessage({ id: 'team', name: 'lead', role: 'lead' }, 'helper', 'hello', 'quiet')
+    await entered.promise
+    expect(document.view.events.map(event => event.type)).toEqual(['team/message/queued'])
+    release.resolve({ kind: 'consumed', via: 'target', sendFailure: { occurred: false } })
+    await expect(sending).resolves.toMatchObject({ status: 'accepted' })
+    expect(document.view.events.map(event => event.type)).toEqual(['team/message/queued', 'team/message/delivered'])
+  } finally {
+    await coordinator.close().catch(() => {})
+    await rm(root, { recursive: true, force: true })
+  }
+})
