@@ -14,6 +14,7 @@ import type {RoleModelSelection} from './model-binding.ts'
 import type {TaskChildHostPreparation} from './task-host.ts'
 import {inspectTaskChildHistory,prepareTaskChildHistory} from './task-history.ts'
 import {birthFailure} from './birth-outcome.ts'
+import {d} from './diagnostics.ts'
 
 export interface CommittedTaskChildBirth {readonly kind:'original-task-child-birth'}
 type Birth={document:ManagedDocument;request:ChildBootstrapCaptureRequest;payload:BootstrapRequest;receipt:BootstrapReceipt;start:{wall:number;monotonic:number};declared:RoleModelSelection|undefined;slot:TaskLaunchSlot;adopted:boolean;claimed:boolean;assertDependencyReceipt?:(receipt:BootstrapReceipt,seed:ReturnType<typeof compileSemanticSeed>)=>void}
@@ -66,7 +67,7 @@ export async function bootstrapTaskChild(slot:TaskLaunchSlot,deps:SubagentToolDe
   }
   return result
  })
- if(outcome.kind!=='ready'&&outcome.kind!=='already-ready')throw birthFailure('child',outcome)
+ if(outcome.kind!=='ready'&&outcome.kind!=='already-ready'){d.warn('original child birth did not become ready',{outcome:outcome.kind,...('reason' in outcome&&outcome.reason!==undefined?{reason:String(outcome.reason)}:{}),targetSessionId:request.invocation.targetSessionId,parentSessionId:request.core.caller.kind==='task'?request.core.caller.parentSessionId:undefined,taskId:request.core.caller.kind==='task'?request.core.caller.taskId:undefined});throw birthFailure('child',outcome)}
  const birth=retainedBirth!
  verifyTaskChildBirth(birth)
  await transfer.releaseSource?.()
