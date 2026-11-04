@@ -178,3 +178,8 @@ lifecycle 已切到 composed fixture + control hooks：
 **lifecycle 失敗 document 定位（2026-11-05）**：`managed-close` 診斷顯示失敗的是 **`parent` document**（`Managed restored read/document cleanup unresolved`）。`restoredEntries` 的 `close()` 在 coordinator teardown 前未被 consume／abandon；測試在 finally 先 `owned.document.close()` 也無效（該 handoff 屬於 managed restored read，不是一般 document handle）。
 
 **下一步**：檢查 `mountAgentTeams` 的 managed parent 收尾（unmount → `managed.parent.close()`）是否應 consume/abandon 這個 restored read；或在 `managed-documents.closeOne` 對「team 已 unmount 的 parent」允許 release。修正後 lifecycle 應達 49/50。
+
+**restored-read close 進一步追蹤（2026-11-05）**：`parent` document 的 `restoredEntries.close()` 會執行
+`retired=true → flight → state.close() → history=undefined`，若 `hasFailure` 再 `transitions.joinIO()`；
+錯誤（cleanup unresolved）來自這條路徑的其中一步。也就是 restore-path team mount（seed 內含 queued message）讓 parent 走進 restored-read 狀態，並在 close 時留下未完成的 IO／state。
+下一步：在 `createManagedRestoredRead.close()` 區分「read 已 failure／retired」與「IO debt」；若 team 已 unmount 且沒有任何 writer，允許 release 而不是 join（或由 mountAgentTeams 在 unmount 時先 settle）。
