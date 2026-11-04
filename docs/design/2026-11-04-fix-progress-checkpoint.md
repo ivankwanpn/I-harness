@@ -120,6 +120,24 @@
 | mcp-client | A-11：Windows 關閉時 `taskkill /T` 終止 MCP 後代行程 | `8ad5584d` |
 | 審計 | A-06／A-07 覆核：維持 fail-closed（既有測試已固定安全屬性） | `ec9a9b1e` |
 | exec | A-08：`IH_MINIMUM_EXEC_ASSURANCE` 設定後端 assurance 下限，admission fail-closed | `32409b1c` |
+| 建置 | 安裝檔重建（`acb388d3…`）＋第 50–53 輪 checkpoint | `571f52ec` |
+| sandbox-wsl | A-12：distribution 檢查每 backend 快取一次 | `de99ee29` |
+
+## 2026-11-05 D-01 durable job store（第 56–64 輪）
+
+| 步驟 | 項目 | Commit |
+|---|---|---|
+| 1 | `JobRecordV1` + append-only store、fold／terminal 契約、壞行容錯 | `aca762a3` |
+| 2 | `TaskRegistry` submit/claim/terminalize/cancelTree 雙寫，`flushPersistence` drain | `53868e74` |
+| 3 | `inspectJobRecordProjection`：missing／terminal-ahead／terminal-missing／child-mismatch | `4dfe2afa` |
+| 4a | recovery 優先採用 terminal job record（child session 遺失仍可結案） | `57d82dd8` |
+| 4b | D-08：spawn admission 改用 `flushPersistenceBestEffort`，document debt 不再擋工作 | `3699dc1b` |
+| 4c | document 遺失時用 job record 重建 v1 文件（e2e） | `7d6d0c68` |
+| 4d | legacy restore 自動 fallback 到重建文件 | `d9df3b3f` |
+| 4e | owned／v3 不偽造 witness；改提供 `readRecoveredTaskRows` 唯讀降級 | `d981489a` |
+| 4f | `tasksAsync` → SDK `session/tasks` 降級回傳 read-only rows | `7d3b90da` |
+
+**尚未完成**：移除 task document 的可變寫入（write-behind／廢除），會影响 desktop catalog、required settlement 與 v3 parent 契約，屬獨立重構。
 
 ## D-12 測試基礎：已遷移與新發現（2026-11-05）
 
