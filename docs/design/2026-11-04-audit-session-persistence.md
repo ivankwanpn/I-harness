@@ -311,3 +311,5 @@
 **S-09 處理（2026-11-05）**：確認 `SessionCoordinator.enqueue` 在產品程式碼沒有任何 caller（只有實作與測試）；已將其標記 `@deprecated`，明確指出同步 `append` 才是唯一耐久契約。CLI 的失敗報告改寫為「accepted event 已同步寫入；仍在跑的 turn 可能缺少 tail」，不再聲稱 200 ms write-behind 批次。close／delete 仍保留防禦性的 `flushWriteBehinds()`（無 producer 時 no-op），避免刪除路徑回歸。
 
 **S-08 部分完成（2026-11-05）**：`list()` 已排除 0-byte 的 create／fork 半成品（完成第一次 durable write 前不會出現在會話清單）。完整修法仍需跨 `fork-controller`／backend 的原子發佈設計（例如先寫 `<id>.pending`、完成後 rename；或把 reservation 完成狀態放進可低成本檢查的位置），目前維持 deferred。
+
+**S-06 document preimage（2026-11-05）**：`createOwnedDocumentWrite` 不再保留 preimage 的第二份完整 copy，改存 SHA-256 digest ＋ byte length；preimage 驗證改成以 64 KiB 視窗串流讀取並比對 digest（峰值記憶體與文件大小無關）。tamper 仍會被判 `conflict`。16 MiB／64 MiB 的 document 上限與格式未變（降低上限需要格式／契約決策）。

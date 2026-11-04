@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { link, lstat, open, rename, unlink, type FileHandle } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { TaskDocumentAck, TaskDocumentWrite, TaskWriteOutcome } from '@i-harness/session-persistence'
@@ -42,7 +42,8 @@ class Conflict extends Error {}
 export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Array; preimage?: { bytes: Uint8Array; identity: Identity }; maxBytes?: number | null; guard(): void; verifyRoot(): Promise<void> }) {
   if (input.maxBytes !== null && input.bytes.byteLength > (input.maxBytes ?? 64 * 1024 * 1024)) throw new RangeError('Task document too large')
   if (input.preimage && !meaningful(input.preimage.identity)) throw new Error('Task document identity unavailable')
-  const bytes = Buffer.from(input.bytes), before = input.preimage && { bytes: Buffer.from(input.preimage.bytes), identity: input.preimage.identity }, temp = `${input.path}.${randomUUID()}.tmp`
+  // S-06: keep only a digest of the preimage instead of a second full copy.
+  const bytes = Buffer.from(input.bytes), before = input.preimage && { digest: createHash('sha256').update(input.preimage.bytes).digest('hex'), size: input.preimage.bytes.byteLength, identity: input.preimage.identity }, temp = `${input.path}.${randomUUID()}.tmp`
   const resources = new Set<Resource>()
   let tempIdentity: Identity | undefined, phase: 'staged'|'temp'|'closed'|'issued'|'published'|'acknowledged' = 'staged', result: TaskWriteOutcome | undefined, issueFlight: Promise<TaskWriteOutcome> | undefined, active: Promise<TaskWriteOutcome> | undefined, reconcileFlight: Promise<TaskWriteOutcome> | undefined, ack: TaskDocumentAck | undefined, terminal = false, tempCleanupPending = false
   let lifetime: ReturnType<typeof captureOriginalTaskWriteProducer>
@@ -95,6 +96,28 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
     const value = await usingResource(resource, () => readBounded(resource, identity, limit))
     guard(); return value
   }
+  /** S-06: verify the preimage by streaming digest instead of comparing a
+   * retained full copy; the 64 KiB window keeps peak memory constant. */
+  async function exactPreimage(path: string, identity: Identity, digest: string, size: number) {
+    guard(); await input.verifyRoot(); guard(); const stat = await lstat(path, { bigint: true }); guard()
+    if (!stat.isFile() || stat.isSymbolicLink() || !sameIdentity(stat, identity) || stat.size !== BigInt(size)) throw new Conflict()
+    const resource = await openOwned(path, 'r')
+    const actual = await usingResource(resource, async () => {
+      const hash = createHash('sha256'), chunk = Buffer.alloc(65536); let offset = 0
+      const opened = await resource.handle.stat({ bigint: true })
+      if (!opened.isFile() || !sameIdentity(opened, identity) || opened.size !== BigInt(size)) throw new Conflict()
+      while (offset < size) {
+        guard()
+        const read = await resource.handle.read(chunk, 0, Math.min(chunk.length, size - offset), offset)
+        if (!read.bytesRead) break
+        hash.update(chunk.subarray(0, read.bytesRead)); offset += read.bytesRead
+      }
+      const after = await resource.handle.stat({ bigint: true })
+      if (!sameIdentity(after, identity) || after.size !== BigInt(size) || offset !== size) throw new Conflict()
+      guard(); return hash.digest('hex')
+    })
+    guard(); if (actual !== digest) throw new Conflict()
+  }
   async function exact(path: string, expected: Uint8Array, identity: Identity) {
     guard(); await input.verifyRoot(); guard(); const stat = await lstat(path, { bigint: true }); guard(); if (!stat.isFile() || stat.isSymbolicLink() || !sameIdentity(stat, identity) || stat.size !== BigInt(expected.byteLength)) throw new Conflict()
     const data = await readOwned(path, identity, expected.byteLength); guard(); const after = await lstat(path, { bigint: true }); guard(); if (!sameIdentity(after, identity) || after.size !== BigInt(expected.byteLength) || !data.equals(Buffer.from(expected))) throw new Conflict()
@@ -110,7 +133,7 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
     return result!
   }
   async function inspectFinal(): Promise<'candidate'|'preimage'|'absent'> {
-    try { guard(); const stat = await lstat(input.path, { bigint: true }); guard(); if (tempIdentity && sameIdentity(stat, tempIdentity)) { await exact(input.path, bytes, tempIdentity); return 'candidate' }; if (before && sameIdentity(stat, before.identity)) { await exact(input.path, before.bytes, before.identity); return 'preimage' }; throw new Conflict() }
+    try { guard(); const stat = await lstat(input.path, { bigint: true }); guard(); if (tempIdentity && sameIdentity(stat, tempIdentity)) { await exact(input.path, bytes, tempIdentity); return 'candidate' }; if (before && sameIdentity(stat, before.identity)) { await exactPreimage(input.path, before.identity, before.digest, before.size); return 'preimage' }; throw new Conflict() }
     catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') return 'absent'; throw error }
   }
   async function attempt(publish: boolean): Promise<TaskWriteOutcome> {
@@ -129,7 +152,7 @@ export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Arra
       }
       if (!tempIdentity) throw new Error('Missing original temp identity')
       await exact(temp, bytes, tempIdentity)
-      if (before) { try { await exact(input.path, before.bytes, before.identity) } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') throw new Conflict(); throw error } }
+      if (before) { try { await exactPreimage(input.path, before.identity, before.digest, before.size) } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') throw new Conflict(); throw error } }
       else { try { await lstat(input.path, { bigint: true }); guard(); throw new Conflict() } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw error } }
       guard(); lifetime?.beforeIssue(); phase = 'issued'
       try { await publishDocument(temp, input.path, before ? 'replace' : 'initialize'); phase = 'published' }
