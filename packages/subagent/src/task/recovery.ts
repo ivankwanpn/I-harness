@@ -74,8 +74,25 @@ export async function reconcileTaskProjection(tasks: TaskRegistry, coordinator: 
 
 export async function classifyRestoredTasks(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<number> {
   let classified = 0
-  for (const t of tasks.list()) {
+  const rows = tasks.list()
+  const jobs = rows[0] === undefined ? new Map<string, import('../job-record.ts').JobRecordV1>() : new Map((await loadJobRecords(coordinator, rows[0].parentSessionId)).records.map(record => [record.jobId, record]))
+  for (const t of rows) {
     if (t.outcome !== undefined || t.publication === 'unqualified') continue
+    // D-01 step 4: a durable terminal job record settles the task even when the
+    // (mutable) task document no longer knows it; the child session supplies the
+    // result text when it still has one.
+    const job = jobs.get(t.id)
+    if (job?.terminal !== undefined) {
+      const evidence = t.childSessionId === undefined ? undefined : await completedTurnEvidence(coordinator, t.childSessionId)
+      const outcome = job.status === 'completed' ? 'completed' : job.status === 'cancelled' ? 'cancelled' : 'error'
+      tasks.terminalize({
+        taskId: t.id, outcome,
+        ...(outcome === 'completed' && evidence?.lastAssistantText !== undefined ? { resultText: evidence.lastAssistantText } : {}),
+        ...(outcome !== 'completed' ? { error: job.terminal.reason ?? job.detail ?? 'terminal state recovered from the job record' } : {}),
+      })
+      classified += 1
+      continue
+    }
     const evidence = t.childSessionId === undefined
       ? undefined
       : await completedTurnEvidence(coordinator, t.childSessionId)

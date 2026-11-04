@@ -43,7 +43,7 @@
 1. **（本輪）** schema + `createJobRecordStore` + fold/validation 測試。不動任何現有路徑。
 2. **（已完成）** 在 TaskRegistry 的 submit / claim / 	erminalize / cancelTree append job record，寫入序列化並由 lushPersistence() 一起 drain；與現有 journal/document 雙寫，讀取路徑未變。append 失敗只影響該 job（best-effort，IH_JOB_RECORD_DEBUG 可觀察）。
 3. **（已完成，read-only 檢查）** `inspectJobRecordProjection` 比對 job record 與 task projection，回報 `job-record-missing`／`terminal-ahead`／`terminal-missing`／`child-mismatch`；session-executor 的 `taskProjectionIntegrity`／`reconcileProjection` 會附帶這些問題。不改 task 狀態、不寫 document；沒有 job file 的舊 session 視為尚未遷移。
-4. 移除 task document 的可變寫入（或改成 write-behind），讓父會話不再因單一 job 的 debt 而封鎖。
+4. **（部分完成）** recovery 的 `classifyRestoredTasks` 先看 job record：terminal job 可直接結案（child session 遺失時仍能恢復 completed／error／cancelled，error 取 job terminal 的 reason，completed 則在 child session 仍在時補 resultText）。task document 仍是可變寫入來源；移除可變寫入與 D-08 的 per-job 隔離留待下一步。
 5. 端到端測試：spawn → child session → job record → 父通知；崩潰重啟後只靠 child session + job record 重建。
 
 ## 驗證

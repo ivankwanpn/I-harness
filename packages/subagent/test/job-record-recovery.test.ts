@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createJobRecordStore, type JobRecordV1 } from '../src/job-record.ts'
-import { inspectJobRecordProjection } from '../src/task/recovery.ts'
+import { classifyRestoredTasks, inspectJobRecordProjection } from '../src/task/recovery.ts'
+import { vi } from 'vitest'
 import type { TaskRecord, TaskRegistry } from '../src/task/types.ts'
 
 const task = (id: string, childSessionId: string, outcome?: TaskRecord['outcome']): TaskRecord => ({
@@ -48,5 +49,30 @@ it('treats a session without job records as not yet migrated (D-01 step 3)', asy
   try {
     const tasks = { list: () => [task('a', 'child')] } as unknown as TaskRegistry
     await expect(inspectJobRecordProjection(tasks, { storageRoot: root } as SessionCoordinator)).resolves.toEqual([])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+
+it('settles an unfinished task from a terminal job record when the child session is gone (D-01 step 4)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-job-recovery-'))
+  try {
+    const store = createJobRecordStore(join(root, 'jobs', 'parent.jobs.jsonl'))
+    await store.append(record('done', 'completed'))
+    const terminalize = vi.fn(() => true)
+    const tasks = { list: () => [task('done', 'missing-child', undefined)], terminalize } as unknown as TaskRegistry
+    await expect(classifyRestoredTasks(tasks, { load: async () => { throw new Error('missing') }, storageRoot: root } as unknown as SessionCoordinator)).resolves.toBe(1)
+    expect(terminalize).toHaveBeenCalledWith({ taskId: 'done', outcome: 'completed' })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('recovers the terminal error reason from the job record (D-01 step 4)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-job-recovery-'))
+  try {
+    const store = createJobRecordStore(join(root, 'jobs', 'parent.jobs.jsonl'))
+    await store.append(record('failed', 'error', { terminal: { at: 2, reason: 'child crashed' } }))
+    const terminalize = vi.fn(() => true)
+    const tasks = { list: () => [task('failed', 'child', undefined)], terminalize } as unknown as TaskRegistry
+    await classifyRestoredTasks(tasks, { load: async () => { throw new Error('missing') }, storageRoot: root } as unknown as SessionCoordinator)
+    expect(terminalize).toHaveBeenCalledWith({ taskId: 'failed', outcome: 'error', error: 'child crashed' })
   } finally { await rm(root, { recursive: true, force: true }) }
 })
