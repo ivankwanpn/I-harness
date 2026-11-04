@@ -9,12 +9,20 @@ import { createInterface } from "node:readline"
 import { PassThrough } from "node:stream"
 import { append, createSession, type Session, type SessionEvent } from "@i-harness/core-session"
 import { createSessionService, createCliForkHost, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
-import { createSessionCoordinator, createForkSessionController, type SessionCoordinator } from "@i-harness/session-persistence"
+import { createForkSessionController, type SessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { HarnessClient } from "../src/client.ts"
+const createCoordinator = (directory: string) => composeJsonlTaskTransitionCoordinator(createJsonlBackend(directory), { lock: { enabled: true } }, taskDocumentStorageContract)
+
 import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createSdkServer, type SdkServer } from "../src/server.ts"
+
+// D-12: composed-coordinator fork capture takes ~20s per operation (JSONL
+// durability); keep the default gate but give these evidence tests room.
+vi.setConfig({ testTimeout: 30_000 })
 import {
   decodeFrame,
   encodeFrame,
@@ -42,7 +50,7 @@ async function handshake(server: SdkServer): Promise<void> {
 }
 
 it('public fork routes use actual capture once, reject raw/control inputs, and adopt before source access',async()=>{
-  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fork-')),c=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fork-')),c=createCoordinator(root)
   await c.create({sessionId:'source'});await c.append('source',[{type:'turn/start'},{type:'user/message',text:'actual SDK fork'},{type:'turn/end'}])
   const controller=createForkSessionController(c,createCliForkHost({workspace:root,coordinator:c})),raw=vi.fn(async()=>({sessionId:'raw-must-not-run'}))
   const input=new PassThrough(),output=new PassThrough(),client=new HarnessClient(output,input),rl=createInterface({input})
@@ -68,7 +76,7 @@ it('public fork routes use actual capture once, reject raw/control inputs, and a
   }finally{rl.close();await client.close();await server.close();await controller.close();await f.service.close();await c.close();await f.cleanup();await rm(root,{recursive:true,force:true})}
 })
 it.each(['prepare','target'] as const)('SDK close joins whole actual fork %s callback and repeated close joins the same flight',async phase=>{
-  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fclose-')),c=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fclose-')),c=createCoordinator(root)
   await c.create({sessionId:'source'});await c.append('source',[{type:'turn/start'},{type:'user/message',text:'actual close source'},{type:'turn/end'}])
   const host=createCliForkHost({workspace:root,coordinator:c}),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
   if(phase==='prepare'){const prepare=host.resolvePreparation.bind(host);host.resolvePreparation=async(...args)=>{entered.resolve();await release.promise;return prepare(...args)}}
@@ -90,7 +98,7 @@ it.each(['prepare','target'] as const)('SDK close joins whole actual fork %s cal
   }finally{release.resolve();await running?.catch(()=>{});rl.close();await client.close();await server.close();await controller.close();await f.service.close();await c.close();await f.cleanup();await rm(root,{recursive:true,force:true})}
 })
 it('SDK detach failure still joins the actual final target barrier before close rejects',async()=>{
-  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fdetach-')),c=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fdetach-')),c=createCoordinator(root)
   await c.create({sessionId:'source'});await c.append('source',[{type:'turn/start'},{type:'user/message',text:'actual detach source'},{type:'turn/end'}])
   const subscribe=f.service.onExecutionState!.bind(f.service)
   f.service.onExecutionState=listener=>{const off=subscribe(listener);return()=>{off();throw new Error('original notification detach failed')}}
