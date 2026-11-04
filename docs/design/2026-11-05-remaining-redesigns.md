@@ -190,3 +190,6 @@ lifecycle 已切到 composed fixture + control hooks：
 2. `managed-document.finish`：not-issued 時無條件 `staged.discardUnissued()`（issued 後也丟棄 staged group）。
 
 `closeOne` 診斷仍顯示 step 1 = **document close 回 `Managed facts require reconciliation`**，所以留下 debt 的不是 delivery source 或 discard 與否。下一步需在 document close 路徑列出實際的 `pending`／`recoveryHolds`／`sourceDrains` 條目（含 group 名稱或 action 來源），才能定位是哪個 fact group。
+
+**source-facts drain 實驗（2026-11-05，未採用）**：在 `drainSnapshot` 對 `not-issued` 直接 `remove(fact)`（視為沒有 durable debt）仍無法讓 restore-path 測試通過；teardown 仍以 `Required source facts need recovery` 失敗，表示該 record 的 reconcile outcome 不是 `not-issued`（很可能是 `unknown`，即先前 attempt 已 issued 但結果未知）。已還原，避免放寬真正需要 recovery 的情況。
+下一步：在同一位置列出每個 pending fact 的 `outcome.kind/code` 與 group 種類，確認是 delivery admission、team-input-admission 還是 task delivery 的 record。
