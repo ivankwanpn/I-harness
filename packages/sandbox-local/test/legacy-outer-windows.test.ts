@@ -17,8 +17,8 @@ it.skipIf(process.platform !== 'win32' || process.arch !== 'x64' || process.env.
     env: { ...command.env, IH_LEGACY_OUTER_QUALIFICATION: '1', IH_LEGACY_OUTER_ROOT: cwd } })
   appendFileSync(join(cwd, 'wrapper.jsonl'), JSON.stringify({ event: 'host-started', pid: child.pid, parentPid: process.pid, command }) + '\n')
   let stdout = '', stderr = '', expired = false, spawnError: unknown
-  child.stdout.on('data', b => { stdout += b; appendFileSync(join(cwd, 'stdout.txt'), b) })
-  child.stderr.on('data', b => { stderr += b; appendFileSync(join(cwd, 'stderr.txt'), b) })
+  child.stdout!.on('data', b => { stdout += b; appendFileSync(join(cwd, 'stdout.txt'), b) })
+  child.stderr!.on('data', b => { stderr += b; appendFileSync(join(cwd, 'stderr.txt'), b) })
   child.on('error', e => { spawnError = e })
   const watchdog = setTimeout(() => {
     expired = true
