@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createJobRecordStore, type JobRecordV1 } from '../src/job-record.ts'
-import { classifyRestoredTasks, inspectJobRecordProjection } from '../src/task/recovery.ts'
+import { classifyRestoredTasks, inspectJobRecordProjection, rebuildTaskDocumentFromJobRecords } from '../src/task/recovery.ts'
+import { createTaskRegistry } from '../src/index.ts'
 import { vi } from 'vitest'
 import type { TaskRecord, TaskRegistry } from '../src/task/types.ts'
 
@@ -74,5 +75,24 @@ it('recovers the terminal error reason from the job record (D-01 step 4)', async
     const tasks = { list: () => [task('failed', 'child', undefined)], terminalize } as unknown as TaskRegistry
     await classifyRestoredTasks(tasks, { load: async () => { throw new Error('missing') }, storageRoot: root } as unknown as SessionCoordinator)
     expect(terminalize).toHaveBeenCalledWith({ taskId: 'failed', outcome: 'error', error: 'child crashed' })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+
+it('rebuilds a missing task document from job records and restores it (D-01 e2e)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-job-e2e-'))
+  try {
+    const coordinator: SessionCoordinator = { storageRoot: root } as unknown as SessionCoordinator
+    const writer = createTaskRegistry({ coordinator, stateId: 'parent' })
+    const task = writer.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'helper', description: 'do work', prompt: 'p', agent: 'general', delivery: 'tool' })
+    writer.claim(task.id, 'child-session')
+    writer.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'ok' })
+    await writer.flushPersistence().catch(() => {})
+    const doc = await rebuildTaskDocumentFromJobRecords(coordinator, 'parent')
+    expect(doc).toBeDefined()
+    const reader = createTaskRegistry({ coordinator, stateId: 'parent' })
+    reader.restore(doc!)
+    expect(reader.get(task.id)).toMatchObject({ status: 'completed', outcome: 'completed', childSessionId: 'child-session', agentPath: 'helper', description: 'do work' })
+    await expect(classifyRestoredTasks(reader, coordinator)).resolves.toBe(0)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

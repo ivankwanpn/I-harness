@@ -17,6 +17,11 @@ export interface JobRecordV1 {
   updatedAt: number
   terminal?: { at: number; reason?: string }
   detail?: string
+  /** Projection metadata so a missing task document can be rebuilt faithfully. */
+  agentPath?: string
+  description?: string
+  agent?: string
+  delivery?: 'tool' | 'parent'
 }
 
 export interface JobLoadResult {
@@ -36,6 +41,11 @@ function validRecord(value: unknown): value is JobRecordV1 {
   if (row.childSessionId !== undefined && (typeof row.childSessionId !== 'string' || !row.childSessionId)) return false
   if (!STATUSES.has(row.status as TaskStatus) || !isTime(row.createdAt) || !isTime(row.updatedAt) || row.createdAt > row.updatedAt) return false
   if (row.detail !== undefined && (typeof row.detail !== 'string' || row.detail.length > 64 * 1024)) return false
+  for (const key of ['agentPath', 'description', 'agent'] as const) {
+    const field = row[key]
+    if (field !== undefined && (typeof field !== 'string' || field.length > 64 * 1024)) return false
+  }
+  if (row.delivery !== undefined && row.delivery !== 'tool' && row.delivery !== 'parent') return false
   if (row.terminal === undefined) return !TERMINAL.has(row.status as TaskStatus)
   if (!TERMINAL.has(row.status as TaskStatus)) return false
   const terminal = row.terminal as Record<string, unknown>

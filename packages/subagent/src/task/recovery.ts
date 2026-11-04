@@ -1,5 +1,5 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import type { TaskRegistry } from "./types.ts"
+import type { TaskRecord, TaskRegistry, TaskProtocolDocument } from "./types.ts"
 import { loadJobRecords } from "../job-record.ts"
 
 /** D-01 step 1: read-only projection integrity report. A task document is a
@@ -70,6 +70,30 @@ export async function reconcileTaskProjection(tasks: TaskRegistry, coordinator: 
     }
   }
   return issues
+}
+
+/** D-01 step 4 e2e: rebuild the legacy task document shape from job records
+ * when the mutable document is missing or unusable. The result restores through
+ * the normal v1 path, so ID counter seeding and validation still apply. */
+export async function rebuildTaskDocumentFromJobRecords(coordinator: SessionCoordinator, parentSessionId: string): Promise<TaskProtocolDocument | undefined> {
+  const loaded = await loadJobRecords(coordinator, parentSessionId)
+  if (loaded.records.length === 0) return undefined
+  const tasks = loaded.records.map(record => {
+    const outcome = record.terminal === undefined ? undefined
+      : record.status === 'completed' ? 'completed' as const
+        : record.status === 'cancelled' ? 'cancelled' as const
+          : record.status === 'error' ? 'error' as const : undefined
+    return {
+      id: record.jobId, parentSessionId: record.parentSessionId,
+      ...(record.childSessionId !== undefined ? { childSessionId: record.childSessionId } : {}),
+      agentPath: record.agentPath ?? record.jobId, description: record.description ?? '', prompt: '',
+      agent: record.agent ?? 'unknown', delivery: record.delivery ?? 'tool', status: record.status,
+      ...(outcome !== undefined ? { outcome } : {}),
+      ...(record.terminal?.reason !== undefined ? { error: record.terminal.reason } : {}),
+      timeCreated: record.createdAt,
+    } as TaskRecord
+  })
+  return { formatVersion: 1, tasks, notifications: [] }
 }
 
 export async function classifyRestoredTasks(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<number> {

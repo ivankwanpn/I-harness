@@ -75,7 +75,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     jobWrite = jobWrite.then(() => jobRecords.append({
       version: 1, jobId: task.id, parentSessionId: task.parentSessionId || opts.stateId!,
       ...(task.childSessionId !== undefined ? { childSessionId: task.childSessionId } : {}),
-      status, createdAt: task.timeCreated ?? now, updatedAt: now, ...extra,
+      status, createdAt: task.timeCreated ?? now, updatedAt: now,
+      agentPath: task.agentPath, description: task.description, agent: task.agent, delivery: task.delivery, ...extra,
     })).catch(error => { if (process.env.IH_JOB_RECORD_DEBUG) console.error('[job-record]', error) })
   }
   const requiredClaimRoutes=new WeakMap<TaskRecord,()=>void>()
