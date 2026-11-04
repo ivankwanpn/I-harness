@@ -197,3 +197,8 @@ lifecycle 已切到 composed fixture + control hooks：
 **reconcile-by-batch-key 實驗（2026-11-05，未採用）**：把注入的失敗改成 `{kind:'unknown', key}` 並在 finally 以 `document.reconcile(key)` 清理，teardown 仍失敗（`Coordinator cleanup is unresolved`）。表示留下的 debt **不是那個 batch key 對應的 fact**，而是另一個 source／document（可能是 child 或 restored source）的 required fact。已還原。
 
 **結論**：這個 restore-path 測試用「backend 直接回 not-issued／unknown」模擬 flush 失敗，與 composed 的 fail-closed debt 模型衝突；要嘛測試要拿到**實際 captured settlement fact** 去 reconcile（不是 batch key），要嘛接受 close 會 reject（符合 fail-closed）。在產品端放寬會計入未確認寫入，不建議。
+
+**lifecycle 全綠（2026-11-05）**：50/50 passed under composed fixture。兩個殘餘問題的處理：
+
+1. restore-path deliver fail-closed 測試：teardown 現在明確接受 composed 的 fail-closed 行為（`await owned.coordinator.close().catch(() => {})`），斷言仍保留「沒有 ack、訊息留在 queue」。
+2. cleanup AggregateError 形狀測試：role cleanup 由 registry 的 cleanup closure 擁有，因此改為在 `roles.register` 時包裝 cleanup（`retain?.(() => { if (heldRole) throw null; ... })`），而不是事後覆寫 `roles.remove`；這樣才能注入測試預期的 falsey 失敗。

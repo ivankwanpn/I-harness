@@ -600,12 +600,15 @@ describe("mountAgentTeams lifecycle", () => {
 
   it('cleanup ownership retains exact tool and role failures and continues independent phases', async () => {
     const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    let heldTool = true, heldRole = true
+    const unregister = tools.unregister.bind(tools)
+    tools.unregister = name => { if (name === 'send_message' && heldTool) throw undefined; return unregister(name) }
+    // The role cleanup closure is owned by the registry; wrap it to inject the
+    // exact falsey failure the test expects to be retained.
+    const registerRole = deps.subagents.roles.register.bind(deps.subagents.roles)
+    deps.subagents.roles.register = (role, retain) => registerRole(role, cleanup => retain?.(() => { if (heldRole) throw null; return cleanup?.() }))
     const handle = await mountAgentTeams(ctx, tools, deps)
     const originalTool = tools.get('send_message'), originalRole = deps.subagents.roles.get('teammate')
-    const unregister = tools.unregister.bind(tools), remove = deps.subagents.roles.remove.bind(deps.subagents.roles)
-    let heldTool = true, heldRole = true
-    tools.unregister = name => { if (name === 'send_message' && heldTool) throw undefined; return unregister(name) }
-    deps.subagents.roles.remove = name => { if (name === 'teammate' && heldRole) throw null; return remove(name) }
     try {
       const failure = await handle.unmount().catch(error => error)
       expect(failure.errors[0].errors).toEqual([undefined]); expect(failure.errors[1]).toBeNull()
@@ -974,7 +977,10 @@ describe("mountAgentTeams lifecycle", () => {
       expect(parentSession.events.filter((e) => e.type === "team/message/queued")).toHaveLength(1)
     } finally {
       await handle.unmount()
-      await owned.coordinator.close()
+      // The injected flush failure is an unknown write by design; composed
+      // teardown is fail-closed, so close may honestly report unresolved debt.
+      // The assertions above already prove the message was not acknowledged.
+      await owned.coordinator.close().catch(() => {})
     }
   })
 
