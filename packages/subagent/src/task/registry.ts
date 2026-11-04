@@ -91,7 +91,10 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const terminalFingerprint=(task:Readonly<TaskRecord>)=>JSON.stringify(captureTaskSnapshot(terminalData(task,true)))
   const retentionPrerequisites=new WeakMap<TaskRecord,()=>Promise<void>>()
   const retentionFlights = new WeakMap<TaskRecord, Promise<void>>()
-  const save = async () => { assertReady(); await persistence.save() }
+  // D-08: remember document-write failures so an admission drain can report
+  // them without failing the task path (job records remain durable).
+  const persistenceFailures: unknown[] = []
+  const save = async () => { assertReady(); try { await persistence.save() } catch (error) { if (persistenceFailures.length < 16) persistenceFailures.push(error); throw error } }
 
   function snapshot():TaskProtocolDocument {assertReady();return snapshotData()}
   function snapshotData(): TaskProtocolDocument {
@@ -444,6 +447,14 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     // Cleanup joins original initialization/writes even after work is retired.
     // Failed initialization retains its original rejection; no work is admitted.
     flushPersistence: async () => { await ready; await persistence.flush(); await jobWrite },
+    async flushPersistenceBestEffort() {
+      let error: unknown
+      try { await ready; await persistence.flush() }
+      catch (cause) { error = cause }
+      finally { await jobWrite }
+      if (error === undefined && persistenceFailures.length) error = persistenceFailures[0]
+      return error === undefined ? { ok: true } : { ok: false, error }
+    },
   }
   const requiredTasks=new WeakSet<TaskRecord>()
   associateRequiredTaskRegistry(registry,async(task,source,producer)=>{

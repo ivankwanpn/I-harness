@@ -169,7 +169,10 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       try {
         await source.bindRequiredTask(deps.tasks,task)
         const resultStore = await deps.tasks.prepareResult(task.id, exec, source.settlementHeld)
-        await deps.tasks.flushPersistence()
+        // D-08: the durable job record (and parent journal) already cover this
+        // spawn; a task-document write debt must not fail the spawn or block
+        // unrelated tasks. The strict flush stays available to close paths.
+        await (deps.tasks.flushPersistenceBestEffort?.() ?? deps.tasks.flushPersistence().then(() => ({ ok: true }), error => ({ ok: false, error })))
         const preparation = exec.resultConsumer !== 'code' && exec.session === deps.parentSession
           && exec.sessionId === deps.childSessions?.parentSessionId && deps.notificationNamespace && exec.callEventSeq !== undefined
           ? await deps.parentNotify?.prepareTaskDelivery?.({ sessionId: exec.sessionId!, namespace: deps.notificationNamespace, taskId: task.id, callSeq: exec.callEventSeq }) : undefined

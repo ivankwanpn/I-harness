@@ -26,6 +26,7 @@ export function createTaskStartupFacade(owner: TaskRegistry, assertWork: () => v
     async readResult(...args) { assertWork(); return owner.readResult(...args) },
     async save() { assertWork(); await owner.save() },
     async flushPersistence() { await owner.flushPersistence() },
+    async flushPersistenceBestEffort() { return owner.flushPersistenceBestEffort() },
   }
   associateTaskSaveFacade(facade, owner)
   forwardColdBindings(facade, owner)
