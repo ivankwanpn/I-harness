@@ -515,7 +515,10 @@ describe("shell output retention", () => {
     const bash = tools.find((t) => t.name === "bash")!
     const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; truncated?: { stdoutBytes: number; stderrBytes: number } }
     expect(res.stdout.length).toBeLessThanOrEqual(100)
-    expect(res.truncated).toEqual({ stdoutBytes: 900, stderrBytes: 900 })
+    expect(res.stdout).toContain("output omitted")
+    // The marker is reserved from the budget, so the omitted count grows by the
+    // marker's bytes (24) while the retained text still fits maxBytes.
+    expect(res.truncated).toEqual({ stdoutBytes: 924, stderrBytes: 924 })
   })
 
   it("small output is unchanged (no truncated key)", async () => {

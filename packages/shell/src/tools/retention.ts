@@ -65,11 +65,34 @@ export function createResultRetention(deps: Pick<ShellToolDeps, "retention">) {
       const omittedForNotice = rs.truncated ? rs.omittedBytes : execTruncated ? 0 : 0
       stdout = rs.text + "\n" + spillNotice(omittedForNotice, spillPathForNotice)
     }
+    let stderr = re.text
+    let stdoutBytes = rs.omittedBytes, stderrBytes = re.omittedBytes
+    const marker = "\n…(output omitted)…\n", markerBytes = Buffer.byteLength(marker), budget = deps.retention!.maxBytes ?? 64_000
+    const retainWithMarker = (text: string) => {
+      // Re-retain with the marker reserved so the tool result still respects
+      // the configured byte budget (A-10 keeps the old size invariant).
+      const retry = createTextRetainer({ maxBytes: Math.max(0, budget - markerBytes), mode: deps.retention!.mode })
+      retry.push(text)
+      return retry.finish()
+    }
+    if (spillPathForNotice === undefined && (rs.truncated || execTruncated)) {
+      // A-10: without a spill file there was NO trace of the gap — a model could
+      // read a severed stack trace/JSON as complete output. Always leave a
+      // visible marker when bytes were omitted.
+      const trimmed = retainWithMarker(result.stdout)
+      stdout = trimmed.text + marker
+      stdoutBytes = trimmed.omittedBytes
+    }
+    if (re.truncated || result.truncated?.stderr === true) {
+      const trimmed = retainWithMarker(result.stderr)
+      stderr = trimmed.text + marker
+      stderrBytes = trimmed.omittedBytes
+    }
     return bind({
       stdout,
-      stderr: re.text,
+      stderr,
       exitCode: result.exitCode,
-      ...(truncated ? { truncated: { stdoutBytes: rs.omittedBytes, stderrBytes: re.omittedBytes } } : {}),
+      ...(truncated ? { truncated: { stdoutBytes, stderrBytes } } : {}),
       ...(result.sandboxDenial === undefined ? {} : { sandboxDenial: result.sandboxDenial }),
     })
   }

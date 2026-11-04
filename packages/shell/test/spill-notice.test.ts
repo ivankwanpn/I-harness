@@ -77,7 +77,9 @@ describe("shell spill notice", () => {
       stdout: string
       truncated?: { stdoutBytes: number; stderrBytes: number }
     }
-    expect(res.truncated).toEqual({ stdoutBytes: 0, stderrBytes: 900 })
+    // The stderr marker is reserved from the byte budget (24 bytes), so the
+    // omitted count grows accordingly while stdout stays untouched.
+    expect(res.truncated).toEqual({ stdoutBytes: 0, stderrBytes: 924 })
     expect(res.stdout).toBe("hi") // 未截斷 → 不加 notice、不動內容
     expect(res.stdout).not.toContain("stored at:")
     // 沒有任何 spill 檔被建立（root 仍為空）
