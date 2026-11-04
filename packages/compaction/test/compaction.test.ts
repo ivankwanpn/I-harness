@@ -31,10 +31,12 @@ describe("compaction config", () => {
 })
 
 describe("token estimation", () => {
-  it("approxTokens is ceil(chars / 4)", () => {
+  it("approxTokens uses the shared density (ASCII /4, non-ASCII by UTF-8 bytes)", () => {
     expect(approxTokens("abcd")).toBe(1)
     expect(approxTokens("abcde")).toBe(2)
     expect(approxTokens("")).toBe(0)
+    // A-02: two CJK characters are 6 UTF-8 bytes, not 2 UTF-16 units.
+    expect(approxTokens("角色")).toBe(6)
   })
 
   it("estimates an image part at the fixed token count", () => {

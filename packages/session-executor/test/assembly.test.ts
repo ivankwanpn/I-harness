@@ -173,7 +173,7 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
-  it("M33: the assembly prices the agent's overhead as systemPrompt/4 + schemas JSON/4 (chars-4 estimator, scheduling-only)", async () => {
+  it("M33: the assembly prices the agent's overhead with the shared token density (scheduling-only)", async () => {
     agentCalls.deps.length = 0
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),

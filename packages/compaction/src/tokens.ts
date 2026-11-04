@@ -1,20 +1,20 @@
 import type { LLMContentPart, SessionView as Session } from "@i-harness/core-session"
-import { activeTokens as meterActiveTokens, IMAGE_TOKEN_ESTIMATE } from "@i-harness/token-meter"
+import { activeTokens as meterActiveTokens, estimateTextTokens, IMAGE_TOKEN_ESTIMATE } from "@i-harness/token-meter"
 
 // M15: single source of truth moved to @i-harness/token-meter; kept here as a
 // re-export so the M14 public surface is unchanged.
 export { IMAGE_TOKEN_ESTIMATE }
 
-// M15: content-only single-blob estimate — string → ceil(chars/4); parts →
-// Σ (text: ceil/4, image: IMAGE_TOKEN_ESTIMATE). NO block/role overhead.
-// Consumers (region.ts shadow selection, summarizer.ts trimming) price single
-// blobs, not full messages; estimateContent (token-meter) is the full-message
-// price used by activeTokens.
+// Content-only single-blob estimate — string → estimateTextTokens; parts →
+// Σ (text: estimateTextTokens, image: IMAGE_TOKEN_ESTIMATE). NO block/role
+// overhead. A-02: it must use the same density as every other estimate (ASCII
+// /4, non-ASCII by UTF-8 bytes); the old ceil(length/4) counted UTF-16 units
+// and undercounted CJK content by ~3x.
 export function approxTokens(content: string | LLMContentPart[]): number {
-  if (typeof content === "string") return Math.ceil(content.length / 4)
+  if (typeof content === "string") return estimateTextTokens(content)
   let total = 0
   for (const part of content) {
-    total += part.type === "text" ? Math.ceil(part.text.length / 4) : IMAGE_TOKEN_ESTIMATE
+    total += part.type === "text" ? estimateTextTokens(part.text) : IMAGE_TOKEN_ESTIMATE
   }
   return total
 }
