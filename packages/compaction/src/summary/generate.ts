@@ -15,7 +15,7 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
   const { maxTokens, minSummaryChars, inherited } = settings
   const check = () => { source.signal?.throwIfAborted(); if (!source.current()) throw Object.assign(new Error('Selected summary source changed'), { code: 'CONTEXT_INPUT_STALE' }); limits.validateBeforeTransport?.() }
   const pending: Piece[] = [{ groups: source.groups }], covered: string[] = []
-  let running: string | undefined, portable = !inherited, sizing = source.attempts.summarySizingCorrections ?? 0, corrective = false
+  let running: string | undefined, portable = !inherited, malformed = 0, sizing = source.attempts.summarySizingCorrections ?? 0, corrective = false
   if (maxTokens * 4 < minSummaryChars) throw new SummaryBlockedError('retention-policy', { chars: maxTokens * 4, floor: minSummaryChars })
   const maximum = Math.min(8, source.maxCalls ?? 8, limits.maxSummaryCalls ?? 8)
   if (!Number.isSafeInteger(maximum) || maximum < 1) throw new SummaryBlockedError('call-policy')
@@ -78,10 +78,8 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
     if (!result.chars) throw new Error('compaction: summarizer returned empty output')
     const checkpoint = inspectCheckpoint(result.text)
     if (result.overflow || result.chars < minSummaryChars || result.chars > maxTokens * 4 || checkpoint.kind !== 'complete') {
-      // Per PAGE, not per generation: a shared counter meant page 2+ got no
-      // retry at all. The counter is reset when a page is accepted.
-      const retries = piece.malformed ?? 0
-      piece.malformed = retries + 1
+      const retries = page ? malformed++ : (piece.malformed ?? 0)
+      piece.malformed = (piece.malformed ?? 0) + 1
       if (retries >= 1) throw new SummaryBlockedError(result.overflow || result.chars < minSummaryChars || result.chars > maxTokens * 4 ? 'retention-output' : 'checkpoint-format', { chars: result.chars, floor: minSummaryChars, limit: maxTokens * 4 })
       corrective = true; continue
     }
@@ -90,7 +88,7 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
     if (page && !result.observation && prepared.candidate.measurement.input.coverage !== 'neutral-only') throw new SummaryBlockedError('opaque')
     if (result.observation) { await limits.onPieceAccepted?.(result.observation); check() }
     check()
-    if (page) { piece.pages!.accept(page); piece.malformed = 0 }
+    if (page) piece.pages!.accept(page)
     running = checkpoint.text; corrective = false
     if (!piece.pages || piece.pages.complete) { covered.push(...groups.map(group => group.id)); pending.shift() }
   }
