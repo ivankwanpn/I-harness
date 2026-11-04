@@ -3,6 +3,16 @@ import { lstatSync, realpathSync } from "node:fs"
 import { isAbsolute, join, parse, relative, resolve } from "node:path"
 import type { PreparedToolIdentity } from "@i-harness/core-tools"
 
+/**
+ * Implementation identity for remembered approvals. This used to hash the
+ * `Function.prototype.toString()` of seventeen functions on every
+ * `createFsTools()` call: expensive, unstable across bundlers/minifiers (a
+ * build-tool change invalidated every remembered approval) and able to
+ * collapse to "[native code]" for proxied functions. Behaviour only changes
+ * when someone changes the code, so an explicit version — bumped in review —
+ * is both stable and auditable.
+ */
+export const FS_TOOLS_IMPLEMENTATION = "fs-tools-v1"
 /** Permission evidence names the real workspace and every target ancestor.
  * No traversal, symlinks/junctions, special files or missing parent chains. */
 export function filesystemApprovalIdentity(workspace: string, path: string, operation: "read" | "write" | "edit" | "list_dir", implementation: string): PreparedToolIdentity | undefined {

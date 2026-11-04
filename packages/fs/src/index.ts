@@ -1,5 +1,5 @@
 import { readFile, readdir, mkdir } from "node:fs/promises"
-import { filesystemApprovalIdentity } from "./approval-identity.ts"
+import { FS_TOOLS_IMPLEMENTATION, filesystemApprovalIdentity } from "./approval-identity.ts"
 import { resolve, relative, isAbsolute, dirname } from "node:path"
 import { nativeMutation, nativeOperation, nativePlanValidationFailure, isInstructionReplan, declareInstructionReplan, declareToolResultOutcome, type InstructionReplanError } from "@i-harness/core-tools"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
@@ -250,7 +250,7 @@ function decodeUtf8Safely(bytes: Uint8Array): string | undefined {
 // declaration can move by editing another's.
 
 export function createFsTools(deps: FsToolDeps): Tool[] {
-  const implementation = [createFsTools, fileReadPage, filesystemApprovalIdentity, resolvePath, resolveWriteCall, guardWrite, writeFileAtomic, assertSnapshotFresh, normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit, parsePatch, applyPatch, softFail].map((fn) => fn.toString()).join("\n")
+  const implementation = FS_TOOLS_IMPLEMENTATION
   const read: Tool<FileReadArgs, FileReadPage | FsToolFailure> = {
     name: "read",
     description: deps.readPolicy ? "Read a file within a final JSON byte budget. Follow next_offset_bytes with the same digest to retrieve more; changed sources require restarting." : "read a file",
