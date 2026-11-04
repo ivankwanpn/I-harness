@@ -51,6 +51,13 @@ export class TaskPersistence {
   #pending: OwnedTaskSave[] = []
   #bindingAdmitted = false
   #flushing: Promise<void> | undefined
+  // D-01 write-behind: the legacy/non-owned document is a projection, so bursts
+  // of saves coalesce into one write of the latest snapshot. Strict/owned paths
+  // keep their ordered, capturable writes.
+  #coalesceWaiters: Array<{ resolve: () => void; reject: (cause: unknown) => void }> = []
+  #coalesceScheduled = false
+  #coalesceRunning = false
+  #coalesceFlight: Promise<void> | undefined
   constructor(readonly coordinator: SessionCoordinator | undefined, readonly stateId: string | undefined, readonly strict: boolean, readonly snapshot: () => TaskProtocolDocument, readonly owned?: OwnedTaskContext, requiredCapture?:(authority:object)=>RequiredSaveCapture) {this.#requiredCapture=requiredCapture}
   save(): Promise<void> {
     if (!this.coordinator || !this.stateId) return Promise.resolve()
@@ -59,6 +66,7 @@ export class TaskPersistence {
     if (this.owned) {
       try { if (this.snapshot().formatVersion === 3) return this.captureOwned(false).done } catch (cause) { return Promise.reject(cause) }
     }
+    if (!this.strict && !this.owned) return this.#enqueueCoalesced()
     const document = this.strict ? this.snapshot() : undefined
     const next = this.#chain.then(() => {
       const payload = this.strict ? document! : this.snapshot()
@@ -107,6 +115,44 @@ export class TaskPersistence {
       this.#pending.push(handle); this.#last = handle; this.#chain = done.catch(() => {}); return handle
     }
   }
+  #enqueueCoalesced(): Promise<void> {
+    const done = new Promise<void>((resolve, reject) => { this.#coalesceWaiters.push({ resolve, reject }) })
+    this.#scheduleCoalesced()
+    return done
+  }
+  #scheduleCoalesced(): void {
+    if (this.#coalesceScheduled || this.#coalesceRunning || this.#coalesceWaiters.length === 0) return
+    this.#coalesceScheduled = true
+    const flight = new Promise<void>(resolve => { queueMicrotask(() => { void this.#drainCoalesced().finally(resolve) }) })
+    this.#coalesceFlight = flight
+    void flight.finally(() => { if (this.#coalesceFlight === flight) this.#coalesceFlight = undefined })
+  }
+  async #drainCoalesced(): Promise<void> {
+    this.#coalesceScheduled = false
+    if (this.#coalesceRunning || this.#coalesceWaiters.length === 0) return
+    this.#coalesceRunning = true
+    const waiters = this.#coalesceWaiters
+    this.#coalesceWaiters = []
+    try {
+      const payload = this.snapshot()
+      if (payload.formatVersion === 3) throw new Error('Task v3 persistence requires original eligible parent')
+      await this.coordinator!.putDocument(taskDocKey(this.stateId!), payload)
+      for (const waiter of waiters) waiter.resolve()
+    } catch (error) {
+      for (const waiter of waiters) waiter.reject(error)
+    } finally {
+      this.#coalesceRunning = false
+      this.#scheduleCoalesced()
+    }
+  }
+  async #coalesceIdle(): Promise<void> {
+    for (;;) {
+      const flight = this.#coalesceFlight
+      if (flight) await flight.catch(() => {})
+      if (this.#coalesceFlight === undefined && this.#coalesceWaiters.length === 0 && !this.#coalesceScheduled) return
+      await new Promise<void>(resolve => setImmediate(resolve))
+    }
+  }
   flush(): Promise<void> {
     if (this.#flushing) return this.#flushing
     const flight = this.flushOwned()
@@ -118,6 +164,7 @@ export class TaskPersistence {
     for (;;) {
       const pending = this.#chain
       await pending
+      await this.#coalesceIdle()
       if (pending === this.#chain) {
         if (this.#debt) throw new Error('Owned task save requires resolution', { cause: this.#debtCause })
         if (this.#pending.length) throw new Error('Owned task save requires resolution')
