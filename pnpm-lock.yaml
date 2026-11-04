@@ -702,6 +702,9 @@ importers:
       '@i-harness/text-diff':
         specifier: workspace:*
         version: link:../text-diff
+      koffi:
+        specifier: ^3.1.0
+        version: 3.1.6
 
   packages/fs-lock:
     dependencies:

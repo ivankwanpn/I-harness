@@ -8,6 +8,7 @@
   "dependencies": {
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/sandbox": "workspace:*",
-    "@i-harness/text-diff": "workspace:*"
+    "@i-harness/text-diff": "workspace:*",
+    "koffi": "^3.1.0"
   }
 }

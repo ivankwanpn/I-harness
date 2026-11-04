@@ -548,3 +548,4 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
   }
   return [read, edit, write, apply_patch, list_dir]
 }
+export { protectWindowsPath } from "./windows-protection.ts"

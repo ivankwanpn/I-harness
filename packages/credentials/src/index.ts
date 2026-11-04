@@ -28,7 +28,7 @@
 
 import { chmodSync, readFileSync } from "node:fs"
 import { currentDiagnostics } from "@i-harness/diagnostics"
-import { writeFileAtomic } from "@i-harness/fs"
+import { protectWindowsPath, writeFileAtomic } from "@i-harness/fs"
 
 /** Source of a configured value; "file" is also the projected write target
  * of an unconfigured ref (a future write would land in the file). */
@@ -276,6 +276,17 @@ async function persistRefs(path: string, refs: Record<string, string>): Promise<
   try {
     chmodSync(path, 0o600)
   } catch {
-    // win32: Node ignores POSIX mode bits; Windows ACLs apply instead.
+    // win32: Node ignores POSIX mode bits; the DACL below applies instead.
+  }
+  if (process.platform === "win32") {
+    // Without this the key document inherits the directory ACL (the mode above
+    // is a no-op there). Best-effort: a filesystem that cannot carry a DACL must
+    // not make saving a key fail, but the degradation is reported.
+    try { await protectWindowsPath(path) } catch (error) {
+      const message = `[credentials] credential file ${path} could not be ACL-protected: ${error instanceof Error ? error.message : String(error)}`
+      const d = currentDiagnostics()
+      if (d === undefined) console.warn(message)
+      else d.child("config").warn(message)
+    }
   }
 }
