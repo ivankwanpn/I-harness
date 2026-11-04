@@ -7,6 +7,15 @@ import { foldTeam, teamLedger } from "@i-harness/agent-team"
 import { taskDocKey, childResultPreview } from "@i-harness/subagent"
 import type { SubagentScope } from "./scope.ts"
 import { object, records, jobRecords, status, errorText, MAX_LINEAGE, CONTROL_REASON, PLAN_REASON, type AgentRecord, type DesktopSubagentCatalog, type DesktopSubagentRow } from "./types.ts"
+
+/** Task documents are persisted in three shapes; v3 is what the current writer
+ * produces. Rejecting it invalidated the whole catalog (every subagent row
+ * showed "unavailable" and the panel banner read "metadata is invalid"). */
+export function supportedTaskDocument(document: Record<string, unknown>): boolean {
+  const version = document.formatVersion
+  return (version === 1 || version === 2 || version === 3) && Array.isArray(document.tasks)
+}
+
 export function createSubagentCatalog(coordinator: SessionCoordinator, service: SessionService, scope: SubagentScope) {
   const { parent, childVisible, snapshot, live, authority, liveChild } = scope
   async function list(parentId: string): Promise<DesktopSubagentCatalog> {
@@ -54,7 +63,7 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
       try {
         const raw = await coordinator.getDocument(taskDocKey(ownerId)), doc = object(raw)
         if (raw !== undefined && !doc) throw new Error('Subagent task metadata is invalid')
-        if (doc && ((doc.formatVersion !== 1 && doc.formatVersion !== 2) || !Array.isArray(doc.tasks))) throw new Error("Subagent task metadata is invalid")
+        if (doc && !supportedTaskDocument(doc)) throw new Error("Subagent task metadata is invalid")
         for (const raw of doc?.tasks as unknown[] ?? []) {
           const task = object(raw)
           if (typeof task?.childSessionId !== "string" || typeof task.agentPath !== "string") continue
