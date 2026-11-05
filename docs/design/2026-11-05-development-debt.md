@@ -528,7 +528,32 @@ node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence test
 node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exec vitest run test/managed-native-replay.test.ts test/delete-owned.test.ts
 ```
 
-## 交接：2026-11-05 round 7
+## 交接：2026-11-05 round 32
+
+**已綠的 gate（可當 CI 必過項）**：
+- `pnpm -r --no-bail typecheck`：82 packages 全綠（round 7 量測）。
+- `node scripts/audit/check-package-boundaries.mjs --gate`：147/147 PASS。
+- `node scripts/audit/check-reachability.mjs --gate`：**PASS（0 NEW，381 rows，無 inert）**，
+  由 round 6 的 70 NEW 經 17 批移除（~50 筆 export）與 dated allowlist 收斂。
+
+**測試債務現況**：
+- `session-persistence-jsonl` 全套 107 failed / 750 passed / 26 紅檔（round 10 量測；
+  P18 修正後此檔再 +1，全套未重跑）。
+- 三個 A 類檔的語義紅共 25 筆：`bootstrap-physical` 12、`bootstrap-capture-physical` 4、
+  `current-context-predecessors` 9（逐條形狀見上文第 4 項）。
+- 其餘 jsonl 紅檔：`task-transition-*` header/close 群、`semantic-publication` 24、
+  predecessor 群（format8/11/13、codec2、child-bootstrap）、`archive-stream` 1 個 hang。
+
+**第 5 項量測進度**：`session-executor` owned-* 19/19 檔全綠（30–140s/檔，Windows
+關閉 fileParallelism）；`token-meter` 53/53、`llm-seam` 188/188 綠。未量：
+`session-executor` 其餘分組（private-*/task-*/result-* 等，共 223 檔）、
+`desktop-gateway`（61 檔）、`subagent`、`agent-team`。
+
+**下一輪建議順序**：第 4 項語義紅（先 `bootstrap-capture` P09/P10 與 P14 release 計數，
+再 `bootstrap-physical` outcome 差異），然後分組量測其餘套件，最後把 `verify:all`
+full job 當 gate。
+
+## 交接：2026-11-05 round 7（歷史）
 
 待辦第 1、2 項完成，第 3 項（A 類）11／11 檔全部遷移（8 檔全綠；三個 bootstrap／
 predecessor 檔只剩語義紅，歸第 4 項）。`createJsonlBackend` 另有通用 `wrap` seam、
