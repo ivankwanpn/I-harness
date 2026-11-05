@@ -670,6 +670,16 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
   through the managed fact path, the child's run appends through the same document, and the durable session reads back with the
   seed prefix plus the admitted input. No product code changed to make it pass — the facade is compatible.
 
+## Plan 4b (implemented 2026-11-05): the product verifier accepts an SCL birth
+
+- `packages/subagent/test/child-birth-verification.test.ts` feeds a one-commit birth into the product's own
+  `verifyOriginalChildBirth` (the same gate the real task-birth path runs before handing the child to the caller).
+  It passes with the exact checks that matter: header `origin`/`subagentProtocolVersion`/`parentSession`/`seedLength`,
+  `semanticSeed` seed/manifest/request digests, receipt `seedLength`/`manifestDigest`/initial commitment,
+  completion-frame owner and seq range, the `session/bootstrap` event at `completion.key.firstSeq`, the
+  `agent/input/admitted` event at `initial.seq` (text/intent/delivery/provenance), `document.assertReady()` and
+  the initial-input digest commitment.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
