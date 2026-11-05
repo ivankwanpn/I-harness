@@ -960,6 +960,13 @@ files running in parallel the 1 s budget was too short; the selection owner now 
 through the real host (`updateMeta` / `snapshot` / `list` / `load`), including the archived list and the visible list
 invariant.
 
+## Plan 18 (implemented 2026-11-05): CLI sessions command on the commit log
+
+`i-harness sessions list/show` used the legacy JSONL coordinator unconditionally, so an SCL store looked empty. The command now
+selects the commit-log coordinator when `IH_SESSION_STORE=commit-log` (with the writer lease enabled; reads take no lease).
+`listStoredSessions` already works through `list`/`profile`/`snapshot`; the artifact mtime falls back to `createdAt` when the
+legacy file is absent. Test: seed an SCL session and list it through `runSessionsCommand`.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
