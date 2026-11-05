@@ -51,12 +51,19 @@ export function createConversationQuery(coordinator: SessionCoordinator, query: 
     lineage,
     async search(text, options = {}) {
       const limit = Math.min(options.limit ?? 20, 100)
-      const ids = options.sessionId ? [options.sessionId] : await coordinator.list()
+      const listed = options.sessionId ? [options.sessionId] : await coordinator.list()
+      // `subtreeOf` restricts the search to a session and its descendants; the
+      // per-session query is then asked without the filter.
+      const subtree = options.subtreeOf
+        ? new Set([options.subtreeOf, ...(await lineage(options.subtreeOf, { direction: 'descendants', depth: 16 })).map(node => node.sessionId)])
+        : undefined
+      const ids = subtree ? listed.filter(id => subtree.has(id)) : listed
+      const { subtreeOf: _subtreeOf, ...perSession } = options
       const hits = []
       for (const sessionId of ids) {
         const { meta } = await coordinator.profile(sessionId)
         if (!await visible(sessionId, meta)) continue
-        const direct = await query.search(text, { ...options, sessionId, limit })
+        const direct = await query.search(text, { ...perSession, sessionId, limit })
         if (direct.length || !fallback) { hits.push(...direct); continue }
         hits.push(...await fallback(sessionId, text, limit))
       }

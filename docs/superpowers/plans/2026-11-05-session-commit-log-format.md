@@ -1190,6 +1190,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 77 (implemented 2026-11-06): subtree-restricted search
+
+`createConversationQuery.search` now honours `subtreeOf`: it resolves the session and its descendants through the lineage
+implementation and restricts the candidate ids before asking the per-session query (the `subtreeOf` option is stripped from the
+per-session call). `session-query-subtree.test.ts` shows the unfiltered search returns all three sessions and
+`{subtreeOf:"root"}` returns only `root` and `child`.
+
 ## Plan 76 (implemented 2026-11-06): coordinator lineage for session search
 
 The same wiring now supplies a `lineage` implementation for commit-log stores: `createCoordinatorLineage` walks `parentSession` from
