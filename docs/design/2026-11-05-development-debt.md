@@ -517,8 +517,8 @@ round 28/29 量了兩個小套件：
 - `instructions`：**1 檔紅 / 12 檔綠（13 檔），1 failed / 140 passed（141 tests）**。
 - `runtime-context`：**1 檔紅 / 3 檔綠（4 檔），1 failed / 21 passed（22 tests）**。
   紅點名稱已補記：`instructions` = **「actual W1 128-key aggregate capacity bounds a new
-  port without cancelling an accepted producer」→ Test timed out in 5000ms**（時間類，與
-  jsonl 的 timeout 債同類）；`runtime-context` = **「original-only management settles actual
+  port without cancelling an accepted producer」→ Test timed out in 5000ms**（時間類；
+  round 65 已加 `packages/instructions/vitest.config.ts`（30s），**13/13 檔、141/141 全綠**）；`runtime-context` = **「original-only management settles actual
   absent without getter/action/retain or publication replay」→ resolved undefined instead
   of rejecting**（語義類）。
 - `llm-seam`：**22 檔 / 188 tests，1 紅**（21 檔綠）。唯一紅是 `terminal-ownership-contract.test.ts`：它期待 private SDK ownership bridge 的 production importer 只有 `['.', './internal/bedrock-terminal']`，實際收到 4 個（已有額外檔案 import）。這是未量測套件既有紅，列入第 5 項待修。
