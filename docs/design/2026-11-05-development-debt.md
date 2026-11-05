@@ -534,6 +534,8 @@ round 120：`image-validation` **1 檔 / 19 tests 全綠**、`attachment` **2 �
 round 125：`guard-timeout` **1 檔 / 7 tests 全綠**；`guard-retry` **1 檔紅 / 9 passed（10）**——紅點
   **round 126 已修**：`guard-retry` 在 `sleep(backoff)` **之後**沒有再檢查 caller signal，
 round 127：`guard-approval` **11 檔 / 107 tests 全綠**；`guard-repeat-tool` **1 檔紅 / 8 passed（9）**
+  **round 128 已修**：把 `entered`／`release` 提到建構前，掛鉤改走 `wrapOwnedBatch` 並用 composed
+  建構子 → `guard-repeat-tool` **2/2 檔、9/9 tests 全綠**。
   ——紅點「awaits the actual owned repeat-feedback receipt for the exact observed session」原為
   `TASK_TRANSITION_UNSUPPORTED`（legacy 建構子），遷到 composed 後變成
   `PROCESS_READ_UNAVAILABLE`（建構後 patch backend），即與 `code-mode` 同一類、需同一個掛鉤決策。

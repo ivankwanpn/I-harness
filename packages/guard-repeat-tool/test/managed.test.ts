@@ -3,24 +3,24 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { decodeFactBatch } from '@i-harness/core-session'
 import { createRepeatToolGuard } from '../src/index.ts'
 
 it('awaits the actual owned repeat-feedback receipt for the exact observed session', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-repeat-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'user/message' && event.source?.kind === 'plugin')) { entered.resolve(); await release.promise }
+    return append(...args)
+  } }), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext()
   ctx.mount(createRepeatToolGuard(ctx, { thresholds: [2], factsFor: view => {
     expect(view).toBe(document.view)
     return { async feedback(event) { const action = document.beginAction(); try { return await action.facts.agent.feedback(event) } finally { action.finish() } } }
   } }))
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'user/message' && event.source?.kind === 'plugin')) { entered.resolve(); await release.promise }
-    return actual(...args)
-  }
   try {
     await ctx.emit('agent/post-tool', { name: 'read', args: { path: 'a' }, session: document.view })
     let returned = false
