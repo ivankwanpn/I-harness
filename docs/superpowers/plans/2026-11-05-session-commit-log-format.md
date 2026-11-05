@@ -1200,6 +1200,18 @@ gateway native context rather than the host log.
 
 
 
+## Plan 96 (diagnosed 2026-11-06): archive after a turn is refused on both stores
+
+Isolation with three fresh hosts (prompt → archive, prompt → session search → archive, prompt → context read → archive) shows the
+failure on **every** variant, and the same three variants fail identically on the legacy `jsonl` store — so it is not a commit-log
+regression and not caused by search/context: any session that has run a turn cannot be archived.
+
+The message comes from `session-management-fence.assertOpen`, which throws only when `blocked` (set for the duration of an
+`exclusive` operation) or `retired` (delete) contains the id. A management `exclusive` therefore appears to be in flight at archive
+time even though the test issued none, or a prior one never cleared its `blocked` flag. The management test archives a session that
+never ran a turn and passes, so the turn path is what leaves the fence in that state. Next: instrument `exclusive` entry/exit (and the
+`serial` queue) to find the stuck operation, then re-add the archived-context rejection test.
+
 ## Plan 95 (found, not fixed): archive refuses after a search in the same host
 
 In the search host test, after a prompt, `session/list`, `desktop/session/search` and the context-picker calls, archiving the same

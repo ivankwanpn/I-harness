@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 353（archive 卡住隔離）**：三種序列（prompt→archive、prompt→search→archive、prompt→context→archive）在 SCL 與 legacy
+> 都一樣失敗——不是 SCL 回歸；任何跑過 turn 的 session 都無法 archive。錯誤來自 fence.assertOpen（blocked 或 retired），
+> 表示 archive 當下仍有 exclusive 在飛或旗標未清除。待 instrument exclusive。
 > **round 352（archive 卡住）**：prompt→list→search→context 之後，manage/batch archive 都回 `Session management is in progress or
 > session is deleted`，profile 沒有 archived。已回退探測；待隔離是哪個呼叫讓 session 變成 busy。
 > **round 351（context files／project guard）**：files 模式命中 `notes.txt`；跨專案 session reference 被拒
