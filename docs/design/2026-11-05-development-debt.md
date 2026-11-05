@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 355（archived context）**：archive 後 `context/search`（sessions）回空、`context/read` 被拒（outside the current project）。
 > **round 354（archive 修正）**：`exclusive` 對自己的 async context 發 admission token，`assertOpen` 對 `blocked` 尊重該 grant
 > （retired 仍全拒）；archive-after-turn 與 restore 測試通過。
 > **round 353（archive 卡住隔離）**：三種序列（prompt→archive、prompt→search→archive、prompt→context→archive）在 SCL 與 legacy

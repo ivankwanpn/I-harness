@@ -42,5 +42,9 @@ it('searches a commit-log session transcript', async () => {
     const ctxRead = await call('desktop/context/read', { reference: { kind: 'session', workspaceId: workspace, sessionId: item.sessionId, seq: item.seq } }) as { text: string; truncated: boolean }
     expect(ctxRead.text).toContain('unique-search-token')
     expect(ctxRead.truncated).toBe(false)
+    await call('desktop/session/manage', { sessionId: created.sessionId, action: 'archive' })
+    const archivedSearch = await call('desktop/context/search', { contextKind: 'sessions', query: 'unique-search-token', offset: 0 }) as { items: { sessionId: string }[] }
+    expect(archivedSearch.items).toEqual([])
+    await expect(call('desktop/context/read', { reference: { kind: 'session', workspaceId: workspace, sessionId: item.sessionId, seq: item.seq } })).rejects.toThrow(/outside the current project/)
   } finally { await host.close() }
 }, 90000)

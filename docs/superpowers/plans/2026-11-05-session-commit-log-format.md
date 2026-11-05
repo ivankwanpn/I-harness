@@ -1200,6 +1200,11 @@ gateway native context rather than the host log.
 
 
 
+## Plan 98 (implemented 2026-11-06): archived sessions leave the context picker
+
+With archive working again, the picker behaves correctly: after archiving, `context/search` in `sessions` mode returns no items and
+`context/read` for the archived reference is refused with `Session reference is outside the current project`.
+
 ## Plan 96 (diagnosed 2026-11-06): archive after a turn is refused on both stores
 
 Fixed (2026-11-06): the stack showed the failure was the archive `exclusive` operation retaining the managed runtime for cold rewind
