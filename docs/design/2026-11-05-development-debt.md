@@ -2,6 +2,10 @@
    **round 145 已遷移** 3 個測試檔（`admitted-context`、`cancel-stop`、`result-page-cli`）→
    **round 161**：`result-page`、`session-context` 亦遷移 → **9 failed / 110 passed（119）**。
 round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 timeout 露出真因
+  round 163 查證：`cancel-stop.test.ts` 的兩個 hook（append/reconcile）是**在** `service.submit(...)`
+  **之後**才安裝的，正是 round 135 的 `armed` 情境。遷移步驟：把 `entered/release/unknown/allow/key/
+  reconciles/closeKeys/receipts` 宣告提前到 `createJsonlBackend` 之前、加 `armed=false`、
+  wrapper 內 `if(!armed) return append(...)`、`service.submit` 之後 `armed=true`。
   **`PROCESS_READ_UNAVAILABLE`**（建構後 patch backend，需 seam 遷移）。
    **11 → 10 failed / 109 passed（119）**；剩 1 筆 `TASK_TRANSITION_UNSUPPORTED` 不是建構子路徑。
 
