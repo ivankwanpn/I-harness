@@ -532,6 +532,12 @@ round 93：`fs` **15 檔 / 113 tests 全綠**、`shell` **11 檔 / 93 tests 全�
 round 94：`jobs` **1 檔 / 5 tests 全綠**、`workflow` **6 檔 / 66 tests 全綠**。
 round 95：`lsp` **6 檔 / 94 tests 全綠**、`media` **3 檔 / 15 tests 全綠**。
 round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot read properties of undefined
+  **round 97 排除**：在 `startInner` 的 flight 上「barrier.headerCommitted 為真時清
+  `headerUnknown`」→ 三檔仍 `Coordinator cleanup is unresolved`，表示這些 entry 的
+  `headerCommitted` 是 false（或 close 走的是另一條路徑）。累計已排除：放寬守衛、只對 current
+  entry 拋、document 路徑 fallback、ready 判斷、blocked 返回清旗標；下一輪需在 `closeOne` 直接
+  印出 `entry` 的 `ready／headerUnknown／document／bootstrap.taskBarrier.headerCommitted／revoked`
+  五個欄位才能定位。
   (reading 'stopReason')`，疑與建置/環境有關）；`compaction` 原 **4 紅全是 `TASK_TRANSITION_UNSUPPORTED`**
   （legacy 建構子），遷到 composed 建構子後降為 **3 紅，且全變成 `Coordinator cleanup is
   unresolved`**——即與 bootstrap 群同一個 cleanup-debt（`headerUnknown` 殘留 entry）。
