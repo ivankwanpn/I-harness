@@ -12,7 +12,12 @@
 > 2. `coordinator.append` 同樣持有 `doc:task-*` lease（解 `task-transition-direct-lease`）。
 > 3. `bootstrap-physical` 5 筆、`bootstrap-capture-physical` 2 筆：中斷後維持 `blocked`，
 >    測試改為驅動 reconcile 再斷言 `ready`（不要產品假裝成功）。
-> 4. sdk：child-context ×2 走 **model-origin spawn**（host `tools.execute` 的 prepared body
+> 4. sdk：child-context ×2 走 **model-origin spawn**；已確認卡點不是 prepared-body，而是
+>    **durable parent 的 generation 建立**：直接 submit → `This operation was aborted`；
+>    inbox admit + `{admittedInputId}` → `GENERATION_UNCERTAIN`（來源包含
+>    `generation-action.ts:144` 的 `!bound || pending`）。下一步：對照 `execution-state.test.ts`
+>    的 `createSessionService` 選項（它能在 durable parent 上 submit 成功），補齊 generation 所需設定。
+>    （原註記：host `tools.execute` 的 prepared body
 >    （第一次嘗試改寫後 `service.submit` 收到 `This operation was aborted`、task 未建立；
 >    先用 `it.only` 隔離並確認 abort 是 turn 本身還是 finally 的 `service.close()` 造成）
 >    是 foreign，`prepared-body.ts:299` 回 undefined）；fork 爭用追
