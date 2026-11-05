@@ -62,6 +62,7 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(requests).toBeGreaterThanOrEqual(2)
     expect(await call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 5 })).toBeTruthy()
     expect(await call('desktop/session/tasks/integrity', { sessionId: created.sessionId })).toBeTruthy()
+    expect(await call('desktop/session/tasks/integrity', { sessionId: created.sessionId, reconcile: true })).toBeTruthy()
     expect(await call('desktop/session/processes/read', { sessionId: created.sessionId })).toBeTruthy()
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'use todo' })
     expect(toolCalls).toBe(1)

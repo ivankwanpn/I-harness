@@ -1156,7 +1156,13 @@ builds `createSessionCoordinator` directly).
 
 `deleteOwnedSession` now marks the session and its manifest documents in the binding observations (`markDeleted`), so a retained
 reference (or a binding observation) stops being current as soon as the deletion receipt is durable — previously the reference
-kept passing `assertCurrent` after the session directory disappeared. `commit-retained.test.ts` covers acquire → delete →
+kept passing `assertCurrent` after the session directory disappeared. 
+## Plan 42 (implemented 2026-11-06): task projection reconcile on SCL
+
+`host-commit-log-turn.test.ts` also calls `desktop/session/tasks/integrity` with `reconcile: true` after tool execution, exercising the
+task projection reconcile write path (the plain read is covered separately).
+
+`commit-retained.test.ts` covers acquire → delete →
 `assertCurrent` throws → release.
 
 Coordinator close also retires the binding observations (`closeRetained` with a fresh cleanup operation, inside the close path
