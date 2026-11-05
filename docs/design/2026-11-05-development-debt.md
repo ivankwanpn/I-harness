@@ -520,7 +520,11 @@ round 28/29 量了兩個小套件：
   port without cancelling an accepted producer」→ Test timed out in 5000ms**（時間類；
   round 65 已加 `packages/instructions/vitest.config.ts`（30s），**13/13 檔、141/141 全綠**）；`runtime-context` = **「original-only management settles actual
   absent without getter/action/retain or publication replay」→ resolved undefined instead
-  of rejecting**（語義類）。
+  of rejecting**（語義類）。round 66 定位：`test/original-disposition.test.ts:52` 的
+  `it.each(['committed','absent','install'])`，只有 `absent` 這輪失敗，失敗點是 line 57 的
+  `await expect(f.rc.settleOriginals()).rejects.toThrow()`——`absent`  disposition 在
+  `allow()` 之前 `settleOriginals()` 直接 resolve。下一步：確認 absent 的 settle 是否應在
+  `allow()` 前拒絕（與 committed/install 對齊），或測試期待需調整。
 - `llm-seam`：**22 檔 / 188 tests，1 紅**（21 檔綠）。唯一紅是 `terminal-ownership-contract.test.ts`：它期待 private SDK ownership bridge 的 production importer 只有 `['.', './internal/bedrock-terminal']`，實際收到 4 個（已有額外檔案 import）。這是未量測套件既有紅，列入第 5 項待修。
   round 30 修正：它比的是 `package.json` 的 exports 清單，而該清單後來多了
   `./internal/passive-observation` 與 `./internal/stream-lifetime` 兩個已審查的內部 bridge；
