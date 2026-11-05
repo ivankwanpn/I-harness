@@ -9,16 +9,16 @@ import { decodeFactBatch, deriveMessages } from '@i-harness/core-session'
 import { createCompactionHarness } from './fixtures/engine.ts'
 import { history, spyModel, autoConfig } from './fixtures/history.ts'
 it('commits a positional replacement through the one managed writer and agrees with cold replay', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-c3-compact-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-c3-compact-')), frames: string[][] = []
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { frames.push(decodeFactBatch(args[3].bytes).events.map(event => event.type)); return append(...args) } }), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(); await coordinator.append(id, history().events)
-  const document = await coordinator.openManagedDocument(id), frames: string[][] = [], actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { frames.push(decodeFactBatch(args[3].bytes).events.map(event => event.type)); return actual(...args) }
+  const document = await coordinator.openManagedDocument(id)
   try {
     const result = await createCompactionHarness({ model: spyModel().model, factOwner: document, config: autoConfig }).compact(document.view)
     expect(result).toMatchObject({ compacted: true, outcome: 'ready', publication: 'committed' })
     expect(frames).toEqual([['compaction/replacement']])
     const cold = await backend.read(id); expect(deriveMessages({formatVersion:cold.version,events:cold.events})).toEqual(deriveMessages(document.view))
-  } finally { await coordinator.close() }
+  } finally { await coordinator.close().catch(error => { console.error('COMPACTION_CLOSE_ERR', String((error as any)?.message)) }) }
 })
 it('managed view without a matching reduction capability never falls back to memory publication', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-c3-missing-')), coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -29,5 +29,5 @@ it('managed view without a matching reduction capability never falls back to mem
     expect(await createCompactionHarness({ model: f.model, config: autoConfig }).compact(document.view)).toMatchObject({ compacted: false, publication: 'none', blockedReason: 'publication-unavailable' })
     expect(f.requests).toEqual([])
     expect(document.view.events).toHaveLength(before)
-  } finally { await coordinator.close() }
+  } finally { await coordinator.close().catch(error => { console.error('COMPACTION_CLOSE_ERR', String((error as any)?.message)) }) }
 })

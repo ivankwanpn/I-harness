@@ -547,6 +547,9 @@ round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot r
 round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**，10 個測試檔仍是 legacy
 round 115：`code-retrieval` **4 檔 / 54 tests 全綠**；`code-mode` **10 檔紅 / 18 檔綠
   **round 117 已遷移**：8 個 code-mode 測試檔改用 composed 建構子 → **9 檔紅 / 19 檔綠，
+round 133：`compaction` 已由 3 紅轉 **33/33 檔、247/247 tests 全綠**——`managed-facts` 與
+  `summary-observation` 的 `appendOwnedBatch`／`reconcileOwnedBatch` 掛鉤搬到 `wrapOwnedBatch`／
+  `wrapOwnedReconcile`（計數器先宣告），並把 `finally` 的 close 改為只附加錯誤 → 真紅現形、逐一修正。
   **round 121 遷移配方**（給下一輪照做）：測試目前是 `backend.appendOwnedBatch = async (...args)=>…`
   **round 122 首例完成**：`broker.test.ts` 的 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch` →
   **round 123 卡點**：`cell-output-owner-fixture.ts` 的後續掛鉤（line 115–134）依賴執行期狀態

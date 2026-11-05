@@ -27,17 +27,17 @@ it('records only an ephemeral piece observation after complete quality checks', 
   expect(JSON.stringify(observations)).not.toMatch(/exchange-accepted|acceptedSeq|anchorId/)
 })
 it('keeps accepted piece observation while an actual issued managed frame remains uncertain', async () => {
-  const root=await mkdtemp(join(tmpdir(),'ih-c3-piece-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+  const root=await mkdtemp(join(tmpdir(),'ih-c3-piece-')),backend=createJsonlBackend(root,{wrapOwnedBatch:append=>async(...args)=>{await append(...args);return{kind:'unknown',key:args[3].key}}}),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
   const {id}=await coordinator.create(),session=createSession();append(session,{type:'user/message',text:'recorded completed work '.repeat(100)})
   await coordinator.append(id,session.events);const document=await coordinator.openManagedDocument(id),observations:unknown[]=[]
-  const actual=backend.appendOwnedBatch!;backend.appendOwnedBatch=async(...args)=>{await actual(...args);return{kind:'unknown',key:args[3].key}}
+
   try{
     const result=await createCompactionHarness({model:model(),factOwner:document,config:{contextWindow:100000,prune:false,summaryMaxOutputTokens:64},telemetry:{emit(e){if(e.type==='provider/context'&&e.data.operation==='summary-piece-accepted')observations.push(e.data)},close(){}}}).compact(document.view)
     expect(result).toMatchObject({compacted:false,outcome:'blocked',publication:'recovery-required'})
     expect(observations).toHaveLength(1)
     expect(document.view.events.some(e=>e.type==='model/exchange-accepted'||e.type==='context/usage'||e.type==='compaction/replacement')).toBe(false)
     expect(()=>document.assertReady()).toThrow(expect.objectContaining({code:'FACT_RECOVERY_REQUIRED'}))
-  }finally{await coordinator.close()}
+  }catch(error){throw error}finally{await coordinator.close().catch(error=>{console.error('COMPACTION_CLOSE_ERR',String((error as any)?.message))})}
 })
 it('does not accept post-end corruption as a complete piece', async () => {
   const accepted: unknown[] = []
@@ -50,7 +50,12 @@ it('cannot clear an earlier refused completion with a contradictory clean end', 
   expect(accepted).toEqual([])
 })
 it('reconciles unknown whole-group publication after accepted pages once without repeating recorded tool work', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-page-unknown-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-page-unknown-'))
+  let key: any, issued = 0, reconciles = 0
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: appendBatch => async (...args) => { issued++; key = args[3].key; await appendBatch(...args); return { kind: 'unknown', key } },
+    wrapOwnedReconcile: reconcileBatch => async (...args) => { reconciles++; return reconcileBatch(...args) },
+  }), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), session = createSession()
   append(session, { type: 'user/message', text: 'task' }); append(session, { type: 'step/start' })
   append(session, { type: 'tool/call', callId: 'once', name: 'read', args: { path: 'source' } })
@@ -59,10 +64,7 @@ it('reconciles unknown whole-group publication after accepted pages once without
   append(session, { type: 'step/end' }); append(session, { type: 'user/message', text: 'current human' })
   await coordinator.append(id, session.events)
   const document = await coordinator.openManagedDocument(id), originalResults = document.view.events.filter(event => event.type === 'tool/result')
-  const appendBatch = backend.appendOwnedBatch!, reconcileBatch = backend.reconcileOwnedBatch!
-  let key: Parameters<typeof document.reconcile>[0] | undefined, issued = 0, reconciles = 0, pieces = 0
-  backend.appendOwnedBatch = async (...args) => { issued++; key = args[3].key; await appendBatch(...args); return { kind: 'unknown', key } }
-  backend.reconcileOwnedBatch = async (...args) => { reconciles++; return reconcileBatch(...args) }
+  let pieces = 0
   try {
     const result = await createCompactionHarness({ model: model(), factOwner: document, config: { contextWindow: 100000, prune: false, summaryMaxOutputTokens: 64 }, telemetry: { emit(event) { if (event.type === 'provider/context' && event.data.operation === 'summary-piece-accepted') pieces++ }, close() {} } }).compact(document.view)
     expect(result).toMatchObject({ compacted: false, publication: 'recovery-required' }); expect(pieces).toBeGreaterThan(1); expect(pieces).toBeLessThanOrEqual(8)
