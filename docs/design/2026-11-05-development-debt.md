@@ -180,6 +180,13 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 202（Q1 定位）**：eager 建立的入口在
+> `session-persistence/src/coordinator/task-document-transition.ts:147-150` 的 `ensureTask()`：
+> `task = open(scope)` 之後才 `observeTask()`，而 recovery（`recover && !recoveryDone`）在
+> format 14 且任務文件不存在時就從 :159 拋 `TASK_TRANSITION_RECOVERY_REQUIRED`——此時
+> `open(scope)` 已經把 `task-*.doc.jsonl` 建出來了。下一輪要讀
+> `session-persistence-jsonl/src/task-document-factory.ts` 的 `open` 實作，替 recovery 路徑
+> 加一個「只觀察、不建立」的入口（或在 absent 時回滾該檔）。
 > **round 201（Q1 以證據收斂）**：`task-*.doc.jsonl` 在 blocked/refused 之後必須**不存在**，這不是
 > 單一測試的過時期待，而是全 suite 一致的契約——`task-transition-bootstrap-stop:28`、
 > `-bootstrap-stage-swap:36`、`-bootstrap-stage-debt:29`、`task-transition-existing:19/62/158`、
