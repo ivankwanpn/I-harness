@@ -759,6 +759,20 @@ ordering, and revocation is a durable marker plus a registry of live attachments
   result pages.
 - Tests: capture + suffix + publish, and a retired observation refusing `assertCurrent`.
 
+## Plan 6b (implemented 2026-11-05): result ordering registration
+
+- `asSessionCoordinator` associates `associateOriginalResultOrdering` with a minimal ledger owner (`lockEnabled`, a registration
+  that can be committed or cancelled exactly once, a no-op `retryResultOrdering`): SCL writers are serialized by the write lease
+  and the commit log fixes the order, so no cross-session scheduling is needed.
+- Tests: registration issuance/validation, a committed registration expiring, a registration refused by a different coordinator,
+  and an unassociated coordinator refusing the capability.
+
+**Revocation (Plan 6c):** `associateOriginalResultRevocation` cannot take a shim — its admission is issued by
+`createBindingObservations` and `issueOriginalResultRevocationScope` validates the participant through the private ownership
+batch ledger (`assertOriginalBatchParticipant`). The workable path is to give the SCL coordinator a **real** `createOwnership`
+instance for ordering + revocation, and build the observations/admission over SCL-backed backend adapters (`putDocument`,
+`getDocument`, `readDocumentObserved`, `profile`). That keeps one ownership identity for both capabilities.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

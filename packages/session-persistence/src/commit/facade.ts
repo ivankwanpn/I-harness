@@ -1,5 +1,6 @@
 import type { SessionCoordinator } from '../coordinator/types.ts'
 import { associateManagedExecution } from '../execution-internal.ts'
+import { associateOriginalResultOrdering } from '../result-ordering-internal.ts'
 import type { CommitCoordinator } from './coordinator.ts'
 
 /**
@@ -26,6 +27,20 @@ export function asSessionCoordinator(coordinator: CommitCoordinator): SessionCoo
     putDocument: coordinator.putDocument.bind(coordinator),
     acquireExecution: coordinator.acquireExecution.bind(coordinator),
   }
+  // v1 ordering: the write lease serializes every writer of a session and the
+  // commit log fixes the order, so a registration only needs a stable ledger
+  // identity (no cross-session scheduling).
+  associateOriginalResultOrdering(facade as never, Object.freeze({
+    lockEnabled: true,
+    beginResultOrderingRegistration() {
+      let finished = false
+      return Object.freeze({
+        commit() { if (finished) throw new TypeError('Original ordering registration expired'); finished = true },
+        cancel() { finished = true },
+      })
+    },
+    async retryResultOrdering() {},
+  }) as never)
   associateManagedExecution(facade, {
     acquire: id => coordinator.acquireExecution(id),
     // v1: admission currentness is enforced by the attachment's own guards; the
