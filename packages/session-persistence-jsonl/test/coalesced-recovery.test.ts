@@ -2,17 +2,20 @@ import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 
 it.each(['second-first', 'last-first', 'concurrent', 'multiple-event-groups'] as const)('returns each original group slice after shared-key reconciliation (%s)', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-shared-key-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
   let writes = 0, reconciles = 0
-  backend.appendOwnedBatch = async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
-  backend.reconcileOwnedBatch = async (...args) => { reconciles++; return reconcile(...args) }
+  // Both owned-batch seams are bound before construction; the coordinator
+  // captures the original descriptors, so later patches are refused by design.
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } },
+    wrapOwnedReconcile: reconcile => async (...args) => { reconciles++; return reconcile(...args) },
+  })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const action = document.beginAction(), source = document.registerReceivedInputSource(async () => {})
   const counts = mode === 'multiple-event-groups' ? [2, 1, 3] : [1, 1, 1]
   const facts = counts.map((count, index) => mode === 'multiple-event-groups'
