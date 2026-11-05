@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, decodeFactBatch, stringifyJsonData, type Session, type SessionEvent } from '@i-harness/core-session'
 import type { CommitLog } from '@i-harness/session-commit-log'
-import type { IssuingFactOwner, ManagedDocument } from '../coordinator/fact-types.ts'
+import type { HeldFactOwner, IssuingFactOwner, ManagedDocument } from '../coordinator/fact-types.ts'
+import { heldFactOwner } from '../coordinator/fact-owner.ts'
 import { createManagedDocument } from '../coordinator/managed-document.ts'
 import type { Ownership } from '../coordinator/ownership.ts'
 import type { PersistenceBackend, SessionMeta, CoordinatorOptions } from '../coordinator/types.ts'
@@ -73,21 +74,39 @@ export type CommitManagedDeps = {
   readonly onReport?: (error: unknown) => void
 }
 
-/** Open the managed document over an already-writable commit log and keep the
- *  log registered so every later append routes through the same lease. */
-export function openCommitManagedDocument(sessionId: string, log: CommitLog, deps: CommitManagedDeps): ManagedDocument {
+export type CommitManagedContext = {
+  readonly meta: SessionMeta
+  readonly source: Session
+  readonly prefix: ReturnType<typeof commitPrefix>
+  readonly backend: PersistenceBackend
+  readonly ownership: Ownership
+}
+
+export function createCommitManagedContext(_sessionId: string, log: CommitLog, deps: CommitManagedDeps): CommitManagedContext {
   const meta = deps.metaOf(log)
   const events: SessionEvent[] = log.view().entries.map(event => ({ ...event }))
   preflightSessionFormat(CURRENT_FORMAT_VERSION, events, meta)
-  const source: Session = buildSession(meta, events)
-  const document = createManagedDocument(
-    sessionId,
-    source,
-    commitPrefix(log),
-    createFactBackend(log),
-    createCommitOwnership(deps.logs),
-    {} as CoordinatorOptions,
-    deps.onReport ?? (() => {}),
+  return { meta, source: buildSession(meta, events), prefix: commitPrefix(log), backend: createFactBackend(log), ownership: createCommitOwnership(deps.logs) }
+}
+
+const closed = () => Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
+
+/** Open the managed document over an already-writable commit log and keep the
+ *  log registered so every later append routes through the same lease. */
+export function openCommitManagedDocument(sessionId: string, log: CommitLog, deps: CommitManagedDeps): ManagedDocument {
+  const context = createCommitManagedContext(sessionId, log, deps)
+  return createManagedDocument(sessionId, context.source, context.prefix, context.backend, context.ownership, {} as CoordinatorOptions, deps.onReport ?? (() => {}))
+}
+
+/** The execution attachment's document: constructed from the restored state so
+ *  the document owns a delivery observation the execution state can fence. */
+export function openCommitExecutionDocument(sessionId: string, log: CommitLog, deps: CommitManagedDeps, state: object): ManagedDocument {
+  const context = createCommitManagedContext(sessionId, log, deps)
+  const held: HeldFactOwner = heldFactOwner({ sessionId, incarnation: randomUUID() }, context.ownership, () => { if (!log.open) throw closed() })
+  return createManagedDocument(
+    sessionId, undefined, context.prefix, context.backend, context.ownership,
+    {} as CoordinatorOptions, deps.onReport ?? (() => {}),
+    undefined, undefined, undefined, undefined,
+    { state, held, assertCurrent() { if (!log.open) throw closed() } } as never,
   )
-  return document
 }

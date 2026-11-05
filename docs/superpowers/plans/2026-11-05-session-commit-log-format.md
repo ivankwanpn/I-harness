@@ -714,6 +714,23 @@ What the port must provide:
 
 Added in this reconnaissance round: `putDocumentStrict` (an alias of the durable `putDocument`) on the coordinator.
 
+## Plan 5a (implemented 2026-11-05): managed execution attachment
+
+- `src/commit/execution.ts` restores `restoreManagedExecutionState` from an `OriginalConversationRestorationSource` over the log
+  (stable prefix object, replaced only by `appendCommitted`; `readEvent`/`consume` from the fold; `openDependencies` answers writer
+  reads from the same log) and then constructs the managed document **from that state** (`createManagedDocument(..., execution)`),
+  so the document owns the delivery observation the execution fence requires. The attachment exposes `identity`, `owner`,
+  `prepare`, `observe`, `prepareRequest`, `revokeNewWork`, `close`.
+- `asSessionCoordinator` registers `associateManagedExecution`, and the coordinator exposes `acquireExecution(id)`.
+- Test: `acquireManagedExecution(facade, 's1')` returns an attachment whose owner is the SCL managed document and whose
+  `observe()` reports the empty prefix.
+
+**Next blocker found:** running the gateway stack again reaches the first turn's fact admission, which returns
+`{kind:'recovery-required', code:'FACT_INSTALL_FAILED'}`: the document's own queue install throws while the execution state is
+bound (its `install` only accepts a batch issued through `prepareWrite`). The next step is to route execution-bound document
+writes through `state.prepareWrite`/`install` (or to keep the bound document read-only and let the executor drive all writes),
+which is the same split the legacy `attach(...)` path implements at `managed-document.ts:813`.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

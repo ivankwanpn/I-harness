@@ -14,6 +14,10 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 233（SCL execution attachment）**：`acquireManagedExecution(facade,id)` 已可用——以 commit log 的 restoration source
+> 還原 `restoreManagedExecutionState`，再由該 state 建構 managed document（交付觀察綁定在 execution fence 上）。
+> gateway stack 已跑到第一個 turn 的 fact admission，卡在 `FACT_INSTALL_FAILED`：綁定 execution 的 document 其 queue install
+> 與 execution state 的 `prepareWrite/install` 路徑未對接（legacy 的 `attach(...)` 有同樣分工）。下一輪處理這個寫入路徑。
 > **round 232（gateway cutover 偵察）**：owned-gateway stack 在 SCL 上跑到 `service.close()` 才失敗，
 > 缺口是 `acquireManagedExecution`（`execution-internal.ts:28`）——需要 `associateManagedExecution` 與
 > `restoreManagedExecutionState` 的 restoration source。已把需要的 port 寫進計畫（Plan 5），並補上 `putDocumentStrict` alias。

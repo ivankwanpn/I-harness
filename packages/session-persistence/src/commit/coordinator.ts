@@ -12,6 +12,7 @@ import { createCommitObservations } from './observations.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapRequest } from '../coordinator/bootstrap-header.ts'
 import type { BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import { openCommitManagedDocument } from './managed.ts'
+import { openCommitExecution } from './execution.ts'
 
 /**
  * v1 commit-log coordinator: the session view is a fold of one commit log.
@@ -58,6 +59,7 @@ export type CommitCoordinator = {
   loadOwned(sessionId: string): Promise<{ session: Session }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   openManagedDocument(sessionId: string): Promise<ManagedDocument>
+  acquireExecution(sessionId: string): Promise<import('../execution-internal.ts').ManagedExecutionAttachment>
   closeManagedDocument(sessionId: string): Promise<void>
   revokeManagedDocumentNewWork(sessionId: string): void
   list(): Promise<string[]>
@@ -353,6 +355,13 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf })
       managed.set(sessionId, document)
       return document
+    },
+    async acquireExecution(sessionId) {
+      let log = owned.get(sessionId)
+      if (!log) { log = await ensureWritable(sessionId); owned.set(sessionId, log) }
+      const attachment = await openCommitExecution(sessionId, log, { logs: owned, metaOf })
+      managed.set(sessionId, attachment.owner as unknown as ManagedDocument)
+      return attachment
     },
     async closeManagedDocument(sessionId) {
       const document = managed.get(sessionId)
