@@ -20,7 +20,14 @@ for (const sessionStore of ['jsonl', 'commit-log'] as const) {
       await request(2, 'session/create', {})
       const created = frames.find(frame => 'id' in frame && frame.id === 2)
       if (!isRpcSuccess(created)) throw new Error(sessionStore + ' session creation failed')
-      expect((created.result as { sessionId: string }).sessionId).toBeTruthy()
+      const sessionId = (created.result as { sessionId: string }).sessionId
+      expect(sessionId).toBeTruthy()
+      if (sessionStore === 'commit-log') {
+        await request(3, 'desktop/schedule/list', { sessionId })
+        const schedules = frames.find(frame => 'id' in frame && frame.id === 3)
+        expect(isRpcSuccess(schedules)).toBe(true)
+        if (isRpcSuccess(schedules)) expect(schedules.result).toEqual({ schedules: [] })
+      }
     } finally {
       await host.close()
     }

@@ -855,6 +855,15 @@ independent of SCL. SCL fork needs its own host-level test (next).
 - `resumeSemanticTarget` returns `{kind:'not-issued', reason:'unsupported'}`: SCL birth is one committed child creation and the
   legacy staged resume protocol has no counterpart, so `session/fork/retry` reports a clean refusal instead of an internal error.
 
+## Plan 9d (implemented 2026-11-05): rewind and schedule reads on SCL
+
+- `host-commit-log-rewind.test.ts`: with a `RewindStore` point, `desktop/rewind/points` → `plan` → `execute`
+  (`mode:'conversation'`) succeeds through the real host on the commit-log store (`eventAppended`, `truncated`).
+- `desktop/schedule/list` folds the session's schedule events through `coordinator.snapshot` and returns `{ schedules: [] }`
+  on a fresh session.
+- Schedule **create/delete** go through the live execution runtime (tool execution), so they are exercised only once a turn runs;
+  the same is true of selected-result reads.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
