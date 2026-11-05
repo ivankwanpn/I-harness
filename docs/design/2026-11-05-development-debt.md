@@ -13,6 +13,8 @@
 > 3. `bootstrap-physical` 5 筆、`bootstrap-capture-physical` 2 筆：中斷後維持 `blocked`，
 >    測試改為驅動 reconcile 再斷言 `ready`（不要產品假裝成功）。
 > 4. sdk：child-context ×2 走 **model-origin spawn**（host `tools.execute` 的 prepared body
+>    （第一次嘗試改寫後 `service.submit` 收到 `This operation was aborted`、task 未建立；
+>    先用 `it.only` 隔離並確認 abort 是 turn 本身還是 finally 的 `service.close()` 造成）
 >    是 foreign，`prepared-body.ts:299` 回 undefined）；fork 爭用追
 >    `createCliForkHost.withHandoff` 的 `coordinator.flush` 卡在 held write-behind。
 > 5. 全綠後跑 `verify:all` full job，把結果寫回本文件。
