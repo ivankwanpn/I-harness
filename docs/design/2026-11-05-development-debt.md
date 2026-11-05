@@ -616,6 +616,11 @@ full job 當 gate。
   且 `ready=false`、`headerUnknown=true`。即冷 resume 的成功結果並沒有回寫到這個 entry。
   需要的是在 `resume` 成功時把「已確認 header」回寫到 current entry（或把該 entry 標 ready），
   不是 close 端的守衛問題。已還原實驗。
+  **round 57–58 再收窄**：`adopt()` 其實會在成功時設 `entry.ready=true; entry.headerUnknown=false`
+  （`bootstrap.ts:349`），所以失敗的 current entry 走的是**另一條**（例如 `blocked`）路徑：
+  header 已 issued（`activeIssue` 設 `headerUnknown=true`）但最後回 `blocked`，flag 沒被清。
+  下一輪：在 `run()` 回傳 `blocked` 前，若 durable state 已證明 header committed（或由後續
+  成功 resume 證明），清掉 `entry.headerUnknown`；否則保留 fail-closed。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
