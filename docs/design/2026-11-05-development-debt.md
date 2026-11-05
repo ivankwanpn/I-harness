@@ -552,6 +552,7 @@ round 133：`compaction` 已由 3 紅轉 **33/33 檔、247/247 tests 全綠**—
   `wrapOwnedReconcile`（計數器先宣告），並把 `finally` 的 close 改為只附加錯誤 → 真紅現形、逐一修正。
   **round 121 遷移配方**（給下一輪照做）：測試目前是 `backend.appendOwnedBatch = async (...args)=>…`
   **round 122 首例完成**：`broker.test.ts` 的 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch` →
+  **round 134**：`managed-store-stop.test.ts` 同法遷移（計數器先宣告）→ **2/2 全綠**。
   **round 123 卡點**：`cell-output-owner-fixture.ts` 的後續掛鉤（line 115–134）依賴執行期狀態
   （`batch`／`receipt`／`target` 由測試參數決定），無法直接搬進建構選項；同類測試還有
   `instruction-start-recovery`、`output-source-recovery`。這批需要「建構後的合法掛鉤 API」

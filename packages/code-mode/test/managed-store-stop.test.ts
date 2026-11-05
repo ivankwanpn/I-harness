@@ -17,13 +17,21 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 it.each(['before-issue', 'issued-unknown-absent'] as const)('Stop never reissues or installs the original optional store (%s)', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-store-stop-'))
-  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
-  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const ctx = createContext(), tools = createToolRegistry(ctx)
   let bodies = 0, finalizations = 0, attempts = 0, writes = 0, broken = false
   let key: BatchKey | undefined
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const actualAppend = backend.appendOwnedBatch!, native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) {
+      attempts++; key = args[3].key
+      if (mode === 'before-issue') { entered.resolve(); await release.promise }
+      else broken = true
+    }
+    const outcome = await append(...args)
+    if (broken) entered.resolve()
+    return outcome
+  } }), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const ctx = createContext(), tools = createToolRegistry(ctx)
   tools.register({ name: 'probe', description: '', inputSchema: {}, execute: async () => { bodies++; return 7 } })
   ctx.on('tools/post-execute', () => { finalizations++ })
   vi.mocked(open).mockImplementation(async (...args) => {
@@ -40,16 +48,6 @@ it.each(['before-issue', 'issued-unknown-absent'] as const)('Stop never reissues
       return typeof value === 'function' ? value.bind(target) : value
     } })
   })
-  backend.appendOwnedBatch = async (...args) => {
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) {
-      attempts++; key = args[3].key
-      if (mode === 'before-issue') { entered.resolve(); await release.promise }
-      else broken = true
-    }
-    const outcome = await actualAppend(...args)
-    if (broken) entered.resolve()
-    return outcome
-  }
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   const observing = tools.get('code_exec')!.execute({ code: 'store("original", await tools.probe({})); text("computed once")', yield_time_ms: 5000 }, { session: document.view, sessionId: id })
   void observing.catch(() => {})
