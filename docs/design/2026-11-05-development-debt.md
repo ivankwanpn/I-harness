@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 337（搜尋 limit）**：兩個 SCL session 共 3 個命中，`limit:2` 回 2 筆、`limit:100` 回 3 筆（跨 session 上限生效）。
 > **round 336（混合 store 搜尋）**：同一目錄下 legacy JSONL 與 SCL session 都命中、無重複；legacy 來自索引（bm25 ≤ 0）、
 > SCL 來自 fallback（bm25 0）。
 > **round 335（未知 session 視圖）**：`processes/read`／`execution/read` 對不存在的 session 回 `does not exist`（-32602）。

@@ -1193,6 +1193,12 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 82 (implemented 2026-11-06): search limit across sessions
+
+`host-commit-log-search-limit.test.ts` seeds three matching messages across two commit-log sessions: `limit: 2` returns exactly two
+hits and `limit: 100` returns all three from both sessions, so the per-session fallback cannot exceed the conversation-level limit.
+
 ## Plan 81 (implemented 2026-11-06): mixed legacy and commit-log search
 
 `host-commit-log-mixed-search.test.ts` puts a legacy JSONL session and a commit-log session in the same store directory: the search
