@@ -522,6 +522,7 @@ round 28/29 量了兩個小套件：
   **7 檔 / 93 tests 全綠**。
 round 70：`session-query` **4 檔紅 / 3 檔綠（7 檔），25 failed / 59 passed（84）**；
   `hooks` **19 檔全綠，167 passed / 1 skipped（168）**。
+round 74：`core-plugin` **6 檔 / 58 tests 全綠**、`memory` **3 檔 / 4 tests 全綠**。
 round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed（176）**；
   `core-session` **1 檔紅 / 86 檔綠（87 檔），1 failed / 932 passed（933）**。
   紅點名稱：`core-session` =「durable exchange acceptance > indexes a large prefix once
