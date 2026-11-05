@@ -180,6 +180,9 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 208（jsonl 複量）**：**25 紅檔 / 100 failed / 757 passed / 17 skipped（98 檔）**。
+> 由 round 196 的 26/102 降下來（stage-swap 轉綠、stage-debt 首紅前移）。
+> 三大族群不變：task-transition claim/lease（8）、bootstrap readiness（24）、其餘 seam／predecessor。
 > **round 207（claim 族的第二個語義叉路）**：`task-transition-direct-lease` 要求
 > **一次普通的 parent append 期間也必須持有 `doc:task-p` lease**（測試在 append 進行中讓另一個
 > ownership `acquireLease('doc:task-p')` 期待被拒），現在會成功。這與 Q1/Q2 同類：是「append 是否
