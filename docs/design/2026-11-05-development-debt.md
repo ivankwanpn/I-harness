@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 340（lineage 工具＋snippet）**：`lineage` 工具由 coordinator metadata 回答 ancestors／children；長訊息中間命中時
+> snippet 兩側有 `…`、長度受限且含 token。
 > **round 339（session_search 工具）**：tool→conversation query→SCL fallback 端到端通過（命中含 snippet、缺席回空）。
 > **round 338（tool 內容可搜尋）**：fallback 涵蓋 tool/call args 與 tool/result output（搜尋 `do it` 命中）。
 > **round 337（搜尋 limit）**：兩個 SCL session 共 3 個命中，`limit:2` 回 2 筆、`limit:100` 回 3 筆（跨 session 上限生效）。

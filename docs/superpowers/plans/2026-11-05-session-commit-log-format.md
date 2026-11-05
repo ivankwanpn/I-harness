@@ -1196,6 +1196,12 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 85 (implemented 2026-11-06): lineage tool and snippet truncation
+
+The same tool set is exercised further: the `lineage` tool answers ancestors/children from coordinator metadata, and a match in the
+middle of a long message yields a snippet shorter than the body with `…` on both sides while still containing the token.
+
 ## Plan 84 (implemented 2026-11-06): the `session_search` tool reaches the fallback
 
 `session-search-tool.test.ts` builds the tool with `createSessionQueryTools(createConversationQuery(coordinator, emptyIndex,
