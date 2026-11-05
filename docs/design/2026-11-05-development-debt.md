@@ -516,7 +516,11 @@ round 28/29 量了兩個小套件：
 - `sdk`：**6 檔紅 / 13 檔綠（19 檔），11 failed / 108 passed（119 tests）**——已列為第 5 項待修清單的第一筆（含 `cancel-stop` 的 5 個 Stop receipt 案例、CLI 端到端 2 筆、cold native frames 2 筆等）。
 - `instructions`：**1 檔紅 / 12 檔綠（13 檔），1 failed / 140 passed（141 tests）**。
 - `runtime-context`：**1 檔紅 / 3 檔綠（4 檔），1 failed / 21 passed（22 tests）**。
-  （兩者的紅點名稱待下一輪以 `×` 過濾器補記。）
+  紅點名稱已補記：`instructions` = **「actual W1 128-key aggregate capacity bounds a new
+  port without cancelling an accepted producer」→ Test timed out in 5000ms**（時間類，與
+  jsonl 的 timeout 債同類）；`runtime-context` = **「original-only management settles actual
+  absent without getter/action/retain or publication replay」→ resolved undefined instead
+  of rejecting**（語義類）。
 - `llm-seam`：**22 檔 / 188 tests，1 紅**（21 檔綠）。唯一紅是 `terminal-ownership-contract.test.ts`：它期待 private SDK ownership bridge 的 production importer 只有 `['.', './internal/bedrock-terminal']`，實際收到 4 個（已有額外檔案 import）。這是未量測套件既有紅，列入第 5 項待修。
   round 30 修正：它比的是 `package.json` 的 exports 清單，而該清單後來多了
   `./internal/passive-observation` 與 `./internal/stream-lifetime` 兩個已審查的內部 bridge；
