@@ -20,7 +20,7 @@ vi.mock('@i-harness/core-session/internal/bootstrap',async original=>{
   }}
 })
 afterEach(async () => { for (const c of coordinators.splice(0)) await c.close().catch(() => {}); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }) })
-type BootstrapHooks = { append?: (actual: any, ...args: any[]) => any; confirm?: (actual: any, ...args: any[]) => any }
+type BootstrapHooks = { append?: (actual: any, ...args: any[]) => any; confirm?: (actual: any, ...args: any[]) => any; prepareBootstrapHeader?: (actual: any, ...args: any[]) => any }
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'ih-bootstrap-')); roots.push(root)
   const hooks: BootstrapHooks = {}
@@ -28,9 +28,10 @@ async function setup() {
   // snapshots the backend descriptors; patching them afterwards is
   // PROCESS_READ_UNAVAILABLE by design.
   const backend = createJsonlBackend(root, { wrap: b => {
-    const append = b.appendOwnedBatch!.bind(b), confirm = b.confirmBootstrapFrames!.bind(b)
+    const append = b.appendOwnedBatch!.bind(b), confirm = b.confirmBootstrapFrames!.bind(b), prepare = b.prepareBootstrapHeader!.bind(b)
     b.appendOwnedBatch = ((...args: any[]) => hooks.append ? hooks.append(append, ...args) : (append as any)(...args)) as typeof b.appendOwnedBatch
     b.confirmBootstrapFrames = ((...args: any[]) => hooks.confirm ? hooks.confirm(confirm, ...args) : (confirm as any)(...args)) as typeof b.confirmBootstrapFrames
+    b.prepareBootstrapHeader = ((...args: any[]) => hooks.prepareBootstrapHeader ? hooks.prepareBootstrapHeader(prepare, ...args) : (prepare as any)(...args)) as typeof b.prepareBootstrapHeader
   } })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }); coordinators.push(coordinator)
   return { root, backend, coordinator: coordinator as any, hooks }
@@ -300,19 +301,18 @@ it('retains a partial stage under failed close and honestly resumes cold with or
   }finally{vi.mocked(open).mockImplementation(native.open)}
 })
 it('blocks cold public open and metadata mutations when existing-empty publication has not occurred',async()=>{
-  const {root,backend,coordinator}=await setup(),r:any=request()
+  const {root,coordinator,hooks}=await setup(),r:any=request()
   await coordinator.create({sessionId:'target',createdAt:r.invocation.createdAt})
   const path=join(root,'target.jsonl'),raw=await readFile(path)
   r.target={kind:'existing-empty',expectedHeaderDigest:createHash('sha256').update(raw).digest('hex'),expectedPrefix:{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())}}
-  const actual=backend.prepareBootstrapHeader!
-  backend.prepareBootstrapHeader=async(_id,owner,operation)=>{owner.beforeIssue();const key=createHash('sha256').update((await import('@i-harness/core-session')).canonicalJsonData(operation.invocation)).digest('hex');await writeFile(path+'.bootstrap-'+key+'.stage',operation.stageBytes);return {kind:'unknown'}}
+  hooks.prepareBootstrapHeader=async(_actual,_id,owner,operation)=>{owner.beforeIssue();const key=createHash('sha256').update((await import('@i-harness/core-session')).canonicalJsonData(operation.invocation)).digest('hex');await writeFile(path+'.bootstrap-'+key+'.stage',operation.stageBytes);return {kind:'unknown'}}
   expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})
   const cold=await copyStore(root)
   await expect(cold.coordinator.openManagedDocument('target')).rejects.toThrow()
   await expect(cold.coordinator.updateMeta('target',{title:'hijack'})).rejects.toThrow()
   await expect(cold.coordinator.append('target',[{type:'plan/mode',mode:'on'}])).rejects.toThrow()
   expect(await readFile(join(cold.root,'target.jsonl'))).toEqual(raw)
-  backend.prepareBootstrapHeader=actual
+  hooks.prepareBootstrapHeader=undefined
 })
 it('does not repair a later torn suffix during ready adoption',async()=>{
   const {root,coordinator}=await setup(),r=request()

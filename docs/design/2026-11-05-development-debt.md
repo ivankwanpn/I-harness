@@ -180,6 +180,9 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 197**：`bootstrap-physical` 的 `PROCESS_READ_UNAVAILABLE` 那筆（`prepareBootstrapHeader`
+> 事後 patch）已走 `wrap` seam 修掉 → 該檔由 12 紅降到 **11 紅**。其餘紅都是
+> readiness 語義（'blocked' vs 'ready'/'already-ready'），與上方裁定同一家族。
 > **round 191**：core-agent 由 9 紅檔 / 33 failed 降到 **3 紅檔 / 13 failed**——
 > soft-sequence-settlement 3/3、retained-boundaries 3/3、held-policy-receipt 1/1、
 > current-context-loopback 2/2、instruction-request-context 12/12 全綠；剩下
