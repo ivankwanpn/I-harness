@@ -1,8 +1,8 @@
 import {expect,it,vi} from 'vitest'
-import {mkdtemp,writeFile} from 'node:fs/promises'
+import {mkdtemp} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
-import {createSession,append,toJSONL,decodeFactBatch,createConversationValidationIndex,type SettlementFacts,type ProducerFactOutcome,type BatchKey} from '@i-harness/core-session'
+import {createSession,append,decodeFactBatch,createConversationValidationIndex,type SettlementFacts,type ProducerFactOutcome,type BatchKey} from '@i-harness/core-session'
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
@@ -14,11 +14,15 @@ it('an actually issued unknown publication retains its original key/capture afte
  for(let i=0;i<20;i++)append(session,{type:'user/message',text:`segment-${i} ${'x'.repeat(400)}`})
  append(session,{type:'context/soft-reduction',version:1,op:'start',ownerSessionId:owner,sequenceId:'prior',workKey:d,sourceKey:d,protectionKey:d,policyKey:d,acceptedExchanges:0,humanTurns:0})
  append(session,{type:'context/soft-reduction',version:1,op:'terminal',ownerSessionId:owner,sequenceId:'prior',startSeq:20,workKey:d,sourceKey:d,outcome:'failed',publication:'none',consumedBeforeKey:d})
- session.header={sessionId:owner,createdAt:'synthetic-fix2'} as typeof session.header
- const directory=await mkdtemp(join(tmpdir(),'ih-fix2-receipt-'));await writeFile(join(directory,owner+'.jsonl'),toJSONL(session))
- const backend=createJsonlBackend(directory),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract),document=await coordinator.openManagedDocument(owner),action=document.beginAction(),sources:SettlementFacts<ProducerFactOutcome>[]=[]
- const appendBatch=backend.appendOwnedBatch!;let issued=0,captures=0,transports=0,originalKey:BatchKey|undefined;const reconciled:BatchKey[]=[]
- backend.appendOwnedBatch=async(...args)=>{if(decodeFactBatch(args[3].bytes).events.some(e=>e.type==='compaction/replacement')){issued++;originalKey=args[3].key;await appendBatch(...args);action.stop();return{kind:'unknown',key:args[3].key}}return appendBatch(...args)}
+ const directory=await mkdtemp(join(tmpdir(),'ih-fix2-receipt-'))
+ let issued=0,captures=0,transports=0,armed=false,originalKey:BatchKey|undefined;const reconciled:BatchKey[]=[]
+ const backend=createJsonlBackend(directory,{wrapOwnedBatch:appendBatch=>async(...args)=>{if(armed&&decodeFactBatch(args[3].bytes).events.some(e=>e.type==='compaction/replacement')){issued++;originalKey=args[3].key;await appendBatch(...args);action.stop();return{kind:'unknown',key:args[3].key}}return appendBatch(...args)}}),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+ // The product's own bootstrap creates the format-14 task document a real session
+ // owns; a hand-written JSONL header left this session task-less.
+ expect(await coordinator.create({sessionId:owner,createdAt:'synthetic-fix2'})).toEqual({id:owner})
+ await coordinator.append(owner,session.events)
+ const document=await coordinator.openManagedDocument(owner),action=document.beginAction(),sources:SettlementFacts<ProducerFactOutcome>[]=[]
+ armed=true
  const model={prepare:prepareTextFixture,async *stream(){transports++;throw Error('summary data fixture cannot transport')}}
  const context=createAgentContext({session:document.view,model,tools:{schemas:()=>[]} as never,systemPrompt:'',compact:{contextWindow:20000,thresholdRatio:.8,targetRatio:.7,minTurnsBeforeRecompact:0,prune:false},maxOutputTokens:15500,
   summaryFactory:()=>async source=>({kind:'complete',text:checkpointOfLength(600),groupIds:source.groups.map(g=>g.id)}),facts:action.facts,assertFactOpen:action.assertOpen,

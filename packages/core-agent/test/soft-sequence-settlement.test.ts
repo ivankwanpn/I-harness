@@ -11,14 +11,17 @@ import { createReductionPublication } from '../src/agent/context-reduction/publi
 import { captureContextSnapshot } from '@i-harness/context-engine'
 
 it.each(['committed', 'absent'] as const)('the original source settles an uncertain start after Stop without granting summary (%s)', async disposition => {
-  const directory = await mkdtemp(join(tmpdir(), 'ih-soft-start-')), backend = createJsonlBackend(directory), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const directory = await mkdtemp(join(tmpdir(), 'ih-soft-start-')), d = 'a'.repeat(64)
+  let writes = 0, armed = false
+  const backend = createJsonlBackend(directory, {
+    wrapOwnedBatch: append => async (...args) => {
+      if (!armed) return append(...args)
+      if (++writes === 1) { if (disposition === 'committed') await append(...args); action.stop(); return { kind: 'unknown', key: args[3].key } }
+      return append(...args)
+    },
+  }), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), action = document.beginAction(), sources: SettlementFacts<ProducerFactOutcome>[] = []
-  const original = backend.appendOwnedBatch!, d = 'a'.repeat(64)
-  let writes = 0
-  backend.appendOwnedBatch = async (...args) => {
-    if (++writes === 1) { if (disposition === 'committed') await original(...args); action.stop(); return { kind: 'unknown', key: args[3].key } }
-    return original(...args)
-  }
+  armed = true
   try {
     await expect(beginSoftSequence({ session: document.view, captureSoftReduction: action.captureSoftReduction.bind(action), registerFactSource: drain => { const source = action.registerSettlementSource(drain); sources.push(source); return source } },
       { type: 'context/soft-reduction', version: 1, op: 'start', ownerSessionId: id, sequenceId: 'sequence', workKey: d, sourceKey: d, protectionKey: d, policyKey: d, acceptedExchanges: 0, humanTurns: 0 }, () => true)).rejects.toMatchObject({ code: expect.stringMatching(/^FACT_/) })
@@ -33,15 +36,16 @@ it.each(['committed', 'absent'] as const)('the original source settles an uncert
   } finally { action.finish(); await coordinator.close() }
 })
 it('publication absence after Stop settles the original start without a second optional write or a ready reset', async()=>{
- const root=await mkdtemp(join(tmpdir(),'ih-soft-publication-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract),{id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),action=document.beginAction(),sources:SettlementFacts<ProducerFactOutcome>[]=[]
+ const root=await mkdtemp(join(tmpdir(),'ih-soft-publication-'))
+ let writes=0,armed=false
+ const backend=createJsonlBackend(root,{wrapOwnedBatch:append=>async(...args)=>{if(!armed)return append(...args);if(++writes===1){action.stop();return{kind:'unknown',key:args[3].key}}return append(...args)}}),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract),{id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),action=document.beginAction(),sources:SettlementFacts<ProducerFactOutcome>[]=[]
  const registerFactSource=(drain:()=>Promise<void>)=>{const source=action.registerSettlementSource(drain);sources.push(source);return source},d='a'.repeat(64)
  const deps={session:document.view,captureSoftReduction:action.captureSoftReduction.bind(action),captureContextReduction:action.captureContextReduction!.bind(action),registerFactSource}
  try{
   const sequence=await beginSoftSequence(deps,{type:'context/soft-reduction',version:1,op:'start',ownerSessionId:id,sequenceId:'original',workKey:d,sourceKey:d,protectionKey:d,policyKey:d,acceptedExchanges:0,humanTurns:0},()=>true)
   const captured=captureContextSnapshot(document.view,{ownerSessionId:id,surface:{systemPrompt:'',tools:[]}});if(captured.kind!=='captured')throw Error('capture required')
   const publish=createReductionPublication(deps,()=>true,()=>({type:'context/soft-reduction',version:1,op:'terminal',ownerSessionId:id,sequenceId:'original',startSeq:{kind:'prior',seq:sequence.start.seq!,expectedType:'context/soft-reduction'},workKey:d,sourceKey:d,outcome:'target-ready',publication:'committed',consumedBeforeKey:d,consumedAfterKey:'b'.repeat(64)}),()=>sequence.settle('canceled'))
-  const actual=backend.appendOwnedBatch!;let writes=0
-  backend.appendOwnedBatch=async(...args)=>{if(++writes===1){action.stop();return{kind:'unknown',key:args[3].key}}return actual(...args)}
+  armed=true
   expect(await publish(captured.snapshot,[],[{type:'compaction/prune',version:1,pruned:[]}],{})).toEqual({kind:'recovery-required'})
   await Promise.allSettled(sources.map(source=>source.close()))
   expect(await Promise.allSettled(sources.map(source=>source.close()))).toEqual(sources.map(()=>({status:'fulfilled',value:undefined})))

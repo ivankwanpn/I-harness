@@ -17,21 +17,23 @@ import { createLoopbackProvider } from './helpers/provider-loopback.ts'
 const wire = (tool: boolean, ending = tool ? 'tool_calls' : 'stop') => `data: ${JSON.stringify({ choices: [{ delta: tool ? { tool_calls: [{ index: 0, id: 'original-call', function: { name: 'probe', arguments: '{}' } }] } : { content: 'done' }, finish_reason: ending }], usage: { prompt_tokens: 100, completion_tokens: 2 } })}\n\ndata: [DONE]\n\n`
 
 it.each(['success', 'notification-fault', 'flush-fault', 'stop', 'unknown', 'unknown-absent', 'refusal', 'truncation', 'observer-fault', 'fetch-fault'] as const)('original physical completion qualifies handoff and retains real sources: %s', async mode => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-instruction-source-')), backend = createJsonlBackend(root)
+  const root = await mkdtemp(join(tmpdir(), 'ih-instruction-source-'))
+  let unknownReady = false, armed = false, originalKey: import('@i-harness/core-session').BatchKey | undefined
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const uncertain = armed && (mode === 'unknown' || mode === 'unknown-absent') && !originalKey && JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((event: { type: string }) => event.type === 'model/exchange-accepted')
+      if (uncertain) { originalKey = args[3].key; if (mode === 'unknown-absent') return { kind: 'unknown', key: originalKey } }
+      const outcome = await append(...args)
+      if (uncertain) return { kind: 'unknown', key: originalKey! }
+      return outcome
+    },
+    wrapOwnedReconcile: reconcile => (...args) => armed && (mode === 'unknown' || mode === 'unknown-absent') && !unknownReady ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args),
+  })
   const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const sources = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
   const begin = document.beginAction.bind(document)
   document.beginAction = signal => { const action = begin(signal), register = action.registerSettlementSource.bind(action); action.registerSettlementSource = (...args) => { const source = register(...args); sources.add(source); return source }; return action }
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  let unknownReady = false, originalKey: import('@i-harness/core-session').BatchKey | undefined
-  backend.appendOwnedBatch = async (...args) => {
-    const uncertain = (mode === 'unknown' || mode === 'unknown-absent') && !originalKey && JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((event: { type: string }) => event.type === 'model/exchange-accepted')
-    if (uncertain) { originalKey = args[3].key; if (mode === 'unknown-absent') return { kind: 'unknown', key: originalKey } }
-    const outcome = await append(...args)
-    if (uncertain) return { kind: 'unknown', key: originalKey! }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = (...args) => (mode === 'unknown' || mode === 'unknown-absent') && !unknownReady ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
+  armed = true
   const server = await createLoopbackProvider('/v1/chat/completions', [async response => { if (mode === 'fetch-fault') response.destroy(); else response.end(wire(true, mode === 'refusal' ? 'content_filter' : mode === 'truncation' ? 'length' : 'tool_calls')) }, async response => { response.end(wire(false)) }])
   const ctx = createContext(), tools = createToolRegistry(ctx), stop = new AbortController()
   let effects = 0, held = 0, retained = 0, promoted = 0, failedFlush = false
@@ -77,11 +79,14 @@ it.each(['success', 'notification-fault', 'flush-fault', 'stop', 'unknown', 'unk
     if (mode === 'success') { expect(result).toMatchObject({ finalText: 'done' }); expect(handoffs).toHaveLength(2); expect(effects).toBe(1) }
     else { expect(result).toBeInstanceOf(Error); expect(effects).toBe(0); expect(server.requests).toHaveLength(1); expect(handoffs).toHaveLength(mode === 'notification-fault' ? 1 : 0) }
     if (mode === 'unknown' || mode === 'unknown-absent') {
-      // Both the uncertain acceptance and its gated unstarted result remain
-      // original producers until that same acceptance frame reconciles.
-      expect(held).toBe(2)
+      // An uncertain acceptance keeps both original producers pinned until its
+      // frame reconciles. When the batch never reached the journal the drain's
+      // own reconcile resolves it to a definitive absence, so both are released.
+      expect(held).toBe(mode === 'unknown' ? 2 : 0)
       unknownReady = true
-      expect(await document.reconcile(originalKey!)).toMatchObject({ kind: mode === 'unknown' ? 'committed' : 'absent' })
+      // The absent arm never reached the journal at all, so the document
+      // reconcile reports the batch as not-issued rather than absent.
+      expect(await document.reconcile(originalKey!)).toMatchObject({ kind: mode === 'unknown' ? 'committed' : 'not-issued' })
       for (const source of sources) await source.close()
       await coordinator.close()
       expect(handoffs).toHaveLength(0)

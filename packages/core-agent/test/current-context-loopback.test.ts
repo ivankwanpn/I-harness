@@ -82,16 +82,17 @@ it('explicit source-boundary publisher sends the owned current prefix once throu
 
 it('retains the exact issued current capture after lost response and joins reconciliation before close', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-c12-unknown-'))
-  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  let issued = 0, captures = 0, blocked = true, armed = false, originalKey: unknown
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: actual => async (...args) => {
+      const result = await actual(...args)
+      if (armed && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { issued++; originalKey = args[3].key; return { kind: 'unknown', key: args[3].key } }
+      return result
+    },
+    wrapOwnedReconcile: actualReconcile => async (...args) => { if (armed) expect(args[3].key).toEqual(originalKey); return armed && blocked ? { kind: 'unknown', key: args[3].key } : actualReconcile(...args) },
+  }), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const actual = backend.appendOwnedBatch!, actualReconcile = backend.reconcileOwnedBatch!
-  let issued = 0, captures = 0, blocked = true, originalKey: unknown
-  backend.appendOwnedBatch = async (...args) => {
-    const result = await actual(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { issued++; originalKey = args[3].key; return { kind: 'unknown', key: args[3].key } }
-    return result
-  }
-  backend.reconcileOwnedBatch = async (...args) => { expect(args[3].key).toEqual(originalKey); return blocked ? { kind: 'unknown', key: args[3].key } : actualReconcile(...args) }
+  armed = true
   const service = createRuntimeContext(document.view, signal => {
     const action = document.beginAction(signal)
     return { finish: action.finish, captureRuntimeContext(record, check) { captures++; return action.captureRuntimeContext(record, check) } }

@@ -14,13 +14,15 @@ import { observeModelClient } from '@i-harness/llm-seam'
 import { localTestGeneration } from './fixtures/generation.ts'
 
 it.each(['truncated','refused','empty'] as const)('retains the original %s step closure and its remaining turn closure exactly once after unknown',async kind=>{
-  const root=await mkdtemp(join(tmpdir(),'ih-f1-closure-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+  const root=await mkdtemp(join(tmpdir(),'ih-f1-closure-'))
+  let key:BatchKey|undefined,sends=0,hooks=0,blocked=true,armed=false
+  const backend=createJsonlBackend(root,{
+    wrapOwnedBatch:append=>async(...args)=>{const out=await append(...args);if(armed&&decodeFactBatch(args[3].bytes).events.some(event=>event.type==='step/end')){key=args[3].key;return{kind:'unknown',key}}return out},
+    wrapOwnedReconcile:reconcile=>async(...args)=>armed&&blocked?{kind:'unknown',key:args[3].key}:reconcile(...args),
+  }),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
   const {id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),ctx=createContext(),tools=createToolRegistry(ctx)
-  let key:BatchKey|undefined,sends=0,hooks=0,blocked=true
   ctx.on('agent/stop',()=>{hooks++})
-  const actual=backend.appendOwnedBatch!,reconcile=backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch=async(...args)=>{const out=await actual(...args);if(decodeFactBatch(args[3].bytes).events.some(event=>event.type==='step/end')){key=args[3].key;return{kind:'unknown',key}}return out}
-  backend.reconcileOwnedBatch=async(...args)=>blocked?{kind:'unknown',key:args[3].key}:reconcile(...args)
+  armed=true
   const model = observeModelClient(createMockClient([{ role: 'assistant', ...(kind === 'empty' ? {} : { [kind]: true }) }]), { start() { sends++ }, finish() {} })
   const agent=createAgent(ctx,{session:document.view,factOwner:document,generationFactory:localTestGeneration(document,id,model),sessionId:id,tools,systemPrompt:'',model})
   try{

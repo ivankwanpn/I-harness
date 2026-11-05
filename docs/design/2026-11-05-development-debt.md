@@ -80,6 +80,23 @@ round 190：code-mode 收尾兩檔。`register.test.ts` 的兩個 durable 案例
   （`expect(current.code.dispose()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})`）
   再在 finally 吞掉重試，不改變產品語義。code-mode **28/28 檔、365/365 tests 全綠**。
 
+round 191：core-agent 的 seam 遷移（5 檔 / 21 tests 全綠）。
+  - `soft-sequence-settlement`（3）：`writes`／`armed` 提前；第一個案例 hook 從
+    `beginAction` 之後生效，第二個案例必須**等 `beginSoftSequence` 寫完**才 `armed=true`
+    （原本 patch 的時點就是這樣）。
+  - `retained-boundaries`（3）、`current-context-loopback`（1 個案例）：
+    `wrapOwnedBatch`／`wrapOwnedReconcile` ＋ open 之後 `armed`。
+  - `held-policy-receipt`（1）：真正的紅不是 seam，而是 `TASK_TRANSITION_FAILED`
+    （cause `TASK_TRANSITION_RECOVERY_REQUIRED`）——fixture 用手寫 JSONL 造了一個
+    **format-14 但沒有 task document** 的會話。修法：改走產品的 bootstrap
+    （`coordinator.create({sessionId})` → `coordinator.append(id, seeded events)`），
+    不再手寫 header。
+  - `instruction-request-context`（10）：`wrapOwnedBatch`／`wrapOwnedReconcile` ＋
+    `armed`。unmask 後只剩 `unknown-absent` 一個 arm：該 arm **完全沒有寫進 journal**，
+    所以 drain 內的 reconcile 會落到 `absent`、pin 立即釋放（`held=0`），
+    `document.reconcile` 回 `not-issued` 而不是 `absent`。這是可辯護的產品行為
+    （批次從未 issue），已把期待改成逐 arm 斷言並加註解。**此點列入待裁定清單**。
+
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
 
@@ -96,6 +113,12 @@ round 190：code-mode 收尾兩檔。`register.test.ts` 的兩個 durable 案例
 > （由 13 紅）：instruction-start-recovery 5/5、surface-publication 7/7、
 > output-owner-boundaries 3/3、store 11/11、register 12/12。剩餘紅：core-agent 33（seam 遷移類）、
 > sdk 5、exec 1、acp 1、core-session 1（效能）、sandbox-windows-acl 2（native）。
+> **round 191**：core-agent 由 9 紅檔 / 33 failed 降到 **3 紅檔 / 13 failed**——
+> soft-sequence-settlement 3/3、retained-boundaries 3/3、held-policy-receipt 1/1、
+> current-context-loopback 2/2、instruction-request-context 12/12 全綠；剩下
+> retained-batch-continuation 4、unstarted-call-settlement 9、compaction-binding 2。
+> 另修掉 core-agent 的 typecheck（`retained-batch-continuation` 的重複 import 與死變數，
+> HEAD 上本來就是紅的）。
 
 ## 為什麼先做這個
 
