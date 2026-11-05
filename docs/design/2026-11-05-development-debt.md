@@ -532,7 +532,7 @@ round 78：`schedule` **2 檔紅 / 4 檔綠（6 檔），3 failed / 97 passed（
   設計）；`schedule/test/fold-bridge.test.ts:78` 卻直接 `toThrow('uncertain')`（期待未包裝的
   原始錯誤）。另兩個測試期待 `undefined` 但收到包裝後的 TypeError。這是測試期待與產品設計
   不一致，需決定：改成斷言 `cause.message === 'uncertain'`，或產品在 `install` 首次失敗時
-  原樣拋出。**round 80 已修**：斷言改為 `TypeError('Original fold callback failed')` 且
+  （`runtime-context` 另計，見下。）**round 80 已修**：斷言改為 `TypeError('Original fold callback failed')` 且
   `cause` 分別是 `'uncertain'`／`undefined`（產品 fail-closed 設計不變）→ **`schedule`
   6/6 檔、100/100 tests 全綠**。
 round 75：`core-tools` **24 檔 / 187 tests 全綠**；`exec` **1 檔紅 / 28 檔綠（29 檔），
@@ -565,7 +565,12 @@ round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed�
   `it.each(['committed','absent','install'])`，只有 `absent` 這輪失敗，失敗點是 line 57 的
   `await expect(f.rc.settleOriginals()).rejects.toThrow()`——`absent`  disposition 在
   `allow()` 之前 `settleOriginals()` 直接 resolve。下一步：確認 absent 的 settle 是否應在
-  `allow()` 前拒絕（與 committed/install 對齊），或測試期待需調整。
+  `allow()` 前拒絕（與 committed/install 對齊），或測試期待需調整。**round 81 分析**：
+  fixture 的 absent 路徑讓 `appendOwnedBatch` 只回 `{kind:'unknown'}`（不寫入）、`reconcile`
+  在 `allow()` 前也回 `unknown`；`settleOriginals()` 的 `reconcileRecords` 只把 absent/not-issued
+  放進 refused 而不拋，所以 absent 這輪 resolve 是**產品既有語義**（committed/install 才會因
+  `unknown` 拋）。測試卻對三個 disposition 一律要求 reject；修正需把 absent 那輪改成
+  `resolves` 並重新推導 counts（`finishes` 會變 1），屬測試期待調整，需一併改 line 56–60 的計數。
 - `llm-seam`：**22 檔 / 188 tests，1 紅**（21 檔綠）。唯一紅是 `terminal-ownership-contract.test.ts`：它期待 private SDK ownership bridge 的 production importer 只有 `['.', './internal/bedrock-terminal']`，實際收到 4 個（已有額外檔案 import）。這是未量測套件既有紅，列入第 5 項待修。
   round 30 修正：它比的是 `package.json` 的 exports 清單，而該清單後來多了
   `./internal/passive-observation` 與 `./internal/stream-lifetime` 兩個已審查的內部 bridge；
