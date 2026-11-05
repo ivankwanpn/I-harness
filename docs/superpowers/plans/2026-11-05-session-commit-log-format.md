@@ -1199,6 +1199,18 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 88 (found, not fixed): a desktop todo write breaks the in-turn todo_write
+
+On a cold commit-log session `desktop/session/work-state` is `{todos:null, todosRevision:0, goal:null}` and
+`desktop/session/todo/write` works: the first write returns the list with `todosRevision:1`, the read matches, and a stale
+`expectedRevision` is refused with `Todo list changed (revision 1). Reload it before saving your edit.`
+
+However, when that write happens **before** a model turn, the in-turn `todo_write` tool then fails with
+`Original Task projection owner required` and the prompt itself rejects. The probe was removed from the turn test; this is the next
+investigation: the desktop write path and the managed task projection must agree on the owner (likely the task document owner/revision
+taken by `writeTodos` is not the one the managed tool expects).
+
 ## Plan 87 (implemented 2026-11-06): execution cursor bounds
 
 The execution view validates its cursor before reading: a negative offset or a limit above 20 is rejected with
