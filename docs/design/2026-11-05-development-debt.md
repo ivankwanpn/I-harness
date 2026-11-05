@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 302（document 錯誤路徑）**：legacy document 讀取失敗會原樣拋出（不再回 undefined）；corrupt `__documents__` log
+> 讓讀寫都拒絕。
 > **round 301（legacy list 錯誤）**：`list()` 不再吞掉 legacy list 失敗（原先錯誤會讓 store 看起來是空的），改為原樣拋出；
 > 另移除 child capture 的冗餘 try/throw。
 > **round 300（legacy 讀取錯誤）**：`readLegacy` 只把 ENOENT 映射成 not-found，其餘原樣拋出；新增「缺 journal 的舊 header」

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -38,6 +38,24 @@ afterEach(async () => {
 })
 
 describe('commit coordinator', () => {
+  it('surfaces a legacy document read failure instead of returning undefined', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-commit-legacy-doc-'))
+    roots.push(root)
+    const coordinator = createCommitCoordinator({ root, legacy: { read: async () => { throw new Error('missing') }, list: async () => [], readDocument: async () => { throw new Error('legacy document failed') } } })
+    coordinators.push(coordinator)
+    await expect(coordinator.getDocument('task-x')).rejects.toThrow('legacy document failed')
+  })
+
+  it('refuses a corrupt document log instead of ignoring it', async () => {
+    const { root, coordinator } = await setup()
+    await coordinator.putDocument('a', { value: 1 })
+    const documentPath = join(root, '__documents__', `session.v15.jsonl`)
+    const existing = await readFile(documentPath, 'utf8')
+    await writeFile(documentPath, existing + '{"not":"a commit"}\n', 'utf8')
+    await expect(coordinator.putDocument('b', { value: 2 })).rejects.toBeTruthy()
+    await expect(coordinator.getDocument('a')).rejects.toBeTruthy()
+  })
+
   it('surfaces a legacy list failure instead of reporting an empty store', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-commit-legacy-list-'))
     roots.push(root)

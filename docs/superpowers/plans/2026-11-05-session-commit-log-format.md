@@ -1173,6 +1173,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 54 (implemented 2026-11-06): document store error paths
+
+`getDocument` propagates a legacy document read failure instead of returning `undefined`, and a corrupt `__documents__` log refuses
+both reads and writes (`CommitFormatError`) rather than silently ignoring the damaged tail. Both are covered in
+`commit-coordinator.test.ts`.
+
 ## Plan 53 (implemented 2026-11-06): a broken legacy store is not an empty store
 
 `list()` swallowed legacy list failures (`catch(() => [])`), so an unreadable legacy store silently looked empty. It now rethrows;
