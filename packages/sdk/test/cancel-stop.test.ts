@@ -24,7 +24,24 @@ async function boundary<T>(work: Promise<T>): Promise<T> {
 }
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ih-sdk-stop-')), sessions = join(root, 'sessions')
-  const backend = createJsonlBackend(sessions), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let unknown = false, allow = false, armed = false, key: BatchKey | undefined, reconciles = 0
+  const closeKeys: string[] = [], receipts: unknown[] = []
+  const backend = createJsonlBackend(sessions, {
+    wrapOwnedBatch: append => async (...args) => {
+      if (!armed) return append(...args)
+      const closes = decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/delivery-generation' && event.op === 'close')
+      if (closes) { key = args[3].key; closeKeys.push(key.batchId); entered.resolve(); await release.promise }
+      const outcome = await append(...args)
+      if (closes) { receipts.push(outcome); if (unknown && !allow) return { kind: 'unknown', key: args[3].key } }
+      return outcome
+    },
+    wrapOwnedReconcile: reconcile => async (...args) => {
+      if (!armed) return reconcile(...args)
+      if (args[3].key.batchId === key?.batchId) { reconciles++; if (unknown && !allow) return { kind: 'unknown', key: args[3].key } }
+      return reconcile(...args)
+    },
+  }), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 'stop' })
   const modelEntered = Promise.withResolvers<void>(), modelRelease = Promise.withResolvers<void>()
   let calls = 0, signal: AbortSignal | undefined
@@ -36,21 +53,7 @@ async function fixture() {
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
     model, approveAll: true, modelPolicy: 'test-mock', codeMode: { mode: 'off' } })
   await service.submit('stop', 'first completed turn', new AbortController().signal)
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  let unknown = false, allow = false, key: BatchKey | undefined, reconciles = 0
-  const closeKeys: string[] = [], receipts: unknown[] = []
-  backend.appendOwnedBatch = async (...args) => {
-    const closes = decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/delivery-generation' && event.op === 'close')
-    if (closes) { key = args[3].key; closeKeys.push(key.batchId); entered.resolve(); await release.promise }
-    const outcome = await append(...args)
-    if (closes) { receipts.push(outcome); if (unknown && !allow) return { kind: 'unknown', key: args[3].key } }
-    return outcome
-  }
-  backend.reconcileOwnedBatch = async (...args) => {
-    if (args[3].key.batchId === key?.batchId) { reconciles++; if (unknown && !allow) return { kind: 'unknown', key: args[3].key } }
-    return reconcile(...args)
-  }
+  armed = true
   const options = { coordinator, async listSessions() {
     const { session } = await coordinator.snapshot!('stop')
     return { sessions: [{ id: 'stop', turnCount: session.events.filter(event => event.type === 'turn/start').length }] }

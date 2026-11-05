@@ -3,6 +3,9 @@
    **round 161**：`result-page`、`session-context` 亦遷移 → **9 failed / 110 passed（119）**。
 round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 timeout 露出真因
   round 163 查證：`cancel-stop.test.ts` 的兩個 hook（append/reconcile）是**在** `service.submit(...)`
+  **round 164 已實作**：`cancel-stop` 5 個 hook 遷到 seam ＋ armed 旗標 → **4/5 通過**；
+  剩「an independent actual fork finishes while the original cancel Stop remains held」
+  （`Original Stop boundary pending`，該案自身的 4s 邊界）。
   **之後**才安裝的，正是 round 135 的 `armed` 情境。遷移步驟：把 `entered/release/unknown/allow/key/
   reconciles/closeKeys/receipts` 宣告提前到 `createJsonlBackend` 之前、加 `armed=false`、
   wrapper 內 `if(!armed) return append(...)`、`service.submit` 之後 `armed=true`。
