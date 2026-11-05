@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({ next: 100n, live: new Map<bigint, string>(), memory: new Map<bigint, bigint | number>(), failAlloc: false, failClose: 0n, decodeFailures: 0, freeFailures: 0, freeCalls: 0, revokeFails: false, api: {} as any }))
-vi.mock('koffi', async original => { const actual = await original<any>(); return { ...actual, default: { ...actual.default, free: (p: bigint) => { state.freeCalls++; if (state.freeFailures-- > 0) throw new Error('free failed'); if (state.live.get(p) !== 'heap') throw new Error('allocator mismatch'); state.live.delete(p) }, encode: (p: bigint, _type: unknown, value: bigint | number) => { state.memory.set(p, value) } } } })
+vi.mock('koffi', async original => { const actual = await original<any>(); return { ...actual, default: { ...actual.default, decode: (p: bigint, type: unknown, length: unknown) => type === 'char16' ? 'S-1-5-5-1-2' : actual.default.decode(p, type, length), free: (p: bigint) => { state.freeCalls++; if (state.freeFailures-- > 0) throw new Error('free failed'); if (state.live.get(p) !== 'heap') throw new Error('allocator mismatch'); state.live.delete(p) }, encode: (p: bigint, _type: unknown, value: bigint | number) => { state.memory.set(p, value) } } } })
 vi.mock('../src/ffi.ts', async original => { const actual = await original<any>(); const alloc = () => { if (state.failAlloc) { state.failAlloc = false; throw new Error('allocation failed') } const p = state.next++; state.live.set(p, 'heap'); return p }; return { ...actual, allocBytes: alloc, allocUint32: alloc, allocPtrSlot: alloc, decodePtr: (p: bigint) => { if (state.decodeFailures-- > 0) throw new Error('decode failed'); return state.memory.get(p) ?? null }, decodeUint32: (p: bigint) => Number(state.memory.get(p)), encodeUint32: (p: bigint, n: number) => { state.memory.set(p, n) }, decodePtrAt: () => 99n, ptrAddress: (p: bigint) => p, win32: async () => state.api } })
 vi.mock('../src/acl.ts', async original => { const actual = await original<any>(); return { ...actual, grantWrite: () => {}, revokeWrite: () => { if (state.revokeFails) throw new Error('revoke failed'); return true } } })
 import { openCurrentProcessToken, findLogonSid, makeWellKnownSid, createRestrictedToken, setTokenDefaultDaclGrant } from '../src/token.ts'
@@ -19,6 +19,7 @@ beforeEach(() => {
     getTokenInformation: (_t: bigint, cls: number, buffer: Buffer | null, _n: number, size: bigint) => { state.memory.set(size, 24); if (!buffer) return 0; buffer.writeUInt32LE(cls === 2 ? 1 : 0, 0); if (cls === 2) buffer.writeUInt32LE(0xc0000000, 16); return 1 },
     getLengthSid: () => 12, copySid: () => 0, createWellKnownSid: () => 0, isValidSid: () => 1,
     setEntriesInAclW: (_n: number, _access: unknown, _acl: bigint, slot: bigint) => { state.memory.set(slot, resource('local')); return 0 }, setTokenInformation: () => 0,
+    convertSidToStringSidW: (_sid: bigint, slot: bigint) => { state.memory.set(slot, resource('local')); return 1 },
     localFree: (p: bigint) => { expect(state.live.get(p)).toBe('local'); state.live.delete(p); return null },
   }
 })
