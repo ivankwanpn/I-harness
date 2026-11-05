@@ -3,19 +3,20 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { committedFactSeqs, createNondurableFactOwner, createSession, type CapturedSettlementFact, type ProducerFactOutcome, type SettlementFacts } from '@i-harness/core-session'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 
 it.each(['managed', 'nondurable'] as const)('rejects optional facts and accessor discriminators at every required source constructor before lowering (%s)', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-required-port-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let lowerings = 0, accessors = 0, writes = 0, traps = 0
+  // Bound before construction: the coordinator captures the backend's original
+  // owned-batch descriptor, so a later patch is PROCESS_READ_UNAVAILABLE.
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { writes++; return append(...args) } })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const owner = mode === 'managed' ? document : createNondurableFactOwner(createSession())
   const action = owner.beginAction(), source = action.registerSettlementSource(async () => {})
   const before = await readFile(join(root, `${id}.jsonl`))
-  let lowerings = 0, accessors = 0, writes = 0, traps = 0
-  const actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { writes++; return actual(...args) }
   const call = { type: 'tool/call', callId: 'never', name: 'never', args: { toJSON() { lowerings++; return {} } } }
   const store = { type: 'code/store', version: 1, cellId: 'never', writes: [['key', 7]] }
   const rows: { name: string; port(source: SettlementFacts<ProducerFactOutcome>): (...args: never[]) => unknown; event: unknown }[] = [
