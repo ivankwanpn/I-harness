@@ -522,6 +522,12 @@ round 28/29 量了兩個小套件：
   **7 檔 / 93 tests 全綠**。
 round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed（176）**；
   `core-session` **1 檔紅 / 86 檔綠（87 檔），1 failed / 932 passed（933）**。
+  紅點名稱：`core-session` =「durable exchange acceptance > indexes a large prefix once
+  and visits only each proposed suffix」→ `expected +0 to be 20000`；`provider` =
+  「preserves invalid raw input -1／1.5 without declaring accounting」（多了一個欄位）、
+  「does not add a marker to signed or redacted assistant thinking」與「explicit off removes
+  supported Responses content breakpoints while preserving tool data」（皆 `expected undefined
+  to be defined`）。
 - `runtime-context` = **「original-only management settles actual
   absent without getter/action/retain or publication replay」→ resolved undefined instead
   of rejecting**（語義類）。round 66 定位：`test/original-disposition.test.ts:52` 的
