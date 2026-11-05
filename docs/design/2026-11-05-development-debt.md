@@ -97,6 +97,21 @@ round 191：core-agent 的 seam 遷移（5 檔 / 21 tests 全綠）。
     `document.reconcile` 回 `not-issued` 而不是 `absent`。這是可辯護的產品行為
     （批次從未 issue），已把期待改成逐 arm 斷言並加註解。**此點列入待裁定清單**。
 
+round 193：core-agent 收尾兩檔。
+  - `unstarted-call-settlement`（9）：`setup(seams)` ＋ `arm()`（hook 在 open 之後才生效），三個測試的
+    append/reconcile 掛鉤全部搬進 seam。unmask 後只剩 `unknown-to-absent` 一個 arm：fixture 在
+    **沒有真正 append** 的情況下回報 unknown，產品的 `document.reconcile` 會走
+    `resolveUnissuedConflict`（managed-document.ts:637-643，只有發行過的批次才 fail-closed）把
+    「未發行的 unknown」判成**可證明的 absent**，所以 mount 不需要保持 reconciliation，稍後的
+    reconcile 回 `not-issued`。已把期待改成逐 arm 斷言並在碼內寫明規則（**issued** 才保留 hold）。
+    → **14/14 全綠**。
+  - `compaction-binding`（1）：不是 seam。「reused main client」案例斷言 summary body 的 system
+    要含 `main authority`，但 `compaction/src/summary/generate.ts:30-40` 的 A-04 註解明確寫著
+    **summary 是專用 request，不複製 main 的 system prompt 與 tool catalogue**。產品是對的、
+    斷言過時：改成斷言「不洩漏 main system」、「tools 為空」、仍繼承 main 的 reasoning budget
+    （`budget_tokens: 4095`）。→ **9/9 全綠**。此點即先前待裁定的 SYS-PROMPT 語義，證據是
+    產品內的 A-04 設計註解。
+
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
 
@@ -119,8 +134,9 @@ round 191：core-agent 的 seam 遷移（5 檔 / 21 tests 全綠）。
 > retained-batch-continuation 4、unstarted-call-settlement 9、compaction-binding 2。
 > **交接（round 192 收尾）**：下一步是 `unstarted-call-settlement`（9）——它的 `setup()`
 > 目前回傳 `backend` 讓測試事後 patch；照 round 192 的 `fixture(names, seams)` ＋ `arm()`
-> 模式改即可（hook 在 `openManagedDocument` 之後才生效）。之後 compaction-binding 2
-> （其中「SAME system prompt」屬待裁定的 SYS-PROMPT 語義）、sdk 5、exec 1、acp 1、
+> 模式改即可（hook 在 `openManagedDocument` 之後才生效）。**round 193 已完成**：
+> `unstarted-call-settlement` **14/14**、`compaction-binding` **9/9**（SYS-PROMPT 一條已按 A-04
+> 改成「專用 summary request」斷言）。接著：sdk 5、exec 1、acp 1、
 > core-session 1、sandbox-windows-acl 2（native），最後是 session-persistence-jsonl 全套。
 > 另修掉 core-agent 的 typecheck（`retained-batch-continuation` 的重複 import 與死變數，
 > HEAD 上本來就是紅的）。**round 192**：`retained-batch-continuation` 的 `fixture()` 加上

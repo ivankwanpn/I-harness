@@ -60,7 +60,11 @@ it("recognizes an explicitly reused main client after session attribution wrappi
     contextMetadata: { version: 1, modelId: "claude-3-7-sonnet", protocol: "anthropic-messages", contextWindow: 100000, identityCoverage: "partial" },
     compact: { contextWindow: 100000, summarizationModel: model } })
   expect((await agent.compact!()).compacted).toBe(true)
-  expect(JSON.stringify(bodies[0]!.system)).toContain("main authority")
+  // A-04: the summary is a dedicated request, so reusing the main client inherits
+  // its model and reasoning budget but never copies the main system prompt or tool
+  // catalogue into the summary transport.
+  expect(JSON.stringify(bodies[0]!.system)).not.toContain("main authority")
+  expect(bodies[0]!.tools ?? []).toEqual([])
   expect(bodies[0]).toMatchObject({ thinking: { type: "enabled", budget_tokens: 4095 } })
 })
 

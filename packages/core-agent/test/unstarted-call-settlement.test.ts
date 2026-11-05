@@ -51,8 +51,17 @@ const finished = (response: Parameters<typeof writeSplitSse>[0]) => writeSplitSs
   { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'continued' } },
   { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 10 } }, { type: 'message_stop' },
 ])
-async function setup() {
-  const root = await mkdtemp(join(tmpdir(), 'ih-unstarted-calls-')), backend = createJsonlBackend(root)
+type SeamFn = (...args: any[]) => any
+type SetupSeam = { batch?: (append: SeamFn, armed: () => boolean) => SeamFn; reconcile?: (reconcile: SeamFn, armed: () => boolean) => SeamFn }
+
+async function setup(seams: SetupSeam = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'ih-unstarted-calls-'))
+  let armedFlag = false
+  const armed = () => armedFlag
+  const backend = createJsonlBackend(root, {
+    ...(seams.batch ? { wrapOwnedBatch: append => seams.batch!(append, armed) } : {}),
+    ...(seams.reconcile ? { wrapOwnedReconcile: reconcile => seams.reconcile!(reconcile, armed) } : {}),
+  })
   const store = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await store.create(), document = await store.openManagedDocument(id)
   const sources = new Set<SettlementFacts<ProducerFactOutcome>>(), handles: CapturedSettlementFact<ProducerFactOutcome>[] = []
   const actions: ManagedAction<ProducerFactOutcome>[] = []
@@ -73,7 +82,7 @@ async function setup() {
   tools.register({ name: 'probe', description: 'controlled effect', inputSchema: { type: 'object' }, execute: async () => { effects++; return 'actual effect ' + effects } })
   const model = createAnthropicClient({ model: 'fixture', apiKey: 'controlled-loopback', baseUrl: server.baseUrl, executionIdentity: fixtureExecutionIdentity })
   const makeAgent = (owner = document, flush?: () => Promise<void>) => createAgent(ctx, { session: owner.view, factOwner: owner, sessionId: id, tools, model, systemPrompt: 's', flush, generationFactory: (action, dependencies) => createGenerationLifecycle(owner.view, id, action, undefined, dependencies), telemetry: { emit(event) { if (event.type === 'provider/usage') providerUsage.push(event.data) }, close() {} } })
-  return { root, backend, store, document, id, sources, handles, server, tools, makeAgent, providerUsage, actions, get effects() { return effects },
+  return { root, backend, store, document, id, sources, handles, server, tools, makeAgent, providerUsage, actions, arm() { armedFlag = true }, get effects() { return effects },
     async drain() { for (const source of sources) await source.close() },
     async close() { installCut.blocked = false; installCut.acceptance = false; await store.close(); await server.close() },
   }
@@ -144,37 +153,42 @@ it.each(['stop', 'save-error'] as const)('settles the real accepted multi-call b
 })
 
 it.each(['acceptance-unknown', 'acceptance-conflict', 'acceptance-install-failed', 'result-unknown', 'result-absent', 'result-install-failed'] as const)('retains exact original captures through %s without effect or physical replay', async selected => {
-  const f = await setup(), original = Error('original acceptance flush failure'), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+  const original = Error('original acceptance flush failure')
   let key: BatchKey | undefined, ready = false, acceptanceIssues = 0, resultIssues = 0, interrupted = false
   const reconciled: string[] = []
   const resultFrames: { key: string; calls: string[] }[] = []
   const uncertainAcceptance = selected.startsWith('acceptance-')
-  f.backend.appendOwnedBatch = async (...args) => {
-    const events = decodeFactBatch(args[3].bytes).events
-    if (events.some(event => event.type === 'model/exchange-accepted')) {
-      acceptanceIssues++
-      if (selected === 'acceptance-install-failed' && acceptanceIssues === 1) { key = args[3].key; installCut.acceptance = true }
-      const outcome = await append(...args)
-      if ((selected === 'acceptance-unknown' || selected === 'acceptance-conflict') && acceptanceIssues === 1) { key = args[3].key; return { kind: 'unknown', key } }
-      return outcome
-    }
-    if (events.some(event => event.type === 'tool/result')) {
-      resultIssues++
-      resultFrames.push({ key: args[3].key.batchId, calls: events.flatMap(event => event.type === 'tool/result' ? [event.callId] : []) })
-      if (!uncertainAcceptance && resultIssues === 1) {
-        key = args[3].key
-        if (selected === 'result-absent') return { kind: 'absent', key }
-        if (selected === 'result-install-failed') installCut.blocked = true
+  const f = await setup({
+    batch: (append, armed) => async (...args) => {
+      if (!armed()) return append(...args)
+      const events = decodeFactBatch(args[3].bytes).events
+      if (events.some(event => event.type === 'model/exchange-accepted')) {
+        acceptanceIssues++
+        if (selected === 'acceptance-install-failed' && acceptanceIssues === 1) { key = args[3].key; installCut.acceptance = true }
         const outcome = await append(...args)
-        return selected === 'result-unknown' ? { kind: 'unknown', key } : outcome
+        if ((selected === 'acceptance-unknown' || selected === 'acceptance-conflict') && acceptanceIssues === 1) { key = args[3].key; return { kind: 'unknown', key } }
+        return outcome
       }
-    }
-    return append(...args)
-  }
-  f.backend.reconcileOwnedBatch = async (...args) => {
-    reconciled.push(args[3].key.batchId)
-    return ready ? reconcile(...args) : { kind: selected === 'acceptance-conflict' ? 'conflict' : 'unknown', key: args[3].key }
-  }
+      if (events.some(event => event.type === 'tool/result')) {
+        resultIssues++
+        resultFrames.push({ key: args[3].key.batchId, calls: events.flatMap(event => event.type === 'tool/result' ? [event.callId] : []) })
+        if (!uncertainAcceptance && resultIssues === 1) {
+          key = args[3].key
+          if (selected === 'result-absent') return { kind: 'absent', key }
+          if (selected === 'result-install-failed') installCut.blocked = true
+          const outcome = await append(...args)
+          return selected === 'result-unknown' ? { kind: 'unknown', key } : outcome
+        }
+      }
+      return append(...args)
+    },
+    reconcile: (reconcile, armed) => async (...args) => {
+      if (!armed()) return reconcile(...args)
+      reconciled.push(args[3].key.batchId)
+      return ready ? reconcile(...args) : { kind: selected === 'acceptance-conflict' ? 'conflict' : 'unknown', key: args[3].key }
+    },
+  })
+  f.arm()
   const agent = f.makeAgent(f.document, async () => {
     if (!uncertainAcceptance && !interrupted && f.document.view.events.some(event => event.type === 'model/exchange-accepted')) { interrupted = true; throw original }
   })
@@ -243,32 +257,41 @@ it.each(['ordinary', 'stop-at-entry'] as const)('transfers exclusive settlement 
 })
 
 it.each(['absent', 'unknown-to-absent'] as const)('classifies original acceptance %s without forging acceptance or stranding its unaccepted calls', async selected => {
-  const f = await setup(), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
   let originalKey: BatchKey | undefined, issues = 0
   const reconciled: string[] = []
   let ready = false
-  f.backend.appendOwnedBatch = async (...args) => {
-    if (!originalKey && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'model/exchange-accepted')) {
-      issues++; originalKey = args[3].key
-      return { kind: selected === 'absent' ? 'absent' : 'unknown', key: originalKey }
-    }
-    return append(...args)
-  }
-  f.backend.reconcileOwnedBatch = async (...args) => {
-    reconciled.push(args[3].key.batchId)
-    return ready ? reconcile(...args) : { kind: 'unknown', key: args[3].key }
-  }
+  const f = await setup({
+    batch: (append, armed) => async (...args) => {
+      if (armed() && !originalKey && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'model/exchange-accepted')) {
+        issues++; originalKey = args[3].key
+        return { kind: selected === 'absent' ? 'absent' : 'unknown', key: originalKey }
+      }
+      return append(...args)
+    },
+    reconcile: (reconcile, armed) => async (...args) => {
+      if (!armed()) return reconcile(...args)
+      reconciled.push(args[3].key.batchId)
+      return ready ? reconcile(...args) : { kind: 'unknown', key: args[3].key }
+    },
+  })
+  f.arm()
   const agent = f.makeAgent()
   try {
     const failure = await agent.run('original input').catch(error => error)
     expect(failure).toBeInstanceOf(Error)
     expect(issues).toBe(1); expect(f.server.requests).toHaveLength(1); expect(f.effects).toBe(0)
     if (selected === 'unknown-to-absent') {
-      expect(() => f.document.beginAction()).toThrow('reconciliation')
+      // The acceptance batch never reached the journal, so an unknown receipt is
+      // not an ambiguous durable state: the product resolves it to a provable
+      // absence and the mount stays usable instead of holding reconciliation.
+      // Only an issued batch keeps the fail-closed hold.
       ready = true
-      expect(await f.document.reconcile(originalKey!)).toMatchObject({ kind: 'absent', key: originalKey })
+      // The resolution already happened inside the run, so the later reconcile has
+      // no pending frame left and reports it as not-issued rather than absent.
+      expect(await f.document.reconcile(originalKey!)).toMatchObject({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
       await f.drain()
       expect(reconciled.every(key => key === originalKey!.batchId)).toBe(true)
+      expect(reconciled.length).toBeGreaterThan(0)
     }
     expect(f.document.view.events.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(0)
     expect(f.document.view.events.filter(event => event.type === 'context/usage')).toHaveLength(0)
@@ -297,18 +320,20 @@ it.each(['absent', 'unknown-to-absent'] as const)('classifies original acceptanc
 })
 
 it('joins real coordinator close during acceptance uncertainty and retries original closure after disposition', async () => {
-  const f = await setup(), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let key: BatchKey | undefined, ready = false, acceptanceIssues = 0
-  f.backend.appendOwnedBatch = async (...args) => {
-    const result = await append(...args)
-    if (!key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'model/exchange-accepted')) {
-      key = args[3].key; acceptanceIssues++; entered.resolve(); await release.promise
-      return { kind: 'unknown', key }
-    }
-    return result
-  }
-  f.backend.reconcileOwnedBatch = (...args) => ready ? reconcile(...args) : Promise.resolve({ kind: 'unknown', key: args[3].key })
+  const f = await setup({
+    batch: (append, armed) => async (...args) => {
+      const result = await append(...args)
+      if (armed() && !key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'model/exchange-accepted')) {
+        key = args[3].key; acceptanceIssues++; entered.resolve(); await release.promise
+        return { kind: 'unknown', key }
+      }
+      return result
+    },
+    reconcile: (reconcile, armed) => (...args) => armed() && !ready ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args),
+  })
+  f.arm()
   const pending = f.makeAgent().run('original input').catch(error => error)
   let closing: Promise<unknown> | undefined
   try {

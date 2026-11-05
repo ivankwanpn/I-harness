@@ -44,7 +44,8 @@ it('keeps the retained-batch injected failure after the original drain and befor
   expect(order).toEqual(['original drain', 'injection', 'original drain', 'injection'])
 })
 
-type FixtureSeam = { batch?: (append: any, armed: () => boolean) => any; reconcile?: (reconcile: any, armed: () => boolean) => any }
+type SeamFn = (...args: any[]) => any
+type FixtureSeam = { batch?: (append: SeamFn, armed: () => boolean) => SeamFn; reconcile?: (reconcile: SeamFn, armed: () => boolean) => SeamFn }
 
 async function fixture(names = ['retained'], seams: FixtureSeam = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-live-batch-core-'))
