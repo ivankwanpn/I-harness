@@ -1167,6 +1167,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 48 (implemented 2026-11-06): CLI transcript tail
+
+`sessions show --last 2` on an SCL store prints only the tail with the `earlier line(s)` marker, covering the transcript window
+path. A concurrent live `execution/read` during a prompt is not testable through one host connection: the RPC replies are serialized
+per connection, so a second request cannot observe the running turn (the read returns after the turn, `live:false`).
+
 ## Plan 47 (implemented 2026-11-06): large-session read cost
 
 Extending the benchmark with a 5,000-event session (about 1.1 MB) shows ten warm reads in **7 ms total** — the fold itself is

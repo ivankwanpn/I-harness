@@ -14,7 +14,7 @@ it('lists commit-log sessions through the sessions command', async () => {
   roots.push(dir)
   const seed = asSessionCoordinator(createJsonlCommitCoordinator(dir, { lock: { enabled: true, lockRoot: dir } }))
   await seed.create({ sessionId: 's1', title: 'Commit log session' })
-  await seed.append('s1', [{ type: 'user/message', text: 'hello there' }, { type: 'assistant/message', text: 'general kenobi' }])
+  await seed.append('s1', [{ type: 'user/message', text: 'first line' }, { type: 'assistant/message', text: 'second line' }, { type: 'user/message', text: 'third line' }, { type: 'assistant/message', text: 'fourth line' }])
   await seed.close()
   const before = process.env.IH_SESSION_STORE
   process.env.IH_SESSION_STORE = 'commit-log'
@@ -29,11 +29,17 @@ it('lists commit-log sessions through the sessions command', async () => {
     logs.length = 0
     expect(await runSessionsCommand(['sessions', 'show', 's1', '--session-dir', dir])).toBe(0)
     const shown = logs.join('\n')
-    expect(shown).toContain('hello there')
-    expect(shown).toContain('general kenobi')
+    expect(shown).toContain('first line')
+    expect(shown).toContain('fourth line')
+    logs.length = 0
+    expect(await runSessionsCommand(['sessions', 'show', 's1', '--session-dir', dir, '--last', '2'])).toBe(0)
+    const tail = logs.join('\n')
+    expect(tail).toContain('fourth line')
+    expect(tail).not.toContain('first line')
+    expect(tail).toContain('earlier line(s)')
     logs.length = 0
     expect(await runSessionsCommand(['sessions', 'show', 's1', '--session-dir', dir, '--json'])).toBe(0)
-    expect(logs.join('\n')).toContain('general kenobi')
+    expect(logs.join('\n')).toContain('fourth line')
   } finally {
     console.log = original
     if (before === undefined) delete process.env.IH_SESSION_STORE
