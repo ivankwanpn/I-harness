@@ -240,8 +240,8 @@ function createEmptyRegistry() {
   } as never
 }
 
-describe("the summarizer inherits the main request's shape (M5/D2)", () => {
-  it("a real compaction sends the SAME system prompt and tools as the turn request", async () => {
+describe("the summary request is dedicated, not a copy of the main request (A-04)", () => {
+  it("a real compaction keeps the turn's shape and sends a dedicated summary request", async () => {
     // The failure mode this pins is SILENT: if the agent forgets to hand the
     // engine the request shape, compaction still succeeds, still writes a
     // summary, and nothing anywhere reports a problem — the only symptom is that
@@ -276,13 +276,17 @@ describe("the summarizer inherits the main request's shape (M5/D2)", () => {
     await agent.run("work", undefined)
     expect(session.events.some((e) => e.type === "compaction/replacement")).toBe(true)
 
-    // Every call — the summarizer's and the turn's — carries the shape. Before
-    // D2 the summarizer's had `systemPrompt: ""` and `tools: 0`.
+    // The turn keeps the main shape; the dedicated summary request must NOT copy
+    // it (A-04 superseded the M5/D2 inheritance: copying the main system prompt
+    // and tool catalogue made the summary as large as the work it compresses and
+    // invited tool-call answers that the checkpoint validator treats as blocked).
     expect(seen.length).toBeGreaterThan(1)
-    for (const req of seen) {
-      expect(req.systemPrompt).toBe("SYS-PROMPT")
-      expect(req.tools).toBe(1)
-    }
+    const turn = seen.filter(req => req.systemPrompt === "SYS-PROMPT")
+    const summary = seen.filter(req => req.systemPrompt === "")
+    expect(turn.length).toBeGreaterThan(0)
+    expect(turn.every(req => req.tools === 1)).toBe(true)
+    expect(summary.length).toBeGreaterThan(0)
+    expect(summary.every(req => req.tools === 0)).toBe(true)
   })
 })
 

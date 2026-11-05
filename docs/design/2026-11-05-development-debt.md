@@ -111,6 +111,13 @@ round 193：core-agent 收尾兩檔。
     斷言過時：改成斷言「不洩漏 main system」、「tools 為空」、仍繼承 main 的 reasoning budget
     （`budget_tokens: 4095`）。→ **9/9 全綠**。此點即先前待裁定的 SYS-PROMPT 語義，證據是
     產品內的 A-04 設計註解。
+  - `overflow.test.ts`（最後 1 筆，就是清單裡的「SYS-PROMPT」）：同一個 A-04 衝突。它的
+    describe 是「the summarizer inherits the main request's shape (M5/D2)」，斷言 summary
+    請求的 `systemPrompt` 要等於主請求的 `SYS-PROMPT`、tools 要 1。A-04（2026-11-05，
+    `e5bbe5cf`）比 D2（2026-09-18，`3ac561e8`）新，且註解說明了複製主請求的失敗模式，
+    所以改寫成：turn 請求維持 `SYS-PROMPT`／1 tool，summary 請求是**專用**的
+    （`systemPrompt: ''`／0 tool）。→ `overflow` **13/13**，core-agent 全套
+    **649/649（79 檔）**。
 
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
