@@ -1008,6 +1008,12 @@ log. This is the first end-to-end CLI turn on the commit-log store.
 `host-commit-log-turn.test.ts` now also sets the live model (`session/model/set` with `{provider,model}`) and runs a second
 prompt through the rebound assembly, so the host's in-place rebind works with the commit-log execution attachment.
 
+## Plan 26 (implemented 2026-11-05): execution, task and process reads on SCL
+
+After two turns the host's `desktop/session/execution/read`, `desktop/session/tasks/integrity` and
+`desktop/session/processes/read` all succeed on the commit-log store, covering the execution attachment read path, the task
+projection and the agent-process projection.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
