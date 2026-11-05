@@ -539,6 +539,12 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 97 排除**：在 `startInner` 的 flight 上「barrier.headerCommitted 為真時清
   **round 98 實測欄位**（`closeOne`，`bootstrap-stage-swap`）：
   **round 99 排除**：在 `startInner` 的 flight 上「outcome 為 ready／already-ready 就清
+  **round 102**：`trackBootstrap`（bootstrap.ts:128–148）只負責 process latch 的 witness，
+  不碰 entry 的 `headerUnknown`；`attach`（managed-documents.ts:37）對已有 document 的 entry
+  直接回傳，不會換 entry；而 `adopt`（唯一會產生帶 document 的 `already-ready` 的地方）
+  必會 `attach`，所以 round 98 印到的 `document:false` 與「第二次 resume 回 already-ready」矛盾。
+  結論：那個 `already-ready` 很可能來自 observations 層（`withBootstrapResume`）合成的結果，
+  而非 `managed.resumeSemanticTarget`；下一輪要查該 wrapper。
   `headerUnknown`」仍三檔全紅 → 表示第二次 resume 的 `already-ready` 沒有經過該 flight（或
   close 時 `documents` 裡的 entry 不是 flight 的 `owned`）。下一步必須在 close 時印出
   `documents` 的所有 key 與 `owned` 的參照比較，確認是否有第二個 entry 存在。
