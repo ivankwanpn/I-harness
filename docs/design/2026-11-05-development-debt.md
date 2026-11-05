@@ -544,6 +544,11 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 104 執行期追蹤**：stage-swap 測試中 `adopt` 與 remap 都有跑，且都是
   **round 105 決定性證據**：`documents` 只有一個 key `target`；close 時該 entry 是
   **round 106 決定性證據**：在 `startInner` 的 `documents.set`（line 605）與 flight finally 的
+  **round 107**：`documents.delete` 共 7 處——bootstrap.ts:608（已驗證未觸發）、:681（capture
+  finally，需 `!b.issued`）、:877、:908（selected/capture）、managed-documents.ts:66、:98、:255
+  （open 失敗處理）。下一步在 :66、:255、:681、:877、:908 各插一行 log（帶 stack）即可定位；
+  其中 :255 的 `open` rejection 路徑最可疑（若第一次 resume 的 open 以 rejection 結束，entry
+  會被直接刪除，而 `blocked` outcome 仍可能被回傳）。
   `delete` 各加 log，stage-swap 測試印出**兩次 `NEW_ENTRY target`**（都來自 `startInner`），
   而**沒有**任何 `DEL_ENTRY`——即第二次 resume 時 `documents` 是空的，第一次 blocked resume
   的 entry 被「別的路徑」移除了（不是 startInner 的 flight finally）。下一步：在所有
