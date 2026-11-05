@@ -180,6 +180,10 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 207（claim 族的第二個語義叉路）**：`task-transition-direct-lease` 要求
+> **一次普通的 parent append 期間也必須持有 `doc:task-p` lease**（測試在 append 進行中讓另一個
+> ownership `acquireLease('doc:task-p')` 期待被拒），現在會成功。這與 Q1/Q2 同類：是「append 是否
+> 必須序列化到 task document」的產品契約問題。待你裁定或明確授權「以測試為規格」後再動。
 > **round 206（task-transition 群像）**：9 檔現在 **8 紅**，且第一個紅都不再是檔案存在性，而是
 > 同一族「**失敗/blocked 之後沒有保留原 claim/lease**」：
 > `promise resolved {held:true} instead of rejecting`（header-debt、direct-lease、
