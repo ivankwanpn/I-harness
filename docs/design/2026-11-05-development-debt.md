@@ -43,6 +43,23 @@ round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 ti
   **`PROCESS_READ_UNAVAILABLE`**（建構後 patch backend，需 seam 遷移）。
    **11 → 10 failed / 109 passed（119）**；剩 1 筆 `TASK_TRANSITION_UNSUPPORTED` 不是建構子路徑。
 
+round 188：`code-mode/test/instruction-start-recovery.test.ts` 4 紅完成 seam 遷移——
+狀態（`released`／`key`／`blocked`）提前宣告、掛鉤搬進 `wrapOwnedBatch`／
+`wrapOwnedReconcile`、`armed` 在 `openManagedDocument` 之後才設 true（＝原本 patch 的位置）。
+遷移後 unmask 出來的真紅不是斷言，而是 **`mount.dispose()` 永遠不 settle**：
+cell 的 `started` receipt 不確定時，terminal fact 被同一條 queue 的 held record 擋住，
+`finalizations.drain()` 等的是永遠不會來的 terminal → dispose 掛死 30s。
+這是 **liveness bug**（fail-closed 應該早點回 `FACT_RECOVERY_REQUIRED`，不是等），
+不是產品守衛放寬：`event-facts` 新增 `recoveryPending()`（sticky recovery／pending record／
+admission hold），dispose 在 drain 前先問；有債就回 `FACT_RECOVERY_REQUIRED` 並**保留**
+finalization reservation，等外部 `document.reconcile` 之後的第二次 dispose 才真的 drain
+（第二次會經 `facts.refresh()` 重推 held record，terminal 才 commit、pin 才 release）。
+結果 `instruction-start-recovery` **5/5 全綠**、code-mode 全套 **11 failed / 354 passed
+（28 檔，4 紅檔：surface-publication 5、output-owner-boundaries 3、register 2、store 1）**。
+另補 `packages/code-mode/vitest.config.ts`（30s，讓真實 fsync/reconcile 航程不被 5s 誤殺）、
+移除 `cell-output-owner-fixture.ts:114` 的死變數（round 183 重構殘留的 TS6133，
+code-mode `tsc --noEmit` 因此由紅轉綠）。
+
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
 
@@ -55,8 +72,9 @@ round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 ti
 > 下一個具體動作見文末「交接：round 32」與其後的 round 41–52 記錄。
 > **round 187 更新**：52 個套件已量測；**10 個由紅轉全綠**（instructions、schedule、
 > runtime-context、guard-retry、guard-repeat-tool、session-query、compaction、workspace、
-> provider、llm-openai）。剩餘紅：code-mode ~12（instruction-start-recovery 4、
-> surface-publication 5、output-owner-boundaries 3、store 1）、core-agent 33（seam 遷移類）、
+> provider、llm-openai）。**round 188**：code-mode 由 13 紅降到 **11 failed / 354 passed
+> （28 檔，4 紅檔）**：instruction-start-recovery 5/5 全綠，剩 surface-publication 5、
+> output-owner-boundaries 3、register 2、store 1。剩餘紅：core-agent 33（seam 遷移類）、
 > sdk 5、exec 1、acp 1、core-session 1（效能）、sandbox-windows-acl 2（native）。
 
 ## 為什麼先做這個

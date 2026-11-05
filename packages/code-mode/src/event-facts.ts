@@ -233,6 +233,10 @@ export function createCodeModeEventFacts(owner: CodeModeFactOwner, drainProducer
     },
     stopOptional() { for (const cell of cells.values()) cell.action.stop() },
     assertObserved() { if (pending.size || admissionNotices.size) throw new FactRecoveryRequiredError() },
+    /** An unadmitted or held fact fences its cell's terminal, so that cell's
+     * original finalization cannot complete until the fact is reconciled
+     * externally. Reported instead of waited on: the hold is resumable. */
+    recoveryPending() { return stickyRecovery || pending.size > 0 || admissionHolds.size > 0 },
     async close() { if (!retired) { retired = true; changed() }; await source.close(); off() },
   }
 }

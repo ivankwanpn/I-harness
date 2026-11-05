@@ -11,16 +11,19 @@ import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts
 import { registerCodeMode } from '../src/register.ts'
 
 it('retains the original cell pin through an uncertain started receipt until interrupted settlement', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-cell-start-recovery-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-cell-start-recovery-'))
+  let released = 0, key: BatchKey | undefined, blocked = true, armed = false
+  const backend = createJsonlBackend(root, {
+    wrapOwnedReconcile: reconcile => async (...args) => armed && blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args),
+    wrapOwnedBatch: append => async (...args) => {
+      const result = await append(...args)
+      if (armed && !key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'started')) { key = args[3].key; return { kind: 'unknown', key } }
+      return result
+    },
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
-  let released = 0, key: BatchKey | undefined, blocked = true
-  const originalAppend = backend.appendOwnedBatch!, originalReconcile = backend.reconcileOwnedBatch!
-  backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : originalReconcile(...args)
-  backend.appendOwnedBatch = async (...args) => {
-    const result = await originalAppend(...args)
-    if (!key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'started')) { key = args[3].key; return { kind: 'unknown', key } }
-    return result
-  }
+  armed = true
   const tools = createToolRegistry(ctx, { instructionOriginVerifier: value => value === origin, instructionCellRetainer: () => ({ bind() { return origin }, async preflight() {}, async release() { released++ } }) })
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   try {
@@ -36,16 +39,19 @@ it('retains the original cell pin through an uncertain started receipt until int
 })
 
 it('retains the original cell pin while Stop races a held started receipt', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-cell-start-stop-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
-  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
+  const root = await mkdtemp(join(tmpdir(), 'ih-cell-start-stop-'))
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), stop = new AbortController()
-  let released = 0
-  const originalAppend = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const result = await originalAppend(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'started')) { entered.resolve(); await release.promise }
-    return result
-  }
+  let released = 0, armed = false
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const result = await append(...args)
+      if (armed && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'started')) { entered.resolve(); await release.promise }
+      return result
+    },
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
+  armed = true
   const tools = createToolRegistry(ctx, { instructionOriginVerifier: value => value === origin, instructionCellRetainer: () => ({ bind() { return origin }, async preflight() {}, async release() { released++ } }) })
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   try {
@@ -61,16 +67,19 @@ it('retains the original cell pin while Stop races a held started receipt', asyn
 })
 
 it('retains the original cell pin and failed terminal through an unknown replan receipt', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-cell-replan-recovery-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-cell-replan-recovery-'))
+  let released = 0, key: BatchKey | undefined, blocked = true, effects = 0, armed = false
+  const backend = createJsonlBackend(root, {
+    wrapOwnedReconcile: reconcile => async (...args) => armed && blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args),
+    wrapOwnedBatch: append => async (...args) => {
+      const result = await append(...args)
+      if (armed && !key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'failed')) { key = args[3].key; return { kind: 'unknown', key } }
+      return result
+    },
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
-  let released = 0, key: BatchKey | undefined, blocked = true, effects = 0
-  const originalAppend = backend.appendOwnedBatch!, originalReconcile = backend.reconcileOwnedBatch!
-  backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : originalReconcile(...args)
-  backend.appendOwnedBatch = async (...args) => {
-    const result = await originalAppend(...args)
-    if (!key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'failed')) { key = args[3].key; return { kind: 'unknown', key } }
-    return result
-  }
+  armed = true
   const tools = createToolRegistry(ctx, { instructionsRequired: true, instructionOriginVerifier: value => value === origin, instructionCellRetainer: () => ({ bind() { return origin }, async preflight() { throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'unseen-rules', currentFingerprint: 'current' }) }, async release() { released++ } }) })
   tools.register({ name: 'write', description: '', inputSchema: {}, captureNativePlan: () => ({ targets: [{ path: process.cwd(), kind: 'directory', mode: 'mutate' }], operation: {} }), execute: async () => { effects++ } })
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
@@ -104,16 +113,19 @@ it('retains the original successful cell terminal when its pin release needs ret
 })
 
 it('does not release a policy-retired cell pin before its uncertain terminal settles', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-cell-policy-recovery-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-cell-policy-recovery-'))
+  let released = 0, key: BatchKey | undefined, blocked = true, armed = false
+  const backend = createJsonlBackend(root, {
+    wrapOwnedReconcile: reconcile => async (...args) => armed && blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args),
+    wrapOwnedBatch: append => async (...args) => {
+      const result = await append(...args)
+      if (armed && !key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'terminated')) { key = args[3].key; return { kind: 'unknown', key } }
+      return result
+    },
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
-  let released = 0, key: BatchKey | undefined, blocked = true
-  const originalAppend = backend.appendOwnedBatch!, originalReconcile = backend.reconcileOwnedBatch!
-  backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : originalReconcile(...args)
-  backend.appendOwnedBatch = async (...args) => {
-    const result = await originalAppend(...args)
-    if (!key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'terminated')) { key = args[3].key; return { kind: 'unknown', key } }
-    return result
-  }
+  armed = true
   const tools = createToolRegistry(ctx, { instructionOriginVerifier: value => value === origin, instructionCellRetainer: () => ({ bind() { return origin }, async preflight() {}, async release() { released++ } }) })
   tools.register({ name: 'blocked', description: '', inputSchema: {}, execute: async () => { throw new Error('must not execute') } })
   ctx.on('tools/pre-execute', input => { if ((input as { name: string }).name === 'blocked') throw Object.assign(new Error('denied'), { policyRefusal: true }) })

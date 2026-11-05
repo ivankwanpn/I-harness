@@ -111,7 +111,6 @@ export async function fixture(mode: 'native' | 'memory') {
 export async function unknownMountReceipt(kind: 'reference' | 'terminal' | 'required') {
   const f = await fixture('native'); await f.admit('A')
   if (kind === 'terminal') await f.admit('B')
-  const backend = f.backend!
   let unresolved = true, batch: any
   let receipt: any
   const target = (event: SessionEvent) => kind === 'reference' ? event.type === 'context/result-ref'

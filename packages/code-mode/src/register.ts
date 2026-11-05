@@ -322,7 +322,12 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
         if (brokerFailed) try { await broker.dispose() } catch (error) { errors.push(error === brokerFailure ? error : new AggregateError([brokerFailure, error], 'Original broker cleanup failed')) }
         for(const producer of [...producers])try{await producer.close()}catch(error){errors.push(error)}
         try { await facts.close() } catch (error) { errors.push(error) }
-        try { await finalizations.drain() } catch (error) { errors.push(error) }
+        // A held fact fences its cell terminal, so the cell's original finalization
+        // can only complete after that fact is reconciled externally. Waiting here
+        // would never settle; report the recovery debt and keep the reservation, so
+        // a later dispose (after the reconcile) drains it.
+        if (facts.recoveryPending()) errors.push(new FactRecoveryRequiredError())
+        else try { await finalizations.drain() } catch (error) { errors.push(error) }
         try { await finalOutputs.drain() } catch (error) { errors.push(error) }
         if (errors.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(errors) })
         await runtime.dispose()
