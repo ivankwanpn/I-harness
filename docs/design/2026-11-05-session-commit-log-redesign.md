@@ -254,5 +254,17 @@ revocation admission）重寫到 SCL 的 retained binding 上；這是 legacy co
 - 沒有 reservation／finalization 協議，crash 安全由 SCL 的單一 commit 提供；
 - UI 上「selected results」仍可用，但 `assertResultLineage` 類的嚴格語意不再成立。
 
+**更精確的資料流（2026-11-06 追蹤）**：selected results 的最終出口是 `exportSelectedResultsConversationSeed(context, inherited)`，
+它需要 `CompletedPassiveContext`（restored owner）、`HeldInheritedResultMetadata`、`projectSelectedResults` 與可逐頁迭代且帶
+currency 檢查的 `HeldResultPages`，輸出 `SemanticSeedV3Public`（v3 seed 協議）。換句話說，「snapshot」省掉的只是 legacy 的
+reservation／witness 層，**v3 seed 的產生器仍然要存在**。
+
+因此替代方案要再分成兩種：
+
+- **B1（不進 v3 協議）**：fork 當下把選取結果以一般 context 事件寫進子會話（例如 `context/selected-result` 一類事件或 artifact
+  引用）。最簡單、可立刻在 SCL 實作；代價是子會話的 UI 不會有「inherited results」的標記與 lineage。
+- **B2（v3 seed 但自建 held 物件）**：在 SCL 上實作 `HeldInheritedResultMetadata`／`HeldResultPages` 的等價物（綁定 fold 與
+  artifact store，帶 prefix 檢查），仍可輸出 v3 seed；工作量中等，但能保留子會話的 inherited 標記。
+
 **建議**：若產品要的是「能帶著選取結果開子會話」，先做 snapshot selection（B），把語意寫清楚；只有當「子會話必須持續
 見證父結果的撤銷與 lineage」是硬需求時，才投入完整移植（A）。目前決策見 §8.1（維持 legacy 預設、SCL opt-in）。

@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 310（selected results 資料流）**：追到出口是 `exportSelectedResultsConversationSeed`，需要 CompletedPassiveContext、
+> HeldInheritedResultMetadata、HeldResultPages，輸出 v3 seed；ADR §8.2 因此把替代方案拆成 B1（一般事件）與 B2（自建 held 物件）。
 > **round 309（cold control 錯誤）**：`execution/stop`（無 cell／未知 cell）與 `processes/control`（未知 process）在冷 session 上
 > 都回明確的 -32602 錯誤（cold history cannot …）。
 > **round 308（unavailable 頁面）**：不存在的 digest 與未知 session 的 result read 都回 `{kind:"unavailable"}`（非 RPC 錯誤）。
