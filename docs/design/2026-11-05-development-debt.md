@@ -526,6 +526,9 @@ round 74：`core-plugin` **6 檔 / 58 tests 全綠**、`memory` **3 檔 / 4 test
 round 75：`core-tools` **24 檔 / 187 tests 全綠**；`exec` **1 檔紅 / 28 檔綠（29 檔），
   1 failed / 366 passed（367）**——紅點「recovers the same real1MiB background artifact after
   losing its original finish receipt」→ `unknown job: bash-1`。
+  測試位置：`packages/exec/test/retention-store-recovery.test.ts:12`，用真實 1 MiB 輸出＋
+  `createContextOutputService` 的 retention store 重建流程；錯誤表示重建後 job registry 找不到
+  原本的 job（`bash-1`）。下一輪：查 retention store 復原後 job 索引的寫入/讀取順序。
 round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed（176）**；
   `core-session` **1 檔紅 / 86 檔綠（87 檔），1 failed / 932 passed（933）**。
   紅點名稱：`core-session` =「durable exchange acceptance > indexes a large prefix once
