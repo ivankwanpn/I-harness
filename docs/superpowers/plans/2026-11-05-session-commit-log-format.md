@@ -1190,6 +1190,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 78 (implemented 2026-11-06): cold process and execution shapes
+
+The turn test pins the cold views on the commit log: `desktop/session/processes/read` is `{live:false, terminals:[], jobs:[]}` and
+`desktop/session/execution/read` is `{live:false, cells:[], total:0}` (the execution projection is a live-runtime view, not a log
+projection). Both are asserted after the turn.
+
 ## Plan 77 (implemented 2026-11-06): subtree-restricted search
 
 `createConversationQuery.search` now honours `subtreeOf`: it resolves the session and its descendants through the lineage

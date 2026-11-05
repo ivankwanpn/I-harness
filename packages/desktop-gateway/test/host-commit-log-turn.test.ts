@@ -63,7 +63,13 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(await call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 5 })).toBeTruthy()
     expect(await call('desktop/session/tasks/integrity', { sessionId: created.sessionId })).toBeTruthy()
     expect(await call('desktop/session/tasks/integrity', { sessionId: created.sessionId, reconcile: true })).toBeTruthy()
-    expect(await call('desktop/session/processes/read', { sessionId: created.sessionId })).toBeTruthy()
+    const processes = await call('desktop/session/processes/read', { sessionId: created.sessionId }) as { live?: boolean; terminals?: unknown[]; jobs?: unknown[] }
+    expect(processes).toMatchObject({ live: false })
+    expect(processes.terminals).toEqual([])
+    expect(processes.jobs).toEqual([])
+    const executionSurface = await call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 10 }) as { live?: boolean; cells?: unknown[]; total?: number }
+    expect(executionSurface).toMatchObject({ live: false, total: 0 })
+    expect(executionSurface.cells).toEqual([])
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'use todo' })
     expect(toolCalls).toBe(1)
     await writeFile(join(workspace, 'big.txt'), 'x'.repeat(200 * 1024))
