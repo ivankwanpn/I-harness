@@ -539,6 +539,9 @@ round 149：`workspace` **6 failed → 2/2 檔、24/24 tests 全綠**（legacy �
 round 150：`sandbox-policy` **3 檔 / 67 tests 全綠**、`tool-search` **2 檔 / 19 tests 全綠**。
 round 151：`sandbox-local` **4 檔綠 / 2 檔 skipped，22 passed / 6 skipped**；`fs-lock`
 round 152：`credentials` **2 檔 / 23 passed + 1 skipped**、`harness-home` **1 檔 / 5 tests 全綠**。
+round 154：`output-retention` **5 檔 / 45 tests 全綠**；`sandbox-windows-acl` **1 檔紅 / 39 檔綠 /
+  5 skipped（45 檔），2 failed / 380 passed**——兩個紅都是「native initialization failed with
+  retained cleanup debt」（koffi native 初始化，疑與本機環境有關）。
   **3 檔綠 / 1 檔 skipped，109 passed / 6 skipped**。
   lock）；`workspace-runtime` **3 檔 / 23 tests 全綠**。
 round 125：`guard-timeout` **1 檔 / 7 tests 全綠**；`guard-retry` **1 檔紅 / 9 passed（10）**——紅點
