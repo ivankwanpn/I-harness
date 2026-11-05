@@ -1190,6 +1190,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 76 (implemented 2026-11-06): coordinator lineage for session search
+
+The same wiring now supplies a `lineage` implementation for commit-log stores: `createCoordinatorLineage` walks `parentSession` from
+profiles for ancestors and scans profiles for children/descendants, reporting `{sessionId, parentSession?, delegationDepth?,
+origin?, seedLength?, createdAt?, hasChildren}`. `createConversationQuery` takes the override as its fourth argument, and
+`session-lineage.test.ts` covers children, descendants (depth 2), ancestors and unknown ids.
+
 ## Plan 75 (implemented 2026-11-06): session search covers commit-log sessions
 
 `desktop/session/search` was backed only by the file-backed index (`<id>.jsonl`), so a commit-log session never matched. The host

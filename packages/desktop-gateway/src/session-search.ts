@@ -1,5 +1,5 @@
 import type { SessionCoordinator } from '@i-harness/session-persistence'
-import type { SearchHit } from '@i-harness/session-query'
+import type { LineageNode, SearchHit, SessionQuery } from '@i-harness/session-query'
 import type { SessionSearchFallback } from './session-visibility.ts'
 
 const messageText = (event: { type: string; text?: unknown; output?: unknown; args?: unknown }): string | undefined => {
@@ -32,5 +32,51 @@ export function createCommitLogSearchFallback(coordinator: SessionCoordinator): 
       if (hits.length >= limit) break
     }
     return hits
+  }
+}
+
+/** Lineage from the coordinator's metadata (commit-log sessions are not in the
+ *  file-backed index); children are discovered by scanning profiles. */
+export function createCoordinatorLineage(coordinator: SessionCoordinator): SessionQuery['lineage'] {
+  const metaOf = async (id: string) => {
+    try { return (await coordinator.profile(id)).meta } catch { return undefined }
+  }
+  const childrenOf = async (id: string): Promise<string[]> => {
+    const children: string[] = []
+    for (const candidate of await coordinator.list()) {
+      const meta = await metaOf(candidate)
+      if (meta?.parentSession === id) children.push(candidate)
+    }
+    return children
+  }
+  const node = async (id: string): Promise<LineageNode | undefined> => {
+    const meta = await metaOf(id)
+    if (!meta) return undefined
+    return { sessionId: id, ...(meta.parentSession === undefined ? {} : { parentSession: meta.parentSession }), ...(meta.delegationDepth === undefined ? {} : { delegationDepth: meta.delegationDepth }), ...(meta.origin === undefined ? {} : { origin: meta.origin }), ...(meta.seedLength === undefined ? {} : { seedLength: meta.seedLength }), ...(meta.createdAt === undefined ? {} : { createdAt: meta.createdAt }), hasChildren: (await childrenOf(id)).length > 0 }
+  }
+  return async (sessionId, options) => {
+    const maxDepth = Math.max(1, Math.min(options.depth ?? 1, 16))
+    const out: LineageNode[] = []
+    if (options.direction === 'ancestors') {
+      let cursor = (await metaOf(sessionId))?.parentSession, level = 0
+      while (cursor && level < maxDepth) {
+        const value = await node(cursor)
+        if (!value) break
+        out.push(value)
+        cursor = value.parentSession
+        level++
+      }
+      return out
+    }
+    const queue = (await childrenOf(sessionId)).map(id => ({ id, level: 1 }))
+    while (queue.length) {
+      const { id, level } = queue.shift()!
+      const value = await node(id)
+      if (!value) continue
+      out.push(value)
+      if (level >= maxDepth) continue
+      for (const child of await childrenOf(id)) queue.push({ id: child, level: level + 1 })
+    }
+    return out
   }
 }

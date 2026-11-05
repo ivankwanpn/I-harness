@@ -40,7 +40,7 @@ import { assertOutsideForkController } from '../../session-persistence/src/fork-
 import { createContextPicker } from "./context-picker.ts"
 import { createDraftSession } from "./draft-session.ts"
 import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
-import { createCommitLogSearchFallback } from "./session-search.ts"
+import { createCommitLogSearchFallback, createCoordinatorLineage } from "./session-search.ts"
 import { createDesktopSubagents } from "./session-subagents.ts"
 import { createInstructionViews } from './instructions/views.ts'
 import { createInstructionSettings } from './instructions/settings.ts'
@@ -228,7 +228,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   }
   // The derived in-memory search index belongs to this workspace gateway
   // process. Never call global query cleanup when closing an individual host.
-  const sessionQuery = createConversationQuery(coordinator, createFileBackedSessionQuery({ storeRoot: options.sessionDir }), commitLogStore ? createCommitLogSearchFallback(coordinator) : undefined)
+  const sessionQuery = createConversationQuery(coordinator, createFileBackedSessionQuery({ storeRoot: options.sessionDir }), commitLogStore ? createCommitLogSearchFallback(coordinator) : undefined, commitLogStore ? createCoordinatorLineage(coordinator) : undefined)
   const nativeCredentials=createCredentialStore(options.credentialsPath ?? join(dirname(settingsPath),"credentials.json"))
   const ownedIndexJobs=createOwnedIndexJobBindings()
   const indexJobOwners=new Map<string,WeakRef<SessionAssembly>>()

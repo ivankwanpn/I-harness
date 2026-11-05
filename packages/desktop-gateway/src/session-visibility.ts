@@ -45,10 +45,10 @@ export function createSessionRuntimeVisibility(coordinator: SessionCoordinator) 
 
 /** UI search excludes child sessions before applying its result limit, so a
  * busy child transcript cannot crowd the user's conversations out of results. */
-export function createConversationQuery(coordinator: SessionCoordinator, query: SessionQuery, fallback?: SessionSearchFallback): SessionQuery {
+export function createConversationQuery(coordinator: SessionCoordinator, query: SessionQuery, fallback?: SessionSearchFallback, lineage: SessionQuery['lineage'] = query.lineage.bind(query)): SessionQuery {
   const visible = createConversationVisibility(coordinator)
   return {
-    lineage: query.lineage.bind(query),
+    lineage,
     async search(text, options = {}) {
       const limit = Math.min(options.limit ?? 20, 100)
       const ids = options.sessionId ? [options.sessionId] : await coordinator.list()

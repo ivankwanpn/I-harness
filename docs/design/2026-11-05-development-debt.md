@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 331（coordinator lineage）**：SCL store 的 lineage 改由 profile 的 parentSession 鏈推導（ancestors）與掃描（children／
+> descendants），`session-lineage.test.ts` 覆蓋 depth 2 與未知 id。
 > **round 330（session search fallback）**：file-backed 索引對 SCL session 沒有資料；host 加 `createCommitLogSearchFallback`，索引為空時
 > 由 coordinator 載入該 session 做 substring 搜尋。lineage 仍走檔案索引（缺口已記錄）。
 > **round 329（batch 邊界）**：重複 archive 為成功（idempotent）、刪除已封存 session 成功、restore 已刪除 session 失敗
