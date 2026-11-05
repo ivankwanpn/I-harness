@@ -12,7 +12,7 @@ export { createExecutionSupervisor } from "./execution-supervisor.ts"
 export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor, ExecutionReconciliationContext, ExecutionReconciler } from "./execution-supervisor.ts"
 export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
 export { registerRetainedOutput, retainedOutputReader, execResultOutcome } from "./retained-output.ts"
-export type { ExecOutputFramePage, ExecFrameRead, ExecFrameQuery, JobOutputSelectors, JobOutputFrameQuery, ExecFrameObservation, ExecFrameWriteOptions, ExecFramePart, ExecFrameCapture, ExecResultRetention, ExecRawSummary, ExecOutputSource } from './capture/frames.ts'
+export type { ExecFrameRead, JobOutputSelectors, JobOutputFrameQuery, ExecFrameObservation, ExecFrameWriteOptions, ExecFramePart, ExecFrameCapture, ExecResultRetention, ExecOutputSource } from './capture/frames.ts'
 
 export interface ExecCommand {
   /** Assigned by trusted tool registration, never exposed as model permission input. */
