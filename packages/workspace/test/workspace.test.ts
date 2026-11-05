@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
   WORKSPACE_DOC_KEY,
@@ -11,7 +12,7 @@ import {
 
 async function withRegistry(run: (registry: ReturnType<typeof createWorkspaceRegistry>, root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "i-harness-workspace-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await run(createWorkspaceRegistry(coordinator), root)
   } finally {
@@ -97,7 +98,7 @@ describe("workspace registry", () => {
 
   it("persists durability: a fresh registry over the same store sees the state", async () => {
     const root = await mkdtemp(join(tmpdir(), "i-harness-workspace-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
     try {
       const first = createWorkspaceRegistry(coordinator)
       const { workspace } = await first.create("/srv/app")
@@ -117,7 +118,7 @@ describe("workspace registry", () => {
   it("stores the snapshot under the workspace-registry doc key", async () => {
     await withRegistry(async (registry, root) => {
       await registry.create("/srv/app")
-      const coordinator = createSessionCoordinator(createJsonlBackend(root))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
       const doc = await coordinator.getDocument(WORKSPACE_DOC_KEY)
       expect(doc).toMatchObject({ formatVersion: 1, workspaces: [{ path: "/srv/app", title: "app" }] })
     })
@@ -143,7 +144,7 @@ describe("workspace registry archive (task 3.2, DSH archiveSession parity)", () 
   // (branch carried a workspaceId meta option here — web-region SessionMeta
   // extension that main's coordinator shape does not include / E does not adopt)
   const makeSession = (root: string): Promise<{ id: string }> => {
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
     return coordinator.create()
   }
 
@@ -200,7 +201,7 @@ describe("workspace registry archive (task 3.2, DSH archiveSession parity)", () 
 
   it("persists across registries; a pre-3.2 doc (no archivedSessionIds) defaults to []  then writes the field back", async () => {
     const root = await mkdtemp(join(tmpdir(), "i-harness-workspace-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
     try {
       const first = createWorkspaceRegistry(coordinator)
       const { id } = await coordinator.create({})
