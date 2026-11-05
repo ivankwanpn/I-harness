@@ -3,6 +3,14 @@
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
 
+> **狀態快照（round 54）**：typecheck 82/82、boundaries 147/147、reachability PASS（0 NEW）
+> 三個 gate 已綠。待辦 1（P0 + P1 #3/#4）、待辦 2（移除 `createJsonlSessionCoordinator`）、
+> 待辦 3（A 類 11/11 遷移）已完成。`session-persistence-jsonl` 全套 106 failed / 751 passed
+> （26 紅檔）。第 5 項量測：`session-executor` owned-* 19/19、`token-meter` 53/53、
+> `llm-seam` 188/188 綠。剩下的紅分兩類：(a) cleanup-debt 群（`closeOne` 的殘留 attempt
+> entry，根因已定位）；(b) 各 bootstrap／predecessor 語義紅（逐條列在第 4 項）。
+> 下一個具體動作見文末「交接：round 32」與其後的 round 41–52 記錄。
+
 ## 為什麼先做這個
 
 `verify:all` 的 full job 從未真正 green：v0.1.13 的 gate 只有 typecheck 與
