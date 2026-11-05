@@ -534,7 +534,11 @@ round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed�
   3 次走訪，或 hooks 被呼叫多次；需先確認實作是否真的退化（效能契約）再決定修產品或重寫 probe。
   兩次實驗均已還原。round 72 追加：`conversation/validation.ts` 只有一處
   `for (const event of events)`（line 431）；3 次走訪的其他來源很可能在 `createHistoryIndex`
-  （core-session 內另一個模組），下輪沿該呼叫鏈數走訪次數即可。
+  （core-session 內另一個模組），下輪沿該呼叫鏈數走訪次數即可。**round 73 定論**：只掛
+  `Symbol.iterator`（不掛 entries）仍得到 **60000 = 3 次完整走訪**；而 `validation.ts` 只有
+  一處 `for (const event of events)`（line 431）→ 同一段建構路徑被呼叫了 3 次。這是真實的
+  「一次建構要走訪前綴三次」效能問題（測試契約正確），修法需重構 `conversationIndex` 的
+  建構流程；已還原探針，未改產品。
   to be defined`）。
 - `runtime-context` = **「original-only management settles actual
   absent without getter/action/retain or publication replay」→ resolved undefined instead
