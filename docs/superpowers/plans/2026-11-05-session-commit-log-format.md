@@ -1190,6 +1190,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 68 (implemented 2026-11-06): prepared forks are not resumable after a restart (parity)
+
+`host-fork-restart.test.ts` prepares a fork in one host, closes it, and tries to begin the same operation from a second host on the
+same store. Both stores (commit-log and the legacy composed coordinator) answer `Session fork unavailable`, i.e. prepared forks live
+in the preparing host and a restart requires preparing again. The test pins that contract for both stores so a future resume
+implementation is a deliberate change.
+
 ## Plan 67 (implemented 2026-11-06): a session continues across a host restart
 
 `host-commit-log-restart.test.ts` opens a host, creates a session, runs a turn and closes; a second host on the same store lists the
