@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, decodeFactBatch, stringifyJsonData, type Session, type SessionEvent } from '@i-harness/core-session'
 import type { CommitLog } from '@i-harness/session-commit-log'
 import type { HeldFactOwner, IssuingFactOwner, ManagedDocument } from '../coordinator/fact-types.ts'
@@ -100,9 +100,9 @@ export function openCommitManagedDocument(sessionId: string, log: CommitLog, dep
 
 /** The execution attachment's document: constructed from the restored state so
  *  the document owns a delivery observation the execution state can fence. */
-export function openCommitExecutionDocument(sessionId: string, log: CommitLog, deps: CommitManagedDeps, state: object): ManagedDocument {
+export function openCommitExecutionDocument(sessionId: string, log: CommitLog, deps: CommitManagedDeps, state: object, incarnation: string): ManagedDocument {
   const context = createCommitManagedContext(sessionId, log, deps)
-  const held: HeldFactOwner = heldFactOwner({ sessionId, incarnation: randomUUID() }, context.ownership, () => { if (!log.open) throw closed() })
+  const held: HeldFactOwner = heldFactOwner({ sessionId, incarnation }, context.ownership, () => { if (!log.open) throw closed() })
   return createManagedDocument(
     sessionId, undefined, context.prefix, context.backend, context.ownership,
     {} as CoordinatorOptions, deps.onReport ?? (() => {}),

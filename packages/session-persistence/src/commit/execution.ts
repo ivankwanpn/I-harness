@@ -53,7 +53,7 @@ export async function openCommitExecution(sessionId: string, log: CommitLog, dep
   }
   const state = await restoreManagedExecutionState(executionSource(log, context), binding as never)
   // createManagedDocument binds the execution core to this exact document.
-  const document = openCommitExecutionDocument(sessionId, log, deps, state as unknown as object)
+  const document = openCommitExecutionDocument(sessionId, log, deps, state as unknown as object, token.incarnation)
   return Object.freeze({
     identity: state.identity,
     owner: document,

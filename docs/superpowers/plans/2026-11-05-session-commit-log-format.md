@@ -731,6 +731,24 @@ bound (its `install` only accepts a batch issued through `prepareWrite`). The ne
 writes through `state.prepareWrite`/`install` (or to keep the bound document read-only and let the executor drive all writes),
 which is the same split the legacy `attach(...)` path implements at `managed-document.ts:813`.
 
+## Plan 5b (2026-11-05): gateway capability associations audit
+
+Fixing the execution attachment exposed the remaining coordinator associations the gateway composition requires, in the order
+they fail:
+
+| Association | State | Requirement |
+|---|---|---|
+| `associateManagedExecution` | **done** | attachment over the restored state; document constructed from it (incarnation shared with the fact owner so receipts verify) |
+| `associateOriginalResultOrdering` | missing | needs an `Ownership` with `beginResultOrderingRegistration`/`retryResultOrdering` and the ordering ledger |
+| `associateOriginalResultRevocation` | missing | needs a `ResultRevocationAdmission` from the binding observations plus an ownership participant (`assertOriginalBatchParticipant`) |
+| `withProcessReadObservation` | missing (optional) | result reads; callers throw `observation-unsupported` without it |
+| `retainExistingSessionBindingObservation` | missing (optional) | execution-host observation; guarded callers skip it |
+
+These are **result-capability** subsystems, not storage: ordering and revocation exist because concurrent sessions deliver results, and
+their legacy implementation is coupled to the ownership batch protocol. The SCL-native shape is smaller: commit order defines
+ordering, and revocation is a durable marker plus a registry of live attachments. That design is the next plan (Plan 6), followed by
+`withProcessReadObservation` over the fold.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

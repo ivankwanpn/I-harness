@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 234（execution 修復＋capability 審計）**：execution attachment 的 fact owner 與 execution token 改用**同一個 incarnation**
+> （否則 receipt 驗證失敗 → `FACT_INSTALL_FAILED`）；gateway 接下來缺的是 result capability 關聯（ordering、revocation、
+> process read），它們與 legacy ownership batch 協議深度耦合，需要 SCL-native 設計（Plan 6）。
 > **round 233（SCL execution attachment）**：`acquireManagedExecution(facade,id)` 已可用——以 commit log 的 restoration source
 > 還原 `restoreManagedExecutionState`，再由該 state 建構 managed document（交付觀察綁定在 execution fence 上）。
 > gateway stack 已跑到第一個 turn 的 fact admission，卡在 `FACT_INSTALL_FAILED`：綁定 execution 的 document 其 queue install
