@@ -498,6 +498,7 @@ baseline 仍為 456 rows，目前 381 rows、無 inert 警告。以下為當時�
    `owned-code-nested-workflow`、`owned-code-stop-retry`、`owned-metadata-fold`、
    `owned-plugin-causal`、`owned-prefilesystem`、`owned-rewind`、`owned-service-title-debt`
    等）下一輪分組跑。套件實際有 223 個 `*.test.ts`（不是 99），全套要用多輪或分組跑。
+另外 round 28 量了 `llm-seam`：**8 檔 / 53 tests 全綠**（2.35s）。`token-meter` 的量測在並行執行時出現 1 筆不穩定失敗（187/188），單獨重跑時 filter 行為不一致，留待下一輪重測。
 5. 量測 `session-executor`（223 檔）、`desktop-gateway`（61 檔）、`subagent`、
    `agent-team` 的 red 清單，補進本文件。
 6. 全部轉綠後，才把 `verify:all` 的 full job 當成 gate；在那之前 CI 的必過項目
