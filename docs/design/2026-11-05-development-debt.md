@@ -494,7 +494,10 @@ baseline 仍為 456 rows，目前 381 rows、無 inert 警告。以下為當時�
    `owned-metadata-runtime`(18)、`owned-service-title`(7)、`owned-code-nested-shell`(2)、
    `owned-plugin-catalog`(6)、`owned-task-service`(2)、`owned-code-service`(2，單跑 29.6s)。
    量測中發現 **單檔就吃 30–140 秒**，批次跑到第 8 檔後被本輪中止（不是 hang；
-   `owned-code-service` 單跑可完成）。剩 9 檔（`owned-approval-causal`、`owned-code-mount`、
+   `owned-code-service` 單跑可完成）。**round 31 完成剩餘的 11 檔：11/11 檔、21/21 tests 全綠**（batch2，字串列表下列為當時的清單）。
+早先已完成 8 檔；合計 owned-* 子集 **19 檔全綠**。
+
+剩下的清單為（`owned-approval-causal`、`owned-code-mount`、
    `owned-code-nested-workflow`、`owned-code-stop-retry`、`owned-metadata-fold`、
    `owned-plugin-causal`、`owned-prefilesystem`、`owned-rewind`、`owned-service-title-debt`
    等）下一輪分組跑。套件實際有 223 個 `*.test.ts`（不是 99），全套要用多輪或分組跑。
