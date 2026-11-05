@@ -1194,6 +1194,12 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 83 (implemented 2026-11-06): tool content is searchable
+
+After the `todo_write` turn the turn test searches for `do it` and finds it in the tool call/result events, so the commit-log
+search fallback covers tool arguments and outputs, not only chat messages.
+
 ## Plan 82 (implemented 2026-11-06): search limit across sessions
 
 `host-commit-log-search-limit.test.ts` seeds three matching messages across two commit-log sessions: `limit: 2` returns exactly two

@@ -76,6 +76,8 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(executionSurface.cells).toEqual([])
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'use todo' })
     expect(toolCalls).toBe(1)
+    const toolHits = await call('desktop/session/search', { query: 'do it' }) as { hits: { eventType: string; snippet: string }[] }
+    expect(toolHits.hits.some(hit => (hit.eventType === 'tool/result' || hit.eventType === 'tool/call') && hit.snippet.includes('do it'))).toBe(true)
     await writeFile(join(workspace, 'big.txt'), 'x'.repeat(200 * 1024))
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'read big' })
     expect(toolCalls).toBe(2)
