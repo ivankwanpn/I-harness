@@ -532,7 +532,7 @@ round 78：`schedule` **2 檔紅 / 4 檔綠（6 檔），3 failed / 97 passed（
   設計）；`schedule/test/fold-bridge.test.ts:78` 卻直接 `toThrow('uncertain')`（期待未包裝的
   原始錯誤）。另兩個測試期待 `undefined` 但收到包裝後的 TypeError。這是測試期待與產品設計
   不一致，需決定：改成斷言 `cause.message === 'uncertain'`，或產品在 `install` 首次失敗時
-  （`runtime-context` 另計，見下。）**round 80 已修**：斷言改為 `TypeError('Original fold callback failed')` 且
+  原樣拋出。**round 80 已修**：斷言改為 `TypeError('Original fold callback failed')` 且
   `cause` 分別是 `'uncertain'`／`undefined`（產品 fail-closed 設計不變）→ **`schedule`
   6/6 檔、100/100 tests 全綠**。
 round 75：`core-tools` **24 檔 / 187 tests 全綠**；`exec` **1 檔紅 / 28 檔綠（29 檔），
