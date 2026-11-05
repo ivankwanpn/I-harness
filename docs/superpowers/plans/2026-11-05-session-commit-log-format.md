@@ -693,6 +693,27 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
   commit-log coordinator: the host's observation scope admits the parent, refuses a bound target, the prepared child is
   born through `bootstrapChildTargetWithCapture`, and the product's `verifyOriginalChildBirth` accepts it.
 
+## Plan 5 (reconnaissance 2026-11-05): gateway cutover blocker = managed execution
+
+Running the owned-gateway stack (`createSessionService` + `composeOwnedGatewayDefault` + `createOwnedTaskChildHost`) over the
+commit-log facade reaches `service.close()` and fails with **`Original execution coordinator required`** from
+`session-persistence/src/execution-internal.ts:28` (`acquireManagedExecution`): the gateway's execution assembly needs the
+coordinator to have registered an execution attachment, and the SCL coordinator has not.
+
+What the port must provide:
+
+- `associateManagedExecution(facade, { acquire(id), assertAdmission(id) })`.
+- An attachment `{ identity, owner, prepare(), observe(), prepareRequest(action), revokeNewWork(), close() }` where `owner` is the
+  SCL managed document (it already exposes `ownsAction`/`beginAction`/`registerReceivedInputSource`/`drain`).
+- Under it, `restoreManagedExecutionState(source, binding, foldFactory)` needs an `OriginalConversationRestorationSource` over the
+  log: `formatVersion`/`header`/`prefix` getters, `consume(accept)` (feed the folded events), `readEvent(ordinal)`,
+  `settle()`/`close()` and `appendCommitted(batch, receipt)` (prefix is recomputed from the log after every commit).
+- `binding = { token, assertHeld, openDependencies(prefix) }`; `openDependencies` answers `readEvent(ordinal)` from the same log
+  (writer-dependency scopes). `associateExecutionDependencies(backendAdapter, open)` registers it for the fact backend.
+- Then `state.bindOwner(document)` and `associateManagedExecution` on the facade object the consumers receive.
+
+Added in this reconnaissance round: `putDocumentStrict` (an alias of the durable `putDocument`) on the coordinator.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

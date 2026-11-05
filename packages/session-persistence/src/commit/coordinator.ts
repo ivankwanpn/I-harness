@@ -64,6 +64,7 @@ export type CommitCoordinator = {
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }>
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
   putDocument(key: string, data: unknown): Promise<void>
+  putDocumentStrict(key: string, data: unknown): Promise<void>
   getDocument(key: string): Promise<unknown | undefined>
   flush(sessionId: string): Promise<void>
   enqueue(sessionId: string, events: SessionEvent[]): void
@@ -228,6 +229,15 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return JSON.parse(new TextDecoder().decode(await log.readSidecar(side.digest))) as unknown
     } finally { await log.close() }
   }
+  const putDocumentOf = async (key: string, data: unknown): Promise<void> => {
+    const text = stringifyJsonData(data)
+    if (text === undefined) throw new TypeError('document must be losslessly JSON-serializable')
+    const log = await documentLog()
+    try {
+      const side = await log.writeSidecar(new TextEncoder().encode(text))
+      await log.append({ ops: [{ kind: 'doc', key, side }] })
+    } finally { await log.close() }
+  }
   const observations = createCommitObservations({ profile: profileOf, getDocument: getDocumentOf })
 
   return {
@@ -376,15 +386,8 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         return metaOf(log)
       })
     },
-    async putDocument(key, data) {
-      const text = stringifyJsonData(data)
-      if (text === undefined) throw new TypeError('document must be losslessly JSON-serializable')
-      const log = await documentLog()
-      try {
-        const side = await log.writeSidecar(new TextEncoder().encode(text))
-        await log.append({ ops: [{ kind: 'doc', key, side }] })
-      } finally { await log.close() }
-    },
+    putDocument: putDocumentOf,
+    putDocumentStrict: putDocumentOf,
     getDocument: getDocumentOf,
     async flush() { /* every append is fsynced before it resolves */ },
     enqueue(sessionId, events) { void this.append(sessionId, events).catch(() => {}) },
