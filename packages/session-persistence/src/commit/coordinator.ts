@@ -34,6 +34,8 @@ export type CommitCoordinatorOptions = {
   readonly legacy?: LegacySessionStore
   /** Metadata folds restored into the execution state (owned metadata context). */
   readonly originalExecutionFoldFactory?: Parameters<typeof import('@i-harness/core-session/internal/execution').restoreManagedExecutionState>[2]
+  /** Where background failures (enqueued appends, deletion listeners) go. */
+  readonly reportBackgroundFailure?: (error: unknown) => void
 }
 
 export type ForkOptions = {
@@ -147,6 +149,7 @@ function receiptOf(request: BootstrapRequest, stage: ReturnType<typeof buildBoot
 export function createCommitCoordinator(options: CommitCoordinatorOptions): CommitCoordinator {
   const root = options.root
   const now = options.now ?? (() => new Date())
+  const reportFailure = options.reportBackgroundFailure ?? ((error: unknown) => console.warn('[i-harness] background persistence failure:', error))
   if (options.lock?.enabled === false) throw new Error('Commit coordinator requires the writer lease')
   const logOptions = (sessionId: string) => ({ root, sessionId, now, lockRoot: options.lock?.lockRoot ?? root, lease: { retryMs: options.acquireRetryMs, deadlineMs: options.acquireDeadlineMs } })
   const open = (sessionId: string, mode: CommitLogMode): Promise<CommitLog> => openCommitLog(logOptions(sessionId), mode)
@@ -443,7 +446,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     putDocumentStrict: putDocumentOf,
     getDocument: getDocumentOf,
     async flush() { /* every append is fsynced before it resolves */ },
-    enqueue(sessionId, events) { void this.append(sessionId, events).catch(() => {}) },
+    enqueue(sessionId, events) { void this.append(sessionId, events).catch(reportFailure) },
     ownerOf(sessionId) { return owned.get(sessionId)?.open === true },
     hasLiveOwnership(sessionId) { return owned.get(sessionId)?.open === true },
     async deleteOwnedSession(sessionId, manifest) {
@@ -465,7 +468,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       const trash = join(root, `.trash-${randomUUID()}`)
       await rename(directory, trash)
       await rm(trash, { recursive: true, force: true }).catch(() => {})
-      for (const listener of [...deletedListeners]) await listener(sessionId, manifest).catch(() => {})
+      for (const listener of [...deletedListeners]) await listener(sessionId, manifest).catch(reportFailure)
     },
     async deletionReceipt(sessionId) {
       const value = await this.getDocument(`deletion:${sessionId}`)

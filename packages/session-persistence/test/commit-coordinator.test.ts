@@ -38,6 +38,17 @@ afterEach(async () => {
 })
 
 describe('commit coordinator', () => {
+  it('reports a failed enqueued append instead of dropping it silently', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-commit-enqueue-'))
+    roots.push(root)
+    let settle: (error: unknown) => void = () => {}
+    const reported = new Promise<unknown>(resolve => { settle = resolve })
+    const coordinator = createCommitCoordinator({ root, reportBackgroundFailure: error => settle(error) })
+    coordinators.push(coordinator)
+    coordinator.enqueue('missing', [{ type: 'user/message', text: 'x' }])
+    await expect(reported).resolves.toBeInstanceOf(CommitLogNotFoundError)
+  })
+
   it('refuses to invent metadata for a legacy session without a header', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-commit-legacy-meta-'))
     roots.push(root)

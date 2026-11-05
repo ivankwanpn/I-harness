@@ -1175,6 +1175,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 56 (implemented 2026-11-06): background failures are reported
+
+`enqueue` dropped a failed append (`catch(() => {})`) and deletion listeners were silently ignored. `CommitCoordinatorOptions` now
+takes `reportBackgroundFailure` (default `console.warn("[i-harness] background persistence failure:", error)`), used by both paths.
+`commit-coordinator.test.ts` enqueues into a missing session and asserts the reporter receives the `CommitLogNotFoundError`.
+
 ## Plan 55 (implemented 2026-11-06): no invented legacy metadata
 
 `profileOf` used to fall back to `{sessionId, createdAt: now(), formatVersion: 15}` when a readable legacy session reported no meta,
