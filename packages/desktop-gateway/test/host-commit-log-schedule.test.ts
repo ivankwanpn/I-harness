@@ -50,6 +50,7 @@ it('creates and deletes a schedule through the desktop host on the commit log', 
     expect(scheduled.schedules).toHaveLength(1)
     await call('desktop/schedule/delete', { sessionId: created.sessionId, id: scheduled.schedules[0]!.id })
     expect((await call('desktop/schedule/list', { sessionId: created.sessionId }) as { schedules: unknown[] }).schedules).toHaveLength(0)
+    await expect(call('desktop/schedule/list', { sessionId: 'missing-session' })).rejects.toThrow(/does not exist/)
   } finally {
     await host.close()
   }

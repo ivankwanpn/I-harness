@@ -1188,6 +1188,14 @@ appears to answer through the model message stream rather than a persisted tool 
 page-read path on SCL; whether the in-turn tool needs the selected-source witness is still open and should be checked from the
 gateway native context rather than the host log.
 
+
+## Plan 62 (implemented 2026-11-06): schedule list for a missing session
+
+`desktop/schedule/list` for a session that does not exist rejects with `commit log for session "<id>" does not exist` (-32603)
+instead of returning an empty list, so a stale session id cannot look like a session without schedules. Pinned in
+`host-commit-log-schedule.test.ts`; a host-restart durability test for schedules was attempted but needs the host factory split
+into a reusable opener (the settings fixture differs from the other host tests).
+
 ## Plan 61 (investigated 2026-11-06): context_output_read on the SCL host
 
 A controlled `context_output_read` call against a real artifact ref on the commit-log host answers

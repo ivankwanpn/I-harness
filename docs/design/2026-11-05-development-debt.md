@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 315（schedule 未知 session）**：`desktop/schedule/list` 對不存在的 session 回 -32603 `does not exist`（不是空列表）。
+> host 重啟持久性測試需要先把 host 工廠抽成可重用的 opener，暫緩。
 > **round 314（現況報告）**：新增 `docs/design/2026-11-06-session-commit-log-status.md`（已驗證面、效能、生命週期、缺口、決策、重跑指令）。
 > **round 313（selected results 範圍釐清）**：只有帶 `results:"selected-results-v1"` 的 fork／child 捕獲受影響；一般 fork、
 > 無 selected 的 task child、`session/result/read`、context output 皆不受影響（已在 SCL 驗證）。ADR §8.2 已註明。
