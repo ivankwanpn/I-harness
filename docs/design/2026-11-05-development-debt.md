@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 286（close 撤銷 retained reference）**：`coordinator.close()` 先 `closeRetained`（retire 全部 references、拒絕新
+> admission）再關閉 log handles；第三個測試覆蓋 close 後 assertCurrent 失敗。
 > **round 285（刪除撤銷 retained reference）**：`deleteOwnedSession` 以 `markDeleted` 標記 session 與 manifest 文件，
 > retained reference 在刪除後立即失效；測試覆蓋 acquire→delete→assertCurrent 失敗→release。
 > **round 284（selected-results 決策）**：依產品完整性優先，維持 legacy 預設、SCL opt-in，**不刪 legacy**；

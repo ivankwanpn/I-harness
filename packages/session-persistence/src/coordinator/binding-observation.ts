@@ -808,7 +808,15 @@ export function createBindingObservations(
       },
     })
   }
-  return { createResultRevocationAdmission, beginProjectBindingMutation, markDeleted(ids: readonly string[], keys: readonly string[]) { for (const id of ids) deletedIds.add(id); for (const key of keys) deletedKeys.add(key) }, captureColdBindingObservation(metadata: Readonly<SessionMeta>, observation: SessionBindingObservation) { const original = coldBindings.get(observation); if (!original || original.metadata !== metadata) throw new Failure('invalid'); original.assertCurrent(); return observation }, createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerRequiredTaskObligation, registerOwnedDocumentOperation, registerTeamColdObservation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertManagedSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
+  async function closeRetained(operation: RetainedCleanupOperation) {
+    assertRetainedCleanupOperation(operation)
+    if (closed) return
+    preflightClose()
+    closed = true
+    const joins = retained.retire([], [], operation, true)
+    await Promise.all(joins)
+  }
+  return { createResultRevocationAdmission, beginProjectBindingMutation, closeRetained, markDeleted(ids: readonly string[], keys: readonly string[]) { for (const id of ids) deletedIds.add(id); for (const key of keys) deletedKeys.add(key) }, captureColdBindingObservation(metadata: Readonly<SessionMeta>, observation: SessionBindingObservation) { const original = coldBindings.get(observation); if (!original || original.metadata !== metadata) throw new Failure('invalid'); original.assertCurrent(); return observation }, createColdFinalizationFactory, associateRetainedCoordinator: retained.associateCoordinator, retainExistingSessionBindingObservation: retained.acquire, preflightClose, taskContextIdentity, registerRequiredTaskObligation, registerOwnedDocumentOperation, registerTeamColdObservation, beginTaskTransition, beginBootstrapTaskTransition, assertOutsideOwnedOperations, revokeOwnedDocumentOperations, acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertManagedSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return retained.cleanupForError(error) ?? (error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined) } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

@@ -37,6 +37,16 @@ describe('commit-log retained bindings', () => {
     expect(() => reference.assertCurrent()).toThrow()
   })
 
+  it('revokes a retained reference when the coordinator closes', async () => {
+    const { coordinator } = await setup()
+    await coordinator.create({ sessionId: 's3' })
+    const facade = asSessionCoordinator(coordinator)
+    const reference = await facade.retainExistingSessionBindingObservation!({ sessionId: 's3' }, () => {})
+    reference.assertCurrent()
+    await coordinator.close()
+    expect(() => reference.assertCurrent()).toThrow()
+  })
+
   it('revokes a retained reference when its session is deleted', async () => {
     const { coordinator } = await setup()
     await coordinator.create({ sessionId: 's2' })

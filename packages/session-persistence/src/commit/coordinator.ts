@@ -15,6 +15,7 @@ import { openCommitManagedDocument } from './managed.ts'
 import { openCommitExecution } from './execution.ts'
 import { withCommitProcessReadObservation } from './process-read.ts'
 import { createCommitOwnershipPorts, type CommitOwnershipPorts } from './capabilities.ts'
+import { createRetainedCleanupOperation, finishRetainedCleanupOperation } from '../coordinator/retained-cleanup.ts'
 
 /**
  * v1 commit-log coordinator: the session view is a fold of one commit log.
@@ -480,6 +481,8 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     },
     async close() {
       for (const [sessionId, document] of [...managed]) { managed.delete(sessionId); await document.close().catch(() => {}) }
+      const cleanup = createRetainedCleanupOperation()
+      try { await ownershipPorts.observations.closeRetained(cleanup).catch(() => {}) } finally { finishRetainedCleanupOperation(cleanup) }
       const handles = [...owned.values()]
       owned.clear()
       for (const handle of handles) await handle.close().catch(() => {})

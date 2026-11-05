@@ -1159,6 +1159,11 @@ reference (or a binding observation) stops being current as soon as the deletion
 kept passing `assertCurrent` after the session directory disappeared. `commit-retained.test.ts` covers acquire → delete →
 `assertCurrent` throws → release.
 
+Coordinator close also retires the binding observations (`closeRetained` with a fresh cleanup operation, inside the close path
+before the log handles close), so retained references are revoked and new admissions are refused after close. Covered by a third
+case in `commit-retained.test.ts`.
+
+
 
 
 `fork-controller.test.ts` moved the same way: 32 failures drop to 6, which have different causes (fork admission/host fixture
