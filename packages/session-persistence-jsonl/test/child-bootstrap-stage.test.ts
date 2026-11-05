@@ -6,12 +6,13 @@ import { createHash } from 'node:crypto'
 import { canonicalJsonData } from '@i-harness/core-session'
 import * as p from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { bootstrapPaths, bootstrapPathsForRoute, lookupBootstrapStage, ordinaryStageIO } from '../src/backend/bootstrap-stage.ts'
 import { bootstrapManifest, buildBootstrapHeader } from '../../session-persistence/src/coordinator/bootstrap-header.ts'
 import { pair, guards } from '../../session-persistence/test/child-bootstrap-fixture.ts'
 const roots:string[]=[],coordinators:p.SessionCoordinator[]=[]
 afterEach(async()=>{for(const c of coordinators.splice(0))await c.close().catch(()=>{});for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})})
-async function setup(){const root=await mkdtemp(join(tmpdir(),'ih-cs-'));roots.push(root);const backend=createJsonlBackend(root),coordinator=p.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(coordinator);return{root,backend,coordinator}}
+async function setup(){const root=await mkdtemp(join(tmpdir(),'ih-cs-'));roots.push(root);const backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(coordinator);return{root,backend,coordinator}}
 async function artifacts(root:string){const names=(await readdir(root)).filter(n=>n.includes('.bootstrap-')||n==='target.jsonl').sort();return Promise.all(names.map(async name=>({name,bytes:(await readFile(join(root,name))).toString('base64')})))}
 it('uses the frozen public key and original canonical child hash domain with one selected namespace',()=>{
  const {request}=pair(),path='target.jsonl',pub=bootstrapPaths(path,request.invocation),child=bootstrapPathsForRoute(path,{protocol:'child-v1',request})
