@@ -548,6 +548,13 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 108 修正解讀**：兩個 `NEW_ENTRY` 很可能分別是「第一個 coordinator 的 bootstrap」與
   **round 109 關鍵翻轉**：在 `start`（bootstrap.ts:572）與 factory 的 `resumeSemanticTarget`
   **round 110 定論**：把第二次 `resumeSemanticTarget` 包 try/catch 後**沒有** `RESUME2_ERR`——
+  **round 111 揭曉真正失敗**：把兩檔的 `finally` close 改成 `.catch(console.error)` 後，真正的
+  斷言錯誤現形——`promise resolved "Buffer[123,34,102,111,114,…]" instead of rejecting`，
+  即測試 line 35 的 `await expect(readFile('task-target.doc.jsonl')).rejects.toMatchObject({code:'ENOENT'})`
+  **失敗**：blocked resume 之後 `task-target.doc.jsonl` **被建立**了（內容以 `{"for…` 開頭）。
+  這才是 bootstrap 群紅的真正原因（cleanup-debt 只是 close 的二次現象）。下一步：確認 transition
+  lane 在 blocked resume 時建立 task document 是否為預期行為；若是，更新測試期待（允許該檔存在
+  並斷言內容）；若不是，修 lane 的 eager 建立。實驗已還原。
   即它沒有拋錯。配合 round 109 的 log（該次呼叫沒有 START_OUT），最可能是 `expect(...).toBe
   ('already-ready')` 的斷言失敗（實際回 `refused` 或 `blocked`），而 JS 的 `finally` 中
   `await coordinator.close()` 拋錯**覆蓋**了原本的斷言錯誤。所以 bootstrap 群 3 檔的
