@@ -2,8 +2,8 @@ import { expect, it, vi } from 'vitest'
 import { mkdtemp, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
@@ -14,12 +14,19 @@ it.each(['append', 'reconcile'] as const)('reports one safe known-sync cleanup d
   for (const reporter of ['normal', 'throw', 'reject'] as const) {
     const root = await mkdtemp(join(tmpdir(), 'ih-f1-cleanup-report-'))
     const report = vi.fn((_error: unknown) => { if (reporter === 'throw') throw new Error('reporter failed'); if (reporter === 'reject') return Promise.reject(new Error('reporter rejected')) })
-    const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true }, reportBackgroundFailure: report })
+    let writes = 0, truncates = 0, syncs = 0, closes = 0, key: import('@i-harness/core-session').BatchKey | undefined
+    // The owned-batch writer is bound before the coordinator captures its
+    // original descriptor; patching the backend afterwards is rejected as
+    // PROCESS_READ_UNAVAILABLE by design.
+    const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
+      writes++
+      const outcome = await append(...args)
+      if (operation === 'reconcile') { key = args[3].key; return { kind: 'unknown', key } }
+      return outcome
+    } })
+    const coordinator = createSessionCoordinator(backend, { lock: { enabled: true }, reportBackgroundFailure: report })
     const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
     const native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-    const append = backend.appendOwnedBatch!
-    let writes = 0, truncates = 0, syncs = 0, closes = 0, key: import('@i-harness/core-session').BatchKey | undefined
-    backend.appendOwnedBatch = async (...args) => { writes++; const outcome = await append(...args); if (operation === 'reconcile') { key = args[3].key; return { kind: 'unknown', key } }; return outcome }
     const closeFails = () => vi.mocked(open).mockImplementation(async (...args) => {
       const handle = await native.open(...args)
       if (String(args[0]) !== join(root, id + '.jsonl') || args[1] !== 'r+') return handle
@@ -52,16 +59,17 @@ it.each(['append', 'reconcile'] as const)('reports one safe known-sync cleanup d
 })
 
 it.each(['invalid', 'accessor'] as const)('keeps a valid original receipt when an optional cleanup marker is %s', async mode => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-f1-cleanup-marker-')), backend = createJsonlBackend(root)
-  const report = vi.fn(), coordinator = createSessionCoordinator(backend, { lock: { enabled: true }, reportBackgroundFailure: report })
-  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), append = backend.appendOwnedBatch!
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-cleanup-marker-'))
+  const report = vi.fn()
   let reads = 0, writes = 0
-  backend.appendOwnedBatch = async (...args) => {
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
     writes++
     const outcome = await append(...args)
     if (outcome.kind !== 'committed') return outcome
     return Object.defineProperty({ ...outcome }, 'cleanupDiagnostic', mode === 'invalid' ? { value: 'private unexpected detail', enumerable: true } : { get() { reads++; throw new Error('must not execute') }, enumerable: true })
-  }
+  } })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true }, reportBackgroundFailure: report })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   try {
     expect(await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', seqs: [0] })
     expect([writes, reads]).toEqual([1, 0])
