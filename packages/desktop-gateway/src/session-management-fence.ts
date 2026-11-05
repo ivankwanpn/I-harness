@@ -15,7 +15,10 @@ export function createSessionManagementFence() {
   const observers = new Set<Observer>()
   let count = 0
   function assertOpen(id: string) {
-    if (blocked.has(id) || retired.has(id)) throw new Error("Session management is in progress or session is deleted")
+    // An operation already admitted for this session keeps its internal calls
+    // open while it drains; a deleted session still refuses everything.
+    if (retired.has(id)) throw new Error("Session management is in progress or session is deleted")
+    if (blocked.has(id) && !admitted.getStore()?.get(id)?.active) throw new Error("Session management is in progress or session is deleted")
   }
   function uncharge(observer: Observer) { if (observer.charged) { observer.charged = false; count--; observers.delete(observer) } }
   function preflightObservers(id: string) { for (const observer of observers) if (observer.id === id) observer.preflight?.() }
@@ -83,24 +86,32 @@ export function createSessionManagementFence() {
       assertRetainedCleanupOperation(cleanup)
       advanceAdmission(id)
       blocked.add(id)
+      // The operation itself may need internal service bookkeeping (for example
+      // retaining the managed runtime used for cold rewind recovery). Give only
+      // this operation's async context a grant, exactly like `run`; external
+      // requests still see the blocked fence.
+      const token = { active: true }
+      const context = new Map(admitted.getStore()); context.set(id, token)
+      const granted = <T>(work: () => Promise<T>): Promise<T> => admitted.run(context, work)
       const cleanupResult = join([...notify(id, cleanup), joinRetainedRetirementSinks(cleanup)])
       let primary: { error: unknown } | undefined
       try {
         // Refuse live turns/approval waits immediately before draining short
         // admitted writers. The blocked flag closes the check/admission race.
-        await preflight?.()
+        await granted(async () => { await preflight?.() })
         const errors = await cleanupResult
         if (errors.length) throw new AggregateError(errors, 'Management observation cleanup failed')
         // An admitted operation may schedule a separately drained child before
         // it settles. Keep draining until no registered producer remains.
         while (work.get(id)?.size) {
-          await preflight?.()
+          await granted(async () => { await preflight?.() })
           await Promise.allSettled([...(work.get(id) ?? [])])
         }
-        return await operation(cleanup)
+        return await granted(() => operation(cleanup))
       }
       catch (error) { primary = { error }; throw error }
       finally {
+        token.active = false
         const errors = await cleanupResult
         blocked.delete(id); if (!supplied) finishRetainedCleanupOperation(cleanup)
         // Preserve a literal preflight/operation failure and any independent

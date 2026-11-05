@@ -1202,6 +1202,12 @@ gateway native context rather than the host log.
 
 ## Plan 96 (diagnosed 2026-11-06): archive after a turn is refused on both stores
 
+Fixed (2026-11-06): the stack showed the failure was the archive `exclusive` operation retaining the managed runtime for cold rewind
+recovery while `blocked` was set, and `assertOpen` refusing that internal call. `exclusive` now gives only its own async context an
+admission token (the same grant `run` uses) and `assertOpen` honours it for `blocked` (a retired session still refuses everything).
+`host-commit-log-archive.test.ts` archives a session that ran a turn, lists it under archived, and restores it with its turn count.
+
+
 Isolation with three fresh hosts (prompt → archive, prompt → session search → archive, prompt → context read → archive) shows the
 failure on **every** variant, and the same three variants fail identically on the legacy `jsonl` store — so it is not a commit-log
 regression and not caused by search/context: any session that has run a turn cannot be archived.
