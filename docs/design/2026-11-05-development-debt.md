@@ -525,6 +525,7 @@ round 70：`session-query` **4 檔紅 / 3 檔綠（7 檔），25 failed / 59 pas
 round 74：`core-plugin` **6 檔 / 58 tests 全綠**、`memory` **3 檔 / 4 tests 全綠**。
 round 77：`todo` **1 檔 / 14 tests 全綠**、`text-diff` **1 檔 / 16 tests 全綠**。
 round 89：`skills` **8 檔 / 61 tests 全綠**、`telemetry` **4 檔 / 19 tests 全綠**。
+round 90：`settings` **18 檔 / 230 tests 全綠**、`plugin-registry` **12 檔 / 244 tests 全綠**。
 round 78：`schedule` **2 檔紅 / 4 檔綠（6 檔），3 failed / 97 passed（100）**；`rewind`
   **7 檔 / 72 tests 全綠**。`schedule` 三紅同源：live fold 失敗保留語義（預期 `uncertain`
   或 `undefined`，實際是 `TypeError: Original fold callback failed`）。round 79 定位：
