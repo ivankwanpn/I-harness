@@ -531,6 +531,8 @@ round 92：`terminal` **8 檔全綠，57 passed / 2 skipped**（第一次跑有 
 round 93：`fs` **15 檔 / 113 tests 全綠**、`shell` **11 檔 / 93 tests 全綠**。
 round 119：`fs-search` **5 檔 / 51 tests 全綠**、`fs-watch` **5 檔 / 69 tests 全綠**。
 round 120：`image-validation` **1 檔 / 19 tests 全綠**、`attachment` **2 檔 / 12 tests 全綠**。
+round 125：`guard-timeout` **1 檔 / 7 tests 全綠**；`guard-retry` **1 檔紅 / 9 passed（10）**——紅點
+  「does not re-dispatch after the caller signal aborts」→ `expected 2 to be 1`（abort 後仍再派發）。
 round 94：`jobs` **1 檔 / 5 tests 全綠**、`workflow` **6 檔 / 66 tests 全綠**。
 round 95：`lsp` **6 檔 / 94 tests 全綠**、`media` **3 檔 / 15 tests 全綠**。
 round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot read properties of undefined
