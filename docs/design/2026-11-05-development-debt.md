@@ -556,6 +556,10 @@ round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed�
   基線一致（1 個既有 M72 紅，與本次無關）。
   round 71 診斷：`visits` 只在 `entries()` yield 時遞增，而目前實作不再透過 `entries`（所以 0）。
   改測 `Symbol.iterator`＋`entries` 後得到 **60000**（3×20000）——表示 index 建構時對前綴做了
+  **round 85**：兩個 marker 紅都失敗在 `capture()` 的 `expect(body).toBeDefined()`——
+  請求根本沒發出去（stub 沒收到 fetch），不是 marker 內容不對。下一步要查 client 在
+  signed/redacted thinking＋toolCalls 或 explicit-off breakpoints 這兩種輸入下是否提早結束
+  （例如驗證/錯誤事件在 fetch 之前），再決定修產品或修測試的輸入。
   3 次走訪，或 hooks 被呼叫多次；需先確認實作是否真的退化（效能契約）再決定修產品或重寫 probe。
   兩次實驗均已還原。round 72 追加：`conversation/validation.ts` 只有一處
   `for (const event of events)`（line 431）；3 次走訪的其他來源很可能在 `createHistoryIndex`
