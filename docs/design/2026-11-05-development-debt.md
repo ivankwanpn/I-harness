@@ -532,7 +532,7 @@ node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exe
 ## 交接：2026-11-05 round 32
 
 **已綠的 gate（可當 CI 必過項）**：
-- `pnpm -r --no-bail typecheck`：82 packages 全綠（round 7 量測）。
+- `pnpm -r --no-bail typecheck`：**82 packages 全綠**（round 39 空載重跑）。
 - `node scripts/audit/check-package-boundaries.mjs --gate`：147/147 PASS。
 - `node scripts/audit/check-reachability.mjs --gate`：**PASS（0 NEW，381 rows，無 inert）**，
   由 round 6 的 70 NEW 經 17 批移除（~50 筆 export）與 dated allowlist 收斂。
