@@ -39,14 +39,6 @@ export function lookupJsonlProcessRead(backend: object) {
   if (!owner) return undefined
   try { owner.assertOriginal(); return owner.capability } catch { return undefined }
 }
-export function createJsonlSessionCoordinator(root: string, options?: CoordinatorOptions): SessionCoordinator {
-  const backend = createJsonlBackend(root)
-  const owner = processReadOwners.get(backend)!
-  return assembleSessionCoordinatorWithProcessStorage(backend, options, {
-    capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) },
-    captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) },
-  })
-}
 export function composeJsonlTaskDocumentCoordinator(backend: PersistenceBackend, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
   const owner = processReadOwners.get(backend)
   if (!owner) throw new TypeError('Original JSONL backend required')

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createJsonlBackend, createJsonlSessionCoordinator } from '../src/index.ts'
+import { createJsonlBackend } from '../src/index.ts'
 import { composeJsonlTaskDocumentCoordinator, composeJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
@@ -60,9 +60,9 @@ it('original root and nested document preparation recaptures before lock and pub
   try { await f.documents.putDocumentStrict('nested/key', {ok:true}); expect(await f.backend.getDocument('nested/key')).toEqual({ok:true}); const latch=f.latches.capture({sessionId:'other',documentKeys:['nested/key'],mode:'cold'}); await f.documents.putDocumentStrict('nested/./key',{ok:false}); expect(()=>latch.assertCurrent()).toThrow(); latch.retire() } finally { await f.close() }
 })
 
-it.each(['generic','process','task','transition'] as const)('all genuine %s constructors use original document-artifact ownership', async kind => {
+it.each(['generic','task','transition'] as const)('all genuine %s constructors use original document-artifact ownership', async kind => {
   const f = await fixture(), backend = createJsonlBackend(f.root)
-  const writer = kind === 'generic' ? createSessionCoordinator(backend, options) : kind === 'process' ? createJsonlSessionCoordinator(f.root, options) : kind === 'task' ? composeJsonlTaskDocumentCoordinator(backend, options, taskDocumentStorageContract) : composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
+  const writer = kind === 'generic' ? createSessionCoordinator(backend, options) : kind === 'task' ? composeJsonlTaskDocumentCoordinator(backend, options, taskDocumentStorageContract) : composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
   try { await f.owner.ensureOwnership('parent'); await writer.putDocumentStrict!('unrelated', {ok:true}); await expect(writer.putDocumentStrict!('nested/../task-parent', {})).rejects.toThrow() } finally { await f.close(); await writer.close() }
 })
 it('custom structural backend copies cannot acquire original task-handoff construction authority', async () => {

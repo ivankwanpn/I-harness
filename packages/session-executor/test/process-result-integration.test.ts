@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
-import { createJsonlSessionCoordinator } from '@i-harness/session-persistence-jsonl'
+import { createJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
 import type { ResultDependency } from '@i-harness/core-session'
 import { acquireAssemblyResultStore, acquireResultReadStore } from '../src/lifecycle/result-store.ts'
 import { readManagedResultPage } from '@i-harness/context-output'
@@ -47,7 +48,7 @@ vi.mock('../../session-persistence/src/coordinator/process-read-visibility.ts', 
 it('reads a genuine catalog member repeatedly in an original cold process scope without snapshots', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-real-bridge-')), sessionRoot = join(root, 'sessions'), settings = join(root, 'settings.json')
   await mkdir(sessionRoot); await writeFile(settings, '{}')
-  const coordinator = createJsonlSessionCoordinator(sessionRoot, { lock: { enabled: true } })
+  const coordinator = createJsonlTaskTransitionCoordinator(sessionRoot, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 's' })
   const options = { workspace: root, coordinator, contextOutputSettingsPath: settings, sessionId: 's' }
   const producer = await acquireAssemblyResultStore(options), output = producer.service!, source = await producer.sourceFor!('s')
@@ -88,7 +89,7 @@ it('reads a genuine catalog member repeatedly in an original cold process scope 
       expect(publishBodies).toBe(0)
       expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
     } finally { trace.afterRead = undefined; trace.active = false }
-    const foreignCoordinator = createJsonlSessionCoordinator(sessionRoot, { lock: { enabled: true } })
+    const foreignCoordinator = createJsonlTaskTransitionCoordinator(sessionRoot, { lock: { enabled: true } }, taskDocumentStorageContract)
     const a = await acquireResultReadStore({ ...options, readCallerAvailable: () => true }, getter)
     const b = await acquireResultReadStore({ ...options, coordinator: foreignCoordinator, readCallerAvailable: () => true }, () => ({ revision: 'foreign', scope: { id: 'foreign', roots: [root] } }))
     try {

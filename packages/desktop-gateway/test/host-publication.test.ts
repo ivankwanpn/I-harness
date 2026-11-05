@@ -3,8 +3,8 @@ import { expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createJsonlSessionCoordinator, createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { createJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
 import { createSessionService } from '@i-harness/session-executor'
 import { createAgentProcesses } from '../src/agent-processes.ts'
 import { createAgentProcessReadRunner, type AgentProcessReadRunner } from '../src/agent-process-read.ts'
@@ -13,7 +13,7 @@ import { recordFixture } from './managed-fixture.ts'
 
 it.each(['output', 'list'] as const)('managed final suffix revokes selected saved terminal %s while unrelated append stays valid', async mode => {
   for (const change of ['unrelated', 'rewind'] as const) {
-    const root = await mkdtemp(join(tmpdir(), 'terminal-publication-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } })
+    const root = await mkdtemp(join(tmpdir(), 'terminal-publication-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
     await coordinator.create({ sessionId: 's' }); const doc = await coordinator.openManagedDocument('s')
     await recordFixture(doc, { type: 'tool/call', callId: 'open', name: 'terminal_open', args: { command: 'owned' } })
     await recordFixture(doc, { type: 'tool/result', callId: 'open', name: 'terminal_open', output: { id: 'pty', pid: 1 } })
@@ -38,7 +38,7 @@ it.each(['output', 'list'] as const)('managed final suffix revokes selected save
 })
 it.each(['document', 'profile'] as const)('two-argument saved compatibility revalidates original declaration across %s await', async phase => {
   for (const change of ['unrelated', 'rewind', 'competitor'] as const) {
-    const root = await mkdtemp(join(tmpdir(), 'compat-publication-')), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+    const root = await mkdtemp(join(tmpdir(), 'compat-publication-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
     await coordinator.create({ sessionId: 's' }); const doc = await coordinator.openManagedDocument('s')
     await recordFixture(doc, { type: 'tool/call', callId: 'start', name: 'shell', args: {} })
     await recordFixture(doc, { type: 'tool/result', callId: 'start', name: 'shell', output: { job_id: 'job' } })
@@ -60,7 +60,7 @@ it.each(['document', 'profile'] as const)('two-argument saved compatibility reva
 })
 
 it('terminal fixed windows preserve original PTY string offsets and overlap behavior for multibyte text', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'terminal-offsets-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'terminal-offsets-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 's' }); const doc = await coordinator.openManagedDocument('s'), service = createSessionService({ workspace: root, coordinator })
   try {
     await recordFixture(doc, { type: 'tool/call', callId: 'open', name: 'terminal_open', args: {} })
@@ -75,7 +75,7 @@ it('terminal fixed windows preserve original PTY string offsets and overlap beha
 })
 const terminalPendingCases = (['output', 'list'] as const).flatMap(mode => (['initial', 'suffix'] as const).flatMap(split => (['legacy', 'inline'] as const).flatMap(format => (['same', 'other'] as const).map(target => [mode, split, format, target] as const))))
 it.each(terminalPendingCases)('terminal pending parity %s/%s/%s/%s uses actual final managed suffix', async (mode, split, format, target) => {
-  const root = await mkdtemp(join(tmpdir(), 'terminal-pending-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'terminal-pending-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 's' }); const doc = await coordinator.openManagedDocument('s')
   await recordFixture(doc, { type: 'tool/call', callId: 'old-open', name: 'terminal_open', args: {} })
   await recordFixture(doc, { type: 'tool/result', callId: 'old-open', name: 'terminal_open', output: { id: 'pty' } })

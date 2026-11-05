@@ -63,7 +63,7 @@ it('retains failed close through generic coordinator close and retries exact ori
     await c.close();
     expect(closes).toBe(2);
 });
-import { createJsonlSessionCoordinator } from '../src/index.ts';
+import { createSessionCoordinator as createComposedCoordinator } from './helpers/composed.ts';
 import { encodeFactBatch, legacyPrefixDigest, readFactJournal, type SessionEvent } from '@i-harness/core-session';
 async function managed(version = 14) { const f = await fixture(), previous = legacyPrefixDigest(0, Buffer.alloc(0)), journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: previous, separatorBytes: 0 as const }; const frame = Buffer.from(encodeFactBatch('one', previous, [{ type: 'plan/mode', mode: 'on', seq: 0 }]).bytes); await fs.writeFile(f.path, JSON.stringify({ formatVersion: version, sessionId: 'a', journal }) + '\n'); await fs.appendFile(f.path, frame); return { ...f, journal, frame }; }
 it.each([6, 7, 8, 9, 10, 11, 12, 13, 14])('actual managed format%s matches original validated events and ignores torn suffix', async (version) => { const f = await managed(version); await fs.appendFile(f.path, '{"unfinished":"雪'); expect((await f.backend.read('a')).events).toEqual(readFactJournal(Buffer.concat([f.frame, Buffer.from('{"unfinished":"雪')]), f.journal, version).events); });
@@ -111,7 +111,7 @@ it('keeps consumed falsey close failure unresolved without reopening or successf
     await expect(c.close()).rejects.toThrow();
     expect({ opens, closes }).toEqual({ opens: 1, closes: 1 });
 });
-it('tracks exact read resources in the composed constructor and permits sequential coordinator reuse', async () => { const f = await fixture(); const c = createJsonlSessionCoordinator(f.root); expect((await c.snapshot!('a')).session.events).toHaveLength(1); await c.close(); const one = createSessionCoordinator(f.backend); await one.close(); const two = createSessionCoordinator(f.backend); expect((await f.backend.read('a')).events).toHaveLength(1); await two.close(); });
+it('tracks exact read resources in the composed constructor and permits sequential coordinator reuse', async () => { const f = await fixture(); const c = createComposedCoordinator(createJsonlBackend(f.root)); expect((await c.snapshot!('a')).session.events).toHaveLength(1); await c.close(); const one = createSessionCoordinator(f.backend); await one.close(); const two = createSessionCoordinator(f.backend); expect((await f.backend.read('a')).events).toHaveLength(1); await two.close(); });
 it('preserves primary and cleanup falsey causes', async () => {
     const f = await fixture();
     vi.mocked(fs.open).mockImplementation(async (...args) => {

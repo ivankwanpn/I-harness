@@ -1,13 +1,12 @@
 import { expect,it,vi } from 'vitest'
 import { mkdtemp,readdir,rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createJsonlSessionCoordinator } from '../src/backend-factory.ts'
 import { createJsonlTaskDocumentCoordinator } from '../src/task-document-factory.ts'
 import { createSelectedRuntimeCapture } from '../../session-persistence/src/selected-source-owner.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 it.each(['generic','validator-only'] as const)('refuses selected runtime assembly for native %s before original operation/export or any effects',async kind=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'d-selected-capability-'))
- const coordinator=kind==='generic'?createJsonlSessionCoordinator(root,{lock:{enabled:true}}):createJsonlTaskDocumentCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ const coordinator=kind==='generic'?createSessionCoordinatorCore(createJsonlBackend(root),{lock:{enabled:true}}):createJsonlTaskDocumentCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
  const make=vi.fn(()=>{throw Error('original operation must not be constructed')})
  try{expect(()=>createSelectedRuntimeCapture(coordinator,make)).toThrow('TASK_TRANSITION_UNSUPPORTED');expect(make).not.toHaveBeenCalled();expect(await readdir(root)).toEqual([])}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })

@@ -12,7 +12,6 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from '@i-harness/core-session'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
-import { createJsonlSessionCoordinator } from '../src/backend-factory.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 
@@ -20,7 +19,7 @@ it('syncs the exact original bootstrap header before a cold managed open', async
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-managed-header-'))
   const request = { invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) }, target: { kind: 'new' as const }, metadata: {}, lineage: { origin: 'fork' as const, parentSession: 'parent' }, seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' as const }, records: [] } }
   const guards = { assertCurrent() {}, dependencies: { async confirm() { throw Error('unused') }, async reconcile() { throw Error('unused') } } }
-  const original = createJsonlSessionCoordinator(root, { lock: { enabled: true } })
+  const original = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try { expect((await original.bootstrapSemanticTarget(request, guards)).kind).toBe('ready') } finally { await original.close() }
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   fault.target = join(root, 'target.jsonl'); fault.syncs = 0

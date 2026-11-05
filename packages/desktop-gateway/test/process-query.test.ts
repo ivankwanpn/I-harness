@@ -2,7 +2,8 @@ import { expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createJsonlSessionCoordinator } from '@i-harness/session-persistence-jsonl'
+import { createJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
 import { createSessionService } from '@i-harness/session-executor'
 import { createAgentProcesses } from '../src/agent-processes.ts'
 import { createAgentProcessReadRunner } from '../src/agent-process-read.ts'
@@ -15,7 +16,7 @@ it('closed process query transport retains complete fixed selectors and refuses 
   expect(() => contextRequestParams({ ...query, ownerSessionId: 'foreign' })).toThrow(/invalid/)
 })
 it('malformed frame selectors refuse before any genuine observation or reader page can run', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'process-query-')), coordinator = createJsonlSessionCoordinator(root)
+  const root = await mkdtemp(join(tmpdir(), 'process-query-')), coordinator = createJsonlTaskTransitionCoordinator(root, undefined, taskDocumentStorageContract)
   const service = createSessionService({ workspace: root, coordinator, resultReadScopeFor: async () => undefined })
   let pages = 0, policyCalls = 0
   const runRead = createAgentProcessReadRunner({ coordinator, service, fence: createSessionManagementFence(), isConversation: async () => { policyCalls++; return true }, resultReadScopeFor: async () => undefined, readResultPage: async () => { pages++; return { kind: 'unavailable', reason: 'unavailable' } } })

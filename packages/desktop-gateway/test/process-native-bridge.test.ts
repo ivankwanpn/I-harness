@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { expect, it, vi } from 'vitest'
-import { createJsonlSessionCoordinator } from '@i-harness/session-persistence-jsonl'
+import { createJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
 import { createSessionService } from '@i-harness/session-executor'
 import type { ResultDependency } from '@i-harness/core-session'
 import { createNativeContextRuntime } from '../src/context-runtime.ts'
@@ -46,7 +47,7 @@ vi.mock('../../session-persistence/src/coordinator/process-read-visibility.ts', 
 it('reads real catalog members through the injected native service without visibility rescans', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-native-bridge-')), sessions = join(root, 'sessions'), settings = join(root, 'settings.json')
   await mkdir(sessions); await writeFile(settings, '{}')
-  const coordinator = createJsonlSessionCoordinator(sessions, { lock: { enabled: true } }); await coordinator.create({ sessionId: 's' })
+  const coordinator = createJsonlTaskTransitionCoordinator(sessions, { lock: { enabled: true } }, taskDocumentStorageContract); await coordinator.create({ sessionId: 's' })
   let revision = 'one'
   const visibleRefsFor = vi.fn(async () => []), getter = () => ({ revision }), resolveScope = async () => getter
   const native = await createNativeContextRuntime({ workspace: root, storageRoot: join(root, 'native'), coordinator, projectFor: async () => ({ revision: 'one' }), resultReadScopeFor: resolveScope, visibleRefsFor })
@@ -174,7 +175,7 @@ it('reads real catalog members through the injected native service without visib
       expect(await reader.readResultPage!('s', { ref: unlisted.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'cached'
     }, async result => { memberPublished = true; return result })).rejects.toThrow()
     expect(memberPublished).toBe(false)
-    const foreignCoordinator = createJsonlSessionCoordinator(sessions, { lock: { enabled: true } })
+    const foreignCoordinator = createJsonlTaskTransitionCoordinator(sessions, { lock: { enabled: true } }, taskDocumentStorageContract)
     const foreignReader = createSessionService({ workspace: root, coordinator: foreignCoordinator, sessionId: 's', contextOutput: output, resultReadScopeFor: resolveScope })
     try {
       let published = false

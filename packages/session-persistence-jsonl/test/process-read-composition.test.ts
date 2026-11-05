@@ -2,13 +2,13 @@ import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { createJsonlSessionCoordinator } from '../src/index.ts';
 import { createSessionCoordinator, compileSemanticSeed } from '@i-harness/session-persistence';
 import { createJsonlBackend } from '../src/backend-factory.ts';
+import { createSessionCoordinator as createComposedCoordinator } from './helpers/composed.ts';
 
 it('constructs the genuine composed coordinator while generic construction stays separate', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-compose-'));
-    const composed = createJsonlSessionCoordinator(root, { lock: { enabled: true } });
+    const composed = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
     const generic = createSessionCoordinator(createJsonlBackend(root));
     try {
         await composed.create({ sessionId: 's' });
@@ -32,7 +32,7 @@ it('constructs the genuine composed coordinator while generic construction stays
 });
 
 it('refuses a real process capture while original bootstrap binding admission is still joined', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ih-compose-bootstrap-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } });
+    const root = await mkdtemp(join(tmpdir(), 'ih-compose-bootstrap-')), coordinator = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
     const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>();
     await coordinator.create({ sessionId: 'target' });
     const binding = coordinator.withExistingSessionBindingObservation!({ sessionIds: ['target'] }, async () => { entered.resolve(); await leave.promise });
@@ -49,7 +49,7 @@ it('refuses a real process capture while original bootstrap binding admission is
 });
 
 it('discards an active managed candidate after a genuine recovery hold is entered and released', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ih-compose-recovery-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } });
+    const root = await mkdtemp(join(tmpdir(), 'ih-compose-recovery-')), coordinator = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
     try {
         await coordinator.create({ sessionId: 's' }); const document = await coordinator.openManagedDocument('s');
         const action = document.beginAction(), source = action.registerSettlementSource(async () => {});
@@ -63,34 +63,64 @@ it('discards an active managed candidate after a genuine recovery hold is entere
     } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-it.each([1, -1, 0.5, '1', null])('refuses inherited or malformed seed boundary %j in cold and managed process setup only', async seedLength => {
+it.each([-1, 0.5, '1', null])('refuses malformed seed boundary %j for optimized process setup and managed recovery', async seedLength => {
     const root = await mkdtemp(join(tmpdir(), 'ih-compose-seed-')), backend = createJsonlBackend(root);
-    const setup = createSessionCoordinator(backend, { lock: { enabled: true } });
+    const setup = createComposedCoordinator(backend, { lock: { enabled: true } });
     await setup.create({ sessionId: 's' }); await setup.append('s', [{ type: 'plan/mode', mode: 'on' }]); await setup.close();
     const path = join(root, 's.jsonl'), bytes = await readFile(path, 'utf8'), newline = bytes.indexOf('\n');
     await writeFile(path, JSON.stringify({ ...JSON.parse(bytes.slice(0, newline)), parentSession: 'parent', seedLength }) + bytes.slice(newline));
-    const coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } });
+    const coordinator = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
     try {
         await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'bad', async value => value)).rejects.toThrow();
-        // Generic normalization remains the original behavior; a supported
-        // ordinary managed owner must still refuse optimized inherited setup.
+        // Format 14 recovery is a task transition, so a malformed inherited
+        // boundary is a task-history scope violation: the managed owner refuses
+        // it instead of normalizing the header.
+        await expect(coordinator.openManagedDocument('s')).rejects.toThrow();
+    } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+it('opens a well-formed inherited boundary through managed recovery while refusing optimized process setup', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-compose-inherited-')), backend = createJsonlBackend(root);
+    const setup = createComposedCoordinator(backend, { lock: { enabled: true } });
+    await setup.create({ sessionId: 's' }); await setup.append('s', [{ type: 'plan/mode', mode: 'on' }]); await setup.close();
+    const path = join(root, 's.jsonl'), bytes = await readFile(path, 'utf8'), newline = bytes.indexOf('\n');
+    await writeFile(path, JSON.stringify({ ...JSON.parse(bytes.slice(0, newline)), parentSession: 'parent', seedLength: 1 }) + bytes.slice(newline));
+    const coordinator = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
+    try {
+        await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'bad', async value => value)).rejects.toThrow();
         const document = await coordinator.openManagedDocument('s'); expect(document.view.events).toHaveLength(1);
         await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'bad', async value => value)).rejects.toThrow();
     } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-it.each([undefined, 0])('preserves ordinary lineage-only process reads with seed boundary %j', async seedLength => {
-    const root = await mkdtemp(join(tmpdir(), 'ih-compose-lineage-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } });
+it('preserves ordinary lineage-only process reads with a zero seed boundary', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-compose-lineage-')), coordinator = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
     try {
-        await coordinator.create({ sessionId: 's', parentSession: 'parent', ...(seedLength === undefined ? {} : { seedLength }) });
+        await coordinator.create({ sessionId: 's', parentSession: 'parent', seedLength: 0 });
         await coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'cold', async value => value);
         await coordinator.openManagedDocument('s');
         await coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'managed', async value => value);
     } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }); }
 });
 
+it('refuses to mint a lineage-only header while a hand-written one stays readable for the cold process lane', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-compose-lineage-legacy-')), coordinator = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
+    try {
+        await expect(coordinator.create({ sessionId: 's', parentSession: 'parent' })).rejects.toThrow(/seed length/i);
+        // An artifact written before the creation gate keeps its original
+        // meaning for the optimized cold lane: an absent seedLength is a zero
+        // boundary. The strict history reader still refuses managed recovery.
+        await coordinator.create({ sessionId: 's' });
+        const path = join(root, 's.jsonl'), bytes = await readFile(path, 'utf8'), newline = bytes.indexOf('\n');
+        await writeFile(path, JSON.stringify({ ...JSON.parse(bytes.slice(0, newline)), parentSession: 'parent' }) + bytes.slice(newline));
+        await coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'cold', async value => value);
+        await expect(coordinator.openManagedDocument('s')).rejects.toThrow();
+    } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+
 it('uses the original ready managed owner and delivers its contiguous suffix', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ih-compose-managed-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } });
+    const root = await mkdtemp(join(tmpdir(), 'ih-compose-managed-')), coordinator = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
     try {
         await coordinator.create({ sessionId: 's' });
         const document = await coordinator.openManagedDocument('s');
@@ -106,7 +136,7 @@ it('uses the original ready managed owner and delivers its contiguous suffix', a
 });
 
 it('delivers the unique final managed suffix committed during the last work await', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'ih-final-suffix-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } });
+    const root = await mkdtemp(join(tmpdir(), 'ih-final-suffix-')), coordinator = createComposedCoordinator(createJsonlBackend(root), { lock: { enabled: true } });
     try {
         await coordinator.create({ sessionId: 's' }); const document = await coordinator.openManagedDocument('s');
         let publications = 0;

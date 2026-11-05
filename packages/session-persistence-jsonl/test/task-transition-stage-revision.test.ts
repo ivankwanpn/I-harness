@@ -24,12 +24,11 @@ import { join } from 'node:path'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { pair, guards } from '../../session-persistence/test/child-bootstrap-fixture.ts'
 import { bootstrapPathsForRoute } from '../src/backend/bootstrap-stage.ts'
-import { createJsonlSessionCoordinator } from '../src/backend-factory.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 
 it('refuses a same-inode equal-size stage rewrite during the tracked read even when its bytes are unchanged', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-stage-revision-'))
-  const { payload } = pair(), original = createJsonlSessionCoordinator(root, { lock: { enabled: true } })
+  const { payload } = pair(), original = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try { expect((await original.bootstrapSemanticTarget(payload, guards)).kind).toBe('ready') } finally { await original.close() }
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   fault.target = bootstrapPathsForRoute(join(root, 'target.jsonl'), { protocol: 'public', invocation: payload.invocation }).stage; fault.active = true

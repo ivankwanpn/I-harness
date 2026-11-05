@@ -271,10 +271,10 @@ it.each([false,undefined])('post-install startup failure %s permanently fences t
 })
 
 it.each(['generic','task-only'])('logical14 %s parent cannot qualify v3 binding',async kind=>{
- const {createJsonlSessionCoordinator}=await import('../../session-persistence-jsonl/src/backend-factory.ts'),{createJsonlTaskDocumentCoordinator}=await import('../../session-persistence-jsonl/src/task-document-factory.ts'),{TaskPersistence}=await import('../src/task/persistence.ts')
+ const {createSessionCoordinatorCore}=await import('../../session-persistence/src/coordinator-factory.ts'),{createJsonlTaskDocumentCoordinator}=await import('../../session-persistence-jsonl/src/task-document-factory.ts'),{TaskPersistence}=await import('../src/task/persistence.ts')
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'v3-unsupported-')),backend=createJsonlBackend(root)
  await backend.create('parent',{sessionId:'parent',formatVersion:14,createdAt:'x'});await writeFile(join(root,'task-parent.doc.jsonl'),'{"formatVersion":2,"tasks":[],"notifications":[]}')
- const coordinator=kind==='generic'?createJsonlSessionCoordinator(root,{lock:{enabled:true}}):createJsonlTaskDocumentCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ const coordinator=kind==='generic'?createSessionCoordinatorCore(backend,{lock:{enabled:true}}):createJsonlTaskDocumentCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
  try{
   await expect(coordinator.openManagedDocument('parent')).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED');let snapshots=0;const owned=undefined
   const persistence=new TaskPersistence(coordinator,'parent',false,()=>{snapshots++;return {formatVersion:3,tasks:[],notifications:[]}},owned)
