@@ -589,6 +589,11 @@ full job 當 gate。
   文件內部的 currentness 斷言在文件關閉時仍以舊 entry 為準 → `FactRecoveryRequiredError`。
   下一輪候選修法：在 line 85 之前也先 `revokeManagedEntry(entry)` 並 join flight（或让
   document.close 對已 revoke 的 entry 容忍），再跑三檔驗證。
+  **round 50 實測**：在 line 85 包一層「遇 `FactRecoveryRequiredError` 才 revoke+join 並重試」
+  的 fallback，三檔仍全部 `Coordinator cleanup is unresolved` → 表示 rejection 不是裸的
+  `FactRecoveryRequiredError`（可能是 AggregateError／另一層包裝），或失敗點不在 closeOne 的
+  document 路徑。已還原該實驗；下一輪應先在 `managed.close()` 印出實際 rejection 的建構子
+  名稱與 stack，再決定修法。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
