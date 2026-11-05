@@ -180,6 +180,10 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 200（gate 複驗）**：三個 gate 在目前 HEAD 全綠——`pnpm -r typecheck` **exit 0**、
+> `check-package-boundaries --gate` **147/147 baseline**、`check-reachability --gate`
+> **PASS / no new rows（gone rows 為既有清理）**。這代表本 session 的產品改動
+> （code-mode dispose recovery、core-session 單次走訪）沒有破壞任何 gate。
 > **round 199**：sdk child-context 的 model-origin spawn 改寫**嘗試過但已還原**——把 parent 改成由模型
 > yield `spawn_agent` tool_call 後，parent turn 收到 `This operation was aborted`
 > （task 從未建立）。下次先查 submit 的 abort 來源（durable session 是否需要 inbox admission、
