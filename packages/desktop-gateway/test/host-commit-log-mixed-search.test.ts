@@ -33,15 +33,16 @@ it('searches a mixed legacy and commit-log store', async () => {
     await call('initialize')
     const created = await call('session/create') as { sessionId: string }
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'mixed-store-token in a commit log session' })
-    const hits = await call('desktop/session/search', { query: 'mixed-store-token' }) as { hits: { sessionId: string }[] }
+    const hits = await call('desktop/session/search', { query: 'mixed-store-token' }) as { hits: { sessionId: string; bm25: number }[] }
     const ids = hits.hits.map(hit => hit.sessionId)
     expect(ids).toContain('legacy-source')
     expect(ids).toContain(created.sessionId)
     expect(new Set(ids).size).toBe(ids.length)
     // The legacy session comes from the file-backed index (negative bm25), the
     // commit-log session from the coordinator fallback (bm25 0).
-    expect(hits.hits.find(hit => hit.sessionId === 'legacy-source')).toMatchObject({ bm25: expect.any(Number) })
-    expect((hits.hits.find(hit => hit.sessionId === 'legacy-source') as { bm25: number }).bm25).toBeLessThanOrEqual(0)
+    const legacyHit = hits.hits.find(hit => hit.sessionId === 'legacy-source')
+    expect(legacyHit).toBeDefined()
+    expect(legacyHit!.bm25).toBeLessThanOrEqual(0)
     expect(hits.hits.find(hit => hit.sessionId === created.sessionId)).toMatchObject({ bm25: 0 })
   } finally { await host.close() }
 }, 90000)
