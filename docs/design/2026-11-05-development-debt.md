@@ -563,6 +563,10 @@ full job 當 gate。
   `createJsonlBackend(root,{ wrap })` 的 pre-bind seam，並把 `p.createSessionCoordinator`
   改成 `composeJsonlTaskTransitionCoordinator(backend,{lock},
   taskDocumentStorageContract)`（即 `bootstrap-capture` P06 的成功模式）。
+  **round 40 已實作**：child script 改成 `createJsonlBackend(root,{wrap})` + composed 建構子，
+  `PROCESS_READ_UNAVAILABLE` 消失、測試主體（barrier／cold restart／receipt／bytes）全部通過；
+  剩下唯一紅是 `finally { await cold.close() }` 拋 `Coordinator cleanup is unresolved`——新的
+  cleanup-debt 語義（與 `bootstrap-stage-swap`／`stage-revision` 同一類），列入第 4 項。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
