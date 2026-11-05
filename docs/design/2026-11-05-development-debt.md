@@ -14,6 +14,10 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 222（SCL store）**：`session-commit-log` 加上 store／lease／crash-cut：temp→fsync→`link()` no-overwrite 發佈、
+> 寫入租約（重用 `@i-harness/fs-lock`）、torn tail 只在寫入模式截斷、append 失敗以 truncate 回滾、
+> content-addressed sidecar＋未引用回收。30 tests 全綠；typecheck／boundaries 147／reachability 全綠。
+> 下一步：舊格式（13/14）reader 與 dual-run，然後 facade。
 > **round 221（SCL 動工）**：`packages/session-commit-log` 落地（format 15 codec、torn-tail scanner、fold），
 > 18 tests 全綠、`tsc --noEmit` exit 0、boundaries 147/147、reachability PASS（index 公開面暫留空，Plan 2 接上第一個消費者時再開）。
 > 計畫：`docs/superpowers/plans/2026-11-05-session-commit-log-format.md`；下一步是 Plan 2（store + lease + crash-cut）。

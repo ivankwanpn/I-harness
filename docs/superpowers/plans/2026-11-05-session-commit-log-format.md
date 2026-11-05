@@ -578,6 +578,19 @@ git commit -m "feat(session-commit-log): fold commits into the session view"
 
 ---
 
+## Plan 2 (implemented 2026-11-05): store + lease + crash-cut
+
+Delivered in the same package (30 tests total, all green):
+
+- `src/paths.ts` — `<root>/<id>/session.v15.jsonl`, `side/<sha256>`, temp names, id safety.
+- `src/io.ts` — injectable filesystem port (`open/readFile/link/unlink/mkdir/readdir/rm`) so crash cuts are injected by wrapping the port.
+- `src/lease.ts` — `@i-harness/fs-lock` exclusive lease on the `commit-log:<id>` namespace (cross-process on Windows/Linux; stale lock files are harmless because the OS lock dies with the process).
+- `src/store.ts` — `createCommitLog` publishes via temp write + fsync + **`link()` no-overwrite** + directory fsync; `openCommitLog(mode)` acquires the write lease, scans, truncates a torn tail only in write mode, keeps an `r+` handle, appends with rollback-by-truncate on write/sync failure, writes/reads content-addressed sidecars, and collects unreferenced sidecars on write open.
+- `test/store.test.ts` — publish/reopen, duplicate-create conflict, missing session, torn tail (read leaves it, write truncates then appends), fsync rollback, sidecar GC, lease conflict.
+- `test/crash.test.ts` — a cut at temp-open / temp-write / temp-fsync / link leaves **no session**; a cut after the link keeps the complete session.
+
+Remaining for the store before the facade: append-crash cuts (a cut between write and fsync must roll back to the previous size — already implemented, needs a fault test through the append path), and generation selection once format-15 migration lands.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
