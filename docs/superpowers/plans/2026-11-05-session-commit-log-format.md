@@ -1190,6 +1190,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 69 (implemented 2026-11-06): a rewind planned by one host executes in the next
+
+`host-commit-log-rewind-restart.test.ts`: host1 lists the points and plans the conversation rewind (fingerprint), closes; host2
+executes with that fingerprint and gets `{eventAppended:true, truncated:true}`, the points list is empty afterwards, and a fresh
+coordinator sees the durable `rewind/point` marker. Rewind planning is therefore restart-safe (unlike prepared forks, which are
+host-memory bound).
+
 ## Plan 68 (implemented 2026-11-06): prepared forks are not resumable after a restart (parity)
 
 `host-fork-restart.test.ts` prepares a fork in one host, closes it, and tries to begin the same operation from a second host on the

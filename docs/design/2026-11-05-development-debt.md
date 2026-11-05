@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 324（跨 host rewind）**：host1 points+plan、host2 execute（fingerprint）成功，points 清空，log 留下 `rewind/point` 標記；
+> rewind 規劃可跨重啟（與 prepared fork 不同）。
 > **round 323（prepared fork 不可續）**：host1 prepare、關閉、host2 begin 在 commit-log 與 legacy 都回 `Session fork unavailable`，
 > 屬產品層契約（prepared fork 存在原 host 記憶體）；測試固定兩邊行為。
 > **round 322（host 重啟續用）**：host1 建立＋prompt 後關閉，host2 冷載入看到 turnCount 1，再 prompt 後 turnCount 2——
