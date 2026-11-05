@@ -43,4 +43,3 @@ export { createResultObservationScope, createLegacyReadObservationRunner, legacy
 export type { ResultObservationScope, ResultObservationCapture, ResultSourceObservation } from './lifecycle/result-observation.ts'
 
 export { mountChildShellTools } from './child-shell.ts'
-export type { ChildShellMount } from './child-shell.ts'
