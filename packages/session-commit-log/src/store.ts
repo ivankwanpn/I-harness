@@ -53,6 +53,8 @@ export type CommitLogMode = 'read' | 'write'
 export type CommitLog = {
   readonly sessionId: string
   readonly mode: CommitLogMode
+  /** False once closed; the writer lease is held for the handle's whole life. */
+  readonly open: boolean
   header(): Readonly<Record<string, unknown>>
   view(): CommitView
   records(): readonly CommitRecord[]
@@ -215,6 +217,7 @@ function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, l
   return {
     sessionId: options.sessionId,
     mode,
+    get open() { return !state.closed },
     header: () => state.view.header,
     view: () => state.view,
     records: () => state.records,

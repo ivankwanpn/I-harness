@@ -11,6 +11,8 @@ export type CommitView = {
   readonly meta: Readonly<Record<string, unknown>>
   readonly documents: ReadonlyMap<string, CommitDocument>
   readonly intents: ReadonlyMap<string, Readonly<Record<string, unknown>>>
+  /** Committed fact batches: batch id -> its prefix digest (insertion order). */
+  readonly batches: ReadonlyMap<string, string>
   readonly seed?: CommitSeed
   readonly deleted: boolean
 }
@@ -22,6 +24,7 @@ export function foldCommits(records: readonly CommitRecord[]): CommitView {
   const meta: Record<string, unknown> = {}
   const documents = new Map<string, CommitDocument>()
   const intents = new Map<string, Readonly<Record<string, unknown>>>()
+  const batches = new Map<string, string>()
   let seed: CommitSeed | undefined
   let deleted = false
   for (const record of records) {
@@ -33,6 +36,7 @@ export function foldCommits(records: readonly CommitRecord[]): CommitView {
         case 'doc': documents.set(op.key, op.side); break
         case 'doc-clear': documents.delete(op.key); break
         case 'intent': intents.set(op.id, op.intent); break
+        case 'batch': batches.set(op.id, op.prefixDigest); break
         case 'seed': seed ??= { parent: op.parent, cut: op.cut, digest: op.digest }; break
         case 'intent-done': intents.delete(op.id); break
         case 'rewind':
@@ -43,5 +47,5 @@ export function foldCommits(records: readonly CommitRecord[]): CommitView {
     }
   }
   if (!header) throw new CommitFormatError('ops', 'commit log has no header op')
-  return { header, entries, meta, documents, intents, ...(seed ? { seed } : {}), deleted }
+  return { header, entries, meta, documents, intents, batches, ...(seed ? { seed } : {}), deleted }
 }

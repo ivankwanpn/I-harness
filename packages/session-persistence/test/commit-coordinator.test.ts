@@ -157,6 +157,21 @@ describe('commit coordinator', () => {
     expect((await reopened.intents('s')).get('i2')).toEqual({ kind: 'child-birth' })
   })
 
+  it('opens a managed document and commits a fact group', async () => {
+    const { coordinator } = await setup()
+    await coordinator.create({ sessionId: 's1' })
+    const document = await coordinator.openManagedDocument('s1')
+    const outcome = await document.metadata.enterPlan('proposal')
+    expect(outcome.kind).toBe('committed')
+    expect(document.view.events.map(event => event.type)).toEqual(['plan/mode', 'user/message'])
+    await coordinator.closeManagedDocument('s1')
+    const { session } = await coordinator.load('s1')
+    expect(session.events.map(event => event.type)).toEqual(['plan/mode', 'user/message'])
+    const reopened = await coordinator.openManagedDocument('s1')
+    expect(reopened.view.events.map(event => event.type)).toEqual(['plan/mode', 'user/message'])
+    await coordinator.closeManagedDocument('s1')
+  })
+
   it('routes appends through the retained owned handle', async () => {
     const { coordinator } = await setup()
     await coordinator.create({ sessionId: 's1' })

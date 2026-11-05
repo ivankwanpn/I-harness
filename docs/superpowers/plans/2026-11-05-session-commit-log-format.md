@@ -614,6 +614,20 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
 - `test/commit-dual-run.test.ts` (JSONL) proves the commit coordinator returns exactly the legacy backend's events/meta/list
   for a real format-14 session, and the same for an empty session.
 
+## Plan 3c (implemented 2026-11-05): managed documents over the commit log
+
+- New `batch` commit op (`id`, `prefixDigest`) folded into `CommitView.batches`; `CommitLog.open` reports the handle state.
+- `src/commit/managed.ts` adapts the existing `createManagedDocument` composition to one commit log:
+  - `appendOwnedBatch` decodes the fact batch, verifies the prefix/first-seq, calls `beforeIssue()`, appends the batch as one commit
+    (entries + `batch` op) and returns the receipt with the batch's prefix digest;
+  - `reconcileOwnedBatch` reports `committed` when the batch op is in the fold, `absent` when the prefix still proves nothing was issued,
+    `conflict` otherwise;
+  - a minimal `Ownership` adapter exposes the document lane (`withSessionOperation`) and held-owner assertion over the commit-log lease.
+- `openManagedDocument/closeManagedDocument/revokeManagedDocumentNewWork` on the coordinator; the document's log stays in the ownership map,
+  so later appends route through the same lease.
+- Test: open a managed document, commit a plan proposal through `metadata.enterPlan`, read it back from `document.view`, close and reopen
+  both the document and the raw session.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

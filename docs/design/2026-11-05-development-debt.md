@@ -14,6 +14,10 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 225（SCL managed document）**：`batch` op＋`CommitView.batches`；`createManagedDocument` 以 commit log 為 backend
+> （appendOwnedBatch 驗 prefix→beforeIssue→單一 commit；reconcile 依 fold 回 committed/absent/conflict；
+> Ownership 轉接器只保留 `withSessionOperation` 與 `assertHeld`）。協調器新增 `openManagedDocument/closeManagedDocument/revokeManagedDocumentNewWork`。
+> 13 個 coordinator 測試全綠（含 managed fact group 寫入、關閉重開）。
 > **round 224（SCL fork／intent／dual-run）**：`seed` op＋`fork(cut)`（子會話以單一 commit 發佈，header 記 parentSession/seedLength）、
 > `beginIntent/endIntent/intents`（capture reservation 的 durable 替代）、以及與 legacy backend 的 dual-run parity 測試。
 > 12 個 coordinator 測試＋2 個 jsonl 整合＋2 個 dual-run 全綠；typecheck／兩個 gate 全綠。

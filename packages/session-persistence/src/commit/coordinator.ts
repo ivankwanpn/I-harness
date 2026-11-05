@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { buildSession, migrate, preflightSessionFormat } from '../format/validation.ts'
 import type { SessionMeta } from '../coordinator/types.ts'
 import type { LegacySessionStore } from './legacy.ts'
+import type { ManagedDocument } from '../coordinator/fact-types.ts'
+import { openCommitManagedDocument } from './managed.ts'
 
 /**
  * v1 commit-log coordinator: the session view is a fold of one commit log.
@@ -43,6 +45,9 @@ export type CommitCoordinator = {
   snapshot(sessionId: string): Promise<{ session: Session }>
   loadOwned(sessionId: string): Promise<{ session: Session }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
+  openManagedDocument(sessionId: string): Promise<ManagedDocument>
+  closeManagedDocument(sessionId: string): Promise<void>
+  revokeManagedDocumentNewWork(sessionId: string): void
   list(): Promise<string[]>
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }>
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
@@ -86,6 +91,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   const logOptions = (sessionId: string) => ({ root, sessionId, now, lockRoot: options.lock?.lockRoot ?? root, lease: { retryMs: options.acquireRetryMs, deadlineMs: options.acquireDeadlineMs } })
   const open = (sessionId: string, mode: CommitLogMode): Promise<CommitLog> => openCommitLog(logOptions(sessionId), mode)
   const owned = new Map<string, CommitLog>()
+  const managed = new Map<string, ManagedDocument>()
 
   const build = (log: CommitLog): Session => {
     const meta = metaOf(log)
@@ -198,6 +204,24 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         await log.append({ entries: staged })
       })
     },
+    async openManagedDocument(sessionId) {
+      const existing = managed.get(sessionId)
+      if (existing) return existing
+      let log = owned.get(sessionId)
+      if (!log) { log = await ensureWritable(sessionId); owned.set(sessionId, log) }
+      const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf })
+      managed.set(sessionId, document)
+      return document
+    },
+    async closeManagedDocument(sessionId) {
+      const document = managed.get(sessionId)
+      if (!document) return
+      managed.delete(sessionId)
+      await document.close()
+      const log = owned.get(sessionId)
+      if (log) { owned.delete(sessionId); await log.close() }
+    },
+    revokeManagedDocumentNewWork(sessionId) { managed.get(sessionId)?.revokeNewWork() },
     async list() {
       const ids = new Set<string>()
       for (const entry of await readdir(root, { withFileTypes: true })) {
@@ -257,12 +281,14 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       owned.set(sessionId, await ensureWritable(sessionId))
     },
     async releaseOwnership(sessionId) {
+      if (managed.has(sessionId)) await this.closeManagedDocument(sessionId)
       const log = owned.get(sessionId)
       if (!log) return
       owned.delete(sessionId)
       await log.close()
     },
     async close() {
+      for (const [sessionId, document] of [...managed]) { managed.delete(sessionId); await document.close().catch(() => {}) }
       const handles = [...owned.values()]
       owned.clear()
       for (const handle of handles) await handle.close().catch(() => {})

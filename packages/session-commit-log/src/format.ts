@@ -14,6 +14,7 @@ export type CommitOp =
   | { readonly kind: 'doc-clear'; readonly key: string }
   | { readonly kind: 'intent'; readonly id: string; readonly intent: Readonly<Record<string, unknown>> }
   | { readonly kind: 'intent-done'; readonly id: string; readonly outcome: 'committed' | 'failed' }
+  | { readonly kind: 'batch'; readonly id: string; readonly prefixDigest: string }
   | { readonly kind: 'seed'; readonly parent: string; readonly cut: number; readonly digest: string }
   | { readonly kind: 'rewind'; readonly toSeq: number }
   | { readonly kind: 'delete' }
@@ -100,6 +101,10 @@ export function parseOp(value: unknown): CommitOp {
     case 'intent-done': {
       if (op.outcome !== 'committed' && op.outcome !== 'failed') throw new CommitFormatError('ops', 'intent-done outcome must be committed or failed')
       return { kind, id: requireString(op.id, 'id'), outcome: op.outcome }
+    }
+    case 'batch': {
+      if (typeof op.prefixDigest !== 'string' || !HEX64.test(op.prefixDigest)) throw new CommitFormatError('ops', 'batch prefixDigest must be a 64-char lowercase hex digest')
+      return { kind, id: requireString(op.id, 'id'), prefixDigest: op.prefixDigest }
     }
     case 'seed': {
       if (!Number.isSafeInteger(op.cut) || (op.cut as number) < 0) throw new CommitFormatError('ops', 'seed cut must be a non-negative safe integer')
