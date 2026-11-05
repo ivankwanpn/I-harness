@@ -594,6 +594,11 @@ full job 當 gate。
   `FactRecoveryRequiredError`（可能是 AggregateError／另一層包裝），或失敗點不在 closeOne 的
   document 路徑。已還原該實驗；下一輪應先在 `managed.close()` 印出實際 rejection 的建構子
   名稱與 stack，再決定修法。
+  **round 51 取得真實 stack**：throw 點是 `managed-documents.ts:96` 的
+  `if(entry.headerUnknown) throw new FactRecoveryRequiredError()`（closeOne 的無 document
+  分支）。即冷 resume 後該 entry 的 `headerUnknown` 仍為 true；`bootstrap.ts` 只有 line 349、
+  514 兩處會清除它，冷 resume 走的另一條分支沒清。下一輪：找出冷 resume 後 header 已
+  confirmed 的分支，補上 `entry.headerUnknown=false`。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
