@@ -799,10 +799,15 @@ That task-document/registry capability is the next port to build on SCL (Plan 7)
   `sessionOfDocument` map. `asSessionCoordinator(coordinator, { taskDocument: { validator } })` associates the port.
 - Test: parent capture, `assertParentSession`, `begin`, observe-absent.
 
-**Next gateway blocker:** with the task port wired the owned gateway mounts past the Task host and fails at
-`selectedSourceFor(coordinator)` in `context-runtime.ts:140` (`Original coordinator required`) — the selected-results
-capability. It is called unconditionally there (only the composer at `:240` is guarded), so the next step is an explicit
-availability query plus graceful degradation for SCL, or a selected-results port.
+**Follow-up (same round):** the task registry loads the parent's task document before any save, so `create` now seeds the
+composition's empty document (`task-<id>`) and the task operations receive the process-read latches. The owned gateway then
+reaches the task **read handoff**: `consume()` calls `ownership.assertHeld(id)`, and the capability ownership does not hold the
+session bundle (the SCL commit-log lease is a different ownership). The next step is to give the coordinator one real
+`createOwnership` for both documents and capabilities so that assertion is satisfied, instead of a derivative ownership
+(identity-keyed WeakMaps reject a spread copy with `Invalid ownership claim`).
+
+**Then:** `selectedSourceFor(coordinator)` in `context-runtime.ts:140` — the selected-results capability, either guarded as
+unsupported on SCL or ported.
 
 ## Follow-on plans (not in this plan)
 

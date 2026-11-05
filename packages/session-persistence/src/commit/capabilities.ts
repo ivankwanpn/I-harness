@@ -5,6 +5,7 @@ import { createOwnership } from '../coordinator/ownership.ts'
 import { createOriginalJsonlPathResolution } from '../coordinator/canonical-path-resolution.ts'
 import { associateArtifactPaths } from '../coordinator/artifact-path-association.ts'
 import { createTaskDocumentOperations, type TaskDocumentConfiguration } from '../coordinator/task-document-operation.ts'
+import { createProcessReadLatches } from '../coordinator/process-read-latches.ts'
 import { openCommitTaskDocumentSession } from './task-document.ts'
 import type { ObservedDocument, SessionMeta } from '../coordinator/types.ts'
 
@@ -48,6 +49,7 @@ export function createCommitCapabilities(root: string, documents: CapabilityDocu
   const observations = createBindingObservations(backend as never, ownership)
   const admission = observations.createResultRevocationAdmission(ownership)
   const sessionOf = options.sessionOfDocument ?? (() => undefined)
+  const taskLatches = createProcessReadLatches(ownership.exclusionScope)
   const operations = options.taskDocument
     ? createTaskDocumentOperations(ownership, observations, {
         validator: options.taskDocument.validator,
@@ -60,7 +62,7 @@ export function createCommitCapabilities(root: string, documents: CapabilityDocu
           }
         },
         open: scope => openCommitTaskDocumentSession(scope, { getDocument: documents.getDocument, putDocument: documents.putDocument }),
-      }, run => run())
+      }, run => run(), taskLatches)
     : undefined
   return { ownership, observations, admission, operations }
 }
