@@ -1,4 +1,9 @@
 # 開發債務清冊與 burn-down（2026-11-05）
+  **round 174 定論**：在 `capture()` 內記錄事件後，兩個 marker 紅其實是 **`error` 事件**：
+  `{code:'INVALID_ARGUMENT', modelFailure:{reason:'message-order'}}` —— 請求在送出前就被
+  message-order 驗證拒絕（所以 body undefined，非逾時）。測試輸入是「只有 assistant 訊息
+  （含 signed thinking + toolCalls、無 tool results）」，不符合現行順序驗證。修法：調整測試
+  輸入為合法序列（user turn + 對應 tool results），或放寬驗證；需先確認哪個才是正確語義。
    **round 145 已遷移** 3 個測試檔（`admitted-context`、`cancel-stop`、`result-page-cli`）→
    **round 161**：`result-page`、`session-context` 亦遷移 → **9 failed / 110 passed（119）**。
 round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 timeout 露出真因
