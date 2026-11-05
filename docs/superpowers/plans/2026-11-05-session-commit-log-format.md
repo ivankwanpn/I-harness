@@ -1176,6 +1176,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 57 (implemented 2026-11-06): result page chunking
+
+The turn test now pages an artifact result: a 4 KB chunk reports `nextOffset`, and the following read from that offset advances
+again with `eof:false`. A request below the service page budget (e.g. `maxBytes: 256`) is answered with
+`{kind:"unavailable", reason:"budget"}` rather than a truncated page, so the client must use a page-sized request.
+
 ## Plan 56 (implemented 2026-11-06): background failures are reported
 
 `enqueue` dropped a failed append (`catch(() => {})`) and deletion listeners were silently ignored. `CommitCoordinatorOptions` now

@@ -81,6 +81,12 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
       expect(page.ref?.id).toBe((ref as { id?: string }).id)
       expect(typeof page.nextOffset).toBe('number')
       expect(page.data).toBeDefined()
+      const chunk = await call('session/result/read', { sessionId: created.sessionId, ref, maxBytes: 4096 }) as { ref?: { id?: string }; data?: unknown; nextOffset?: number; eof?: boolean }
+      expect(chunk.nextOffset).toBeGreaterThan(0)
+      expect(chunk.data).toBeDefined()
+      const next = await call('session/result/read', { sessionId: created.sessionId, ref, offset: chunk.nextOffset, maxBytes: 4096 }) as { nextOffset?: number; eof?: boolean }
+      expect(next.nextOffset).toBeGreaterThan(chunk.nextOffset!)
+      expect(next.eof).toBe(false)
     } finally { await observer.close() }
   } finally {
     await host.close()

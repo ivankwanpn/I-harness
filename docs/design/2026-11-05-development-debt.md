@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 306（result page 分頁）**：4KB 分頁可續讀（nextOffset 前進、eof:false）；低於 page budget 的 maxBytes（如 256）
+> 回 `{kind:"unavailable", reason:"budget"}`。
 > **round 305（selected results 移植分析）**：ADR §8.2 記錄 legacy 協議、移植範圍，以及 snapshot selection 替代方案
 > （fork 當下快照，無 lineage／撤銷見證）。
 > **round 304（背景失敗回報）**：`enqueue` 與 deletion listener 的失敗改走 `reportBackgroundFailure`（預設 console.warn），
