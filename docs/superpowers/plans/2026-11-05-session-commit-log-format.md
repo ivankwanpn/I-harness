@@ -1190,6 +1190,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 70 (implemented 2026-11-06): stale rewind fingerprints are refused
+
+`host-commit-log-rewind-stale.test.ts` plans a rewind, then changes the tracked file before executing with the pinned fingerprint:
+the execute is refused with `Rewind preview changed; preview again before confirming`, no `rewind/point` is appended and the
+conversation is untouched. Note the fingerprint covers the plan (target, mode, files), not later conversation appends — those are
+truncated as part of the confirmed target.
+
 ## Plan 69 (implemented 2026-11-06): a rewind planned by one host executes in the next
 
 `host-commit-log-rewind-restart.test.ts`: host1 lists the points and plans the conversation rewind (fingerprint), closes; host2

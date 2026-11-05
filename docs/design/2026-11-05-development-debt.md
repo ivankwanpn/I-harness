@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 325（rewind fingerprint 失效）**：preview 後改動 tracked 檔，execute 以舊 fingerprint 被拒（Rewind preview changed），
+> 不追加 rewind/point、不動對話；亦確認 fingerprint 不涵蓋之後的 append（會在 rewind 目標處被截斷）。
 > **round 324（跨 host rewind）**：host1 points+plan、host2 execute（fingerprint）成功，points 清空，log 留下 `rewind/point` 標記；
 > rewind 規劃可跨重啟（與 prepared fork 不同）。
 > **round 323（prepared fork 不可續）**：host1 prepare、關閉、host2 begin 在 commit-log 與 legacy 都回 `Session fork unavailable`，
