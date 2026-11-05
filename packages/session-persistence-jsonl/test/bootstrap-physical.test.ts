@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import * as persistence from '@i-harness/session-persistence'
 import { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, createSession, append, exportConversationSeed, legacyPrefixDigest } from '@i-harness/core-session'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 
 const roots: string[] = [], coordinators: any[] = []
 vi.mock('node:fs/promises', async original => { const fs=await original<typeof import('node:fs/promises')>(); return {...fs,open:vi.fn(fs.open),rename:vi.fn(fs.rename)} })
@@ -19,11 +20,20 @@ vi.mock('@i-harness/core-session/internal/bootstrap',async original=>{
   }}
 })
 afterEach(async () => { for (const c of coordinators.splice(0)) await c.close().catch(() => {}); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }) })
+type BootstrapHooks = { append?: (actual: any, ...args: any[]) => any; confirm?: (actual: any, ...args: any[]) => any }
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'ih-bootstrap-')); roots.push(root)
-  const backend = createJsonlBackend(root)
-  const coordinator = persistence.createSessionCoordinator(backend, { lock: { enabled: true } }); coordinators.push(coordinator)
-  return { root, backend, coordinator: coordinator as any }
+  const hooks: BootstrapHooks = {}
+  // The bootstrap frame writers are bound before the canonical-path guard
+  // snapshots the backend descriptors; patching them afterwards is
+  // PROCESS_READ_UNAVAILABLE by design.
+  const backend = createJsonlBackend(root, { wrap: b => {
+    const append = b.appendOwnedBatch!.bind(b), confirm = b.confirmBootstrapFrames!.bind(b)
+    b.appendOwnedBatch = ((...args: any[]) => hooks.append ? hooks.append(append, ...args) : (append as any)(...args)) as typeof b.appendOwnedBatch
+    b.confirmBootstrapFrames = ((...args: any[]) => hooks.confirm ? hooks.confirm(confirm, ...args) : (confirm as any)(...args)) as typeof b.confirmBootstrapFrames
+  } })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }); coordinators.push(coordinator)
+  return { root, backend, coordinator: coordinator as any, hooks }
 }
 const request = ():persistence.BootstrapRequest => ({ invocation: { version: 1, operationId: 'operation', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) },
   target: { kind: 'new' }, metadata: { title: 'original' }, lineage: { origin: 'fork', parentSession: 'parent' },
@@ -63,11 +73,10 @@ it('keeps empty target reserved when configured preparation is blocked or stale'
   expect((await readFile(join(root, 'target.jsonl'), 'utf8')).trimEnd().split('\n')).toHaveLength(1)
 })
 it.each(['host', 'dependency', 'seed', 'confirmation'])('rechecks target authority after the actual %s await before issuing or exposing READY', async cut => {
-  const { coordinator, backend, root } = await setup(), r = dependent(), calls: string[] = []
+  const { coordinator, root, hooks } = await setup(), r = dependent(), calls: string[] = []
   let available = true
-  const append = backend.appendOwnedBatch!, confirm = backend.confirmBootstrapFrames!
-  backend.appendOwnedBatch = async (...args) => { const result = await append(...args); if (cut === 'seed' && args[3].key.batchId.endsWith(':seed')) available = false; return result }
-  backend.confirmBootstrapFrames = async (...args) => { const result = await confirm(...args); if (cut === 'confirmation') available = false; return result }
+  hooks.append = async (append, ...args) => { const result = await append(...args); if (cut === 'seed' && args[3].key.batchId.endsWith(':seed')) available = false; return result }
+  hooks.confirm = async (confirm, ...args) => { const result = await confirm(...args); if (cut === 'confirmation') available = false; return result }
   const closure = 'b'.repeat(64)
   const targetPreparation = {
     async confirm() { calls.push('host'); if (cut === 'host') available = false; return { kind: 'confirmed' as const } },
@@ -153,9 +162,9 @@ it('review F1 preserves the captured preparation method receiver and function re
   expect((await pending).kind).toBe('ready'); expect(checks).toBeGreaterThan(1)
 })
 it('rechecks target authority at the original seed issue guard after backend awaits and permits a fresh attempt', async () => {
-  const { coordinator, backend, root } = await setup(), r = seeded(), append = backend.appendOwnedBatch!
+  const { coordinator, root, hooks } = await setup(), r = seeded()
   let available = true, cut = true
-  backend.appendOwnedBatch = async (...args) => {
+  hooks.append = async (append, ...args) => {
     if (cut && args[3].key.batchId.endsWith(':seed')) {
       cut = false
       await readFile(join(root, 'target.jsonl'))
@@ -192,7 +201,7 @@ function dependent(anonymous=false):persistence.BootstrapRequest {
 async function copyStore(root:string) {
   const other=await mkdtemp(join(tmpdir(),'ih-bootstrap-cold-'));roots.push(other)
   for(const file of await readdir(root))if(file.endsWith('.jsonl')||file.endsWith('.stage')||file.endsWith('.publish'))await copyFile(join(root,file),join(other,file))
-  const backend=createJsonlBackend(other),coordinator=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(coordinator)
+  const backend=createJsonlBackend(other),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(coordinator)
   return {root:other,backend,coordinator}
 }
 
@@ -231,7 +240,7 @@ it('keeps the original manifest ready after mutable metadata edits and a later c
   await first.document.metadata.admit({type:'plan/mode',mode:'on'})
   await coordinator.updateMeta('target',{title:'renamed',archived:true,workspaceId:'new',modelSelection:{provider:'test',model:'new'}})
   await coordinator.close()
-  const cold=persistence.createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}});coordinators.push(cold)
+  const cold=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}});coordinators.push(cold)
   const adopted=await cold.resumeSemanticTarget(r.invocation,guards)
   expect(adopted.kind).toBe('already-ready')
   if(adopted.kind!=='already-ready')throw new Error(JSON.stringify(adopted))
@@ -242,13 +251,13 @@ it('keeps the original manifest ready after mutable metadata edits and a later c
   expect(JSON.parse((await readFile(join(root,'target.jsonl'),'utf8')).split('\n')[0]!)).toMatchObject({title:'renamed',workspaceId:'new',archived:true})
 })
 it.each(['seed','complete'])('reconciles a real synced %s frame after response loss without duplicate inputs or a second view',async phase=>{
-  const {root,backend,coordinator}=await setup(),r=seeded(true),actual=backend.appendOwnedBatch!
-  backend.appendOwnedBatch=async(...args)=>{const result=await actual(...args);return args[3].key.batchId.endsWith(':'+phase)?{kind:'unknown',key:args[3].key}:result}
+  const {root,coordinator,hooks}=await setup(),r=seeded(true)
+  hooks.append=async(actual,...args)=>{const result=await actual(...args);return args[3].key.batchId.endsWith(':'+phase)?{kind:'unknown',key:args[3].key}:result}
   const lost=await coordinator.bootstrapSemanticTarget(r,guards);expect(lost).toMatchObject({kind:'blocked'})
   await expect(coordinator.openManagedDocument('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
   await expect(coordinator.snapshot('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
   await expect(coordinator.close()).rejects.toThrow()
-  backend.appendOwnedBatch=actual
+  hooks.append=undefined
   // Closing revoked optional new work; original passive reconciliation is still permitted.
   const adopted=await coordinator.resumeSemanticTarget(r.invocation,guards)
   if(phase==='complete')expect(adopted.kind).toBe('already-ready')
@@ -310,7 +319,7 @@ it('does not repair a later torn suffix during ready adoption',async()=>{
   expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')
   await coordinator.close()
   const path=join(root,'target.jsonl'),before=Buffer.concat([await readFile(path),Buffer.from('{"recordKind":"torn')]);await writeFile(path,before)
-  const cold=persistence.createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}});coordinators.push(cold)
+  const cold=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}});coordinators.push(cold)
   expect(await cold.resumeSemanticTarget(r.invocation,guards)).toMatchObject({kind:'blocked'})
   expect(await readFile(path)).toEqual(before)
 })
@@ -332,7 +341,7 @@ it('includes exact original and partial staging artifacts in owned deletion and 
   for(const file of stages)expect(await readdir(root)).not.toContain(file)
   const receipt=await backend.deletionReceipt!('target')
   expect(receipt!.manifest.files).toEqual(stages.sort())
-  const cold=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
+  const cold=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
   const resumed=await cold.resumeSemanticTarget(r.invocation,guards,r)
   expect(resumed.kind).toBe('refused')
   expect(await readdir(root)).not.toContain('target.jsonl')
@@ -349,13 +358,13 @@ it('refuses metadata-only nonempty targets and a stale source before reservation
   expect((await readdir(root)).some(n=>n.startsWith('stale.jsonl'))).toBe(false)
 })
 it('preserves the reserved source and clocks when source changes after real seed sync',async()=>{
-  const {root,backend,coordinator}=await setup(),r=seeded(true),actual=backend.appendOwnedBatch!
+  const {root,coordinator,hooks}=await setup(),r=seeded(true)
   let fresh=true
-  backend.appendOwnedBatch=async(...args)=>{const result=await actual(...args);if(args[3].key.batchId.endsWith(':seed'))fresh=false;return result}
+  hooks.append=async(actual,...args)=>{const result=await actual(...args);if(args[3].key.batchId.endsWith(':seed'))fresh=false;return result}
   expect(await coordinator.bootstrapSemanticTarget(r,{...guards,assertCurrent(){if(!fresh)throw new Error('changed source')}})).toMatchObject({kind:'blocked',reason:'source-changed'})
   const raw=await readFile(join(root,'target.jsonl'),'utf8')
   expect(raw).toContain('original source');expect(raw).not.toContain('"type":"session/bootstrap"')
-  backend.appendOwnedBatch=actual
+  hooks.append=undefined
   const recovered=await coordinator.resumeSemanticTarget(r.invocation,guards,r)
   expect(recovered.kind).toBe('ready')
   if(recovered.kind==='ready')expect(recovered.receipt.initial).toMatchObject({inputId:'initial',startedAt:100,expiresAt:200})
@@ -505,12 +514,12 @@ it('keeps header fsync commitment when file close cleanup fails',async()=>{
   expect((await readFile(join(root,'target.jsonl'),'utf8')).match(/"batchId":"bootstrap:operation:complete"/g)).toHaveLength(1)
 })
 it('rejects a foreign historical receipt after real sync and adopts only the current owner evidence',async()=>{
-  const {root,backend,coordinator}=await setup(),r=request(),actual=backend.confirmBootstrapFrames!
-  backend.confirmBootstrapFrames=async(...args)=>{const result=await actual(...args);return result.kind==='committed'?{...result,receipts:result.receipts.map(receipt=>({...receipt,owner:{...receipt.owner,sessionId:'foreign'}}))}:result}
+  const {root,coordinator,hooks}=await setup(),r=request()
+  hooks.confirm=async(actual,...args)=>{const result=await actual(...args);return result.kind==='committed'?{...result,receipts:result.receipts.map((receipt:any)=>({...receipt,owner:{...receipt.owner,sessionId:'foreign'}}))}:result}
   expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})
   await expect(coordinator.openManagedDocument('target')).rejects.toThrow()
   const before=await readFile(join(root,'target.jsonl'))
-  backend.confirmBootstrapFrames=actual
+  hooks.confirm=undefined
   expect((await coordinator.resumeSemanticTarget(r.invocation,guards)).kind).toBe('already-ready')
   expect(await readFile(join(root,'target.jsonl'))).toEqual(before)
 })
@@ -539,7 +548,7 @@ it('review F1 preserves actual seed/completion/initial frames through same-event
   expect((await readFile(path)).subarray(0,actualBirth.length)).toEqual(actualBirth)
   expect((await backend.read('target')).events).toEqual(changed)
   await backend.updateMeta('target',{title:'after allowed replacement'})
-  const cold=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
+  const cold=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
   const adopted=await cold.resumeSemanticTarget(r.invocation,guards)
   expect(adopted.kind).toBe('already-ready')
   if(adopted.kind==='already-ready') {
@@ -573,7 +582,7 @@ it('review F1 preserves a zero-seed completion frame across ordinary replacement
   await backend.replaceEvents!('target',loaded.events)
   expect(await readFile(path)).toEqual(before)
   expect((await backend.read('target')).events).toEqual(loaded.events)
-  const cold=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
+  const cold=createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
   const adopted=await cold.resumeSemanticTarget(r.invocation,guards)
   expect(adopted.kind).toBe('already-ready')
   if(adopted.kind==='already-ready')expect(adopted.receipt.completion.key).toEqual(ready.receipt.completion.key)
