@@ -125,7 +125,7 @@ for(const after of [false,true])it(`retains falsey live fold failure ${after?'af
   const f=fixture();let calls=0
   const state=await f.restore((info:any)=>{const sink=createScheduleFoldSink(info);return {...sink,appendValidated(unit:any,ordinal:number){calls++;if(after)sink.appendValidated(unit,ordinal);throw undefined}}})
   const pending=await write(f,state);pending.stage.beforeIssue(pending.batch)
-  let failed=false;try{pending.install()}catch(error){failed=true;expect(error).toBeUndefined()}
+  let failed=false;try{pending.install()}catch(error){failed=true;const retained=error as Error;expect(retained).toBeInstanceOf(TypeError);expect(retained.message).toBe('Original fold callback failed');expect(retained.cause).toBeUndefined()}
   expect(failed).toBe(true);expect(()=>state.observe()).toThrow();expect(pending.install).toThrow(/RECOVERY_REQUIRED/);expect(calls).toBe(1)
 })
 

@@ -75,7 +75,14 @@ it('a throwing live fold stays blocked and is never replayed after an uncertain 
   expect(calls).toBe(0)
   staged.beforeIssue(batch)
   expect(calls).toBe(0)
-  expect(() => staged.install(batch,receipt)).toThrow('uncertain')
+  // The product wraps a throwing fold callback fail-closed and keeps the
+  // original error as its cause; the contract is the retained failure, not the
+  // error identity.
+  let thrown: unknown
+  try { staged.install(batch,receipt) } catch (error) { thrown = error }
+  expect(thrown).toBeInstanceOf(TypeError)
+  expect((thrown as Error).message).toBe('Original fold callback failed')
+  expect(((thrown as Error).cause as Error).message).toBe('uncertain')
   expect(() => state.observe()).toThrow()
   expect(() => staged.install(batch,receipt)).toThrow(/RECOVERY_REQUIRED/)
   expect(calls).toBe(1)
