@@ -166,7 +166,12 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   const readLegacy = async (sessionId: string): Promise<{ meta?: SessionMeta; events: SessionEvent[]; version: number }> => {
     if (!options.legacy) throw new CommitLogNotFoundError(sessionId)
     let raw
-    try { raw = await options.legacy.read(sessionId) } catch { throw new CommitLogNotFoundError(sessionId) }
+    try { raw = await options.legacy.read(sessionId) } catch (error) {
+      // Only a genuinely absent legacy file is "not found"; a corrupt or
+      // unsupported one must surface its real error instead of hiding it.
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') throw new CommitLogNotFoundError(sessionId)
+      throw error
+    }
     const events = await migrate(raw.version, [...raw.events], raw.meta)
     return { meta: raw.meta, events, version: raw.version }
   }

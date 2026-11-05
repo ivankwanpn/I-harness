@@ -1171,6 +1171,15 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 52 (implemented 2026-11-06): legacy read errors are not "not found"
+
+`readLegacy` mapped every legacy read failure to `CommitLogNotFoundError`, so a corrupt or unsupported legacy session looked deleted.
+It now maps only `ENOENT` to not-found and rethrows the real error. `commit-dual-run-corpus.test.ts` covers an old header without
+`journal` metadata (surfaces `invalid session journal metadata`) and a genuinely absent session (still `CommitLogNotFoundError`).
+This also pins the older-format boundary: formats 6–12 need valid journal metadata and this branch has no writer or recorded sample
+for them, so the dual-run corpus stays at 13/14.
+
 ## Plan 51 (implemented 2026-11-06): two-process writer lease
 
 The ADR verification item "two processes, one writer" now has a dedicated test: a child process (`node --experimental-transform-types`,

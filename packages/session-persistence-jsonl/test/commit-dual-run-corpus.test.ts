@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -63,6 +63,20 @@ describe('commit-log dual run over a legacy corpus', () => {
         if (entry.title !== undefined) expect((await coordinator.profile(entry.id)).meta.title).toBe(entry.title)
       }
       expect(await coordinator.getDocument('task-task')).toEqual(await backend.getDocument('task-task'))
+    } finally { await coordinator.close() }
+  })
+
+  it('surfaces the legacy read error for an old header without journal metadata', async () => {
+    const base = await root()
+    await writeFile(join(base, 'broken.jsonl'), [
+      JSON.stringify({ formatVersion: 8, sessionId: 'broken', createdAt: '2026-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'user/message', text: 'hello', seq: 0 }),
+      '',
+    ].join('\n'), 'utf8')
+    const coordinator = createJsonlCommitCoordinator(base)
+    try {
+      await expect(coordinator.load('broken')).rejects.toThrow(/invalid session journal metadata/)
+      await expect(coordinator.load('absent')).rejects.toThrow(/does not exist/)
     } finally { await coordinator.close() }
   })
 })

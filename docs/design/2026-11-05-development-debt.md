@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 300（legacy 讀取錯誤）**：`readLegacy` 只把 ENOENT 映射成 not-found，其餘原樣拋出；新增「缺 journal 的舊 header」
+> 與「真正不存在」兩個案例；ADR §6 第 3 項改註明 6–12 需 journal metadata。
 > **round 299（ADR 驗證現況）**：§6 改為表格，逐項標示狀態與證據（crash ✅、fold ✅、舊 corpus ⚠️ 部分、既有回歸 ⚠️ 部分、多程序 ✅）。
 > **round 298（雙程序 writer lease）**：子程序持有 write lease 時父程序寫入開啟被拒；kill 後父程序可接管、append，
 > 新讀取看到新事件（證明程序死亡會釋放鎖）。

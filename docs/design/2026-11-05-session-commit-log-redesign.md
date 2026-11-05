@@ -168,7 +168,7 @@
 |---|---|---|---|
 | 1 | **crash-cut 矩陣**：temp 寫入、fsync、link、目錄 fsync、sidecar 寫入、commit append 各步注入中止；重開只允許「不存在」或「恰好該 commit 前綴」 | ✅ | `session-commit-log/test/crash.test.ts`（5 案例，含 link 前後、sidecar 與 append 中斷）＋ `store.test.ts` |
 | 2 | **fold 性質測試**：任意 commit 序列 → fold(log) == 記憶體模型；重開冪等；torn tail 任意截斷點得到合法前綴 | ✅ | `fold-property.test.ts`（5 seed × 25 commits，全部 op）＋ `scanner.test.ts`（torn tail／seq／prev）|
-| 3 | **舊格式 corpus**：format 8/11/13/14 可讀；14 的 task doc 可重建 | ⚠️ 部分 | `session-persistence-jsonl/test/commit-dual-run-corpus.test.ts` 以 8 個 legacy session 與 legacy coordinator 逐項比對（events／meta／task doc）；13/14 讀取路徑有測試，8/11 尚無專屬 corpus |
+| 3 | **舊格式 corpus**：format 8/11/13/14 可讀；14 的 task doc 可重建 | ⚠️ 部分（8/11 需 journal metadata） | `commit-dual-run-corpus.test.ts` 以 8 個 legacy session 與 legacy coordinator 逐項比對（events／meta／task doc）。6–12 格式的檔案必須帶有效 `journal` metadata（fact journal），本 branch 沒有產生它們的 writer 或錄製樣本；邊界已測：缺 journal 的舊檔會把 legacy 的 `invalid session journal metadata` 原樣拋出，只有真正不存在的 session 才是 `CommitLogNotFoundError` |
 | 4 | **既有回歸**：jsonl、session-persistence、subagent、agent-team、desktop-gateway、sdk e2e | ⚠️ 部分 | SCL 相關套件全綠（13 host 檔／14 tests、store 9 檔／38 tests、commit suites 37 tests）；legacy `session-persistence` 仍有 280 個既有失敗（transition gate／artifact latch／win32 lock），與 SCL 無關，見計畫 Plan 38–39 |
 | 5 | **多程序**：兩行程同開一 session，只有一個取得寫鎖；死鎖／重啟後可恢復 | ✅ | `multiprocess-lock.test.ts`：子程序持鎖時父程序被拒；kill 後父程序接管、append、新讀取可見 |
 
