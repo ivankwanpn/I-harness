@@ -34,8 +34,11 @@ import { spawn } from "node:child_process"
 import { readFileSync, readdirSync, existsSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { testEnvironment } from "./test-env.mjs"
 
 const ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "..")
+// Isolated evidence/config directories for every suite (scripts/test-env.mjs).
+const TEST_ENV = testEnvironment()
 // The ESC is written as an escape sequence, never as a raw control byte: a
 // literal ESC in a source file is the same class of hazard as a stray CR.
 const ANSI = /\u001B\[[0-9;]*m/g
@@ -76,7 +79,7 @@ function expectedPopulation() {
  *  minutes must not look like a hang). Returns { code, text }. */
 function run(cmd, args) {
   return new Promise((done) => {
-    const child = spawn(cmd, args, { cwd: ROOT, shell: true, windowsHide: true })
+    const child = spawn(cmd, args, { cwd: ROOT, shell: true, windowsHide: true, env: TEST_ENV })
     let text = ""
     const sink = (chunk) => {
       const s = chunk.toString()

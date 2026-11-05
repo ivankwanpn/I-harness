@@ -26,7 +26,7 @@ import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
 import { createDurableSessionLoader, createSessionService, createInstructionEnvironment, readPendingRewindIntents, type SessionServiceOptions } from "@i-harness/session-executor"
 import { acquireChildManagedExecution } from '../../session-executor/src/host-managed-execution.ts'
-import { mountChildShellTools } from '../../session-executor/src/child-shell.ts'
+import { mountChildShellTools } from '@i-harness/session-executor'
 import { reportTaskProjectionIssues } from './task-projection-diagnostics.ts'
 import { createFsWatchService } from '@i-harness/fs-watch'
 import { createSdkServer } from "@i-harness/sdk/server"

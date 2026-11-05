@@ -41,3 +41,6 @@ export type { ResultPageQuery, ResultPageResult } from '@i-harness/context-outpu
 export { createCliForkHost } from './lifecycle/fork-handoff.ts'
 export { createResultObservationScope, createLegacyReadObservationRunner, legacyObservationFor } from './lifecycle/result-observation.ts'
 export type { ResultObservationScope, ResultObservationCapture, ResultSourceObservation } from './lifecycle/result-observation.ts'
+
+export { mountChildShellTools } from './child-shell.ts'
+export type { ChildShellMount } from './child-shell.ts'
