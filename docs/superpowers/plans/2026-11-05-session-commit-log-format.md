@@ -973,6 +973,12 @@ legacy file is absent. Test: seed an SCL session and list it through `runSession
 and task-child inheritance paths check it and fail with `SELECTED_RESULTS_UNSUPPORTED` ("Selected results are unavailable on
 this session store") instead of the legacy `Original coordinator required` TypeError. SCL reports the capability as absent.
 
+## Plan 20 (implemented 2026-11-05): desktop settings/rule routes on SCL
+
+`host-commit-log.test.ts` also reads `desktop/approval-rules/state` through the real host on SCL (the rules state lives in the
+host's file-backed adapter, so this pins that the surrounding desktop surface works). `desktop/usage/query` (v1) is refused by
+the current host with `USAGE_UPGRADE_REQUIRED` regardless of store; usage reads are expected to use `desktop/usage/query-v2`.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

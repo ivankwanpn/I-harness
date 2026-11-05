@@ -27,6 +27,10 @@ for (const sessionStore of ['jsonl', 'commit-log'] as const) {
         const schedules = frames.find(frame => 'id' in frame && frame.id === 3)
         expect(isRpcSuccess(schedules)).toBe(true)
         if (isRpcSuccess(schedules)) expect(schedules.result).toEqual({ schedules: [] })
+        await request(4, 'desktop/approval-rules/state', {})
+        const rules = frames.find(frame => 'id' in frame && frame.id === 4)
+        expect(isRpcSuccess(rules)).toBe(true)
+
       }
     } finally {
       await host.close()
