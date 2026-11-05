@@ -74,7 +74,7 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
       const { session } = await observer.load(created.sessionId)
       expect(session.events.some(event => event.type === 'tool/call' && event.name === 'todo_write')).toBe(true)
       expect(session.events.some(event => event.type === 'tool/result')).toBe(true)
-      const bigResult = session.events.filter(event => event.type === 'tool/result').at(-1) as { envelope?: { retention?: { kind?: string; ref?: unknown } } } | undefined
+      const bigResult = session.events.filter(event => event.type === 'tool/result' && (event as { name?: string }).name === 'read').at(-1) as { envelope?: { retention?: { kind?: string; ref?: unknown } } } | undefined
       expect(bigResult?.envelope?.retention).toMatchObject({ kind: 'artifact' })
       const ref = bigResult?.envelope?.retention?.ref
       const page = await call('session/result/read', { sessionId: created.sessionId, ref, maxBytes: 4096 }) as { ref?: { id?: string }; data?: unknown; nextOffset?: number }

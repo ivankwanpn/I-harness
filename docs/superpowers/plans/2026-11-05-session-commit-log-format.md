@@ -1157,6 +1157,11 @@ builds `createSessionCoordinator` directly).
 `deleteOwnedSession` now marks the session and its manifest documents in the binding observations (`markDeleted`), so a retained
 reference (or a binding observation) stops being current as soon as the deletion receipt is durable — previously the reference
 kept passing `assertCurrent` after the session directory disappeared. 
+
+Note: a `shell` tool call (echo) executes and commits its tool/result on SCL, but `desktop/session/execution/read` reports
+`{live:false, cells:[]}` after the turn — the execution projection is a live-runtime view, not a log projection, so it is empty for
+a cold session. The artifact assertion in the turn test now selects the `read` result by tool name so a later tool cannot shadow it.
+
 ## Plan 42 (implemented 2026-11-06): task projection reconcile on SCL
 
 `host-commit-log-turn.test.ts` also calls `desktop/session/tasks/integrity` with `reconcile: true` after tool execution, exercising the
