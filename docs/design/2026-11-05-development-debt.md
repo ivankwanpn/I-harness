@@ -545,6 +545,12 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 105 決定性證據**：`documents` 只有一個 key `target`；close 時該 entry 是
   **round 106 決定性證據**：在 `startInner` 的 `documents.set`（line 605）與 flight finally 的
   **round 107**：`documents.delete` 共 7 處——bootstrap.ts:608（已驗證未觸發）、:681（capture
+  **round 108 修正解讀**：兩個 `NEW_ENTRY` 很可能分別是「第一個 coordinator 的 bootstrap」與
+  「第二個 coordinator 的第一次 resume」；第二次 resume（line 37）**沒有**再建 entry（所以只有
+  兩筆 log），而是直接回 `already-ready`——但該 entry 仍停在 `phase:'header'`、`ready:false`。
+  即「already-ready 沒走 adopt」的謎團仍在；下一步應在 `startInner` 的所有 return 點印
+  outcome 與 entry 狀態（確認是否有一條回 already-ready 但沒走 adopt 的分支，例如
+  `entry.bootstrap` 已存在時走 `startInner:595` 那條）。
   finally，需 `!b.issued`）、:877、:908（selected/capture）、managed-documents.ts:66、:98、:255
   （open 失敗處理）。下一步在 :66、:255、:681、:877、:908 各插一行 log（帶 stack）即可定位；
   其中 :255 的 `open` rejection 路徑最可疑（若第一次 resume 的 open 以 rejection 結束，entry
