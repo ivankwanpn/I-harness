@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 246（host turn 寫入衝突調查）**：host 層 model turn 重現 `FACT admission requires recovery`＋delivery reconciliation
+> 失敗（已以 skip 測試保留）。初判：legacy 對每個 append 包 `processLatches.beginMutation`，SCL 沒有，execution fence 看不到
+> 外部 append → 下一批 fact 用過期 prefix 發行 → conflict。下一輪：coordinator 持有 process latches 並包住 append／meta 寫入。
 > **round 245（rewind／schedule 讀取）**：真實 host 上 rewind points→plan→execute（conversation）在 SCL 通過；
 > `desktop/schedule/list` 以 snapshot fold 回空清單。schedule 寫入與 selected-result 讀取仍綁在 turn 執行期。
 > **round 244（nested fork／passive resume）**：nested fork（child→grandchild）在 SCL 通過；`resumeSemanticTarget` 明確回

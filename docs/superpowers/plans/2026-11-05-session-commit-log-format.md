@@ -864,6 +864,24 @@ independent of SCL. SCL fork needs its own host-level test (next).
 - Schedule **create/delete** go through the live execution runtime (tool execution), so they are exercised only once a turn runs;
   the same is true of selected-result reads.
 
+## Plan 10 (investigation 2026-11-05): host model turn write conflict
+
+A host-level model turn (`host-commit-log-turn.test.ts`, kept skipped as a repro) fails with
+`Fact admission requires recovery or was cancelled` and repeated
+`private delivery reconciliation failed: Original issued write needs reconciliation`.
+
+What is known:
+
+- the composed surface test (`owned-gateway-commit-log.test.ts`) runs the same kind of model turn **without** the host plugins
+  and passes, so the difference is a host component writing during the turn;
+- the legacy coordinator wraps every raw append/meta mutation in `processLatches.beginMutation(...)`; the commit coordinator has
+  no process latches, so those external appends are invisible to the execution fence — its cached `prefix` object never changes,
+  the execution state issues the next batch against a stale prefix, and our backend rejects it as a conflict;
+- `managed.assertMutation(id)` only validates the entry (it does not forbid external appends), so the guard cannot be the fix.
+
+Next: give the commit coordinator process-read latches over the capability ownership and beginMutation/end around `append`,
+`putDocument` and meta writes, then re-run the skipped repro.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
