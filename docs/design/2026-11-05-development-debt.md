@@ -337,7 +337,9 @@ re-export（`ResolvedBootstrapBirth`、`ForkHandoffMode`、`ChildInitialCommitme
 `ExecFrameQuery`、`ExecOutputFramePage`、`ExecRawSummary` → **415 rows、53 NEW**（累計 -17）。
 再一輪移除 `core-agent` 的 6 個 type re-export（`ManagedAgentDeps`、`ManagedGenerationFactory`、
 `ManagedAcknowledgedFact`、`ManagedRequestContext`、`ManagedSessionExecutor`、
-`ManagedSessionExecutorDeps`）→ **409 rows、47 NEW**（累計 -23）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+`ManagedSessionExecutorDeps`）→ **409 rows、47 NEW**（累計 -23）。再一輪移除 `settings` 的
+`SettingsRevisionGuard`、`SettingsWatchOptions`、`SettingsWatchState`、
+`InstructionMigrationMeta` → **405 rows、43 NEW**（累計 -27）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---

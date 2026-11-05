@@ -45,20 +45,20 @@ export { FONT_SIZE_MIN, FONT_SIZE_MAX } from "./schema/defaults.ts"
 export { normalizeWslExecution, normalizeCodeMode, validModelWaitSeconds } from "./normalize/execution.ts"
 export { normalizeInputModalities } from "./normalize/providers.ts"
 export { normalizeSettings } from "./normalize/settings.ts"
-export type { SettingsStoreOptions, LayeredStoreOptions, SettingsStoreSurface, SettingsRevisionGuard, ObservedSettingsLoadOptions, ObservedSettingsLoad } from "./storage/contracts.ts"
+export type { SettingsStoreOptions, LayeredStoreOptions, SettingsStoreSurface, ObservedSettingsLoadOptions, ObservedSettingsLoad } from "./storage/contracts.ts"
 export type { LayerSource, LayeredRoots, LayerRaw } from "./storage/layers.ts"
 export { resolveLayeredSources, mergeRawLayers } from "./storage/layers.ts"
 export { SettingsPatchError, patchJsonDocumentKeepingComments } from "./storage/json-patch.ts"
 export { SettingsStore, resolveSettingsPath, updateSettings } from "./storage/single-store.ts"
 export { LayeredSettingsStore, createLayeredStore } from "./storage/layered-store.ts"
 export { watchSettings } from "./observation/watch-settings.ts"
-export type { SettingsWatchState, SettingsWatchError, SettingsWatchOptions, SettingsWatchHandle } from "./observation/watch-settings.ts"
+export type { SettingsWatchError, SettingsWatchHandle } from "./observation/watch-settings.ts"
 export type { SettingsSourceStamp } from "./observation/source-stamp.ts"
 export * from './context-subsystems.ts'
 export { normalizeInstructions, resolveInstructionPolicy } from "./instructions.ts"
 export type { SettingsInstructions, InstructionPolicy } from "./instructions.ts"
 export { previewLegacyInstructionImport, InstructionMigrationError } from "./storage/instruction-migration.ts"
-export type { LegacyInstructionImport, InstructionMigrationMeta } from "./storage/instruction-migration.ts"
+export type { LegacyInstructionImport } from "./storage/instruction-migration.ts"
 
 // Section descriptor API (Task 1 of the models plan): schemas, redacted
 // describe views, validated mutate ops and the revision-guard errors. Built on
