@@ -1,3 +1,17 @@
+/** Mutable header fields a completed target may legitimately change after its
+ * bootstrap: a rewrite of any other field is a real conflict. */
+const MUTABLE_HEADER_FIELDS = new Set(['title', 'workspaceId', 'archived', 'modelSelection', 'subagentProtocolVersion'])
+function sameImmutableHeader(live: Record<string, unknown>, staged: Record<string, unknown>): boolean {
+  const keys = new Set([...Object.keys(live), ...Object.keys(staged)])
+  for (const key of keys) {
+    if (MUTABLE_HEADER_FIELDS.has(key)) continue
+    const a = live[key], b = staged[key]
+    if (a === b) continue
+    try { if (canonicalJsonData(a) === canonicalJsonData(b)) continue } catch { return false }
+    return false
+  }
+  return true
+}
 import { lstat, open, readFile, readdir, rename, mkdir, type FileHandle } from 'node:fs/promises'
 import { basename, dirname,join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -309,10 +323,23 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
         let liveBytes=Buffer.from(operation.headerBytes)
         if(!target.subarray(0,liveBytes.length).equals(liveBytes)) {
           const original=JSON.parse(liveBytes.toString('utf8'))
-          if(original.formatVersion!==13)return {kind:'conflict'}
-          const upgraded=Buffer.from(canonicalJsonData({...original,formatVersion:14})+'\n')
-          if(!target.subarray(0,upgraded.length).equals(upgraded))return {kind:'conflict'}
-          liveBytes=upgraded
+          if(original.formatVersion===13){
+            const upgraded=Buffer.from(canonicalJsonData({...original,formatVersion:14})+'\n')
+            if(!target.subarray(0,upgraded.length).equals(upgraded))return {kind:'conflict'}
+            liveBytes=upgraded
+          } else {
+            // A completed target keeps its immutable bootstrap header but may carry
+            // later title/workspace/archive/model edits. Reconcile adopts the live
+            // header when only those mutable fields differ; anything else is a
+            // genuine conflict.
+            const end=target.indexOf(10)
+            const liveLine=end<0?undefined:target.subarray(0,end).toString('utf8')
+            if(liveLine===undefined)return {kind:'conflict'}
+            let liveMeta:unknown
+            try{liveMeta=JSON.parse(liveLine)}catch{return {kind:'conflict'}}
+            if(typeof liveMeta!=='object'||liveMeta===null||!sameImmutableHeader(liveMeta as Record<string,unknown>,original))return {kind:'conflict'}
+            liveBytes=Buffer.from(liveLine+'\n')
+          }
         }
         if(!await syncExact(path,liveBytes,id,owner))return {kind:'unknown'}
         return {kind:'committed',headerDigest:rawHeaderDigest(liveBytes)}

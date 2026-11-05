@@ -199,6 +199,12 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 212（Q2 第一個產品修正）**：`bootstrap-header.ts` 的 `reconcileBootstrapHeader` 原本
+> 拿**磁碟現行 header** 與 stage header 逐位元比對，任何 metadata 變更（title/workspaceId/
+> archived/modelSelection）都會被判 conflict → adoption 回 blocked。已改為：只有在
+> **不可變欄位**（journal、formatVersion、lineage…）不同時才 conflict；純 metadata 差異時
+> 採用磁碟上的現行 header 回 `committed`（adopt）。→ `bootstrap-physical` 由 **11 紅降到 8 紅**
+> （「keeps the original manifest ready after mutable metadata edits…」轉綠），且未見新紅。
 > **round 211（Q2 首例精化）**：`bootstrap-physical` 的「keeps the original manifest ready after
 > mutable metadata edits and a later complete live suffix」不是抽象的 readiness 爭議：
 > 流程是 **ready bootstrap → admit plan/mode → updateMeta(title/workspaceId/archived) → close →
