@@ -2,6 +2,10 @@
   **round 174 定論**：在 `capture()` 內記錄事件後，兩個 marker 紅其實是 **`error` 事件**：
   **round 175 已修**：thinking 案補 user turn ＋ 對應 tool result；Responses 案把
   **round 176**：`llm-openai` 的 M72 Ⅲ 紅改為斷言「宣告 `measurementValidity:'invalid'`」
+  round 177：`acp` 的 CLI stdio 紅真因——`session/prompt` 回 `-32603 Internal error`，
+  `data.details = 'Observed instructions unavailable'`。即 CLI 的 prompt 路徑需要 instructions
+  快照，而測試只 seed 了 provider。下一步：在 fixture 的 `IH_CONFIG_DIR` 補上 instructions
+  （或確認是否產品回歸）。
   → **14/14 檔、230/230 tests 全綠**。
   `function_call` 排在 `function_call_output` 前並統一 call_id → **`provider` 10/10 檔、176/176
   tests 全綠**。
