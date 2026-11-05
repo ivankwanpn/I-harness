@@ -546,6 +546,13 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 106 決定性證據**：在 `startInner` 的 `documents.set`（line 605）與 flight finally 的
   **round 107**：`documents.delete` 共 7 處——bootstrap.ts:608（已驗證未觸發）、:681（capture
   **round 108 修正解讀**：兩個 `NEW_ENTRY` 很可能分別是「第一個 coordinator 的 bootstrap」與
+  **round 109 關鍵翻轉**：在 `start`（bootstrap.ts:572）與 factory 的 `resumeSemanticTarget`
+  各加 outcome log 後，測試只印出 `START_OUT ready`（第一個 coordinator 的 bootstrap）、
+  `START_OUT blocked`（第二個 coordinator 的第一次 resume）與一次 `FACTORY_OUT blocked`——
+  **第二次 resume 既沒有 START_OUT 也沒有 FACTORY_OUT/ERR**，即它根本沒走到 factory 的
+  `trackBootstrap`（很可能在 `captureSelfConflict`／guard capture 同步拋出）。因此測試看到的
+  `Coordinator cleanup is unresolved` **是 finally 的 close 蓋住了真正錯誤**；cleanup-debt 可能
+  只是次要現象。下一步：在 `resumeSemanticTarget` 入口用 try/catch 印出同步例外。
   「第二個 coordinator 的第一次 resume」；第二次 resume（line 37）**沒有**再建 entry（所以只有
   兩筆 log），而是直接回 `already-ready`——但該 entry 仍停在 `phase:'header'`、`ready:false`。
   即「already-ready 沒走 adopt」的謎團仍在；下一步應在 `startInner` 的所有 return 點印
