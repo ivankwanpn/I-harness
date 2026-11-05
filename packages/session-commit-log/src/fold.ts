@@ -3,6 +3,7 @@ import { CommitFormatError } from './errors.ts'
 import type { CommitRecord } from './format.ts'
 
 export type CommitDocument = { readonly digest: string; readonly bytes: number }
+export type CommitSeed = { readonly parent: string; readonly cut: number; readonly digest: string }
 
 export type CommitView = {
   readonly header: Readonly<Record<string, unknown>>
@@ -10,6 +11,7 @@ export type CommitView = {
   readonly meta: Readonly<Record<string, unknown>>
   readonly documents: ReadonlyMap<string, CommitDocument>
   readonly intents: ReadonlyMap<string, Readonly<Record<string, unknown>>>
+  readonly seed?: CommitSeed
   readonly deleted: boolean
 }
 
@@ -20,6 +22,7 @@ export function foldCommits(records: readonly CommitRecord[]): CommitView {
   const meta: Record<string, unknown> = {}
   const documents = new Map<string, CommitDocument>()
   const intents = new Map<string, Readonly<Record<string, unknown>>>()
+  let seed: CommitSeed | undefined
   let deleted = false
   for (const record of records) {
     entries.push(...record.entries)
@@ -30,6 +33,7 @@ export function foldCommits(records: readonly CommitRecord[]): CommitView {
         case 'doc': documents.set(op.key, op.side); break
         case 'doc-clear': documents.delete(op.key); break
         case 'intent': intents.set(op.id, op.intent); break
+        case 'seed': seed ??= { parent: op.parent, cut: op.cut, digest: op.digest }; break
         case 'intent-done': intents.delete(op.id); break
         case 'rewind':
           if (op.toSeq > entries.length) throw new CommitFormatError('ops', `rewind toSeq ${op.toSeq} exceeds ${entries.length} committed entries`)
@@ -39,5 +43,5 @@ export function foldCommits(records: readonly CommitRecord[]): CommitView {
     }
   }
   if (!header) throw new CommitFormatError('ops', 'commit log has no header op')
-  return { header, entries, meta, documents, intents, deleted }
+  return { header, entries, meta, documents, intents, ...(seed ? { seed } : {}), deleted }
 }

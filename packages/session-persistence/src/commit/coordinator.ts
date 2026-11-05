@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, stringifyJsonData, type Session, type SessionEvent } from '@i-harness/core-session'
 import { COMMIT_LOG_GENERATION, createCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode } from '@i-harness/session-commit-log'
 import { readdir, stat } from 'node:fs/promises'
@@ -23,9 +24,21 @@ export type CommitCoordinatorOptions = {
   readonly legacy?: LegacySessionStore
 }
 
+export type ForkOptions = {
+  readonly cut?: number
+  readonly sessionId?: string
+  readonly meta?: Partial<SessionMeta>
+}
+
+export type CommitIntent = Readonly<Record<string, unknown>>
+
 export type CommitCoordinator = {
   readonly storageRoot: string
   create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
+  fork(parentId: string, options?: ForkOptions): Promise<{ id: string }>
+  beginIntent(sessionId: string, id: string, intent: CommitIntent): Promise<void>
+  endIntent(sessionId: string, id: string, outcome: 'committed' | 'failed'): Promise<void>
+  intents(sessionId: string): Promise<ReadonlyMap<string, CommitIntent>>
   load(sessionId: string): Promise<{ session: Session }>
   snapshot(sessionId: string): Promise<{ session: Session }>
   loadOwned(sessionId: string): Promise<{ session: Session }>
@@ -90,15 +103,21 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     return { meta: raw.meta, events, version: raw.version }
   }
 
-  const readSession = async (sessionId: string): Promise<Session> => {
+  const readState = async (sessionId: string): Promise<{ meta?: SessionMeta; events: SessionEvent[] }> => {
     try {
       const log = await open(sessionId, 'read')
-      try { return build(log) } finally { await log.close() }
+      try { return { meta: metaOf(log), events: log.view().entries.map(event => ({ ...event })) } } finally { await log.close() }
     } catch (error) {
       if (!(error instanceof CommitLogNotFoundError)) throw error
       const legacy = await readLegacy(sessionId)
-      return buildSession(legacy.meta, legacy.events)
+      return { meta: legacy.meta, events: legacy.events }
     }
+  }
+
+  const readSession = async (sessionId: string): Promise<Session> => {
+    const state = await readState(sessionId)
+    preflightSessionFormat(CURRENT_FORMAT_VERSION, state.events, state.meta)
+    return buildSession(state.meta, state.events)
   }
 
   /** Open a writable handle; a legacy-only session first publishes a format-15
@@ -139,6 +158,27 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return { id: sessionId }
     },
     async load(sessionId) { return { session: await readSession(sessionId) } },
+    async fork(parentId, options = {}) {
+      const parent = await readState(parentId)
+      const cut = options.cut ?? parent.events.length
+      if (!Number.isSafeInteger(cut) || cut < 0 || cut > parent.events.length) throw new Error(`fork cut ${cut} is outside the committed history of ${parentId}`)
+      const childId = options.sessionId ?? randomSessionId()
+      const header = { ...toHeader(parent.meta, childId, now), parentSession: parentId, seedLength: cut, ...options.meta } as unknown as Record<string, unknown>
+      const digest = createHash('sha256').update(stringifyJsonData(parent.events.slice(0, cut)) ?? '[]').digest('hex')
+      const log = await createCommitLog(logOptions(childId), { header, entries: parent.events.slice(0, cut), ops: [{ kind: 'seed', parent: parentId, cut, digest }] })
+      await log.close()
+      return { id: childId }
+    },
+    async beginIntent(sessionId, id, intent) {
+      await withWrite(sessionId, log => log.append({ ops: [{ kind: 'intent', id, intent }] }))
+    },
+    async endIntent(sessionId, id, outcome) {
+      await withWrite(sessionId, log => log.append({ ops: [{ kind: 'intent-done', id, outcome }] }))
+    },
+    async intents(sessionId) {
+      const log = await open(sessionId, 'read')
+      try { return new Map(log.view().intents) } finally { await log.close() }
+    },
     async snapshot(sessionId) { return { session: await readSession(sessionId) } },
     async loadOwned(sessionId) {
       const held = owned.get(sessionId)

@@ -130,6 +130,33 @@ describe('commit coordinator', () => {
     expect(profile.blank).toBe(false)
   })
 
+  it('forks a committed prefix into a new generation', async () => {
+    const { coordinator } = await setup()
+    await coordinator.create({ sessionId: 'p' })
+    await coordinator.append('p', [{ type: 'user/message', text: 'a' }, { type: 'user/message', text: 'b' }, { type: 'user/message', text: 'c' }])
+    const { id } = await coordinator.fork('p', { cut: 2, sessionId: 'c1' })
+    expect(id).toBe('c1')
+    const { session } = await coordinator.load('c1')
+    expect(session.events.map(event => (event as { text?: string }).text)).toEqual(['a', 'b'])
+    expect((session as { header?: unknown }).header).toMatchObject({ parentSession: 'p', seedLength: 2 })
+    expect(await coordinator.list()).toEqual(['c1', 'p'])
+    await expect(coordinator.fork('p', { cut: 9 })).rejects.toThrow(/fork cut/)
+  })
+
+  it('records and settles birth intents durably', async () => {
+    const { coordinator } = await setup()
+    await coordinator.create({ sessionId: 's' })
+    await coordinator.beginIntent('s', 'i1', { kind: 'child-birth', childId: 'x' })
+    expect((await coordinator.intents('s')).get('i1')).toEqual({ kind: 'child-birth', childId: 'x' })
+    await coordinator.endIntent('s', 'i1', 'committed')
+    expect((await coordinator.intents('s')).size).toBe(0)
+    await coordinator.beginIntent('s', 'i2', { kind: 'child-birth' })
+    await coordinator.close()
+    const reopened = createCommitCoordinator({ root: (coordinator as { storageRoot: string }).storageRoot })
+    coordinators.push(reopened)
+    expect((await reopened.intents('s')).get('i2')).toEqual({ kind: 'child-birth' })
+  })
+
   it('routes appends through the retained owned handle', async () => {
     const { coordinator } = await setup()
     await coordinator.create({ sessionId: 's1' })

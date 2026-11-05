@@ -604,6 +604,16 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
   existing JSONL backend.
 - Tests: 10 coordinator tests (session-persistence) + 2 JSONL integration tests (legacy read, migration, list, lease retention).
 
+## Plan 3b (implemented 2026-11-05): fork + birth intents + dual-run
+
+- New `seed` commit op (`parent`, `cut`, `digest`) recorded in the fold (`CommitView.seed`).
+- `fork(parentId, { cut, sessionId, meta })` publishes the child as one commit carrying the copied prefix and the seed op;
+  the child header records `parentSession` + `seedLength`. A cut outside the committed history refuses.
+- `beginIntent/endIntent/intents` record cross-session work (child birth, team birth) inside the same log; an open intent
+  survives reopen and is settled by a later `intent-done` — this is the durable replacement for capture reservations.
+- `test/commit-dual-run.test.ts` (JSONL) proves the commit coordinator returns exactly the legacy backend's events/meta/list
+  for a real format-14 session, and the same for an empty session.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
