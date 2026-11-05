@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 296（SCL 全套回歸）**：host 13 檔/14、commit-log 7 檔/32、commit suites 9 檔/37，共 83 tests 全綠、無 flake。
 > **round 295（transcript tail）**：`sessions show --last 2` 在 SCL 只印尾段並標示 earlier lines。單一 host 連線的 RPC 回覆
 > 會序列化，無法在 turn 進行中併發觀察 `execution/read`（會等到 turn 結束、live:false）。
 > **round 294（大 session 讀取成本）**：5,000 事件 session 連續 10 次讀取共 7ms——fold 成本低於 1ms，無需快取 view。

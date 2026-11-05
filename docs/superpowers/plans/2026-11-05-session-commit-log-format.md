@@ -1168,6 +1168,14 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 49 (verified 2026-11-06): full SCL regression snapshot
+
+All commit-log suites run together: **13 host files / 14 tests** (create, fork, rewind, turn, schedule, surface, surface-changed,
+management, project, title, compact, compact-long, owned gateway), **7 files / 32 tests** in `session-commit-log`
+(format, scanner, fold, store, crash, scan-cache, benchmark) and **9 files / 37 tests** in the session-persistence commit suites
+(coordinator, execution, fork, ordering, retained, task-document, process-read, observations, prefix) — 83 green, no flakes.
+
 ## Plan 48 (implemented 2026-11-06): CLI transcript tail
 
 `sessions show --last 2` on an SCL store prints only the tail with the `earlier line(s)` marker, covering the transcript window
