@@ -87,7 +87,7 @@ export function createLoads(
             }
           }
           return { session: buildSession(repaired.meta, canonical) }
-        }, pending ? () => pending.flush() : undefined, async proof => { const meta = proof.initial.header as SessionMeta | undefined; const physical = JSON.parse(JSON.stringify(proof.initial.events)) as SessionEvent[]; return { session: buildSession(meta, await migrate(proof.initial.formatVersion, guardIgnorable(physical, true), meta)) } }, after)
+        }, pending ? () => pending.flush() : undefined, async proof => { const meta = proof.initial.header as SessionMeta | undefined; const physical = (() => { try { return JSON.parse(JSON.stringify(proof.initial.events)) as SessionEvent[] } catch (error) { if (!(error instanceof RangeError)) throw error; throw Object.assign(new Error('Session events exceed the supported nesting depth', { cause: error }), { code: 'SESSION_EVENTS_TOO_DEEP' }) } })(); return { session: buildSession(meta, await migrate(proof.initial.formatVersion, guardIgnorable(physical, true), meta)) } }, after)
       }
   return {
     transitionLoad,
