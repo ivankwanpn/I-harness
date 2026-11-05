@@ -1164,6 +1164,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 45 (implemented 2026-11-06): CLI sessions show on SCL
+
+`sessions list` and `sessions show` (transcript and `--json`) both read an SCL store through `runSessionsCommand`; the test seeds a
+session with a user/assistant exchange and asserts the rendered transcript. Note the command expects argv including the `sessions`
+token (it slices the first element).
+
 ## Plan 44 (implemented 2026-11-06): read-open scan cache
 
 `openCommitLog(read)` re-scanned and JSON-parsed the whole generation on every open, and the desktop lists call `profile` per
