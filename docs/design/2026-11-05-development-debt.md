@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 270（compaction summarizer fixture 調査）**：checkpoint fixture 直接覆寫 `prepare` 會破壞 managed generation
+> （`GENERATION_UNSUPPORTED`）；controlled model 則停在 `retention-output`。真正的 E2E compaction 測試需要「留在 managed
+> model client 內、且輸出可 retention」的 fixture。
 > **round 269（compaction 進入引擎）**：observation expiry 來源是 **cached recovery prompt**（overhead 計數早於
 > `prepareModelSurface`）；過期時省略 advisory recovery section 後，compaction 可進入引擎，summarizer 尚需 checkpoint
 > fixture（`retention-output`）。

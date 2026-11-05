@@ -1035,8 +1035,17 @@ whether the compaction path must re-observe around its own writes.
 The expiry was not in the execution prefix but in the cached **recovery prompt**: `modelOverheadTokens` asks for the system
 prompt before `prepareModelSurface` refreshes the native-recovery observation, so the cached recovery text is stale after any
 earlier turn. `recoveryPrompt` now omits the advisory recovery section when its observation expired (the real request still
-gets a fresh one through `prepareModelSurface`). Compaction then reaches the engine; the summarizer itself still needs a
-checkpoint-capable fixture model (`retention-output`), tracked as the next step.
+gets a fresh one through `prepareModelSurface`). Compaction then reaches the engine. Two fixture attempts: overriding `prepare` with the compaction text fixture breaks the managed
+generation composition (`GENERATION_UNSUPPORTED`), and a plain controlled answer leaves the summarizer blocked with
+`retention-output`. The summarizer needs a checkpoint/output-retention fixture composed through the managed model client; the test
+keeps the SCL-specific assertion (`outcome` is a string, no observation expiry).
+
+## Plan 28c (investigation 2026-11-05): compaction summarizer fixture
+
+`desktop/session/compact` on SCL now reaches the compaction engine (no observation expiry). The summarizer itself is blocked
+with `retention-output` under the controlled fixture model; replacing the model with the compaction text fixture loses the
+managed generation composition (`GENERATION_UNSUPPORTED`). A real end-to-end compaction test needs a fixture that stays inside
+the managed model client while producing a retained checkpoint.
 
 ## Follow-on plans (not in this plan)
 

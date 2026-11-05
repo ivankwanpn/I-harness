@@ -15,12 +15,13 @@ it('reaches the compaction engine on the commit log', async () => {
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
   await writeFile(settingsPath, JSON.stringify({ autoTitle: false, sandboxMode: 'read-only', compaction: { auto: false }, codeMode: { mode: 'off' }, llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: 'http://127.0.0.1:1', apiKeyEnv: 'IH_COMPACT_KEY', models: [{ id: 'fixture', contextWindow: 32000 }] } }, defaultModel: { provider: 'fixture', model: 'fixture' } } }))
   await writeFile(credentialsPath, JSON.stringify({ refs: { IH_COMPACT_KEY: 'controlled' } }))
-  const frames: RpcMessage[] = []
-  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, sessionStore: 'commit-log', onWrite: frame => frames.push(frame), buildProviderClient: () => controlledModel(request => ({ async *stream() {
+  const model = controlledModel(request => ({ async *stream() {
     request.signal?.throwIfAborted(); request.validateBeforeTransport?.()
     yield { type: 'text/chunk', text: 'answer' }
     yield { type: 'end' }
-  } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+  const frames: RpcMessage[] = []
+  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, sessionStore: 'commit-log', onWrite: frame => frames.push(frame), buildProviderClient: () => model })
   let serial = 0
   const call = async (method: string, params: unknown = {}) => {
     const id = ++serial
