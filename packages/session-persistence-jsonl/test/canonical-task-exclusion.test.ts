@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { taskDocumentOperationsFor } from '../../session-persistence/src/coordinator/task-document-association.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { composeJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'

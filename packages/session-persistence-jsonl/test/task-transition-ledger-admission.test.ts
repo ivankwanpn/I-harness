@@ -17,6 +17,7 @@ import { createOwnership } from '../../session-persistence/src/coordinator/owner
 import { heldFactOwner } from '../../session-persistence/src/coordinator/fact-owner.ts'
 import { createBootstrapHeaderBackend } from '../src/backend/bootstrap-header.ts'
 import { createJsonlBackend } from '../src/backend-factory.ts'
+import { createPredecessorSession } from './helpers/predecessor.ts'
 
 it('fences a late tracked flight while settlement joins the original delayed read close', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-header-ledger-admission-'))
@@ -25,8 +26,9 @@ it('fences a late tracked flight while settlement joins the original delayed rea
   const backend = createBootstrapHeaderBackend(id => join(root, `${id}.jsonl`), async () => {}, root)
   const route = { protocol: 'public' as const, invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-30T00:00:00.000Z', requestDigest: 'a'.repeat(64) } }
   const gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
+  await createPredecessorSession(createJsonlBackend(root), root, 'target', 13, route.invocation.createdAt)
   fault.target = join(root, 'target.jsonl'); fault.gate = gate.promise; fault.entered = entered.resolve
-  await createJsonlBackend(root).create('target', { sessionId: 'target', createdAt: route.invocation.createdAt, formatVersion: 13 }); backend.trackHeaderOwner('target', held)
+  backend.trackHeaderOwner('target', held)
   const original = backend.readTrackedState(route, held); void original.catch(() => {})
   let settle: Promise<void> | undefined
   try {

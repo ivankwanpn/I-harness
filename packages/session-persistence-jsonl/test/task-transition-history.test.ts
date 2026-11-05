@@ -2,6 +2,7 @@ import { mkdtemp, rm, appendFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { createJsonlBackend, lookupJsonlProcessRead } from '../src/backend-factory.ts'
+import { createPredecessorSession } from './helpers/predecessor.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { issueHeldTaskDocumentScope } from '../../session-persistence/src/coordinator/task-document-scope.ts'
 
@@ -11,7 +12,7 @@ it('captures only the complete original framed parent under its genuine task sco
   const pin = await owner.pinOwnership('parent'), lease = await owner.acquireLease('doc:task-parent')
   const scope = issueHeldTaskDocumentScope(owner, 'parent', pin, { assertActive() { if (!lease.held) throw Error('revoked') } })
   try {
-    await backend.create('parent', { sessionId: 'parent', formatVersion: 13, createdAt: '2026-01-01' })
+    await createPredecessorSession(backend, root, 'parent', 13, '2026-01-01')
     const capability = lookupJsonlProcessRead(backend)!
     expect(() => capability.openTaskHistory({ ...scope })).toThrow()
     const reader = capability.openTaskHistory(scope); const history = await reader.observe()

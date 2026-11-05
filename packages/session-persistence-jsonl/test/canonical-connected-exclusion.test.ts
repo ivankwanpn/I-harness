@@ -7,7 +7,7 @@ import { taskDocumentStorageContract } from '../../subagent/src/task/storage-con
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { createDocuments } from '../../session-persistence/src/coordinator/documents.ts'
 import { createProcessReadLatches } from '../../session-persistence/src/coordinator/process-read-latches.ts'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 const options = { lock: { enabled: true }, acquireDeadlineMs: 20, acquireRetryMs: 1 }
 async function fixture(absent = false) {
   const base = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'canonical-connected-'))

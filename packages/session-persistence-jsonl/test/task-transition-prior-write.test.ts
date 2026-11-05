@@ -11,11 +11,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../src/backend-factory.ts'
+import { createPredecessorSession } from './helpers/predecessor.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 
 it.each([false, true])('joins the earlier original generic write and refuses uncertainty: failure=%s', async fail => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-prior-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await createPredecessorSession(backend, root, 'p', 13, 'x')
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
   fault.target = join(root, 'task-p.doc.jsonl'); fault.gate = gate.promise; fault.entered = entered.resolve; fault.fail = fail

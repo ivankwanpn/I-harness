@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { committedFactSeqs, deliveryInputId, readFactJournal, encodeFactBatch, decodeFactBatch, legacyPrefixDigest } from '@i-harness/core-session';
-import { createSessionCoordinator } from '@i-harness/session-persistence';
+import { createSessionCoordinator } from './helpers/composed.ts';
 import { createJsonlBackend } from '../src/index.ts';
 async function ownedDeliveryHistory() {
   const root = await mkdtemp(join(tmpdir(), 'delivery-owned-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } });

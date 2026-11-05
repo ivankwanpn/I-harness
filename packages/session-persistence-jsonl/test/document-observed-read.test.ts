@@ -20,14 +20,17 @@ it('strict reads distinguish actual absent, present and malformed document data'
   await fs.writeFile(join(root, 'binding.doc.jsonl'), '{broken')
   await expect(backend.readDocumentObserved!('binding')).rejects.toThrow()
 })
-it.each(['EACCES', 'EIO'])('strict read propagates %s while legacy read stays tolerant', async code => {
+it.each(['EACCES', 'EIO'])('strict read propagates %s instead of reporting absence (S-05)', async code => {
   const { root, backend } = await fixture()
   const original = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).readFile
   vi.spyOn(fs, 'readFile').mockImplementation(((path: unknown, ...args: unknown[]) => {
     if (path === join(root, 'binding.doc.jsonl')) return Promise.reject(Object.assign(new Error(code), { code }))
     return (original as Function)(path, ...args)
   }) as typeof fs.readFile)
-  expect(await backend.getDocument('binding')).toBeUndefined()
+  // S-05: only ENOENT is absence. A permission/IO failure must not be turned
+  // into "no document" by either read surface, or the caller could overwrite
+  // durable state it never saw.
+  await expect(backend.getDocument('binding')).rejects.toMatchObject({ code })
   await expect(backend.readDocumentObserved!('binding')).rejects.toMatchObject({ code })
 })
 it('missing storage root and durable session tombstone never become absent binding', async () => {

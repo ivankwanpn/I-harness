@@ -12,17 +12,19 @@ import { join } from 'node:path'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { taskDocumentTransitionCleanupFor } from '../../session-persistence/src/task-document-internal.ts'
 import { createJsonlBackend } from '../src/backend-factory.ts'
+import { createPredecessorSession } from './helpers/predecessor.ts'
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 
 it('reconciles the exact predecessor header candidate after rename post-effect throw', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-upgrade-retry-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await createPredecessorSession(backend, root, 'p', 13, 'x')
   const path = join(root, 'p.jsonl'), lines = (await readFile(path, 'utf8')).split('\n'), header = JSON.parse(lines[0]!); header.formatVersion = 12; lines[0] = JSON.stringify(header); await writeFile(path, lines.join('\n'))
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   fault.target = path; fault.active = true; fault.renames = 0
   try {
     let failure: unknown; try { await coordinator.loadOwned('p'); expect.fail('expected unknown') } catch (error) { failure = error }
-    expect((await backend.read('p')).version).toBe(13)
+    expect((await backend.read('p')).version).toBe(CURRENT_FORMAT_VERSION)
     const task = await readFile(join(root, 'task-p.doc.jsonl'), 'utf8')
     const retry = taskDocumentTransitionCleanupFor(coordinator, failure); expect(retry).toBeDefined()
     expect(await retry!.retry()).toBe('committed'); expect(fault.renames).toBe(1)

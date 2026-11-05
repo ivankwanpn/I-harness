@@ -14,6 +14,7 @@ vi.mock('node:fs/promises', async original => {
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createJsonlBackend, lookupJsonlProcessRead } from '../src/backend-factory.ts'
+import { createPredecessorSession } from './helpers/predecessor.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { issueHeldTaskDocumentScope } from '../../session-persistence/src/coordinator/task-document-scope.ts'
 
@@ -23,7 +24,7 @@ it('retains the original history file close failure until explicit settlement', 
   const pin = await owner.pinOwnership('p'), lease = await owner.acquireLease('doc:task-p')
   const scope = issueHeldTaskDocumentScope(owner, 'p', pin, { assertActive() { if (!lease.held) throw Error('revoked') } })
   try {
-    await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: '2026-01-01' })
+    await createPredecessorSession(backend, root, 'p', 13, '2026-01-01')
     faults.target = join(root, 'p.jsonl'); faults.fail = true; faults.closes = 0
     const reader = lookupJsonlProcessRead(backend)!.openTaskHistory(scope)
     await expect(reader.observe()).rejects.toBe(false)

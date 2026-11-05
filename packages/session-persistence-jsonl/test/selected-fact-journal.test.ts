@@ -280,7 +280,12 @@ it.each(['qualification','close-debt','bind-debt'] as const)('retires the origin
   expect((await inspectColdSelectedTarget(coordinator,f.route)).kind).toBe(mode==='bind-debt'?'blocked':'qualification-required');bind?.mockRestore()
   expect(registry.has('target')).toBe(true);await expect(registry.open('target')).rejects.toThrow();expect(capture).toThrow('PROCESS_READ_UNAVAILABLE')
   if(mode!=='qualification'){
-   await expect(registry.closeOne('target')).rejects.toThrow('original close dependency debt')
+   // The cleanup failure is wrapped by the managed-document aggregate, so assert
+   // the chain rather than the top-level message: the injected dependency error
+   // must stay visible, not be swallowed.
+   const failure = await registry.closeOne('target').catch(error => error)
+   const chain = [failure, ...((failure as { errors?: unknown[] }).errors ?? [])].map(item => String((item as Error | undefined)?.message ?? item))
+   expect(chain.join(' | ')).toContain('original close dependency debt')
    expect(registry.has('target')).toBe(true);expect(ownership.ownerOf('target')).toBe(true);expect(capture).toThrow('PROCESS_READ_UNAVAILABLE')
   }
   await registry.closeOne('target');expect(registry.has('target')).toBe(false);expect(ownership.ownerOf('target')).toBe(false)

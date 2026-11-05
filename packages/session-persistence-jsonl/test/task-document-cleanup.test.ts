@@ -12,7 +12,7 @@ vi.mock('node:fs/promises', async original => {
 })
 
 it('joins issue, reconcile and retry onto the same original write flight', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-flight-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-flight-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
     fault.path = join(root, 'task-parent.doc.jsonl'); await writeFile(fault.path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -24,7 +24,7 @@ it('joins issue, reconcile and retry onto the same original write flight', async
 })
 
 it('keeps the original write witness through an uncertain publication and same-candidate retry', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-retry-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-retry-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
     fault.path = join(root, 'task-parent.doc.jsonl'); await writeFile(fault.path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -37,7 +37,7 @@ it('keeps the original write witness through an uncertain publication and same-c
 })
 
 it('keeps committed write acknowledgment and process fence through original final close debt', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-close-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-close-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
     fault.path = join(root, 'task-parent.doc.jsonl'); await writeFile(fault.path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -52,7 +52,7 @@ it('keeps committed write acknowledgment and process fence through original fina
 })
 
 it('refuses staging while original confirmation is in flight and prevents later preimage retries', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-confirm-gate-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-confirm-gate-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
@@ -68,7 +68,7 @@ it('refuses staging while original confirmation is in flight and prevents later 
 })
 
 it('refuses staging while an explicit original confirmation retry is in flight', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-reconfirm-gate-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-reconfirm-gate-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
     fault.path = join(root, 'task-parent.doc.jsonl'); await writeFile(fault.path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
@@ -82,7 +82,7 @@ it('refuses staging while an explicit original confirmation retry is in flight',
 })
 
 it('joins a revoked observation suspended before its original file open', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-open-gate-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-open-gate-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
@@ -97,7 +97,7 @@ it('joins a revoked observation suspended before its original file open', async 
 })
 
 it('retries unknown confirmation only against its original raw witness', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-confirm-retry-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-confirm-retry-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
     fault.path = join(root, 'task-parent.doc.jsonl'); await writeFile(fault.path, '{ "formatVersion":2,"tasks":[],"notifications":[] }')
@@ -112,7 +112,7 @@ it('retries unknown confirmation only against its original raw witness', async (
 })
 
 it('preserves the original confirmed acknowledgement separately from failed close debt', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-ack-debt-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-ack-debt-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
     fault.path = join(root, 'task-parent.doc.jsonl'); await writeFile(fault.path, '{"formatVersion":2,"tasks":[],"notifications":[]}')
@@ -125,7 +125,7 @@ it('preserves the original confirmed acknowledgement separately from failed clos
 })
 
 it('does not retry a failed original file close in the same coordinator shutdown', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-shutdown-debt-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-shutdown-debt-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
     fault.path = join(root, 'task-parent.doc.jsonl'); await writeFile(fault.path, '{"formatVersion":2,"tasks":[],"notifications":[]}')
@@ -139,11 +139,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
-import { createJsonlTaskDocumentCoordinator } from '../src/task-document-factory.ts'
+import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 import { taskDocumentOperationsFor } from '../../session-persistence/src/coordinator/task-document-association.ts'
 
 it('retains a falsey file close debt and original locks until explicit retry', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-task-debt-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-debt-')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
     fault.path = join(root, 'task-parent.doc.jsonl'); await writeFile(fault.path, '{"formatVersion":2,"tasks":[],"notifications":[]}')

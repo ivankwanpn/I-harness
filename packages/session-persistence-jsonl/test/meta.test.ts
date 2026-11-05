@@ -2,8 +2,8 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../src/index.ts"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 import { parseHeader } from "../src/format.ts"
 
 describe("updateMeta/profile (R-C5)", () => {

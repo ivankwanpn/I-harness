@@ -7,7 +7,7 @@ import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session';
 import { createProcessReadLatches } from '../../session-persistence/src/coordinator/process-read-latches.ts';
 import { createColdProcessReadOwner } from '../../session-persistence/src/coordinator/process-read-owner.ts';
 import { createManagedProcessReadOwner } from '../../session-persistence/src/coordinator/process-read-managed-owner.ts';
-import { createSessionCoordinator } from '@i-harness/session-persistence';
+import { createSessionCoordinator } from './helpers/composed.ts';
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts';
 import { createMutations } from '../../session-persistence/src/coordinator/mutations.ts';
 import { createLoads } from '../../session-persistence/src/coordinator/load.ts';
