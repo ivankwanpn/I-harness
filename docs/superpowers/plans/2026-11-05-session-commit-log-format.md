@@ -1202,6 +1202,18 @@ gateway native context rather than the host log.
 
 ## Plan 88 (found, not fixed): a desktop todo write breaks the in-turn todo_write
 
+Deeper root cause (2026-11-06): the cold `writeTodos` path reaches `service.writableSessionFor`, which calls `selectComplete` and
+marks the session as a **complete** selection; `first-party-selection` then skips the managed selection for that session forever, so the
+next turn runs on a non-managed assembly and the in-turn task tool has no `managedTaskOwners` entry
+(`Original Task projection owner required`).
+
+Two attempted escapes both failed and were reverted: (a) closing the opened document breaks the following cold write with
+`Supplied Session is not this document view`; (b) also closing the service session clears the complete selection, but the next cold
+write then fails with `Original Task projection owner required` because `openExecutorDocument` needs the managed task owner. The real
+fix must keep the cold todo edit on a path that never calls `selectComplete` (a task-document write that does not claim the session),
+or make `completeSelections` reversible without tearing down the executor document.
+
+
 Attempt (reverted): closing the document that the cold `writeTodos` path opened (`closeManagedDocument` after the admit) makes the
 following cold write fail with `Supplied Session is not this document view; use explicit detached import` (the live session object no
 longer matches a rebuilt document), so the next cold edit must also re-create the service session.
