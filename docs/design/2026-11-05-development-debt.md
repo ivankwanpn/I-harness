@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 342（execution cursor）**：負 offset 與 limit>20 被拒（`Invalid execution cursor or dimension`）；超大 offset 合法且回空頁。
 > **round 341（limit 下界）**：修正 `limit:-5` 會經 `slice(0,-1)` 回「全部少一筆」的錯誤；改為 `max(0, min(limit,100))`，
 > fallback 對 `limit<=0` 回空。
 > **round 340（lineage 工具＋snippet）**：`lineage` 工具由 coordinator metadata 回答 ancestors／children；長訊息中間命中時

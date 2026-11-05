@@ -1198,6 +1198,13 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 87 (implemented 2026-11-06): execution cursor bounds
+
+The execution view validates its cursor before reading: a negative offset or a limit above 20 is rejected with
+`Invalid execution cursor or dimension` (-32602), while a very large offset is accepted and returns an empty page with that offset.
+All three are asserted on the commit-log host.
+
 ## Plan 86 (implemented 2026-11-06): search limits are clamped from below
 
 `createConversationQuery` clamped only the upper bound, so `limit: -5` reached `slice(0, -1)` and returned all-but-the-last hit. The

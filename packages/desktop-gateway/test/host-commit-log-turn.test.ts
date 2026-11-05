@@ -74,6 +74,11 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     const executionSurface = await call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 10 }) as { live?: boolean; cells?: unknown[]; total?: number }
     expect(executionSurface).toMatchObject({ live: false, total: 0 })
     expect(executionSurface.cells).toEqual([])
+    await expect(call('desktop/session/execution/read', { sessionId: created.sessionId, offset: -5, limit: 10 })).rejects.toThrow(/Invalid execution cursor or dimension/)
+    await expect(call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 999 })).rejects.toThrow(/Invalid execution cursor or dimension/)
+    const far = await call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 1_000_000_000, limit: 10 }) as { offset: number; cells: unknown[] }
+    expect(far).toMatchObject({ offset: 1_000_000_000 })
+    expect(far.cells).toEqual([])
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'use todo' })
     expect(toolCalls).toBe(1)
     const toolHits = await call('desktop/session/search', { query: 'do it' }) as { hits: { eventType: string; snippet: string }[] }
