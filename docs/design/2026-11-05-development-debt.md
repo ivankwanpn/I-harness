@@ -125,6 +125,70 @@ backend、in-memory fake backend「Original JSONL backend required」、legacy-o
 
 ---
 
+## 償還：round 6（待辦第 1 項，2026-11-05）
+
+### P0：deep-JSON 冷載入的 e2e 回歸
+
+`managed-native-replay.test.ts` 改走 composed 測試入口後拆成兩個案例：
+
+| 案例 | 深度 | 期望 |
+|---|---|---|
+| signed/numeric/source-order 保留 | 12 | `prepare().validation.native === 'preserved'`；冷讀後 `tool/call` 的 args 鍵序仍是 `['2','10','z','a','deep','text','$ref']` |
+| 過深會話冷開啟 | 6000 | 拒絕：`message === 'TASK_TRANSITION_FAILED'`、`code === 'SESSION_EVENTS_TOO_DEEP'`、`cause.code` 同名、`cause.cause` 是 `RangeError` |
+
+寫入側（agent → managed document → durable journal）在 6000 層仍然成功，只有冷開啟拒絕——
+這是 mitigation（`9c4e1bf2` + `e78fe6ca`）的 e2e 證據，`managed-native-replay.test.ts:41`
+的重現點結案。保留案例刻意用 12 層：clone 溢出的門檻是 stack 相依，不能當穩定數字。
+
+### P1 #4：create 驗證 lineage 完整性
+
+- `core-session` 新增 `validateLineageHeader`：有 `parentSession` 就必須有合法的
+  `seedLength`（安全整數 ≥ 0）。`mutations.create` 的 composed/legacy 兩條分支都在
+  寫入前驗證，不再產生「create 成功、append 才 `PROCESS_READ_UNAVAILABLE`」的 artifact。
+- 回歸：`delete-owned.test.ts`「refuses a child lineage header without its seed length
+  at create」。修前 `create` resolve `{id:'child'}`（測試紅），修後以
+  `Invalid parent session lineage: a seed length is required` 拒絕，store 不留檔案。
+- 與 `process-read-composition.test.ts:82`（lineage-only 讀取：`seedLength` 缺省視為 0）
+  的衝突已記錄：該檔整檔紅（P1 #2），遷移時要把「手寫 lineage-only artifact 的讀取容忍」
+  與「create 拒絕」分開寫，不能再用 `create` 造 lineage-only fixture。
+
+### P1 #3：刪除不再被已接受的寫入卡死
+
+- 根因：`lifecycle.deleteOwnedSession` 先 `closeAdmission`（`deleted` 標記）再 flush
+  write-behind；composed 的 flush 走 `transitionWrite` → `transitionLoad` →
+  `assertWritable`，直接拋 `Session is deleting or deleted`。
+- 實測另一條路不可行：只讓 `assertWritable` 在 drain 期間放行、仍走 transition 車道，
+  會在 `beginTaskTransition` 得到 `Session binding observation conflict`
+  （刪除自己的 observation admission 內不能再開 task transition）。
+- 修法：`mutations.ts` 的 write-behind 寫入器在 `deleted.has(id)`（只有 deletion 會設）
+  時改走 direct append——與 legacy write-behind 相同形狀，且不必新增 lifecycle 依賴。
+- 回歸：`delete-owned.test.ts`「drains accepted writes…」修前在 `deleteOwnedSession`
+  拋 `Session is deleting or deleted`，修後刪除成功且事後 `enqueue` 仍被 fence。
+- 取捨：drain 的 direct append 不經過 task transition；若 drain 之後刪除才失敗（例如
+  backend IO），磁碟上會多一批「已接受但未 transition」的事件，下次開啟是
+  `TASK_TRANSITION_RECOVERY_REQUIRED`（fail-closed、可 recovery），而不是靜默丟棄
+  已接受的寫入。tombstone 仍在 drain 之後才寫，成功路徑沒有中間可見狀態。
+
+### 同批 fixture 現代化（`delete-owned.test.ts`）
+
+- 建構子改走 `test/helpers/composed.ts`。
+- `restarted.create` 的 tombstone 斷言改看 `code: SESSION_DELETED`（D-12 #7 的 wrapper
+  只保留 code；message 仍是泛用的 `TASK_TRANSITION_FAILED`）。
+- symlink 案例的訊息改 `symlink|non-reparse`（Windows junction 走
+  `Artifact ancestor is not an original non-reparse directory`）。
+- 「read-only backend 不發佈 destructive capability」改用**從未有**該能力的 fake
+  backend：JSONL backend 的 identity guard 會拒絕建構後改屬性，那不是這條契約。
+
+**量測（round 6 結束時）**：`session-persistence-jsonl` 全套
+**286 failed / 572 passed / 17 skipped（36 個紅檔，共 98 檔）**
+（round 5 結束：295 failed / 561 passed / 38 紅檔）。紅檔集合 = round 5 的 38 檔減去
+`delete-owned` 與 `managed-native-replay`，沒有新增紅檔。
+
+**其他 gate（round 6）**：三個受影響套件 `typecheck` exit 0；boundaries 147/147；
+reachability 仍是 71 NEW（沒有新增 row）。
+
+---
+
 ## 發現的產品 bug（本輪新增，依嚴重度）
 
 1. **P0：deep-JSON 冷載入會 `RangeError` 崩潰**
@@ -140,8 +204,10 @@ backend、in-memory fake backend「Original JSONL backend required」、legacy-o
    回 `code: SESSION_EVENTS_TOO_DEEP`（cause 保留 RangeError），且
    transition wrapper 會保留該 code。probe（6000 層）：
    `CODE SESSION_EVENTS_TOO_DEEP | CAUSE RangeError`。
-   **仍欠**：磁碟上深層 args 會話的端到端回歸測試（重現點
-   `managed-native-replay.test.ts:41`），以及 admission 端的深度上限決策。
+   **round 6 已補**：磁碟上深層 args 會話的 e2e 冷開啟回歸
+   （`managed-native-replay.test.ts`；6000 層 → `code: SESSION_EVENTS_TOO_DEEP`，
+   cause 鏈到 `RangeError`）。**仍欠**：admission 端的深度上限決策（目前語義是
+   「寫得進去、冷讀拒絕」）。
 
 2. **P1：`createJsonlSessionCoordinator` 在 format 14 無法建立/開啟會話**
    `backend-factory.ts:42-49` 組裝時沒有 `transitionStorage`，任何
@@ -155,11 +221,16 @@ backend、in-memory fake backend「Original JSONL backend required」、legacy-o
    `delete-owned.test.ts:40`：`Session is deleting or deleted`
    （`mutations.ts:53` → `load.ts:51` → `mutations.ts:68`）。刪除順序需與
    accepted-write drain 對齊。
+   **已修（round 6）**：`deleted` 狀態的 write-behind 改走 direct append（transition
+   車道在刪除 admission 內是 `Session binding observation conflict`），回歸見上方
+   量測章節。
 
 4. **P1：`create` 接受 `parentSession` 但沒有 `seedLength`，append 才拒絕**
    `delete-owned.test.ts:12-14`：`create({origin:'subagent',parentSession})`
    成功，`append` 卻 `PROCESS_READ_UNAVAILABLE`（`process-read.ts:237`）。
    應在 create 就驗證 lineage 完整性。
+   **已修（round 6）**：`validateLineageHeader` 在 create 入口拒絕不完整 lineage，
+   回歸與待解衝突（`process-read-composition`）見上方量測章節。
 
 5. **P2：`updateMeta` 把 downgrade/format 錯誤包成 `TASK_TRANSITION_FAILED`**
    `context-format.test.ts:39` 期待 `/downgrade|format/`，原因藏在 `.cause`。
@@ -214,8 +285,13 @@ backend、in-memory fake backend「Original JSONL backend required」、legacy-o
 
 ## 待辦順序（下一輪起）
 
-1. 修 P0（deep-JSON）與 P1 #3/#4，各補一個回歸測試。
+1. ~~修 P0（deep-JSON）與 P1 #3/#4，各補一個回歸測試。~~ → round 6 完成（見上）。
 2. 決定 #2 的 API 去留（移除或補參數），同步清掉 15+ 測試的建構子。
+   **round 6 已決定：移除 export。** `createJsonlSessionCoordinator` 沒有 production
+   caller（只有 14 個測試檔），且它建不出可用的 format-14 coordinator；
+   `composeJsonlTaskTransitionCoordinator`（測試經 `test/helpers/composed.ts`）已是
+   唯一合格入口。實作時逐套件把那 14 檔改成 composed helper 並各自驗證
+   （desktop-gateway 3、subagent 1、session-executor 1、jsonl 9）。
 3. A 類測試（建構後 monkeypatch）逐檔改用 pre-bind seam；每檔一次 PR/commit，
    並用本文件的 `test-env` 指令驗證。
 4. B 類 predecessor 語義決策：若 composed 升級 13→14 是正確行為，更新
@@ -236,9 +312,17 @@ node scripts/audit/check-package-boundaries.mjs --gate
 # 自帶隔離環境的套件測試
 node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl test
 node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence test
+# round 6 的回歸點（P0 deep-JSON、P1 #3/#4）
+node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exec vitest run test/managed-native-replay.test.ts test/delete-owned.test.ts
 ```
 
-## 交接：2026-11-05 round 5
+## 交接：2026-11-05 round 6
+
+待辦第 1 項完成（P0 e2e、P1 #3/#4 各有回歸），第 2 項的 API 決策已寫在上方
+（移除 `createJsonlSessionCoordinator`，尚未實作）。工作樹狀態以本節所在的 commit
+為準；下一輪從第 2 項的實作開始，逐套件遷移那 14 個測試檔。
+
+## 交接：2026-11-05 round 5（歷史）
 
 本 session 的上下文已用盡，停止在乾淨的 345541fe（工作樹 clean）。本輪只做狀態驗證：
 全庫 typecheck 在 round 2 為 82 packages exit 0；reachability allowlist 已清到 38 筆、
