@@ -46,6 +46,7 @@ export function captureOriginalColdObservation(coordinator: SessionCoordinator, 
 export function captureOriginalColdBindingObservation(coordinator: SessionCoordinator, cold: import('./coordinator/cold-selected-target.ts').ColdSelectedObservation, binding: import('./coordinator/types.ts').SessionBindingObservation) {
   const original = coldObservationOwners.get(coordinator); if (!original) throw TypeError('Original cold coordinator required'); original.capture(cold); return original.binding(cold.metadata, binding)
 }
+export function hasSelectedSource(coordinator:SessionCoordinator) {return selectedSources.has(coordinator)}
 export function selectedSourceFor(coordinator:SessionCoordinator) {const owner=selectedSources.get(coordinator);if(!owner)throw new TypeError('Original coordinator required');return owner}
 export function inspectSelectedTarget(coordinator:SessionCoordinator,target:object) {const inspect=selectedComposers.get(coordinator)?.targets.get(target);if(!inspect)throw TypeError('Original selected target required');return inspect()}
 export function inspectColdSelectedTarget(coordinator:SessionCoordinator,route:import('./coordinator/selected-results-route.ts').SelectedResultsRoute) {const owner=selectedComposers.get(coordinator);if(!owner)throw TypeError('Original coordinator required');return owner.inspectCold(route)}

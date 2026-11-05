@@ -6,6 +6,7 @@ import { createSession, exportConversationSeed, EMPTY_SEMANTIC_DEPENDENCY_DIGEST
 import { compileSemanticSeed } from '../src/semantic-seed.ts'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
 import { asSessionCoordinator } from '../src/commit/facade.ts'
+import { hasSelectedSource, selectedSourceFor } from '../src/selected-source-owner.ts'
 
 const roots: string[] = []
 const coordinators: Array<ReturnType<typeof createCommitCoordinator>> = []
@@ -25,6 +26,13 @@ function append(session: ReturnType<typeof createSession>, event: Record<string,
 }
 
 describe('commit-log public fork', () => {
+  it('reports the selected-results capability as unavailable', async () => {
+    const { coordinator } = await setup()
+    const facade = asSessionCoordinator(coordinator)
+    expect(hasSelectedSource(facade as never)).toBe(false)
+    expect(() => selectedSourceFor(facade as never)).toThrow(/Original coordinator required/)
+  })
+
   it('creates the fork child through the semantic capture', async () => {
     const { coordinator } = await setup()
     await coordinator.create({ sessionId: 'parent' })

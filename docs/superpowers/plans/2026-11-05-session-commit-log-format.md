@@ -967,6 +967,12 @@ selects the commit-log coordinator when `IH_SESSION_STORE=commit-log` (with the 
 `listStoredSessions` already works through `list`/`profile`/`snapshot`; the artifact mtime falls back to `createdAt` when the
 legacy file is absent. Test: seed an SCL session and list it through `runSessionsCommand`.
 
+## Plan 19 (implemented 2026-11-05): explicit selected-results capability
+
+`hasSelectedSource(coordinator)` is exported (via `internal/selected-source-owner`). The gateway's selected-source acquisition
+and task-child inheritance paths check it and fail with `SELECTED_RESULTS_UNSUPPORTED` ("Selected results are unavailable on
+this session store") instead of the legacy `Original coordinator required` TypeError. SCL reports the capability as absent.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

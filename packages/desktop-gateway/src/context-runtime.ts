@@ -14,7 +14,7 @@ import {originalDeletionPreparationAvailable} from '@i-harness/session-persisten
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
 import {captureTaskChildProject,type TaskChildProjectCapture} from './bootstrap-project.ts'
-import {selectedSourceFor,createSelectedRuntimeCapture,inspectSelectedTarget} from '@i-harness/session-persistence/internal/selected-source-owner'
+import {hasSelectedSource,selectedSourceFor,createSelectedRuntimeCapture,inspectSelectedTarget} from '@i-harness/session-persistence/internal/selected-source-owner'
 import {discoverResultLineage,assertResultLineage,legacyObservationFor} from '../../session-executor/src/lifecycle/result-observation.ts'
 import type {createProjectScopeBroker} from './project-scope.ts'
 import {readSelectedResultsOperation} from '../../session-persistence/src/selected-results-fork-contract.ts'
@@ -137,7 +137,9 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
   }
   async function acquireSelectedSource(sessionId:string) {
     assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');if(!options.retainSelectedProjectRead)throw Error('Selected source unavailable')
-    const coordinator=options.coordinator as SessionCoordinator,original=selectedSourceFor(coordinator)
+    const coordinator=options.coordinator as SessionCoordinator
+    if(!hasSelectedSource(coordinator))throw Object.assign(new Error('Selected results are unavailable on this session store'),{code:'SELECTED_RESULTS_UNSUPPORTED'})
+    const original=selectedSourceFor(coordinator)
     await coordinator.flush(sessionId);assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');const document=await coordinator.openManagedDocument(sessionId);assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved')
     let binding:Awaited<ReturnType<typeof original.acquire>>|undefined,revoked=false
     const witness=original.retain(document,()=>{revoked=true;binding?.revoke()})
@@ -380,6 +382,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
 
     if(association&&(association.hasDependencies||association.inheritedLegacyUnknown)){
       if(!options.retainSelectedProjectRead)throw Error('Original task result source unavailable')
+      if(!hasSelectedSource(options.coordinator as SessionCoordinator))throw Object.assign(new Error('Selected results are unavailable on this session store'),{code:'SELECTED_RESULTS_UNSUPPORTED'})
       const original=selectedSourceFor(options.coordinator as SessionCoordinator)
       let binding:Awaited<ReturnType<typeof original.acquire>>|undefined,project:Awaited<ReturnType<NonNullable<typeof options.retainSelectedProjectRead>>>|undefined
       let retired=false,flight:Promise<void>|undefined,cleanup:ReturnType<typeof original.cleanupForError>
