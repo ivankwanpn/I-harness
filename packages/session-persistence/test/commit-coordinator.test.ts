@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SessionLockConflictError } from '@i-harness/fs-lock'
-import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, append, createSession, exportConversationSeed } from '@i-harness/core-session'
+import { compileSemanticSeed } from '../src/semantic-seed.ts'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
 import { CommitLogNotFoundError } from '@i-harness/session-commit-log'
 
@@ -200,6 +201,54 @@ describe('commit coordinator', () => {
     expect(coordinator.hasLiveOwnership('s1')).toBe(true)
     await coordinator.releaseOwnership('s1')
     expect(coordinator.hasLiveOwnership('s1')).toBe(false)
+  })
+
+  it('creates a child session in one commit and resumes it idempotently', async () => {
+    const { coordinator } = await setup()
+    const source = createSession()
+    append(source, { type: 'user/message', text: 'source' })
+    const exported = exportConversationSeed(source, { kind: 'session', sessionId: 'parent' }, { kind: 'all' })
+    if (exported.kind !== 'seed') throw new Error('seed refused')
+    const request = {
+      invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) },
+      target: { kind: 'new' as const },
+      metadata: {},
+      lineage: { origin: 'fork' as const, parentSession: 'parent' },
+      seed: compileSemanticSeed(exported),
+    }
+    const born = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST })
+    expect(born.id).toBe('target')
+    expect(born.document.view.events.at(-1)?.type).toBe('session/bootstrap')
+    await coordinator.closeManagedDocument('target')
+    const { session } = await coordinator.load('target')
+    expect(session.events[0]?.type).toBe('conversation/seed-manifest')
+    expect(session.events.at(-1)?.type).toBe('session/bootstrap')
+    const again = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST })
+    expect(again.id).toBe('target')
+    await coordinator.closeManagedDocument('target')
+  })
+
+  it('carries the initial admitted input into the birth commit', async () => {
+    const { coordinator } = await setup()
+    const source = createSession()
+    append(source, { type: 'user/message', text: 'source' })
+    const exported = exportConversationSeed(source, { kind: 'session', sessionId: 'parent' }, { kind: 'all' })
+    if (exported.kind !== 'seed') throw new Error('seed refused')
+    const request = {
+      invocation: { version: 1 as const, operationId: 'op2', targetSessionId: 'child', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'b'.repeat(64) },
+      target: { kind: 'new' as const },
+      metadata: {},
+      lineage: { origin: 'subagent' as const, parentSession: 'parent', delegationDepth: 1, subagentProtocolVersion: 1 as const },
+      seed: compileSemanticSeed(exported),
+      initial: { inputId: 'initial', text: 'do task once', parentSessionId: 'parent', startedAt: 100, expiresAt: 200 },
+    }
+    const born = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST })
+    expect(born.document.view.events.at(-1)).toMatchObject({ type: 'agent/input/admitted', inputId: 'initial' })
+    await coordinator.closeManagedDocument('child')
+    const { session } = await coordinator.load('child')
+    expect(session.header).toMatchObject({ parentSession: 'parent', seedLength: request.seed.records.length, delegationDepth: 1 })
+    const admitted = session.events.filter(event => event.type === 'agent/input/admitted')
+    expect(admitted).toHaveLength(1)
   })
 
   it('routes appends through the retained owned handle', async () => {

@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 227（SCL 單一 commit 出生）**：`createChildSession` 以 `buildBootstrapHeader` 產生 header＋manifest digest，
+> 把 seed records、`session/bootstrap`、initial `agent/input/admitted` 寫成**同一個 commit**；以 `semanticSeed.operationId` 冪等，
+> 父會話存在時先寫 `child:<op>` intent、完成後 settle。17 個 coordinator 測試全綠（fork 子、subagent 子＋initial input）。
 > **round 226（SCL 刪除／所有權查詢）**：`deleteOwnedSession`（先寫 `deletion:<id>` receipt，再原子 rename 到 `.trash-*`，
 > 最後 best-effort 移除）、`deletionReceipt`、`onDocumentDeleted`、`ownerOf`/`hasLiveOwnership`、`enqueue` shim。
 > 15 個 coordinator 測試全綠（含刪除後重建同 id）。

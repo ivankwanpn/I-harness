@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, stringifyJsonData, type Session, type SessionEvent } from '@i-harness/core-session'
-import { COMMIT_LOG_GENERATION, createCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode } from '@i-harness/session-commit-log'
+import { COMMIT_LOG_GENERATION, CommitLogConflictError, createCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode } from '@i-harness/session-commit-log'
 import { readdir, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -8,6 +8,8 @@ import { buildSession, migrate, preflightSessionFormat } from '../format/validat
 import type { SessionMeta } from '../coordinator/types.ts'
 import type { LegacySessionStore } from './legacy.ts'
 import type { ManagedDocument } from '../coordinator/fact-types.ts'
+import { bootstrapManifest, buildBootstrapHeader, captureBootstrapRequest } from '../coordinator/bootstrap-header.ts'
+import type { BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import { openCommitManagedDocument } from './managed.ts'
 
 /**
@@ -43,6 +45,7 @@ export class CommitSessionDeletedError extends Error {
 export type CommitCoordinator = {
   readonly storageRoot: string
   create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
+  createChildSession(request: BootstrapRequest, options: { closure: string }): Promise<{ id: string; document: ManagedDocument }>
   fork(parentId: string, options?: ForkOptions): Promise<{ id: string }>
   beginIntent(sessionId: string, id: string, intent: CommitIntent): Promise<void>
   endIntent(sessionId: string, id: string, outcome: 'committed' | 'failed'): Promise<void>
@@ -177,6 +180,42 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return { id: sessionId }
     },
     async load(sessionId) { return { session: await readSession(sessionId) } },
+    async createChildSession(request, options) {
+      const captured = captureBootstrapRequest(request)
+      const { stage, initial } = buildBootstrapHeader(captured)
+      const id = captured.invocation.targetSessionId
+      const existing = await open(id, 'read').then(async (log) => { try { return log.header() } finally { await log.close() } }, () => undefined)
+      if (existing) {
+        const seed = (existing as { semanticSeed?: { operationId?: string } }).semanticSeed
+        if (seed?.operationId !== captured.invocation.operationId) throw new CommitLogConflictError(id)
+        return { id, document: await this.openManagedDocument(id) }
+      }
+      const header = JSON.parse(Buffer.from(stage.headerBytes).toString('utf8')) as Record<string, unknown>
+      const seedLength = stage.seed.seedLength
+      const completion = {
+        type: 'session/bootstrap' as const, version: 1 as const, seq: seedLength,
+        operationId: captured.invocation.operationId,
+        manifestDigest: bootstrapManifest(stage, captured.seed.records),
+        dependencyClosureDigest: options.closure,
+        seedLength,
+        ...(stage.initial ? { initialInputId: stage.initial.inputId, initialStartedAt: stage.initial.startedAt, initialExpiresAt: stage.initial.expiresAt } : {}),
+      }
+      const entries = [
+        ...captured.seed.records.map(event => ({ ...event })),
+        completion as unknown as SessionEvent,
+        ...(initial ? [{ ...initial, seq: seedLength + 1 } as SessionEvent] : []),
+      ]
+      const parent = captured.lineage.parentSession
+      const intentId = `child:${captured.invocation.operationId}`
+      let parentIntent = false
+      if (parent) {
+        parentIntent = await this.beginIntent(parent, intentId, { kind: 'child-birth', childId: id, requestDigest: captured.invocation.requestDigest }).then(() => true, () => false)
+      }
+      const log = await createCommitLog(logOptions(id), { header, entries })
+      await log.close()
+      if (parentIntent && parent) await this.endIntent(parent, intentId, 'committed').catch(() => {})
+      return { id, document: await this.openManagedDocument(id) }
+    },
     async fork(parentId, options = {}) {
       const parent = await readState(parentId)
       const cut = options.cut ?? parent.events.length

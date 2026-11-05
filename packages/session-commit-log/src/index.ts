@@ -3,5 +3,5 @@
  * exported; the format/scanner/fold modules stay internal until they have a
  * consumer (an unconsumed export fails the reachability gate).
  */
-export { COMMIT_LOG_GENERATION, CommitLogNotFoundError, createCommitLog, openCommitLog } from './store.ts'
+export { COMMIT_LOG_GENERATION, CommitLogConflictError, CommitLogNotFoundError, createCommitLog, openCommitLog } from './store.ts'
 export type { CommitLog, CommitLogMode } from './store.ts'

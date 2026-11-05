@@ -636,6 +636,19 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
 - `ownerOf`/`hasLiveOwnership` report whether a committed handle (and therefore the lease) is retained.
 - `enqueue` is a compatibility shim that appends synchronously and reports failures through the coordinator's normal rejection.
 
+## Plan 3e (implemented 2026-11-05): one-commit child birth
+
+- `createChildSession(request, { closure })` builds the exact session header with `buildBootstrapHeader` (the same
+  `semanticSeed`/manifest digest the stage-based path produced) and publishes header + seed records + `session/bootstrap`
+  + the initial `agent/input/admitted` event as **one commit**. No stage file, no header promotion, no capture reservation,
+  no adoption: the child either exists complete or not at all.
+- Idempotency is by the header's `semanticSeed.operationId`: a repeat call with the same operation returns the existing
+  child (and its managed document) instead of a conflict; a different operation on the same target refuses.
+- When the request carries `lineage.parentSession`, a `child:<operationId>` intent is written to the parent before the
+  child commit and settled after it, so a crash leaves a durable intent the parent can reconcile.
+- Tests: a forked child (seed manifest first, bootstrap completion last) and a subagent child with the initial admitted
+  input (lineage header preserved, exactly one admitted event).
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
