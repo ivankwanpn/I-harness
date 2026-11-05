@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 289（prefix 增量快取）**：`commitPrefix` 的 `bodyBytes` 改為每個 append 增量累加並以 CommitLog 身份快取，
+> 避免每次 commit 重新序列化整段歷史；值與舊算法完全一致，26 個 commit 測試全綠。
 > **round 288（shell exec 與 execution read）**：`shell` echo 在 SCL 上可執行並提交結果，但 `execution/read` 是 live 視圖，
 > 冷 session 回空 cells（非 SCL 問題）。artifact 斷言改以工具名稱挑選 `read` 結果。
 > **round 287（task reconcile）**：`desktop/session/tasks/integrity` 的 `reconcile:true` 在 SCL host 上通過（tool 執行後）。

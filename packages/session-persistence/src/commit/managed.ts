@@ -8,12 +8,24 @@ import type { Ownership } from '../coordinator/ownership.ts'
 import type { PersistenceBackend, SessionMeta, CoordinatorOptions } from '../coordinator/types.ts'
 import { buildSession, preflightSessionFormat } from '../format/validation.ts'
 
-/** Prefix derivation shared by the fact-batch adapter and the document's start. */
+/** Prefix derivation shared by the fact-batch adapter and the document's start.
+ *  `bodyBytes` is accumulated per appended event and cached by log identity, so a
+ *  long session does not re-serialize its whole history on every commit. */
+const prefixCache = new WeakMap<CommitLog, { eventCount: number; bodyBytes: number; prefixDigest: string }>()
 export function commitPrefix(log: CommitLog): { eventCount: number; bodyBytes: number; prefixDigest: string } {
   const view = log.view()
+  const eventCount = view.entries.length
+  const cached = prefixCache.get(log)
   const last = [...view.batches.values()].at(-1)
   const digest = last ?? createHash('sha256').update(stringifyJsonData(log.header()) ?? '{}').digest('hex')
-  return { eventCount: view.entries.length, bodyBytes: Buffer.byteLength(stringifyJsonData(view.entries) ?? '[]'), prefixDigest: digest }
+  if (cached && cached.eventCount === eventCount && cached.prefixDigest === digest) return cached
+  let bodyBytes = cached && cached.eventCount < eventCount ? cached.bodyBytes : 0
+  for (let index = cached && cached.eventCount < eventCount ? cached.eventCount : 0; index < eventCount; index++) {
+    bodyBytes += Buffer.byteLength(stringifyJsonData(view.entries[index]) ?? 'null')
+  }
+  const next = { eventCount, bodyBytes, prefixDigest: digest }
+  prefixCache.set(log, next)
+  return next
 }
 
 function receipt(owner: { sessionId: string; incarnation: string }, key: ReturnType<typeof decodeFactBatch>['key'], prefixDigest: string) {

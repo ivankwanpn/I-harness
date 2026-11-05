@@ -1162,6 +1162,14 @@ Note: a `shell` tool call (echo) executes and commits its tool/result on SCL, bu
 `{live:false, cells:[]}` after the turn — the execution projection is a live-runtime view, not a log projection, so it is empty for
 a cold session. The artifact assertion in the turn test now selects the `read` result by tool name so a later tool cannot shadow it.
 
+
+## Plan 43 (implemented 2026-11-06): incremental journal prefix
+
+`commitPrefix` re-serialized the entire event history to compute `bodyBytes` on every call, which is O(n) per commit (and the
+execution fence reads the prefix on every write). The value is now accumulated per appended event and cached by `CommitLog`
+identity, so a commit only serializes the events it adds while keeping the exact same `{eventCount, bodyBytes, prefixDigest}`.
+The commit suites (26 tests) stay green; SCL host flows use the same prefix on every write.
+
 ## Plan 42 (implemented 2026-11-06): task projection reconcile on SCL
 
 `host-commit-log-turn.test.ts` also calls `desktop/session/tasks/integrity` with `reconcile: true` after tool execution, exercising the
