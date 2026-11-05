@@ -180,6 +180,11 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 203（Q1 再縮小）**：`openOwnedTask`（backend-factory.ts:608-624）只包一個
+> **唯讀** observation（`opener` 只接受 `'r'|'r+'`，見 task-document-observation.ts:12），
+> 所以建立不是來自 open/observe；剩下的嫌疑是 transition 在 recovery 之後仍走到
+> `settleResources()`／`initializeTask` 其中之一。下一輪用「在 writeFile/open('w') 上掛
+> stack」的方式一次釘死，不要在猜測上再耗。
 > **round 202（Q1 定位）**：eager 建立的入口在
 > `session-persistence/src/coordinator/task-document-transition.ts:147-150` 的 `ensureTask()`：
 > `task = open(scope)` 之後才 `observeTask()`，而 recovery（`recover && !recoveryDone`）在
