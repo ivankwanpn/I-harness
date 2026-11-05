@@ -20,6 +20,36 @@
       "source": "packages/llm-seam/README.md"
     },
     {
+      "key": "unused-export\t@i-harness/exec#JobOutputObservation",
+      "reason": "Public observation shape returned by the exported observeJobOutput contract; session-executor's retained-background-summary test names it as the consumer, and no production site re-declares it.",
+      "dated": "2026-11-05",
+      "source": "packages/exec/src/index.ts#observeJobOutput"
+    },
+    {
+      "key": "unused-export\t@i-harness/exec#NativeJobKillSelector",
+      "reason": "Public selector named by the exported killJob contract; exec's native-job-kill test is the consumer. Removing it would force the test to reach into an internal module for a documented parameter type.",
+      "dated": "2026-11-05",
+      "source": "packages/exec/src/index.ts#killJob"
+    },
+    {
+      "key": "unused-export\t@i-harness/core-tools#ToolPrepareIdentity",
+      "reason": "Prepared-tool identity named by the exported ToolRegistry surface; the session-executor child-instruction-consumers test is the only importer. Kept public because registry consumers type prepared identities.",
+      "dated": "2026-11-05",
+      "source": "packages/core-tools/src/types.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/runtime-context#PreparedRuntimeContextReader",
+      "reason": "Parameter type of the exported createPreparedRuntimeContext factory; it cannot be made private without a private-name error on that public signature.",
+      "dated": "2026-11-05",
+      "source": "packages/runtime-context/src/index.ts#createPreparedRuntimeContext"
+    },
+    {
+      "key": "unused-export\t@i-harness/token-meter#CHARS_PER_TOKEN",
+      "reason": "Documented estimate constant used by the package's own estimator and the estimate test; exposed so callers can reason about the same heuristic.",
+      "dated": "2026-11-05",
+      "source": "packages/token-meter/src/estimate.ts"
+    },
+    {
       "key": "unused-export\t@i-harness/exec#ExecutionLaunch",
       "reason": "Intentional public type: ExecutionSupervisor.launch input names the trusted process specification, policy, backend and validation contract.",
       "dated": "2026-10-08",

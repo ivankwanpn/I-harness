@@ -355,7 +355,10 @@ type re-export：`session-executor`（`PendingRewindIntent`、`RewindIntentV1`�
 單引號一律漏報。把 `EVENT_LITERAL` 與 `isProducerLine` 改成引號無關 → 該筆 false positive
 消失，**26 NEW / 389 rows**（其他既有 producerless 判定不受影響）。再移除
 `workflow#WorkflowLoopFailure` 與 `session-executor#ManagedRuntimeLifecycle` 兩個
-multi-line export list 內的 type 條目 → **24 NEW / 387 rows**。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+multi-line export list 內的 type 條目 → **24 NEW / 387 rows**。接著把 5 個有公開簽名／
+文件依據的契約加 allowlist（`exec#JobOutputObservation`、`exec#NativeJobKillSelector`、
+`core-tools#ToolPrepareIdentity`、`runtime-context#PreparedRuntimeContextReader`、
+`token-meter#CHARS_PER_TOKEN`，皆附 dated reason/source）→ **19 NEW**（無 inert 警告）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---
