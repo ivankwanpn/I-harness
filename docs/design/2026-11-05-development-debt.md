@@ -540,6 +540,11 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 98 實測欄位**（`closeOne`，`bootstrap-stage-swap`）：
   **round 99 排除**：在 `startInner` 的 flight 上「outcome 為 ready／already-ready 就清
   **round 102**：`trackBootstrap`（bootstrap.ts:128–148）只負責 process latch 的 witness，
+  **round 103**：`withBootstrapResume`（binding-observation.ts:293–299）只是 capture＋
+  `bootstrapMutation(run)` 的薄包裝，不合成 outcome；所以 `already-ready` 仍應出自
+  `start`→`adopt`。與 `document:false` 的矛盾未解，下一步只能做執行期追蹤：在
+  bootstrap.ts:350（adopt 的 already-ready）與 :561（remap）各印一行（entry 是否有 document、
+  是否為 `documents.get(id)`），跑 `task-transition-bootstrap-stage-swap` 一次即可定位。
   不碰 entry 的 `headerUnknown`；`attach`（managed-documents.ts:37）對已有 document 的 entry
   直接回傳，不會換 entry；而 `adopt`（唯一會產生帶 document 的 `already-ready` 的地方）
   必會 `attach`，所以 round 98 印到的 `document:false` 與「第二次 resume 回 already-ready」矛盾。
