@@ -539,6 +539,11 @@ round 115：`code-retrieval` **4 檔 / 54 tests 全綠**；`code-mode` **10 檔�
   **round 117 已遷移**：8 個 code-mode 測試檔改用 composed 建構子 → **9 檔紅 / 19 檔綠，
   **round 121 遷移配方**（給下一輪照做）：測試目前是 `backend.appendOwnedBatch = async (...args)=>…`
   **round 122 首例完成**：`broker.test.ts` 的 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch` →
+  **round 123 卡點**：`cell-output-owner-fixture.ts` 的後續掛鉤（line 115–134）依賴執行期狀態
+  （`batch`／`receipt`／`target` 由測試參數決定），無法直接搬進建構選項；同類測試還有
+  `instruction-start-recovery`、`output-source-recovery`。這批需要「建構後的合法掛鉤 API」
+  （例如 `backend.hookOwnedBatch(fn)` 重新 bind guard）或把 fixture 改成在建構前先確定 hook 的
+  形式——屬設計決策，不是機械遷移。`broker.test.ts` 之所以能遷是因為它的 hook 是靜態的。
   **11/11 全綠**（原本 `PROCESS_READ_UNAVAILABLE`）。其餘檔案照同一模式處理。
   與 `backend.reconcileOwnedBatch = …` 的建構後賦值。改法是：把包裹邏輯改寫成
   `createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { …原邏輯，用 append 當原方法… },
