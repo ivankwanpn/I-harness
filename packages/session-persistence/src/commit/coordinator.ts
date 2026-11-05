@@ -231,11 +231,12 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     }
   }
   const getDocumentOf = async (key: string): Promise<unknown | undefined> => {
+    const legacyDocument = () => options.legacy?.readDocument ? options.legacy.readDocument(key) : undefined
     let log: CommitLog
-    try { log = await open(DOCUMENT_SESSION, 'read') } catch (error) { if (error instanceof CommitLogNotFoundError) return undefined; throw error }
+    try { log = await open(DOCUMENT_SESSION, 'read') } catch (error) { if (error instanceof CommitLogNotFoundError) return legacyDocument(); throw error }
     try {
       const side = log.view().documents.get(key)
-      if (!side) return undefined
+      if (!side) return legacyDocument()
       return JSON.parse(new TextDecoder().decode(await log.readSidecar(side.digest))) as unknown
     } finally { await log.close() }
   }

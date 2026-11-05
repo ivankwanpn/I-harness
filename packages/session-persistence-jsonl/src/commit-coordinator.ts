@@ -14,6 +14,7 @@ export function createJsonlCommitCoordinator(root: string, options: Omit<CommitC
     legacy: {
       read: sessionId => backend.read(sessionId),
       list: () => backend.list(),
+      readDocument: key => backend.getDocument(key),
     },
   })
 }

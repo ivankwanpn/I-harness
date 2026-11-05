@@ -23,6 +23,19 @@ async function legacySession(base: string): Promise<string> {
 }
 
 describe('jsonl commit coordinator', () => {
+  it('reads a legacy task document through the commit-log store', async () => {
+    const base = await root()
+    const backend = createJsonlBackend(base)
+    const document = { formatVersion: 2, tasks: [], notifications: [] }
+    await backend.putDocument('task-legacy', document)
+    const coordinator = createJsonlCommitCoordinator(base)
+    try {
+      expect(await coordinator.getDocument('task-legacy')).toEqual(document)
+      await coordinator.putDocument('task-legacy', { formatVersion: 2, tasks: [{ id: 't1' }], notifications: [] })
+      expect(await coordinator.getDocument('task-legacy')).toMatchObject({ tasks: [{ id: 't1' }] })
+    } finally { await coordinator.close() }
+  })
+
   it('reads a legacy session and migrates it on write without touching the old bytes', async () => {
     const base = await root()
     const legacyPath = await legacySession(base)

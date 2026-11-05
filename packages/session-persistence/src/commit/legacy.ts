@@ -8,4 +8,6 @@ export type LegacySession = { readonly version: number; readonly events: readonl
 export type LegacySessionStore = {
   read(sessionId: string): Promise<LegacySession>
   list(): Promise<string[]>
+  /** Read-through for documents that predate the commit-log store. */
+  readDocument?(key: string): Promise<unknown | undefined>
 }

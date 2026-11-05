@@ -985,6 +985,12 @@ the current host with `USAGE_UPGRADE_REQUIRED` regardless of store; usage reads 
 navigation state, and pins the idempotent re-bind (a bind without a project id keeps the existing binding — the gateway's
 `bind` has no unbind path). This exercises the binding-document write/read path on SCL.
 
+## Plan 22 (implemented 2026-11-05): legacy document read-through
+
+Documents written before the commit-log store (`task-*.doc.jsonl`, project bindings, …) are no longer invisible after switching:
+`LegacySessionStore.readDocument` is optional and the coordinator falls back to it when the document log has no side or does not
+exist yet. The JSONL composition supplies `backend.getDocument`. Once a key is written through the commit log its sidecar wins.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
