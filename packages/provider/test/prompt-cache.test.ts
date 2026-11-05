@@ -121,8 +121,10 @@ describe("explicit Anthropic prompt cache route", () => {
 
   it("does not add a marker to signed or redacted assistant thinking", async () => {
     const thinkingBlocks: ProviderThinkingBlock[] = [{ type: "thinking", thinking: "saved", signature: "signed" }, { type: "redacted_thinking", data: "opaque" }]
-    const body = await capture(profile("anthropic-messages", { mode: "automatic" }), { systemPrompt: "", tools: [], messages: [{ role: "assistant", content: "", thinkingBlocks, toolCalls: [{ id: "c", name: "read", args: {} }] }] })
-    expect(body.messages[0].content).toEqual([...thinkingBlocks, { type: "tool_use", id: "c", name: "read", input: {} }])
+    // Thinking blocks only follow a user turn; the assistant reply carries them
+    // together with its tool call so the request is an ordered conversation.
+    const body = await capture(profile("anthropic-messages", { mode: "automatic" }), { systemPrompt: "", tools: [], messages: [{ role: "user", content: "read it" }, { role: "assistant", content: "", thinkingBlocks, toolCalls: [{ id: "c", name: "read", args: {} }] }, { role: "tool", toolCallId: "c", content: "ok" }] })
+    expect(body.messages[1].content).toEqual([...thinkingBlocks, { type: "tool_use", id: "c", name: "read", input: {} }])
   })
 })
 
@@ -165,16 +167,16 @@ describe("explicit Responses prompt cache route", () => {
       prompt_cache_options: { mode: "explicit", ttl: "30m" },
       input: [
         { role: "developer", content: [{ type: "input_text", text: "stable", prompt_cache_breakpoint: { mode: "explicit" } }] },
+        { type: "function_call", call_id: "c", name: "read", arguments: '{"prompt_cache_breakpoint":"argument data"}' },
         { type: "function_call_output", call_id: "c", output: [{ type: "input_text", text: '{"prompt_cache_breakpoint":"tool data"}', prompt_cache_breakpoint: { mode: "explicit" } }] },
-        { type: "function_call", call_id: "d", name: "read", arguments: '{"prompt_cache_breakpoint":"argument data"}' },
       ],
     }
     const before = JSON.stringify(options)
     const body = await capture(profile("openai-responses", { mode: "automatic" }), { ...request, promptCache: { mode: "off" } }, options)
     expect(body.input).toEqual([
       { role: "developer", content: [{ type: "input_text", text: "stable" }] },
+      { type: "function_call", call_id: "c", name: "read", arguments: '{"prompt_cache_breakpoint":"argument data"}' },
       { type: "function_call_output", call_id: "c", output: [{ type: "input_text", text: '{"prompt_cache_breakpoint":"tool data"}' }] },
-      { type: "function_call", call_id: "d", name: "read", arguments: '{"prompt_cache_breakpoint":"argument data"}' },
     ])
     expect(JSON.stringify(options)).toBe(before)
   })
