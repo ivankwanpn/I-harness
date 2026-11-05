@@ -6,8 +6,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, expect, it } from 'vitest'
 import { append, createSession, toJSONL, projectConversation } from '@i-harness/core-session'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { extractFormat10Predecessor } from './helpers/format10-predecessor.ts'
 import { extractCurrentPredecessor, provisionPredecessorLock } from './helpers/current-context-predecessors.ts'
 
@@ -65,17 +66,28 @@ await c.close();console.log(JSON.stringify({request,kind:outcome.kind,reason:out
   expect(original.kind, JSON.stringify(original.reason)).toBe(wasReady ? 'ready' : 'blocked')
   const path = join(store, 'target.jsonl'), before = await readFile(path), stageName = (await readdir(store)).find(name => name.endsWith('.stage'))!, stage = await readFile(join(store, stageName))
   expect(JSON.parse(before.subarray(0, before.indexOf(10)).toString()).formatVersion).toBe(11)
-  const backend = createJsonlBackend(store), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let targetAvailable = true
+  let cutUpgrade = mode === 'upgrade-response-lost'
+  let missingUpgrade = false
+  // The upgrade policy is bound before the canonical-path guard snapshots the
+  // backend descriptors; patching upgradeSessionFormat afterwards is refused.
+  const backend = createJsonlBackend(store, { wrap: b => {
+    const actualUpgrade = b.upgradeSessionFormat!.bind(b)
+    b.upgradeSessionFormat = async (...args) => {
+      if (missingUpgrade) throw new Error('upgrade capability unavailable')
+      const result = await actualUpgrade(...args)
+      if (mode === 'upgrade-target-revoked') targetAvailable = false
+      if (cutUpgrade) { cutUpgrade = false; throw Error('lost upgrade response') }
+      return result
+    }
+  } })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const pinRequests: unknown[] = []
   const pin = async (input: unknown) => { pinRequests.push(input); return { kind: 'confirmed' as const, closureDigest: 'f'.repeat(64) } }
-  let targetAvailable = true
   const guards = { assertCurrent() {}, dependencies: { confirm: pin, reconcile: pin }, targetPreparation: { async confirm() { return { kind: 'confirmed' as const } }, async reconcile() { return { kind: 'confirmed' as const } }, assertTargetCurrent() { if (!targetAvailable) throw Error('target changed') } } }
   if (mode === 'stage-only') await rm(path)
   if (mode === 'partial-header') await writeFile(path, before.subarray(0, 23))
   const cutBytes = mode === 'stage-only' ? undefined : await readFile(path)
-  const actualUpgrade = backend.upgradeSessionFormat!
-  let cutUpgrade = mode === 'upgrade-response-lost'
-  backend.upgradeSessionFormat = async (...args) => { const result = await actualUpgrade(...args); if (mode === 'upgrade-target-revoked') targetAvailable = false; if (cutUpgrade) { cutUpgrade = false; throw Error('lost upgrade response') } return result }
   try {
     expect((await coordinator.inspectBootstrap(original.request.invocation)).kind).toBe(wasReady ? 'ready' : 'reserved')
     if (cutBytes) expect(await readFile(path)).toEqual(cutBytes)
@@ -88,17 +100,17 @@ await c.close();console.log(JSON.stringify({request,kind:outcome.kind,reason:out
       changed.originalTarget = { kind: 'existing-empty', expectedHeaderDigest: 'b'.repeat(64), expectedPrefix: { eventCount: 0, bodyBytes: 0, prefixDigest: changed.headerBase.journal.legacyPrefixDigest } }
       const { canonicalJsonData } = await import('@i-harness/core-session')
       await writeFile(join(store, stageName), canonicalJsonData(changed) + '\n')
-      await expect(backend.upgradeSessionFormat!('target', 11, 12)).rejects.toThrow('manifest')
+      await expect(backend.upgradeSessionFormat!('target', 11, CURRENT_FORMAT_VERSION)).rejects.toThrow('manifest')
       expect(await readFile(path)).toEqual(before)
       await writeFile(join(store, stageName), stage)
     }
     if (mode === 'unsupported-upgrade') {
-      backend.upgradeSessionFormat = undefined
+      missingUpgrade = true
       expect((await coordinator.resumeSemanticTarget(original.request.invocation, guards, original.request)).kind).toBe('blocked')
       expect(await readFile(path)).toEqual(before)
-      backend.upgradeSessionFormat = actualUpgrade
+      missingUpgrade = false
     }
-    if (mode === 'direct-upgrade') await backend.upgradeSessionFormat!('target', 11, 12)
+    if (mode === 'direct-upgrade') await backend.upgradeSessionFormat!('target', 11, CURRENT_FORMAT_VERSION)
     if (mode === 'upgrade-response-lost' || mode === 'upgrade-target-revoked') {
       expect((await coordinator.resumeSemanticTarget(original.request.invocation, guards, original.request)).kind).toBe('blocked')
       expect(await readFile(join(store, stageName))).toEqual(stage)
@@ -112,7 +124,7 @@ await c.close();console.log(JSON.stringify({request,kind:outcome.kind,reason:out
     if (original.receipt) expect(resumed.receipt.completion.key).toEqual(original.receipt.completion.key)
     expect(await readFile(join(store, stageName))).toEqual(stage)
     const upgraded = await readFile(path), header = JSON.parse(upgraded.subarray(0, upgraded.indexOf(10)).toString())
-    expect(header.formatVersion).toBe(12)
+    expect(header.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(header.semanticSeed).toEqual(JSON.parse(before.subarray(0, before.indexOf(10)).toString()).semanticSeed)
     expect(resumed.receipt.dependencyClosureDigest).toBe('f'.repeat(64))
     expect(pinRequests.length).toBeGreaterThan(0)
