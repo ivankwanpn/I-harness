@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import { append, createSession, deriveMessages, type SessionEvent } from '@i-harness/core-session'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { captureContextSnapshot } from '../../context-engine/src/index.ts'
-import { createSessionCoordinator, ownedContextReadiness, remapConversationSeed, forkSession } from '../src/index.ts'
+import { ownedContextReadiness, remapConversationSeed, forkSession } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 const roots: string[] = [], d = 'a'.repeat(64)
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 const native = { kind: 'bedrock', model: 'fixture', reasoningBlocks: [{ reasoningText: { text: 'plan' } }], contentOrder: [{ kind: 'reasoning', index: 0 }, { kind: 'text', text: 'answer' }], producerWitness: { version: 1, messagesPrefixId: d, inputSurfaceId: d, callsId: d, callCount: 0 } } as const

@@ -6,7 +6,7 @@
 // sandbox/mode), so the shape asserted here is a LOAD ROUND-TRIP.
 import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

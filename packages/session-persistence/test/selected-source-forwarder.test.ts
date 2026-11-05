@@ -2,7 +2,7 @@ import { it,expect } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { selectedSourceFor } from '../src/selected-source-owner.ts'
 it('uses the original coordinator binding and managed witness and rejects copied coordinators',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'source-forward-')),coordinator=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})

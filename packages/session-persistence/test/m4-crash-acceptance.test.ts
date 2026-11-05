@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { createSessionCoordinator } from "../src/index.ts"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 
 // M4's ACCEPTANCE, and it is a spawn test on purpose. The roadmap's completion
 // definition: "在工具呼叫中途殺掉行程，斷言續行的 session 到達一個已記錄且正確的

@@ -35,7 +35,7 @@
  */
 
 import { mkdirSync } from "node:fs"
-import { createSessionCoordinator } from "../../src/index.ts"
+import { createSessionCoordinator } from "./composed.ts"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { SessionEvent } from "@i-harness/core-session"
 

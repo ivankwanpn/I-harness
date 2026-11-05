@@ -1,6 +1,6 @@
 import { expect, it } from "vitest"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

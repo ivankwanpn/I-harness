@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { append, createSession, deriveMessages } from '@i-harness/core-session'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator, forkSession } from '../src/index.ts'
+import { forkSession } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 
 // FC04: semantic records require the actual persisted readiness header.
 it('fork archives only the current summary and typed tail, without consumed proof bodies', async () => {

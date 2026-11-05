@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 
 it('retains the original cold lock until the last shared inspector releases it', async () => {
   const root = await mkdtemp(join(tmpdir(), 'inspector-owner-'))

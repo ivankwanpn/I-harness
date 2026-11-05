@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest"
 import { append, createSession, deriveMessages, rewindCuts, toJSONL, type SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
-  createSessionCoordinator,
   forkSession,
   remapSeedEvent,
 } from "../src/index.ts"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 // The unrelated legacy remap helper keeps its own physical-prefix controls.
 import { completedTurnPrefix } from "../src/fork.ts"
 

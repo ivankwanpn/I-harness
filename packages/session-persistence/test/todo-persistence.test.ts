@@ -1,7 +1,7 @@
 // 仿 coordinator.test.ts 的 team event round-trip：registerEventType 於 module
 // init 已註冊，load gate（guardIgnorable）需放行 todo/write 且不明文 drop。
 import { describe, expect, it } from "vitest"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

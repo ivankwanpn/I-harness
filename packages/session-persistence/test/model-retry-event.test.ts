@@ -37,7 +37,7 @@
 // record of the retry a session actually went through. Registering keeps it.
 import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { createFactCapacity } from '../src/coordinator/fact-capacity.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 
