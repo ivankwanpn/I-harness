@@ -937,6 +937,12 @@ bindings, ownership batch ledgers and the JSONL journal/artifact paths.
 - Test: issue a reference for an existing session, `assertCurrent`/`metadata`/`binding`/`withRead`, then `release` and verify
   the reference is revoked.
 
+## Plan 15 (implemented 2026-11-05): execution surface events on SCL
+
+With retained bindings available, the gateway advertises `desktop-surface-events: ['1']` on SCL and the private execution
+observation can hold leases. `host-commit-log-surface.test.ts` subscribes (`desktop/surface/subscribe`), takes a snapshot
+(`desktop/surface/snapshot` with the lease epoch) and unsubscribes through the real host.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
