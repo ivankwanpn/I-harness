@@ -529,6 +529,7 @@ round 90：`settings` **18 檔 / 230 tests 全綠**、`plugin-registry` **12 檔
 round 91：`usage-stats` **10 檔 / 88 tests 全綠**、`mcp-client` **17 檔 / 109 tests 全綠**。
 round 92：`terminal` **8 檔全綠，57 passed / 2 skipped**（第一次跑有 1 個 flaky 紅，重跑全綠）；
 round 93：`fs` **15 檔 / 113 tests 全綠**、`shell` **11 檔 / 93 tests 全綠**。
+round 119：`fs-search` **5 檔 / 51 tests 全綠**、`fs-watch` **5 檔 / 69 tests 全綠**。
 round 94：`jobs` **1 檔 / 5 tests 全綠**、`workflow` **6 檔 / 66 tests 全綠**。
 round 95：`lsp` **6 檔 / 94 tests 全綠**、`media` **3 檔 / 15 tests 全綠**。
 round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot read properties of undefined
