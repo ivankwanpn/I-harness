@@ -1,5 +1,5 @@
 import { createSessionCoordinatorCore } from './coordinator-factory.ts'
-export { captureBootstrapRoute, captureBootstrapCaptureRoute, childBootstrapPathKey, routeInvocation, routeForReservation, encodeOwnedCaptureReservation, parseOwnedCaptureReservation, validateOwnedCaptureStage, validateChildCaptureStage } from './coordinator/bootstrap-route.ts'
+export { captureBootstrapRoute, captureBootstrapCaptureRoute, childBootstrapPathKey, routeInvocation, routeForReservation, encodeOwnedCaptureReservation, parseOwnedCaptureReservation, validateOwnedCaptureStage } from './coordinator/bootstrap-route.ts'
 export type { BootstrapRoute, BootstrapCaptureRoute, BootstrapRouteBackend } from './coordinator/bootstrap-route.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from "./coordinator/types.ts"
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"

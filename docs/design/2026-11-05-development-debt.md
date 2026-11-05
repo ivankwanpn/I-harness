@@ -365,7 +365,9 @@ multi-line export list 內的 type 條目 → **24 NEW / 387 rows**。接著把 
 再移除 `workflow#reserveWorkflowIn`（測試本來就從 `src/runner.ts` 直接 import）
 → **16 NEW / 384 rows**（runner-lifecycle 13/13 綠）。再把 `settings#previewLegacyInstructionImport`
 的唯一測試 consumer 改成從 `src/storage/instruction-migration.ts` import，入口不 export
-→ **15 NEW / 383 rows**（instructions 44/44 綠）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+→ **15 NEW / 383 rows**（instructions 44/44 綠）。再移除 `session-persistence` 入口的
+`validateChildCaptureStage`（測試本來就從 `coordinator/bootstrap-route.ts` 直接 import）
+→ **14 NEW / 382 rows**。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---
