@@ -10,9 +10,11 @@
 |---|---|
 | store（append-only commit log、prefix 鏈、flock writer lease、sidecar、GC、deletion commit point） | `session-commit-log` 9 檔 / 38 tests（format、scanner、fold、store、crash、scan-cache、benchmark、multiprocess-lock、fold-property） |
 | facade／coordinator（create、load、list、profile、snapshot、append、documents、delete、fork、birth、intent、ownership、retained references） | `session-persistence` commit 系列 10 檔 / 38 tests |
-| desktop host（create、prompt turn、model switch、tool call、artifact retention、result page 讀取與分頁、execution/tasks/processes 讀取、task reconcile、schedule CRUD、surface subscribe/snapshot/changed、management rename/archive/restore/reload/navigation/batch delete/batch move、project bind、auto title、compaction E2E、cold control 錯誤） | `desktop-gateway` host SCL 13 檔 / 14 tests |
+| desktop host（create、prompt turn、model switch、tool call、artifact retention、result page 讀取／分頁／邊界／unavailable、execution/tasks/processes 讀取與冷視圖形狀、task reconcile、todo 冷／live 寫入、schedule CRUD、surface subscribe/snapshot/changed、management rename/archive/restore/reload/navigation/batch delete/batch move/batch 邊界、project bind、auto title、compaction E2E、cold control 與 owner-scoped 錯誤、session search） | `desktop-gateway` host SCL 21 檔 / 25 tests（另 plus lineage／subtree／search tool 單元 3 檔） |
 | fork（普通 fork、nested、project 繼承、retry） | `host-commit-log-fork.test.ts` |
-| rewind（points/plan/execute） | `host-commit-log-rewind.test.ts` |
+| rewind（points/plan/execute、files 模式、fingerprint 失效、跨 host 執行） | `host-commit-log-rewind*.test.ts`（4 檔） |
+| 重啟耐久（session 續用、metadata、schedule、batch move、prepared fork 契約） | `host-commit-log-restart*.test.ts`、`host-commit-log-schedule.test.ts`、`host-commit-log-batch-move.test.ts`、`host-fork-restart.test.ts` |
+| 搜尋（SCL fallback、limit、tool 內容、混合 store、subtree、lineage） | `host-commit-log-search*.test.ts`、`host-commit-log-mixed-search.test.ts`、`session-search-tool.test.ts`、`session-query-subtree.test.ts`、`session-lineage.test.ts` |
 | CLI（`sessions list/show/--json/--last`、headless `run`） | `apps/cli/test/sessions-commit-log.test.ts`、`run-commit-log.test.ts` |
 | 整備 gateway（slash command turn + clean close） | `owned-gateway-commit-log.test.ts` |
 | 雙跑 corpus（8 個 legacy session 對照 legacy coordinator） | `commit-dual-run-corpus.test.ts` |
@@ -45,10 +47,15 @@
 2. **legacy 刪除**：只有 (1) 決定後才有意義；
 3. **SCL 預設化**：目前為 opt-in（`IH_SESSION_STORE=commit-log` 或 host 的 `sessionStore`）。
 
+## 5.1 最新回歸（2026-11-06）
+
+一次跑完 SCL 全部表面：**host 27 檔 / 32 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests，共 113 tests
+全綠、無 flake。
+
 ## 6. 如何重跑驗證
 
 ```powershell
-node scripts/test-env.mjs pnpm --filter @i-harness/desktop-gateway exec vitest run test/host-commit-log.test.ts test/host-commit-log-fork.test.ts test/host-commit-log-rewind.test.ts test/host-commit-log-turn.test.ts test/host-commit-log-schedule.test.ts test/host-commit-log-surface.test.ts test/host-commit-log-surface-changed.test.ts test/host-commit-log-management.test.ts test/host-commit-log-project.test.ts test/host-commit-log-title.test.ts test/host-commit-log-compact.test.ts test/host-commit-log-compact-long.test.ts test/owned-gateway-commit-log.test.ts
+node scripts/test-env.mjs pnpm --filter @i-harness/desktop-gateway exec vitest run test/host-commit-log.test.ts test/host-fork-restart.test.ts test/host-commit-log-restart.test.ts test/host-commit-log-restart-meta.test.ts test/host-commit-log-search.test.ts test/host-commit-log-search-limit.test.ts test/host-commit-log-mixed-search.test.ts test/host-commit-log-fork.test.ts test/host-commit-log-rewind.test.ts test/host-commit-log-turn.test.ts test/host-commit-log-schedule.test.ts test/host-commit-log-surface.test.ts test/host-commit-log-surface-changed.test.ts test/host-commit-log-management.test.ts test/host-commit-log-project.test.ts test/host-commit-log-title.test.ts test/host-commit-log-compact.test.ts test/host-commit-log-compact-long.test.ts test/owned-gateway-commit-log.test.ts
 pnpm --filter @i-harness/session-commit-log exec vitest run
 pnpm --filter @i-harness/session-persistence exec vitest run test/commit-coordinator.test.ts test/commit-execution.test.ts test/commit-fork.test.ts test/commit-ordering.test.ts test/commit-retained.test.ts test/commit-task-document.test.ts test/commit-process-read.test.ts test/commit-observations.test.ts test/commit-prefix.test.ts
 node scripts/test-env.mjs pnpm --filter @i-harness/cli exec vitest run test/sessions-commit-log.test.ts test/run-commit-log.test.ts
