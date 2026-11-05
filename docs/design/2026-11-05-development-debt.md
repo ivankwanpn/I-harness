@@ -547,6 +547,13 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 107**：`documents.delete` 共 7 處——bootstrap.ts:608（已驗證未觸發）、:681（capture
   **round 108 修正解讀**：兩個 `NEW_ENTRY` 很可能分別是「第一個 coordinator 的 bootstrap」與
   **round 109 關鍵翻轉**：在 `start`（bootstrap.ts:572）與 factory 的 `resumeSemanticTarget`
+  **round 110 定論**：把第二次 `resumeSemanticTarget` 包 try/catch 後**沒有** `RESUME2_ERR`——
+  即它沒有拋錯。配合 round 109 的 log（該次呼叫沒有 START_OUT），最可能是 `expect(...).toBe
+  ('already-ready')` 的斷言失敗（實際回 `refused` 或 `blocked`），而 JS 的 `finally` 中
+  `await coordinator.close()` 拋錯**覆蓋**了原本的斷言錯誤。所以 bootstrap 群 3 檔的
+  `Coordinator cleanup is unresolved` 是**遮罩後的假象**；真正要看的是「stage 被替換/還原後
+  第二次 resume 為何不是 already-ready」。下一步：把三檔測試的 `finally` 改成先記錄原錯誤
+  再 close（或 close 用 catch 收集），以顯示真正的斷言差異。
   各加 outcome log 後，測試只印出 `START_OUT ready`（第一個 coordinator 的 bootstrap）、
   `START_OUT blocked`（第二個 coordinator 的第一次 resume）與一次 `FACTORY_OUT blocked`——
   **第二次 resume 既沒有 START_OUT 也沒有 FACTORY_OUT/ERR**，即它根本沒走到 factory 的
