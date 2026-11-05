@@ -31,6 +31,12 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
       yield { type: 'end' }
       return
     }
+    if (request.messages.at(-1)?.content === 'read big' && toolCalls === 1) {
+      toolCalls++
+      yield { type: 'tool_call', call: { id: 'call-read', name: 'read', args: { path: 'big.txt' } } }
+      yield { type: 'end' }
+      return
+    }
     yield { type: 'text/chunk', text: 'controlled answer' }
     yield { type: 'end' }
   } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
@@ -59,11 +65,21 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(await call('desktop/session/processes/read', { sessionId: created.sessionId })).toBeTruthy()
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'use todo' })
     expect(toolCalls).toBe(1)
+    await writeFile(join(workspace, 'big.txt'), 'x'.repeat(200 * 1024))
+    await call('session/prompt', { sessionId: created.sessionId, prompt: 'read big' })
+    expect(toolCalls).toBe(2)
     const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
     try {
       const { session } = await observer.load(created.sessionId)
       expect(session.events.some(event => event.type === 'tool/call' && event.name === 'todo_write')).toBe(true)
       expect(session.events.some(event => event.type === 'tool/result')).toBe(true)
+      const bigResult = session.events.filter(event => event.type === 'tool/result').at(-1) as { envelope?: { retention?: { kind?: string; ref?: unknown } } } | undefined
+      expect(bigResult?.envelope?.retention).toMatchObject({ kind: 'artifact' })
+      const ref = bigResult?.envelope?.retention?.ref
+      const page = await call('session/result/read', { sessionId: created.sessionId, ref, maxBytes: 4096 }) as { ref?: { id?: string }; data?: unknown; nextOffset?: number }
+      expect(page.ref?.id).toBe((ref as { id?: string }).id)
+      expect(typeof page.nextOffset).toBe('number')
+      expect(page.data).toBeDefined()
     } finally { await observer.close() }
   } finally {
     await host.close()

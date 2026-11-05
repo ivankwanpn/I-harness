@@ -1121,3 +1121,11 @@ Until then the legacy coordinator stays the only selected-results implementation
 managed document and both `tool/call` and `tool/result` events are committed (read back with a second coordinator). This is the
 first tool-execution round trip on the commit-log store and the prerequisite for artifact-producing tools (shell/exec results).
 
+## Plan 35 (implemented 2026-11-06): artifact retention and result pages on SCL
+
+A `read` of a 200 KB workspace file produces a `tool/result` whose envelope retention is `kind: "artifact"`
+(`json-utf8-v1`, content digest, encoded bytes), and `session/result/read` returns the page (`{ref, offset, nextOffset, eof, data}`)
+through the real host. The artifact store therefore already works for commit-log sessions; what remains for selected results is
+the selection/witness lifecycle, not storage.
+
+
