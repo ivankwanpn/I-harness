@@ -545,6 +545,9 @@ round 94：`jobs` **1 檔 / 5 tests 全綠**、`workflow` **6 檔 / 66 tests 全
 round 95：`lsp` **6 檔 / 94 tests 全綠**、`media` **3 檔 / 15 tests 全綠**。
 round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot read properties of undefined
 round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**，10 個測試檔仍是 legacy
+  round 143：加 `packages/core-agent/vitest.config.ts`（30s）→ **10 檔紅 / 35 → 9 檔紅 /
+  33 failed（649）**；剩餘分類：22× `Coordinator cleanup is unresolved`（多為遮罩，需 unmask）、
+  6× `expected undefined to be defined`、1× `SYS-PROMPT`、1× `main authority`、1× length、以及少量 timeout。
 round 115：`code-retrieval` **4 檔 / 54 tests 全綠**；`code-mode` **10 檔紅 / 18 檔綠
   **round 117 已遷移**：8 個 code-mode 測試檔改用 composed 建構子 → **9 檔紅 / 19 檔綠，
 round 133：`compaction` 已由 3 紅轉 **33/33 檔、247/247 tests 全綠**——`managed-facts` 與
