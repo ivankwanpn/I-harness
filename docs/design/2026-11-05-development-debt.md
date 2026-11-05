@@ -611,6 +611,11 @@ full job 當 gate。
   `Coordinator cleanup is unresolved` → 該 entry 的 `ready` 是 **false**（不是「已 ready 但
   flag 沒清」）。所以失敗的 entry 是一個「header 未確認、也還沒 ready」的殘留 attempt entry；
   需要的是在冷 resume 成功時**清掉這個殘留 entry**（或清它的 flag），而不是放寬守衛。已還原實驗。
+  **round 55 再排除**：改成 `if(entry.headerUnknown && documents.get(id)===entry)`（只對
+  current entry 拋）仍然三檔全紅 → 失敗的 entry **就是** `documents` 裡的 current entry，
+  且 `ready=false`、`headerUnknown=true`。即冷 resume 的成功結果並沒有回寫到這個 entry。
+  需要的是在 `resume` 成功時把「已確認 header」回寫到 current entry（或把該 entry 標 ready），
+  不是 close 端的守衛問題。已還原實驗。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
