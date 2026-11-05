@@ -1,5 +1,9 @@
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
-import type { SessionQuery } from "@i-harness/session-query"
+import type { SearchHit, SessionQuery } from "@i-harness/session-query"
+
+/** Extra per-session search used when the indexed query has no rows for it
+ *  (commit-log sessions are not in the file-backed index yet). */
+export type SessionSearchFallback = (sessionId: string, text: string, limit: number) => Promise<SearchHit[]>
 
 // Prior builds stored reviewers as ordinary subagents. Recognize only that
 // exact internal request envelope plus its lineage, never an untitled name.
@@ -41,7 +45,7 @@ export function createSessionRuntimeVisibility(coordinator: SessionCoordinator) 
 
 /** UI search excludes child sessions before applying its result limit, so a
  * busy child transcript cannot crowd the user's conversations out of results. */
-export function createConversationQuery(coordinator: SessionCoordinator, query: SessionQuery): SessionQuery {
+export function createConversationQuery(coordinator: SessionCoordinator, query: SessionQuery, fallback?: SessionSearchFallback): SessionQuery {
   const visible = createConversationVisibility(coordinator)
   return {
     lineage: query.lineage.bind(query),
@@ -52,7 +56,9 @@ export function createConversationQuery(coordinator: SessionCoordinator, query: 
       for (const sessionId of ids) {
         const { meta } = await coordinator.profile(sessionId)
         if (!await visible(sessionId, meta)) continue
-        hits.push(...await query.search(text, { ...options, sessionId, limit }))
+        const direct = await query.search(text, { ...options, sessionId, limit })
+        if (direct.length || !fallback) { hits.push(...direct); continue }
+        hits.push(...await fallback(sessionId, text, limit))
       }
       return hits.sort((a, b) => a.bm25 - b.bm25).slice(0, limit)
     },

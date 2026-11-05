@@ -1190,6 +1190,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 75 (implemented 2026-11-06): session search covers commit-log sessions
+
+`desktop/session/search` was backed only by the file-backed index (`<id>.jsonl`), so a commit-log session never matched. The host
+now wraps the index query with `createCommitLogSearchFallback`: when the index returns no rows for a session, the coordinator loads
+that session and returns substring hits over messages and tool results (`{sessionId, seq, eventType, snippet, bm25:0}`).
+`host-commit-log-search.test.ts` finds a session by its prompt text and an absent token returns `{hits: []}`. Known remaining gap:
+`lineage` still delegates to the file-backed index, so session-lineage search over commit-log children is not covered yet.
+
 ## Plan 74 (implemented 2026-11-06): batch archive/delete edge semantics
 
 `host-commit-log-batch-edges.test.ts` pins the batch semantics on the commit log: archiving an already archived session is a

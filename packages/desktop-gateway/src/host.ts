@@ -40,6 +40,7 @@ import { assertOutsideForkController } from '../../session-persistence/src/fork-
 import { createContextPicker } from "./context-picker.ts"
 import { createDraftSession } from "./draft-session.ts"
 import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
+import { createCommitLogSearchFallback } from "./session-search.ts"
 import { createDesktopSubagents } from "./session-subagents.ts"
 import { createInstructionViews } from './instructions/views.ts'
 import { createInstructionSettings } from './instructions/settings.ts'
@@ -227,7 +228,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   }
   // The derived in-memory search index belongs to this workspace gateway
   // process. Never call global query cleanup when closing an individual host.
-  const sessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
+  const sessionQuery = createConversationQuery(coordinator, createFileBackedSessionQuery({ storeRoot: options.sessionDir }), commitLogStore ? createCommitLogSearchFallback(coordinator) : undefined)
   const nativeCredentials=createCredentialStore(options.credentialsPath ?? join(dirname(settingsPath),"credentials.json"))
   const ownedIndexJobs=createOwnedIndexJobBindings()
   const indexJobOwners=new Map<string,WeakRef<SessionAssembly>>()
@@ -555,7 +556,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     },
     draftSession: createDraftSession(coordinator),
     sessionReload: reloadSession,
-    contextPicker: createContextPicker(options.workspace, coordinator, review, { visible: isConversation, projectFor: projects.projectFor, query: createConversationQuery(coordinator, sessionQuery) }),
+    contextPicker: createContextPicker(options.workspace, coordinator, review, { visible: isConversation, projectFor: projects.projectFor, query: sessionQuery }),
     workflow, agentShell, wslSettings, input, projects: { ...projects, bind: (id, projectId) => fence.run(id, () => projects.bind(id, projectId)) },
     resources,
     projectFiles: createProjectFiles(options.workspace, review),
@@ -586,7 +587,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         return result
       } finally { compactionSignals.delete(sessionId) }
     }),
-    sessionQuery: createConversationQuery(coordinator, sessionQuery),
+    sessionQuery,
     sandboxState: (): SandboxState => ({ mode, source: "settings", wired: true }),
     interaction,
     review,
