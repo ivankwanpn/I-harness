@@ -979,6 +979,12 @@ this session store") instead of the legacy `Original coordinator required` TypeE
 host's file-backed adapter, so this pins that the surrounding desktop surface works). `desktop/usage/query` (v1) is refused by
 the current host with `USAGE_UPGRADE_REQUIRED` regardless of store; usage reads are expected to use `desktop/usage/query-v2`.
 
+## Plan 21 (implemented 2026-11-05): project scope binding on SCL
+
+`host-commit-log-project.test.ts` configures a project, binds a commit-log session to it, reads the project state and the
+navigation state, and pins the idempotent re-bind (a bind without a project id keeps the existing binding — the gateway's
+`bind` has no unbind path). This exercises the binding-document write/read path on SCL.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
