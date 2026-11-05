@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 238（SCL task document operations）**：task document backend session（observe/confirm/stageWrite 以 witness revision
+> 對應 document 快照）＋`createTaskDocumentOperations` 接上 capability ownership；gateway 已越過 Task host，
+> 下一個缺口是 selected-results capability（`context-runtime.ts:140` 無條件呼叫 `selectedSourceFor`）。
 > **round 237（SCL capability ownership）**：`<root>/.capabilities` 的真實 `createOwnership`＋binding observations，
 > ordering 與 revocation 共用同一 ownership 並通過 participant 驗證；4 tests 全綠。gateway 已越過 revocation，
 > 下一個缺口是 `associateTaskDocumentOperations`（task registry port）。

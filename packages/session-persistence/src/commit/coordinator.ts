@@ -61,6 +61,7 @@ export type CommitCoordinator = {
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   openManagedDocument(sessionId: string): Promise<ManagedDocument>
   acquireExecution(sessionId: string): Promise<import('../execution-internal.ts').ManagedExecutionAttachment>
+  sessionOfDocument(document: object): string | undefined
   withProcessReadObservation<T, U>(id: string, options: import('../coordinator/process-read-owner.ts').ProcessReadOptions, work: (observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation, last: import('../coordinator/process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
   closeManagedDocument(sessionId: string): Promise<void>
   revokeManagedDocumentNewWork(sessionId: string): void
@@ -146,6 +147,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   const open = (sessionId: string, mode: CommitLogMode): Promise<CommitLog> => openCommitLog(logOptions(sessionId), mode)
   const owned = new Map<string, CommitLog>()
   const managed = new Map<string, ManagedDocument>()
+  const documentSessions = new WeakMap<object, string>()
   const deletedListeners = new Set<(sessionId: string, manifest: { documents: string[]; files?: string[] }) => Promise<void>>()
 
   const build = (log: CommitLog): Session => {
@@ -355,9 +357,11 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       let log = owned.get(sessionId)
       if (!log) { log = await ensureWritable(sessionId); owned.set(sessionId, log) }
       const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf })
+      documentSessions.set(document as object, sessionId)
       managed.set(sessionId, document)
       return document
     },
+    sessionOfDocument(document) { return documentSessions.get(document) },
     withProcessReadObservation(id, options, work, publish) {
       return withCommitProcessReadObservation({ open: sessionId => open(sessionId, 'read'), getDocument: getDocumentOf, metaOf }, id, options, work, publish)
     },
@@ -365,6 +369,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       let log = owned.get(sessionId)
       if (!log) { log = await ensureWritable(sessionId); owned.set(sessionId, log) }
       const attachment = await openCommitExecution(sessionId, log, { logs: owned, metaOf })
+      documentSessions.set(attachment.owner as object, sessionId)
       managed.set(sessionId, attachment.owner as unknown as ManagedDocument)
       return attachment
     },

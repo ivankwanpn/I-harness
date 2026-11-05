@@ -2,6 +2,8 @@ import type { SessionCoordinator } from '../coordinator/types.ts'
 import { associateManagedExecution } from '../execution-internal.ts'
 import { associateOriginalResultOrdering } from '../result-ordering-internal.ts'
 import { associateOriginalResultRevocation } from '../coordinator/result-revocation.ts'
+import { associateTaskDocumentOperations } from '../coordinator/task-document-association.ts'
+import type { TaskDocumentConfiguration } from '../coordinator/task-document-operation.ts'
 import type { CommitCoordinator } from './coordinator.ts'
 import { createCommitCapabilities } from './capabilities.ts'
 
@@ -13,7 +15,11 @@ import { createCommitCapabilities } from './capabilities.ts'
  * The managed-execution, ordering and revocation capabilities are registered on
  * this exact facade object, which is what the session executor passes in.
  */
-export function asSessionCoordinator(coordinator: CommitCoordinator): SessionCoordinator {
+export type CommitFacadeOptions = {
+  readonly taskDocument?: { readonly validator: TaskDocumentConfiguration['validator'] }
+}
+
+export function asSessionCoordinator(coordinator: CommitCoordinator, options: CommitFacadeOptions = {}): SessionCoordinator {
   const unsupported = <T>(): Promise<T> => Promise.reject(Object.assign(new Error('commit-log coordinator does not support the stage bootstrap API'), { code: 'TASK_TRANSITION_UNSUPPORTED' }))
   const facade: CommitCoordinator & Record<string, unknown> = {
     ...coordinator,
@@ -33,7 +39,8 @@ export function asSessionCoordinator(coordinator: CommitCoordinator): SessionCoo
     putDocument: (key, data) => coordinator.putDocument(key, data),
     getDocument: key => coordinator.getDocument(key),
     profile: id => coordinator.profile(id),
-  })
+  }, { ...(options.taskDocument ? { taskDocument: options.taskDocument } : {}), sessionOfDocument: document => coordinator.sessionOfDocument(document) })
+  if (capabilities.operations) associateTaskDocumentOperations(facade as never, capabilities.operations)
   associateOriginalResultOrdering(facade as never, capabilities.ownership as never)
   associateOriginalResultRevocation(facade as never, capabilities.admission as never, capabilities.ownership as never)
   associateManagedExecution(facade, {

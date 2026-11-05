@@ -789,6 +789,21 @@ instance for ordering + revocation, and build the observations/admission over SC
 `Original managed Task host required`, i.e. `captureOwnedTaskContext` found no `associateTaskDocumentOperations` port.
 That task-document/registry capability is the next port to build on SCL (Plan 7).
 
+## Plan 7a (implemented 2026-11-05): task document operations on SCL
+
+- `src/commit/task-document.ts` implements `TaskDocumentBackendSession` over the document store: `observe()` returns the
+  parsed document plus a witness bound to its canonical revision, `confirm(witness)` re-reads and compares, and
+  `stageWrite(witness, bytes)` issues/reconciles one durable document commit (a stale witness is a conflict).
+- `createCommitCapabilities` builds `createTaskDocumentOperations(ownership, observations, { validator, captureParent, open })`
+  when a validator is supplied; `captureParent` resolves the session id from the document through the coordinator's
+  `sessionOfDocument` map. `asSessionCoordinator(coordinator, { taskDocument: { validator } })` associates the port.
+- Test: parent capture, `assertParentSession`, `begin`, observe-absent.
+
+**Next gateway blocker:** with the task port wired the owned gateway mounts past the Task host and fails at
+`selectedSourceFor(coordinator)` in `context-runtime.ts:140` (`Original coordinator required`) — the selected-results
+capability. It is called unconditionally there (only the composer at `:240` is guarded), so the next step is an explicit
+availability query plus graceful degradation for SCL, or a selected-results port.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
