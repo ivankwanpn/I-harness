@@ -5,7 +5,8 @@ import { join } from "node:path"
 import { createHash } from "node:crypto"
 import * as syncFs from "node:fs"
 import { normalizeSettings, SettingsStore, createLayeredStore, normalizeInstructions, resolveInstructionPolicy,
-  previewLegacyInstructionImport, InstructionMigrationError, mutateSection, describeSection, type LegacyInstructionImport } from "../src/index.ts"
+  InstructionMigrationError, mutateSection, describeSection, type LegacyInstructionImport } from "../src/index.ts"
+import { previewLegacyInstructionImport } from "../src/storage/instruction-migration.ts"
 import { parseDocumentTolerant } from "../src/storage/json-patch.ts"
 
 vi.mock("node:fs/promises", async (original) => {

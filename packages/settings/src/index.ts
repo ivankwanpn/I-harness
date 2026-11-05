@@ -57,7 +57,7 @@ export type { SettingsSourceStamp } from "./observation/source-stamp.ts"
 export * from './context-subsystems.ts'
 export { normalizeInstructions, resolveInstructionPolicy } from "./instructions.ts"
 export type { SettingsInstructions, InstructionPolicy } from "./instructions.ts"
-export { previewLegacyInstructionImport, InstructionMigrationError } from "./storage/instruction-migration.ts"
+export { InstructionMigrationError } from "./storage/instruction-migration.ts"
 export type { LegacyInstructionImport } from "./storage/instruction-migration.ts"
 
 // Section descriptor API (Task 1 of the models plan): schemas, redacted
