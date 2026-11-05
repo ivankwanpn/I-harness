@@ -235,3 +235,24 @@ SCL 的 fork capture 走不同路徑，兩者無法只靠 facade 銜接。
    CLI）維持綠燈並持續回歸驗證。
 
 這個決策讓「功能完整性」優先於「刪除 legacy 的程式碼縮減」；若之後接受在 SCL 模式失去 selected results，再啟動刪除階段。
+
+### 8.2 selected results 的移植分析（2026-11-06）
+
+**legacy 現在做什麼**：`selectedSourceFor(coordinator)` 提供 `acquire`／`retainTask`／`retainManagedTask`，全部建立在
+`createDocuments(...).observations` 之上（`acquireSelectedBindingRead`、cold finalization、retained lease、result lineage
+witness）；fork capture 走 `createSelectedRuntimeCapture`，內含 reservation → cold/warm finalization → witness 的協議。
+SCL 的 fork capture 是另一條路（`bootstrapSemanticTargetWithCapture`），兩者無法只靠 facade 拼接。
+
+**移植會牽涉什麼**：把 `createDocuments` 的 selected 路徑（binding observations、cold routes、finalization tickets、
+revocation admission）重寫到 SCL 的 retained binding 上；這是 legacy coordinator 最複雜的一層，估計是數千行的等價邏輯，
+且必須重做 crash-cut 與 lineage 測試。
+
+**可行的替代方案（snapshot selection）**：fork 當下用既有的 context-output 服務讀出被選取的 result pages（SCL 已驗證可讀），
+把它們以一般事件／artifact 內嵌到子 session 的 seed。語意差異：
+
+- 選取結果是**fork 當下的快照**，不具跨 session 的 lineage／撤銷見證；
+- 沒有 reservation／finalization 協議，crash 安全由 SCL 的單一 commit 提供；
+- UI 上「selected results」仍可用，但 `assertResultLineage` 類的嚴格語意不再成立。
+
+**建議**：若產品要的是「能帶著選取結果開子會話」，先做 snapshot selection（B），把語意寫清楚；只有當「子會話必須持續
+見證父結果的撤銷與 lineage」是硬需求時，才投入完整移植（A）。目前決策見 §8.1（維持 legacy 預設、SCL opt-in）。
