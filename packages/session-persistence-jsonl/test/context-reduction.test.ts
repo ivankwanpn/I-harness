@@ -3,7 +3,8 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonlBackend } from '../src/index.ts'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import type { PersistenceBackend } from '@i-harness/session-persistence'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { captureContextSnapshot, reductionGroups, reductionSourceCurrent, replacementProposal } from '../../context-engine/src/index.ts'
 import { deriveMessages, subscribe, createConversationValidationIndex, type SoftReductionStart, type SoftReductionTerminalDraft, type SessionEvent, type SessionView } from '@i-harness/core-session'
 
@@ -17,21 +18,31 @@ function snapshot(session: SessionView) {
   if (value.kind !== 'captured') throw Error('capture required')
   return value.snapshot
 }
-async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), 'ih-c3-fence-')), backend = createJsonlBackend(directory)
+type OwnedAppend = NonNullable<PersistenceBackend['appendOwnedBatch']>
+type AppendArgs = Parameters<OwnedAppend>
+/** Mutable per-test interception installed at backend construction: the
+ * canonical-path guard snapshots every own descriptor then, so patching the
+ * backend after this point is PROCESS_READ_UNAVAILABLE by design. */
+type AppendHook = { current?: (actual: OwnedAppend, ...args: AppendArgs) => ReturnType<OwnedAppend> }
+async function fixture(hook?: AppendHook) {
+  const directory = await mkdtemp(join(tmpdir(), 'ih-c3-fence-'))
+  const backend = createJsonlBackend(directory, hook ? { wrap: b => {
+    const actual = b.appendOwnedBatch!.bind(b) as OwnedAppend
+    b.appendOwnedBatch = ((...args: AppendArgs) => hook.current ? hook.current(actual, ...args) : actual(...args)) as OwnedAppend
+  } } : undefined)
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   await coordinator.append(id, seed)
   const document = await coordinator.openManagedDocument(id)
   return { directory, backend, coordinator, id, document }
 }
 it.each(['committed','absent'] as const)('soft terminal shares the original unknown publication receipt after Stop (%s)',async outcome=>{
- const f=await fixture(),action=f.document.beginAction(),d='a'.repeat(64),e='b'.repeat(64)
+ const hook:AppendHook={},f=await fixture(hook),action=f.document.beginAction(),d='a'.repeat(64),e='b'.repeat(64)
  const start:SoftReductionStart={type:'context/soft-reduction',version:1,op:'start',ownerSessionId:f.id,sequenceId:'soft-one',workKey:d,sourceKey:d,protectionKey:d,policyKey:d,acceptedExchanges:0,humanTurns:0}
  const opened=await action.captureSoftReduction(start,()=>true).admit();if(opened.kind!=='committed')throw Error('start required')
  const terminal:SoftReductionTerminalDraft={type:'context/soft-reduction',version:1,op:'terminal',ownerSessionId:f.id,sequenceId:'soft-one',startSeq:{kind:'prior',seq:opened.seqs[0]!,expectedType:'context/soft-reduction'},workKey:d,sourceKey:d,outcome:'target-ready',publication:'committed',consumedBeforeKey:d,consumedAfterKey:e}
  const state=(view:SessionView)=>createConversationValidationIndex(view.events,{formatVersion:view.formatVersion,header:view.header}).softReduction(f.id)
- const actual=f.backend.appendOwnedBatch!;let writes=0
- f.backend.appendOwnedBatch=async(...args)=>{writes++;if(outcome==='committed')await actual(...args);action.stop();return{kind:'unknown',key:args[3].key}}
+ let writes=0
+ hook.current=async(actual,...args)=>{writes++;if(outcome==='committed')await actual(...args);action.stop();return{kind:'unknown',key:args[3].key}}
  try{
   const capture=action.captureContextReduction!({kind:'context-reduction',events:[{type:'compaction/prune',version:1,pruned:[]}],softTerminal:terminal},()=>true)
   expect(await capture.admit()).toMatchObject({kind:'unknown'});expect(state(f.document.view)).toMatchObject({pending:true,failures:0})
@@ -47,9 +58,9 @@ it.each(['committed','absent'] as const)('soft terminal shares the original unkn
  }finally{action.finish();await f.coordinator.close()}
 })
 it.each(['metadata','legacy-rewrite','wrong-event','extra-seq','missing-field','bad-reset','bad-prune','kind-getter','events-getter','proxy','null'] as const)('dedicated durable capture rejects %s before allocation, installation or observer notification',async kind=>{
-  const f=await fixture(),action=f.document.beginAction(),before=await readFile(join(f.directory,`${f.id}.jsonl`),'utf8'),beforeEvents=f.document.view.events.slice(),seen:unknown[]=[]
+  const hook:AppendHook={},f=await fixture(hook),action=f.document.beginAction(),before=await readFile(join(f.directory,`${f.id}.jsonl`),'utf8'),beforeEvents=f.document.view.events.slice(),seen:unknown[]=[]
   let getters=0,guards=0,writes=0
-  const actual=f.backend.appendOwnedBatch!;f.backend.appendOwnedBatch=async(...args)=>{writes++;return actual(...args)}
+  hook.current=async(actual,...args)=>{writes++;return actual(...args)}
   const reset={type:'compaction/reset',removedSeqs:[1]}
   const draft:unknown=kind==='metadata'?{kind:'metadata',event:{type:'plan/mode',mode:'on'}}
     :kind==='legacy-rewrite'?{kind:'legacy-compaction',events:[reset]}
@@ -78,11 +89,10 @@ it.each(['metadata','legacy-rewrite','wrong-event','extra-seq','missing-field','
   }finally{unsubscribe();action.finish();await f.coordinator.close()}
 })
 it('runs a final source fence after backend awaits with no issued batch or visible rewrite', async () => {
-  const f = await fixture(), action = f.document.beginAction(), source = snapshot(f.document.view)
+  const hook: AppendHook = {}, f = await fixture(hook), action = f.document.beginAction(), source = snapshot(f.document.view)
   const groups = reductionGroups(source).filter(group => group.items.some(item => item.messages.some(message => message.content === 'E1')))
   let current = true, writes = 0
-  const actual = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => { current = false; writes++; return actual(...args) }
+  hook.current = async (actual, ...args) => { current = false; writes++; return actual(...args) }
   const prior = await readFile(join(f.directory, `${f.id}.jsonl`), 'utf8')
   const eventCount = f.document.view.events.length
   try {
@@ -95,10 +105,10 @@ it('runs a final source fence after backend awaits with no issued batch or visib
   } finally { action.finish(); await f.coordinator.close() }
 })
 it.each(['feedback', 'metadata'] as const)('installs earlier %s before the guard and keeps captures out of ordinary coalescing', async kind => {
-  const f = await fixture(), action = f.document.beginAction(), source = snapshot(f.document.view)
+  const hook: AppendHook = {}, f = await fixture(hook), action = f.document.beginAction(), source = snapshot(f.document.view)
   const groups = reductionGroups(source).filter(group => group.items.some(item => item.messages.some(message => message.content === 'E1')))
-  const frames: number[] = [], actual = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => { frames.push(args[3].key.count); return actual(...args) }
+  const frames: number[] = []
+  hook.current = async (actual, ...args) => { frames.push(args[3].key.count); return actual(...args) }
   try {
     const earlier = kind === 'metadata' ? action.facts.metadata.admit({ type: 'session/title', title: 'compatible',messageSeqs:[],source:'user' })
       : action.facts.agent.feedback({ type: 'user/message', text: 'new observed feedback', source: { kind: 'plugin', plugin: 'fixture' } })
@@ -117,8 +127,8 @@ it.each(['feedback', 'metadata'] as const)('installs earlier %s before the guard
   } finally { action.finish(); await f.coordinator.close() }
 })
 it('two captures from one action have distinct physical frames and the second sees the first installed',async()=>{
- const f=await fixture(),action=f.document.beginAction(),source=snapshot(f.document.view),groups=reductionGroups(source),frames:number[]=[]
- const actual=f.backend.appendOwnedBatch!;f.backend.appendOwnedBatch=async(...args)=>{frames.push(args[3].key.count);return actual(...args)}
+ const hook:AppendHook={},f=await fixture(hook),action=f.document.beginAction(),source=snapshot(f.document.view),groups=reductionGroups(source),frames:number[]=[]
+ hook.current=async(actual,...args)=>{frames.push(args[3].key.count);return actual(...args)}
  const selected=(label:string)=>groups.filter(group=>group.items.some(item=>item.messages.some(message=>message.content===label)))
  try{
   const first=action.captureContextReduction!({kind:'context-reduction',events:[replacementProposal({id:'first',groups:selected('E1')},'S1','first')]},()=>true)
@@ -131,10 +141,10 @@ it('two captures from one action have distinct physical frames and the second se
  }finally{action.finish();await f.coordinator.close()}
 })
 it('the first guarded admission stays before subsequently queued semantic feedback', async () => {
-  const f = await fixture(), action = f.document.beginAction(), source = snapshot(f.document.view)
+  const hook: AppendHook = {}, f = await fixture(hook), action = f.document.beginAction(), source = snapshot(f.document.view)
   const groups = reductionGroups(source).filter(group => group.items.some(item => item.messages.some(message => message.content === 'E1')))
-  const frames: string[][] = [], actual = f.backend.appendOwnedBatch!
-  f.backend.appendOwnedBatch = async (...args) => {
+  const frames: string[][] = []
+  hook.current = async (actual, ...args) => {
     frames.push(JSON.parse(new TextDecoder().decode(args[3].bytes).trim()).events?.map((event: SessionEvent) => event.type) ?? [])
     return actual(...args)
   }
@@ -151,9 +161,9 @@ it('the first guarded admission stays before subsequently queued semantic feedba
   } finally { action.finish(); await f.coordinator.close() }
 })
 it('Stop after issue installs the known receipt while preventing all later optional work',async()=>{
- const f=await fixture(),action=f.document.beginAction(),source=snapshot(f.document.view),groups=reductionGroups(source).filter(group=>group.items.some(item=>item.messages.some(message=>message.content==='E1')))
- const actual=f.backend.appendOwnedBatch!;let writes=0
- f.backend.appendOwnedBatch=async(...args)=>{writes++;const outcome=await actual(...args);action.stop();return outcome}
+ const hook:AppendHook={},f=await fixture(hook),action=f.document.beginAction(),source=snapshot(f.document.view),groups=reductionGroups(source).filter(group=>group.items.some(item=>item.messages.some(message=>message.content==='E1')))
+ let writes=0
+ hook.current=async(actual,...args)=>{writes++;const outcome=await actual(...args);action.stop();return outcome}
  try{
   const capture=action.captureContextReduction!({kind:'context-reduction',events:[replacementProposal({id:'issued',groups},'S','issued')]},()=>true)
   expect(await capture.admit()).toMatchObject({kind:'committed'})
@@ -164,9 +174,9 @@ it('Stop after issue installs the known receipt while preventing all later optio
  }finally{action.finish();await f.coordinator.close()}
 })
 it('an issued uncertain rewrite reconciles exactly once after Stop without duplicate replacement allocation',async()=>{
- const f=await fixture(),action=f.document.beginAction(),source=snapshot(f.document.view),groups=reductionGroups(source).filter(group=>group.items.some(item=>item.messages.some(message=>message.content==='E1')))
- const actual=f.backend.appendOwnedBatch!;let writes=0
- f.backend.appendOwnedBatch=async(...args)=>{writes++;await actual(...args);action.stop();return{kind:'unknown',key:args[3].key}}
+ const hook:AppendHook={},f=await fixture(hook),action=f.document.beginAction(),source=snapshot(f.document.view),groups=reductionGroups(source).filter(group=>group.items.some(item=>item.messages.some(message=>message.content==='E1')))
+ let writes=0
+ hook.current=async(actual,...args)=>{writes++;await actual(...args);action.stop();return{kind:'unknown',key:args[3].key}}
  try{
   const capture=action.captureContextReduction!({kind:'context-reduction',events:[replacementProposal({id:'uncertain',groups},'S','uncertain')]},()=>true)
   expect(await capture.admit()).toMatchObject({kind:'unknown'})
