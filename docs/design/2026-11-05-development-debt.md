@@ -554,6 +554,9 @@ round 133：`compaction` 已由 3 紅轉 **33/33 檔、247/247 tests 全綠**—
   **round 122 首例完成**：`broker.test.ts` 的 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch` →
   **round 134**：`managed-store-stop.test.ts` 同法遷移（計數器先宣告）→ **2/2 全綠**。
   **round 135 重要教訓**：`register.test.ts` 的 hook 若在建構時就生效，會攔到 `create`／
+  **round 136**：加 `armed` 旗標（open 後才生效）仍 5s timeout → 不是 hook 攔到 open，而是
+  `register` 這兩個案例的 settle 時序本身需要更長／或 hook 與 settle 互動有問題；此檔暫緩，
+  先做 `surface-publication`／`output-source-recovery` 這類較單純的檔案。
   `openManagedDocument` 期間的 append/reconcile（測試原本是 open 之後才掛），導致 `mount.ready()`
   永遠等不到（30s timeout）。遷移時必須加 `armed` 旗標：open 完成後才 `armed = true`，hook 內
   `armed && …` 才生效。已還原該實驗（未提交）。
