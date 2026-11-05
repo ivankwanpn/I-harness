@@ -117,6 +117,11 @@ round 191：core-agent 的 seam 遷移（5 檔 / 21 tests 全綠）。
 > soft-sequence-settlement 3/3、retained-boundaries 3/3、held-policy-receipt 1/1、
 > current-context-loopback 2/2、instruction-request-context 12/12 全綠；剩下
 > retained-batch-continuation 4、unstarted-call-settlement 9、compaction-binding 2。
+> **交接（round 192 收尾）**：下一步是 `unstarted-call-settlement`（9）——它的 `setup()`
+> 目前回傳 `backend` 讓測試事後 patch；照 round 192 的 `fixture(names, seams)` ＋ `arm()`
+> 模式改即可（hook 在 `openManagedDocument` 之後才生效）。之後 compaction-binding 2
+> （其中「SAME system prompt」屬待裁定的 SYS-PROMPT 語義）、sdk 5、exec 1、acp 1、
+> core-session 1、sandbox-windows-acl 2（native），最後是 session-persistence-jsonl 全套。
 > 另修掉 core-agent 的 typecheck（`retained-batch-continuation` 的重複 import 與死變數，
 > HEAD 上本來就是紅的）。**round 192**：`retained-batch-continuation` 的 `fixture()` 加上
 > `seams`／`arm()`，4 筆紅全綠 → 該檔 **35/35**；core-agent 剩 unstarted-call-settlement 9、
