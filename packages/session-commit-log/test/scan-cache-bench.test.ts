@@ -20,7 +20,7 @@ describe('commit log read benchmark', () => {
     for (let index = 0; index < 40; index++) {
       const id = 's' + index
       ids.push(id)
-      const events = Array.from({ length: 30 }, (_, at) => ({ type: at % 2 === 0 ? 'user/message' : 'assistant/message', text: 'event ' + at + ' ' + 'x'.repeat(200) }))
+      const events = Array.from({ length: 30 }, (_, at) => ({ type: at % 2 === 0 ? 'user/message' : 'assistant/message', text: 'event ' + at + ' ' + 'x'.repeat(200) })) as unknown as import('@i-harness/core-session').SessionEvent[]
       const log = await createCommitLog(options(base, id), { header: { formatVersion: 15, sessionId: id, createdAt: '2026-01-01T00:00:00.000Z' }, entries: events })
       await log.close()
     }
