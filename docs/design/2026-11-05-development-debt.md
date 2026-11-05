@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 348（冷 diagnostics）**：`desktop/environment/diagnostics` 冷 session 為 `{live:false, sessionId, tools:[], roles:[]}`
+> （shell 區段依主機環境，不固定）。
 > **round 347（live todo 寫入）**：turn 之後 revision 1，帶 expectedRevision:1 寫入成功並回 revision 2。
 > **round 346（todo 冷寫入修正）**：冷 `writeTodos` 改走 coordinator document（`document.view` 檢查 revision、`actionMetadataFacts`
 > 寫入、寫後關閉），不再 `selectComplete`；todo→turn 流程與 in-turn `todo_write` 全綠。

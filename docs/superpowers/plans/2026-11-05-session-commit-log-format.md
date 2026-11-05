@@ -1200,6 +1200,11 @@ gateway native context rather than the host log.
 
 
 
+## Plan 91 (implemented 2026-11-06): cold diagnostics shape
+
+`desktop/environment/diagnostics` for a cold commit-log session reports `{live:false, sessionId}` with empty `tools` and `roles` (the
+shell section stays host-dependent), so the management test pins only the stable fields.
+
 ## Plan 90 (implemented 2026-11-06): live todo write
 
 After the second turn the session has revision 1; `desktop/session/todo/write` with `expectedRevision: 1` succeeds and reports

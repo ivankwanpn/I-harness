@@ -50,7 +50,10 @@ it('renames, archives, restores and reloads a session on the commit log', async 
     expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).not.toContain(second.sessionId)
     const after = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
     try { expect(await after.getDocument('task-' + second.sessionId)).toBeUndefined() } finally { await after.close() }
-    expect(await call('desktop/environment/diagnostics', { sessionId: created.sessionId })).toBeTruthy()
+    const diagnostics = await call('desktop/environment/diagnostics', { sessionId: created.sessionId }) as { live?: boolean; sessionId?: string; tools?: unknown[]; roles?: unknown[] }
+    expect(diagnostics).toMatchObject({ live: false, sessionId: created.sessionId })
+    expect(diagnostics.tools).toEqual([])
+    expect(diagnostics.roles).toEqual([])
     await call('desktop/project/configure', { project: { id: 'p', name: 'Project', roots: [workspace], primaryRoot: workspace } })
     const moved = await call('desktop/session/batch', { command: { action: 'move', sessionIds: [created.sessionId], projectId: 'p', expectedOwners: { [created.sessionId]: null } } }) as { results: { ok: boolean; error?: string }[] }
     expect(moved.results[0]?.ok).toBe(true)
