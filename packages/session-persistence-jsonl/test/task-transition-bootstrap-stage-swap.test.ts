@@ -30,10 +30,17 @@ it('refuses a same-byte stage replacement during the actual tracked read', async
   try { expect((await original.bootstrapSemanticTarget(request, guards)).kind).toBe('ready') } finally { await original.close() }
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   fault.target = bootstrapPaths(join(root,'target.jsonl'),request.invocation).stage; fault.moved = join(root,'saved-stage'); fault.active = true
+  let failure: unknown
   try {
     expect((await coordinator.resumeSemanticTarget(request.invocation,guards)).kind).toBe('blocked')
     await expect(readFile(join(root,'task-target.doc.jsonl'))).rejects.toMatchObject({code:'ENOENT'})
     await unlink(fault.target); await rename(fault.moved,fault.target)
     expect((await coordinator.resumeSemanticTarget(request.invocation,guards)).kind).toBe('already-ready')
-  } finally { fault.active = false; fault.target = ''; fault.moved = ''; await coordinator.close(); await rm(root,{recursive:true,force:true}) }
+  } catch (error) { failure = error } finally {
+    fault.active = false; fault.target = ''; fault.moved = ''
+    // A close failure is real debt, but it must not hide the assertion that failed first.
+    try { await coordinator.close() } catch (error) { if (failure === undefined) failure = error }
+    await rm(root,{recursive:true,force:true})
+  }
+  if (failure !== undefined) throw failure
 })

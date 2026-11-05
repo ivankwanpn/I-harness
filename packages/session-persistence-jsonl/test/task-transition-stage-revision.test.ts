@@ -32,9 +32,16 @@ it('refuses a same-inode equal-size stage rewrite during the tracked read even w
   try { expect((await original.bootstrapSemanticTarget(payload, guards)).kind).toBe('ready') } finally { await original.close() }
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   fault.target = bootstrapPathsForRoute(join(root, 'target.jsonl'), { protocol: 'public', invocation: payload.invocation }).stage; fault.active = true
+  let failure: unknown
   try {
     expect((await coordinator.resumeSemanticTarget(payload.invocation, guards)).kind).toBe('blocked')
     await expect(readFile(join(root, 'task-target.doc.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await coordinator.resumeSemanticTarget(payload.invocation, guards)).kind).toBe('already-ready')
-  } finally { fault.active = false; fault.target = ''; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+  } catch (error) { failure = error } finally {
+    fault.active = false; fault.target = ''
+    // A close failure is real debt, but it must not hide the assertion that failed first.
+    try { await coordinator.close() } catch (error) { if (failure === undefined) failure = error }
+    await rm(root, { recursive: true, force: true })
+  }
+  if (failure !== undefined) throw failure
 })

@@ -549,6 +549,9 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 109 關鍵翻轉**：在 `start`（bootstrap.ts:572）與 factory 的 `resumeSemanticTarget`
   **round 110 定論**：把第二次 `resumeSemanticTarget` 包 try/catch 後**沒有** `RESUME2_ERR`——
   **round 111 揭曉真正失敗**：把兩檔的 `finally` close 改成 `.catch(console.error)` 後，真正的
+  **round 113 已修測試衛生**：兩檔的 `finally` 改為「先捕捉 body 錯誤、close 只在沒有其他
+  失敗時才蓋上」，現在回報的是真實斷言（`task-target.doc.jsonl` 非 ENOENT）；
+  `child-bootstrap-physical` 的 `finally{await cold.close()}` 同類問題待套用。
   斷言錯誤現形——`promise resolved "Buffer[123,34,102,111,114,…]" instead of rejecting`，
   即測試 line 35 的 `await expect(readFile('task-target.doc.jsonl')).rejects.toMatchObject({code:'ENOENT'})`
   **失敗**：blocked resume 之後 `task-target.doc.jsonl` **被建立**了（內容以 `{"for…` 開頭）。
