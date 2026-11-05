@@ -243,19 +243,36 @@ reachability 仍是 71 NEW（沒有新增 row）。
 | `recoverable-source-hold` | 0/2 → 2/2 | `wrapOwnedBatch` |
 | `coalesced-recovery` | 0/4 → 4/4 | `wrapOwnedBatch` + `wrapOwnedReconcile` |
 | `selected-results-denials` | 5/9 → 9/9 | `wrapOwnedBatch` |
+| `context-format` | 1/10 → 10/10 | 新增通用 `wrap` seam（見下） |
 
-剩 6 檔（`bootstrap-physical`、`bootstrap-capture-physical`、`context-format`、
-`context-reduction`、`retained-format-ownership`、`current-context-predecessors`）——
-後兩者與 bootstrap 兩檔同時涉及 legacy upgrade／bootstrap 語義，不是單純換 seam。
+`context-format` 需要換掉三種「建構後改 backend 方法」的注入，既有的兩個 seam 不夠，
+所以 `createJsonlBackend` 多了第三個 pre-bind seam：
+
+- `wrap?: (backend) => void`：在 canonical-path guard 快照 **所有** own descriptor 之前
+  執行一次。測試可以替換任何方法（repair／replaceEvents／upgradeSessionFormat／append），
+  也可以刪掉能力來模擬「本來就沒有」的 backend。這比照 `wrapOwnedBatch` 的既有限制：
+  建構後再改就是 `PROCESS_READ_UNAVAILABLE`。
+- 檔內兩個 legacy 期待在 format 14 已不成立，改寫成 composed 契約：
+  1. 過深／legacy 升級能力：composed lane 自己 stage header 升級，**不查**
+     `backend.upgradeSessionFormat`；改成斷言「沒有該方法也能升到可寫格式」。
+  2. 升級被拒後重試：unknown durable write 會 poison process-read latch，重試被
+     `PROCESS_READ_UNAVAILABLE` 拒絕、關閉時回報 retained batch debt；改成斷言
+     fail-closed 形狀（不再假設同一個 coordinator 內可重試）。
+- 順帶修掉 P2 #5：`updateMeta` 的 downgrade 檢查移到 transition 之前，訊息回到
+  「cannot downgrade session format」，不再被包成泛用 `TASK_TRANSITION_FAILED`。
+
+剩 5 檔（`bootstrap-physical`、`bootstrap-capture-physical`、`context-reduction`、
+`retained-format-ownership`、`current-context-predecessors`）——後兩者與 bootstrap 兩檔
+同時涉及 legacy upgrade／bootstrap 語義，不是單純換 seam。
 
 **量測（round 7 結束，空載重跑）**：`session-persistence-jsonl` 全套
-**257 failed / 600 passed / 17 skipped（29 個紅檔，共 98 檔）**。
+**248 failed / 609 passed / 17 skipped（28 個紅檔，共 98 檔）**。
 
 - 第 2 項（建構子移除）後是 273 failed / 584 passed（34 紅檔）：差異恰好是
   `process-read-composition`（-12 failed、+12 passed）、
   `task-transition-managed-header-retry`（-1、+1），加上
   `canonical-connected-exclusion` 少一個 process-only 變體（總數 875 → 874）。
-- 第 3 項的 5 檔再降 16 個紅測試（4／2／2／4／4），紅檔 34 → 29。
+- 第 3 項的 6 檔再降 25 個紅測試（4／2／2／4／4／9），紅檔 34 → 28。
 - round 6 結束時是 286 failed / 572 passed（36 紅檔）。
 
 **其他 gate（round 7）**：全庫 `pnpm -r --no-bail typecheck` 82 packages 全綠；
@@ -312,6 +329,8 @@ boundaries 147/147；reachability 432 rows、70 NEW（round 6 是 71，移除的
 5. **P2：`updateMeta` 把 downgrade/format 錯誤包成 `TASK_TRANSITION_FAILED`**
    `context-format.test.ts:39` 期待 `/downgrade|format/`，原因藏在 `.cause`。
    對 user-facing diagnostics 是退步。
+   **已修（round 7）**：downgrade 檢查移到 transition 之前，訊息恢復原樣；回歸在
+   `context-format` 的 cold v1 案例。
 
 6. **P2：fork `seedLength` 語義改變**
    composed fork 的 header `seedLength` 是 4（compiled seed records），
@@ -367,9 +386,9 @@ boundaries 147/147；reachability 432 rows、70 NEW（round 6 是 71，移除的
    → round 7 完成（移除 export，14 檔遷移，見上）。
 3. A 類測試（建構後 monkeypatch）逐檔改用 pre-bind seam；每檔一次 PR/commit，
    並用本文件的 `test-env` 指令驗證。
-   **round 7：11 檔中 5 檔完成**（`cleanup-diagnostic`、`required-source-ports`、
-   `recoverable-source-hold`、`coalesced-recovery`、`selected-results-denials`）；
-   剩 `bootstrap-physical`、`bootstrap-capture-physical`、`context-format`、
+   **round 7：11 檔中 6 檔完成**（`cleanup-diagnostic`、`required-source-ports`、
+   `recoverable-source-hold`、`coalesced-recovery`、`selected-results-denials`、
+   `context-format`）；剩 `bootstrap-physical`、`bootstrap-capture-physical`、
    `context-reduction`、`retained-format-ownership`、`current-context-predecessors`。
 4. B 類 predecessor 語義決策：若 composed 升級 13→14 是正確行為，更新
    `child-bootstrap-predecessor`、`semantic-codec2-predecessor` 的位元組斷言；
@@ -395,12 +414,11 @@ node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exe
 
 ## 交接：2026-11-05 round 7
 
-待辦第 1、2 項完成，第 3 項（A 類）完成 5／11 檔。下一輪續做其餘 6 檔：
-`bootstrap-physical`、`bootstrap-capture-physical`、`context-format`、
-`context-reduction`、`retained-format-ownership`、`current-context-predecessors`
-（後兩者與 bootstrap 兩檔同時涉及 legacy upgrade／bootstrap 語義，先做
-`context-format`／`context-reduction` 的 seam 與 code-based 斷言）。第 4 項的
-bootstrap 語義發現已列在上方。
+待辦第 1、2 項完成，第 3 項（A 類）完成 6／11 檔（`createJsonlBackend` 另有通用
+`wrap` seam 與 P2 #5 的 downgrade 修正）。下一輪續做其餘 5 檔：
+`context-reduction`（fixture 的 appendOwnedBatch 注入改成 hook + `wrapOwnedBatch`）、
+`bootstrap-physical`、`bootstrap-capture-physical`、`retained-format-ownership`、
+`current-context-predecessors`。第 4 項的 bootstrap 語義發現已列在上方。
 
 ## 交接：2026-11-05 round 5（歷史）
 
