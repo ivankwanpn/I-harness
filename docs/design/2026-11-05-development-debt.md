@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 248（host turn 修復）**：dump 顯示 promotion 與 admission 的 provenance 只差**鍵序**（`JSON.stringify` 比較）。
+> 改用 `canonicalJsonData` 後 host turn 5/5 通過、conversation 測試 27 全綠；skip 測試已恢復為正式測試。
 > **round 247（host turn 診斷修正）**：失敗是 flaky（5 次中 2 次），根因不是 prefix conflict，而是
 > `prepared promotion changed raw input`（input-preparation.ts:76，從 prepareWrite→restored-view:353 拋出）：promotion 與
 > 以 seq 解析出的 admission 之 provenance／images 不一致。下一輪 dump 事件確認是否同一 input 寫了兩次 admission。

@@ -1,5 +1,6 @@
 import type { SessionEventView } from '../managed/types.ts'
 import type { InputPreparationEvent } from '../events/input-preparation.ts'
+import { canonicalJsonData } from '../serialization/json-data.ts'
 import { inputObservationText, type PreparedInputObservation } from '../events/input-preparation.ts'
 import { conversationFormatError as fail } from '../events/conversation.ts'
 import type { GenerationActionState } from './generation.ts'
@@ -72,7 +73,7 @@ export function createInputPreparationIndex(scope: { parentSession?: string; see
             const promotion = promoted.get(state.started.inputId) ?? promotions.get(state.started.inputId)
             if (admission.type !== 'agent/input/admitted' || event.input?.inputId !== admission.inputId
               || cancelled.has(admission.inputId) || cancellations.has(admission.inputId) || promotion === undefined || promotion <= link.resultSeq || promotion >= event.seq!
-              || JSON.stringify(event.provenance) !== JSON.stringify(admission.provenance)
+              || canonicalJsonData(event.provenance) !== canonicalJsonData(admission.provenance)
               || !!admission.images?.length !== (event.imageInputId === admission.inputId) || event.images) fail('prepared promotion changed raw input')
             if (profile !== semanticSourceStructure) validatePreparedInputText(event, admission)
           }

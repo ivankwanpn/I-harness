@@ -11,7 +11,7 @@ import { createDesktopHost } from '../src/host.ts'
 // delivery reconciliation failures, while the composed-owned surface test
 // without the host plugins runs the same kind of turn. Kept skipped so the
 // reproduction is available without a red suite.
-it.skip('runs a full prompt turn through the desktop host on the commit log', async () => {
+it('runs a full prompt turn through the desktop host on the commit log', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-turn-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
   await mkdir(workspace)
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')

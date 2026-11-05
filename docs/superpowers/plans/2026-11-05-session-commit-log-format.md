@@ -879,11 +879,10 @@ What is known:
   the execution state issues the next batch against a stale prefix, and our backend rejects it as a conflict;
 - `managed.assertMutation(id)` only validates the entry (it does not forbid external appends), so the guard cannot be the fix.
 
-**Refined diagnosis (same round, instrumentation):** the failure is flaky (2 of 5 runs) and its cause is not a prefix
-conflict. The underlying error is `invalid conversation format: prepared promotion changed raw input`
-(`conversation/input-preparation.ts:76`) raised from `prepareWrite` (`restored-view.ts:353` → `execution-state.ts:481`): the
-promotion's admission `provenance`/images do not match the admission the restored view resolves by seq. Next: dump the
-admission/promotion events around a failing turn to see whether the host writes two admissions for one input.
+**Resolved (Plan 10b):** the promotion/admission check compared provenance with `JSON.stringify`, so two semantically equal
+provenance objects with different key insertion order failed. The dump showed exactly that
+(`{authority,kind,producer,scope}` vs `{kind,authority,scope,producer}`). `input-preparation.ts` now compares with
+`canonicalJsonData`; the host turn test is re-enabled and passed 5/5 runs, and the conversation suites (27 tests) pass.
 
 ## Follow-on plans (not in this plan)
 
