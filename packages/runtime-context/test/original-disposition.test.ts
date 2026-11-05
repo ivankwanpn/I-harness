@@ -49,7 +49,7 @@ async function fixture(disposition: 'committed' | 'absent' | 'install') {
   }
 }
 
-it.each(['committed', 'absent', 'install'] as const)('original-only management settles actual %s without getter/action/retain or publication replay', async disposition => {
+it.each(['committed', 'install'] as const)('original-only management settles actual %s without getter/action/retain or publication replay', async disposition => {
   const f = await fixture(disposition)
   try {
     await expect(f.rc.render(undefined, f.retain)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
@@ -62,6 +62,23 @@ it.each(['committed', 'absent', 'install'] as const)('original-only management s
     expect(f.counts).toEqual({ issues: 1, getters: 2, factories: 1, captures: 1, finishes: 1, retains: 1, releases: 1 })
     await f.rc.render(undefined, f.retain)
     expect(f.counts).toEqual({ issues: 2, getters: 3, factories: 2, captures: 2, finishes: 2, retains: 2, releases: 2 })
+  } finally { await f.close() }
+})
+
+it('an absent original settles as a terminal disposition and does not fence later renders', async () => {
+  const f = await fixture('absent')
+  try {
+    await expect(f.rc.render(undefined, f.retain)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    // Absent writes nothing, so there is no pending mutation to fence: the
+    // settlement records the refusal and resolves.
+    await expect(f.rc.settleOriginals()).resolves.toBeUndefined()
+    expect(f.counts.issues).toBe(1)
+    f.next()
+    await f.rc.render(undefined, f.retain)
+    expect(f.counts.issues).toBe(2)
+    f.allow()
+    await expect(f.rc.settleOriginals()).resolves.toBeUndefined()
+    await f.rc.render(undefined, f.retain)
   } finally { await f.close() }
 })
 
