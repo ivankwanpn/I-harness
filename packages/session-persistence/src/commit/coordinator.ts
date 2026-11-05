@@ -447,6 +447,9 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       // The receipt is durable before the session becomes invisible; the rename
       // is the deletion commit point (a crash before it deletes nothing).
       await this.putDocument(`deletion:${sessionId}`, manifest)
+      // Retained references must stop being current as soon as the deletion is
+      // durable, before the directory disappears.
+      ownershipPorts.observations.markDeleted([sessionId], [...manifest.documents].filter(key => !key.startsWith('deletion:')))
       // The manifest's documents belong to the deleted session; clear them so a
       // recreation cannot read the old task/title/binding state.
       await clearDocumentsOf([...new Set(manifest.documents)].filter(key => !key.startsWith('deletion:')))

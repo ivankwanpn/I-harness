@@ -36,4 +36,16 @@ describe('commit-log retained bindings', () => {
     await reference.release()
     expect(() => reference.assertCurrent()).toThrow()
   })
+
+  it('revokes a retained reference when its session is deleted', async () => {
+    const { coordinator } = await setup()
+    await coordinator.create({ sessionId: 's2' })
+    await coordinator.putDocument('task-s2', { formatVersion: 2, tasks: [], notifications: [] })
+    const facade = asSessionCoordinator(coordinator)
+    const reference = await facade.retainExistingSessionBindingObservation!({ sessionId: 's2' }, () => {})
+    reference.assertCurrent()
+    await coordinator.deleteOwnedSession('s2', { documents: ['task-s2'] })
+    expect(() => reference.assertCurrent()).toThrow()
+    await reference.release()
+  })
 })

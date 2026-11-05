@@ -1152,6 +1152,14 @@ document exists, deletes the session through `desktop/session/batch`, and reads 
 coordinator. `child-bootstrap-admission.test.ts` failures were confirmed as the same pre-existing plain-factory gate (the test
 builds `createSessionCoordinator` directly).
 
+## Plan 40 (implemented 2026-11-06): deleted sessions revoke retained references
+
+`deleteOwnedSession` now marks the session and its manifest documents in the binding observations (`markDeleted`), so a retained
+reference (or a binding observation) stops being current as soon as the deletion receipt is durable — previously the reference
+kept passing `assertCurrent` after the session directory disappeared. `commit-retained.test.ts` covers acquire → delete →
+`assertCurrent` throws → release.
+
+
 
 `fork-controller.test.ts` moved the same way: 32 failures drop to 6, which have different causes (fork admission/host fixture
 
