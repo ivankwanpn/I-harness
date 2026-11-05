@@ -245,6 +245,8 @@ reachability 仍是 71 NEW（沒有新增 row）。
 | `selected-results-denials` | 5/9 → 9/9 | `wrapOwnedBatch` |
 | `context-format` | 1/10 → 10/10 | 新增通用 `wrap` seam（見下） |
 | `context-reduction` | 0/20 → 20/20 | `wrap` + 可變 `AppendHook`（fixture 在建構前安裝） |
+| `retained-format-ownership` | 0/30 → 30/30 | `wrap` 計數器（取代七個 `vi.spyOn`） |
+| `bootstrap-physical` | 0/58 → 46/58 | `wrap` + append／confirm frame hooks（剩 12 個語義紅，見下） |
 
 `context-format` 需要換掉三種「建構後改 backend 方法」的注入，既有的兩個 seam 不夠，
 所以 `createJsonlBackend` 多了第三個 pre-bind seam：
@@ -262,15 +264,27 @@ reachability 仍是 71 NEW（沒有新增 row）。
 - 順帶修掉 P2 #5：`updateMeta` 的 downgrade 檢查移到 transition 之前，訊息回到
   「cannot downgrade session format」，不再被包成泛用 `TASK_TRANSITION_FAILED`。
 
-剩 4 檔（`bootstrap-physical`、`bootstrap-capture-physical`、
-`retained-format-ownership`、`current-context-predecessors`）——這四檔同時涉及
-legacy upgrade／bootstrap 語義，不是單純換 seam：`retained-format-ownership` 用
-`vi.spyOn` 覆蓋 repair／upgrade／replace／append／readJournalPrefix／appendOwnedBatch／
-reconcile 七個方法，要改成一組 pre-bind 計數器；bootstrap 兩檔用 `appendOwnedBatch`／
-`confirmBootstrapFrames` 的注入，且斷言依賴 legacy bootstrap 形狀。
+剩 2 檔：`bootstrap-capture-physical`、`current-context-predecessors`（都涉及
+legacy upgrade／bootstrap 語義，不是單純換 seam）。
 
-**量測（round 7 結束，空載重跑）**：`session-persistence-jsonl` 全套
-**228 failed / 629 passed / 17 skipped（27 個紅檔，共 98 檔）**。
+`bootstrap-physical` 遷移後仍有 12 個語義紅（歸第 4 項），共同形狀是「transition 車道
+的 outcome 與 legacy 期待不同」：
+
+- seed-issue 守衛、source-change、frame reconcile、header fsync 等案例期待 `ready`，
+  實際是 `blocked`（bootstrap 在 transition 內多了一次一致性檢查）。
+- 一個案例期待 `not-issued`，實際 `blocked`（metadata-only nonempty target）。
+- 兩個案例期待 `FACT_RECOVERY_REQUIRED` 或直接拋錯，實際是
+  `SessionBindingObservationError`／`PROCESS_READ_UNAVAILABLE`。
+- `keeps the original manifest ready …` 與 `review F1 …` 期待 `already-ready`，
+  實際 `blocked`。
+
+**量測（round 8 結束，空載重跑）**：`session-persistence-jsonl` 全套
+**152 failed / 705 passed / 17 skipped（26 個紅檔，共 98 檔）**。
+
+- round 7 結束時是 228 failed / 629 passed（27 紅檔）。
+- round 8 的兩個 A 類遷移：`retained-format-ownership` -30、
+  `bootstrap-physical` -46（46 個轉綠、12 個語義紅留下）；紅檔 27 → 26
+  （`retained-format-ownership` 轉綠，bootstrap 兩檔仍紅）。
 
 - 第 2 項（建構子移除）後是 273 failed / 584 passed（34 紅檔）：差異恰好是
   `process-read-composition`（-12 failed、+12 passed）、
@@ -390,11 +404,11 @@ boundaries 147/147；reachability 432 rows、70 NEW（round 6 是 71，移除的
    → round 7 完成（移除 export，14 檔遷移，見上）。
 3. A 類測試（建構後 monkeypatch）逐檔改用 pre-bind seam；每檔一次 PR/commit，
    並用本文件的 `test-env` 指令驗證。
-   **round 7：11 檔中 7 檔完成**（`cleanup-diagnostic`、`required-source-ports`、
+   **round 8：9 檔遷移完成，8 檔全綠**（`cleanup-diagnostic`、`required-source-ports`、
    `recoverable-source-hold`、`coalesced-recovery`、`selected-results-denials`、
-   `context-format`、`context-reduction`）；剩 `bootstrap-physical`、
-   `bootstrap-capture-physical`、`retained-format-ownership`、
-   `current-context-predecessors`。
+   `context-format`、`context-reduction`、`retained-format-ownership`）；
+   `bootstrap-physical` 已改走 pre-bind frame hooks（46/58），剩 12 個語義紅歸第 4 項。
+   還要處理 `bootstrap-capture-physical`、`current-context-predecessors`。
 4. B 類 predecessor 語義決策：若 composed 升級 13→14 是正確行為，更新
    `child-bootstrap-predecessor`、`semantic-codec2-predecessor` 的位元組斷言；
    若否，回頭修產品。
@@ -419,11 +433,11 @@ node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exe
 
 ## 交接：2026-11-05 round 7
 
-待辦第 1、2 項完成，第 3 項（A 類）完成 7／11 檔（`createJsonlBackend` 另有通用
-`wrap` seam 與 P2 #5 的 downgrade 修正）。下一輪續做其餘 4 檔：
-`retained-format-ownership`（七個 `vi.spyOn` 改成 pre-bind 計數器）、
-`bootstrap-physical`、`bootstrap-capture-physical`、`current-context-predecessors`。
-第 4 項的 bootstrap 語義發現已列在上方。
+待辦第 1、2 項完成，第 3 項（A 類）9／11 檔已遷移（8 檔全綠；`bootstrap-physical`
+46/58，12 個語義紅歸第 4 項）。`createJsonlBackend` 另有通用 `wrap` seam、P2 #5 的
+downgrade 修正。下一輪續做 `bootstrap-capture-physical`（同 bootstrap-physical 的
+frame hook 形狀）與 `current-context-predecessors`（legacy upgrade 語義：期待 12、
+實際 CURRENT；raw upgrade 缺 task document）。第 4 項的 bootstrap 語義發現已列在上方。
 
 ## 交接：2026-11-05 round 5（歷史）
 
