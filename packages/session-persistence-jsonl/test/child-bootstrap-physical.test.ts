@@ -63,6 +63,7 @@ const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:t
   expect(stderr).toBe('');expect(barrier.callbacks).toBe(['exclusive-empty','reservation-short','reservation-sync','reservation-readback','reservation-close','confirmed-reservation'].includes(cut)?0:1)
   const before=await artifacts(root),stagePath=bootstrapPathsForRoute(join(root,'target.jsonl'),{protocol:'child-v1',request}).stage,stage=await readFile(stagePath),full=(()=>{try{return JSON.parse(stage.toString()).kind==='semantic-bootstrap-header'}catch{return false}})()
   const backend=createJsonlBackend(root),cold=createSessionCoordinator(backend,{lock:{enabled:true}});let callbacks=0
+  let failure: unknown
   try{
    const retry=await cold.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;return payload});expect(callbacks).toBe(0)
    if(!full){expect(retry.kind).not.toBe('ready');const resumed=await cold.resumeChildTarget!(request,guards,payload);expect(resumed.kind).not.toBe('ready');expect(await artifacts(root)).toEqual(before)}
@@ -78,6 +79,7 @@ const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:t
     const after=await readFile(join(root,'target.jsonl')),original=before.find(row=>row.name==='target.jsonl');if(original)expect(after.subarray(0,Buffer.from(original.base64,'base64').length)).toEqual(Buffer.from(original.base64,'base64'))
     await writeFile(join(root,'recovery.json'),JSON.stringify({cut,callbacks,receipt:resumed.receipt,stageSha256:hash(stage),targetSha256:hash(after),birthFrameSha256:hash(after.subarray(after.indexOf(10)+1)),before,after:await artifacts(root)},null,2))
    }
-  }finally{await cold.close()}
+  }catch(error){failure=error}finally{try{await cold.close()}catch(error){if(failure===undefined)failure=error}}
+  if(failure!==undefined)throw failure
  }
 },360000)

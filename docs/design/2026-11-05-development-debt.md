@@ -550,6 +550,9 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 110 定論**：把第二次 `resumeSemanticTarget` 包 try/catch 後**沒有** `RESUME2_ERR`——
   **round 111 揭曉真正失敗**：把兩檔的 `finally` close 改成 `.catch(console.error)` 後，真正的
   **round 113 已修測試衛生**：兩檔的 `finally` 改為「先捕捉 body 錯誤、close 只在沒有其他
+  **round 114**：`child-bootstrap-physical` 也套用同樣的 finally 衛生改動，真實失敗現形為
+  `expected ['ready','already-ready'] to include 'refused'`——即冷 resume 在某個 barrier cut
+  之後回 `refused`（測試期待 ready/already-ready）。這是真正的語義問題，不是 cleanup 假象。
   失敗時才蓋上」，現在回報的是真實斷言（`task-target.doc.jsonl` 非 ENOENT）；
   `child-bootstrap-physical` 的 `finally{await cold.close()}` 同類問題待套用。
   斷言錯誤現形——`promise resolved "Buffer[123,34,102,111,114,…]" instead of rejecting`，
