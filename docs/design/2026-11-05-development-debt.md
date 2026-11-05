@@ -561,6 +561,9 @@ round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed�
   signed/redacted thinking＋toolCalls 或 explicit-off breakpoints 這兩種輸入下是否提早結束
   （例如驗證/錯誤事件在 fetch 之前），再決定修產品或修測試的輸入。
   3 次走訪，或 hooks 被呼叫多次；需先確認實作是否真的退化（效能契約）再決定修產品或重寫 probe。
+  **round 87 排除**：即使補一個前置 user turn，`anthropic-messages` 仍不發 fetch（body 仍
+  undefined）→ 不是「訊息序列缺 user」的問題；需在 `buildModelClient` 的 stream 進入點直接觀察
+  是否產生 error event（測試的 `for await` 會吞掉事件，不拋錯）。實驗已還原。
   兩次實驗均已還原。round 72 追加：`conversation/validation.ts` 只有一處
   `for (const event of events)`（line 431）；3 次走訪的其他來源很可能在 `createHistoryIndex`
   （core-session 內另一個模組），下輪沿該呼叫鏈數走訪次數即可。**round 73 定論**：只掛
