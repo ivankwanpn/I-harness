@@ -171,6 +171,9 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       assertDurableTransition()
       managed.assertOutsideCapture(id);observations.assertOutsideObservedSession(id);observations.assertOutsideOwnedOperations([id]);observations.assertSessionAdmission(id);managed.assertMutation(id)
       if(typeof id!=='string'||!patch||typeof patch!=='object'||utilTypes.isProxy(patch))throw TypeError('Invalid metadata update')
+      // A downgrade is a caller error, not a transition failure: refuse it
+      // before the transition wrapper so the diagnostic keeps its meaning.
+      if (Object.hasOwn(patch, 'formatVersion') && patch.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('cannot downgrade session format')
       const taskMetadata=managed.beginTaskMetadataUpdate(id);let succeeded=false
       try {
         managed.invalidateMetadataWitness(id)
