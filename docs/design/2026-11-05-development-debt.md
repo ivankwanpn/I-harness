@@ -570,9 +570,11 @@ full job 當 gate。
   （round 41–43 定位：`Coordinator cleanup is unresolved` 來自 `coordinator-factory` 的
   `closeWithRetained`，其 rejection 鏈是 `Managed documents require recovery before close`
   → `Managed facts require reconciliation`（`managed-documents.ts:259` 的 AggregateError
-  包住 `closeOne` 的失敗）。即冷 resume 後的 'target' managed entry 仍有未 reconcile 的
-  fact group；下一步要追 `resumeChildTarget` 結束時為何沒 reconcile 該 entry，或 close 前
-  應先被動 reconcile。）
+  包住 `closeOne` 的失敗）。round 44 再收窄：該訊息是 `FactRecoveryRequiredError`
+  （`FACT_RECOVERY_REQUIRED`），由 `core-session/src/managed/nondurable.ts:41` 的
+  `assertNewWork` 在 `recoveryState.sticky || recoveryHolds.size` 時拋出——即冷 resume 後
+  仍有 sticky recovery 或未釋放的 recovery hold。下一步：追 `resumeChildTarget` 成功路徑
+  是否應清掉由被中斷子程序留下的 unknown fact group（以及 `recoveryHolds` 由誰持有）。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
