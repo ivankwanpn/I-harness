@@ -4,8 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { append, createSession, fromJSONL, readGenerationActions, toJSONL, type ResultEnvelope, type SessionEvent } from '@i-harness/core-session'
-import { createSessionCoordinator, SessionFormatUnsupportedError, type PersistenceBackend } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { format8Fixture } from '../../core-session/test/fixtures/format8-journal.ts'
 
 const roots: string[] = []
@@ -13,30 +13,37 @@ afterEach(async () => {
   vi.unstubAllGlobals()
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
+const mutationNames = ['repair', 'upgrade', 'replace', 'append', 'journalRead', 'ownedAppend', 'reconcile'] as const
+type MutationName = typeof mutationNames[number]
+const backendMethod: Record<MutationName, keyof import('@i-harness/session-persistence').PersistenceBackend> = {
+  repair: 'repair', upgrade: 'upgradeSessionFormat', replace: 'replaceEvents', append: 'append',
+  journalRead: 'readJournalPrefix', ownedAppend: 'appendOwnedBatch', reconcile: 'reconcileOwnedBatch',
+}
 async function store(raw: string) {
   const root = await mkdtemp(join(tmpdir(), 'ih-owned-retained-format-')); roots.push(root)
   const path = join(root, 'legacy.jsonl')
   await writeFile(path, raw)
-  return { root, path, backend: createJsonlBackend(root) }
+  const counts: Record<MutationName, number> = { repair: 0, upgrade: 0, replace: 0, append: 0, journalRead: 0, ownedAppend: 0, reconcile: 0 }
+  // Count before delegating to the real owners. The pre-bind wrap seam runs
+  // before the canonical-path guard snapshots the backend descriptors; spying
+  // after construction is PROCESS_READ_UNAVAILABLE by design.
+  const backend = createJsonlBackend(root, { wrap: b => {
+    for (const name of mutationNames) {
+      const key = backendMethod[name], method = (b as unknown as Record<string, unknown>)[key]
+      if (typeof method !== 'function') continue
+      const actual = method.bind(b)
+      ;(b as unknown as Record<string, unknown>)[key] = (...args: unknown[]) => { counts[name]++; return actual(...args) }
+    }
+  } })
+  return { root, path, backend, counts }
 }
 const headerOf = (raw: string) => JSON.parse(raw.slice(0, raw.indexOf('\n')))
 const bodyOf = (raw: string) => raw.slice(raw.indexOf('\n') + 1)
 function withVersion(raw: string, formatVersion: number) {
   return JSON.stringify({ ...headerOf(raw), formatVersion }) + raw.slice(raw.indexOf('\n'))
 }
-function mutationCalls(backend: PersistenceBackend) {
-  // Spies count before delegating to the real original owners, including the
-  // journal read that may truncate a torn tail and the managed append path.
-  return {
-    repair: vi.spyOn(backend, 'repair'), upgrade: vi.spyOn(backend, 'upgradeSessionFormat'),
-    replace: vi.spyOn(backend, 'replaceEvents'), append: vi.spyOn(backend, 'append'),
-    journalRead: vi.spyOn(backend, 'readJournalPrefix'), ownedAppend: vi.spyOn(backend, 'appendOwnedBatch'),
-    reconcile: vi.spyOn(backend, 'reconcileOwnedBatch'),
-  }
-}
-function noMutations(calls: ReturnType<typeof mutationCalls>) {
-  expect(Object.fromEntries(Object.entries(calls).map(([key, spy]) => [key, spy.mock.calls.length])))
-    .toEqual({ repair: 0, upgrade: 0, replace: 0, append: 0, journalRead: 0, ownedAppend: 0, reconcile: 0 })
+function noMutations(counts: Record<MutationName, number>) {
+  expect(counts).toEqual({ repair: 0, upgrade: 0, replace: 0, append: 0, journalRead: 0, ownedAppend: 0, reconcile: 0 })
 }
 function forbidExecution() {
   const fetch = vi.fn(() => { throw new Error('owned open does not authorize model execution') })
@@ -82,7 +89,16 @@ describe.each([8, 9, 10] as const)('literal predecessor%s owned migration', vers
     try {
       await coordinator.snapshot!('legacy')
       expect(await readFile(path, 'utf8')).toBe(raw)
-      if (barrier === 'direct') expect((await backend.upgradeSessionFormat!('legacy', version, CURRENT_FORMAT_VERSION)).formatVersion).toBe(CURRENT_FORMAT_VERSION)
+      if (barrier === 'direct') {
+        expect((await backend.upgradeSessionFormat!('legacy', version, CURRENT_FORMAT_VERSION)).formatVersion).toBe(CURRENT_FORMAT_VERSION)
+        const upgraded = await readFile(path, 'utf8')
+        // A raw backend upgrade skips the task-document birth, so the composed
+        // lane refuses to open the current session (recovery required) rather
+        // than presenting it as consistent; the bytes stay untouched.
+        await expect(coordinator.openManagedDocument('legacy')).rejects.toThrow()
+        expect(await readFile(path, 'utf8')).toBe(upgraded)
+        return
+      }
       if (barrier === 'coordinator') expect(await coordinator.ensureWritableFormat!('legacy')).toEqual({ formatVersion: CURRENT_FORMAT_VERSION })
       const document = await coordinator.openManagedDocument('legacy')
       expect(coordinator.ownerOf('legacy')).toBe(true)
@@ -144,6 +160,9 @@ describe.each(slots)('$name version ownership', ({ events }) => {
   it('keeps current11 retained facts through an actual owned append, close and fresh reopen', async () => {
     const raw = currentFixture(events), original = fromJSONL(raw)
     const { root, path, backend } = await store(raw), fetch = forbidExecution()
+    // A current session must be born with its task document; the one 'child' row
+    // keeps the subagent/end slot consistent and is inert for the other slots.
+    await writeFile(join(root, 'task-legacy.doc.jsonl'), JSON.stringify({ formatVersion: 3, tasks: [{ id: 'child', parentSessionId: 'legacy', agentPath: 'a', description: 'd', prompt: 'p', agent: 'a', delivery: 'tool', status: 'error', outcome: 'error', timeCreated: 1 }], notifications: [] }) + '\n')
     const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
     let committed = ''
     try {
@@ -170,23 +189,25 @@ describe.each(slots)('$name version ownership', ({ events }) => {
     const current = currentFixture(events), wrong = withVersion(current, version)
     expect(wrong).not.toBe(current)
     expect(bodyOf(wrong)).toBe(bodyOf(current))
-    const { path, backend } = await store(wrong), calls = mutationCalls(backend), fetch = forbidExecution()
+    const { path, backend, counts } = await store(wrong), fetch = forbidExecution()
     const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
     try {
       const error = await coordinator.openManagedDocument('legacy').then(() => undefined, error => error)
+      // The transition wrapper keeps a machine-readable code and the original
+      // cause (D-12 #7); the legacy error class lives on the cause.
       if (version === CURRENT_FORMAT_VERSION+1) {
-        expect(error).toBeInstanceOf(SessionFormatUnsupportedError)
-        expect(error.message).toMatch(new RegExp(`format version ${version}.*newer`, 'i'))
+        expect(error.code).toBe('SESSION_FORMAT_UNSUPPORTED')
+        expect(String(error.cause)).toMatch(new RegExp(`format version ${version}.*newer`, 'i'))
       } else {
-        expect(error).toBeInstanceOf(TypeError)
-        expect(error.message).toMatch(/^Invalid (result envelope|retained job result) or session format$/)
+        expect(error.cause).toBeInstanceOf(TypeError)
+        expect(error.cause.message).toMatch(/^Invalid (result envelope|retained job result) or session format$/)
       }
-      noMutations(calls)
+      noMutations(counts)
       expect(await readFile(path, 'utf8')).toBe(wrong)
       expect(coordinator.ownerOf('legacy')).toBe(false)
       expect(fetch).not.toHaveBeenCalled()
     } finally { await coordinator.close() }
-    noMutations(calls)
+    noMutations(counts)
     expect(await readFile(path, 'utf8')).toBe(wrong)
   })
 })
