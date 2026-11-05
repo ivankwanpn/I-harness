@@ -39,7 +39,7 @@ export function createOwnedGatewaySelectionOwner(options:Parameters<typeof captu
       original.assertCurrent();const candidate=await captureOwnedGatewaySelection(options);original.assertCurrent();if(candidate.kind!=='managed')throw Error('Physical hooks require complete compatibility before acquisition');candidate.assertCurrent();if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed');await Reflect.apply(update,mount,[candidate.inputs,candidate.directMcp]);original.assertCurrent();candidate.assertCurrent();if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed');row.current=candidate;row.failed=false;return
      }catch(error){
       const message=String((error as Error)?.message??'')
-      if(attempt<40&&/issued write needs reconciliation|prefix changed/i.test(message)){await new Promise(resolve=>setTimeout(resolve,25));continue}
+      if(attempt<200&&/issued write needs reconciliation|prefix changed|writer dependency cleanup unresolved/i.test(message)){await new Promise(resolve=>setTimeout(resolve,25));continue}
       throw error
      }
     }

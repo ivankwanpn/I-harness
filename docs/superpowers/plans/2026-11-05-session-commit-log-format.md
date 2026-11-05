@@ -948,6 +948,12 @@ observation can hold leases. `host-commit-log-surface.test.ts` subscribes (`desk
 `host-commit-log-surface-changed.test.ts` subscribes to the execution surface, runs a controlled prompt turn and observes a
 `desktop/surface/changed` frame, so the private observation publishes writes made through the commit log.
 
+## Plan 16a (implemented 2026-11-05): refresh retry budget under parallel load
+
+The plugin refresh can also see `Original writer dependency cleanup unresolved` while an earlier write settles. With seven SCL host
+files running in parallel the 1 s budget was too short; the selection owner now retries those three transient messages for up to
+5 s. The parallel SCL host suite (8 tests) passed three consecutive runs.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
