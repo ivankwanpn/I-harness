@@ -180,6 +180,14 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 206（task-transition 群像）**：9 檔現在 **8 紅**，且第一個紅都不再是檔案存在性，而是
+> 同一族「**失敗/blocked 之後沒有保留原 claim/lease**」：
+> `promise resolved {held:true} instead of rejecting`（header-debt、direct-lease、
+> capture-close-race 的 pinOwnership）、`expected {…} to be undefined`
+> （capture-close-race 的 parent claim）、`Coordinator cleanup is unresolved`
+> （managed-header-confirm、stage-revision）、以及 stage-revision 的
+> `expected false to be true`。教訓：`stage-debt`/stage-swap 修好檔案斷言後露出的正是這一族，
+> 下一輪應集中攻「blocked/failed 路徑釋放了 claim」這一個根因。
 > **round 205（Q1 反轉）**：實驗證明 **成功 bootstrap（`kind: 'ready'`）本來就會建立
 > `task-target.doc.jsonl`**（`DBGEXISTS after-ready=yes`）。所以 stage-swap 的 ENOENT 斷言是
 > **自相矛盾**：line 30 的 ready 已經寫出該檔，line 36 卻要求它不存在。已改成「blocked resume
