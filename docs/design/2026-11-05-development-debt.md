@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 312（啟用 context output 後）**：`contextSubsystems.contextOutput.enabled = true` 時，`context_output_read` 仍不在 log 留下
+> `tool/result`，只有 context/action、context/budget、context/attempt；待從 native context 直接確認是否需 selected-source witness。
 > **round 311（context_output_read 探測）**：SCL host 上以真實 artifact ref 呼叫回 `{"error":"Context output is disabled or stopping"}`，
 > 表示測試配置未啟用 context output，尚未走到 selected-source 路徑；探測已移除，結論記入計畫。
 > **round 310（selected results 資料流）**：追到出口是 `exportSelectedResultsConversationSeed`，需要 CompletedPassiveContext、

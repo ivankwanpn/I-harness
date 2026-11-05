@@ -1181,6 +1181,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+Follow-up: with `contextSubsystems.contextOutput.enabled = true` in the test settings, the same `context_output_read` call still
+leaves no `tool/result` event in the log — only `context/action`, `context/budget` and `context/attempt` events — so the context tool
+appears to answer through the model message stream rather than a persisted tool result. `session/result/read` remains the verified
+page-read path on SCL; whether the in-turn tool needs the selected-source witness is still open and should be checked from the
+gateway native context rather than the host log.
+
 ## Plan 61 (investigated 2026-11-06): context_output_read on the SCL host
 
 A controlled `context_output_read` call against a real artifact ref on the commit-log host answers
