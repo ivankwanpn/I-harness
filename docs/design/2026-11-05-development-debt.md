@@ -339,7 +339,12 @@ re-export（`ResolvedBootstrapBirth`、`ForkHandoffMode`、`ChildInitialCommitme
 `ManagedAcknowledgedFact`、`ManagedRequestContext`、`ManagedSessionExecutor`、
 `ManagedSessionExecutorDeps`）→ **409 rows、47 NEW**（累計 -23）。再一輪移除 `settings` 的
 `SettingsRevisionGuard`、`SettingsWatchOptions`、`SettingsWatchState`、
-`InstructionMigrationMeta` → **405 rows、43 NEW**（累計 -27）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+`InstructionMigrationMeta` → **405 rows、43 NEW**（累計 -27）。再一輪清三個套件共 11 個
+type re-export：`session-executor`（`PendingRewindIntent`、`RewindIntentV1`）、
+`subagent`（`DocumentIntentStore`、`DocumentWriteIntentV1`、`JobLoadResult`、
+`JobRecordStore`、`PendingDocumentWrite`、`isParentNotificationStopped`）、
+`core-tools`（`ApprovalPolicyService`、`NativePlanValidationError`、`NativeTarget`）
+→ **394 rows、32 NEW**（累計 -38）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---

@@ -14,7 +14,7 @@ export { createTitleGenerationContext } from './lifecycle/title-generation.ts'
 export { actionMetadataFacts } from './lifecycle/action-facts.ts'
 export { withRewindFacts } from './lifecycle/rewind-facts.ts'
 export { createRewindIntentLog, readPendingRewindIntents } from './lifecycle/rewind-intent.ts'
-export type { RewindIntentHooks, PendingRewindIntent, RewindIntentV1 } from './lifecycle/rewind-intent.ts'
+export type { RewindIntentHooks } from './lifecycle/rewind-intent.ts'
 export {
   createSessionService,
   type SessionModelBindingResult,
