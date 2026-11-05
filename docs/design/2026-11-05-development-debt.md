@@ -573,8 +573,12 @@ full job 當 gate。
   包住 `closeOne` 的失敗）。round 44 再收窄：該訊息是 `FactRecoveryRequiredError`
   （`FACT_RECOVERY_REQUIRED`），由 `core-session/src/managed/nondurable.ts:41` 的
   `assertNewWork` 在 `recoveryState.sticky || recoveryHolds.size` 時拋出——即冷 resume 後
-  仍有 sticky recovery 或未釋放的 recovery hold。下一步：追 `resumeChildTarget` 成功路徑
-  是否應清掉由被中斷子程序留下的 unknown fact group（以及 `recoveryHolds` 由誰持有）。
+  仍有 sticky recovery 或未釋放的 recovery hold。**round 46 修正線索**：durable managed
+  document 走的是 `session-persistence/src/coordinator/bootstrap.ts`；`FactRecoveryRequiredError`
+  的 throw 點是 `bootstrap.ts:359`（`assertCurrent`：`documents.get(id)!==entry || entry.revoked`）
+  與 `:825`（`captureClosed || owned.revoked || documents.get(id)!==owned`）。即 close 期間某個
+  bootstrap entry 的識別已失效（revoked／被 resume 換掉）。下一步：追 `resumeChildTarget`
+  是否 revoke 了舊 entry 但把舊 entry 的 close handle 留在 documents／flight 裡。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
