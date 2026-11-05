@@ -534,6 +534,7 @@ round 93：`fs` **15 檔 / 113 tests 全綠**、`shell` **11 檔 / 93 tests 全�
 round 119：`fs-search` **5 檔 / 51 tests 全綠**、`fs-watch` **5 檔 / 69 tests 全綠**。
 round 120：`image-validation` **1 檔 / 19 tests 全綠**、`attachment` **2 檔 / 12 tests 全綠**。
 round 147：`plan-mode` **1 檔 / 5 tests 全綠**、`interaction` **5 檔 / 29 tests 全綠**。
+round 148：`goal` **1 檔 / 16 tests 全綠**、`diagnostics` **4 檔 / 49 tests 全綠**。
 round 125：`guard-timeout` **1 檔 / 7 tests 全綠**；`guard-retry` **1 檔紅 / 9 passed（10）**——紅點
   **round 126 已修**：`guard-retry` 在 `sleep(backoff)` **之後**沒有再檢查 caller signal，
 round 127：`guard-approval` **11 檔 / 107 tests 全綠**；`guard-repeat-tool` **1 檔紅 / 8 passed（9）**
