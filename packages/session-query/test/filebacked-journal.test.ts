@@ -21,7 +21,7 @@ it('searches an actual current coordinator append as logical facts without chang
     const { session: snapshot } = await coordinator.load('current')
     expect(snapshot.events).toEqual([expect.objectContaining({ type: 'user/message', seq: 0, text: 'CURRENT_COORDINATOR_MARKER' })])
     const path = join(root, 'current.jsonl'), before = await readFile(path)
-    expect(JSON.parse(before.subarray(0, before.indexOf(10)).toString()).formatVersion).toBe(13)
+    expect(JSON.parse(before.subarray(0, before.indexOf(10)).toString()).formatVersion).toBe(14)
     const query = createFileBackedSessionQuery({ storeRoot: root })
     expect(await query.search('CURRENT_COORDINATOR_MARKER')).toEqual([expect.objectContaining({ sessionId: 'current', seq: 0, eventType: 'user/message' })])
     expect(parseLinePrefix(before).events).toEqual(snapshot.events)

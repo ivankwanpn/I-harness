@@ -14,9 +14,9 @@ describe("session-query tools", () => {
   it("registers session_search and lineage as read-only direct tools", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools-"))
     try {
-      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       await coordinator.create({ sessionId: "parent" })
-      await coordinator.create({ sessionId: "child", parentSession: "parent" })
+      await coordinator.create({ sessionId: "child", parentSession: "parent", seedLength: 0 })
       await coordinator.append("parent", [{ type: "user/message", text: "searchable needle phrase" }])
 
       const ctx = createContext()
@@ -53,7 +53,7 @@ describe("session-query tools", () => {
   it("marks session_search and lineage isConcurrencySafe", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools-cc-"))
     try {
-      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       await coordinator.create({ sessionId: "parent" })
       const tools = createSessionQueryTools(createFileBackedSessionQuery({ storeRoot: dir }))
       const search = tools.find((t) => t.name === "session_search")!
@@ -69,7 +69,7 @@ describe("session-query tools", () => {
   it("propagates errors as tool failures (unknown session)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools2-"))
     try {
-      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       await coordinator.create({ sessionId: "parent" })
       const ctx = createContext()
       const registry = createToolRegistry(ctx)

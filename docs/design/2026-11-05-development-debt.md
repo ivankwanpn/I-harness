@@ -556,6 +556,10 @@ round 133：`compaction` 已由 3 紅轉 **33/33 檔、247/247 tests 全綠**—
 round 138 全套重跑：`code-mode` **7 檔紅 / 21 檔綠（28 檔），83 failed / 282 passed（365）**
   round 139：`store.test.ts` 單紅是「a failed completion flush overrides a persisted store
 round 141：`session-query` 4 個測試檔遷到 composed 建構子 → **25 → 20 failed / 64 passed
+  **round 142 收尾**：剩下的 `TASK_TRANSITION_UNSUPPORTED` 其實來自
+  `task-document-transition.ts:95`（lock 未啟用）——補上 `{ lock: { enabled: true } }`；
+  子會話建立需 `seedLength`（lineage validator）；current append 測試的格式改期待 14。
+  → `session-query` **7/7 檔、84/84 tests 全綠**（由 25 failed）。
   （84）**、4 紅檔不變；剩餘 20 筆仍報 `TASK_TRANSITION_UNSUPPORTED`，來源不是測試檔的建構子
   （src 無 `createSessionCoordinator`），需追 session-query 工具內部開啟 session 的路徑。
   candidate and completed marker」→ `Managed facts require reconciliation`；該測試用非 durable

@@ -15,7 +15,7 @@ import { createFileBackedSessionQuery, SessionQueryError } from "../src/file-bac
  * the FILE is the authority — the query index must consume it read-only. */
 async function seededStore(text: string = "hello 獨角獸"): Promise<{ dir: string; id: string }> {
   const dir = mkdtempSync(join(tmpdir(), "ih-q-"))
-  const coord = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
+  const coord = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coord.create()
   const s = createSession()
   append(s, { type: "user/message", text })
@@ -49,9 +49,9 @@ describe("file-backed session query (reconcile-on-search)", () => {
   it("lineage is served from the jsonl header (create meta)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ih-q-lineage-"))
     try {
-      const coord = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
+      const coord = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       await coord.create({ sessionId: "parent" })
-      await coord.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })
+      await coord.create({ sessionId: "child", parentSession: "parent", seedLength: 0, delegationDepth: 1, origin: "subagent" })
       await coord.close()
       const q = createFileBackedSessionQuery({ storeRoot: dir })
       const nodes = await q.lineage("parent", { direction: "children" })
@@ -94,7 +94,7 @@ describe("file-backed session query (reconcile-on-search)", () => {
     try {
       const q = createFileBackedSessionQuery({ storeRoot: dir })
       expect((await q.search("zebra")).length).toBe(0)
-      const coord = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
+      const coord = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       await coord.append(id, [{ type: "user/message", text: "a zebra crossed the purple unicorn" }])
       await coord.close()
       const hits = await q.search("zebra")
@@ -108,7 +108,7 @@ describe("file-backed session query (reconcile-on-search)", () => {
   it("removes a deleted session's rows on the next reconcile", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ih-q-del-"))
     try {
-      const coord = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
+      const coord = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       await coord.create({ sessionId: "keep" })
       await coord.create({ sessionId: "drop" })
       await coord.append("keep", [{ type: "user/message", text: "unicorn keep" }])

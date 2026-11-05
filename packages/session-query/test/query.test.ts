@@ -17,15 +17,15 @@ function cleanup(dir: string): void {
 // the file-backed index derives on first search (reconcile-on-search).
 function makeEnv() {
   const dir = mkdtempSync(join(tmpdir(), "m10b-q-"))
-  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
   const query = createFileBackedSessionQuery({ storeRoot: dir })
   return { dir, coordinator, query }
 }
 
 async function seed(coordinator: ReturnType<typeof composeJsonlTaskTransitionCoordinator>) {
   const parent = (await coordinator.create({ sessionId: "parent" })).id
-  const child = (await coordinator.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })).id
-  const grand = (await coordinator.create({ sessionId: "grand", parentSession: "child", delegationDepth: 2, origin: "subagent" })).id
+  const child = (await coordinator.create({ sessionId: "child", parentSession: "parent", seedLength: 0, delegationDepth: 1, origin: "subagent" })).id
+  const grand = (await coordinator.create({ sessionId: "grand", parentSession: "child", seedLength: 0, delegationDepth: 2, origin: "subagent" })).id
   await coordinator.append("parent", [{ type: "user/message", text: "the purple unicorn fixed the parser" }])
   await coordinator.append("parent", [{ type: "tool/result", callId: "c", name: "bash", output: { stdout: "unicorn done" } }])
   await coordinator.append("child", [{ type: "user/message", text: "the green dragon slept" }])
@@ -143,7 +143,7 @@ describe("session-query", () => {
   it("lineage ancestors rejects cyclic parent metadata", async () => {
     const { dir, coordinator, query } = makeEnv()
     try {
-      await coordinator.create({ sessionId: "a", parentSession: "a" })
+      await coordinator.create({ sessionId: "a", parentSession: "a", seedLength: 0 })
       await expect(query.lineage("a", { direction: "ancestors" })).rejects.toThrow(
         /cycle detected in session lineage at: a/,
       )
