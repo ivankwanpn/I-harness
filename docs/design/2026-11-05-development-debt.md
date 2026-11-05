@@ -118,7 +118,9 @@ round 191：core-agent 的 seam 遷移（5 檔 / 21 tests 全綠）。
 > current-context-loopback 2/2、instruction-request-context 12/12 全綠；剩下
 > retained-batch-continuation 4、unstarted-call-settlement 9、compaction-binding 2。
 > 另修掉 core-agent 的 typecheck（`retained-batch-continuation` 的重複 import 與死變數，
-> HEAD 上本來就是紅的）。
+> HEAD 上本來就是紅的）。**round 192**：`retained-batch-continuation` 的 `fixture()` 加上
+> `seams`／`arm()`，4 筆紅全綠 → 該檔 **35/35**；core-agent 剩 unstarted-call-settlement 9、
+> compaction-binding 2。
 
 ## 為什麼先做這個
 

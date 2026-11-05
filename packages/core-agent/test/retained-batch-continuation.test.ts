@@ -44,8 +44,16 @@ it('keeps the retained-batch injected failure after the original drain and befor
   expect(order).toEqual(['original drain', 'injection', 'original drain', 'injection'])
 })
 
-async function fixture(names = ['retained']) {
-  const root = await mkdtemp(join(tmpdir(), 'ih-live-batch-core-')), backend = createJsonlBackend(root)
+type FixtureSeam = { batch?: (append: any, armed: () => boolean) => any; reconcile?: (reconcile: any, armed: () => boolean) => any }
+
+async function fixture(names = ['retained'], seams: FixtureSeam = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'ih-live-batch-core-'))
+  let armedFlag = false
+  const armed = () => armedFlag
+  const backend = createJsonlBackend(root, {
+    ...(seams.batch ? { wrapOwnedBatch: append => seams.batch!(append, armed) } : {}),
+    ...(seams.reconcile ? { wrapOwnedReconcile: reconcile => seams.reconcile!(reconcile, armed) } : {}),
+  })
   const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await coordinator.create()
   const document = await coordinator.openManagedDocument(id), ctx = createContext(), tools = createToolRegistry(ctx)
   const requests: unknown[] = [], originalErrors: unknown[] = [], preparedCalls: PreparedCall[] = []
@@ -59,7 +67,7 @@ async function fixture(names = ['retained']) {
   tools.dispatch = prepared => { preparedCalls.push(prepared); return dispatch(prepared).catch(error => { originalErrors.push(error); throw error }) }
   const model = observeModelClient(createMockClient([{ role: 'assistant', toolCalls: names.map((name, index) => ({ id: 'call-' + index, name, args: {} })) }, { role: 'assistant', text: 'original final' }]), { start(request) { requests.push(request) }, finish() {} })
   const deps: AgentDeps & AgentConfig = { session: document.view, factOwner: document, sessionId: id, tools, model, systemPrompt: '', generationFactory: localTestGeneration(document, id, model), ensureWritableContext: ownedContextReadiness(coordinator, id, document.view) }
-  return { root, backend, coordinator, document, ctx, tools, deps, requests, originalErrors, preparedCalls, get bodies() { return bodies }, agent: () => createAgent(ctx, deps), close: async () => { await coordinator.close().catch(() => {}); await ctx.scope.unmount() } }
+  return { root, backend, coordinator, document, ctx, tools, deps, requests, originalErrors, preparedCalls, get bodies() { return bodies }, arm() { armedFlag = true }, agent: () => createAgent(ctx, deps), close: async () => { await coordinator.close().catch(() => {}); await ctx.scope.unmount() } }
 }
 
 it('continues one actual managed invocation after its own exact source clears and keeps the accepted generation closed', async () => {
@@ -249,17 +257,19 @@ it('keeps a failing transferred original instruction pin on its batch source thr
 })
 
 it.each(['unknown', 'conflict', 'absent'] as const)('never continues while the original result commit remains %s', async kind => {
-  const f = await fixture(), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
   let key: BatchKey | undefined, ready = false
-  f.backend.appendOwnedBatch = async (...args) => {
-    if (!key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result')) {
-      key = args[3].key
-      if (kind === 'unknown') await append(...args)
-      return { kind, key }
-    }
-    return append(...args)
-  }
-  f.backend.reconcileOwnedBatch = async (...args) => !ready && key?.batchId === args[3].key.batchId ? { kind, key } : reconcile(...args)
+  const f = await fixture(undefined, {
+    batch: (append, armed) => async (...args) => {
+      if (armed() && !key && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result')) {
+        key = args[3].key
+        if (kind === 'unknown') await append(...args)
+        return { kind, key }
+      }
+      return append(...args)
+    },
+    reconcile: (reconcile, armed) => async (...args) => armed() && !ready && key?.batchId === args[3].key.batchId ? { kind, key } : reconcile(...args),
+  })
+  f.arm()
   try {
     await expect(f.agent().run('one input')).rejects.toBeInstanceOf(Error)
     expect(key).toBeDefined(); expect(f.requests).toHaveLength(1); expect(f.bodies).toBe(1)
@@ -267,13 +277,15 @@ it.each(['unknown', 'conflict', 'absent'] as const)('never continues while the o
 })
 
 it('rejects an outer result commit failure even when its original later drain settles', async () => {
-  const f = await fixture(), append = f.backend.appendOwnedBatch!
   let cut = false
-  f.backend.appendOwnedBatch = async (...args) => {
-    const result = await append(...args)
-    if (!cut && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result')) { cut = true; return { kind: 'unknown', key: args[3].key } }
-    return result
-  }
+  const f = await fixture(undefined, {
+    batch: (append, armed) => async (...args) => {
+      const result = await append(...args)
+      if (armed() && !cut && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result')) { cut = true; return { kind: 'unknown', key: args[3].key } }
+      return result
+    },
+  })
+  f.arm()
   try {
     await expect(f.agent().run('one input')).rejects.toBeInstanceOf(Error)
     expect(f.requests).toHaveLength(1); expect(f.bodies).toBe(1)
