@@ -3,7 +3,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { describe, expect, it } from "vitest"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { closeSessionQueries, createFileBackedSessionQuery, createSessionQuery } from "../src/index.ts"
 
@@ -16,12 +17,12 @@ function cleanup(dir: string): void {
 // the file-backed index derives on first search (reconcile-on-search).
 function makeEnv() {
   const dir = mkdtempSync(join(tmpdir(), "m10b-q-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
   const query = createFileBackedSessionQuery({ storeRoot: dir })
   return { dir, coordinator, query }
 }
 
-async function seed(coordinator: ReturnType<typeof createSessionCoordinator>) {
+async function seed(coordinator: ReturnType<typeof composeJsonlTaskTransitionCoordinator>) {
   const parent = (await coordinator.create({ sessionId: "parent" })).id
   const child = (await coordinator.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })).id
   const grand = (await coordinator.create({ sessionId: "grand", parentSession: "child", delegationDepth: 2, origin: "subagent" })).id

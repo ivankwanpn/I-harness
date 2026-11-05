@@ -4,7 +4,8 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createContext } from "@i-harness/core-plugin"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery, createSessionQueryTools, closeSessionQueries } from "../src/index.ts"
 
@@ -13,7 +14,7 @@ describe("session-query tools", () => {
   it("registers session_search and lineage as read-only direct tools", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
       await coordinator.create({ sessionId: "parent" })
       await coordinator.create({ sessionId: "child", parentSession: "parent" })
       await coordinator.append("parent", [{ type: "user/message", text: "searchable needle phrase" }])
@@ -52,7 +53,7 @@ describe("session-query tools", () => {
   it("marks session_search and lineage isConcurrencySafe", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools-cc-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
       await coordinator.create({ sessionId: "parent" })
       const tools = createSessionQueryTools(createFileBackedSessionQuery({ storeRoot: dir }))
       const search = tools.find((t) => t.name === "session_search")!
@@ -68,7 +69,7 @@ describe("session-query tools", () => {
   it("propagates errors as tool failures (unknown session)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools2-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), undefined, taskDocumentStorageContract)
       await coordinator.create({ sessionId: "parent" })
       const ctx = createContext()
       const registry = createToolRegistry(ctx)

@@ -7,12 +7,14 @@ import { join } from 'node:path'
 import { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, CURRENT_FORMAT_VERSION, exportConversationSeed, readFactJournal } from '@i-harness/core-session'
 import { createFileBackedSessionQuery, closeSessionQueries } from '../src/index.ts'
 import { parseLinePrefix, revisionOf } from '../src/file-backed/inspection.ts'
-import { createSessionCoordinator, compileSemanticSeed, type BootstrapRequest } from '@i-harness/session-persistence'
+import { compileSemanticSeed, type BootstrapRequest } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 
 it('searches an actual current coordinator append as logical facts without changing source bytes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-query-current-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.create({ sessionId: 'current' })
     await coordinator.append('current', [{ type: 'user/message', text: 'CURRENT_COORDINATOR_MARKER' }])
@@ -44,7 +46,7 @@ it.each([11, 12, 13])('decodes literal supported format%s frames as searchable l
 
 async function semanticFixture(version: 1 | 2) {
   const root = await mkdtemp(join(tmpdir(), 'ih-query-semantic-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 'source' })
   const image = { mediaType: 'image/png' as const, dataBase64: Buffer.from('MEDIA_TRANSPORT_SECRET').toString('base64'), name: 'VISIBLE_IMAGE_MARKER', width: 2, height: 3 }
   await coordinator.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'INHERITED_CONVERSATION_MARKER', images: [image] },
