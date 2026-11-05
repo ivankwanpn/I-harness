@@ -625,6 +625,10 @@ round 133：`compaction` 已由 3 紅轉 **33/33 檔、247/247 tests 全綠**—
   **round 122 首例完成**：`broker.test.ts` 的 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch` →
   **round 134**：`managed-store-stop.test.ts` 同法遷移（計數器先宣告）→ **2/2 全綠**。
 round 138 全套重跑：`code-mode` **7 檔紅 / 21 檔綠（28 檔），83 failed / 282 passed（365）**
+round 182：`cell-output-owner-fixture.ts` 的第一個 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch`
+  → **`retention-callback-latches` 41 紅 → 84/84 全綠**（單一修正清掉 41 筆）。其餘兩個
+  consumer（`cell-output-owner-lifetime`、`output-owner-boundaries`）用的是 fixture 後面
+  line 115/127 的動態掛鉤，仍需 armed 重構。
   round 139：`store.test.ts` 單紅是「a failed completion flush overrides a persisted store
 round 141：`session-query` 4 個測試檔遷到 composed 建構子 → **25 → 20 failed / 64 passed
   **round 142 收尾**：剩下的 `TASK_TRANSITION_UNSUPPORTED` 其實來自

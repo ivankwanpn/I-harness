@@ -11,15 +11,11 @@ import { createCodeModeEventFacts } from '../src/event-facts.ts'
 export const output = (cellId: string, preview = cellId): CodeSettlementFact => ({ type: 'code/output', cellId, envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'not-dispatched' }, preview, media: [], retention: { kind: 'unavailable', reason: 'quota' } } })
 export async function fixture(mode: 'native' | 'memory') {
   const root = await mkdtemp(join(tmpdir(), 'ih-cell-owner-'))
-  const backend = mode === 'native' ? createJsonlBackend(root) : undefined
   const issues: { events: unknown[]; key: unknown; bytesHex: string; outcome?: unknown }[] = []
-  if (backend) {
-    const append = backend.appendOwnedBatch!.bind(backend)
-    backend.appendOwnedBatch = async (...args) => {
-      const entry = { events: [...decodeFactBatch(args[3].bytes).events], key: args[3].key, bytesHex: Buffer.from(args[3].bytes).toString('hex'), outcome: undefined as unknown }
-      issues.push(entry); const result = await append(...args); entry.outcome = result; return result
-    }
-  }
+  const backend = mode === 'native' ? createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
+    const entry = { events: [...decodeFactBatch(args[3].bytes).events], key: args[3].key, bytesHex: Buffer.from(args[3].bytes).toString('hex'), outcome: undefined as unknown }
+    issues.push(entry); const result = await append(...args); entry.outcome = result; return result
+  } }) : undefined
   const coordinator = backend && composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const document = coordinator ? await coordinator.openManagedDocument((await coordinator.create()).id) : undefined
   const owner: FactOwner = document ?? createNondurableFactOwner(createSession())
