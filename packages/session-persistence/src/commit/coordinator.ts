@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, stringifyJsonData, type Session, type SessionEvent } from '@i-harness/core-session'
 import { COMMIT_LOG_GENERATION, createCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode } from '@i-harness/session-commit-log'
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { buildSession, migrate, preflightSessionFormat } from '../format/validation.ts'
 import type { SessionMeta } from '../coordinator/types.ts'
 import type { LegacySessionStore } from './legacy.ts'
@@ -34,6 +35,11 @@ export type ForkOptions = {
 
 export type CommitIntent = Readonly<Record<string, unknown>>
 
+export class CommitSessionDeletedError extends Error {
+  readonly code = 'SESSION_DELETED'
+  constructor(sessionId: string) { super(`session ${JSON.stringify(sessionId)} was deleted`); this.name = 'CommitSessionDeletedError' }
+}
+
 export type CommitCoordinator = {
   readonly storageRoot: string
   create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
@@ -54,6 +60,12 @@ export type CommitCoordinator = {
   putDocument(key: string, data: unknown): Promise<void>
   getDocument(key: string): Promise<unknown | undefined>
   flush(sessionId: string): Promise<void>
+  enqueue(sessionId: string, events: SessionEvent[]): void
+  deleteOwnedSession(sessionId: string, manifest: { documents: string[]; files?: string[] }): Promise<void>
+  deletionReceipt(sessionId: string): Promise<{ documents: string[]; files?: string[] } | undefined>
+  onDocumentDeleted(listener: (sessionId: string, manifest: { documents: string[]; files?: string[] }) => Promise<void>): () => void
+  ownerOf(sessionId: string): boolean
+  hasLiveOwnership(sessionId: string): boolean
   adoptOwnership(sessionId: string): Promise<void>
   releaseOwnership(sessionId: string): Promise<void>
   close(): Promise<void>
@@ -92,6 +104,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   const open = (sessionId: string, mode: CommitLogMode): Promise<CommitLog> => openCommitLog(logOptions(sessionId), mode)
   const owned = new Map<string, CommitLog>()
   const managed = new Map<string, ManagedDocument>()
+  const deletedListeners = new Set<(sessionId: string, manifest: { documents: string[]; files?: string[] }) => Promise<void>>()
 
   const build = (log: CommitLog): Session => {
     const meta = metaOf(log)
@@ -276,6 +289,32 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       } finally { await log.close() }
     },
     async flush() { /* every append is fsynced before it resolves */ },
+    enqueue(sessionId, events) { void this.append(sessionId, events).catch(() => {}) },
+    ownerOf(sessionId) { return owned.get(sessionId)?.open === true },
+    hasLiveOwnership(sessionId) { return owned.get(sessionId)?.open === true },
+    async deleteOwnedSession(sessionId, manifest) {
+      if (managed.has(sessionId)) await this.closeManagedDocument(sessionId)
+      const held = owned.get(sessionId)
+      const log = held ?? await ensureWritable(sessionId)
+      owned.delete(sessionId)
+      await log.close()
+      // The receipt is durable before the session becomes invisible; the rename
+      // is the deletion commit point (a crash before it deletes nothing).
+      await this.putDocument(`deletion:${sessionId}`, manifest)
+      const directory = join(root, sessionId)
+      const trash = join(root, `.trash-${randomUUID()}`)
+      await rename(directory, trash)
+      await rm(trash, { recursive: true, force: true }).catch(() => {})
+      for (const listener of [...deletedListeners]) await listener(sessionId, manifest).catch(() => {})
+    },
+    async deletionReceipt(sessionId) {
+      const value = await this.getDocument(`deletion:${sessionId}`)
+      return value as { documents: string[]; files?: string[] } | undefined
+    },
+    onDocumentDeleted(listener) {
+      deletedListeners.add(listener)
+      return () => { deletedListeners.delete(listener) }
+    },
     async adoptOwnership(sessionId) {
       if (owned.has(sessionId)) return
       owned.set(sessionId, await ensureWritable(sessionId))

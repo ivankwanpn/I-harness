@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { SessionLockConflictError } from '@i-harness/fs-lock'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
+import { CommitLogNotFoundError } from '@i-harness/session-commit-log'
 
 const roots: string[] = []
 const coordinators: Array<ReturnType<typeof createCommitCoordinator>> = []
@@ -170,6 +171,35 @@ describe('commit coordinator', () => {
     const reopened = await coordinator.openManagedDocument('s1')
     expect(reopened.view.events.map(event => event.type)).toEqual(['plan/mode', 'user/message'])
     await coordinator.closeManagedDocument('s1')
+  })
+
+  it('deletes a session behind a durable receipt and notifies listeners', async () => {
+    const { coordinator } = await setup()
+    await coordinator.create({ sessionId: 's1' })
+    await coordinator.append('s1', [{ type: 'user/message', text: 'x' }])
+    const seen: string[] = []
+    const off = coordinator.onDocumentDeleted(async id => { seen.push(id) })
+    const manifest = { documents: [], files: [] }
+    await coordinator.deleteOwnedSession('s1', manifest)
+    off()
+    expect(seen).toEqual(['s1'])
+    expect(await coordinator.list()).toEqual([])
+    await expect(coordinator.load('s1')).rejects.toBeInstanceOf(CommitLogNotFoundError)
+    expect(await coordinator.deletionReceipt('s1')).toEqual(manifest)
+    const recreated = await coordinator.create({ sessionId: 's1' })
+    expect(recreated.id).toBe('s1')
+    const { session } = await coordinator.load('s1')
+    expect(session.events).toEqual([])
+  })
+
+  it('reports live ownership while a handle is retained', async () => {
+    const { coordinator } = await setup()
+    await coordinator.create({ sessionId: 's1' })
+    expect(coordinator.hasLiveOwnership('s1')).toBe(false)
+    await coordinator.loadOwned('s1')
+    expect(coordinator.hasLiveOwnership('s1')).toBe(true)
+    await coordinator.releaseOwnership('s1')
+    expect(coordinator.hasLiveOwnership('s1')).toBe(false)
   })
 
   it('routes appends through the retained owned handle', async () => {

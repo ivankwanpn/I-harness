@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 226（SCL 刪除／所有權查詢）**：`deleteOwnedSession`（先寫 `deletion:<id>` receipt，再原子 rename 到 `.trash-*`，
+> 最後 best-effort 移除）、`deletionReceipt`、`onDocumentDeleted`、`ownerOf`/`hasLiveOwnership`、`enqueue` shim。
+> 15 個 coordinator 測試全綠（含刪除後重建同 id）。
 > **round 225（SCL managed document）**：`batch` op＋`CommitView.batches`；`createManagedDocument` 以 commit log 為 backend
 > （appendOwnedBatch 驗 prefix→beforeIssue→單一 commit；reconcile 依 fold 回 committed/absent/conflict；
 > Ownership 轉接器只保留 `withSessionOperation` 與 `assertHeld`）。協調器新增 `openManagedDocument/closeManagedDocument/revokeManagedDocumentNewWork`。

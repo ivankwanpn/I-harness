@@ -628,6 +628,14 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
 - Test: open a managed document, commit a plan proposal through `metadata.enterPlan`, read it back from `document.view`, close and reopen
   both the document and the raw session.
 
+## Plan 3d (implemented 2026-11-05): deletion, ownership inspection, enqueue
+
+- `deleteOwnedSession` writes a durable `deletion:<id>` receipt into the document log, then **renames the session directory to
+  `.trash-<uuid>`** (the atomic deletion commit point) and removes it best-effort; `list` never sees dot directories and the id can be
+  recreated immediately. Listener fan-out and `deletionReceipt` are covered.
+- `ownerOf`/`hasLiveOwnership` report whether a committed handle (and therefore the lease) is retained.
+- `enqueue` is a compatibility shim that appends synchronously and reports failures through the coordinator's normal rejection.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
