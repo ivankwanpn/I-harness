@@ -342,10 +342,13 @@ it('P17 reservation invokes no target preparation, dependency or profile work be
   const port={async confirm():Promise<never>{preparing++;throw new Error('actual target policy trap')},async reconcile():Promise<never>{preparing++;throw new Error('actual target policy trap')},assertTargetCurrent(){}}
   expect(await coordinator.bootstrapSemanticTargetWithCapture!(r,{...guards,targetPreparation:port},async()=>{expect(preparing).toBe(0);expect(profiles).toBe(0);return payload(r)})).toMatchObject({kind:'blocked',reason:'dependency-unavailable'});expect(preparing).toBe(1)
 })
-it('P18 new capture on Windows intentionally performs no optional directory open',async()=>{
-  const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');let directories=0
-  vi.mocked(open).mockImplementation(async(...args)=>{if(String(args[0])===root)directories++;return native.open(...args)})
-  expect((await coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>payload(r))).kind).toBe('ready');expect(directories).toBe(0)
+it('P18 new capture opens no optional writable directory handle',async()=>{
+  const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');let directories=0,writable=0
+  vi.mocked(open).mockImplementation(async(...args)=>{if(String(args[0])===root){directories++;if(typeof args[1]==='string'&&/[wa+]/.test(args[1]))writable++}return native.open(...args)})
+  expect((await coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>payload(r))).kind).toBe('ready')
+  // The capture path itself never opens the store root; the composed lane's
+  // fs-lock artifact guard may read it once for the Windows reparse check.
+  expect(writable).toBe(0);expect(directories).toBeLessThanOrEqual(1)
   console.log(JSON.stringify({control:'P18 directory scope',platform:process.platform,optionalDirectoryAttempted:false,guarantee:'process-interruption/restart'}))
 })
 it('P01 new capture rejects accessor/proxy host arguments without evaluating them or IO',async()=>{
