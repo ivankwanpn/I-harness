@@ -169,8 +169,13 @@ backend、in-memory fake backend「Original JSONL backend required」、legacy-o
    `new Error('TASK_TRANSITION_FAILED', { cause })`。format-15 標頭、unknown
    event type、non-positional seq 都只剩泛用外層錯誤；呼叫端用
    `instanceof SessionFormatUnsupportedError` 會失效（conversation-format ×2、
-   repair ×1、passive-code-store-bootstrap ×1）。應保留原始 error 型別或在
-   wrapper 上帶 `code`。
+   repair ×1、passive-code-store-bootstrap ×1）。
+   **已修（`e78fe6ca`）**：wrapper 保留原始 `code`，format 拒絕得到穩定的
+   `SESSION_FORMAT_UNSUPPORTED`；probe（format-15 header → composed
+   `openManagedDocument`）得到 `CODE SESSION_FORMAT_UNSUPPORTED`、
+   `CAUSE SessionFormatUnsupportedError`。後續：把上述 4 個測試改為檢查
+   `code`（而不是字串）即可一併轉綠，但那些檔案同時有 monkeypatch 問題，
+   留在第 4 批一起處理。
 
 8. **P1：每次 append 都會修補 open tail**
    `append(turn/start)` 後 `append(step/start)` 會在中間寫入合成的 `turn/end`；
