@@ -42,6 +42,10 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(requests).toBeGreaterThan(0)
     const listed = await call('session/list') as { sessions: { id: string; turnCount: number }[] }
     expect(listed.sessions.find(row => row.id === created.sessionId)?.turnCount).toBe(1)
+    const modelState = await call('session/model/set', { sessionId: created.sessionId, selection: { provider: 'fixture', model: 'fixture' } })
+    expect(modelState).toBeTruthy()
+    await call('session/prompt', { sessionId: created.sessionId, prompt: 'second prompt' })
+    expect(requests).toBeGreaterThanOrEqual(2)
   } finally {
     await host.close()
   }

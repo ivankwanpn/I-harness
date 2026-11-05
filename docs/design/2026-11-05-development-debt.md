@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 265（live model switch）**：`session/model/set` 後在 SCL 上再跑第二個 prompt 成功，代表 host 的 in-place rebind
+> 與 commit-log execution attachment 相容。
 > **round 264（CLI headless run on SCL）**：`i-harness run` 在 `IH_SESSION_STORE=commit-log` 下以 fixture provider 完成一輪，
 > store 產生一個 session generation 與 `__documents__` log。
 > **round 263（auto title 文件）**：controlled turn 後 `session-title/<id>` 以 `{formatVersion:1,title}` 寫入 SCL，

@@ -1003,6 +1003,11 @@ Note: the gateway's `session/list` title comes from `profile.meta.title` (rename
 against a local fixture provider: exit 0 and exactly one session generation (`<id>/session.v15.jsonl`) plus the `__documents__`
 log. This is the first end-to-end CLI turn on the commit-log store.
 
+## Plan 25 (implemented 2026-11-05): live model switch on SCL
+
+`host-commit-log-turn.test.ts` now also sets the live model (`session/model/set` with `{provider,model}`) and runs a second
+prompt through the rebound assembly, so the host's in-place rebind works with the commit-log execution attachment.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
