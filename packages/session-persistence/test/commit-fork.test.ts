@@ -26,6 +26,29 @@ function append(session: ReturnType<typeof createSession>, event: Record<string,
 }
 
 describe('commit-log public fork', () => {
+  it('inspects a child birth by operation id', async () => {
+    const { coordinator } = await setup()
+    await coordinator.create({ sessionId: 'parent' })
+    const source = createSession()
+    append(source, { type: 'user/message', seq: 0, text: 'source' })
+    const exported = exportConversationSeed(source, { kind: 'session', sessionId: 'parent' }, { kind: 'all' })
+    if (exported.kind !== 'seed') throw new Error('seed refused')
+    const request = {
+      invocation: { version: 1 as const, operationId: 'inspect-op', targetSessionId: 'child-2', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'd'.repeat(64) },
+      target: { kind: 'new' as const },
+      metadata: {},
+      lineage: { origin: 'subagent' as const, parentSession: 'parent', delegationDepth: 1, subagentProtocolVersion: 1 as const },
+      seed: compileSemanticSeed(exported),
+    }
+    const facade = asSessionCoordinator(coordinator)
+    const born = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST })
+    expect(born.id).toBe('child-2')
+    expect(await facade.inspectChildBootstrap!({ invocation: request.invocation } as never)).toMatchObject({ kind: 'ready' })
+    expect(await facade.inspectChildBootstrap!({ invocation: { ...request.invocation, operationId: 'other' } } as never)).toMatchObject({ kind: 'conflict' })
+    expect(await facade.inspectChildBootstrap!({ invocation: { ...request.invocation, targetSessionId: 'missing' } } as never)).toMatchObject({ kind: 'absent' })
+    await coordinator.closeManagedDocument('child-2')
+  })
+
   it('reports the selected-results capability as unavailable', async () => {
     const { coordinator } = await setup()
     const facade = asSessionCoordinator(coordinator)

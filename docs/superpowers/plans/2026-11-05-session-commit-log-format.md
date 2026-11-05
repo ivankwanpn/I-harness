@@ -1128,4 +1128,11 @@ A `read` of a 200 KB workspace file produces a `tool/result` whose envelope rete
 through the real host. The artifact store therefore already works for commit-log sessions; what remains for selected results is
 the selection/witness lifecycle, not storage.
 
+## Plan 37 (implemented 2026-11-06): child-birth inspection on SCL
+
+`inspectChildBootstrap(request)` now answers from the commit log: `ready` when the target header carries the same operation id,
+`conflict` for a different operation, `absent` when the target does not exist. This gives the gateway project-scope admission a
+defined answer instead of the previous absent capability (the caller still guards).
+
+
 

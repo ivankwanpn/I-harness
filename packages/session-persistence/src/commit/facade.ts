@@ -69,6 +69,15 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
     resumeChildTarget: coordinator.resumeChildTarget.bind(coordinator),
     bootstrapChildTargetWithCapture: coordinator.bootstrapChildTargetWithCapture.bind(coordinator),
     inspectBootstrap: async (invocation: { targetSessionId: string }) => ({ kind: 'absent', invocation, needsConfirmation: false }),
+    inspectChildBootstrap: async (request: { invocation: { targetSessionId: string; operationId: string } }) => {
+      const invocation = request.invocation as never
+      try {
+        const { meta } = await coordinator.profile(request.invocation.targetSessionId)
+        const seed = (meta as { semanticSeed?: { operationId?: string } }).semanticSeed
+        const kind = seed?.operationId === request.invocation.operationId ? 'ready' as const : 'conflict' as const
+        return { kind, invocation, needsConfirmation: false }
+      } catch { return { kind: 'absent' as const, invocation, needsConfirmation: false } }
+    },
     inspectBootstrapCapture: async () => ({ kind: 'absent' }),
     revokeManagedDocumentNewWork: coordinator.revokeManagedDocumentNewWork.bind(coordinator),
     getDocument: coordinator.getDocument.bind(coordinator),
