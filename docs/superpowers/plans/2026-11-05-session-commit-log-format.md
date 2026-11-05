@@ -997,6 +997,12 @@ exist yet. The JSONL composition supplies `backend.getDocument`. Once a key is w
 `session-title/<id>` (`{formatVersion:1, title}`), and reads that document back through a read-only commit-log coordinator.
 Note: the gateway's `session/list` title comes from `profile.meta.title` (rename), so auto titles are read from the document.
 
+## Plan 24 (implemented 2026-11-05): headless CLI run on SCL
+
+`apps/cli/test/run-commit-log.test.ts` runs `i-harness run hello --session-dir <tmp>` with `IH_SESSION_STORE=commit-log`
+against a local fixture provider: exit 0 and exactly one session generation (`<id>/session.v15.jsonl`) plus the `__documents__`
+log. This is the first end-to-end CLI turn on the commit-log store.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
