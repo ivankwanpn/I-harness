@@ -6,11 +6,10 @@ import type { RpcMessage } from '@i-harness/sdk'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { createDesktopHost } from '../src/host.ts'
 
-// Repro for Plan 28: manual compaction on a live commit-log session fails with
-// "Original execution observation expired" (the observation captured before the
-// compaction no longer matches the execution prefix). Kept skipped so the
-// reproduction is available without a red suite.
-it.skip('compacts a live session on the commit log', async () => {
+// The compaction request reaches the engine on SCL; the summarizer itself needs
+// a checkpoint-capable fixture model (Plan 28b), so this pins the SCL-specific
+// failure ("Original execution observation expired") as fixed.
+it('reaches the compaction engine on the commit log', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-compact-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
   await mkdir(workspace)
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
@@ -35,7 +34,9 @@ it.skip('compacts a live session on the commit log', async () => {
     await call('initialize')
     const created = await call('session/create') as { sessionId: string }
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'hello' })
-    expect(await call('desktop/session/compact', { sessionId: created.sessionId })).toBeTruthy()
+    const compacted = await call('desktop/session/compact', { sessionId: created.sessionId }) as { outcome?: string; reason?: string }
+    expect(compacted.outcome).toEqual(expect.any(String))
+    expect(compacted.reason).not.toBe('observation-expired')
   } finally {
     await host.close()
   }

@@ -1030,6 +1030,14 @@ previous turn's writes. A bounded retry of the compact call did not help, so the
 race; the next step is to check whether the delivery revision advances on ordinary writes (our document's delivery control) or
 whether the compaction path must re-observe around its own writes.
 
+## Plan 28b (implemented 2026-11-05): compaction reaches the engine on SCL
+
+The expiry was not in the execution prefix but in the cached **recovery prompt**: `modelOverheadTokens` asks for the system
+prompt before `prepareModelSurface` refreshes the native-recovery observation, so the cached recovery text is stale after any
+earlier turn. `recoveryPrompt` now omits the advisory recovery section when its observation expired (the real request still
+gets a fresh one through `prepareModelSurface`). Compaction then reaches the engine; the summarizer itself still needs a
+checkpoint-capable fixture model (`retention-output`), tracked as the next step.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

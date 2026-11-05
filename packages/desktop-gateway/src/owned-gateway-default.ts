@@ -49,7 +49,12 @@ export async function composeOwnedGatewayDefault(original:ManagedRegistryConstru
  onExecutionEvent(original.ctx,'agent/pre-step',async payload=>{const task=(payload as {task?:unknown}).task;if(typeof task!=='string'||task===lastMentionTask)return;const names=extensions.catalog.mentionedSkills(task);if(!names.length)return;committedFactSeqs(await actionFeedbackFacts(original.execution.owner,(payload as {signal?:AbortSignal}).signal).feedback({type:'user/message',text:'[skill mention] Load the '+names.map(name=>JSON.stringify(name)).join(', ')+' skill(s) with skill_get before proceeding.',source:{kind:'plugin',plugin:SKILL_MENTION_PLUGIN},internal:true}));lastMentionTask=task})
  const hookContext=()=>extensions.mount.hookContext();options.bindHookContext(hookContext)
  surface=await createOwnedDefaultSurface(original,{...options.surface,
-  prepareInput:text=>extensions.mount.expand(text),hookPrompt:()=>extensions.mount.hookContext(),recoveryPrompt:()=>recovery.render(),prepareModelSurface:signal=>recovery.refresh(signal),
+  prepareInput:text=>extensions.mount.expand(text),hookPrompt:()=>extensions.mount.hookContext(),
+  // Overhead counting asks for the prompt before the model surface refresh; a
+  // cached recovery text from an earlier request is then expired. Recovery is an
+  // advisory section, so omit it rather than failing the request.
+  recoveryPrompt:()=>{try{return recovery.render()}catch(error){if(/observation (expired|stale)/i.test(String((error as Error)?.message??'')))return '';throw error}},
+  prepareModelSurface:signal=>recovery.refresh(signal),
  })
  original.assertCurrent()
  return surface
