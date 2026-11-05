@@ -2,17 +2,19 @@ import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 
 it('refuses queued and capacity-waiting optional groups while preserving an already issued original receipt', async () => {
   const root = await mkdtemp(join(tmpdir(), 'r4a-hold-capacity-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true }, maxPendingGroups: 1 })
+  const issued = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let writes = 0
+  // Bound before construction: patching the backend afterwards is rejected as
+  // PROCESS_READ_UNAVAILABLE by the original-descriptor guard.
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { writes++; const outcome = await append(...args); if (writes === 1) { issued.resolve(); await release.promise } return outcome } })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true }, maxPendingGroups: 1 })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), action = document.beginAction()
   const source = action.registerSettlementSource(async () => {})
-  const append = backend.appendOwnedBatch!, issued = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  let writes = 0
-  backend.appendOwnedBatch = async (...args) => { writes++; const outcome = await append(...args); if (writes === 1) { issued.resolve(); await release.promise } return outcome }
   try {
     const original = action.facts.metadata.admit({ type: 'plan/mode', mode: 'on' })
     await issued.promise
@@ -37,11 +39,11 @@ it('refuses queued and capacity-waiting optional groups while preserving an alre
 
 it('rechecks a new source hold at the actual backend beforeIssue boundary without issuing or retrying the optional group', async () => {
   const root = await mkdtemp(join(tmpdir(), 'r4a-hold-before-issue-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let attempts = 0, source!: { holdRecovery(): void }
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { attempts++; source.holdRecovery(); return append(...args) } })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), action = document.beginAction()
-  const source = action.registerSettlementSource(async () => {}), append = backend.appendOwnedBatch!
-  let attempts = 0
-  backend.appendOwnedBatch = async (...args) => { attempts++; source.holdRecovery(); return append(...args) }
+  source = action.registerSettlementSource(async () => {})
   try {
     expect(await action.facts.metadata.admit({ type: 'plan/mode', mode: 'on' })).toEqual({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
     expect((await backend.read(id)).events).toEqual([])
