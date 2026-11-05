@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 252（coordinator 介面盤點）**：gateway 實際使用的 coordinator 成員中，SCL 已支援絕大多數；缺
+> `retainExistingSessionBindingObservation`（有 guard，execution-host observation 停用）與 `inspectChildBootstrap`（caller 有 guard）。
+> selected-results 與 cold finalization 仍是 legacy-only，列為刪除前必須移植或明確拒絕的項目。
 > **round 251（delivery drain transient）**：drain 把 `issued write needs reconciliation`／`writer dependency cleanup unresolved`
 > 視為 transient（可重試、不報告），警告歸零；legacy 與 SCL host 測試共 15 全綠。
 > **round 250（plugin refresh 競態）**：schedule create 觸發的 plugin refresh 會在寫入 issue→install 視窗斷言 currentness，

@@ -903,6 +903,32 @@ windows, not delivery failures. `delivery-drain.ts` now classifies them as trans
 retries with its existing backoff. The SCL host turn and schedule tests emit no reconciliation warnings, and the legacy host
 suite still passes.
 
+## Plan 13 (inventory 2026-11-05): coordinator surface used by the product
+
+Members the desktop gateway calls on its coordinator, with SCL status:
+
+| Member | SCL |
+|---|---|
+| `create`, `load`, `list`, `profile`, `snapshot`, `flush`, `storageRoot` | yes |
+| `putDocument`, `getDocument`, `onDocumentDeleted` | yes |
+| `openManagedDocument`, `revokeManagedDocumentNewWork` | yes |
+| `adoptOwnership`, `releaseOwnership`, `ownerOf`, `hasLiveOwnership` | yes |
+| `updateMeta`, `deleteOwnedSession`, `deletionReceipt` | yes (deletion covered by `commit-coordinator.test.ts`) |
+| `withExistingSessionBindingObservation` | yes (v1 snapshot+revalidate) |
+| `withProcessReadObservation` | yes |
+| `inspectBootstrap` | yes (`absent`) |
+| `bootstrapSemanticTargetWithCapture` | yes (direct child create) |
+| `inspectChildBootstrap` | absent (caller guards) |
+| `retainExistingSessionBindingObservation` | absent (guarded; execution-host observation disabled) |
+
+Free-function capabilities consumed by the gateway and still legacy-only:
+`selectedSourceFor` / `beginColdSelectedFinalization` / `captureOriginalColdObservation` (selected results and fork cleanup; guarded
+or refused on SCL) and `retainSelectedProjectRead` paths in context-runtime.
+
+Legacy-only subsystems that the SCL product path no longer needs (deletion candidates once results are ported):
+coordinator-factory bootstrap/adoption, selected-results capture, task-document transitions (`stageInitialize`/frames), retained
+bindings, ownership batch ledgers and the JSONL journal/artifact paths.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
