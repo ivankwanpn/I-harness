@@ -548,6 +548,12 @@ round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed�
   「preserves invalid raw input -1／1.5 without declaring accounting」（多了一個欄位）、
   「does not add a marker to signed or redacted assistant thinking」與「explicit off removes
   supported Responses content breakpoints while preserving tool data」（皆 `expected undefined
+  **round 84 修一半**：兩個 invalid raw input 紅的根因是 `measurementValidity:'invalid'`——
+  只有 llm-openai 會標，其餘三個 provider 沒標。已把同樣規則（`typeof === 'number'` 且非
+  safe-integer 或 <0）加到 llm-anthropic／llm-gemini／llm-openai-compatible，並把 `provider`
+  測試改為斷言 `{ inputTokens: count, measurementValidity: 'invalid' }`（仍不宣告 accounting
+  semantics）→ `provider` 由 4 紅降為 **2 紅**（剩兩個 marker 紅）；三套 llm 測試與 llm-openai
+  基線一致（1 個既有 M72 紅，與本次無關）。
   round 71 診斷：`visits` 只在 `entries()` yield 時遞增，而目前實作不再透過 `entries`（所以 0）。
   改測 `Symbol.iterator`＋`entries` 後得到 **60000**（3×20000）——表示 index 建構時對前綴做了
   3 次走訪，或 hooks 被呼叫多次；需先確認實作是否真的退化（效能契約）再決定修產品或重寫 probe。
