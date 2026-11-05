@@ -52,6 +52,12 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
   try {
     await call('initialize')
     const created = await call('session/create') as { sessionId: string }
+    const initialWork = await call('desktop/session/work-state', { sessionId: created.sessionId }) as { todos: unknown; todosRevision?: number }
+    expect(initialWork).toMatchObject({ todos: null, todosRevision: 0 })
+    const written = await call('desktop/session/todo/write', { sessionId: created.sessionId, input: { items: [{ content: 'seed todo', status: 'pending' }], expectedRevision: 0 } }) as { todos: { content: string }[]; todosRevision?: number }
+    expect(written).toMatchObject({ todosRevision: 1 })
+    expect(written.todos[0]).toMatchObject({ content: 'seed todo' })
+    await expect(call('desktop/session/todo/write', { sessionId: created.sessionId, input: { items: [], expectedRevision: 0 } })).rejects.toThrow(/Todo list changed/)
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'hello there' })
     expect(requests).toBeGreaterThan(0)
     const listed = await call('session/list') as { sessions: { id: string; turnCount: number }[] }

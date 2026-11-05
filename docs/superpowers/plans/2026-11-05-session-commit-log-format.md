@@ -1202,6 +1202,12 @@ gateway native context rather than the host log.
 
 ## Plan 88 (found, not fixed): a desktop todo write breaks the in-turn todo_write
 
+Fixed (2026-11-06): the cold `writeTodos` path no longer goes through `service.writableSessionFor` (which called `selectComplete` and
+refused the managed runtime forever). It opens the coordinator document directly, checks the revision on `document.view`, admits the
+`todo/write` metadata fact through `actionMetadataFacts`, returns the updated view and closes the document. The turn test now writes a
+todo, rejects a stale revision and then runs the prompt normally (including the in-turn `todo_write`).
+
+
 Deeper root cause (2026-11-06): the cold `writeTodos` path reaches `service.writableSessionFor`, which calls `selectComplete` and
 marks the session as a **complete** selection; `first-party-selection` then skips the managed selection for that session forever, so the
 next turn runs on a non-managed assembly and the in-turn task tool has no `managedTaskOwners` entry

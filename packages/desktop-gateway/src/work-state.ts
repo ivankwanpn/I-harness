@@ -2,7 +2,7 @@ import { foldGoal, type GoalView } from "@i-harness/goal"
 import { deriveTodoList, validateTodoItems } from "@i-harness/todo"
 import { committedFactSeqs, type SessionView as Session, type TodoItem } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { actionMetadataFacts, createDurableSessionLoader, type SessionService } from "@i-harness/session-executor"
+import { actionMetadataFacts, type SessionService } from "@i-harness/session-executor"
 import {createOwnedWorkState,TodoRevisionConflictError} from './owned-work-state.ts'
 import type {ManagedExecutionAttachment} from '../../session-persistence/src/execution-internal.ts'
 export {TodoRevisionConflictError} from './owned-work-state.ts'
@@ -47,7 +47,6 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, service:
   current(sessionId:string):ManagedExecutionAttachment|undefined
   retain(sessionId:string,execution:ManagedExecutionAttachment,cleanup:()=>Promise<void>):void
 } } = {}) {
-  const sessionFor = options.sessionFor ?? createDurableSessionLoader(coordinator)
   const writes = new Map<string, Promise<void>>()
   let closed=false
   const current=options.managed?.current.bind(options.managed),retain=options.managed?.retain.bind(options.managed)
@@ -87,16 +86,17 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, service:
         const managed=await managedFor(sessionId)
         if(managed)return await managed.writeTodos({items,expectedRevision})
         await coordinator.profile(sessionId)
-        const restored = await service.writableSessionFor?.(sessionId, sessionFor) ?? service.liveSession(sessionId) ?? await sessionFor(sessionId)
-        const session = await service.writableSessionFor?.(sessionId, sessionFor) ?? service.liveSession(sessionId) ?? restored
-        const actualRevision = view(session).todosRevision!
-        if (actualRevision !== expectedRevision) throw new TodoRevisionConflictError(expectedRevision, actualRevision)
-        // No await between compare and append: a live model tool cannot write
-        // between the revision check and this whole-list replacement.
-        const document=await coordinator.openManagedDocument(sessionId)
-        if(document.view!==session)throw Object.assign(new Error('Todo edit requires its owned document view'),{code:'FACT_OWNER_UNSUPPORTED'})
-        committedFactSeqs(await actionMetadataFacts(document).admit({ type: "todo/write", version: 1, items }))
-        return view(session)
+        // The cold path writes through the coordinator document directly: the
+        // service's writable sessionmarks the session as a complete selection
+        // and would refuse the managed runtime for every later turn.
+        const document = await coordinator.openManagedDocument(sessionId)
+        try {
+          const session = document.view as unknown as Session
+          const actualRevision = view(session).todosRevision!
+          if (actualRevision !== expectedRevision) throw new TodoRevisionConflictError(expectedRevision, actualRevision)
+          committedFactSeqs(await actionMetadataFacts(document).admit({ type: "todo/write", version: 1, items }))
+          return view(document.view as unknown as Session)
+        } finally { await coordinator.closeManagedDocument?.(sessionId).catch(() => {}) }
       } finally {
         gate.resolve()
         if (writes.get(sessionId) === gate.promise) writes.delete(sessionId)

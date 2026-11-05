@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 346（todo 冷寫入修正）**：冷 `writeTodos` 改走 coordinator document（`document.view` 檢查 revision、`actionMetadataFacts`
+> 寫入、寫後關閉），不再 `selectComplete`；todo→turn 流程與 in-turn `todo_write` 全綠。
 > **round 345（todo 衝突根因）**：`writableSessionFor` 會 `selectComplete`，讓該 session 永遠跳過 first-party managed selection；
 > 後續 turn 走非 managed assembly → in-turn task tool 沒有 managedTaskOwners。兩種繞道（關 document、關 session）都失敗，已回退。
 > **round 344（todo 衝突嘗試）**：在 `writeTodos` 冷路徑寫入後 `closeManagedDocument` → 下一次冷寫入回 `Supplied Session is not
