@@ -254,6 +254,12 @@ revocation admission）重寫到 SCL 的 retained binding 上；這是 legacy co
 - 沒有 reservation／finalization 協議，crash 安全由 SCL 的單一 commit 提供；
 - UI 上「selected results」仍可用，但 `assertResultLineage` 類的嚴格語意不再成立。
 
+**範圍釐清（2026-11-06）**：這條路只在 **帶 selected results 的捕獲** 上才會被觸發——fork／child 的 core 會多一個
+`results: "selected-results-v1"` 標記（`readSelectedResultsCore`），gateway 需要 `selectedSourceFor` +
+`createSelectedRuntimeCapture`（`context-runtime.ts` 的 `selectedComposer`，僅在 legacy store 上成立）。一般 fork（v1 core）、
+不帶 selected results 的 task child、`session/result/read` 的頁面讀取、以及 context output 都不受影響（皆已在 SCL 驗證）。
+因此 §8.1 的「功能不完整」只限於 selected-results 繼承，不是整個結果讀取面。
+
 **更精確的資料流（2026-11-06 追蹤）**：selected results 的最終出口是 `exportSelectedResultsConversationSeed(context, inherited)`，
 它需要 `CompletedPassiveContext`（restored owner）、`HeldInheritedResultMetadata`、`projectSelectedResults` 與可逐頁迭代且帶
 currency 檢查的 `HeldResultPages`，輸出 `SemanticSeedV3Public`（v3 seed 協議）。換句話說，「snapshot」省掉的只是 legacy 的
