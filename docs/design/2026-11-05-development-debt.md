@@ -180,6 +180,17 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 209（設計判讀，Q2/Q3 結案）**：不再以測試為規格，改以產品設計判讀。
+> - **Q3-a 保留 claim**：`blocked` 代表 durable 狀態不明，釋放 claim 會讓第二個 writer 接管
+>   不明狀態（可恢復債務→不可恢復損壞）。現行 `fail()`（task-document-transition.ts:233）
+>   的 `!confirmationUnknown && !taskIssued` 捷徑會在「沒有 issued 寫入」時呼叫 `close()`
+>   → 連帶釋放 claim/lease（cleanup 125-126）。`!taskIssued` **不等於狀態可證明安全**，
+>   要改成：失敗分類為 blocked/recovery 時**不 close、保留 claim**，等 retry 或顯式 close。
+> - **Q3-b append 持 task lease**：跨檔（session journal + task document）雙寫入需要單一 lane
+>   序列化，append 應取得 `doc:task-*` lease；`direct-lease` 的期待符合設計。
+> - **Q2 blocked → reconcile → ready**：中斷後回 `blocked` 是誠實的 fail-closed，不該假裝
+>   ready；測試要改成驅動 reconcile 再斷言 ready（而不是期待產品跳過復原）。
+> 修正順序：Q3-a（最小、可單檔驗證）→ Q3-b → Q2 測試期待 → sdk 3 → verify:all。
 > **round 208（jsonl 複量）**：**25 紅檔 / 100 failed / 757 passed / 17 skipped（98 檔）**。
 > 由 round 196 的 26/102 降下來（stage-swap 轉綠、stage-debt 首紅前移）。
 > 三大族群不變：task-transition claim/lease（8）、bootstrap readiness（24）、其餘 seam／predecessor。
