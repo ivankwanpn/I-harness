@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 244（nested fork／passive resume）**：nested fork（child→grandchild）在 SCL 通過；`resumeSemanticTarget` 明確回
+> `not-issued/unsupported`（SCL 無 staged resume），`session/fork/retry` 不再是 internal error。
 > **round 243（SCL gateway fork routes）**：capture 會把 project intent 物化成 target 的 project binding，gateway
 > `session/fork/prepare` → `begin` 在 SCL 上回 `ready`，子 session 可列出並繼承 projectId。`host.test.ts` 8/8 在 SCL 全綠。
 > **round 242（SCL 公開 fork capture）**：facade `bootstrapSemanticTargetWithCapture` 直接以 capture 建子 session（單一 commit：

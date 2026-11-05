@@ -41,6 +41,13 @@ it('forks through the gateway fork routes on the commit log', async () => {
     const listed = await call('session/list')
     expect((listed.sessions as { id: string }[]).map(row => row.id)).toContain('child')
     expect(await call('desktop/session/project/state', { sessionId: 'child' })).toEqual({ sessionId: 'child', projectId: 'p' })
+    const nested = await call('session/fork/prepare', { version: 1, sourceSessionId: 'child' })
+    if (nested.kind !== 'prepared') throw new Error('nested preparation refused: ' + JSON.stringify(nested))
+    const grandchildOperation = createForkOperation(nested.prepared, { operationId: 'scl-fork-nested', targetSessionId: 'grandchild', createdAt: new Date().toISOString() })
+    expect(await call('session/fork/begin', { operation: grandchildOperation })).toMatchObject({ kind: 'ready', sessionId: 'grandchild' })
+    // SCL birth is one committed create; the legacy staged resume has no
+    // counterpart, so a passive replay refuses instead of pretending to adopt.
+    expect(await call('session/fork/retry', { operation })).toMatchObject({ kind: 'not-issued', reason: 'unsupported' })
   } finally {
     await host.close()
   }

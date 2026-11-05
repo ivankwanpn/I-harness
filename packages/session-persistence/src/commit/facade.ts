@@ -42,7 +42,9 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
       return result
     },
     bootstrapSemanticTarget: () => unsupported(),
-    resumeSemanticTarget: () => unsupported(),
+    // SCL birth is a single committed child creation; the legacy staged resume
+    // protocol has no counterpart, so a passive replay is a clean refusal.
+    resumeSemanticTarget: async () => ({ kind: 'not-issued' as const, reason: 'unsupported' as const }),
     async bootstrapSemanticTargetWithCapture(_request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>): Promise<BootstrapOutcome> {
       // SCL creates the child directly: the capture is the only source of the
       // seed, and the receipt is verified by the caller against it.

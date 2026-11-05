@@ -848,6 +848,13 @@ independent of SCL. SCL fork needs its own host-level test (next).
   `session/fork/prepare` → `session/fork/begin` routes on the commit-log store; the child is listed and inherits `projectId`.
 - `host.test.ts` (8 tests) also passes on the commit-log store.
 
+## Plan 9c (implemented 2026-11-05): nested fork and passive resume
+
+- Nested fork works on SCL: a forked child is itself a completed source, and `session/fork/prepare` → `begin` produces the
+  grandchild (`host-commit-log-fork.test.ts`).
+- `resumeSemanticTarget` returns `{kind:'not-issued', reason:'unsupported'}`: SCL birth is one committed child creation and the
+  legacy staged resume protocol has no counterpart, so `session/fork/retry` reports a clean refusal instead of an internal error.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
