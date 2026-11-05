@@ -1180,6 +1180,15 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 61 (investigated 2026-11-06): context_output_read on the SCL host
+
+A controlled `context_output_read` call against a real artifact ref on the commit-log host answers
+`{"error":"Context output is disabled or stopping"}` — the desktop-host test configuration does not enable the context-output
+tool, so the call never reaches the selected-source path. The product-level impact of the selected-results gap therefore still
+needs a host configuration that enables context output (or a direct check in the gateway native context); the probe was removed
+from the turn test to keep it configuration-independent.
+
 ## Plan 60 (implemented 2026-11-06): cold-history control errors
 
 Control RPCs answer honestly on a cold commit-log session: `execution/stop` without a cell is `Execution unavailable`, with an
