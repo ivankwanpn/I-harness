@@ -537,6 +537,13 @@ round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot r
 round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**，10 個測試檔仍是 legacy
 round 115：`code-retrieval` **4 檔 / 54 tests 全綠**；`code-mode` **10 檔紅 / 18 檔綠
   **round 117 已遷移**：8 個 code-mode 測試檔改用 composed 建構子 → **9 檔紅 / 19 檔綠，
+  **round 121 遷移配方**（給下一輪照做）：測試目前是 `backend.appendOwnedBatch = async (...args)=>…`
+  與 `backend.reconcileOwnedBatch = …` 的建構後賦值。改法是：把包裹邏輯改寫成
+  `createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { …原邏輯，用 append 當原方法… },
+  wrapOwnedReconcile: reconcile => async (...args) => { … } })`；需要跨測試共享的計數器/旗標先
+  在檔案頂層宣告（`let`），wrapper 內用閉包讀寫。涉及檔案：`broker`、`cell-output-owner-fixture`、
+  `instruction-start-recovery`、`managed-store-stop`、`output-owner-boundaries`、`output-source-recovery`、
+  `register`、`surface-publication` 等。
   86 failed / 279 passed（365）**，`TASK_TRANSITION_UNSUPPORTED` 絕跡；剩 **83×
   `PROCESS_READ_UNAVAILABLE`**（建構後 patch backend，需 pre-bind seam）、1× FACT_RECOVERY 期待不符、
   1× reconciliation、1× timeout。
