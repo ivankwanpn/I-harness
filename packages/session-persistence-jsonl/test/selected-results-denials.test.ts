@@ -3,8 +3,9 @@ import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { canonicalJsonData, encodeFactBatch, legacyPrefixDigest, readFactJournal } from '@i-harness/core-session'
-import { createSessionCoordinator, compileSemanticSeed, createBootstrapRequestIntent, readForkRequestCore, type BootstrapRequest, type HeldFactOwner } from '@i-harness/session-persistence'
+import { compileSemanticSeed, createBootstrapRequestIntent, readForkRequestCore, type BootstrapRequest, type HeldFactOwner } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { serializeHeader } from '../src/format.ts'
 import { codecSeed, codecWire, codecRow, codecPage } from '../../core-session/test/fixtures/selected-results.ts'
 import { compileSelectedResultsSemanticSeed } from '../../session-persistence/src/semantic-seed.ts'
@@ -59,10 +60,10 @@ it.each([false, true])('denies actual create/serializer and ordinary mutation le
 })
 
 it.each([false, true])('denies real held-owner prefix truncation and frame acknowledgment while preserving torn bytes (pages=%s)', async pages => {
-  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'v3-held-denials-')), backend = createJsonlBackend(root)
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'v3-held-denials-'))
   let held: HeldFactOwner | undefined
-  const append = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { held = args[1]; return append(...args) }
+  // Pre-bind seam: the coordinator captures the original writer descriptor.
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { held = args[1]; return append(...args) } })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   try {
     const request: BootstrapRequest = { invocation, target: { kind: 'new' }, metadata: {}, lineage: { origin: 'fork', parentSession: 'source' }, seed: compileSemanticSeed({ kind: 'none' }) }
