@@ -199,6 +199,14 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 213（binding 錯誤分類）**：`SessionBindingObservationError` 的 `reason:'conflict'`
+> 原本不帶任何 code，呼叫端無法區分「暫時失敗」與「durable 狀態衝突」。已加
+> `code:'FACT_RECOVERY_REQUIRED'`（conflict 即需 reconcile）。→ `bootstrap-physical` 再降一筆
+> （**11 → 8 → 7**，「keeps header fsync commitment when file close cleanup fails」轉綠）。
+> **round 214（狀態快照）**：blocked 當下實測為 `pub=valid, stageBytes=true, ready=false,
+> events=0, seed=true, bar=new`——header 已發佈、**seed 批次未落地**。這是狀態機缺第三條
+> 「published header + 未 ready → 冪等補寫 seed → completion」的證據；fall-through 只會得到
+> `not-issued`，不是正解。
 > **round 212（Q2 第一個產品修正）**：`bootstrap-header.ts` 的 `reconcileBootstrapHeader` 原本
 > 拿**磁碟現行 header** 與 stage header 逐位元比對，任何 metadata 變更（title/workspaceId/
 > archived/modelSelection）都會被判 conflict → adoption 回 blocked。已改為：只有在

@@ -209,5 +209,8 @@ export class SessionBindingObservationError extends Error {
   constructor(readonly reason: 'unsupported'|'invalid'|'conflict'|'revoked'|'deleted'|'unavailable', options?: ErrorOptions) {
     super(`Session binding observation ${reason}`, options)
     this.name = 'SessionBindingObservationError'
+    // A conflicting binding is ambiguous durable state, not a transient failure:
+    // callers must reconcile the target before treating it as absent or ready.
+    if (reason === 'conflict') Object.assign(this, { code: 'FACT_RECOVERY_REQUIRED' })
   }
 }
