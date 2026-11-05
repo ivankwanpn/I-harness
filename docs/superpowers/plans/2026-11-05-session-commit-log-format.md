@@ -1014,6 +1014,13 @@ After two turns the host's `desktop/session/execution/read`, `desktop/session/ta
 `desktop/session/processes/read` all succeed on the commit-log store, covering the execution attachment read path, the task
 projection and the agent-process projection.
 
+## Plan 27 (implemented 2026-11-05): batch management and diagnostics on SCL
+
+`host-commit-log-management.test.ts` archives/restores a second session and then deletes it through
+`desktop/session/batch` (exercising `deleteOwnedSession` end-to-end through the host), and reads
+`desktop/environment/diagnostics`.
+Compaction (`desktop/session/compact`) still needs a checkpoint-capable fixture model and is left for a dedicated test.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

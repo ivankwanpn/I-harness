@@ -38,6 +38,14 @@ it('renames, archives, restores and reloads a session on the commit log', async 
     expect(restored.sessions.map(row => row.id)).toContain(created.sessionId)
     expect(await call('desktop/session/reload', { sessionId: created.sessionId })).toEqual({ reloaded: true })
     expect(await call('desktop/session/navigation/state')).toBeTruthy()
+    const second = await call('session/create') as { sessionId: string }
+    await call('desktop/session/batch', { command: { action: 'archive', sessionIds: [second.sessionId] } })
+    expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).not.toContain(second.sessionId)
+    await call('desktop/session/batch', { command: { action: 'restore', sessionIds: [second.sessionId] } })
+    expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).toContain(second.sessionId)
+    await call('desktop/session/batch', { command: { action: 'delete', sessionIds: [second.sessionId] } })
+    expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).not.toContain(second.sessionId)
+    expect(await call('desktop/environment/diagnostics', { sessionId: created.sessionId })).toBeTruthy()
   } finally {
     await host.close()
   }
