@@ -1063,6 +1063,13 @@ seeding raw events that the managed restore rejects (`Assembly construction and 
 
 The short-session test keeps the engine-reached assertion; the long-session test asserts the committed compaction.
 
+## Plan 31 (implemented 2026-11-05): legacy corpus dual run
+
+`commit-dual-run-corpus.test.ts` builds a corpus through the legacy JSONL backend (empty, single message, internal message, a full
+turn, tool call/result, steps, two turns; one titled) and checks that the commit-log coordinator returns exactly the same
+`list`, events, profile title and task document. This is the ADR §5 step-3 gate for cutting over and deleting the legacy
+coordinator.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
