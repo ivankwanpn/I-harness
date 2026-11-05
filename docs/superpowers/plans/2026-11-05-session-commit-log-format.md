@@ -1172,6 +1172,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 53 (implemented 2026-11-06): a broken legacy store is not an empty store
+
+`list()` swallowed legacy list failures (`catch(() => [])`), so an unreadable legacy store silently looked empty. It now rethrows;
+`commit-coordinator.test.ts` covers it with a failing legacy port. The redundant `try { throw }` wrapper around the child capture is
+gone too.
+
 ## Plan 52 (implemented 2026-11-06): legacy read errors are not "not found"
 
 `readLegacy` mapped every legacy read failure to `CommitLogNotFoundError`, so a corrupt or unsupported legacy session looked deleted.

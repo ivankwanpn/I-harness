@@ -38,6 +38,14 @@ afterEach(async () => {
 })
 
 describe('commit coordinator', () => {
+  it('surfaces a legacy list failure instead of reporting an empty store', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-commit-legacy-list-'))
+    roots.push(root)
+    const coordinator = createCommitCoordinator({ root, legacy: { read: async () => { throw new Error('legacy read failed') }, list: async () => { throw new Error('legacy list failed') } } })
+    coordinators.push(coordinator)
+    await expect(coordinator.list()).rejects.toThrow('legacy list failed')
+  })
+
   it('creates, loads and appends with assigned seqs', async () => {
     const { coordinator } = await setup()
     const { id } = await coordinator.create({ sessionId: 's1' })

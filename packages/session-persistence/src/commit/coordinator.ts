@@ -323,8 +323,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     },
     async bootstrapChildTargetWithCapture(request, guards, capture) {
       guards.assertCurrent()
-      let payload: BootstrapRequest
-      try { payload = await capture() } catch (error) { throw error }
+      const payload: BootstrapRequest = await capture()
       if (canonicalJsonData(payload.invocation) !== canonicalJsonData(request.invocation)) throw new TypeError('captured child payload does not match the child request')
       guards.assertCurrent()
       return this.createChildSession(payload, { closure: payload.seed.dependencyDigest }).then(
@@ -424,7 +423,8 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
           ids.add(entry.name.slice(0, -'.jsonl'.length))
         }
       }
-      if (options.legacy) for (const id of await options.legacy.list().catch(() => [] as string[])) ids.add(id)
+      // A broken legacy store must not silently look like an empty store.
+      if (options.legacy) for (const id of await options.legacy.list()) ids.add(id)
       return [...ids].sort()
     },
     profile: profileOf,
