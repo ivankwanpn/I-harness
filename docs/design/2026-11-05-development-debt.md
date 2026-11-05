@@ -577,8 +577,11 @@ full job 當 gate。
   document 走的是 `session-persistence/src/coordinator/bootstrap.ts`；`FactRecoveryRequiredError`
   的 throw 點是 `bootstrap.ts:359`（`assertCurrent`：`documents.get(id)!==entry || entry.revoked`）
   與 `:825`（`captureClosed || owned.revoked || documents.get(id)!==owned`）。即 close 期間某個
-  bootstrap entry 的識別已失效（revoked／被 resume 換掉）。下一步：追 `resumeChildTarget`
-  是否 revoke 了舊 entry 但把舊 entry 的 close handle 留在 documents／flight 裡。
+  bootstrap entry 的識別已失效（revoked／被 resume 換掉）。**round 47 再收窄**：最可能的
+  throw 是 `resumeCachedReady` 內的 `assertCurrent`（`bootstrap.ts:359`），由已排入 flight
+  的延續在 entry 被 revoke 後執行；`managed.closeOne` 會 await `entry.flight`，因此把該
+  rejection 併進 close 的 AggregateError。下一步：在 `closeOne` revoke 前先 join flight，
+  或讓 revoked entry 的延續走 `refused` 而非 throw（需確認 fail-closed 語義）。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
