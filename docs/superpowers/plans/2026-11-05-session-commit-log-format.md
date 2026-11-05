@@ -1190,6 +1190,17 @@ gateway native context rather than the host log.
 
 
 
+## Plan 65 (fixed 2026-11-06): coordinator close releases ownership pins
+
+Root cause of Plan 64: `close()` closed the retained documents directly instead of going through `closeManagedDocument`, so the
+ownership pins taken by `openManagedDocument`/`acquireExecution` were never released and the capability-store lock stayed held for
+the life of the process. `close()` now unwinds each managed session through `closeManagedDocument` (which closes the log and unpins)
+and finally unpins any remaining entry.
+
+Evidence: `host-commit-log-schedule.test.ts` now reopens a second host on the same store — the first host creates the schedule and
+closes, the second lists it, deletes it and closes cleanly. Before the fix that second delete failed on
+`another holder owns the session lock … .capabilities` and the close reported `Session service process cleanup incomplete`.
+
 ## Plan 64 (diagnosed 2026-11-06): the cold-schedule failure is a capability-lock conflict
 
 Printing the inner `AggregateError` of the reopened host shows two distinct errors:

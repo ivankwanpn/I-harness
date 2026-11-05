@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 320（pin 洩漏修正）**：`coordinator.close()` 改走 `closeManagedDocument`（關 log + unpin），最後再 unpin 殘留；
+> 兩 host 的 schedule 重啟測試（建立→關閉→重開→列出→刪除→關閉）全綠。
 > **round 319（真正的錯誤）**：host2 的 `schedule/delete` 是 `.capabilities` 檔案鎖衝突（deadline 2000ms），close 的內層錯誤是
 > `AggregateError: Session service process cleanup incomplete`（service.ts closeAll）。根因是 host1 關閉後仍持有 capability lock，
 > 不是 runtime release；下一步追 `createCommitOwnershipPorts` 的 close/releaseOwnership 路徑。

@@ -490,9 +490,13 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       await log.close()
     },
     async close() {
-      for (const [sessionId, document] of [...managed]) { managed.delete(sessionId); await document.close().catch(() => {}) }
+      // Closing the retained documents also releases their ownership pins; the
+      // host may close with an execution still attached (a cold management
+      // write), and a leaked pin keeps the capability-store lock held.
+      for (const sessionId of [...managed.keys()]) await this.closeManagedDocument(sessionId).catch(() => {})
       const cleanup = createRetainedCleanupOperation()
       try { await ownershipPorts.observations.closeRetained(cleanup).catch(() => {}) } finally { finishRetainedCleanupOperation(cleanup) }
+      for (const sessionId of [...ownershipPins.keys()]) await unpinSession(sessionId)
       const handles = [...owned.values()]
       owned.clear()
       for (const handle of handles) await handle.close().catch(() => {})
