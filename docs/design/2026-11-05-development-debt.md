@@ -518,7 +518,9 @@ round 28/29 量了兩個小套件：
 - `runtime-context`：**1 檔紅 / 3 檔綠（4 檔），1 failed / 21 passed（22 tests）**。
   紅點名稱已補記：`instructions` = **「actual W1 128-key aggregate capacity bounds a new
   port without cancelling an accepted producer」→ Test timed out in 5000ms**（時間類；
-  round 65 已加 `packages/instructions/vitest.config.ts`（30s），**13/13 檔、141/141 全綠**）；`runtime-context` = **「original-only management settles actual
+  round 65 已加 `packages/instructions/vitest.config.ts`（30s），**13/13 檔、141/141 全綠**）；round 67 再量兩個套件：`preset` **2 檔 / 9 tests 全綠**、`provider-runtime`
+  **7 檔 / 93 tests 全綠**。
+- `runtime-context` = **「original-only management settles actual
   absent without getter/action/retain or publication replay」→ resolved undefined instead
   of rejecting**（語義類）。round 66 定位：`test/original-disposition.test.ts:52` 的
   `it.each(['committed','absent','install'])`，只有 `absent` 這輪失敗，失敗點是 line 57 的
