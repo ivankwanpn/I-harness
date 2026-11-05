@@ -199,6 +199,13 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 211（Q2 首例精化）**：`bootstrap-physical` 的「keeps the original manifest ready after
+> mutable metadata edits and a later complete live suffix」不是抽象的 readiness 爭議：
+> 流程是 **ready bootstrap → admit plan/mode → updateMeta(title/workspaceId/archived) → close →
+> 冷啟動 `resumeSemanticTarget`**，設計上必須回 `already-ready`（且 header 要反映新 metadata、
+> `plan/mode` 是最後一個事件），產品卻回 `blocked`。亦即 **良性 metadata 變更後的冷 adoption
+> 被誤判成 blocked**——這是 adoption 路徑的產品缺陷，不是測試過度樂觀。下一輪先追這條
+> （比追 7 個測試快），修好後其餘 4 筆同形狀的 blocked 很可能一起解。
 > **round 210（Q3-a 修正診斷）**：實驗證明「保留 claim」不是改 `fail()` 條件——在
 > stage-read 失敗時 transition lane **根本還沒取得 claim**（claim 在 borrow/pin 之後才拿，
 > 而讀取在其前）。真正的設計修正叫 **acquire-before-read**：
