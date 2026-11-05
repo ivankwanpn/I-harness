@@ -353,7 +353,9 @@ type re-export：`session-executor`（`PendingRewindIntent`、`RewindIntentV1`�
 接著修 gate 本身的盲點：`session/queued` 的 producer 存在（`session-executor/src/service.ts`
 的 `telemetry.emit({ type: 'session/queued' })`），但 gate 的 producer 掃描只認雙引號字面量，
 單引號一律漏報。把 `EVENT_LITERAL` 與 `isProducerLine` 改成引號無關 → 該筆 false positive
-消失，**26 NEW / 389 rows**（其他既有 producerless 判定不受影響）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+消失，**26 NEW / 389 rows**（其他既有 producerless 判定不受影響）。再移除
+`workflow#WorkflowLoopFailure` 與 `session-executor#ManagedRuntimeLifecycle` 兩個
+multi-line export list 內的 type 條目 → **24 NEW / 387 rows**。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---

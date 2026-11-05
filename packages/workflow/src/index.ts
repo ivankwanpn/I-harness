@@ -28,7 +28,6 @@ export {
   type WorkflowReservation,
   type OwnedWorkflowRunHandle,
   type WorkflowLoopCompletion,
-  type WorkflowLoopFailure,
   type WorkflowExecutor,
   type WorkflowJobEntry,
   type WorkflowJobStore,
