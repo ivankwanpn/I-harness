@@ -34,6 +34,10 @@ const corpus: { id: string; title?: string; events: SessionEvent[] }[] = [
   { id: 'steps', events: [
     { type: 'turn/start', seq: 0 }, { type: 'step/start', seq: 1 }, { type: 'assistant/message', text: 'working', seq: 2 }, { type: 'step/end', seq: 3 }, { type: 'turn/end', seq: 4 },
   ] },
+  { id: 'delivery', events: [
+    { type: 'user/message', text: 'hello', seq: 0 },
+    { type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'delivery', reason: 'rewind', fenceId: 'fence-1', seq: 1 },
+  ] },
   { id: 'two-turns', events: [
     { type: 'turn/start', seq: 0 }, { type: 'user/message', text: 'one', seq: 1 }, { type: 'assistant/message', text: 'two', seq: 2 }, { type: 'turn/end', seq: 3 },
     { type: 'turn/start', seq: 4 }, { type: 'user/message', text: 'three', seq: 5 }, { type: 'assistant/message', text: 'four', seq: 6 }, { type: 'turn/end', seq: 7 },

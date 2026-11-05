@@ -1070,6 +1070,12 @@ turn, tool call/result, steps, two turns; one titled) and checks that the commit
 `list`, events, profile title and task document. This is the ADR §5 step-3 gate for cutting over and deleting the legacy
 coordinator.
 
+## Plan 32 (implemented 2026-11-05): corpus delivery events
+
+The dual-run corpus also covers an `agent/delivery-generation` session. A hand-written `compaction/replacement` entry is rejected by
+the historical-replacement validator; a valid compacted history has to come from the real compaction path, so the corpus keeps
+the compaction case out until such a fixture is captured.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

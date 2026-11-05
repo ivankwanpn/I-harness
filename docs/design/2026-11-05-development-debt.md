@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 274（corpus delivery 事件）**：dual-run corpus 加入 `agent/delivery-generation`；手寫的 `compaction/replacement` 被
+> 歷史驗證拒絕，需以真實 compaction 產生的歷史作為 fixture。
 > **round 273（legacy corpus dual run）**：以 legacy backend 建 7 種 session（含 tool call/result、steps、title），
 > SCL 的 list／events／title／task doc 與 legacy 完全一致——ADR §5 切換前的 golden corpus gate。
 > **round 272（compaction E2E）**：以 host 建立的長歷史（8 輪長回覆）在 SCL 上 compaction 成功
