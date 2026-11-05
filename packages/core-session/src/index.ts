@@ -1,4 +1,4 @@
-export { validateSubagentHeader } from "./events/header.ts"
+export { validateLineageHeader, validateSubagentHeader } from "./events/header.ts"
 // Stable package facade. Internal owners import each other directly.
 export { Inbox, SYSTEM_INPUT_PLUGIN } from "./inbox.ts"
 export { readInbox } from './inbox-view.ts'

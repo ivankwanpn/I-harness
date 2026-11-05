@@ -1,5 +1,5 @@
 import type { createColdExecutionWrites } from './cold-execution-writes.ts'
-import { CURRENT_FORMAT_VERSION, validateSubagentHeader, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, validateLineageHeader, validateSubagentHeader, type SessionEvent } from "@i-harness/core-session"
 import { SessionWriteBehind } from "../write-behind.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
@@ -65,7 +65,12 @@ export function createMutations(
         // retains the batch for the next enqueue/flush attempt; a held lease
         // survives background write failures for the same reason.
         write: async (events) => {
-          if (transitionWrite) return transitionWrite(sessionId, events)
+          // A closed admission means the session is being deleted: the only
+          // remaining writer is that deletion draining the records it already
+          // accepted. It must append directly — a task transition started
+          // inside the deletion's own admission is a conflict — and the
+          // records are about to be removed anyway.
+          if (transitionWrite && !deleted.has(sessionId)) return transitionWrite(sessionId, events)
           await withSessionOperation(sessionId, async () => {
             assertManagedMutation(sessionId)
             await ensureOwnership(sessionId)
@@ -109,6 +114,7 @@ export function createMutations(
       if (transitions) {
         const fullMeta: SessionMeta = { sessionId: id, createdAt: new Date().toISOString(), ...meta, formatVersion: CURRENT_FORMAT_VERSION }
         validateSubagentHeader(fullMeta)
+        validateLineageHeader(fullMeta)
         await transitions.create(id, fullMeta)
         return { id }
       }
@@ -126,6 +132,7 @@ export function createMutations(
         }
         try {
           validateSubagentHeader(fullMeta)
+          validateLineageHeader(fullMeta)
           await backend.create(id, fullMeta)
           acquired.retainLive()
         } catch (err) {

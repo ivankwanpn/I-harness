@@ -3,14 +3,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createHash } from "node:crypto"
 import { afterEach, expect, it } from "vitest"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import type { PersistenceBackend } from "@i-harness/session-persistence"
+import { createSessionCoordinator as createCoreCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../src/index.ts"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 it("persists minimal original visibility before removal and resumes only the same exact manifest", async () => {
   const root = await mkdtemp(join(tmpdir(), "delete-receipt-")); roots.push(root)
   const coordinator = createSessionCoordinator(createJsonlBackend(root))
-  await coordinator.create({ sessionId: "s", origin: "subagent", parentSession: "parent", title: "private deleted title" })
+  await coordinator.create({ sessionId: "s", origin: "subagent", parentSession: "parent", seedLength: 0, title: "private deleted title" })
   await coordinator.append("s", [{ type: "user/message", seq: 0, text: "private deleted prompt" }])
   const manifest = { documents: ["session-title/s"], files: [] }
   await coordinator.deleteOwnedSession!("s", manifest); await coordinator.close()
@@ -45,15 +47,29 @@ it("drains accepted writes, deletes exact owned documents, and fences recreation
   expect(() => coordinator.enqueue("s", [{ type: "turn/start" }])).toThrow(/deleted|deleting/)
   await coordinator.close()
   const restarted = createSessionCoordinator(createJsonlBackend(root))
-  await expect(restarted.create({ sessionId: "s" })).rejects.toThrow(/deleted/)
+  // The transition lane wraps failures but preserves the machine-readable
+  // code (D-12 debt #7); the deletion tombstone surfaces as SESSION_DELETED.
+  await expect(restarted.create({ sessionId: "s" })).rejects.toMatchObject({ code: "SESSION_DELETED" })
   await expect(backend.putDocument("session-title/s", {})).rejects.toThrow(/deleted/)
   await restarted.close()
 })
+it("refuses a child lineage header without its seed length at create", async () => {
+  const root = await mkdtemp(join(tmpdir(), "lineage-create-")); roots.push(root)
+  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  try {
+    // The durable history reader refuses a parent link without its seed length
+    // (process-read lineage guard); creation must name that defect up front.
+    await expect(coordinator.create({ sessionId: "child", origin: "subagent", parentSession: "parent" })).rejects.toThrow(/seed length/i)
+    expect(await coordinator.list()).toEqual([])
+  } finally { await coordinator.close() }
+})
 it("withholds destructive capability for custom read-only backends", async () => {
   const root = await mkdtemp(join(tmpdir(), "readonly-delete-")); roots.push(root)
-  const backend = createJsonlBackend(root)
-  backend.deleteOwnedSession = undefined
-  const coordinator = createSessionCoordinator(backend)
+  // The destructive capability is captured from the backend the coordinator was
+  // built on. The JSONL backend always has it (and its identity guard rejects
+  // post-construction edits), so a backend that never had it is the real probe.
+  const readOnly = { id: "readonly", lockRoot: root, async putDocument() {}, async getDocument() {} } as unknown as PersistenceBackend
+  const coordinator = createCoreCoordinator(readOnly)
   expect(coordinator.deleteOwnedSession).toBeUndefined()
   await coordinator.close()
 })
@@ -85,7 +101,9 @@ it("refuses a symlinked artifact parent and leaves outside documents intact", as
   await coordinator.create({ sessionId: "s" })
   await writeFile(join(outside, "s.doc.jsonl"), '{"source":"outside"}\n')
   await symlink(outside, join(root, "session-title"), process.platform === "win32" ? "junction" : "dir")
-  await expect(coordinator.deleteOwnedSession!("s", { documents: ["session-title/s"] })).rejects.toThrow(/symlink/)
+  // The refusal comes from the artifact-ancestor guard, whose wording is
+  // platform-specific (junction on Windows, symlink elsewhere).
+  await expect(coordinator.deleteOwnedSession!("s", { documents: ["session-title/s"] })).rejects.toThrow(/symlink|non-reparse/)
   expect(await readFile(join(outside, "s.doc.jsonl"), "utf8")).toContain("outside")
   await coordinator.close()
 })
