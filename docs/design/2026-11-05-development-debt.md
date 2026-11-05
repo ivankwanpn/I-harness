@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 255（surface changed 通知）**：訂閱 execution surface 後跑一個 controlled turn，會收到 `desktop/surface/changed`，
+> 確認 SCL 寫入會經 private observation 發佈。
 > **round 254（execution surface events）**：retained bindings 讓 gateway 在 SCL 上宣告 `desktop-surface-events`；
 > subscribe → snapshot（帶 epoch）→ unsubscribe 經真實 host 通過。
 > **round 253（retained bindings）**：facade 註冊 `associateRetainedCoordinator` 並轉發 `retainExistingSessionBindingObservation`；

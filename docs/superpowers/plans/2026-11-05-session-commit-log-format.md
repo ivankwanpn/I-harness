@@ -943,6 +943,11 @@ With retained bindings available, the gateway advertises `desktop-surface-events
 observation can hold leases. `host-commit-log-surface.test.ts` subscribes (`desktop/surface/subscribe`), takes a snapshot
 (`desktop/surface/snapshot` with the lease epoch) and unsubscribes through the real host.
 
+## Plan 16 (implemented 2026-11-05): surface change notifications on SCL
+
+`host-commit-log-surface-changed.test.ts` subscribes to the execution surface, runs a controlled prompt turn and observes a
+`desktop/surface/changed` frame, so the private observation publishes writes made through the commit log.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
