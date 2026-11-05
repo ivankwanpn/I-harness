@@ -8,6 +8,7 @@ import { associateRetainedCoordinatorClose } from '../coordinator/retained-clean
 import type { TaskDocumentConfiguration } from '../coordinator/task-document-operation.ts'
 import { CommitLogConflictError } from '@i-harness/session-commit-log'
 import type { BootstrapCaptureRequest, BootstrapGuards, BootstrapOutcome, BootstrapRequest } from '../coordinator/bootstrap-types.ts'
+import { createHash } from 'node:crypto'
 import type { CommitCoordinator } from './coordinator.ts'
 import { createCommitTaskOperations } from './capabilities.ts'
 
@@ -49,6 +50,13 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
       guards.assertCurrent()
       try {
         const created = await coordinator.createChildSession(captured, { closure: captured.seed.dependencyDigest })
+        // The capture's project intent also names the target's binding, which
+        // the fork host re-reads before handing the target to the caller.
+        const project = (_request as { requestIntent?: { project?: { kind?: string; projectId?: string } } }).requestIntent?.project
+        if (project?.kind === 'project' && typeof project.projectId === 'string') {
+          const key = 'desktop-session-project-' + createHash('sha256').update(captured.invocation.targetSessionId).digest('hex')
+          if (await coordinator.getDocument(key) === undefined) await coordinator.putDocument(key, Object.freeze({ version: 1, projectId: project.projectId }))
+        }
         return { kind: 'ready' as const, receipt: created.receipt, document: created.document }
       } catch (error) {
         if (error instanceof CommitLogConflictError) return { kind: 'refused' as const, reason: 'conflict' as const }

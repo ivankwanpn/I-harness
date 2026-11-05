@@ -839,6 +839,15 @@ request (`hello world`) and a clean `service.close()` all pass.
 `createSessionCoordinator` factory, which now throws `TASK_TRANSITION_UNSUPPORTED` in `create` — they are baseline red
 independent of SCL. SCL fork needs its own host-level test (next).
 
+## Plan 9b (implemented 2026-11-05): gateway fork routes on SCL
+
+- `bootstrapSemanticTargetWithCapture` also materializes the capture's project intent as the target's
+  `desktop-session-project-<sha256>` binding (`{version:1, projectId}`) when it is absent; the fork host re-reads that binding
+  before handing the target out, so without it every project fork was refused with `target-policy`.
+- Test `host-commit-log-fork.test.ts`: a completed source session is forked through the real host's
+  `session/fork/prepare` → `session/fork/begin` routes on the commit-log store; the child is listed and inherits `projectId`.
+- `host.test.ts` (8 tests) also passes on the commit-log store.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
