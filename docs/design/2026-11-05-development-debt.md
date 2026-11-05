@@ -533,6 +533,10 @@ round 119：`fs-search` **5 檔 / 51 tests 全綠**、`fs-watch` **5 檔 / 69 te
 round 120：`image-validation` **1 檔 / 19 tests 全綠**、`attachment` **2 檔 / 12 tests 全綠**。
 round 125：`guard-timeout` **1 檔 / 7 tests 全綠**；`guard-retry` **1 檔紅 / 9 passed（10）**——紅點
   **round 126 已修**：`guard-retry` 在 `sleep(backoff)` **之後**沒有再檢查 caller signal，
+round 127：`guard-approval` **11 檔 / 107 tests 全綠**；`guard-repeat-tool` **1 檔紅 / 8 passed（9）**
+  ——紅點「awaits the actual owned repeat-feedback receipt for the exact observed session」原為
+  `TASK_TRANSITION_UNSUPPORTED`（legacy 建構子），遷到 composed 後變成
+  `PROCESS_READ_UNAVAILABLE`（建構後 patch backend），即與 `code-mode` 同一類、需同一個掛鉤決策。
   所以 backoff 期間 abort 仍會再派發；補上 `if (upstream?.aborted) break` 後 **10/10 全綠**。
   「does not re-dispatch after the caller signal aborts」→ `expected 2 to be 1`（abort 後仍再派發）。
 round 94：`jobs` **1 檔 / 5 tests 全綠**、`workflow` **6 檔 / 66 tests 全綠**。
