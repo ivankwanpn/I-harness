@@ -1021,6 +1021,15 @@ projection and the agent-process projection.
 `desktop/environment/diagnostics`.
 Compaction (`desktop/session/compact`) still needs a checkpoint-capable fixture model and is left for a dedicated test.
 
+## Plan 28 (investigation 2026-11-05): manual compaction on a live SCL session
+
+`desktop/session/compact` fails with `Original execution observation expired` on a live commit-log session (repro kept skipped
+in `host-commit-log-compact.test.ts`). The expiry comes from `observe()`'s identity check (`member('prefix') !== expected ||
+delivery.revision() !== fence`): the observation captured before the compaction no longer matches the execution state after the
+previous turn's writes. A bounded retry of the compact call did not help, so the mismatch is persistent rather than a transient
+race; the next step is to check whether the delivery revision advances on ordinary writes (our document's delivery control) or
+whether the compaction path must re-observe around its own writes.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

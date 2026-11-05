@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 268（compaction 調查）**：live SCL session 的 `desktop/session/compact` 失敗於 `Original execution observation expired`；
+> 有界重試無效（非 transient），skip 測試保留重現。下一步檢查 delivery revision 或 compaction 自身寫入後的重新觀察。
 > **round 267（batch／diagnostics）**：`desktop/session/batch` 的 archive／restore／delete 與
 > `desktop/environment/diagnostics` 在 SCL 通過；batch delete 端到端驗證 `deleteOwnedSession`。
 > **round 266（execution／task／process 讀取）**：兩個 turn 後 execution read、tasks integrity、processes read 在 SCL 全數成功。
