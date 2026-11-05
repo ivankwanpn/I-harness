@@ -237,3 +237,10 @@ node scripts/audit/check-package-boundaries.mjs --gate
 node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl test
 node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence test
 ```
+
+## 交接：2026-11-05 round 5
+
+本 session 的上下文已用盡，停止在乾淨的 345541fe（工作樹 clean）。本輪只做狀態驗證：
+全庫 typecheck 在 round 2 為 82 packages exit 0；reachability allowlist 已清到 38 筆、
+不再有 inert 警告。**下一輪請開新工作階段**，從上面的「待辦順序」第 1 項（P0 端到端
+回歸測試）開始；每次修完一項就更新本文件並 push。
