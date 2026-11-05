@@ -1170,6 +1170,10 @@ execution fence reads the prefix on every write). The value is now accumulated p
 identity, so a commit only serializes the events it adds while keeping the exact same `{eventCount, bodyBytes, prefixDigest}`.
 The commit suites (26 tests) stay green; SCL host flows use the same prefix on every write.
 
+`commit-prefix.test.ts` pins the arithmetic: after each append the prefix reports exactly the sum of the canonical event bytes,
+repeated reads are stable, and a fresh read handle recomputes the same values (cache miss path).
+
+
 ## Plan 42 (implemented 2026-11-06): task projection reconcile on SCL
 
 `host-commit-log-turn.test.ts` also calls `desktop/session/tasks/integrity` with `reconcile: true` after tool execution, exercising the

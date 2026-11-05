@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 290（prefix 單元測試）**：`commit-prefix.test.ts` 驗證每次 append 後 `bodyBytes` 等於 canonical 事件位元組總和、
+> 重複讀取穩定、重新開啟的 read handle 得到相同值。
 > **round 289（prefix 增量快取）**：`commitPrefix` 的 `bodyBytes` 改為每個 append 增量累加並以 CommitLog 身份快取，
 > 避免每次 commit 重新序列化整段歷史；值與舊算法完全一致，26 個 commit 測試全綠。
 > **round 288（shell exec 與 execution read）**：`shell` echo 在 SCL 上可執行並提交結果，但 `execution/read` 是 live 視圖，
