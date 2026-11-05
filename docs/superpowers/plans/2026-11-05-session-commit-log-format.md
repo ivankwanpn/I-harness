@@ -1190,6 +1190,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 67 (implemented 2026-11-06): a session continues across a host restart
+
+`host-commit-log-restart.test.ts` opens a host, creates a session, runs a turn and closes; a second host on the same store lists the
+session with `turnCount: 1` and runs another turn, after which `turnCount` is 2. This is the desktop-restart path end to end and also
+covers the ownership-pin release fixed in Plan 65 (the second prompt would otherwise wait on the capability lock).
+
 ## Plan 66 (implemented 2026-11-06): pin-release regression test
 
 `commit-coordinator.test.ts` opens a coordinator, creates a session, opens its managed document, closes the coordinator, and opens a
