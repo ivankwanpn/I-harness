@@ -571,6 +571,10 @@ round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed�
   放進 refused 而不拋，所以 absent 這輪 resolve 是**產品既有語義**（committed/install 才會因
   `unknown` 拋）。測試卻對三個 disposition 一律要求 reject；修正需把 absent 那輪改成
   `resolves` 並重新推導 counts（`finishes` 會變 1），屬測試期待調整，需一併改 line 56–60 的計數。
+  **round 82 實測**：只把 line 57 的 absent 改成 `resolves` 後，失敗移到 line 59——
+  absent 是 terminal（無 pending write），`next()` 後的下一次 render 也直接 resolve，而測試
+  期待它拒絕到 `allow()`。結論：absent 需要**獨立的測試**（斷言 terminal 語義與對應 counts），
+  不能和 committed/install 共用同一個流程；已還原實驗。
 - `llm-seam`：**22 檔 / 188 tests，1 紅**（21 檔綠）。唯一紅是 `terminal-ownership-contract.test.ts`：它期待 private SDK ownership bridge 的 production importer 只有 `['.', './internal/bedrock-terminal']`，實際收到 4 個（已有額外檔案 import）。這是未量測套件既有紅，列入第 5 項待修。
   round 30 修正：它比的是 `package.json` 的 exports 清單，而該清單後來多了
   `./internal/passive-observation` 與 `./internal/stream-lifetime` 兩個已審查的內部 bridge；
