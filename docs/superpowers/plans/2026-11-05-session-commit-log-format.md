@@ -1202,6 +1202,16 @@ gateway native context rather than the host log.
 
 ## Plan 88 (found, not fixed): a desktop todo write breaks the in-turn todo_write
 
+Attempt (reverted): closing the document that the cold `writeTodos` path opened (`closeManagedDocument` after the admit) makes the
+following cold write fail with `Supplied Session is not this document view; use explicit detached import` (the live session object no
+longer matches a rebuilt document), so the next cold edit must also re-create the service session.
+
+Root cause direction: the cold path opens a managed document and leaves it held; the turn's managed runtime then cannot reconcile the
+owner (`Original Task projection owner required`). The fix belongs to `acquireExecution`: when a document for the session already
+exists it must adopt/reuse it instead of creating a second one (or the cold write must fully release the session so the next turn
+re-assembles it, without breaking the sequential cold edits).
+
+
 On a cold commit-log session `desktop/session/work-state` is `{todos:null, todosRevision:0, goal:null}` and
 `desktop/session/todo/write` works: the first write returns the list with `todosRevision:1`, the read matches, and a stale
 `expectedRevision` is refused with `Todo list changed (revision 1). Reload it before saving your edit.`

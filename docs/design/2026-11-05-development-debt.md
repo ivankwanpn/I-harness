@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 344（todo 衝突嘗試）**：在 `writeTodos` 冷路徑寫入後 `closeManagedDocument` → 下一次冷寫入回 `Supplied Session is not
+> this document view`。已回退；正確修法在 `acquireExecution` 重用既有 document（或冷寫入完整釋放 session），不能只關文件。
 > **round 343（todo 寫入與 in-turn tool 衝突）**：`desktop/session/todo/write` 在 SCL 冷 session 正常（revision 1、stale 被拒），
 > 但先寫 todo 再跑 turn 時，模型 `todo_write` 失敗 `Original Task projection owner required` 且 prompt rejects。已記錄，待追 owner 一致性。
 > **round 342（execution cursor）**：負 offset 與 limit>20 被拒（`Invalid execution cursor or dimension`）；超大 offset 合法且回空頁。
