@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 319（真正的錯誤）**：host2 的 `schedule/delete` 是 `.capabilities` 檔案鎖衝突（deadline 2000ms），close 的內層錯誤是
+> `AggregateError: Session service process cleanup incomplete`（service.ts closeAll）。根因是 host1 關閉後仍持有 capability lock，
+> 不是 runtime release；下一步追 `createCommitOwnershipPorts` 的 close/releaseOwnership 路徑。
 > **round 318（單元層重現失敗）**：session-executor 單元測試（prepare runtime → service.close）在 legacy 與 SCL coordinator 下都
 > 正常關閉；洩漏只在完整 desktop host 組裝下出現。host 探針卡在 `.capabilities` lock（prompt 逾時），需改為量測 host shutdown 各階段。
 > **round 317（冷 schedule 修正嘗試）**：在 schedules.create/delete 對非 live session 呼叫 `service.closeSession`，需放在最後一個

@@ -1190,6 +1190,20 @@ gateway native context rather than the host log.
 
 
 
+## Plan 64 (diagnosed 2026-11-06): the cold-schedule failure is a capability-lock conflict
+
+Printing the inner `AggregateError` of the reopened host shows two distinct errors:
+
+1. `desktop/schedule/delete` on the reopened host fails with
+   `another holder owns the session lock at <root>/sessions/.capabilities/.i-harness-locks/<hash>.lock (deadline 2000ms exceeded)`;
+2. the following `host.close()` reports `AggregateError: Session service process cleanup incomplete` (service.ts closeAll).
+
+So the root cause is not a missing runtime release: a capability-store lock is still held when the second host runs. The first host
+performed the schedule write on a live session and closed without error, which points at the commit-log capability owner not
+releasing its pin/lease at close (host2 then cannot acquire it). The next step is to trace the lock through
+`createCommitOwnershipPorts` / `createBindingObservations` release on `close()` and on `releaseOwnership`, instead of the schedule
+handler.
+
 ## Plan 63 (found, not fixed): cold schedule write blocks a clean host close
 
 Reproduction attempt: a session-executor unit test that enrolls a first-party managed selection, calls
