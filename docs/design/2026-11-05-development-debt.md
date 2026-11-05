@@ -554,6 +554,18 @@ node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exe
 再 `bootstrap-physical` outcome 差異），然後分組量測其餘套件，最後把 `verify:all`
 full job 當 gate。
 
+**已定位、尚未實作的具體修法**（round 37 查證）：
+
+- `child-bootstrap-physical.test.ts` 的子程序 template（約 line 49–54）在
+  `createJsonlBackend` 之後才 patch `bootstrapRoutes.reserveCapture`／`prepareBootstrapHeader`／
+  `appendOwnedBatch`／`confirmBootstrapFrames`，所以子程序一啟動 bootstrap 就被
+  canonical-path guard 判 `PROCESS_READ_UNAVAILABLE`。修法：把四個 patch 搬進
+  `createJsonlBackend(root,{ wrap })` 的 pre-bind seam，並把 `p.createSessionCoordinator`
+  改成 `composeJsonlTaskTransitionCoordinator(backend,{lock},
+  taskDocumentStorageContract)`（即 `bootstrap-capture` P06 的成功模式）。
+- 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
+  `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
+
 ## 交接：2026-11-05 round 7（歷史）
 
 待辦第 1、2 項完成，第 3 項（A 類）11／11 檔全部遷移（8 檔全綠；三個 bootstrap／
