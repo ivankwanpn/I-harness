@@ -439,7 +439,13 @@ boundaries 147/147；reachability 432 rows、70 NEW（round 6 是 71，移除的
 4. B 類 predecessor 語義決策：若 composed 升級 13→14 是正確行為，更新
    `child-bootstrap-predecessor`、`semantic-codec2-predecessor` 的位元組斷言；
    若否，回頭修產品。
-5. 量測 `session-executor`（99 檔）、`desktop-gateway`（61 檔）、`subagent`、
+   **round 12 進度：`session-executor` 第一批（owned-* 17 檔）**。Windows 上該套件
+   `vitest.config.ts` 關閉 fileParallelism，單檔要 30–140 秒，17 檔約 25 分鐘；
+   已完成 7 檔全綠：`owned-service-shell`(15)、`owned-workflow-service`(7)、
+   `owned-metadata-runtime`(18)、`owned-service-title`(7)、`owned-code-nested-shell`(2)、
+   `owned-plugin-catalog`(6)、`owned-task-service`(2)。其餘 10 檔仍在跑（job 進行中，
+   下一輪收結果）。套件實際有 223 個 `*.test.ts`（不是 99），全套要用多輪或分組跑。
+5. 量測 `session-executor`（223 檔）、`desktop-gateway`（61 檔）、`subagent`、
    `agent-team` 的 red 清單，補進本文件。
 6. 全部轉綠後，才把 `verify:all` 的 full job 當成 gate；在那之前 CI 的必過項目
    仍是 typecheck + boundaries。
