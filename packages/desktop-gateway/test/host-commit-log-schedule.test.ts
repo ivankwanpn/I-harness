@@ -14,7 +14,7 @@ import { createDesktopHost } from '../src/host.ts'
 // Repro for Plan 11: schedule create (a live tool write) after a turn fails
 // with "Gateway plugin refresh requires recovery" on the commit log, while the
 // prompt-only turn passes. Kept skipped so the reproduction is available.
-it.skip('creates and deletes a schedule through the desktop host on the commit log', async () => {
+it('creates and deletes a schedule through the desktop host on the commit log', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-turn-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
   await mkdir(workspace)
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')

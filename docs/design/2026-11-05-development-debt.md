@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 250（plugin refresh 競態）**：schedule create 觸發的 plugin refresh 會在寫入 issue→install 視窗斷言 currentness，
+> 被回報為 `issued write needs reconciliation` 且永久 poison 該 row。refresh 對這個 transient 錯誤做有界重試後，
+> schedule create/list/delete 5/5 通過。
 > **round 249（execution prefix 修復）**：source 的 `prefix` 快取改為「event count 變了才重讀」，並在 append→install 視窗以
 > `control.suspended` 暫停（backend 與 source 共用）；host turn 5/5 穩定。schedule create（live tool write）仍失敗，
 > 以 skip 測試保留（Plan 11）。

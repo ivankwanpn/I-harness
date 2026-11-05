@@ -889,8 +889,11 @@ cached object that only changed on the execution state's own installs, so a raw 
 desynchronised it. The getter now re-reads the log when the event count changed, except while a batch is between `append` and
 `install` (`control.suspended`, shared by the fact backend and the source). The host turn test is stable at 5/5.
 
-**Plan 11 repro:** schedule create after a turn (`desktop/schedule/create`, a live tool write) fails with
-`Gateway plugin refresh requires recovery` on SCL; kept as a skipped test (`host-commit-log-schedule.test.ts`).
+**Plan 11 (resolved):** schedule create after a turn failed with `Gateway plugin refresh requires recovery`. The refresh
+asserts the assembly's currentness while the session's previous write is between issue and install, which the execution state
+reports as `Original issued write needs reconciliation`; the selection owner then poisoned the row permanently. The refresh
+now retries that specific transient failure (up to 40 times, 25 ms apart) before failing the row; schedule create/list/delete
+passes 5/5 on SCL.
 
 ## Follow-on plans (not in this plan)
 

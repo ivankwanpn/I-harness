@@ -30,7 +30,20 @@ export function createOwnedGatewaySelectionOwner(options:Parameters<typeof captu
    const row=rows.get(id);if(!row||row.retired||!row.mount||!row.update||!row.original)return Promise.reject(Error('Original Gateway plugin mount unavailable'))
    if(row.refresh)return row.refresh
    const mount=row.mount,update=row.update,original=row.original
-   const flight=Promise.resolve().then(async()=>{original.assertCurrent();const candidate=await captureOwnedGatewaySelection(options);original.assertCurrent();if(candidate.kind!=='managed')throw Error('Physical hooks require complete compatibility before acquisition');candidate.assertCurrent();if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed');await Reflect.apply(update,mount,[candidate.inputs,candidate.directMcp]);original.assertCurrent();candidate.assertCurrent();if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed');row.current=candidate;row.failed=false}).catch(error=>{row.failed=true;throw error})
+   const flight=Promise.resolve().then(async()=>{
+    // A refresh can land while the session's previous write is still installing;
+    // currentness reports that as 'issued write needs reconciliation'. Wait for
+    // the write to settle instead of poisoning the selection permanently.
+    for(let attempt=0;;attempt++){
+     try{
+      original.assertCurrent();const candidate=await captureOwnedGatewaySelection(options);original.assertCurrent();if(candidate.kind!=='managed')throw Error('Physical hooks require complete compatibility before acquisition');candidate.assertCurrent();if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed');await Reflect.apply(update,mount,[candidate.inputs,candidate.directMcp]);original.assertCurrent();candidate.assertCurrent();if(row.retired||row.mount!==mount||mount.update!==update)throw Error('Original Gateway plugin mount changed');row.current=candidate;row.failed=false;return
+     }catch(error){
+      const message=String((error as Error)?.message??'')
+      if(attempt<40&&/issued write needs reconciliation|prefix changed/i.test(message)){await new Promise(resolve=>setTimeout(resolve,25));continue}
+      throw error
+     }
+    }
+   }).catch(error=>{row.failed=true;throw error})
    row.refresh=flight;void flight.finally(()=>{if(row.refresh===flight)row.refresh=undefined}).catch(()=>{})
    return flight
   },
