@@ -219,6 +219,11 @@ describe('commit coordinator', () => {
     const born = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST })
     expect(born.id).toBe('target')
     expect(born.document.view.events.at(-1)?.type).toBe('session/bootstrap')
+    const seedLength = request.seed.records.length
+    expect(born.receipt.seedLength).toBe(seedLength)
+    expect(born.receipt.completion.key.firstSeq).toBe(seedLength)
+    expect(born.receipt.manifestDigest).toBe((born.document.view.header as { semanticSeed?: { manifestDigest?: string } }).semanticSeed?.manifestDigest)
+    expect(born.receipt.dependencyClosureDigest).toBe(EMPTY_SEMANTIC_DEPENDENCY_DIGEST)
     await coordinator.closeManagedDocument('target')
     const { session } = await coordinator.load('target')
     expect(session.events[0]?.type).toBe('conversation/seed-manifest')
@@ -244,11 +249,38 @@ describe('commit coordinator', () => {
     }
     const born = await coordinator.createChildSession(request, { closure: EMPTY_SEMANTIC_DEPENDENCY_DIGEST })
     expect(born.document.view.events.at(-1)).toMatchObject({ type: 'agent/input/admitted', inputId: 'initial' })
+    expect(born.receipt.initial).toMatchObject({ inputId: 'initial', seq: request.seed.records.length + 1 })
+    expect(born.document.view.events[born.receipt.completion.key.firstSeq]?.type).toBe('session/bootstrap')
+    expect(born.document.view.events[born.receipt.initial!.seq]?.type).toBe('agent/input/admitted')
     await coordinator.closeManagedDocument('child')
     const { session } = await coordinator.load('child')
     expect(session.header).toMatchObject({ parentSession: 'parent', seedLength: request.seed.records.length, delegationDepth: 1 })
     const admitted = session.events.filter(event => event.type === 'agent/input/admitted')
     expect(admitted).toHaveLength(1)
+  })
+
+  it('births a child through the compatible capture entry', async () => {
+    const { coordinator } = await setup()
+    const source = createSession()
+    append(source, { type: 'user/message', text: 'source' })
+    const exported = exportConversationSeed(source, { kind: 'session', sessionId: 'parent' }, { kind: 'all' })
+    if (exported.kind !== 'seed') throw new Error('seed refused')
+    const payload = {
+      invocation: { version: 1 as const, operationId: 'op3', targetSessionId: 'captured', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'c'.repeat(64) },
+      target: { kind: 'new' as const },
+      metadata: {},
+      lineage: { origin: 'fork' as const, parentSession: 'parent' },
+      seed: compileSemanticSeed(exported),
+    }
+    const guards = { assertCurrent() {}, dependencies: { async confirm() { throw new Error('unused') }, async reconcile() { throw new Error('unused') } } }
+    const outcome = await coordinator.bootstrapChildTargetWithCapture({ invocation: payload.invocation } as never, guards as never, async () => payload)
+    expect(outcome.kind).toBe('ready')
+    if (outcome.kind !== 'ready') throw new Error('expected ready')
+    expect(outcome.document.view.events.at(-1)?.type).toBe('session/bootstrap')
+    expect(outcome.receipt.seedLength).toBe(payload.seed.records.length)
+    await coordinator.closeManagedDocument('captured')
+    const blocked = await coordinator.resumeChildTarget({ invocation: payload.invocation } as never, guards as never)
+    expect(blocked).toMatchObject({ kind: 'blocked', reason: 'payload-required' })
   })
 
   it('routes appends through the retained owned handle', async () => {

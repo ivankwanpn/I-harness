@@ -649,6 +649,16 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
 - Tests: a forked child (seed manifest first, bootstrap completion last) and a subagent child with the initial admitted
   input (lineage header preserved, exactly one admitted event).
 
+## Plan 3f (implemented 2026-11-05): bootstrap-compatible birth entry + receipt
+
+- `createChildSession` now returns the `BootstrapReceipt` synthesized from the exact events it committed:
+  a `bootstrap:<op>:seed` batch (when the seed has records) and a `bootstrap:<op>:complete` batch built with
+  `encodeFactBatch`, carrying `manifestDigest`, `dependencyClosureDigest`, `seedLength` and the initial `{inputId, seq, startedAt, expiresAt}`.
+  The event at `receipt.completion.key.firstSeq` is `session/bootstrap`; the event at `receipt.initial.seq` is `agent/input/admitted`.
+- `bootstrapChildTargetWithCapture(request, guards, capture)` and `resumeChildTarget(request, guards, payload?)` are the drop-in
+  entry the subagent already calls: the capture result must match the request invocation, the child is born as one commit, and a
+  resume without a payload returns `blocked/payload-required`.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

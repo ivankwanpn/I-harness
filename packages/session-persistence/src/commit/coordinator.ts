@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { CURRENT_FORMAT_VERSION, stringifyJsonData, type Session, type SessionEvent } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, canonicalJsonData, decodeFactBatch, encodeFactBatch, legacyPrefixDigest, stringifyJsonData, type FactReceipt, type Session, type SessionEvent } from '@i-harness/core-session'
 import { COMMIT_LOG_GENERATION, CommitLogConflictError, createCommitLog, openCommitLog, CommitLogNotFoundError, type CommitLog, type CommitLogMode } from '@i-harness/session-commit-log'
 import { readdir, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -45,7 +45,9 @@ export class CommitSessionDeletedError extends Error {
 export type CommitCoordinator = {
   readonly storageRoot: string
   create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
-  createChildSession(request: BootstrapRequest, options: { closure: string }): Promise<{ id: string; document: ManagedDocument }>
+  createChildSession(request: BootstrapRequest, options: { closure: string }): Promise<{ id: string; document: ManagedDocument; receipt: import('../coordinator/bootstrap-types.ts').BootstrapReceipt }>
+  bootstrapChildTargetWithCapture(request: import('../coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('../coordinator/bootstrap-types.ts').BootstrapGuards, capture: () => Promise<BootstrapRequest>): Promise<import('../coordinator/bootstrap-types.ts').BootstrapOutcome>
+  resumeChildTarget(request: import('../coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest, guards: import('../coordinator/bootstrap-types.ts').BootstrapGuards, payload?: BootstrapRequest): Promise<import('../coordinator/bootstrap-types.ts').BootstrapOutcome>
   fork(parentId: string, options?: ForkOptions): Promise<{ id: string }>
   beginIntent(sessionId: string, id: string, intent: CommitIntent): Promise<void>
   endIntent(sessionId: string, id: string, outcome: 'committed' | 'failed'): Promise<void>
@@ -98,6 +100,35 @@ function toMeta(header: Readonly<Record<string, unknown>>, meta: Readonly<Record
 }
 
 function metaOf(log: CommitLog): SessionMeta { return toMeta(log.header(), log.view().meta) }
+
+/** Synthesize the bootstrap receipt over the exact events the birth commit wrote:
+ *  a seed batch (when the seed has records) then the completion batch. */
+function receiptOf(request: BootstrapRequest, stage: ReturnType<typeof buildBootstrapHeader>['stage'], closure: string, id: string, initial?: SessionEvent): import('../coordinator/bootstrap-types.ts').BootstrapReceipt {
+  const owner = { sessionId: id, incarnation: 'birth' }
+  const seedLength = stage.seed.seedLength
+  let previous = legacyPrefixDigest(0, new Uint8Array())
+  let seed: FactReceipt | undefined
+  const records = request.seed.records
+  if (records.length) {
+    const batch = encodeFactBatch(`bootstrap:${request.invocation.operationId}:seed`, previous, records)
+    seed = { owner, key: batch.key, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest: decodeFactBatch(batch.bytes).prefixDigest }
+    previous = seed.prefixDigest
+  }
+  const completion = { type: 'session/bootstrap' as const, version: 1 as const, seq: seedLength, operationId: request.invocation.operationId, manifestDigest: bootstrapManifest(stage, records), dependencyClosureDigest: closure, seedLength }
+  const completionEvents: SessionEvent[] = [completion as unknown as SessionEvent]
+  if (initial) completionEvents.push({ ...initial, seq: seedLength + 1 } as SessionEvent)
+  const complete = encodeFactBatch(`bootstrap:${request.invocation.operationId}:complete`, previous, completionEvents)
+  return {
+    version: 1,
+    invocation: request.invocation,
+    manifestDigest: bootstrapManifest(stage, records),
+    seedLength,
+    dependencyClosureDigest: closure,
+    ...(seed ? { seed } : {}),
+    completion: { owner, key: complete.key, lastSeq: complete.key.firstSeq + complete.key.count - 1, prefixDigest: decodeFactBatch(complete.bytes).prefixDigest },
+    ...(stage.initial ? { initial: { inputId: stage.initial.inputId, seq: seedLength + 1, startedAt: stage.initial.startedAt, expiresAt: stage.initial.expiresAt } } : {}),
+  }
+}
 
 export function createCommitCoordinator(options: CommitCoordinatorOptions): CommitCoordinator {
   const root = options.root
@@ -188,7 +219,8 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       if (existing) {
         const seed = (existing as { semanticSeed?: { operationId?: string } }).semanticSeed
         if (seed?.operationId !== captured.invocation.operationId) throw new CommitLogConflictError(id)
-        return { id, document: await this.openManagedDocument(id) }
+        const rebuilt = buildBootstrapHeader(captured)
+        return { id, document: await this.openManagedDocument(id), receipt: receiptOf(captured, rebuilt.stage, options.closure, id, rebuilt.initial) }
       }
       const header = JSON.parse(Buffer.from(stage.headerBytes).toString('utf8')) as Record<string, unknown>
       const seedLength = stage.seed.seedLength
@@ -214,7 +246,25 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       const log = await createCommitLog(logOptions(id), { header, entries })
       await log.close()
       if (parentIntent && parent) await this.endIntent(parent, intentId, 'committed').catch(() => {})
-      return { id, document: await this.openManagedDocument(id) }
+      return { id, document: await this.openManagedDocument(id), receipt: receiptOf(captured, stage, options.closure, id, initial) }
+    },
+    async bootstrapChildTargetWithCapture(request, guards, capture) {
+      guards.assertCurrent()
+      let payload: BootstrapRequest
+      try { payload = await capture() } catch (error) { throw error }
+      if (canonicalJsonData(payload.invocation) !== canonicalJsonData(request.invocation)) throw new TypeError('captured child payload does not match the child request')
+      guards.assertCurrent()
+      return this.createChildSession(payload, { closure: payload.seed.dependencyDigest }).then(
+        ({ document, receipt }) => ({ kind: 'ready' as const, document, receipt }),
+        (error) => {
+          if (error instanceof CommitLogConflictError) return { kind: 'refused' as const, reason: 'conflict' as const }
+          throw error
+        },
+      )
+    },
+    async resumeChildTarget(request, guards, payload) {
+      if (!payload) return { kind: 'blocked', token: { version: 1, invocation: request.invocation, phase: 'header', manifestDigest: 'unknown' }, reason: 'payload-required' }
+      return this.bootstrapChildTargetWithCapture(request, guards, async () => payload)
     },
     async fork(parentId, options = {}) {
       const parent = await readState(parentId)

@@ -14,6 +14,10 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 228（SCL birth 相容入口）**：`createChildSession` 回傳合成的 `BootstrapReceipt`（seed/completion batch、manifestDigest、
+> initial seq），事件位置與 `verifyOriginalChildBirth` 的期待一致；新增 `bootstrapChildTargetWithCapture`／`resumeChildTarget`
+> 供 subagent 直接呼叫（capture payload 必須與 request invocation 相符；無 payload 的 resume 回 `payload-required`）。
+> 18 個 coordinator 測試全綠。
 > **round 227（SCL 單一 commit 出生）**：`createChildSession` 以 `buildBootstrapHeader` 產生 header＋manifest digest，
 > 把 seed records、`session/bootstrap`、initial `agent/input/admitted` 寫成**同一個 commit**；以 `semanticSeed.operationId` 冪等，
 > 父會話存在時先寫 `child:<op>` intent、完成後 settle。17 個 coordinator 測試全綠（fork 子、subagent 子＋initial input）。
