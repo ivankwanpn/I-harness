@@ -1139,6 +1139,14 @@ the selection/witness lifecycle, not storage.
 `repair.test.ts` now builds its coordinator with `composeJsonlTaskTransitionCoordinator(..., { lock: { enabled: true } }, taskDocumentStorageContract)`
 instead of the plain factory: the transition gate (`TASK_TRANSITION_UNSUPPORTED`) disappears, and the file is green (19/19; one
 assertion accepts `TASK_TRANSITION_FAILED` because the composed path reports the non-positional sequence that way).
+
+## Plan 39 (implemented 2026-11-06): deletion clears the session documents
+
+`deleteOwnedSession` wrote the durable deletion receipt and removed the session directory but left the session-owned documents
+(task, title, project binding) in the document log. The manifest documents are now cleared with `doc-clear` commits after the
+receipt, so a recreation cannot read stale task/title/binding state while unrelated documents stay untouched
+(`commit-coordinator.test.ts` covers task + title removal and an unrelated document).
+
 `fork-controller.test.ts` moved the same way: 32 failures drop to 6, which have different causes (fork admission/host fixture
 
 Full-suite measurement after the migration (2026-11-06): `session-persistence` is **280 failed / 840 passed / 1120 total** across

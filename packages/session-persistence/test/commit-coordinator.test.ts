@@ -180,13 +180,19 @@ describe('commit coordinator', () => {
     await coordinator.append('s1', [{ type: 'user/message', text: 'x' }])
     const seen: string[] = []
     const off = coordinator.onDocumentDeleted(async id => { seen.push(id) })
-    const manifest = { documents: [], files: [] }
+    await coordinator.putDocument('task-s1', { formatVersion: 2, tasks: [], notifications: [] })
+    await coordinator.putDocument('session-title/s1', { formatVersion: 1, title: 'Old' })
+    await coordinator.putDocument('task-other', { formatVersion: 2, tasks: [{ id: 'keep' }], notifications: [] })
+    const manifest = { documents: ['task-s1', 'session-title/s1'], files: [] }
     await coordinator.deleteOwnedSession('s1', manifest)
     off()
     expect(seen).toEqual(['s1'])
     expect(await coordinator.list()).toEqual([])
     await expect(coordinator.load('s1')).rejects.toBeInstanceOf(CommitLogNotFoundError)
     expect(await coordinator.deletionReceipt('s1')).toEqual(manifest)
+    expect(await coordinator.getDocument('task-s1')).toBeUndefined()
+    expect(await coordinator.getDocument('session-title/s1')).toBeUndefined()
+    expect(await coordinator.getDocument('task-other')).toEqual({ formatVersion: 2, tasks: [{ id: 'keep' }], notifications: [] })
     const recreated = await coordinator.create({ sessionId: 's1' })
     expect(recreated.id).toBe('s1')
     const { session } = await coordinator.load('s1')

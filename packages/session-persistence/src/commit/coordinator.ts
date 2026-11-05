@@ -240,6 +240,11 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return JSON.parse(new TextDecoder().decode(await log.readSidecar(side.digest))) as unknown
     } finally { await log.close() }
   }
+  const clearDocumentsOf = async (keys: readonly string[]): Promise<void> => {
+    if (!keys.length) return
+    const log = await documentLog()
+    try { await log.append({ ops: keys.map(key => ({ kind: 'doc-clear' as const, key })) }) } finally { await log.close() }
+  }
   const putDocumentOf = async (key: string, data: unknown): Promise<void> => {
     const text = stringifyJsonData(data)
     if (text === undefined) throw new TypeError('document must be losslessly JSON-serializable')
@@ -442,6 +447,9 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       // The receipt is durable before the session becomes invisible; the rename
       // is the deletion commit point (a crash before it deletes nothing).
       await this.putDocument(`deletion:${sessionId}`, manifest)
+      // The manifest's documents belong to the deleted session; clear them so a
+      // recreation cannot read the old task/title/binding state.
+      await clearDocumentsOf([...new Set(manifest.documents)].filter(key => !key.startsWith('deletion:')))
       const directory = join(root, sessionId)
       const trash = join(root, `.trash-${randomUUID()}`)
       await rename(directory, trash)
