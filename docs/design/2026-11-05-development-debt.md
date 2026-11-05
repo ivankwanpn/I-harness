@@ -529,6 +529,10 @@ round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed�
   「preserves invalid raw input -1／1.5 without declaring accounting」（多了一個欄位）、
   「does not add a marker to signed or redacted assistant thinking」與「explicit off removes
   supported Responses content breakpoints while preserving tool data」（皆 `expected undefined
+  round 71 診斷：`visits` 只在 `entries()` yield 時遞增，而目前實作不再透過 `entries`（所以 0）。
+  改測 `Symbol.iterator`＋`entries` 後得到 **60000**（3×20000）——表示 index 建構時對前綴做了
+  3 次走訪，或 hooks 被呼叫多次；需先確認實作是否真的退化（效能契約）再決定修產品或重寫 probe。
+  兩次實驗均已還原。
   to be defined`）。
 - `runtime-context` = **「original-only management settles actual
   absent without getter/action/retain or publication replay」→ resolved undefined instead
