@@ -231,7 +231,16 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     async function fail(cause: unknown, beforeCleanup: boolean): Promise<never> {
       let cleanupCause: unknown, cleanupFailed = false
       if (beforeCleanup && !historyHeaderUnknown && !historyHeaderCleanupPending && !(historyHeld && hasHeaderDebt(id,historyHeld)) && !(historyReader && historyReader.hasDebt()) && (historyHeaderConflict || postAttempted && !postStarted || postStarted && !postDone || confirmationConflict || !confirmationUnknown && !taskIssued || result?.kind === 'conflict' || result?.kind === 'not-issued' || headerResult?.kind === 'conflict' || headerResult?.kind === 'not-issued')) try { await close() } catch (error) { cleanupFailed = true; cleanupCause = error }
-      const failure = new Error('TASK_TRANSITION_FAILED', { cause }); if (cleanupFailed) Object.assign(failure, { cleanupCause })
+      const failure = new Error('TASK_TRANSITION_FAILED', { cause });
+      // D-12 debt #7: the wrapper erased every machine-readable classification,
+      // so callers had to match strings or reach into `cause`. Preserve the
+      // original code (and give format refusals a stable one) while keeping the
+      // wrapper type that the transition API documents.
+      const causeCode = (cause as { code?: unknown } | null | undefined)?.code
+      const code = typeof causeCode === 'string' ? causeCode
+        : (cause as { name?: unknown } | null | undefined)?.name === 'SessionFormatUnsupportedError' ? 'SESSION_FORMAT_UNSUPPORTED' : undefined
+      if (code !== undefined) Object.assign(failure, { code })
+      if (cleanupFailed) Object.assign(failure, { cleanupCause })
       const handle = Object.freeze({ async retry() {
         if (this !== handle) throw new TypeError('Invalid transition retry receiver')
         if (!closed) { if (revoked) await retryClose(); else { await execute(); await close() } }
