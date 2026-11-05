@@ -816,6 +816,17 @@ instead of building a second ownership. The metadata fold factory (`originalExec
 coordinator and submits a `/greet world` slash command: plugin/command/skill surface, managed task host, metadata folds, model
 request (`hello world`) and a clean `service.close()` all pass.
 
+## Plan 8 (implemented 2026-11-05): product store selection
+
+- `@i-harness/session-persistence-jsonl/internal/commit-coordinator` is the declared subpath for the commit-log coordinator.
+- `createDesktopHost({ sessionStore })` and every CLI coordinator construction select the commit-log coordinator when
+  `sessionStore === 'commit-log'` or `IH_SESSION_STORE=commit-log`; the facade receives the task-document validator and the
+  empty-document factory, and the host threads `originalExecutionFoldFactory`.
+- Capability guards for surfaces SCL does not provide yet: the execution-host observation preflight is a no-op when
+  `retainExistingSessionBindingObservation` is absent (it can never have issued a lease), and the retained coordinator close is
+  associated with the coordinator's own `close`.
+- Tests: `host-commit-log.test.ts` creates and closes a session through the real host on **both** stores.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

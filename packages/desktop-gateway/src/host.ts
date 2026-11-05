@@ -20,6 +20,8 @@ import { createIsolatedReviewerPool, type GuardianIsolatedConfig } from "@i-harn
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createForkSessionController } from "@i-harness/session-persistence"
 import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
+import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
+import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
 import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-storage-contract"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
@@ -122,6 +124,9 @@ export interface DesktopHostOptions {
   buildProviderClient?: FileProviderRuntimeOptions["buildClient"]
   /** Fixed for this host lifetime; false explicitly retains legacy recording. */
   experimentalUsageObservations?:boolean
+  /** Durable session store; defaults to the JSONL coordinator, or to the
+   *  commit-log coordinator when IH_SESSION_STORE=commit-log. */
+  sessionStore?: 'jsonl' | 'commit-log'
   onWrite: (frame: RpcMessage) => void
 }
 
@@ -159,10 +164,18 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
   const codingPlans = createCodingPlans(codexAccounts, runtime)
   await mkdir(options.sessionDir, { recursive: true })
-  const coordinator = createJsonlTaskTransitionCoordinator(options.sessionDir, {
-    lock: { enabled: true, lockRoot: options.sessionDir },
-    originalExecutionFoldFactory: createOwnedMetadataFold,
-  }, taskDocumentStorageContract)
+  const commitLogStore = options.sessionStore
+    ? options.sessionStore === 'commit-log'
+    : process.env.IH_SESSION_STORE === 'commit-log'
+  const coordinator = commitLogStore
+    ? asSessionCoordinator(createJsonlCommitCoordinator(options.sessionDir, {
+        lock: { enabled: true, lockRoot: options.sessionDir },
+        originalExecutionFoldFactory: createOwnedMetadataFold,
+      }), { taskDocument: { validator: taskDocumentStorageContract, empty: taskDocumentStorageContract.empty } })
+    : createJsonlTaskTransitionCoordinator(options.sessionDir, {
+        lock: { enabled: true, lockRoot: options.sessionDir },
+        originalExecutionFoldFactory: createOwnedMetadataFold,
+      }, taskDocumentStorageContract)
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
   const fence = createSessionManagementFence()

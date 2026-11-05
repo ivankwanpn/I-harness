@@ -13,7 +13,9 @@ export function createExecutionHostObservation(coordinator: SessionCoordinator, 
   let closing = false, closeFlight: Promise<void> | undefined
   const failures = (results: PromiseSettledResult<unknown>[]) => results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
   const raise = (input: unknown[]) => { const errors = [...new Set(input)]; if (errors.length === 1) throw errors[0]; if (errors.length) throw new AggregateError(errors, 'Execution observation cleanup failed') }
-  const preflight = () => { preflightRetainedCoordinatorFor(coordinator); for (const lease of leases) lease.preflight(); assertOutsideRetirementSink(coordinator) }
+  // A coordinator without retained-binding support never issued a lease, so its
+  // only obligation at close is the retirement-sink exclusion.
+  const preflight = () => { if (coordinator.retainExistingSessionBindingObservation) preflightRetainedCoordinatorFor(coordinator); else if (leases.size) throw new Error('Execution observation unavailable'); for (const lease of leases) lease.preflight(); assertOutsideRetirementSink(coordinator) }
   const fence = () => { preflight(); closing = true; for (const lease of leases) lease.fence() }
   function outer(lease: Owned, retry = true): Promise<void> {
     try { lease.preflight(); assertOutsideRetirementSink(coordinator) } catch (error) { return Promise.reject(error) }

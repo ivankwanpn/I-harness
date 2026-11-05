@@ -3,8 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./internal/task-document-factory": "./src/task-document-factory.ts", "./internal/transition": "./src/internal-transition.ts" },
-  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./internal/task-document-factory": "./src/task-document-factory.ts",
+    "./internal/transition": "./src/internal-transition.ts",
+    "./internal/commit-coordinator": "./src/commit-coordinator.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@i-harness/core-session": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",

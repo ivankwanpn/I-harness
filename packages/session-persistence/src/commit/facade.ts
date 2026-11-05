@@ -4,6 +4,7 @@ import { associateOriginalResultOrdering } from '../result-ordering-internal.ts'
 import { associateOriginalResultRevocation } from '../coordinator/result-revocation.ts'
 import { associateTaskDocumentOperations } from '../coordinator/task-document-association.ts'
 import { associateColdExecutionWrites, createColdExecutionWrites } from '../coordinator/cold-execution-writes.ts'
+import { associateRetainedCoordinatorClose } from '../coordinator/retained-cleanup.ts'
 import type { TaskDocumentConfiguration } from '../coordinator/task-document-operation.ts'
 import type { CommitCoordinator } from './coordinator.ts'
 import { createCommitTaskOperations } from './capabilities.ts'
@@ -63,6 +64,8 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
   associateOriginalResultOrdering(facade as never, ports.ownership as never)
   associateOriginalResultRevocation(facade as never, ports.admission as never, ports.ownership as never)
   associateColdExecutionWrites(facade as never, coldWrites)
+  // No retained bindings exist on this coordinator; close is the whole cleanup.
+  associateRetainedCoordinatorClose(facade as never, async () => { await coordinator.close() })
   associateManagedExecution(facade, {
     acquire: id => coordinator.acquireExecution(id),
     assertAdmission: () => {},
