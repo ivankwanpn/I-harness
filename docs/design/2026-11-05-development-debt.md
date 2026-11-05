@@ -7,6 +7,10 @@ round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 ti
   round 165 全套：`sdk` **5 failed / 114 passed（119）**（由 9 failed）。剩：CLI end-to-end、
   round 167：`Original prepared task caller unavailable` 來自 `subagent/src/index.ts:349`——
    **round 169**：`launchEntry` 是在工具註冊時（`index.ts:418`，`tool.name==='spawn_agent'`）以
+   **round 170**：`enter()` 內部是 `byExec.get(exec)`；若 exec 不在 prepared-body 表中（line 293）
+   且外層 frame 未 active，就回 undefined。即 sdk fixture 直接呼叫 `tool.execute`／自製 exec，
+   繞過了 registry 的 prepared-body 註冊。修法在測試側：走 registry 的 prepared 流程（或先註冊 body），
+   不是產品 bug。
   `bindPreparedTaskLaunchLeaf(tool, tool.execute)` 綁定的；若註冊後 registry 又包裝／替換 `execute`，
   `launchEntry.enter(exec)` 就對不上。修法方向：綁定時改用呼叫當下的 `tool.execute`，或在
   `enter` 失敗時以 `parentRegistry.get('spawn_agent')` 重新綁定一次。
