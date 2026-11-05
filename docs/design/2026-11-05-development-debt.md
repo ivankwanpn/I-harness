@@ -543,6 +543,11 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 103**：`withBootstrapResume`（binding-observation.ts:293–299）只是 capture＋
   **round 104 執行期追蹤**：stage-swap 測試中 `adopt` 與 remap 都有跑，且都是
   **round 105 決定性證據**：`documents` 只有一個 key `target`；close 時該 entry 是
+  **round 106 決定性證據**：在 `startInner` 的 `documents.set`（line 605）與 flight finally 的
+  `delete` 各加 log，stage-swap 測試印出**兩次 `NEW_ENTRY target`**（都來自 `startInner`），
+  而**沒有**任何 `DEL_ENTRY`——即第二次 resume 時 `documents` 是空的，第一次 blocked resume
+  的 entry 被「別的路徑」移除了（不是 startInner 的 flight finally）。下一步：在所有
+  `documents.delete(` 呼叫點加 log（含 `closeOne` line 98、`revoke` 相關），找出移除者。
   `{ready:false, doc:false, issued:true, phase:'header'}`——正是**第一次 blocked resume** 留下的
   那個 entry，而不是 adopt 成功的那個物件。即第二次 resume 的 adopt 作用在另一個物件上，
   `documents` 後來又被換回／重建了。下一步：在 `documents.set`／`delete` 加 log，找出
