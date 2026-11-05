@@ -35,6 +35,10 @@ it('searches a commit-log session transcript', async () => {
     expect(contextHits.items[0]).toMatchObject({ kind: 'session', sessionId: created.sessionId })
     expect(contextHits.items[0]!.excerpt).toContain('unique-search-token')
     const item = contextHits.items[0]!
+    await writeFile(join(workspace, 'notes.txt'), 'context file token\n', 'utf8')
+    const fileHits = await call('desktop/context/search', { contextKind: 'files', query: 'notes', offset: 0 }) as { items: { kind: string; path?: string }[]; total: number }
+    expect(fileHits.items.some(entry => entry.kind === 'file' && entry.path === 'notes.txt')).toBe(true)
+    await expect(call('desktop/context/read', { reference: { kind: 'session', workspaceId: workspace, sessionId: item.sessionId, seq: item.seq }, projectId: 'other' })).rejects.toThrow(/outside the current project/)
     const ctxRead = await call('desktop/context/read', { reference: { kind: 'session', workspaceId: workspace, sessionId: item.sessionId, seq: item.seq } }) as { text: string; truncated: boolean }
     expect(ctxRead.text).toContain('unique-search-token')
     expect(ctxRead.truncated).toBe(false)

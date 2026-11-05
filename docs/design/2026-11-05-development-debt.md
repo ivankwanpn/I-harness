@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 351（context files／project guard）**：files 模式命中 `notes.txt`；跨專案 session reference 被拒
+> （`Session reference is outside the current project`）。
 > **round 350（context read）**：正確參數為 `{reference:{kind:"session", workspaceId, sessionId, seq}}`，回 `{text, truncated:false}`
 > 且含 token；先前的空物件是參數層級錯誤。
 > **round 349（context picker 搜尋）**：`desktop/context/search`（sessions）經 conversation query 命中 SCL session（含 excerpt）；

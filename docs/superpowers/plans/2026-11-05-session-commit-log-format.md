@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 94 (implemented 2026-11-06): context files search and project guard
+
+`context/search` in `files` mode walks the workspace and returns `{kind:"file", path:"notes.txt"}` for a matching file, and
+`context/read` refuses a session reference whose `projectId` differs from the session owner with `Session reference is outside the
+current project`. Both asserted in the search host test.
+
 ## Plan 93 (implemented 2026-11-06): context read for a session reference
 
 `desktop/context/read` takes `{reference:{kind:"session", workspaceId, sessionId, seq}}` (not the bare reference) and returns
