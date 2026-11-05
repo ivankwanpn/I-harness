@@ -533,6 +533,13 @@ round 94：`jobs` **1 檔 / 5 tests 全綠**、`workflow` **6 檔 / 66 tests 全
 round 95：`lsp` **6 檔 / 94 tests 全綠**、`media` **3 檔 / 15 tests 全綠**。
 round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot read properties of undefined
   **round 97 排除**：在 `startInner` 的 flight 上「barrier.headerCommitted 為真時清
+  **round 98 實測欄位**（`closeOne`，`bootstrap-stage-swap`）：
+  `{headerUnknown:true, document:false, headerCommitted:false, revoked:true, issued:true, phase:'header', current:true}`
+  （`revoked` 是 closeOne 自己在 line 90 revoke 的結果；`ready` 未定義）。也就是說：第一個
+  `resumeSemanticTarget` 回 `blocked` 後 entry 停在 `phase:'header'`、header issued 未 commit；
+  第二個呼叫回 `already-ready` 卻**沒有**把這個 entry 的 `headerUnknown` 清掉（adopt 的 line 349
+  只作用在它自己的 entry 上）。下一步：找 `resumeSemanticTarget` 回 `already-ready` 的實作，
+  確保它對 `documents` 裡的那個 entry 標記 header 已確認。
   `headerUnknown`」→ 三檔仍 `Coordinator cleanup is unresolved`，表示這些 entry 的
   `headerCommitted` 是 false（或 close 走的是另一條路徑）。累計已排除：放寬守衛、只對 current
   entry 拋、document 路徑 fallback、ready 判斷、blocked 返回清旗標；下一輪需在 `closeOne` 直接
