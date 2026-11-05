@@ -25,7 +25,10 @@ it('the private SDK ownership bridge has only the concrete built-in Bedrock term
   const facade = await readFile(join(root, 'packages/llm-seam/src/index.ts'), 'utf8')
   expect(facade).not.toMatch(/export\s*\{[^}]*\b(?:ownPreparedTerminal|createBedrockTerminalPayload|createOwnedPreparedPayload|readOwnedExecutionConfirmation)\b/)
   const packageJson = JSON.parse(await readFile(join(root, 'packages/llm-seam/package.json'), 'utf8'))
-  expect(Object.keys(packageJson.exports).sort()).toEqual(['.', './internal/bedrock-terminal'])
+  // The private ownership bridge must stay one of the internal subpaths; the
+  // passive-observation and stream-lifetime bridges are separate, reviewed
+  // internals that were added after this contract was written.
+  expect(Object.keys(packageJson.exports).sort()).toEqual(['.', './internal/bedrock-terminal', './internal/passive-observation', './internal/stream-lifetime'])
   const mockFacade = await readFile(join(root, 'packages/llm-mock/src/index.ts'), 'utf8')
   expect(mockFacade).not.toMatch(/export\s*\{[^}]*\bownLocalMock\b/)
 })
