@@ -1190,6 +1190,13 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 79 (implemented 2026-11-06): cold output reads are owner-scoped errors
+
+`processes/job-output` and `processes/terminal-output` for an unknown id on a cold commit-log session answer with -32602
+`Job output unavailable for this owner` and `Saved terminal output unavailable for this owner`, i.e. the owner check runs before any
+storage lookup. Asserted in the turn test.
+
 ## Plan 78 (implemented 2026-11-06): cold process and execution shapes
 
 The turn test pins the cold views on the commit log: `desktop/session/processes/read` is `{live:false, terminals:[], jobs:[]}` and
