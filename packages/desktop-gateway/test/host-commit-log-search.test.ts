@@ -34,5 +34,9 @@ it('searches a commit-log session transcript', async () => {
     expect(contextHits.total).toBe(1)
     expect(contextHits.items[0]).toMatchObject({ kind: 'session', sessionId: created.sessionId })
     expect(contextHits.items[0]!.excerpt).toContain('unique-search-token')
+    const item = contextHits.items[0] as { sessionId: string; seq: number }
+    const ctxRead = await call('desktop/context/read', { reference: { kind: 'session', workspaceId: workspace, sessionId: item.sessionId, seq: item.seq } }) as { text: string; truncated: boolean }
+    expect(ctxRead.text).toContain('unique-search-token')
+    expect(ctxRead.truncated).toBe(false)
   } finally { await host.close() }
 }, 90000)

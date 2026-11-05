@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 93 (implemented 2026-11-06): context read for a session reference
+
+`desktop/context/read` takes `{reference:{kind:"session", workspaceId, sessionId, seq}}` (not the bare reference) and returns
+`{text, truncated}` where text is the JSON of the neighbouring user/assistant messages — for the commit-log session it contains the
+search token. The earlier empty `{}` came from passing the reference fields at the top level.
+
 ## Plan 92 (implemented 2026-11-06): context picker session search
 
 `desktop/context/search` with `contextKind:"sessions"` finds the commit-log session through the conversation query (the picker uses
