@@ -14,6 +14,12 @@
       "source": "packages/sandbox-wsl/README.md#public-api-scope"
     },
     {
+      "key": "unused-export\t@i-harness/llm-seam#withPreparedRequests",
+      "reason": "Public seam helper every LLM adapter is meant to compose; the repository's adapters currently import the wrapper module directly, so no cross-package consumer names the entry point yet. Documented in the package README as part of the public API scope.",
+      "dated": "2026-11-05",
+      "source": "packages/llm-seam/README.md"
+    },
+    {
       "key": "unused-export\t@i-harness/exec#ExecutionLaunch",
       "reason": "Intentional public type: ExecutionSupervisor.launch input names the trusted process specification, policy, backend and validation contract.",
       "dated": "2026-10-08",

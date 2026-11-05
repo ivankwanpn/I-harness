@@ -346,7 +346,10 @@ type re-export：`session-executor`（`PendingRewindIntent`、`RewindIntentV1`�
 `core-tools`（`ApprovalPolicyService`、`NativePlanValidationError`、`NativeTarget`）
 → **394 rows、32 NEW**（累計 -38）。再一輪移除 4 個 type re-export
 （`session-persistence` 的 `ForkHandoff`、`ChildCaller`；`instructions` 的
-`InstructionPendingLease`；`llm-seam` 的 `SseFrame`）→ **390 rows、28 NEW**（累計 -42）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+`InstructionPendingLease`；`llm-seam` 的 `SseFrame`）→ **390 rows、28 NEW**（累計 -42）。
+接下來改走「公開契約 → allowlist 註明理由」：把 `llm-seam#withPreparedRequests`
+（README 列為 public API seam，但目前 adapter 直接 import wrapper 模組）加進
+`reachability-allowlist.json`（dated 2026-11-05、附 reason/source）→ **27 NEW**。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---
