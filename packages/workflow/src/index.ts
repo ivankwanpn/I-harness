@@ -24,7 +24,6 @@ export {
   createWorkflowJobStore,
   runWorkflow,
   runWorkflowIn,
-  reserveWorkflowIn,
   type WorkflowReservation,
   type OwnedWorkflowRunHandle,
   type WorkflowLoopCompletion,
