@@ -582,6 +582,13 @@ full job 當 gate。
   的延續在 entry 被 revoke 後執行；`managed.closeOne` 會 await `entry.flight`，因此把該
   rejection 併進 close 的 AggregateError。下一步：在 `closeOne` revoke 前先 join flight，
   或讓 revoked entry 的延續走 `refused` 而非 throw（需確認 fail-closed 語義）。
+  **round 48 關鍵發現**：`managed-documents.ts:closeOne` 有兩條路徑——
+  `if(entry.document){await entry.document.close();return}`（line 85）直接關文件，
+  而 `revokeManagedEntry(entry); await entry.flight?.catch(...)` 的 revoke/join 只在**沒有**
+  document 的 entry（line 90）才做。冷 resume 後 entry 已有 document，所以走 line 85，
+  文件內部的 currentness 斷言在文件關閉時仍以舊 entry 為準 → `FactRecoveryRequiredError`。
+  下一輪候選修法：在 line 85 之前也先 `revokeManagedEntry(entry)` 並 join flight（或让
+  document.close 對已 revoke 的 entry 容忍），再跑三檔驗證。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
