@@ -329,7 +329,8 @@ boundaries 147/147；reachability 432 rows、70 NEW（round 6 是 71，移除的
 **round 13 的 gate 進度**：`session-persistence` 移除 5 個沒有 import 端點的 type
 re-export（`ResolvedBootstrapBirth`、`ForkHandoffMode`、`ChildInitialCommitment`、
 `ChildExecutionIntent`、`ChildLineage`）→ reachability **427 rows、65 NEW**
-（-5），套件 typecheck 乾淨。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+（-5），套件 typecheck 乾淨。同輪再移除 `BootstrapInitial`、`BootstrapLineage`、
+`BootstrapTarget`、`ChildBootstrapRequestIntent` → **423 rows、61 NEW**。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---
