@@ -546,6 +546,11 @@ round 95：`lsp` **6 檔 / 94 tests 全綠**、`media` **3 檔 / 15 tests 全綠
 round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot read properties of undefined
 round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**，10 個測試檔仍是 legacy
   round 143：加 `packages/core-agent/vitest.config.ts`（30s）→ **10 檔紅 / 35 → 9 檔紅 /
+  round 144 抽樣：`soft-sequence-settlement` 首紅是 **`TASK_TRANSITION_FAILED`**（需讀 wrapper 的
+  `cause`），其餘三紅是 cleanup 遮罩；`held-policy-receipt` 1 紅同屬 cleanup 群。
+  紅檔清單（9 檔）：`held-policy-receipt`、`compaction-binding`、`soft-sequence-settlement`、
+  `overflow`、`retained-boundaries`、`current-context-loopback`、`instruction-request-context`、
+  `unstarted-call-settlement`、`retained-batch-continuation`。
   33 failed（649）**；剩餘分類：22× `Coordinator cleanup is unresolved`（多為遮罩，需 unmask）、
   6× `expected undefined to be defined`、1× `SYS-PROMPT`、1× `main authority`、1× length、以及少量 timeout。
 round 115：`code-retrieval` **4 檔 / 54 tests 全綠**；`code-mode` **10 檔紅 / 18 檔綠
