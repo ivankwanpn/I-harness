@@ -74,6 +74,60 @@
       "source": "packages/core-session/src/events/delivery.ts#validDeliveryKey"
     },
     {
+      "key": "unused-export\t@i-harness/session-persistence#ChildBootstrapCore",
+      "reason": "Child bootstrap core shape; three session-persistence tests name it while production assembly goes through the intent factory.",
+      "dated": "2026-11-05",
+      "source": "packages/session-persistence/src/coordinator/child-bootstrap-intent.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/session-persistence#ForkHostErrorData",
+      "reason": "Fork host error payload published for host adapters; no in-repo host adapter names it yet.",
+      "dated": "2026-11-05",
+      "source": "packages/session-persistence/src/fork-contract.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/session-persistence#ForkReceiptSummary",
+      "reason": "Fork receipt summary type published by the controller; no external consumer types it yet.",
+      "dated": "2026-11-05",
+      "source": "packages/session-persistence/src/fork-contract.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/exec#BackgroundRun",
+      "reason": "Return type of the exported runBackground contract; unexporting it would be a private-name error on that signature.",
+      "dated": "2026-11-05",
+      "source": "packages/exec/src/index.ts#runBackground"
+    },
+    {
+      "key": "unused-export\t@i-harness/exec#NativeBackgroundRun",
+      "reason": "Return type of the native runBackground implementation exposed on the ExecService contract.",
+      "dated": "2026-11-05",
+      "source": "packages/exec/src/index.ts#runBackground"
+    },
+    {
+      "key": "unused-export\t@i-harness/session-executor#ResultSourceObservation",
+      "reason": "Observation shape consumed by the desktop-gateway selected-results test helper; part of the retained-result observation surface.",
+      "dated": "2026-11-05",
+      "source": "packages/session-executor/src/lifecycle/result-observation.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/schedule#createScheduleAccumulator",
+      "reason": "Public fold accumulator used by the schedule tests; the durable fold sink wraps it.",
+      "dated": "2026-11-05",
+      "source": "packages/schedule/src/index.ts#createScheduleAccumulator"
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#SessionStatus",
+      "reason": "Public SDK session-status union compared against normalizeSessionStatus in the protocol test.",
+      "dated": "2026-11-05",
+      "source": "packages/sdk/src/protocol.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#normalizeSessionStatus",
+      "reason": "Status normalizer used by the protocol test and by SDK consumers mapping host statuses.",
+      "dated": "2026-11-05",
+      "source": "packages/sdk/src/protocol.ts#normalizeSessionStatus"
+    },
+    {
       "key": "unused-export\t@i-harness/exec#ExecutionLaunch",
       "reason": "Intentional public type: ExecutionSupervisor.launch input names the trusted process specification, policy, backend and validation contract.",
       "dated": "2026-10-08",

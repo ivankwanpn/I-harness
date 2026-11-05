@@ -457,7 +457,12 @@ multi-line export list 內的 type 條目 → **24 NEW / 387 rows**。接著把 
 
 ## 其他 gate 的債務
 
-### `check-reachability --gate`（目前紅）
+### `check-reachability --gate`（**round 27 已轉綠：PASS**）
+
+經 17 輪比對：可移除的 export 逐批拆掉（~50 筆），真正的公開契約則加
+`reachability-allowlist.json` 並附 `dated`、reason、source。現在
+`node scripts/audit/check-reachability.mjs --gate` 輸出 `gate PASS -- no new rows`（exit 0）；
+baseline 仍為 456 rows，目前 381 rows、無 inert 警告。以下為當時的紅清單（歷史）。
 
 - 435 rows（baseline 456，103 筆已消失是進度），但 **71 筆是 baseline 之後新增**：
   多數是 `unused-export`（`core-agent` 6、`core-session` 10、`core-tools` 8、
