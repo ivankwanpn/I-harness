@@ -180,6 +180,12 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 201（Q1 以證據收斂）**：`task-*.doc.jsonl` 在 blocked/refused 之後必須**不存在**，這不是
+> 單一測試的過時期待，而是全 suite 一致的契約——`task-transition-bootstrap-stop:28`、
+> `-bootstrap-stage-swap:36`、`-bootstrap-stage-debt:29`、`task-transition-existing:19/62/158`、
+> `task-d-repair-load:29`、`task-transition-bootstrap:177` 全部斷言 `ENOENT`（或先讀檔再驗
+> 內容不變）。因此 Q1 判為 **(a) 產品 bug：transition lane 在 blocked resume 時 eager 建立了
+> 任務文件**，下一輪修 lane，不動測試。若你要否決，回一句即可，我再改成 (b)。
 > **round 200（gate 複驗）**：三個 gate 在目前 HEAD 全綠——`pnpm -r typecheck` **exit 0**、
 > `check-package-boundaries --gate` **147/147 baseline**、`check-reachability --gate`
 > **PASS / no new rows（gone rows 為既有清理）**。這代表本 session 的產品改動
