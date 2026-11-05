@@ -32,15 +32,15 @@ async function fixture(control: string) {
     if (trace.length < 256) trace.push({ sequence: trace.length + 1, kind, ...data })
     else overflow++
   }
-  const backend = createJsonlBackend(root)
-  const append = backend.appendOwnedBatch!.bind(backend)
-  vi.spyOn(backend as Required<Pick<typeof backend, 'appendOwnedBatch'>>, 'appendOwnedBatch').mockImplementation(async (...args) => {
-    const batch = args[3]
-    note('backend.append', { batch: identity(batch), key: batch.key,
-      bytesHex: Buffer.from(batch.bytes).toString('hex') })
-    const outcome = await append(...args)
-    note('backend.outcome', { batch: identity(batch), outcome })
-    return outcome
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const batch = args[3]
+      note('backend.append', { batch: identity(batch), key: batch.key,
+        bytesHex: Buffer.from(batch.bytes).toString('hex') })
+      const outcome = await append(...args)
+      note('backend.outcome', { batch: identity(batch), outcome })
+      return outcome
+    },
   })
   const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)

@@ -60,6 +60,15 @@ finalization reservation，等外部 `document.reconcile` 之後的第二次 dis
 移除 `cell-output-owner-fixture.ts:114` 的死變數（round 183 重構殘留的 TS6133，
 code-mode `tsc --noEmit` 因此由紅轉綠）。
 
+round 189：`surface-publication`（7/7）與 `output-owner-boundaries`（3/3）遷到 seam。
+  前者把 `managed()` 擴成 `managed({ wrapOwnedBatch, wrapOwnedReconcile })`，四個 durable
+  測試各自在 `openManagedDocument` 之後才 `armed = true`（＝原本 monkeypatch 的時點）；
+  後者的 fixture 只是把「觀測 append 前後」的 `vi.spyOn(backend, 'appendOwnedBatch')`
+  改成 `wrapOwnedBatch` 的轉發 wrapper（`vi` 仍用於 capture/source 的觀測）。
+  兩檔皆由 `PROCESS_READ_UNAVAILABLE` 轉全綠。code-mode 只剩 register 2（round 136
+  標記暫緩）與 store 1。`output-owner-boundaries` 的 evidence 檔原本就會寫到
+  `IH_OWNER_CONTROL_EVIDENCE_ROOT`，不需額外設定。
+
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
 
@@ -72,9 +81,9 @@ code-mode `tsc --noEmit` 因此由紅轉綠）。
 > 下一個具體動作見文末「交接：round 32」與其後的 round 41–52 記錄。
 > **round 187 更新**：52 個套件已量測；**10 個由紅轉全綠**（instructions、schedule、
 > runtime-context、guard-retry、guard-repeat-tool、session-query、compaction、workspace、
-> provider、llm-openai）。**round 188**：code-mode 由 13 紅降到 **11 failed / 354 passed
-> （28 檔，4 紅檔）**：instruction-start-recovery 5/5 全綠，剩 surface-publication 5、
-> output-owner-boundaries 3、register 2、store 1。剩餘紅：core-agent 33（seam 遷移類）、
+> provider、llm-openai）。**round 188–189**：code-mode 由 13 紅降到 **3 failed / 362 passed
+> （28 檔，2 紅檔：register 2、store 1）**——instruction-start-recovery 5/5、
+> surface-publication 7/7、output-owner-boundaries 3/3 全綠。剩餘紅：core-agent 33（seam 遷移類）、
 > sdk 5、exec 1、acp 1、core-session 1（效能）、sandbox-windows-acl 2（native）。
 
 ## 為什麼先做這個

@@ -10,19 +10,22 @@ import { taskDocumentStorageContract } from '../../subagent/src/task/storage-con
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { registerCodeMode } from '../src/register.ts'
 
-async function managed() {
+type JsonlSeams = Pick<NonNullable<Parameters<typeof createJsonlBackend>[1]>, 'wrapOwnedBatch' | 'wrapOwnedReconcile'>
+
+async function managed(seams: JsonlSeams = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-surface-'))
-  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const backend = createJsonlBackend(root, seams), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   return { backend, coordinator, id }
 }
 
 it('keeps initial readiness and the entire real admission handler unavailable through local installation', async () => {
-  const { backend, coordinator, id } = await managed()
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let armed = false
+  const { coordinator, id } = await managed({ wrapOwnedBatch: append => async (...args) => { if (armed && decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/cell' && e.state === 'interrupted')) { entered.resolve(); await release.promise }; return append(...args) } })
   await coordinator.append(id, [{ type: 'code/cell', cellId: 'old', state: 'started', sessionId: id, seq: 0 }])
   const document = await coordinator.openManagedDocument(id), ctx = createContext(), tools = createToolRegistry(ctx)
-  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/cell' && e.state === 'interrupted')) { entered.resolve(); await release.promise }; return actual(...args) }
+  armed = true
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   const notices: Array<{ state: string | undefined; live: number | undefined }> = []
   const off = mount.onSurfaceChanged?.(() => { notices.push({ state: mount.surfaceState?.(), live: mount.surfaceState?.() === 'available' ? mount.liveCells!().length : undefined }) })
@@ -51,12 +54,14 @@ it('keeps initial readiness and the entire real admission handler unavailable th
 })
 
 it('publishes late original terminal installation after rejection without letting passive getters recover it', async () => {
-  const { backend, coordinator, id } = await managed(), document = await coordinator.openManagedDocument(id)
+  let key: BatchKey | undefined, blocked = true, reconciles = 0, armed = false
+  const { coordinator, id } = await managed({
+    wrapOwnedBatch: append => async (...args) => { const result = await append(...args); if (armed && decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/cell' && e.state === 'terminated')) { key = args[3].key; return { kind: 'unknown', key } }; return result },
+    wrapOwnedReconcile: reconcile => async (...args) => { if (armed) reconciles++; return armed && blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args) },
+  })
+  const document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  let key: BatchKey | undefined, blocked = true, reconciles = 0
-  const actual = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { const result = await actual(...args); if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/cell' && e.state === 'terminated')) { key = args[3].key; return { kind: 'unknown', key } }; return result }
-  backend.reconcileOwnedBatch = async (...args) => { reconciles++; return blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args) }
+  armed = true
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   const notices: string[] = []
   const off = mount.onSurfaceChanged?.(() => notices.push(mount.surfaceState?.() ?? 'missing'))
@@ -103,13 +108,15 @@ it('keeps failed nondurable installation unavailable after the handler unwinds',
 })
 
 it('never installs or resumes a rejected original start when its late receipt reconciles', async () => {
-  const { backend, coordinator, id } = await managed(), document = await coordinator.openManagedDocument(id)
+  let key: BatchKey | undefined, blocked = true, bodies = 0, armed = false
+  const { coordinator, id } = await managed({
+    wrapOwnedBatch: append => async (...args) => { const result = await append(...args); if (armed && decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/cell' && e.state === 'started')) { key = args[3].key; return { kind: 'unknown', key } }; return result },
+    wrapOwnedReconcile: reconcile => async (...args) => armed && blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args),
+  })
+  const document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  let key: BatchKey | undefined, blocked = true, bodies = 0
   tools.register({ name: 'probe', description: '', inputSchema: {}, async execute() { bodies++; return 1 } })
-  const actual = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { const result = await actual(...args); if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/cell' && e.state === 'started')) { key = args[3].key; return { kind: 'unknown', key } }; return result }
-  backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args)
+  armed = true
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   let notices = 0
   const off = mount.onSurfaceChanged?.(() => { notices++ })
@@ -130,10 +137,12 @@ it('never installs or resumes a rejected original start when its late receipt re
 
 
 it('publishes cancelled store bookkeeping only after the original held admission is discarded', async () => {
-  const { backend, coordinator, id } = await managed(), document = await coordinator.openManagedDocument(id)
-  const ctx = createContext(), tools = createToolRegistry(ctx), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/store')) { entered.resolve(); await release.promise }; return actual(...args) }
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let armed = false
+  const { coordinator, id } = await managed({ wrapOwnedBatch: append => async (...args) => { if (armed && decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/store')) { entered.resolve(); await release.promise }; return append(...args) } })
+  const document = await coordinator.openManagedDocument(id)
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  armed = true
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   const states: string[] = []
   mount.onSurfaceChanged?.(() => states.push(mount.surfaceState!()))
@@ -153,12 +162,14 @@ it('publishes cancelled store bookkeeping only after the original held admission
 })
 
 it('retains the original reconciliation subscription through failed close after consumer detach', async () => {
-  const { backend, coordinator, id } = await managed(), document = await coordinator.openManagedDocument(id)
+  let key: BatchKey | undefined, blocked = true, armed = false
+  const { coordinator, id } = await managed({
+    wrapOwnedBatch: append => async (...args) => { const result = await append(...args); if (armed && decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/cell' && e.state === 'terminated')) { key = args[3].key; return { kind: 'unknown', key } }; return result },
+    wrapOwnedReconcile: reconcile => async (...args) => armed && blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args),
+  })
+  const document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  let key: BatchKey | undefined, blocked = true
-  const actual = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => { const result = await actual(...args); if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'code/cell' && e.state === 'terminated')) { key = args[3].key; return { kind: 'unknown', key } }; return result }
-  backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args)
+  armed = true
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   let notifications = 0
   const off = mount.onSurfaceChanged?.(() => { notifications++ })
