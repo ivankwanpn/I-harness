@@ -1189,6 +1189,15 @@ page-read path on SCL; whether the in-turn tool needs the selected-source witnes
 gateway native context rather than the host log.
 
 
+
+## Plan 63 (found, not fixed): cold schedule write blocks a clean host close
+
+Reopening a second host on the same commit-log store and running `desktop/schedule/delete` on the cold session makes
+`host.close()` reject with `Desktop host cleanup incomplete: session service`. The cold path goes through
+`prepareOriginalManagedRuntime(service, id)` in `schedules.ts` and returns without closing the assembled execution, while the host
+shutdown expects no live execution. The restart test was reverted (the first host closes cleanly; only the cold-management host
+fails), and this is the next lifecycle item: close the runtime it assembled, or drain the session before `service.close()`.
+
 ## Plan 62 (implemented 2026-11-06): schedule list for a missing session
 
 `desktop/schedule/list` for a session that does not exist rejects with `commit log for session "<id>" does not exist` (-32603)

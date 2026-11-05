@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 316（冷 schedule 關閉洩漏）**：在同一 store 開第二個 host、對冷 session 做 `schedule/delete` 後，`host.close()` 以
+> `Desktop host cleanup incomplete: session service` 失敗；冷路徑的 `prepareOriginalManagedRuntime` 未關閉 assembled execution。
+> 重啟測試已回退，列為下一個 lifecycle 項目。
 > **round 315（schedule 未知 session）**：`desktop/schedule/list` 對不存在的 session 回 -32603 `does not exist`（不是空列表）。
 > host 重啟持久性測試需要先把 host 工廠抽成可重用的 opener，暫緩。
 > **round 314（現況報告）**：新增 `docs/design/2026-11-06-session-commit-log-status.md`（已驗證面、效能、生命週期、缺口、決策、重跑指令）。
