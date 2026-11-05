@@ -6,20 +6,20 @@ import { associateTaskDocumentOperations } from '../coordinator/task-document-as
 import { associateColdExecutionWrites, createColdExecutionWrites } from '../coordinator/cold-execution-writes.ts'
 import type { TaskDocumentConfiguration } from '../coordinator/task-document-operation.ts'
 import type { CommitCoordinator } from './coordinator.ts'
-import { createCommitCapabilities } from './capabilities.ts'
+import { createCommitTaskOperations } from './capabilities.ts'
+
+export type CommitFacadeOptions = {
+  readonly taskDocument?: { readonly validator: TaskDocumentConfiguration['validator']; readonly empty?: () => unknown }
+}
 
 /**
  * Present the commit coordinator as the existing SessionCoordinator surface.
  * Everything the SCL core implements is forwarded; the stage-based bootstrap
  * entry points are explicitly unsupported until the fork/team call sites move
  * to intents, so a caller fails loudly instead of silently degrading.
- * The managed-execution, ordering and revocation capabilities are registered on
- * this exact facade object, which is what the session executor passes in.
+ * The managed-execution, ordering, revocation and task-document capabilities are
+ * registered on this exact facade object, which is what the executor passes in.
  */
-export type CommitFacadeOptions = {
-  readonly taskDocument?: { readonly validator: TaskDocumentConfiguration['validator']; readonly empty?: () => unknown }
-}
-
 export function asSessionCoordinator(coordinator: CommitCoordinator, options: CommitFacadeOptions = {}): SessionCoordinator {
   const unsupported = <T>(): Promise<T> => Promise.reject(Object.assign(new Error('commit-log coordinator does not support the stage bootstrap API'), { code: 'TASK_TRANSITION_UNSUPPORTED' }))
   const coldWrites = createColdExecutionWrites()
@@ -29,7 +29,7 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
       const result = await coordinator.create(meta)
       // The task registry loads the parent's task document before any save, so a
       // fresh session starts with the composition's empty document.
-      if (options.taskDocument?.empty) await coordinator.putDocument(`task-${result.id}`, options.taskDocument.empty())
+      if (options.taskDocument?.empty) await coordinator.putDocument('task-' + result.id, options.taskDocument.empty())
       return result
     },
     append: async (id: string, events: Parameters<typeof coordinator.append>[1]) => {
@@ -49,15 +49,20 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
     putDocument: coordinator.putDocument.bind(coordinator),
     acquireExecution: coordinator.acquireExecution.bind(coordinator),
   }
-  const capabilities = createCommitCapabilities(coordinator.storageRoot, {
-    putDocument: (key, data) => coordinator.putDocument(key, data),
-    getDocument: key => coordinator.getDocument(key),
-    profile: id => coordinator.profile(id),
-  }, { ...(options.taskDocument ? { taskDocument: options.taskDocument } : {}), sessionOfDocument: document => coordinator.sessionOfDocument(document) })
-  if (capabilities.operations) associateTaskDocumentOperations(facade as never, capabilities.operations)
+  const ports = coordinator.capabilities()
+  if (options.taskDocument) {
+    associateTaskDocumentOperations(facade as never, createCommitTaskOperations(ports, {
+      putDocument: (key, data) => coordinator.putDocument(key, data),
+      getDocument: key => coordinator.getDocument(key),
+    }, {
+      validator: options.taskDocument.validator,
+      ...(options.taskDocument.empty ? { empty: options.taskDocument.empty } : {}),
+      sessionOfDocument: document => coordinator.sessionOfDocument(document),
+    }) as never)
+  }
+  associateOriginalResultOrdering(facade as never, ports.ownership as never)
+  associateOriginalResultRevocation(facade as never, ports.admission as never, ports.ownership as never)
   associateColdExecutionWrites(facade as never, coldWrites)
-  associateOriginalResultOrdering(facade as never, capabilities.ownership as never)
-  associateOriginalResultRevocation(facade as never, capabilities.admission as never, capabilities.ownership as never)
   associateManagedExecution(facade, {
     acquire: id => coordinator.acquireExecution(id),
     assertAdmission: () => {},

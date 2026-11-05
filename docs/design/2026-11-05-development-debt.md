@@ -14,6 +14,10 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 240（單一 ownership＋gateway cutover 首次貫通）**：coordinator 自建真實 capability ownership 並注入所有 managed
+> document／fact owner，開文件時 pin session；facade 改用同一組 ports（ordering／revocation／task／cold writes）；
+> `originalExecutionFoldFactory` 穿到 `restoreManagedExecutionState`。**owned gateway 在 SCL 上完整跑通一輪**
+> （`owned-gateway-scl5.test.ts`：slash command → model request → close）。
 > **round 239（task document 初始文件＋latches）**：`create` 會寫入 composition 提供的空 task document，task operations 接上
 > process latches。gateway 已到 task read handoff 的 `assertHeld`：capability ownership 未持有 session bundle（SCL 的
 > commit-log lease 是另一個 ownership）。下一步是讓 coordinator 只用一个真實 `createOwnership`（文件與 capability 共用），

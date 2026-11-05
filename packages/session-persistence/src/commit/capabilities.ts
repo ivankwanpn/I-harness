@@ -15,18 +15,15 @@ export type CapabilityDocuments = {
   profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }>
 }
 
-export type CommitCapabilityOptions = {
-  /** Present when the composition has a task-document validator (subagent). */
-  readonly taskDocument?: { readonly validator: TaskDocumentConfiguration['validator'] }
-  readonly sessionOfDocument?: (document: object) => string | undefined
-}
+export type CommitOwnershipPorts = ReturnType<typeof createCommitOwnershipPorts>
 
 /** Cross-cutting capabilities (ordering ledger, result revocation, task
  *  documents) need a real Ownership instance: their participants are validated
  *  through the ownership batch ledger, which only accepts artifact-bound
  *  registrations. The artifacts live under <root>/.capabilities so session data
- *  stays in the commit log. */
-export function createCommitCapabilities(root: string, documents: CapabilityDocuments, options: CommitCapabilityOptions = {}) {
+ *  stays in the commit log. One instance serves the whole store, so a document's
+ *  session pin also satisfies the task read handoff. */
+export function createCommitOwnershipPorts(root: string, documents: CapabilityDocuments) {
   const capabilityRoot = resolve(root, '.capabilities')
   const resolution = createOriginalJsonlPathResolution(capabilityRoot)
   const backend = {
@@ -48,21 +45,29 @@ export function createCommitCapabilities(root: string, documents: CapabilityDocu
   const ownership = createOwnership(backend as never, { lock: { enabled: true, lockRoot: capabilityRoot } })
   const observations = createBindingObservations(backend as never, ownership)
   const admission = observations.createResultRevocationAdmission(ownership)
+  return { ownership, observations, admission, capabilityRoot }
+}
+
+export type CommitTaskOptions = {
+  readonly validator: TaskDocumentConfiguration['validator']
+  readonly empty?: () => unknown
+  readonly sessionOfDocument?: (document: object) => string | undefined
+}
+
+export function createCommitTaskOperations(ports: Pick<CommitOwnershipPorts, 'ownership' | 'observations'>, documents: Pick<CapabilityDocuments, 'putDocument' | 'getDocument'>, options: CommitTaskOptions) {
+  const ownership = ports.ownership
   const sessionOf = options.sessionOfDocument ?? (() => undefined)
   const taskLatches = createProcessReadLatches(ownership.exclusionScope)
-  const operations = options.taskDocument
-    ? createTaskDocumentOperations(ownership, observations, {
-        validator: options.taskDocument.validator,
-        captureParent(document) {
-          const id = sessionOf(document as object)
-          if (!id) throw new TypeError('Original task parent session unavailable')
-          return {
-            id,
-            assertCurrent() { (document as { assertReady?(): void }).assertReady?.() },
-          }
-        },
-        open: scope => openCommitTaskDocumentSession(scope, { getDocument: documents.getDocument, putDocument: documents.putDocument }),
-      }, run => run(), taskLatches)
-    : undefined
-  return { ownership, observations, admission, operations }
+  return createTaskDocumentOperations(ownership, ports.observations, {
+    validator: options.validator,
+    captureParent(document) {
+      const id = sessionOf(document as object)
+      if (!id) throw new TypeError('Original task parent session unavailable')
+      return {
+        id,
+        assertCurrent() { (document as { assertReady?(): void }).assertReady?.() },
+      }
+    },
+    open: scope => openCommitTaskDocumentSession(scope, { getDocument: documents.getDocument, putDocument: documents.putDocument }),
+  }, run => run(), taskLatches)
 }

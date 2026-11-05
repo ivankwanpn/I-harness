@@ -32,7 +32,7 @@ function executionSource(log: CommitLog, context: CommitManagedContext): Origina
 /** One execution attachment over the commit log: restore the execution state
  *  from the folded history, then construct the document FROM that state so its
  *  delivery observation belongs to the execution fence. */
-export async function openCommitExecution(sessionId: string, log: CommitLog, deps: CommitManagedDeps): Promise<ManagedExecutionAttachment> {
+export async function openCommitExecution(sessionId: string, log: CommitLog, deps: CommitManagedDeps, foldFactory?: Parameters<typeof restoreManagedExecutionState>[2]): Promise<ManagedExecutionAttachment> {
   const context = createCommitManagedContext(sessionId, log, deps)
   const token = Object.freeze({ sessionId, incarnation: randomUUID() })
   const binding = {
@@ -51,7 +51,7 @@ export async function openCommitExecution(sessionId: string, log: CommitLog, dep
       }
     },
   }
-  const state = await restoreManagedExecutionState(executionSource(log, context), binding as never)
+  const state = await restoreManagedExecutionState(executionSource(log, context), binding as never, foldFactory)
   // createManagedDocument binds the execution core to this exact document.
   const document = openCommitExecutionDocument(sessionId, log, deps, state as unknown as object, token.incarnation)
   return Object.freeze({

@@ -14,6 +14,7 @@ import type { BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import { openCommitManagedDocument } from './managed.ts'
 import { openCommitExecution } from './execution.ts'
 import { withCommitProcessReadObservation } from './process-read.ts'
+import { createCommitOwnershipPorts, type CommitOwnershipPorts } from './capabilities.ts'
 
 /**
  * v1 commit-log coordinator: the session view is a fold of one commit log.
@@ -30,6 +31,8 @@ export type CommitCoordinatorOptions = {
   readonly now?: () => Date
   /** Pre-commit-log generations, read-only; a write migrates to format 15 first. */
   readonly legacy?: LegacySessionStore
+  /** Metadata folds restored into the execution state (owned metadata context). */
+  readonly originalExecutionFoldFactory?: Parameters<typeof import('@i-harness/core-session/internal/execution').restoreManagedExecutionState>[2]
 }
 
 export type ForkOptions = {
@@ -62,6 +65,7 @@ export type CommitCoordinator = {
   openManagedDocument(sessionId: string): Promise<ManagedDocument>
   acquireExecution(sessionId: string): Promise<import('../execution-internal.ts').ManagedExecutionAttachment>
   sessionOfDocument(document: object): string | undefined
+  capabilities(): CommitOwnershipPorts
   withProcessReadObservation<T, U>(id: string, options: import('../coordinator/process-read-owner.ts').ProcessReadOptions, work: (observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation, last: import('../coordinator/process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
   closeManagedDocument(sessionId: string): Promise<void>
   revokeManagedDocumentNewWork(sessionId: string): void
@@ -244,6 +248,18 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       await log.append({ ops: [{ kind: 'doc', key, side }] })
     } finally { await log.close() }
   }
+  const ownershipPorts = createCommitOwnershipPorts(root, { putDocument: putDocumentOf, getDocument: getDocumentOf, profile: profileOf })
+  const ownershipPins = new Map<string, { release(): Promise<void> }>()
+  const pinSession = async (sessionId: string) => {
+    if (ownershipPins.has(sessionId)) return
+    ownershipPins.set(sessionId, await ownershipPorts.ownership.pinOwnership(sessionId))
+  }
+  const unpinSession = async (sessionId: string) => {
+    const pin = ownershipPins.get(sessionId)
+    if (!pin) return
+    ownershipPins.delete(sessionId)
+    await pin.release().catch(() => {})
+  }
   const observations = createCommitObservations({ profile: profileOf, getDocument: getDocumentOf })
 
   return {
@@ -356,19 +372,22 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       if (existing) return existing
       let log = owned.get(sessionId)
       if (!log) { log = await ensureWritable(sessionId); owned.set(sessionId, log) }
-      const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf })
+      await pinSession(sessionId)
+      const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf, ownership: ownershipPorts.ownership })
       documentSessions.set(document as object, sessionId)
       managed.set(sessionId, document)
       return document
     },
     sessionOfDocument(document) { return documentSessions.get(document) },
+    capabilities() { return ownershipPorts },
     withProcessReadObservation(id, options, work, publish) {
       return withCommitProcessReadObservation({ open: sessionId => open(sessionId, 'read'), getDocument: getDocumentOf, metaOf }, id, options, work, publish)
     },
     async acquireExecution(sessionId) {
       let log = owned.get(sessionId)
       if (!log) { log = await ensureWritable(sessionId); owned.set(sessionId, log) }
-      const attachment = await openCommitExecution(sessionId, log, { logs: owned, metaOf })
+      await pinSession(sessionId)
+      const attachment = await openCommitExecution(sessionId, log, { logs: owned, metaOf, ownership: ownershipPorts.ownership }, options.originalExecutionFoldFactory)
       documentSessions.set(attachment.owner as object, sessionId)
       managed.set(sessionId, attachment.owner as unknown as ManagedDocument)
       return attachment
@@ -380,6 +399,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       await document.close()
       const log = owned.get(sessionId)
       if (log) { owned.delete(sessionId); await log.close() }
+      await unpinSession(sessionId)
     },
     revokeManagedDocumentNewWork(sessionId) { managed.get(sessionId)?.revokeNewWork() },
     async list() {

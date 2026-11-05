@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, decodeFactBatch, stringifyJsonData, type Session, type SessionEvent } from '@i-harness/core-session'
 import type { CommitLog } from '@i-harness/session-commit-log'
@@ -45,32 +44,10 @@ function createFactBackend(log: CommitLog): PersistenceBackend {
   } as unknown as PersistenceBackend
 }
 
-/** The document's operation lane and held-owner assertion over the commit log. */
-function createCommitOwnership(logs: Map<string, CommitLog>): Ownership {
-  const lanes = new Map<string, Promise<unknown>>()
-  const current = new AsyncLocalStorage<string>()
-  return {
-    lockEnabled: true,
-    assertHeld(id: string) {
-      const log = logs.get(id)
-      if (!log?.open) throw Object.assign(new Error('Exclusive ownership claim is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' })
-    },
-    assertOutsideSessionOperation(id: string) {
-      if (current.getStore() === id) throw new Error('TASK_DOCUMENT_CONFLICT')
-    },
-    async withSessionOperation<T>(id: string, operation: () => Promise<T>): Promise<T> {
-      const previous = lanes.get(id) ?? Promise.resolve()
-      const gate = Promise.withResolvers<void>()
-      lanes.set(id, gate.promise)
-      await previous
-      try { return await current.run(id, operation) } finally { gate.resolve(); if (lanes.get(id) === gate.promise) lanes.delete(id) }
-    },
-  } as unknown as Ownership
-}
-
 export type CommitManagedDeps = {
   readonly logs: Map<string, CommitLog>
   readonly metaOf: (log: CommitLog) => SessionMeta
+  readonly ownership: Ownership
   readonly onReport?: (error: unknown) => void
 }
 
@@ -86,7 +63,7 @@ export function createCommitManagedContext(_sessionId: string, log: CommitLog, d
   const meta = deps.metaOf(log)
   const events: SessionEvent[] = log.view().entries.map(event => ({ ...event }))
   preflightSessionFormat(CURRENT_FORMAT_VERSION, events, meta)
-  return { meta, source: buildSession(meta, events), prefix: commitPrefix(log), backend: createFactBackend(log), ownership: createCommitOwnership(deps.logs) }
+  return { meta, source: buildSession(meta, events), prefix: commitPrefix(log), backend: createFactBackend(log), ownership: deps.ownership }
 }
 
 const closed = () => Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })

@@ -806,8 +806,15 @@ session bundle (the SCL commit-log lease is a different ownership). The next ste
 `createOwnership` for both documents and capabilities so that assertion is satisfied, instead of a derivative ownership
 (identity-keyed WeakMaps reject a spread copy with `Invalid ownership claim`).
 
-**Then:** `selectedSourceFor(coordinator)` in `context-runtime.ts:140` — the selected-results capability, either guarded as
-unsupported on SCL or ported.
+**Plan 7c (implemented 2026-11-05): one ownership for documents and capabilities.** The coordinator now creates the real
+capability ownership itself (`<root>/.capabilities`), injects it into every managed document/fact owner, and pins each session
+while its document is open. `asSessionCoordinator` reuses those ports for ordering, revocation, task documents and cold writes
+instead of building a second ownership. The metadata fold factory (`originalExecutionFoldFactory`) is threaded through
+`createJsonlCommitCoordinator` into `restoreManagedExecutionState`.
+
+**Milestone:** `packages/desktop-gateway/test/owned-gateway-scl5.test.ts` composes the **whole owned gateway** on the commit-log
+coordinator and submits a `/greet world` slash command: plugin/command/skill surface, managed task host, metadata folds, model
+request (`hello world`) and a clean `service.close()` all pass.
 
 ## Follow-on plans (not in this plan)
 
