@@ -1192,6 +1192,14 @@ gateway native context rather than the host log.
 
 ## Plan 63 (found, not fixed): cold schedule write blocks a clean host close
 
+Fix attempt (reverted): closing the cold session after the write (`service.closeSession(id)` when the session was not live
+before `prepareOriginalManagedRuntime`) removes the `Original managed runtime retired` risk only if it runs after the final
+`runtime.assertCurrent()`, but it also introduces `[i-harness] private delivery reconciliation failed: Error: FACT_CLOSED`
+warnings and the two-host restart test still ends with `Desktop host cleanup incomplete: session service`. The runtime is retained
+by the service and its cleanup is owned by that retention, so the real fix belongs to the managed-execution lifecycle (a release on
+`OriginalManagedRuntime`, or the service draining retained executions on close), not to the schedule handler.
+
+
 Reopening a second host on the same commit-log store and running `desktop/schedule/delete` on the cold session makes
 `host.close()` reject with `Desktop host cleanup incomplete: session service`. The cold path goes through
 `prepareOriginalManagedRuntime(service, id)` in `schedules.ts` and returns without closing the assembled execution, while the host
