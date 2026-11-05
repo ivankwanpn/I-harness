@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 318（單元層重現失敗）**：session-executor 單元測試（prepare runtime → service.close）在 legacy 與 SCL coordinator 下都
+> 正常關閉；洩漏只在完整 desktop host 組裝下出現。host 探針卡在 `.capabilities` lock（prompt 逾時），需改為量測 host shutdown 各階段。
 > **round 317（冷 schedule 修正嘗試）**：在 schedules.create/delete 對非 live session 呼叫 `service.closeSession`，需放在最後一個
 > `runtime.assertCurrent()` 之後；仍產生 FACT_CLOSED 警告且兩 host 重啟測試仍以 session service 清理失敗收場。已回退，
 > 正確修法在 managed-execution 生命週期（runtime release 或 service 關閉時 drain）。

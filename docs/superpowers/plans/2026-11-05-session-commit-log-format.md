@@ -1192,6 +1192,13 @@ gateway native context rather than the host log.
 
 ## Plan 63 (found, not fixed): cold schedule write blocks a clean host close
 
+Reproduction attempt: a session-executor unit test that enrolls a first-party managed selection, calls
+`prepareOriginalManagedRuntime`, then `service.close()` **passes** with both the composed legacy coordinator and the commit-log
+facade (`DBG close ok`) — so the leaked execution only blocks cleanup under the full desktop host wiring. A minimal host probe could
+not reach the close because its `session/prompt` hit `another holder owns the session lock … .capabilities` and timed out, so the
+next attempt should instrument the host shutdown phases (native context / approvals / projects) rather than the runtime itself.
+
+
 Fix attempt (reverted): closing the cold session after the write (`service.closeSession(id)` when the session was not live
 before `prepareOriginalManagedRuntime`) removes the `Original managed runtime retired` risk only if it runs after the final
 `runtime.assertCurrent()`, but it also introduces `[i-harness] private delivery reconciliation failed: Error: FACT_CLOSED`
