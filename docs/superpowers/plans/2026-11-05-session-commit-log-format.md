@@ -954,6 +954,12 @@ The plugin refresh can also see `Original writer dependency cleanup unresolved` 
 files running in parallel the 1 s budget was too short; the selection owner now retries those three transient messages for up to
 5 s. The parallel SCL host suite (8 tests) passed three consecutive runs.
 
+## Plan 17 (implemented 2026-11-05): session management routes on SCL
+
+`host-commit-log-management.test.ts` renames, archives, restores, reloads and reads navigation state for a commit-log session
+through the real host (`updateMeta` / `snapshot` / `list` / `load`), including the archived list and the visible list
+invariant.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

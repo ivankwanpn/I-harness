@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 257（session management routes）**：rename／archive／restore／reload／navigation 在 SCL 真實 host 上通過；
+> `desktop/session/archived` 回傳的是陣列（非 `{sessions}`）。
 > **round 256（refresh 重試預算）**：並行跑 7 個 SCL host 檔時，plugin refresh 的 1 秒重試預算不足；改成 5 秒並涵蓋
 > `writer dependency cleanup unresolved`，並行 suite 連續 3 次全綠。
 > **round 255（surface changed 通知）**：訂閱 execution surface 後跑一個 controlled turn，會收到 `desktop/surface/changed`，
