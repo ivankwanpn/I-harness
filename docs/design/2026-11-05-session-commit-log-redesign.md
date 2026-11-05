@@ -162,14 +162,15 @@
 
 ---
 
-## 6. 驗證策略
+## 6. 驗證策略與現況（2026-11-06）
 
-1. **crash-cut 矩陣**：在 temp 寫入、fsync、link、目錄 fsync、sidecar 寫入、commit append 的每一步注入中止；
-   重開只允許兩種結果：**不存在**，或**恰好那個 commit 前綴**。
-2. **fold 性質測試**：任意 commit 序列 → fold(log) == 記憶體模型；重開冪等；torn tail 任意截斷點都得到合法前綴。
-3. **舊格式 corpus**：format 8/11/13/14 全部可讀；14 的 task doc 可重建。
-4. **既有回歸**：`session-persistence-jsonl` 98 檔、`session-persistence`、subagent、agent-team、desktop-gateway、sdk e2e。
-5. **多程序**：兩個行程同時開同一 session，只有一個取得寫鎖；死鎖／重啟後可恢復。
+| # | 項目 | 狀態 | 證據 |
+|---|---|---|---|
+| 1 | **crash-cut 矩陣**：temp 寫入、fsync、link、目錄 fsync、sidecar 寫入、commit append 各步注入中止；重開只允許「不存在」或「恰好該 commit 前綴」 | ✅ | `session-commit-log/test/crash.test.ts`（5 案例，含 link 前後、sidecar 與 append 中斷）＋ `store.test.ts` |
+| 2 | **fold 性質測試**：任意 commit 序列 → fold(log) == 記憶體模型；重開冪等；torn tail 任意截斷點得到合法前綴 | ✅ | `fold-property.test.ts`（5 seed × 25 commits，全部 op）＋ `scanner.test.ts`（torn tail／seq／prev）|
+| 3 | **舊格式 corpus**：format 8/11/13/14 可讀；14 的 task doc 可重建 | ⚠️ 部分 | `session-persistence-jsonl/test/commit-dual-run-corpus.test.ts` 以 8 個 legacy session 與 legacy coordinator 逐項比對（events／meta／task doc）；13/14 讀取路徑有測試，8/11 尚無專屬 corpus |
+| 4 | **既有回歸**：jsonl、session-persistence、subagent、agent-team、desktop-gateway、sdk e2e | ⚠️ 部分 | SCL 相關套件全綠（13 host 檔／14 tests、store 9 檔／38 tests、commit suites 37 tests）；legacy `session-persistence` 仍有 280 個既有失敗（transition gate／artifact latch／win32 lock），與 SCL 無關，見計畫 Plan 38–39 |
+| 5 | **多程序**：兩行程同開一 session，只有一個取得寫鎖；死鎖／重啟後可恢復 | ✅ | `multiprocess-lock.test.ts`：子程序持鎖時父程序被拒；kill 後父程序接管、append、新讀取可見 |
 
 ---
 
