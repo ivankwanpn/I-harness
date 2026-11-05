@@ -659,6 +659,17 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
   entry the subagent already calls: the capture result must match the request invocation, the child is born as one commit, and a
   resume without a payload returns `blocked/payload-required`.
 
+## Plan 4 (implemented 2026-11-05): first real consumer — subagent child on SCL
+
+- `asSessionCoordinator(commitCoordinator)` presents the SCL core as the existing `SessionCoordinator` surface: every
+  implemented method is forwarded, the stage-based `bootstrapSemanticTarget`/`resumeSemanticTarget` entry points refuse loudly
+  with `TASK_TRANSITION_UNSUPPORTED`, and `inspectBootstrap` reports `absent`. Exported as
+  `@i-harness/session-persistence/internal/commit-facade`.
+- `packages/subagent/test/child-commit-log.test.ts` runs a real `spawnChild({ childSessions: { coordinator } })` end to end:
+  the child is created, its header records `parentSession`/`origin`/`seedLength`/`delegationDepth`, the fork seed is imported
+  through the managed fact path, the child's run appends through the same document, and the durable session reads back with the
+  seed prefix plus the admitted input. No product code changed to make it pass — the facade is compatible.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
