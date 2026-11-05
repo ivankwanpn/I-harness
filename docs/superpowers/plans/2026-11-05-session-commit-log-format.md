@@ -1190,6 +1190,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 73 (implemented 2026-11-06): batch move from a second host
+
+`host-commit-log-batch-move.test.ts`: a second host re-configures the projects (project configuration is main-process state, and the
+host answers `Destination project has not been confirmed by the current main process` until it does), then moves a bound session
+(`expectedOwners: {id: "p"}`) and an unbound one (`null`) into `q` — both succeed and the project state reports `q`. A wrong
+expectation (`p` while the owner is `q`) is refused with `Session project owner changed; refresh before moving` and the session stays
+in `q`.
+
 ## Plan 72 (implemented 2026-11-06): title, archive and project survive a restart
 
 `host-commit-log-restart-meta.test.ts`: host1 creates, binds project `p`, renames to `Restart title` and archives; host2 (same
