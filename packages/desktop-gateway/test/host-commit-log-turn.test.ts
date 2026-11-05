@@ -66,6 +66,11 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(modelState).toBeTruthy()
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'second prompt' })
     expect(requests).toBeGreaterThanOrEqual(2)
+    const liveWork = await call('desktop/session/work-state', { sessionId: created.sessionId }) as { todos: { content: string }[] | null; todosRevision?: number }
+    expect(liveWork).toMatchObject({ todosRevision: 1 })
+    const liveWrite = await call('desktop/session/todo/write', { sessionId: created.sessionId, input: { items: [{ content: 'live todo', status: 'in_progress' }], expectedRevision: 1 } }) as { todos: { content: string }[]; todosRevision?: number }
+    expect(liveWrite).toMatchObject({ todosRevision: 2 })
+    expect(liveWrite.todos[0]).toMatchObject({ content: 'live todo', status: 'in_progress' })
     expect(await call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 5 })).toBeTruthy()
     expect(await call('desktop/session/tasks/integrity', { sessionId: created.sessionId })).toBeTruthy()
     expect(await call('desktop/session/tasks/integrity', { sessionId: created.sessionId, reconcile: true })).toBeTruthy()

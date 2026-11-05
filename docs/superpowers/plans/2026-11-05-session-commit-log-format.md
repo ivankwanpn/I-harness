@@ -1200,6 +1200,11 @@ gateway native context rather than the host log.
 
 
 
+## Plan 90 (implemented 2026-11-06): live todo write
+
+After the second turn the session has revision 1; `desktop/session/todo/write` with `expectedRevision: 1` succeeds and reports
+`todosRevision: 2` with the new in-progress item, so the managed/live path and the cold path agree on the revision counter.
+
 ## Plan 88 (found, not fixed): a desktop todo write breaks the in-turn todo_write
 
 Fixed (2026-11-06): the cold `writeTodos` path no longer goes through `service.writableSessionFor` (which called `selectComplete` and
