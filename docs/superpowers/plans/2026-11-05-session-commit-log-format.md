@@ -1169,6 +1169,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 50 (implemented 2026-11-06): fold property test
+
+`fold-property.test.ts` generates deterministic random op sequences (header, meta, doc, doc-clear, intent, intent-done, batch,
+rewind, seed, delete; 25 commits across 5 seeds), re-encodes and re-scans them (which enforces seq/prev/digest), and compares
+`foldCommits` against an independent reference implementation of the documented fold semantics.
+
 ## Plan 49 (verified 2026-11-06): full SCL regression snapshot
 
 All commit-log suites run together: **13 host files / 14 tests** (create, fork, rewind, turn, schedule, surface, surface-changed,
