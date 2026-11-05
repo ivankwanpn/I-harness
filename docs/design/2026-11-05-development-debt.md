@@ -248,7 +248,7 @@ reachability 仍是 71 NEW（沒有新增 row）。
 | `retained-format-ownership` | 0/30 → 30/30 | `wrap` 計數器（取代七個 `vi.spyOn`） |
 | `bootstrap-physical` | 0/58 → 46/58 | `wrap` + append／confirm frame hooks（剩 12 個語義紅，見下） |
 | `current-context-predecessors` | 3/12 → 3/12（遷移完成） | `wrap` upgrade policy（剩下 9 個 predecessor-resume 語義紅，見下） |
-| `bootstrap-capture-physical` | 11/61 → 56/61 | `wrap` 通用捕獲方法 hook map（剩 5 個語義紅，見下） |
+| `bootstrap-capture-physical` | 11/61 → 57/61 | `wrap` 通用捕獲方法 hook map（剩 4 個語義紅，見下） |
 
 `context-format` 需要換掉三種「建構後改 backend 方法」的注入，既有的兩個 seam 不夠，
 所以 `createJsonlBackend` 多了第三個 pre-bind seam：
@@ -270,12 +270,15 @@ reachability 仍是 71 NEW（沒有新增 row）。
 （`bootstrap-physical` 46/58、`current-context-predecessors` 3/12、
 `bootstrap-capture-physical` 56/61）。
 
-`bootstrap-capture-physical` 的 5 個語義紅（歸第 4 項）：
+`bootstrap-capture-physical` 的 4 個語義紅（歸第 4 項；P18 已修）：
 
 - P09/P10 rename-after promotion：期待 `ready`，實際 `refused`。
-- P10 cold full promoted ready stage：期待 `already-ready`，實際 `blocked`。
-- P18 Windows「不做可選 directory open」：open 次數 1（期望 0）。
-- P14 claim release failure／consumed native claim release：release 次數 2（期望 1）。
+- P10 cold full promoted ready stage：期待 `already-ready`，實際 `blocked`
+  （metadata 編輯後冷 resume 被拒；要確認 metadata 是否應屬 birth manifest）。
+- P14 claim release failure／consumed native claim release：release 次數 2（期望 1；
+  composed lane 在捕獲失敗時已嘗試釋放一次，close 再重試）。
+- P18 原本期待「root directory open = 0」，但 composed lane 的 fs-lock artifact guard
+  會讀一次 root（Windows reparse 檢查）；改成只斷言「沒有可寫的 directory handle」後轉綠。
 
 `bootstrap-physical` 遷移後仍有 12 個語義紅（歸第 4 項），共同形狀是「transition 車道
 的 outcome 與 legacy 期待不同」：
@@ -431,8 +434,8 @@ boundaries 147/147；reachability 432 rows、70 NEW（round 6 是 71，移除的
 3. A 類測試（建構後 monkeypatch）逐檔改用 pre-bind seam；每檔一次 PR/commit，
    並用本文件的 `test-env` 指令驗證。
    **round 10：11/11 檔遷移完成**，8 檔全綠；`bootstrap-physical` 46/58、
-   `bootstrap-capture-physical` 56/61、`current-context-predecessors` 3/12 的剩餘紅
-   都是語義（歸第 4 項，共 26 個已列形的案例）。
+   `bootstrap-capture-physical` 57/61、`current-context-predecessors` 3/12 的剩餘紅
+   都是語義（歸第 4 項，共 25 個已列形的案例）。
 4. B 類 predecessor 語義決策：若 composed 升級 13→14 是正確行為，更新
    `child-bootstrap-predecessor`、`semantic-codec2-predecessor` 的位元組斷言；
    若否，回頭修產品。
@@ -459,10 +462,10 @@ node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exe
 
 待辦第 1、2 項完成，第 3 項（A 類）11／11 檔全部遷移（8 檔全綠；三個 bootstrap／
 predecessor 檔只剩語義紅，歸第 4 項）。`createJsonlBackend` 另有通用 `wrap` seam、
-P2 #5 的 downgrade 修正。下一輪進第 4 項：先查 `bootstrap-capture-physical` 的
-P14 release 次數與 P18 open 次數（可能是 composed lane 多做了一次 lease settle），
-再處理 `bootstrap-physical` 的 12 個 outcome 差異與 `current-context-predecessors`
-的 predecessor-resume 語義。
+P2 #5 的 downgrade 修正。**第 5 項量測已起跑過 `session-executor`（99 檔，尚未完成，
+下一輪重跑並記錄）；`desktop-gateway`（61 檔）、`subagent`、`agent-team` 仍未量測。**
+下一輪優先：第 4 項的 `bootstrap-capture-physical` 4 紅（P09/P10 promotion、P14 release
+計數）與 `bootstrap-physical` 的 12 個 outcome 差異。
 
 ## 交接：2026-11-05 round 5（歷史）
 
