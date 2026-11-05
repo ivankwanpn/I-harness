@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 271（compaction 尺寸與進度檢查）**：`retention-output` 是摘要長度檢查（≥ minSummaryChars／≤ maxTokens*4）；
+> 短 session 回 checkpoint 長度後變 `no-progress`；長歷史時 compact 失敗且 host close 回報 session service cleanup 未完成，
+> 以 skip repro 保留（`host-commit-log-compact-long.test.ts`）。
 > **round 270（compaction summarizer fixture 調査）**：checkpoint fixture 直接覆寫 `prepare` 會破壞 managed generation
 > （`GENERATION_UNSUPPORTED`）；controlled model 則停在 `retention-output`。真正的 E2E compaction 測試需要「留在 managed
 > model client 內、且輸出可 retention」的 fixture。

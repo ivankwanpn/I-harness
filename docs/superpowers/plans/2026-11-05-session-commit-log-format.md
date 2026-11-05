@@ -1047,6 +1047,14 @@ with `retention-output` under the controlled fixture model; replacing the model 
 managed generation composition (`GENERATION_UNSUPPORTED`). A real end-to-end compaction test needs a fixture that stays inside
 the managed model client while producing a retained checkpoint.
 
+## Plan 28d (investigation 2026-11-05): compaction size and progress checks
+
+`retention-output` is the summarizer's quality/size check (`compaction/src/summary/generate.ts`): the model must return at least
+`minSummaryChars` and at most `maxTokens*4` characters — the controlled `answer` is far too short. Returning a
+`checkpointOfLength(600, …)` summary fixes that on a short session, which then blocks with `no-progress` (nothing to shrink).
+With a seeded long history the compact request fails and host close reports `session service cleanup incomplete`; the repro is
+kept skipped (`host-commit-log-compact-long.test.ts`) for the next investigation.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
