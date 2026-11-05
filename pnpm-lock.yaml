@@ -1413,6 +1413,9 @@ importers:
       '@i-harness/harness-home':
         specifier: workspace:*
         version: link:../harness-home
+      '@i-harness/session-commit-log':
+        specifier: workspace:*
+        version: link:../session-commit-log
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings

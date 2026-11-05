@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 223（SCL facade + 舊格式遷移）**：`createCommitCoordinator`（create/load/append/updateMeta/list/profile/document/lease）
+> 與 `createJsonlCommitCoordinator` 落地；舊 13/14 會話可讀，第一次寫入時發佈 format-15 generation，舊檔位元組不動。
+> 10 個 coordinator 測試＋2 個 jsonl 整合測試全綠；typecheck／兩個 gate 全綠。
 > **round 222（SCL store）**：`session-commit-log` 加上 store／lease／crash-cut：temp→fsync→`link()` no-overwrite 發佈、
 > 寫入租約（重用 `@i-harness/fs-lock`）、torn tail 只在寫入模式截斷、append 失敗以 truncate 回滾、
 > content-addressed sidecar＋未引用回收。30 tests 全綠；typecheck／boundaries 147／reachability 全綠。

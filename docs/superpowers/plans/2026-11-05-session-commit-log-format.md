@@ -591,6 +591,19 @@ Delivered in the same package (30 tests total, all green):
 
 Remaining for the store before the facade: append-crash cuts (a cut between write and fsync must roll back to the previous size — already implemented, needs a fault test through the append path), and generation selection once format-15 migration lands.
 
+## Plan 3a (implemented 2026-11-05): commit coordinator + legacy migration
+
+- `packages/session-persistence/src/commit/coordinator.ts` — core coordinator over the commit log:
+  `create/load/snapshot/loadOwned/append/list/profile/updateMeta/putDocument/getDocument/flush/adoptOwnership/releaseOwnership/close`.
+  Appends are seq-checked, metadata patches are `meta` ops, documents are content-addressed sidecars in the global
+  document log, and `loadOwned` retains the writer lease until `releaseOwnership` (later appends route through it).
+- `packages/session-persistence/src/commit/legacy.ts` — read-only port for format 13/14 sessions.
+  `load`/`profile`/`list` read legacy sessions without writing; the **first write** publishes a format-15 generation carrying
+  the migrated history, leaving the legacy file byte-identical.
+- `packages/session-persistence-jsonl/src/commit-coordinator.ts` — `createJsonlCommitCoordinator(root)` wires the port to the
+  existing JSONL backend.
+- Tests: 10 coordinator tests (session-persistence) + 2 JSONL integration tests (legacy read, migration, list, lease retention).
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

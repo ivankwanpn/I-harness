@@ -1,9 +1,7 @@
 /**
- * Public surface of the commit-log core.
- *
- * The store/facade (Plan 2) is the first consumer, so this module deliberately
- * exports nothing yet: the reachability gate treats an unconsumed export as
- * dead surface. Plan 2 replaces this file with the store's exports as it wires
- * the first real consumer.
+ * Public surface of the commit-log core. Only what a consumer imports today is
+ * exported; the format/scanner/fold modules stay internal until they have a
+ * consumer (an unconsumed export fails the reachability gate).
  */
-export {}
+export { COMMIT_LOG_GENERATION, CommitLogNotFoundError, createCommitLog, openCommitLog } from './store.ts'
+export type { CommitLog, CommitLogMode } from './store.ts'
