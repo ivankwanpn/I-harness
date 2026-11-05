@@ -467,13 +467,13 @@ it('a passive host failure after a real reserved indication keeps unknown eviden
 })
 it('a previously observed real reservation never becomes first capture after later namespace loss', async () => {
   const f = await fixture()
-  let issuer: ReturnType<typeof createSessionCoordinator> | undefined
+  let issuer: ReturnType<typeof composeJsonlTaskTransitionCoordinator> | undefined
   try {
     const host = createInlineForkHost(f.c), handoff = host.withHandoff.bind(host), controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
     await f.c.releaseOwnership('source')
     const backend = createJsonlBackend(f.root), reserve = backend.prepareBootstrapCapture!.bind(backend)
     backend.prepareBootstrapCapture = async (...args) => { const result = await reserve(...args); if (result.kind === 'committed-new') throw undefined; return result }
-    issuer = createSessionCoordinator(backend, { lock: { enabled: true } })
+    issuer = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
     const issued = controllerApi.createForkSessionController(issuer, createInlineForkHost(issuer))
     await issued.execute({ operation: op, mode: 'begin' }).catch(() => {})
     await issuer.close(); issuer = undefined
