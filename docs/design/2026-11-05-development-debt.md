@@ -1,4 +1,23 @@
 # 開發債務清冊與 burn-down（2026-11-05）
+
+> ## 交接（round 210 後的最新可執行狀態）
+> **已完成且全綠**：code-mode（28 檔 365）、core-agent（79 檔 649）、exec（29 檔 367）、
+> acp、core-session（87 檔 933）、sandbox-windows-acl（40 檔 382/5 skipped）；
+> 三個 gate：typecheck 82/82、boundaries 147/147、reachability PASS。
+> **仍紅**：session-persistence-jsonl 25 檔 / 100 failed / 757 passed；sdk 3。
+> **依序執行（設計已定案，不需再問）**：
+> 1. `session-persistence/src/coordinator/bootstrap.ts:569 start()` / `:574 startInner()`：
+>    **acquire-before-read**——`borrowOwnership` + `acquireDocumentLease('task-'+id)`
+>    必須早於任何 stage/header 讀取，讓讀取失敗自然保留 claim（解 task-transition 族 8 檔）。
+> 2. `coordinator.append` 同樣持有 `doc:task-*` lease（解 `task-transition-direct-lease`）。
+> 3. `bootstrap-physical` 5 筆、`bootstrap-capture-physical` 2 筆：中斷後維持 `blocked`，
+>    測試改為驅動 reconcile 再斷言 `ready`（不要產品假裝成功）。
+> 4. sdk：child-context ×2 走 **model-origin spawn**（host `tools.execute` 的 prepared body
+>    是 foreign，`prepared-body.ts:299` 回 undefined）；fork 爭用追
+>    `createCliForkHost.withHandoff` 的 `coordinator.flush` 卡在 held write-behind。
+> 5. 全綠後跑 `verify:all` full job，把結果寫回本文件。
+> **已結案、不要再重開**：Q1（`ready` bootstrap 本來就會建立 `task-*.doc.jsonl`，
+> 測試斷言已修正）；Q2/Q3 的設計判讀見 round 209；SYS-PROMPT 見 A-04（round 193）。
   **round 174 定論**：在 `capture()` 內記錄事件後，兩個 marker 紅其實是 **`error` 事件**：
   **round 175 已修**：thinking 案補 user turn ＋ 對應 tool result；Responses 案把
   **round 176**：`llm-openai` 的 M72 Ⅲ 紅改為斷言「宣告 `measurementValidity:'invalid'`」
