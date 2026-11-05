@@ -38,6 +38,14 @@ afterEach(async () => {
 })
 
 describe('commit coordinator', () => {
+  it('refuses to invent metadata for a legacy session without a header', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-commit-legacy-meta-'))
+    roots.push(root)
+    const coordinator = createCommitCoordinator({ root, legacy: { read: async () => ({ events: [], version: CURRENT_FORMAT_VERSION }), list: async () => ['x'] } })
+    coordinators.push(coordinator)
+    await expect(coordinator.profile('x')).rejects.toThrow(/has no metadata/)
+  })
+
   it('surfaces a legacy document read failure instead of returning undefined', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-commit-legacy-doc-'))
     roots.push(root)

@@ -1174,6 +1174,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 55 (implemented 2026-11-06): no invented legacy metadata
+
+`profileOf` used to fall back to `{sessionId, createdAt: now(), formatVersion: 15}` when a readable legacy session reported no meta,
+fabricating a creation time. A legacy session with events but no metadata is a contract violation, so it now throws
+(`legacy session "<id>" has no metadata`); `commit-coordinator.test.ts` covers it.
+
 ## Plan 54 (implemented 2026-11-06): document store error paths
 
 `getDocument` propagates a legacy document read failure instead of returning `undefined`, and a corrupt `__documents__` log refuses

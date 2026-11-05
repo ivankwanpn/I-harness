@@ -232,8 +232,10 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     } catch (error) {
       if (!(error instanceof CommitLogNotFoundError)) throw error
       const legacy = await readLegacy(sessionId)
-      const meta = legacy.meta ?? ({ sessionId, createdAt: now().toISOString(), formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
-      return { meta, blank: !legacy.events.some(event => event.type === 'turn/start') }
+      // Never invent a createdAt for an existing session: a readable legacy
+      // session without metadata is a contract violation, not a blank one.
+      if (!legacy.meta) throw new Error(`legacy session "${sessionId}" has no metadata`)
+      return { meta: legacy.meta, blank: !legacy.events.some(event => event.type === 'turn/start') }
     }
   }
   const getDocumentOf = async (key: string): Promise<unknown | undefined> => {
