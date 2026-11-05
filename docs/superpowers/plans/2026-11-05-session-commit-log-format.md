@@ -879,8 +879,11 @@ What is known:
   the execution state issues the next batch against a stale prefix, and our backend rejects it as a conflict;
 - `managed.assertMutation(id)` only validates the entry (it does not forbid external appends), so the guard cannot be the fix.
 
-Next: give the commit coordinator process-read latches over the capability ownership and beginMutation/end around `append`,
-`putDocument` and meta writes, then re-run the skipped repro.
+**Refined diagnosis (same round, instrumentation):** the failure is flaky (2 of 5 runs) and its cause is not a prefix
+conflict. The underlying error is `invalid conversation format: prepared promotion changed raw input`
+(`conversation/input-preparation.ts:76`) raised from `prepareWrite` (`restored-view.ts:353` → `execution-state.ts:481`): the
+promotion's admission `provenance`/images do not match the admission the restored view resolves by seq. Next: dump the
+admission/promotion events around a failing turn to see whether the host writes two admissions for one input.
 
 ## Follow-on plans (not in this plan)
 
