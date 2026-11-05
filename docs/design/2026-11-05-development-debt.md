@@ -206,7 +206,8 @@ backend、in-memory fake backend「Original JSONL backend required」、legacy-o
   `exec` 7、`sdk` 2、`session-executor` 5…），另有 1 筆
   `producerless-event session/queued`（telemetry manifest 宣告但沒有 producer）。
 - 2 筆 allowlist 條目已經沒有對應 row（`output-retention#gcSpillStore`、
-  `sdk#SdkRunError`），應刪除。
+  `sdk#SdkRunError`）——**已刪除**（`reachability-allowlist.json` 38 筆，
+  gate 不再報 inert）。
 - 處理原則：能移除的 export 直接移除（型別 export 不影響 runtime）；確實是公開
   契約的就加回 allowlist 並註明理由；`session/queued` 要補 producer 或刪
   manifest 條目。**不要**直接 `--write-baseline` 把 72 筆吞掉。
