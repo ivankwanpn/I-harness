@@ -199,6 +199,11 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 217（回歸確認）**：本 session 兩個 jsonl 產品修正
+> （`reconcileBootstrapHeader` 只比不可變欄位、`SessionBindingObservationError` conflict 帶 code）
+> 沒有讓 `bootstrap-capture-physical` 變差：**4 failed / 57 passed（61）**，與修正前基線相同。
+> 該檔的 4 紅與 `bootstrap-physical` 剩餘 7 紅同屬「中斷 birth 續行」與 capture 計數語義，
+> 不是我這兩個修正造成的。
 > **round 216（barrier 模式語義，只讀）**：`task-document-transition.ts` 的 barrier `prepare()`
 > 只有三種模式語義：`'new'` → `observeBootstrap`；`'completed'` → `openBootstrapHistory`（給舊格式
 > predecessor）；其他 → `openHistory`。因此「current format、header 已提交、task doc 不存在、
