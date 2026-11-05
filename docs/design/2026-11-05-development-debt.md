@@ -554,6 +554,9 @@ round 133：`compaction` 已由 3 紅轉 **33/33 檔、247/247 tests 全綠**—
   **round 122 首例完成**：`broker.test.ts` 的 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch` →
   **round 134**：`managed-store-stop.test.ts` 同法遷移（計數器先宣告）→ **2/2 全綠**。
 round 138 全套重跑：`code-mode` **7 檔紅 / 21 檔綠（28 檔），83 failed / 282 passed（365）**
+  round 139：`store.test.ts` 單紅是「a failed completion flush overrides a persisted store
+  candidate and completed marker」→ `Managed facts require reconciliation`；該測試用非 durable
+  `createSession()`（不是 jsonl backend），屬語義/生命週期問題，需與 cleanup-debt 一起判讀。
   （由 9 檔紅 / 86 failed 改善）。紅檔：`retention-callback-latches` 41、`cell-output-owner-lifetime` 27、
   `surface-publication` 5、`instruction-start-recovery` 4、`output-owner-boundaries` 3、`register` 2、`store` 1。
   **round 135 重要教訓**：`register.test.ts` 的 hook 若在建構時就生效，會攔到 `create`／
