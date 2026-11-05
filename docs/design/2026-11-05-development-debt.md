@@ -1,6 +1,8 @@
 # 開發債務清冊與 burn-down（2026-11-05）
    **round 145 已遷移** 3 個測試檔（`admitted-context`、`cancel-stop`、`result-page-cli`）→
    **round 161**：`result-page`、`session-context` 亦遷移 → **9 failed / 110 passed（119）**。
+round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 timeout 露出真因
+  **`PROCESS_READ_UNAVAILABLE`**（建構後 patch backend，需 seam 遷移）。
    **11 → 10 failed / 109 passed（119）**；剩 1 筆 `TASK_TRANSITION_UNSUPPORTED` 不是建構子路徑。
 
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
