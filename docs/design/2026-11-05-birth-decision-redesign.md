@@ -4,6 +4,9 @@
 > 這些個案每輪只前進一兩筆（round 200–218），本文件回答：**要不要重設計、重設計到什麼程度、向誰學。**
 > 參考來源：`D:\ih_reference_project` 的六個專案（DSH 0.2.2、codex 0.166、opencode 2.1.4/1.19、pi-durable 1.2、ZCode、dsh-superagent-prototype）。
 > **結論：要。分三層：A 決策模型（先做）、B 把 task document 併入單一 commit 域（結構修正）、C 終局（handle/SQLite）。**
+>
+> **後續（2026-11-05，已核定方向）：本文件的 A/B/C 已被 `2026-11-05-session-commit-log-redesign.md`（ADR）取代。**
+> 該 ADR 直接採用 B 的完整形式（單一 commit log + sidecars + lease + handle），不再分階段修補。本文保留為研究記錄與證據來源。
 
 ---
 
