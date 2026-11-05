@@ -542,6 +542,11 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 102**：`trackBootstrap`（bootstrap.ts:128–148）只負責 process latch 的 witness，
   **round 103**：`withBootstrapResume`（binding-observation.ts:293–299）只是 capture＋
   **round 104 執行期追蹤**：stage-swap 測試中 `adopt` 與 remap 都有跑，且都是
+  **round 105 決定性證據**：`documents` 只有一個 key `target`；close 時該 entry 是
+  `{ready:false, doc:false, issued:true, phase:'header'}`——正是**第一次 blocked resume** 留下的
+  那個 entry，而不是 adopt 成功的那個物件。即第二次 resume 的 adopt 作用在另一個物件上，
+  `documents` 後來又被換回／重建了。下一步：在 `documents.set`／`delete` 加 log，找出
+  adopt 之後誰重建了 'target' entry。
   `{doc:true,current:true,ready:true,headerUnknown:false}`——即 target 的 bootstrap entry 是
   健康的。但 close 的 AggregateError 仍來自 `closeOne` line 96（headerUnknown 守衛），表示
   **失敗的是另一個 entry（不同 id，很可能是 task document entry，測試裡 `task-target.doc.jsonl`
