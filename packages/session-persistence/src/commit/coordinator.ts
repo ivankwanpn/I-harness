@@ -8,6 +8,7 @@ import { buildSession, migrate, preflightSessionFormat } from '../format/validat
 import type { SessionMeta } from '../coordinator/types.ts'
 import type { LegacySessionStore } from './legacy.ts'
 import type { ManagedDocument } from '../coordinator/fact-types.ts'
+import { createCommitObservations } from './observations.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapRequest } from '../coordinator/bootstrap-header.ts'
 import type { BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import { openCommitManagedDocument } from './managed.ts'
@@ -71,6 +72,8 @@ export type CommitCoordinator = {
   onDocumentDeleted(listener: (sessionId: string, manifest: { documents: string[]; files?: string[] }) => Promise<void>): () => void
   ownerOf(sessionId: string): boolean
   hasLiveOwnership(sessionId: string): boolean
+  withExistingSessionBindingObservation<T>(request: import('../coordinator/types.ts').ExistingSessionBindingObservationRequest, run: (observation: import('../coordinator/types.ts').ExistingSessionBindingObservation) => Promise<T>): Promise<T>
+  withSessionBindingObservation<T>(request: import('../coordinator/types.ts').SessionBindingObservationRequest, run: (observation: import('../coordinator/types.ts').SessionBindingObservation) => Promise<T>): Promise<T>
   adoptOwnership(sessionId: string): Promise<void>
   releaseOwnership(sessionId: string): Promise<void>
   close(): Promise<void>
@@ -200,6 +203,32 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       return createCommitLog(logOptions(DOCUMENT_SESSION), { header: { sessionId: DOCUMENT_SESSION, kind: 'document-store' } })
     }
   }
+
+  const profileOf = async (sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }> => {
+    try {
+      const log = await open(sessionId, 'read')
+      try {
+        const meta = metaOf(log)
+        const blank = !log.view().entries.some(event => event.type === 'turn/start')
+        return { meta, blank }
+      } finally { await log.close() }
+    } catch (error) {
+      if (!(error instanceof CommitLogNotFoundError)) throw error
+      const legacy = await readLegacy(sessionId)
+      const meta = legacy.meta ?? ({ sessionId, createdAt: now().toISOString(), formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
+      return { meta, blank: !legacy.events.some(event => event.type === 'turn/start') }
+    }
+  }
+  const getDocumentOf = async (key: string): Promise<unknown | undefined> => {
+    let log: CommitLog
+    try { log = await open(DOCUMENT_SESSION, 'read') } catch (error) { if (error instanceof CommitLogNotFoundError) return undefined; throw error }
+    try {
+      const side = log.view().documents.get(key)
+      if (!side) return undefined
+      return JSON.parse(new TextDecoder().decode(await log.readSidecar(side.digest))) as unknown
+    } finally { await log.close() }
+  }
+  const observations = createCommitObservations({ profile: profileOf, getDocument: getDocumentOf })
 
   return {
     storageRoot: root,
@@ -337,21 +366,9 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       if (options.legacy) for (const id of await options.legacy.list().catch(() => [] as string[])) ids.add(id)
       return [...ids].sort()
     },
-    async profile(sessionId) {
-      try {
-        const log = await open(sessionId, 'read')
-        try {
-          const meta = metaOf(log)
-          const blank = !log.view().entries.some(event => event.type === 'turn/start')
-          return { meta, blank }
-        } finally { await log.close() }
-      } catch (error) {
-        if (!(error instanceof CommitLogNotFoundError)) throw error
-        const legacy = await readLegacy(sessionId)
-        const meta = legacy.meta ?? ({ sessionId, createdAt: now().toISOString(), formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
-        return { meta, blank: !legacy.events.some(event => event.type === 'turn/start') }
-      }
-    },
+    profile: profileOf,
+    withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation,
+    withSessionBindingObservation: observations.withSessionBindingObservation,
     async updateMeta(sessionId, patch) {
       if (Object.hasOwn(patch, 'formatVersion') && patch.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('cannot downgrade session format')
       return withWrite(sessionId, async (log) => {
@@ -368,15 +385,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
         await log.append({ ops: [{ kind: 'doc', key, side }] })
       } finally { await log.close() }
     },
-    async getDocument(key) {
-      let log: CommitLog
-      try { log = await open(DOCUMENT_SESSION, 'read') } catch (error) { if (error instanceof CommitLogNotFoundError) return undefined; throw error }
-      try {
-        const side = log.view().documents.get(key)
-        if (!side) return undefined
-        return JSON.parse(new TextDecoder().decode(await log.readSidecar(side.digest))) as unknown
-      } finally { await log.close() }
-    },
+    getDocument: getDocumentOf,
     async flush() { /* every append is fsynced before it resolves */ },
     enqueue(sessionId, events) { void this.append(sessionId, events).catch(() => {}) },
     ownerOf(sessionId) { return owned.get(sessionId)?.open === true },

@@ -680,6 +680,19 @@ Remaining for the store before the facade: append-crash cuts (a cut between writ
   `agent/input/admitted` event at `initial.seq` (text/intent/delivery/provenance), `document.assertReady()` and
   the initial-input digest commitment.
 
+## Plan 4c (implemented 2026-11-05): binding observations + unmanaged task host
+
+- `src/commit/observations.ts` implements the v1 binding observation model: existing sessions are snapshotted
+  (metadata + `desktop-session-project-<sha256(id)>` document), the not-yet-born target contributes only its binding,
+  and the snapshot is **re-read before the callback's result is accepted** (a metadata or binding change becomes
+  `SessionBindingObservationError('conflict')`). A missing session is `unavailable`, an aborted signal is `revoked`.
+  Exclusion is delegated to the commit log itself: a concurrent birth loses the no-overwrite publication, so the
+  observation does not hold a lease across the callback.
+- The coordinator exposes `withExistingSessionBindingObservation`/`withSessionBindingObservation`.
+- `packages/subagent/test/child-task-host-commit-log.test.ts` runs the real `createUnmanagedTaskChildHost` over the
+  commit-log coordinator: the host's observation scope admits the parent, refuses a bound target, the prepared child is
+  born through `bootstrapChildTargetWithCapture`, and the product's `verifyOriginalChildBirth` accepts it.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

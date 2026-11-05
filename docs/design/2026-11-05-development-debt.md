@@ -14,6 +14,10 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 231（SCL 觀察層＋unmanaged task host）**：`withExistingSessionBindingObservation`／`withSessionBindingObservation`
+> 以 snapshot+revalidate 實作（binding doc＝`desktop-session-project-<sha256(id)>`；missing＝unavailable、abort＝revoked、
+> 變更＝conflict；排除交給 commit log 的 no-overwrite 發佈）。真實 `createUnmanagedTaskChildHost` 已在 SCL 上跑通：
+> 觀察 scope 放行 parent、prepared child 出生、產品 `verifyOriginalChildBirth` 接受。
 > **round 230（產品驗證器接受 SCL 出生）**：把單一 commit 出生的結果送進產品自己的 `verifyOriginalChildBirth`
 > （header lineage／semanticSeed digests、receipt seedLength/manifestDigest/initial commitment、completion frame、
 > bootstrap 與 admitted 事件位置與內容、`assertReady()`、initial input digest）——全部通過。
