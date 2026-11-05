@@ -3,7 +3,9 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
-import { createSessionCoordinator, createForkSessionController } from '@i-harness/session-persistence'
+import { createForkSessionController } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createContextOutputService } from '../../context-output/src/index.ts'
 import { createSessionService, createDurableSessionLoader, createCliForkHost } from '@i-harness/session-executor'
@@ -22,7 +24,7 @@ async function boundary<T>(work: Promise<T>): Promise<T> {
 }
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ih-sdk-stop-')), sessions = join(root, 'sessions')
-  const backend = createJsonlBackend(sessions), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(sessions), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: 'stop' })
   const modelEntered = Promise.withResolvers<void>(), modelRelease = Promise.withResolvers<void>()
   let calls = 0, signal: AbortSignal | undefined

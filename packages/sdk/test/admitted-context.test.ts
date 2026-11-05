@@ -3,7 +3,8 @@ import { observeModelClient } from '@i-harness/llm-seam'
 import { captureRequestCandidate } from "../../core-agent/src/agent/request-snapshot.ts"
 import { expect, it, vi } from "vitest"
 import { createSessionService } from "@i-harness/session-executor"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
@@ -60,7 +61,7 @@ it("serves the actual prepared owner without inspecting transport and retains po
 
 it.each([false, true])("child context reader preserves its owner and current parent grant (revoked=%s)", async revoked => {
   const root = await mkdtemp(join(tmpdir(), "admitted-child-context-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "parent" })
   const measurements: PreparedModelRequest["measurement"][] = []
   let enterParent!: () => void

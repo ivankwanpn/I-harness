@@ -5,7 +5,8 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { acquireAssemblyResultStore } from '../../session-executor/src/lifecycle/result-store.ts'
 import { HarnessClient } from '../src/client.ts'
@@ -19,7 +20,7 @@ it('reads original cold native frames viaCatalog through the real CLI and refuse
   if (evidenceRoot) await mkdir(evidenceRoot, { recursive: true })
   const root = await mkdtemp(join(evidenceRoot ?? tmpdir(), 'result-cli-')), store = join(root, 'sessions'), config = join(root, 'config'), workspace = join(root, 'workspace')
   await mkdir(config); await mkdir(workspace); const settings = join(config, 'settings.json'); await writeFile(settings, '{}')
-  const coordinator = createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } }), refs: Record<string, any> = {}
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(store), { lock: { enabled: true } }, taskDocumentStorageContract), refs: Record<string, any> = {}
   for (const id of ['unbound', 'bound']) {
     await coordinator.create({ sessionId: id }); await coordinator.flush(id)
     if (id === 'bound') await coordinator.putDocument('desktop-session-project-' + createHash('sha256').update(id).digest('hex'), { version: 1, projectId: 'p' })
