@@ -1192,6 +1192,13 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 81 (implemented 2026-11-06): mixed legacy and commit-log search
+
+`host-commit-log-mixed-search.test.ts` puts a legacy JSONL session and a commit-log session in the same store directory: the search
+returns one hit per session (no duplicates), the legacy hit carries the index bm25 (<= 0) and the commit-log hit carries the
+fallback bm25 0, in that order.
+
 ## Plan 80 (implemented 2026-11-06): missing sessions fail the view reads
 
 `processes/read` and `execution/read` for a session that does not exist reject with
