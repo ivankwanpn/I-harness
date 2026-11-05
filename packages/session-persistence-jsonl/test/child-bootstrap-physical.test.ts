@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { append, createSession, exportConversationSeed } from '@i-harness/core-session'
 import * as p from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { bootstrapPathsForRoute } from '../src/backend/bootstrap-stage.ts'
 import { pair, guards } from '../../session-persistence/test/child-bootstrap-fixture.ts'
 import { fixtureLoader, fixtureRuntime } from './helpers/child-bootstrap-predecessor.ts'
@@ -61,7 +62,7 @@ const coordinator=p.createSessionCoordinator(backend,{lock:{enabled:true}});cons
   try{barrier=await reached.promise;child.kill();await exited}finally{clearTimeout(timer);if(child.exitCode===null&&!child.killed)child.kill();await exited;await writeFile(join(root,'process.json'),JSON.stringify({cut,cwd:process.cwd(),node:process.execPath,nodeSha256:hash(await readFile(process.execPath)),args,scriptSha256:hash(Buffer.from(body)),roots:runtime.roots,output,stderr,exitCode,signal,interruption:'parent child.kill after observed real native/backend barrier'},null,2))}
   expect(stderr).toBe('');expect(barrier.callbacks).toBe(['exclusive-empty','reservation-short','reservation-sync','reservation-readback','reservation-close','confirmed-reservation'].includes(cut)?0:1)
   const before=await artifacts(root),stagePath=bootstrapPathsForRoute(join(root,'target.jsonl'),{protocol:'child-v1',request}).stage,stage=await readFile(stagePath),full=(()=>{try{return JSON.parse(stage.toString()).kind==='semantic-bootstrap-header'}catch{return false}})()
-  const backend=createJsonlBackend(root),cold=p.createSessionCoordinator(backend,{lock:{enabled:true}});let callbacks=0
+  const backend=createJsonlBackend(root),cold=createSessionCoordinator(backend,{lock:{enabled:true}});let callbacks=0
   try{
    const retry=await cold.bootstrapChildTargetWithCapture!(request,guards,async()=>{callbacks++;return payload});expect(callbacks).toBe(0)
    if(!full){expect(retry.kind).not.toBe('ready');const resumed=await cold.resumeChildTarget!(request,guards,payload);expect(resumed.kind).not.toBe('ready');expect(await artifacts(root)).toEqual(before)}

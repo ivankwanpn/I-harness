@@ -6,8 +6,8 @@ import { encodeChildBootstrapReservation } from '@i-harness/session-persistence'
 import { buildBootstrapHeader } from '../../session-persistence/src/coordinator/bootstrap-header.ts'
 import { pair } from '../../session-persistence/test/child-bootstrap-fixture.ts'
 import { bootstrapPathsForRoute } from '../src/backend/bootstrap-stage.ts'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { guards } from '../../session-persistence/test/child-bootstrap-fixture.ts'
 import { extractCurrentPredecessor, provisionPredecessorLock } from './helpers/current-context-predecessors.ts'
 import { extractFormat12Predecessor } from './helpers/format12-predecessor.ts'
@@ -18,7 +18,7 @@ const methods=['inspect','capture-inspect','capture-inspect-valid','read','snaps
 const oldRequest=`const request={...input.payload,seed:persistence.compileSemanticSeed({kind:'none'})};`
 const getInput=`const input=JSON.parse(await fs.readFile(resolve(store,'input.json'),'utf8'));`
 const writer=`${getInput}${oldRequest}
-const backend=backendFor(store),coordinator=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});let outcome,operationError;
+const backend=backendFor(store),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}});let outcome,operationError;
 try{outcome=await coordinator.bootstrapSemanticTarget(request,guards)}catch(error){operationError=errorRecord(error)}
 const result={kind:outcome?.kind,reason:outcome?.reason,token:outcome?.token,request,receipt:outcome?.receipt,operationError};
 process.stdout.write(JSON.stringify({event:'operation-before-cleanup',...result})+'\\n');
