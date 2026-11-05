@@ -567,6 +567,10 @@ full job 當 gate。
   `PROCESS_READ_UNAVAILABLE` 消失、測試主體（barrier／cold restart／receipt／bytes）全部通過；
   剩下唯一紅是 `finally { await cold.close() }` 拋 `Coordinator cleanup is unresolved`——新的
   cleanup-debt 語義（與 `bootstrap-stage-swap`／`stage-revision` 同一類），列入第 4 項。
+  （round 41 定位：`Coordinator cleanup is unresolved` 來自 `coordinator-factory` 的
+  `closeWithRetained`，不是 `lifecycle.close` 的 persist aggregate；即 observation／managed
+  或 fork admission 的 join 仍 rejected。修法要追子程序 resume 後哪個 capture reservation
+  的 managed entry 沒被 settle。）
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
