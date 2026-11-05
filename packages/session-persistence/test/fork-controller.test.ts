@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { acquireSessionLock } from '@i-harness/fs-lock'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator, forkSession, retryForkSession } from '../src/index.ts'
+import { forkSession, retryForkSession } from '../src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/backend-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import * as controllerApi from '../src/fork-controller.ts'
 import { createInlineForkHost } from '../src/fork-inline-host.ts'
 import { createForkOperation, ForkOperationError } from '../src/fork-contract.ts'
@@ -21,7 +23,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.mocked(acquireSessionLock).mockImplem
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ih-fc-'))
-  const backend = createJsonlBackend(root), c = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), c = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   await c.create({ sessionId: 'source', title: 'original' })
   await c.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'first' }, { type: 'turn/end' }])
   return { root, backend, c, async close() { await c.close(); await rm(root, { recursive: true, force: true }) } }
@@ -90,7 +92,7 @@ it('keeps a spent native reservation passive across a cold controller and source
     expect(error).toBeInstanceOf(ForkOperationError); expect(error.cause).toBeUndefined()
     expect(reservations).toBe(1)
     await f.c.close()
-    const cold = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } })
+    const cold = composeJsonlTaskTransitionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } }, taskDocumentStorageContract)
     try {
       const coldController = controllerApi.createForkSessionController(cold, createInlineForkHost(cold))
       const sourceProfile = vi.spyOn(cold, 'profile').mockRejectedValue(new Error('source trap'))

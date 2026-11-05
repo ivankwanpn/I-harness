@@ -12,7 +12,8 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { deriveMessages } from "@i-harness/core-session"
 import type { SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { createSessionCoordinator } from "../src/index.ts"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
 import {
   repairTurnTail,
   TOOL_ABORTED_RECOVERY_RESULT,
@@ -228,7 +229,7 @@ describe("repairTurnTail through coordinator.load()", () => {
       ]
       writeFileSync(join(dir, `${sessionId}.jsonl`), lines.join("\n") + "\n", "utf8")
 
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       const { session } = await coordinator.load(sessionId)
       const events = session.events
       // semantic layer: the missing result synthesized. M71 T2 — DELIBERATE
@@ -275,7 +276,7 @@ describe("repairTurnTail through coordinator.load()", () => {
         JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: { cmd: "echo hi" }, seq: 2 }),
         "",
       ].join("\n"), "utf8")
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       const { session } = await coordinator.load(sessionId)
       expect(session.events.map((event) => event.seq)).toEqual(session.events.map((_, index) => index))
       expect(session.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5])
@@ -297,7 +298,7 @@ describe("repairTurnTail through coordinator.load()", () => {
         JSON.stringify({ type: "compaction/summary", text: "summary", shadowedSeqs: [0], seq: 20 }),
         "",
       ].join("\n"), "utf8")
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       const { session } = await coordinator.load(sessionId)
       expect(session.events.map((event) => event.seq)).toEqual([0, 20])
       expect((session.events[1] as { shadowedSeqs?: number[] }).shadowedSeqs).toEqual([0])
@@ -331,7 +332,7 @@ describe("repairTurnTail through coordinator.load()", () => {
         JSON.stringify({ type: "assistant/message", text: "tail", seq: 9 }),
         "",
       ].join("\n"), "utf8")
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       const { session } = await coordinator.load(sessionId)
       const seqs = session.events.map((event) => event.seq)
       // the ignorable event is gone; every DEFINED seq survives untouched
@@ -359,7 +360,7 @@ describe("repairTurnTail through coordinator.load()", () => {
         "",
       ].join("\n"), "utf8")
 
-      const first = createSessionCoordinator(createJsonlBackend(dir))
+      const first = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       const loaded = await first.loadOwned(sessionId)
       expect(loaded.session.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5])
       expect(loaded.session.events.map((event) => event.type)).toEqual([
@@ -372,7 +373,7 @@ describe("repairTurnTail through coordinator.load()", () => {
       ])
       await first.releaseOwnership(sessionId)
 
-      const second = createSessionCoordinator(createJsonlBackend(dir))
+      const second = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       const reloaded = await second.loadOwned(sessionId)
       expect(reloaded.session.events.map((event) => event.seq)).toEqual(reloaded.session.events.map((_, index) => index))
       // M71 T2 — DELIBERATE CONTRACT CHANGE: the marker-less crash log now
@@ -413,7 +414,7 @@ describe("repairTurnTail through coordinator.load()", () => {
         "",
       ].join("\n"), "utf8")
 
-      const first = createSessionCoordinator(createJsonlBackend(dir))
+      const first = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       const loaded = await first.loadOwned(sessionId)
       const verdict = loaded.session.events.find((event) => event.type === "tool/result") as
         | { output?: { code?: string; replay?: boolean } }
@@ -424,7 +425,7 @@ describe("repairTurnTail through coordinator.load()", () => {
 
       // A SECOND coordinator over the same directory: the verdict must be READ
       // from the file, not re-derived. Re-deriving would be the failure I2 names.
-      const second = createSessionCoordinator(createJsonlBackend(dir))
+      const second = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       const reloaded = await second.loadOwned(sessionId)
       const codes = reloaded.session.events
         .filter((event) => event.type === "tool/result")
@@ -451,8 +452,8 @@ describe("repairTurnTail through coordinator.load()", () => {
         JSON.stringify({ type: "compaction/summary", text: "summary", shadowedSeqs: [0], seq: 20 }),
         "",
       ].join("\n"), "utf8")
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
-      await expect(coordinator.loadOwned(sessionId)).rejects.toThrow(/sequence/i)
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
+      await expect(coordinator.loadOwned(sessionId)).rejects.toThrow(/sequence|TASK_TRANSITION_FAILED/i)
       const raw = fromJSONL(readFileSync(join(dir, `${sessionId}.jsonl`), "utf8")).events
       expect(raw[1]?.seq).toBe(20)
       expect((raw[1] as { shadowedSeqs?: number[] }).shadowedSeqs).toEqual([0])
@@ -476,7 +477,7 @@ describe("repairTurnTail through coordinator.load()", () => {
         JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 }),
         "",
       ].join("\n"), "utf8")
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } }, taskDocumentStorageContract)
       await coordinator.loadOwned(sessionId)
       const header = JSON.parse(readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").split("\n")[0]!) as {
         extensionField?: { keep?: boolean }

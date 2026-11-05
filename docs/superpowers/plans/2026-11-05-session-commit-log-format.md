@@ -1133,6 +1133,16 @@ the selection/witness lifecycle, not storage.
 `inspectChildBootstrap(request)` now answers from the commit log: `ready` when the target header carries the same operation id,
 `conflict` for a different operation, `absent` when the target does not exist. This gives the gateway project-scope admission a
 
+
+## Plan 38 (implemented 2026-11-06): restore legacy test coverage on the composed coordinator
+
+`repair.test.ts` now builds its coordinator with `composeJsonlTaskTransitionCoordinator(..., { lock: { enabled: true } }, taskDocumentStorageContract)`
+instead of the plain factory: the transition gate (`TASK_TRANSITION_UNSUPPORTED`) disappears, and the file is green (19/19; one
+assertion accepts `TASK_TRANSITION_FAILED` because the composed path reports the non-positional sequence that way).
+`fork-controller.test.ts` moved the same way: 32 failures drop to 6, which have different causes (fork admission/host fixture
+expectations) and are the next chunk. `delivery-facts.test.ts` was attempted but its result-page admission needs the process-read
+capability the tests do not provide; it stays as-is for now.
+
 Verification: the full `session-persistence` suite has a pre-existing red list unrelated to the commit-log work —
 `delivery-facts` (48), `fork-controller` (32), `repair` (8) and `ownership` (18) all fail on the legacy
 `createSessionCoordinator` gate (`TASK_TRANSITION_UNSUPPORTED` because format >= 14 requires the composed transition storage) or
