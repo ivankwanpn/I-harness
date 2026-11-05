@@ -412,7 +412,6 @@ export class SSEParseError extends Error {
  * improvement even before the card arm fires.
  */
 export { parseSseFrames } from "./sse.ts"
-export type { SseFrame } from "./sse.ts"
 export const ANTHROPIC_MAX_TOKENS_FALLBACK = 128_000
 
 

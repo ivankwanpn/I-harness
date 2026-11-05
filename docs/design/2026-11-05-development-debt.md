@@ -344,7 +344,9 @@ type re-export：`session-executor`（`PendingRewindIntent`、`RewindIntentV1`�
 `subagent`（`DocumentIntentStore`、`DocumentWriteIntentV1`、`JobLoadResult`、
 `JobRecordStore`、`PendingDocumentWrite`、`isParentNotificationStopped`）、
 `core-tools`（`ApprovalPolicyService`、`NativePlanValidationError`、`NativeTarget`）
-→ **394 rows、32 NEW**（累計 -38）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+→ **394 rows、32 NEW**（累計 -38）。再一輪移除 4 個 type re-export
+（`session-persistence` 的 `ForkHandoff`、`ChildCaller`；`instructions` 的
+`InstructionPendingLease`；`llm-seam` 的 `SseFrame`）→ **390 rows、28 NEW**（累計 -42）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---
