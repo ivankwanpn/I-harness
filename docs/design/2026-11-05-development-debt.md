@@ -358,7 +358,9 @@ type re-export：`session-executor`（`PendingRewindIntent`、`RewindIntentV1`�
 multi-line export list 內的 type 條目 → **24 NEW / 387 rows**。接著把 5 個有公開簽名／
 文件依據的契約加 allowlist（`exec#JobOutputObservation`、`exec#NativeJobKillSelector`、
 `core-tools#ToolPrepareIdentity`、`runtime-context#PreparedRuntimeContextReader`、
-`token-meter#CHARS_PER_TOKEN`，皆附 dated reason/source）→ **19 NEW**（無 inert 警告）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+`token-meter#CHARS_PER_TOKEN`，皆附 dated reason/source）→ **19 NEW**（無 inert 警告）。
+再處理第一個「測試專用」項：`settings#SettingsWatchError` 讓 `watch-lease.test.ts`
+改從內建模組 import type，入口不再 export → **18 NEW / 386 rows**（測試 14/14 綠）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---

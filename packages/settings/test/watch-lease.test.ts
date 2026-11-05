@@ -2,7 +2,8 @@ import { afterEach, expect, it, vi } from "vitest"
 import { mkdtemp, mkdir, rm, writeFile, unlink, utimes, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { watchSettings, type SettingsWatchError } from "../src/index.ts"
+import { watchSettings } from "../src/index.ts"
+import type { SettingsWatchError } from "../src/observation/watch-settings.ts"
 
 import { controlledLease, settle } from "./helpers/settings-lease.ts"
 const roots: string[] = []
