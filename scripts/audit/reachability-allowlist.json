@@ -50,6 +50,30 @@
       "source": "packages/token-meter/src/estimate.ts"
     },
     {
+      "key": "unused-export\t@i-harness/core-session#CodeOutputRecord",
+      "reason": "Code-output record shape published through the results/code-output wildcard re-export; the package writer consumes it internally and no cross-package consumer names the entry yet.",
+      "dated": "2026-11-05",
+      "source": "packages/core-session/src/results/code-output.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/core-session#SubagentDeliverySourceEvent",
+      "reason": "Delivery-source event shape published through the events/delivery wildcard re-export; every in-repo consumer imports the event types from the module that declares them.",
+      "dated": "2026-11-05",
+      "source": "packages/core-session/src/events/delivery.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/core-session#validCodeOutputMember",
+      "reason": "Validator for the code-output member shape; published together with CodeOutputRecord and used by the code-output writer.",
+      "dated": "2026-11-05",
+      "source": "packages/core-session/src/results/code-output.ts#validCodeOutputMember"
+    },
+    {
+      "key": "unused-export\t@i-harness/core-session#validDeliveryKey",
+      "reason": "Validator for delivery event keys; published together with the delivery event shapes and used by the delivery index.",
+      "dated": "2026-11-05",
+      "source": "packages/core-session/src/events/delivery.ts#validDeliveryKey"
+    },
+    {
       "key": "unused-export\t@i-harness/exec#ExecutionLaunch",
       "reason": "Intentional public type: ExecutionSupervisor.launch input names the trusted process specification, policy, backend and validation contract.",
       "dated": "2026-10-08",
