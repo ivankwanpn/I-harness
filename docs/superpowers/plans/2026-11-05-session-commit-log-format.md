@@ -1190,6 +1190,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 72 (implemented 2026-11-06): title, archive and project survive a restart
+
+`host-commit-log-restart-meta.test.ts`: host1 creates, binds project `p`, renames to `Restart title` and archives; host2 (same
+store) does not list the session as active, lists it under `desktop/session/archived` with `title` and `projectId`, reports
+`desktop/session/project/state` as `{projectId:"p"}`, and restoring it brings back the renamed title. All of it comes from the
+commit log and the document store, not host memory.
+
 ## Plan 71 (implemented 2026-11-06): rewind mode `files`
 
 `host-commit-log-rewind-modes.test.ts` executes a `files` rewind on the commit log: the tracked file is restored to its `preBlob`

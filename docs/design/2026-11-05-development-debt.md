@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 327（metadata 跨重啟）**：title／archive／project binding 在 host 重啟後仍一致（archived 列含 title 與 projectId，
+> restore 後標題保留）。
 > **round 326（rewind files 模式）**：`mode:"files"` 還原 tracked 檔並保留對話事件；`mode:"both"` 不是合法值，RPC 以
 > `Invalid rewind request` 拒絕。
 > **round 325（rewind fingerprint 失效）**：preview 後改動 tracked 檔，execute 以舊 fingerprint 被拒（Rewind preview changed），
