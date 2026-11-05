@@ -1190,6 +1190,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 71 (implemented 2026-11-06): rewind mode `files`
+
+`host-commit-log-rewind-modes.test.ts` executes a `files` rewind on the commit log: the tracked file is restored to its `preBlob`
+content while the conversation keeps its events. The only modes are `conversation` and `files`; a `both` request is refused at the
+RPC layer with `Invalid rewind request` before it touches anything.
+
 ## Plan 70 (implemented 2026-11-06): stale rewind fingerprints are refused
 
 `host-commit-log-rewind-stale.test.ts` plans a rewind, then changes the tracked file before executing with the pinned fingerprint:
