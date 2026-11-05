@@ -87,6 +87,9 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
       const next = await call('session/result/read', { sessionId: created.sessionId, ref, offset: chunk.nextOffset, maxBytes: 4096 }) as { nextOffset?: number; eof?: boolean }
       expect(next.nextOffset).toBeGreaterThan(chunk.nextOffset!)
       expect(next.eof).toBe(false)
+      const past = await call('session/result/read', { sessionId: created.sessionId, ref, offset: 10_000_000, maxBytes: 4096 }) as { kind?: string; reason?: string }
+      expect(past).toMatchObject({ kind: 'unavailable', reason: 'budget' })
+      await expect(call('session/result/read', { sessionId: created.sessionId, ref, maxBytes: 1_000_000 })).rejects.toThrow(/Invalid result page query/)
     } finally { await observer.close() }
   } finally {
     await host.close()

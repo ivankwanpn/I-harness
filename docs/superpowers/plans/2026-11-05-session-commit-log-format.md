@@ -1177,6 +1177,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 58 (implemented 2026-11-06): result page boundaries
+
+An offset past the end is answered with `{kind:"unavailable", reason:"budget"}` (the read service treats the out-of-range request
+as an unavailable page, not an error), while a `maxBytes` above the query limit is rejected by the RPC layer with
+`-32602 Invalid result page query`. Both are now asserted on the commit-log host.
+
 ## Plan 57 (implemented 2026-11-06): result page chunking
 
 The turn test now pages an artifact result: a 4 KB chunk reports `nextOffset`, and the following read from that offset advances
