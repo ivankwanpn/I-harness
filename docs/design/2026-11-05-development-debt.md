@@ -599,6 +599,10 @@ full job 當 gate。
   分支）。即冷 resume 後該 entry 的 `headerUnknown` 仍為 true；`bootstrap.ts` 只有 line 349、
   514 兩處會清除它，冷 resume 走的另一條分支沒清。下一輪：找出冷 resume 後 header 已
   confirmed 的分支，補上 `entry.headerUnknown=false`。
+  **round 52 實測**：把守衛改成 `if(entry.headerUnknown && !entry.ready)` 後三檔仍全部
+  `Coordinator cleanup is unresolved` → 該 entry 的 `ready` 是 **false**（不是「已 ready 但
+  flag 沒清」）。所以失敗的 entry 是一個「header 未確認、也還沒 ready」的殘留 attempt entry；
+  需要的是在冷 resume 成功時**清掉這個殘留 entry**（或清它的 flag），而不是放寬守衛。已還原實驗。
 - 其餘 in-process 的 legacy 建構子已清完；`child-bootstrap-predecessor` 的紅在 generated
   `.mjs` predecessor runtime（format11-clean 腳本 line 18），屬 predecessor 語義。
 
