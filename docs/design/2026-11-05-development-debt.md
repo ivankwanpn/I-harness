@@ -5,6 +5,9 @@ round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 ti
   round 163 查證：`cancel-stop.test.ts` 的兩個 hook（append/reconcile）是**在** `service.submit(...)`
   **round 164 已實作**：`cancel-stop` 5 個 hook 遷到 seam ＋ armed 旗標 → **4/5 通過**；
   round 165 全套：`sdk` **5 failed / 114 passed（119）**（由 9 failed）。剩：CLI end-to-end、
+  round 167：`Original prepared task caller unavailable` 來自 `subagent/src/index.ts:349`——
+  `launchEntry.enter(exec)` 回 undefined（spawn_agent 的 launch entry 與實際 exec 對不上），
+  屬 sdk child-context fixture 的工具掛載／exec 身份問題。
   cleanup 1、`Original prepared task caller unavailable` 2、fork 邊界 1。
   剩「an independent actual fork finishes while the original cancel Stop remains held」
   （`Original Stop boundary pending`，該案自身的 4s 邊界）。
