@@ -14,6 +14,7 @@ import { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from '@i
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
+import { createJsonlBackend } from '../src/backend-factory.ts'
 
 it('syncs the exact original bootstrap header before a cold managed open', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-managed-header-'))
@@ -23,8 +24,10 @@ it('syncs the exact original bootstrap header before a cold managed open', async
   try { expect((await original.bootstrapSemanticTarget(request, guards)).kind).toBe('ready') } finally { await original.close() }
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   fault.target = join(root, 'target.jsonl'); fault.syncs = 0
-  const other = createOwnership({ lockRoot: root }, { lock: { enabled: true }, acquireDeadlineMs: 50, acquireRetryMs: 5 }); let protectedAtSync = false
-  fault.probe = async () => { try { const lease = await other.acquireLease('doc:task-target'); await lease.release() } catch { protectedAtSync = true } }
+  // The composed coordinator leases documents by artifact identity; a
+  // competing owner must share that association to observe the lease.
+  const other = createOwnership(createJsonlBackend(root), { lock: { enabled: true }, acquireDeadlineMs: 50, acquireRetryMs: 5 }); let protectedAtSync = false
+  fault.probe = async () => { try { const lease = await other.acquireDocumentLease!('task-target'); await lease.release() } catch { protectedAtSync = true } }
   try { await coordinator.openManagedDocument('target'); expect(fault.syncs).toBeGreaterThan(0); expect(protectedAtSync).toBe(true) }
   finally { fault.probe = undefined; fault.target = ''; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

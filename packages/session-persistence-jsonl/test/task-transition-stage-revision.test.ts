@@ -29,13 +29,16 @@ import { createJsonlTaskTransitionCoordinator } from '../src/task-document-facto
 it('refuses a same-inode equal-size stage rewrite during the tracked read even when its bytes are unchanged', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-stage-revision-'))
   const { payload } = pair(), original = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  try { expect((await original.bootstrapSemanticTarget(payload, guards)).kind).toBe('ready') } finally { await original.close() }
+  let documentBytes: Buffer | undefined
+  // A ready bootstrap owns the task document, so the blocked resume below must
+  // leave those exact bytes alone instead of proving the file never existed.
+  try { expect((await original.bootstrapSemanticTarget(payload, guards)).kind).toBe('ready'); documentBytes = await readFile(join(root, 'task-target.doc.jsonl')) } finally { await original.close() }
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   fault.target = bootstrapPathsForRoute(join(root, 'target.jsonl'), { protocol: 'public', invocation: payload.invocation }).stage; fault.active = true
   let failure: unknown
   try {
     expect((await coordinator.resumeSemanticTarget(payload.invocation, guards)).kind).toBe('blocked')
-    await expect(readFile(join(root, 'task-target.doc.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await readFile(join(root, 'task-target.doc.jsonl'))).toEqual(documentBytes)
     expect((await coordinator.resumeSemanticTarget(payload.invocation, guards)).kind).toBe('already-ready')
   } catch (error) { failure = error } finally {
     fault.active = false; fault.target = ''

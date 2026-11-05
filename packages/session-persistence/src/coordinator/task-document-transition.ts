@@ -354,7 +354,10 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     const barrier = Object.freeze({
       async allowObservation() {
         if (this !== barrier || done || revoked || cleanupPending || ownerFlight || flight || externalFlight || !headerIssued || headerAck || retainedHeaderOutcome?.kind !== 'unknown') return
-        await settleHeaderResources()
+        // A failed header settle is retained debt, not a call failure: the
+        // bootstrap outcome is already decided (blocked), and finite()/close
+        // reports the debt. Do not let cleanup replace that durable outcome.
+        try { await settleHeaderResources() } catch { return }
         if (done || revoked || cleanupPending || ownerFlight || flight || externalFlight || !claim || !held || hasHeaderDebt(id,held) || historyReader?.hasDebt() || !(confirmed || result?.kind === 'committed') || result?.cleanupPending) return
         claim.assertHeld(); ticket.allowObservation()
       },

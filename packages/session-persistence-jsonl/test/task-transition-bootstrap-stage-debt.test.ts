@@ -15,6 +15,7 @@ import { taskDocumentStorageContract } from '../../subagent/src/task/storage-con
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { bootstrapPaths } from '../src/backend/bootstrap-stage.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
+import { createJsonlBackend } from '../src/backend-factory.ts'
 
 it('retains the actual bootstrap stage read close and original claim until explicit resume', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-stage-read-debt-'))
@@ -30,7 +31,9 @@ it('retains the actual bootstrap stage read close and original claim until expli
   try {
     expect((await coordinator.resumeSemanticTarget(request.invocation, guards)).kind).toBe('blocked')
     expect(await readFile(join(root, 'task-target.doc.jsonl'))).toEqual(documentBytes)
-    const other = createOwnership({ lockRoot: root }, { lock: { enabled: true }, acquireDeadlineMs: 50, acquireRetryMs: 5 })
+    // The composed coordinator leases documents by artifact identity; a
+    // competing owner must share that association to observe the lease.
+    const other = createOwnership(createJsonlBackend(root), { lock: { enabled: true }, acquireDeadlineMs: 50, acquireRetryMs: 5 })
     await expect(other.pinOwnership('target')).rejects.toThrow()
     fault.active = false; expect((await coordinator.resumeSemanticTarget(request.invocation, guards)).kind).toBe('already-ready')
     expect(fault.closes).toBeGreaterThanOrEqual(2)

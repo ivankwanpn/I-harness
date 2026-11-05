@@ -25,11 +25,14 @@ import { taskDocumentStorageContract } from '../../subagent/src/task/storage-con
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { pair, guards } from '../../session-persistence/test/child-bootstrap-fixture.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
+import { createJsonlBackend } from '../src/backend-factory.ts'
 
 it('retains the borrowed capture claim when concurrent shutdown cannot settle the original task file', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-capture-close-race-'))
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  const other = createOwnership({ lockRoot: root }, { lock: { enabled: true }, acquireDeadlineMs: 50, acquireRetryMs: 5 })
+  // The composed coordinator leases documents by artifact identity; a
+  // competing owner must share that association to observe the lease.
+  const other = createOwnership(createJsonlBackend(root), { lock: { enabled: true }, acquireDeadlineMs: 50, acquireRetryMs: 5 })
   const { request, payload } = pair()
   fault.prefix = join(root, 'task-target.doc.jsonl.'); fault.active = true
   let competing: Awaited<ReturnType<typeof other.pinOwnership>> | undefined

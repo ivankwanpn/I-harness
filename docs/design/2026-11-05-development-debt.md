@@ -4,12 +4,19 @@
 > **已完成且全綠**：code-mode（28 檔 365）、core-agent（79 檔 649）、exec（29 檔 367）、
 > acp、core-session（87 檔 933）、sandbox-windows-acl（40 檔 382/5 skipped）；
 > 三個 gate：typecheck 82/82、boundaries 147/147、reachability PASS。
-> **仍紅**：session-persistence-jsonl 25 檔 / 100 failed / 757 passed；sdk 3。
+> **仍紅**：session-persistence-jsonl 20 檔 / 93 failed / 764 passed / 17 skipped；sdk 3。
+> **round 218 已結案：task-transition claim/lease 群（9/10 檔）**。結論修正 round 209/210 的判斷：
+> 產品在 composed 車道**一直**持有 task document 的獨佔 lease——`append` 走
+> `transitionLoad` → `transitions.existing`，claim+lease 在 `begin.execute()` 一起取得，
+> 且成功後 `retainClaim()` 保留到 coordinator close。這批測試紅的原因是**觀測 namespace**：
+> composed 的文件 lease 是 artifact identity（`artifact-ownership:<doc>` /
+> `artifact-document-lease:<doc>`），而測試用裸 `createOwnership({lockRoot})` 的
+> `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
+> 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
+> 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **依序執行（設計已定案，不需再問）**：
-> 1. `session-persistence/src/coordinator/bootstrap.ts:569 start()` / `:574 startInner()`：
->    **acquire-before-read**——`borrowOwnership` + `acquireDocumentLease('task-'+id)`
->    必須早於任何 stage/header 讀取，讓讀取失敗自然保留 claim（解 task-transition 族 8 檔）。
-> 2. `coordinator.append` 同樣持有 `doc:task-*` lease（解 `task-transition-direct-lease`）。
+> 1. ~~acquire-before-read~~、~~append 持 `doc:task-*` lease~~ → round 218 證實已由 composed
+>    transition 車道滿足；8 檔測試已遷移，僅 `task-transition-bootstrap-revoke` 仍紅。
 > 3. `bootstrap-physical` 5 筆、`bootstrap-capture-physical` 2 筆：中斷後維持 `blocked`，
 >    測試改為驅動 reconcile 再斷言 `ready`（不要產品假裝成功）。
 > 4. sdk：child-context ×2 走 **model-origin spawn**；已確認卡點不是 prepared-body，而是
@@ -25,6 +32,35 @@
 > 5. 全綠後跑 `verify:all` full job，把結果寫回本文件。
 > **已結案、不要再重開**：Q1（`ready` bootstrap 本來就會建立 `task-*.doc.jsonl`，
 > 測試斷言已修正）；Q2/Q3 的設計判讀見 round 209；SYS-PROMPT 見 A-04（round 193）。
+>
+> **round 218（claim-retention 群：9/10 檔轉綠）**
+> - 根因（測試側）：`createOwnership({ lockRoot })` 的裸 ownership 與 composed 協調器
+>   **不在同一個 lock namespace**。composed 的 `acquireDocumentLease('task-*')` 走 artifact
+>   identity（`artifact-ownership:<doc key>` + `artifact-document-lease:<doc key>`），
+>   裸 ownership 的 `acquireLease('doc:task-*')` 是另一個 lock 檔 ⇒ 「必須被拒」的斷言
+>   全部變成「成功取得」。這是 D-12 遷移到 composed 建構子後失效的測試假設，不是產品釋放 claim。
+> - 遷移：`createOwnership(createJsonlBackend(root), …)` ＋ `acquireDocumentLease('task-…')`
+>   （claim 用 `pinOwnership`）；「操作結束即可取得」改成「coordinator close 後才可取得」，
+>   因為 M23 acquire-at-live 會把 session bundle（含 parent task artifact）保留到 close。
+> - 產品修正（1 處）：`coordinator/task-document-transition.ts` 的 `allowObservation()`
+>   不再讓 header close 失敗往外拋。bootstrap outcome 已決定（`blocked`），債務留在
+>   `headerSettlementFailure`，由 `finite()`／close 回報；否則第一次 bootstrap 會以
+>   `Bootstrap header cleanup unresolved` reject（`task-transition-bootstrap-retry` 的首紅），
+>   且 `entry.headerUnknown` 永遠沒機會被 retry 清掉。修正後 retry／stage-debt 一併轉綠。
+> - 轉綠 9 檔：`direct-lease`、`header-debt`、`bootstrap-header-debt`、`bootstrap-retry`、
+>   `bootstrap-stage-debt`、`bootstrap-stage-swap`、`stage-revision`、`capture-close-race`、
+>   `managed-header-confirm`。
+>   其中 `stage-revision` 另修掉與 stage-swap 同型的過期斷言：ready bootstrap 已建立
+>   `task-target.doc.jsonl`，blocked resume 只能要求**位元組不變**，不能要求 ENOENT。
+> - 仍紅 1 檔：`task-transition-bootstrap-revoke`。revoked in-flight header 之後的 resume 在
+>   `bootstrap.ts:487` 回 `not-issued/unsupported`，因為第一個 barrier 已被收回、新 barrier
+>   **沒有 mode**（`!b.taskBarrier?.mode && request.target.kind==='new' && state.meta`）。
+>   此時 `publicationStatus==='valid'` 且 `b.issued` 為 true，birth 其實已發行。
+>   下一步（設計級）：新增 `'resume-birth'` 模式（round 216 已預告）或讓 guard 只對
+>   **未發行**的 birth 回 unsupported，並用 `observeBootstrap` 驗證既有 birth；之後 close 才
+>   不會因 `headerUnknown` 回 `Managed documents require recovery before close`。
+> - 全套量測（round 218）：**20 紅檔 / 93 failed / 764 passed / 17 skipped（98 檔）**
+>   （round 217：25 紅檔 / 100 failed / 757 passed）。兩個受影響套件 typecheck exit 0。
   **round 174 定論**：在 `capture()` 內記錄事件後，兩個 marker 紅其實是 **`error` 事件**：
   **round 175 已修**：thinking 案補 user turn ＋ 對應 tool result；Responses 案把
   **round 176**：`llm-openai` 的 M72 Ⅲ 紅改為斷言「宣告 `measurementValidity:'invalid'`」
