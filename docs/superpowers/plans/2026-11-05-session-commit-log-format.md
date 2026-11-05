@@ -991,6 +991,12 @@ Documents written before the commit-log store (`task-*.doc.jsonl`, project bindi
 `LegacySessionStore.readDocument` is optional and the coordinator falls back to it when the document log has no side or does not
 exist yet. The JSONL composition supplies `backend.getDocument`. Once a key is written through the commit log its sidecar wins.
 
+## Plan 23 (implemented 2026-11-05): auto-generated title documents on SCL
+
+`host-commit-log-title.test.ts` runs a controlled turn with `autoTitle`, lets the owned post-turn write
+`session-title/<id>` (`{formatVersion:1, title}`), and reads that document back through a read-only commit-log coordinator.
+Note: the gateway's `session/list` title comes from `profile.meta.title` (rename), so auto titles are read from the document.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

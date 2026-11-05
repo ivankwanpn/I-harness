@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 263（auto title 文件）**：controlled turn 後 `session-title/<id>` 以 `{formatVersion:1,title}` 寫入 SCL，
+> 可由 read-only coordinator 讀回。`session/list` 的 title 來自 `meta.title`（rename），auto title 不在其中。
 > **round 262（legacy document read-through）**：SCL 的 `getDocument` 在文件不存在或 key 未寫入時 fallback 到 legacy
 > `*.doc.jsonl`；寫入後以 SCL sidecar 為準。既有 task 文件在切換 store 後仍可讀。
 > **round 261（project scope binding）**：configure → bind → state → navigation 在 SCL 通過；`bind` 沒有 unbind 路徑，
