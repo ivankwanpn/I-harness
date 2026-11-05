@@ -177,7 +177,10 @@ it("a failed completion flush overrides a persisted store candidate and complete
     expect(await run(current.tools, 'text(load("value"));')).toMatchObject({ text: "undefined" })
     const restored = mount(createSessionFrom(session), "owner")
     try { expect(await run(restored.tools, 'text(load("value"));')).toMatchObject({ text: "undefined" }) } finally { await restored.code.dispose() }
-  } finally { await current.code.dispose() }
+    // The failed terminal flush is retained as original recovery debt: the mount
+    // must not acknowledge its own finalization without a durable terminal receipt.
+    await expect(current.code.dispose()).rejects.toMatchObject({ code: "FACT_RECOVERY_REQUIRED" })
+  } finally { await current.code.dispose().catch(() => {}) }
 })
 
 it("validates restored JSON bounds and refuses non-JSON guest writes", async () => {

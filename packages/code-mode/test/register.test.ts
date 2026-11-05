@@ -34,20 +34,21 @@ it('awaits actual managed startup interruption and every cell output/store/termi
 
 it('retains actual guest completion across an unknown store receipt and Stop without fabricating a failed terminal', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-store-unknown-'))
-  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  let bodies = 0, finalizations = 0, key: BatchKey | undefined, blocked = true, armed = false
+  const backend = createJsonlBackend(root, {
+    wrapOwnedReconcile: reconcile => async (...args) => armed && blocked ? { kind: 'unknown', key: args[3].key } : reconcile(...args),
+    wrapOwnedBatch: append => async (...args) => {
+      const result = await append(...args)
+      if (armed && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) { key = args[3].key; return { kind: 'unknown', key } }
+      return result
+    },
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  let bodies = 0, finalizations = 0, key: BatchKey | undefined, blocked=true
   tools.register({ name: 'probe', description: '', inputSchema: {}, execute: async () => { bodies++; return 7 } })
   ctx.on('tools/post-execute', () => { finalizations++ })
-  const actual = backend.appendOwnedBatch!
-  const reconcile=backend.reconcileOwnedBatch!
-  backend.reconcileOwnedBatch=async(...args)=>blocked?{kind:'unknown',key:args[3].key}:reconcile(...args)
-  backend.appendOwnedBatch = async (...args) => {
-    const result = await actual(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) { key = args[3].key; return { kind: 'unknown', key } }
-    return result
-  }
+  armed = true
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
   try {
     await mount.ready!()
@@ -67,17 +68,19 @@ it('retains actual guest completion across an unknown store receipt and Stop wit
 
 it('keeps a real terminated cell unavailable until its original terminal receipt is reconciled', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-stop-receipt-'))
-  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  let key: BatchKey | undefined, terminals = 0, armed = false
+  const backend = createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const result = await append(...args)
+      if (armed && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'terminated')) { terminals++; key = args[3].key; return { kind: 'unknown', key } }
+      return result
+    },
+  })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
+  armed = true
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
-  let key: BatchKey | undefined, terminals = 0
-  const actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const result = await actual(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'terminated')) { terminals++; key = args[3].key; return { kind: 'unknown', key } }
-    return result
-  }
   try {
     const running = await tools.get('code_exec')!.execute({ code: 'await new Promise(() => {})', yield_time_ms: 0 }, { session: document.view, sessionId: id }) as { cell_id: string }
     await expect(tools.get('code_wait')!.execute({ cell_id: running.cell_id, terminate: true, yield_time_ms: 5000 }, { session: document.view })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })

@@ -69,6 +69,17 @@ round 189：`surface-publication`（7/7）與 `output-owner-boundaries`（3/3）
   標記暫緩）與 store 1。`output-owner-boundaries` 的 evidence 檔原本就會寫到
   `IH_OWNER_CONTROL_EVIDENCE_ROOT`，不需額外設定。
 
+round 190：code-mode 收尾兩檔。`register.test.ts` 的兩個 durable 案例（unknown store
+  receipt ＋ Stop、terminated receipt）用同一套 seam ＋ `armed`（`openManagedDocument` 之後）
+  遷移 → 12/12；round 135/136 記錄的 5s timeout 在 30s 設定下沒有再現。
+  `store.test.ts` 的單紅其實**不是** store 語義：body 斷言全過，紅的是 `finally` 的
+  `await current.code.dispose()`——terminal flush 失敗會 `reject` 該 cell 的 `fence`，
+  `finalizations.drain()` 因此回報 `FACT_RECOVERY_REQUIRED`。這是**正確的 fail-closed**
+  （沒有 durable terminal receipt 就不能承認 finalization），且同檔 line 94 的
+  nondurable 案例本來就以 `.catch(() => {})` 接受同一個債。修法：測試把這個債**顯式斷言**
+  （`expect(current.code.dispose()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})`）
+  再在 finally 吞掉重試，不改變產品語義。code-mode **28/28 檔、365/365 tests 全綠**。
+
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
 
@@ -81,9 +92,9 @@ round 189：`surface-publication`（7/7）與 `output-owner-boundaries`（3/3）
 > 下一個具體動作見文末「交接：round 32」與其後的 round 41–52 記錄。
 > **round 187 更新**：52 個套件已量測；**10 個由紅轉全綠**（instructions、schedule、
 > runtime-context、guard-retry、guard-repeat-tool、session-query、compaction、workspace、
-> provider、llm-openai）。**round 188–189**：code-mode 由 13 紅降到 **3 failed / 362 passed
-> （28 檔，2 紅檔：register 2、store 1）**——instruction-start-recovery 5/5、
-> surface-publication 7/7、output-owner-boundaries 3/3 全綠。剩餘紅：core-agent 33（seam 遷移類）、
+> provider、llm-openai）。**round 188–190**：**code-mode 28/28 檔、365/365 tests 全綠**
+> （由 13 紅）：instruction-start-recovery 5/5、surface-publication 7/7、
+> output-owner-boundaries 3/3、store 11/11、register 12/12。剩餘紅：core-agent 33（seam 遷移類）、
 > sdk 5、exec 1、acp 1、core-session 1（效能）、sandbox-windows-acl 2（native）。
 
 ## 為什麼先做這個
