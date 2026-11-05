@@ -544,6 +544,7 @@ round 150：`sandbox-policy` **3 檔 / 67 tests 全綠**、`tool-search` **2 檔
 round 151：`sandbox-local` **4 檔綠 / 2 檔 skipped，22 passed / 6 skipped**；`fs-lock`
 round 152：`credentials` **2 檔 / 23 passed + 1 skipped**、`harness-home` **1 檔 / 5 tests 全綠**。
 round 154：`output-retention` **5 檔 / 45 tests 全綠**；`sandbox-windows-acl` **1 檔紅 / 39 檔綠 /
+round 159：`sandbox` **9 檔 / 142 tests 全綠**、`sandbox-wsl` **8 檔綠 / 4 檔 skipped（63 passed / 20 skipped）**。
 round 155：`soft-sequence-settlement` 的 3 紅 unmask 後真因是 **`PROCESS_READ_UNAVAILABLE`**
   （建構後 patch backend），與 code-mode／guard-repeat-tool 同一類；單獨跑時無
   `TASK_TRANSITION_FAILED`（全跑才出現，屬順序敏感）。→ core-agent 的 cleanup 群多數可望以
