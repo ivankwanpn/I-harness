@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
@@ -53,5 +53,24 @@ it('hides an interrupted fork from every backend instance until it is published 
     expect(await backend.list()).toEqual(['source'])
     // A cold process sees the same durable state: the marker, not a warm set.
     expect(await createJsonlBackend(root).list()).toEqual(['source'])
+  } finally { await coordinator.close().catch(() => {}); await rm(root, { recursive: true, force: true }) }
+})
+
+it('clears a stale marker when a completed birth is observed (S-08)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-fork-stale-marker-'))
+  const backend = createJsonlBackend(root)
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await source(coordinator)
+    const forked = await forkSession(coordinator, 'source')
+    // Simulate a crash between the completion commit and the marker unlink.
+    await writeFile(join(root, `${forked.sessionId}.jsonl.publishing`), '')
+    const cold = createJsonlBackend(root)
+    expect(await cold.list()).toEqual(['source'])
+    // Observing the completed birth is the publication point; a later read
+    // repairs the visibility without any recovery operation.
+    await cold.read(forked.sessionId)
+    expect(await cold.list()).toEqual([forked.sessionId, 'source'].sort())
+    expect(await readdir(root)).not.toContain(`${forked.sessionId}.jsonl.publishing`)
   } finally { await coordinator.close().catch(() => {}); await rm(root, { recursive: true, force: true }) }
 })
