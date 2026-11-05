@@ -3,6 +3,10 @@
   **round 175 已修**：thinking 案補 user turn ＋ 對應 tool result；Responses 案把
   **round 176**：`llm-openai` 的 M72 Ⅲ 紅改為斷言「宣告 `measurementValidity:'invalid'`」
   round 177：`acp` 的 CLI stdio 紅真因——`session/prompt` 回 `-32603 Internal error`，
+  **round 178**：該訊息實際是 `CONTEXT_INPUT_STALE`，來自 `session-executor` 的 instructions
+  manager（`context/instructions/manager.ts:29` 等）。即 CLI 路徑下 instructions 快照被判定
+  stale（temp cwd 沒有 AGENTS.md 時的初始化問題）。下一步：追 manager 的初始 capture 與 CLI 的
+  requestContext 建立順序。
   `data.details = 'Observed instructions unavailable'`。即 CLI 的 prompt 路徑需要 instructions
   快照，而測試只 seed 了 provider。下一步：在 fixture 的 `IH_CONFIG_DIR` 補上 instructions
   （或確認是否產品回歸）。
