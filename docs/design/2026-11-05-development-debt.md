@@ -626,6 +626,9 @@ round 133：`compaction` 已由 3 紅轉 **33/33 檔、247/247 tests 全綠**—
   **round 134**：`managed-store-stop.test.ts` 同法遷移（計數器先宣告）→ **2/2 全綠**。
 round 138 全套重跑：`code-mode` **7 檔紅 / 21 檔綠（28 檔），83 failed / 282 passed（365）**
 round 182：`cell-output-owner-fixture.ts` 的第一個 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch`
+  **round 183**：fixture 加 `setBatchHook`／`setReconcileHook`（建構時安裝轉發 wrapper），
+  mount helper 改用 setter → **`cell-output-owner-lifetime` 45/45 全綠**；`output-owner-boundaries`
+  剩 3 筆仍 `PROCESS_READ_UNAVAILABLE`（改 patch 另一個方法）。
   → **`retention-callback-latches` 41 紅 → 84/84 全綠**（單一修正清掉 41 筆）。其餘兩個
   consumer（`cell-output-owner-lifetime`、`output-owner-boundaries`）用的是 fixture 後面
   line 115/127 的動態掛鉤，仍需 armed 重構。

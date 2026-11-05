@@ -12,10 +12,14 @@ export const output = (cellId: string, preview = cellId): CodeSettlementFact => 
 export async function fixture(mode: 'native' | 'memory') {
   const root = await mkdtemp(join(tmpdir(), 'ih-cell-owner-'))
   const issues: { events: unknown[]; key: unknown; bytesHex: string; outcome?: unknown }[] = []
-  const backend = mode === 'native' ? createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
-    const entry = { events: [...decodeFactBatch(args[3].bytes).events], key: args[3].key, bytesHex: Buffer.from(args[3].bytes).toString('hex'), outcome: undefined as unknown }
-    issues.push(entry); const result = await append(...args); entry.outcome = result; return result
-  } }) : undefined
+  let batchHook: ((append: any) => any) | undefined, reconcileHook: ((reconcile: any) => any) | undefined
+  const backend = mode === 'native' ? createJsonlBackend(root, {
+    wrapOwnedBatch: append => async (...args) => {
+      const entry = { events: [...decodeFactBatch(args[3].bytes).events], key: args[3].key, bytesHex: Buffer.from(args[3].bytes).toString('hex'), outcome: undefined as unknown }
+      issues.push(entry); const result = await (batchHook ? batchHook(append) : append)(...args); entry.outcome = result; return result
+    },
+    wrapOwnedReconcile: reconcile => async (...args) => (reconcileHook ? reconcileHook(reconcile) : reconcile)(...args),
+  }) : undefined
   const coordinator = backend && composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const document = coordinator ? await coordinator.openManagedDocument((await coordinator.create()).id) : undefined
   const owner: FactOwner = document ?? createNondurableFactOwner(createSession())
@@ -97,7 +101,8 @@ export async function fixture(mode: 'native' | 'memory') {
     } else { await facts.close(); await document?.close(); await coordinator?.close() }
     await save('cleanup', negative)
   }
-  return { owner, document, backend, facts, sources, stores, issues, admit, terminal, cleanup, live, root, trace, note, save, get drains() { return drains } }
+  return { owner, document, backend, facts, sources, stores, issues, admit, terminal, cleanup, live, root, trace, note, save, get drains() { return drains },
+    setBatchHook(hook: ((append: any) => any) | undefined) { batchHook = hook }, setReconcileHook(hook: ((reconcile: any) => any) | undefined) { reconcileHook = hook } }
 }
 
 /** The original native bytes are actually appended/synced. Withhold only the
@@ -106,13 +111,13 @@ export async function fixture(mode: 'native' | 'memory') {
 export async function unknownMountReceipt(kind: 'reference' | 'terminal' | 'required') {
   const f = await fixture('native'); await f.admit('A')
   if (kind === 'terminal') await f.admit('B')
-  const backend = f.backend!, append = backend.appendOwnedBatch!.bind(backend), reconcile = backend.reconcileOwnedBatch!.bind(backend)
-  let unresolved = true, batch: Parameters<typeof append>[3] | undefined
-  let receipt: Extract<Awaited<ReturnType<typeof append>>, { kind: 'committed' }>['receipt'] | undefined
+  const backend = f.backend!
+  let unresolved = true, batch: any
+  let receipt: any
   const target = (event: SessionEvent) => kind === 'reference' ? event.type === 'context/result-ref'
     : kind === 'terminal' ? event.type === 'code/cell' && event.cellId === 'B' && event.state === 'completed'
       : event.type === 'code/output' && event.cellId === 'mount-required'
-  backend.appendOwnedBatch = async (...args) => {
+  f.setBatchHook(append => async (...args: any[]) => {
     const result = await append(...args)
     if (decodeFactBatch(args[3].bytes).events.some(target)) {
       expect(batch).toBeUndefined(); batch = args[3]
@@ -123,15 +128,15 @@ export async function unknownMountReceipt(kind: 'reference' | 'terminal' | 'requ
       return { kind: 'unknown', key: batch.key }
     }
     return result
-  }
-  backend.reconcileOwnedBatch = async (...args) => {
+  })
+  f.setReconcileHook(reconcile => async (...args: any[]) => {
     expect(args[3]).toBe(batch)
     const result = await reconcile(...args)
     expect(result).toMatchObject({ kind: 'committed', receipt })
     const delivered = unresolved ? { kind: 'unknown' as const, key: args[3].key } : result
     f.note('mount-original-reconcile', { key: args[3].key, bytesHex: Buffer.from(args[3].bytes).toString('hex'), native: result, delivered })
     return delivered
-  }
+  })
   return { ...f, kind, releaseReceipt() { unresolved = false },
     get batch() { return batch! }, get receipt() { return receipt! },
     start(onCommit?: () => void) {
