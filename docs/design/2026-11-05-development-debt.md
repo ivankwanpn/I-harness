@@ -1,6 +1,8 @@
 # 開發債務清冊與 burn-down（2026-11-05）
   **round 174 定論**：在 `capture()` 內記錄事件後，兩個 marker 紅其實是 **`error` 事件**：
   **round 175 已修**：thinking 案補 user turn ＋ 對應 tool result；Responses 案把
+  **round 176**：`llm-openai` 的 M72 Ⅲ 紅改為斷言「宣告 `measurementValidity:'invalid'`」
+  → **14/14 檔、230/230 tests 全綠**。
   `function_call` 排在 `function_call_output` 前並統一 call_id → **`provider` 10/10 檔、176/176
   tests 全綠**。
   `{code:'INVALID_ARGUMENT', modelFailure:{reason:'message-order'}}` —— 請求在送出前就被

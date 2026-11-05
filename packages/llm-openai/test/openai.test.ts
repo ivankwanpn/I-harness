@@ -864,7 +864,9 @@ describe("M72 Ⅲ: response.completed's usage (openai)", () => {
     const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
-    expect(events.some((e) => e.type === "usage")).toBe(false)
+    // The string count is not adopted, and the invalid measurement is declared
+    // rather than silently dropped.
+    expect(events.filter((e) => e.type === "usage")).toEqual([{ type: "usage", usage: { measurementValidity: "invalid" } }])
     expect(events.at(-1)).toEqual({ type: "end" })
   })
 })
