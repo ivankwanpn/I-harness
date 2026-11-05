@@ -6,6 +6,10 @@ round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 ti
   **round 164 已實作**：`cancel-stop` 5 個 hook 遷到 seam ＋ armed 旗標 → **4/5 通過**；
   round 165 全套：`sdk` **5 failed / 114 passed（119）**（由 9 failed）。剩：CLI end-to-end、
   round 167：`Original prepared task caller unavailable` 來自 `subagent/src/index.ts:349`——
+   **round 169**：`launchEntry` 是在工具註冊時（`index.ts:418`，`tool.name==='spawn_agent'`）以
+  `bindPreparedTaskLaunchLeaf(tool, tool.execute)` 綁定的；若註冊後 registry 又包裝／替換 `execute`，
+  `launchEntry.enter(exec)` 就對不上。修法方向：綁定時改用呼叫當下的 `tool.execute`，或在
+  `enter` 失敗時以 `parentRegistry.get('spawn_agent')` 重新綁定一次。
   `launchEntry.enter(exec)` 回 undefined（spawn_agent 的 launch entry 與實際 exec 對不上），
   屬 sdk child-context fixture 的工具掛載／exec 身份問題。
   cleanup 1、`Original prepared task caller unavailable` 2、fork 邊界 1。
