@@ -498,7 +498,10 @@ baseline 仍為 456 rows，目前 381 rows、無 inert 警告。以下為當時�
    `owned-code-nested-workflow`、`owned-code-stop-retry`、`owned-metadata-fold`、
    `owned-plugin-causal`、`owned-prefilesystem`、`owned-rewind`、`owned-service-title-debt`
    等）下一輪分組跑。套件實際有 223 個 `*.test.ts`（不是 99），全套要用多輪或分組跑。
-另外 round 28 量了 `llm-seam`：**8 檔 / 53 tests 全綠**（2.35s）。`token-meter` 的量測在並行執行時出現 1 筆不穩定失敗（187/188），單獨重跑時 filter 行為不一致，留待下一輪重測。
+round 28/29 量了兩個小套件：
+
+- `token-meter`：**8 檔 / 53 tests 全綠**（2.4s）。
+- `llm-seam`：**22 檔 / 188 tests，1 紅**（21 檔綠）。唯一紅是 `terminal-ownership-contract.test.ts`：它期待 private SDK ownership bridge 的 production importer 只有 `['.', './internal/bedrock-terminal']`，實際收到 4 個（已有額外檔案 import）。這是未量測套件既有紅，列入第 5 項待修。
 5. 量測 `session-executor`（223 檔）、`desktop-gateway`（61 檔）、`subagent`、
    `agent-team` 的 red 清單，補進本文件。
 6. 全部轉綠後，才把 `verify:all` 的 full job 當成 gate；在那之前 CI 的必過項目
