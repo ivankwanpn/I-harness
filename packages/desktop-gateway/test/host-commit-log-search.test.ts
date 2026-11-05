@@ -30,5 +30,9 @@ it('searches a commit-log session transcript', async () => {
     expect(hits.hits.some(hit => hit.sessionId === created.sessionId && hit.snippet.includes('unique-search-token'))).toBe(true)
     const missing = await call('desktop/session/search', { query: 'token-that-is-not-there' }) as { hits: unknown[] }
     expect(missing.hits).toEqual([])
+    const contextHits = await call('desktop/context/search', { contextKind: 'sessions', query: 'unique-search-token', offset: 0 }) as { items: { kind: string; sessionId: string; excerpt?: string }[]; total: number }
+    expect(contextHits.total).toBe(1)
+    expect(contextHits.items[0]).toMatchObject({ kind: 'session', sessionId: created.sessionId })
+    expect(contextHits.items[0]!.excerpt).toContain('unique-search-token')
   } finally { await host.close() }
 }, 90000)

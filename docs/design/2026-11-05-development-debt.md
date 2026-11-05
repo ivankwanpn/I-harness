@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 349（context picker 搜尋）**：`desktop/context/search`（sessions）經 conversation query 命中 SCL session（含 excerpt）；
+> `context/read` 在此配置回空物件，暫不納入斷言。
 > **round 348（冷 diagnostics）**：`desktop/environment/diagnostics` 冷 session 為 `{live:false, sessionId, tools:[], roles:[]}`
 > （shell 區段依主機環境，不固定）。
 > **round 347（live todo 寫入）**：turn 之後 revision 1，帶 expectedRevision:1 寫入成功並回 revision 2。

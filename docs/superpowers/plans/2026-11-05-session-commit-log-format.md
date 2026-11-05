@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 92 (implemented 2026-11-06): context picker session search
+
+`desktop/context/search` with `contextKind:"sessions"` finds the commit-log session through the conversation query (the picker uses
+the same `SessionQuery`): `{items:[{kind:"session", sessionId, seq, excerpt}], total:1}`. `desktop/context/read` for that reference
+currently returns an empty object in this host configuration and is not asserted.
+
 ## Plan 91 (implemented 2026-11-06): cold diagnostics shape
 
 `desktop/environment/diagnostics` for a cold commit-log session reports `{live:false, sessionId}` with empty `tools` and `roles` (the
