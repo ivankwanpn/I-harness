@@ -195,3 +195,26 @@
 | D3 | BC01 的機制改為 log 內 intent（不變量不變） | 是 |
 | D4 | format 15 的 generation 遷移（讀舊寫新、舊檔不改寫） | 是 |
 | D5 | 切換順序：唯讀 dual-run → 寫入切換 → 刪除舊路徑 | 是 |
+
+---
+
+## 8. 遷移進度（2026-11-06 實作快照）
+
+| 步驟 | 狀態 | 證據 |
+|---|---|---|
+| 1. 讀（13／14 reader、task doc） | ✅ | commit-coordinator.test.ts（legacy read＋首寫遷移）、commit-dual-run-corpus.test.ts（events／documents／meta 完全一致） |
+| 2. 寫（首寫產生新 generation，舊位元組不動） | ✅ | 同上；legacy 檔位元組以 readFile 比對不變 |
+| 3. 驗證（golden corpus dual-run） | ✅ | 8 種 session（空／訊息／internal／turn／tools／steps／delivery／兩輪＋title） |
+| 4. 切換（read-only → write → 刪除舊路徑） | 進行中 | gateway／CLI 以 IH_SESSION_STORE=commit-log 選用 SCL；legacy 仍是預設 |
+| 5. 回滾（忽略新 generation） | ✅ | 舊檔從未改寫 |
+
+切換前尚待補齊：
+
+- **selected results**：SCL 回報 SELECTED_RESULTS_UNSUPPORTED（gateway 已 guard），需移植或接受功能降級；
+- inspectChildBootstrap：caller 有 guard，尚未提供；
+- compaction：SCL 已可完整執行（長歷史 E2E 通過），僅測試 fixture 的摘要長度需注意；
+- legacy 刪除（~7,600 行）：需在預設切換後進行，並以本文件的 corpus gate 為前置。
+
+SCL 已在真實 host 驗證的產品面：session 建立／列表／改名／封存／還原／刪除、prompt turn、模型切換、fork（含 nested）、
+rewind、schedule CRUD、execution surface（訂閱／snapshot／changed 通知）、project bind／move、approval rules state、
+auto title 文件、execution／tasks／processes 讀取、compaction、CLI run＋sessions。
