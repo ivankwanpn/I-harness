@@ -38,6 +38,19 @@ afterEach(async () => {
 })
 
 describe('commit coordinator', () => {
+  it('releases the ownership pin when the coordinator closes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-commit-pin-close-'))
+    roots.push(root)
+    const first = createCommitCoordinator({ root, acquireDeadlineMs: 500 })
+    await first.create({ sessionId: 's1' })
+    await first.openManagedDocument('s1')
+    await first.close()
+    const second = createCommitCoordinator({ root, acquireDeadlineMs: 500 })
+    coordinators.push(second)
+    const document = await second.openManagedDocument('s1')
+    expect(document).toBeTruthy()
+  })
+
   it('reports a failed enqueued append instead of dropping it silently', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-commit-enqueue-'))
     roots.push(root)

@@ -1190,6 +1190,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 66 (implemented 2026-11-06): pin-release regression test
+
+`commit-coordinator.test.ts` opens a coordinator, creates a session, opens its managed document, closes the coordinator, and opens a
+**second** coordinator on the same root which must be able to take the document. Reverting the fix reproduces
+`another holder owns the session lock … .capabilities` on the second open, so the test pins the leak.
+
 ## Plan 65 (fixed 2026-11-06): coordinator close releases ownership pins
 
 Root cause of Plan 64: `close()` closed the retained documents directly instead of going through `closeManagedDocument`, so the
