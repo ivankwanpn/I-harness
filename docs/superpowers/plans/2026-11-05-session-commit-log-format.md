@@ -1190,6 +1190,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 74 (implemented 2026-11-06): batch archive/delete edge semantics
+
+`host-commit-log-batch-edges.test.ts` pins the batch semantics on the commit log: archiving an already archived session is a
+success (idempotent), deleting an archived session succeeds and removes it from `desktop/session/archived`, and restoring a
+deleted session fails with `commit log for session "<id>" does not exist` instead of resurrecting it.
+
 ## Plan 73 (implemented 2026-11-06): batch move from a second host
 
 `host-commit-log-batch-move.test.ts`: a second host re-configures the projects (project configuration is main-process state, and the

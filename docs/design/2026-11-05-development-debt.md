@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 329（batch 邊界）**：重複 archive 為成功（idempotent）、刪除已封存 session 成功、restore 已刪除 session 失敗
+> （does not exist，不復活）。
 > **round 328（跨 host batch move）**：重開的 host 需重新 configure 專案（main-process state），之後 move 綁定／未綁定 session
 > 都成功；錯誤的 expectedOwners 被拒（Session project owner changed）。
 > **round 327（metadata 跨重啟）**：title／archive／project binding 在 host 重啟後仍一致（archived 列含 title 與 projectId，
