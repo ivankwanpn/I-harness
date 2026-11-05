@@ -80,7 +80,7 @@ export { createManagedSessionState, isManagedFactOwner } from './managed/view.ts
 export { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, factPrefixDigest, readFactJournal, validJournalMetadata, validJournalPrefix } from './serialization/fact-journal.ts'
 export { captureFactGroup, resolveFactGroup, modelExchangeGroup } from './managed/groups.ts'
 export { validContextReductionDraft } from './managed/reduction.ts'
-export { validRuntimeContextRecord, validateRuntimeContextRecord, runtimeContextDigest, renderRuntimeContext } from './events/runtime-context.ts'
+export { validRuntimeContextRecord, runtimeContextDigest, renderRuntimeContext } from './events/runtime-context.ts'
 export type { RuntimeContextRecordV1 } from './events/runtime-context.ts'
 export type { RuntimeContextFactSource, RecoverySettlementFact } from './managed/ports.ts'
 export type { CapturedFactGroup, FactGroupDraft, AcceptedDraft, MetadataFact, LifecycleFact } from './managed/groups.ts'

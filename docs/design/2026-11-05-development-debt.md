@@ -360,7 +360,8 @@ multi-line export list 內的 type 條目 → **24 NEW / 387 rows**。接著把 
 `core-tools#ToolPrepareIdentity`、`runtime-context#PreparedRuntimeContextReader`、
 `token-meter#CHARS_PER_TOKEN`，皆附 dated reason/source）→ **19 NEW**（無 inert 警告）。
 再處理第一個「測試專用」項：`settings#SettingsWatchError` 讓 `watch-lease.test.ts`
-改從內建模組 import type，入口不再 export → **18 NEW / 386 rows**（測試 14/14 綠）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+改從內建模組 import type，入口不再 export → **18 NEW / 386 rows**（測試 14/14 綠）。再移除 `core-session`
+的 `validateRuntimeContextRecord`（只在定義模組內使用）→ **17 NEW / 385 rows**。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---
