@@ -1166,6 +1166,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 47 (implemented 2026-11-06): large-session read cost
+
+Extending the benchmark with a 5,000-event session (about 1.1 MB) shows ten warm reads in **7 ms total** — the fold itself is
+sub-millisecond, so caching the folded view is not warranted; the read-open scan cache already covers the parse cost and the OS
+page cache covers the bytes.
+
 ## Plan 46 (implemented 2026-11-06): scan cache measurement
 
 `scan-cache-bench.test.ts` builds 40 sessions x 30 events and times a second full read pass: **17 ms with the cache disabled
