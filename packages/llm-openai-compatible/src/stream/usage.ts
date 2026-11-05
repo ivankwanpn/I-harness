@@ -30,5 +30,6 @@ export function mapUsage(raw: unknown): LLMUsage | undefined {
     if (typeof cached === "number" && Number.isFinite(cached)) out.cacheReadTokens = cached
   }
   if (out.inputTokens !== undefined && Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0) out.inputTokenSemantics = "includes-cache"
+  if (typeof out.inputTokens === "number" && !(Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0)) out.measurementValidity = "invalid"
   return Object.keys(out).length > 0 ? out : undefined
 }

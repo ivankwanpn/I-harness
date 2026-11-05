@@ -36,7 +36,9 @@ describe.each(factories)("$name input accounting metadata", ({ semantics, input,
 
   it.each([-1, 1.5])("preserves invalid raw input %s without declaring accounting", async (count) => {
     vi.stubGlobal("fetch", async () => new Response(`data: ${JSON.stringify(frame({ [input]: count }))}\n\n`))
-    expect(await reports(create({ model: "fixture-model", apiKey: "fixture-key" }))).toEqual([{ inputTokens: count }])
+    // Invalid raw numbers keep the raw value, declare no accounting semantics,
+    // and are marked invalid for measurement consumers.
+    expect(await reports(create({ model: "fixture-model", apiKey: "fixture-key" }))).toEqual([{ inputTokens: count, measurementValidity: "invalid" }])
   })
 })
 
