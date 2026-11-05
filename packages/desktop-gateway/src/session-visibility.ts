@@ -50,7 +50,7 @@ export function createConversationQuery(coordinator: SessionCoordinator, query: 
   return {
     lineage,
     async search(text, options = {}) {
-      const limit = Math.min(options.limit ?? 20, 100)
+      const limit = Math.max(0, Math.min(options.limit ?? 20, 100))
       const listed = options.sessionId ? [options.sessionId] : await coordinator.list()
       // `subtreeOf` restricts the search to a session and its descendants; the
       // per-session query is then asked without the filter.

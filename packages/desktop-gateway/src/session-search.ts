@@ -19,7 +19,7 @@ const snippetAround = (body: string, at: number, length: number): string => {
 export function createCommitLogSearchFallback(coordinator: SessionCoordinator): SessionSearchFallback {
   return async (sessionId, text, limit) => {
     const needle = text.trim().toLowerCase()
-    if (!needle) return []
+    if (!needle || limit <= 0) return []
     let events: readonly { type: string; seq?: number; text?: unknown; output?: unknown; args?: unknown }[]
     try { events = (await coordinator.snapshot!(sessionId)).session.events } catch { return [] }
     const hits: SearchHit[] = []

@@ -1197,6 +1197,13 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 86 (implemented 2026-11-06): search limits are clamped from below
+
+`createConversationQuery` clamped only the upper bound, so `limit: -5` reached `slice(0, -1)` and returned all-but-the-last hit. The
+conversation limit is now `Math.max(0, Math.min(limit ?? 20, 100))` and the fallback returns `[]` for `limit <= 0`.
+`session-search-tool.test.ts` asserts `0` and `-5` return no hits while `1000` is clamped to 100 (the single hit still returns).
+
 ## Plan 85 (implemented 2026-11-06): lineage tool and snippet truncation
 
 The same tool set is exercised further: the `lineage` tool answers ancestors/children from coordinator metadata, and a match in the

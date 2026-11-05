@@ -29,6 +29,13 @@ it('session_search reaches the commit-log fallback', async () => {
   expect(missing.hits).toEqual([])
 })
 
+it('clamps search limits', async () => {
+  const tool = build().find(entry => entry.name === 'session_search')!
+  expect((await tool.execute({ query: 'needle', limit: 0 }, {}) as { hits: unknown[] }).hits).toEqual([])
+  expect((await tool.execute({ query: 'needle', limit: -5 }, {}) as { hits: unknown[] }).hits).toEqual([])
+  expect((await tool.execute({ query: 'needle', session_id: 'child', limit: 1000 }, {}) as { hits: unknown[] }).hits).toHaveLength(1)
+})
+
 it('truncates a snippet around the match', async () => {
   const tool = build().find(entry => entry.name === 'session_search')!
   const result = await tool.execute({ query: 'needle', session_id: 'long' }, {}) as { hits: { snippet: string }[] }
