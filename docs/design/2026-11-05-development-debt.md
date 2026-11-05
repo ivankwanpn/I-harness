@@ -180,6 +180,13 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 205（Q1 反轉）**：實驗證明 **成功 bootstrap（`kind: 'ready'`）本來就會建立
+> `task-target.doc.jsonl`**（`DBGEXISTS after-ready=yes`）。所以 stage-swap 的 ENOENT 斷言是
+> **自相矛盾**：line 30 的 ready 已經寫出該檔，line 36 卻要求它不存在。已改成「blocked resume
+> 必須**位元組不變**」，stage-swap **1/1 全綠**。stage-debt 同型修正後第一紅消失，但露出下一個
+> 真紅：blocked resume 之後 `pinOwnership('target')` **不再被拒**（測試期待 reject）→
+> 「保留 claim 直到明確 resume」這條語義待查（不是 Q1）。
+> 我先前「7 個 ENOENT 一致 ⇒ 產品 bug」的推論**撤回**。
 > **round 203（Q1 再縮小）**：`openOwnedTask`（backend-factory.ts:608-624）只包一個
 > **唯讀** observation（`opener` 只接受 `'r'|'r+'`，見 task-document-observation.ts:12），
 > 所以建立不是來自 open/observe；剩下的嫌疑是 transition 在 recovery 之後仍走到

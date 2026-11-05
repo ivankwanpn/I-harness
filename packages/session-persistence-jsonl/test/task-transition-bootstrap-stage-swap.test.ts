@@ -27,13 +27,16 @@ it('refuses a same-byte stage replacement during the actual tracked read', async
   const request = { invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) }, target: { kind: 'new' as const }, metadata: {}, lineage: { origin: 'fork' as const, parentSession: 'parent' }, seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' as const }, records: [] } }
   const guards = { assertCurrent() {}, dependencies: { async confirm() { throw Error('unused') }, async reconcile() { throw Error('unused') } } }
   const original = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  try { expect((await original.bootstrapSemanticTarget(request, guards)).kind).toBe('ready') } finally { await original.close() }
+  let documentBytes: Buffer | undefined
+  // A ready bootstrap owns the task document, so the blocked resume below must
+  // leave those exact bytes alone instead of proving the file never existed.
+  try { expect((await original.bootstrapSemanticTarget(request, guards)).kind).toBe('ready'); documentBytes = await readFile(join(root,'task-target.doc.jsonl')) } finally { await original.close() }
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   fault.target = bootstrapPaths(join(root,'target.jsonl'),request.invocation).stage; fault.moved = join(root,'saved-stage'); fault.active = true
   let failure: unknown
   try {
     expect((await coordinator.resumeSemanticTarget(request.invocation,guards)).kind).toBe('blocked')
-    await expect(readFile(join(root,'task-target.doc.jsonl'))).rejects.toMatchObject({code:'ENOENT'})
+    expect(await readFile(join(root,'task-target.doc.jsonl'))).toEqual(documentBytes)
     await unlink(fault.target); await rename(fault.moved,fault.target)
     expect((await coordinator.resumeSemanticTarget(request.invocation,guards)).kind).toBe('already-ready')
   } catch (error) { failure = error } finally {
