@@ -30,11 +30,11 @@ it('searches a commit-log session transcript', async () => {
     expect(hits.hits.some(hit => hit.sessionId === created.sessionId && hit.snippet.includes('unique-search-token'))).toBe(true)
     const missing = await call('desktop/session/search', { query: 'token-that-is-not-there' }) as { hits: unknown[] }
     expect(missing.hits).toEqual([])
-    const contextHits = await call('desktop/context/search', { contextKind: 'sessions', query: 'unique-search-token', offset: 0 }) as { items: { kind: string; sessionId: string; excerpt?: string }[]; total: number }
+    const contextHits = await call('desktop/context/search', { contextKind: 'sessions', query: 'unique-search-token', offset: 0 }) as { items: { kind: string; sessionId: string; seq: number; excerpt?: string }[]; total: number }
     expect(contextHits.total).toBe(1)
     expect(contextHits.items[0]).toMatchObject({ kind: 'session', sessionId: created.sessionId })
     expect(contextHits.items[0]!.excerpt).toContain('unique-search-token')
-    const item = contextHits.items[0] as { sessionId: string; seq: number }
+    const item = contextHits.items[0]!
     const ctxRead = await call('desktop/context/read', { reference: { kind: 'session', workspaceId: workspace, sessionId: item.sessionId, seq: item.seq } }) as { text: string; truncated: boolean }
     expect(ctxRead.text).toContain('unique-search-token')
     expect(ctxRead.truncated).toBe(false)
