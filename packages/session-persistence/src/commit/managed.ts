@@ -20,7 +20,8 @@ function receipt(owner: { sessionId: string; incarnation: string }, key: ReturnT
   return { owner: { ...owner }, key: { ...key }, lastSeq: key.firstSeq + key.count - 1, prefixDigest }
 }
 
-function createFactBackend(log: CommitLog): PersistenceBackend {
+export type FactBackendControl = { suspended: boolean }
+function createFactBackend(log: CommitLog, control?: FactBackendControl): PersistenceBackend {
   const prefix = () => commitPrefix(log)
   return {
     id: 'jsonl',
@@ -30,7 +31,9 @@ function createFactBackend(log: CommitLog): PersistenceBackend {
       const current = prefix()
       if (decoded.key.previousPrefixDigest !== current.prefixDigest || decoded.key.firstSeq !== current.eventCount) return { kind: 'conflict' as const, key: decoded.key }
       owner.beforeIssue()
+      if (control) control.suspended = false
       await log.append({ entries: decoded.events, ops: [{ kind: 'batch', id: decoded.key.batchId, prefixDigest: decoded.prefixDigest }] })
+      if (control) control.suspended = true
       return { kind: 'committed' as const, receipt: receipt(owner.owner, decoded.key, decoded.prefixDigest) }
     },
     async reconcileOwnedBatch(_id: string, owner: { owner: { sessionId: string; incarnation: string } }, _prefix: unknown, batch: { bytes: Uint8Array }) {
@@ -59,11 +62,11 @@ export type CommitManagedContext = {
   readonly ownership: Ownership
 }
 
-export function createCommitManagedContext(_sessionId: string, log: CommitLog, deps: CommitManagedDeps): CommitManagedContext {
+export function createCommitManagedContext(_sessionId: string, log: CommitLog, deps: CommitManagedDeps, control?: FactBackendControl): CommitManagedContext {
   const meta = deps.metaOf(log)
   const events: SessionEvent[] = log.view().entries.map(event => ({ ...event }))
   preflightSessionFormat(CURRENT_FORMAT_VERSION, events, meta)
-  return { meta, source: buildSession(meta, events), prefix: commitPrefix(log), backend: createFactBackend(log), ownership: deps.ownership }
+  return { meta, source: buildSession(meta, events), prefix: commitPrefix(log), backend: createFactBackend(log, control), ownership: deps.ownership }
 }
 
 const closed = () => Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
@@ -77,8 +80,8 @@ export function openCommitManagedDocument(sessionId: string, log: CommitLog, dep
 
 /** The execution attachment's document: constructed from the restored state so
  *  the document owns a delivery observation the execution state can fence. */
-export function openCommitExecutionDocument(sessionId: string, log: CommitLog, deps: CommitManagedDeps, state: object, incarnation: string): ManagedDocument {
-  const context = createCommitManagedContext(sessionId, log, deps)
+export function openCommitExecutionDocument(sessionId: string, log: CommitLog, deps: CommitManagedDeps, state: object, incarnation: string, control?: FactBackendControl): ManagedDocument {
+  const context = createCommitManagedContext(sessionId, log, deps, control)
   const held: HeldFactOwner = heldFactOwner({ sessionId, incarnation }, context.ownership, () => { if (!log.open) throw closed() })
   return createManagedDocument(
     sessionId, undefined, context.prefix, context.backend, context.ownership,

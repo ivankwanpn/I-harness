@@ -10,22 +10,29 @@ const closed = () => Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSE
 
 /** Restoration source over the commit log: the fold is the history, a commit is
  *  the only write, and the prefix is always derived from the log. */
-function executionSource(log: CommitLog, context: CommitManagedContext): OriginalConversationRestorationSource {
+function executionSource(log: CommitLog, context: CommitManagedContext, control: { suspended: boolean }): OriginalConversationRestorationSource {
   const events = (): SessionEventView[] => log.view().entries as unknown as SessionEventView[]
   const assertCurrent = () => { if (!log.open) throw closed() }
-  // The execution fence compares this exact object across reads; it is replaced
-  // only when a committed batch advances the log.
+  // The execution fence compares this exact object across reads. It is stable
+  // while the log is unchanged and replaced when ANY commit advances it — the
+  // execution state's own installs and raw appends from other owners alike —
+  // so a prepared batch is always issued against the current prefix.
   let prefix = Object.freeze(commitPrefix(log))
+  const currentPrefix = () => {
+    const view = log.view()
+    if (!control.suspended && prefix.eventCount !== view.entries.length) prefix = Object.freeze(commitPrefix(log))
+    return prefix
+  }
   return {
     get formatVersion() { return CURRENT_FORMAT_VERSION },
     get header() { return context.source.header },
-    get prefix() { return prefix },
+    get prefix() { return currentPrefix() },
     assertCurrent,
     async consume(accept) { for (const event of events()) { assertCurrent(); await accept([event]) } },
     async readEvent(ordinal) { assertCurrent(); const event = events()[ordinal]; if (!event) throw new FactRecoveryRequiredError(); return event },
     async settle() { assertCurrent() },
     async close() { /* no retained read resources */ },
-    appendCommitted() { prefix = Object.freeze(commitPrefix(log)) },
+    appendCommitted() { control.suspended = false; prefix = Object.freeze(commitPrefix(log)) },
   }
 }
 
@@ -33,7 +40,8 @@ function executionSource(log: CommitLog, context: CommitManagedContext): Origina
  *  from the folded history, then construct the document FROM that state so its
  *  delivery observation belongs to the execution fence. */
 export async function openCommitExecution(sessionId: string, log: CommitLog, deps: CommitManagedDeps, foldFactory?: Parameters<typeof restoreManagedExecutionState>[2]): Promise<ManagedExecutionAttachment> {
-  const context = createCommitManagedContext(sessionId, log, deps)
+  const control = { suspended: false }
+  const context = createCommitManagedContext(sessionId, log, deps, control)
   const token = Object.freeze({ sessionId, incarnation: randomUUID() })
   const binding = {
     token,
@@ -51,9 +59,9 @@ export async function openCommitExecution(sessionId: string, log: CommitLog, dep
       }
     },
   }
-  const state = await restoreManagedExecutionState(executionSource(log, context), binding as never, foldFactory)
+  const state = await restoreManagedExecutionState(executionSource(log, context, control), binding as never, foldFactory)
   // createManagedDocument binds the execution core to this exact document.
-  const document = openCommitExecutionDocument(sessionId, log, deps, state as unknown as object, token.incarnation)
+  const document = openCommitExecutionDocument(sessionId, log, deps, state as unknown as object, token.incarnation, control)
   return Object.freeze({
     identity: state.identity,
     owner: document,

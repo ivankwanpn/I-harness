@@ -884,6 +884,14 @@ provenance objects with different key insertion order failed. The dump showed ex
 (`{authority,kind,producer,scope}` vs `{kind,authority,scope,producer}`). `input-preparation.ts` now compares with
 `canonicalJsonData`; the host turn test is re-enabled and passed 5/5 runs, and the conversation suites (27 tests) pass.
 
+**Writer prefix (same round):** the execution fence compares the restoration source's `prefix` object by identity. It was a
+cached object that only changed on the execution state's own installs, so a raw append from another owner (delivery drain)
+desynchronised it. The getter now re-reads the log when the event count changed, except while a batch is between `append` and
+`install` (`control.suspended`, shared by the fact backend and the source). The host turn test is stable at 5/5.
+
+**Plan 11 repro:** schedule create after a turn (`desktop/schedule/create`, a live tool write) fails with
+`Gateway plugin refresh requires recovery` on SCL; kept as a skipped test (`host-commit-log-schedule.test.ts`).
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
