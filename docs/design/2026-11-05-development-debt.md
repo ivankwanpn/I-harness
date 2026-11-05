@@ -136,6 +136,12 @@ backend、in-memory fake backend「Original JSONL backend required」、legacy-o
    （目前被還原；把 import 改回 composed helper 即可重現）。
    建議：在讀取/複製路徑做**迭代式深度檢查**，超過上限回明確
    `SESSION_EVENTS_TOO_DEEP`；或在 tool args admission 就限制深度。
+   **已緩解（`9c4e1bf2`）**：cold-load 的 JSON round-trip 現在捕捉 `RangeError`，
+   回 `code: SESSION_EVENTS_TOO_DEEP`（cause 保留 RangeError），且
+   transition wrapper 會保留該 code。probe（6000 層）：
+   `CODE SESSION_EVENTS_TOO_DEEP | CAUSE RangeError`。
+   **仍欠**：磁碟上深層 args 會話的端到端回歸測試（重現點
+   `managed-native-replay.test.ts:41`），以及 admission 端的深度上限決策。
 
 2. **P1：`createJsonlSessionCoordinator` 在 format 14 無法建立/開啟會話**
    `backend-factory.ts:42-49` 組裝時沒有 `transitionStorage`，任何
