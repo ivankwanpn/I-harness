@@ -189,6 +189,81 @@ reachability 仍是 71 NEW（沒有新增 row）。
 
 ---
 
+## 償還：round 7（待辦第 2 項，2026-11-05）
+
+依 round 6 的決策移除 `createJsonlSessionCoordinator`（`session-persistence-jsonl/src/index.ts`
+不再 export，`backend-factory.ts` 刪除實作）。14 個測試檔全部遷移：
+
+| 套件 | 檔案 | 前 → 後 |
+|---|---|---|
+| jsonl | `process-read-composition` | 0/12 → 12/12 |
+| jsonl | `task-transition-managed-header-retry` | 0/1 → 1/1 |
+| jsonl | `canonical-connected-exclusion` | process-only 變體隨建構子消失，13/13 |
+| jsonl | `task-d-repair-selected-capability` | generic 改用 core 建構子，3/3 |
+| jsonl | `archive-stream` | composed 建構子改用 transition；42 中仍 1 個既有 hang |
+| jsonl | `bootstrap-stage-debt`／`-stage-swap`／`-managed-header-confirm`／`-stage-revision` | setup 改 transition 建構子；紅因轉為 bootstrap 語義（見下） |
+| desktop-gateway | `host-publication` | 0/21 → 21/21（同檔 legacy 建構子一併換掉） |
+| desktop-gateway | `process-query` | 2/2 |
+| desktop-gateway | `process-native-bridge` | 0/1 → 1/1 |
+| session-executor | `process-result-integration` | 0/1 → 1/1 |
+| subagent | `task-owned-load` | generic 變體改用 core 建構子；該檔 22/37 仍是 5s timeout（套件缺 vitest.config，見下） |
+
+### `process-read-composition` 一併解掉 round 6 的 lineage 衝突
+
+- malformed seed boundary（-1／0.5／'1'／null）：**cold process setup 與 managed recovery
+  都拒絕**——format 14 的 recovery 是 task transition，malformed seed 是
+  `Invalid task history scope`（包在 `TASK_TRANSITION_FAILED` 內）。
+- well-formed inherited boundary（1）：cold setup 拒絕、managed recovery 成功。
+- lineage-only（缺 `seedLength`）：create 拒絕；**手寫** artifact 仍可走 cold process lane
+  （視為 0），managed recovery 拒絕（strict history reader）。
+
+### round 7 的新發現（未修，歸第 4 項）
+
+- `bootstrap-stage-debt`：setup 走 transition 建構子後 task document 已存在，舊斷言
+  「blocked resume 後 doc 不存在」失效；應改成「blocked resume 不改寫 doc」。
+- `bootstrap-stage-swap`／`stage-revision`：faulted resume 後重試成功，但
+  `coordinator.close()` 拋 `Coordinator cleanup is unresolved`——retained cleanup debt
+  沒被 close 收斂。
+- `managed-header-confirm`：setup 已完成的 bootstrap 讓 cold open 的 header sync 不再
+  落在 `doc:task-target` lease 內（`protectedAtSync === false`）。
+- subagent 套件沒有 `vitest.config.ts`（5s 預設）：`task-owned-load` 單檔在空載下仍有
+  22/37 個「Test timed out in 5000ms」，實際每個測試要 2.5–4.6s。**不要直接複製 jsonl 的
+  30s**：本輪試過同一個 config，該檔 15 分鐘沒有任何輸出（5s 版 151 秒跑完），已還原；
+  timeout 與可能的同步 hot loop 要單獨查（第 5 項量測 subagent 時處理）。
+
+### 第 3 項（A 類）開工：5 檔完成
+
+每檔都用 `createJsonlBackend` 的 pre-bind seam（`wrapOwnedBatch`／`wrapOwnedReconcile`）
+取代建構後的 `backend.appendOwnedBatch = ...`，並改走 composed 測試 helper：
+
+| 檔案 | 前 → 後 | 用的 seam |
+|---|---|---|
+| `cleanup-diagnostic` | 0/4 → 4/4 | `wrapOwnedBatch` |
+| `required-source-ports` | 0/2 → 2/2 | `wrapOwnedBatch` |
+| `recoverable-source-hold` | 0/2 → 2/2 | `wrapOwnedBatch` |
+| `coalesced-recovery` | 0/4 → 4/4 | `wrapOwnedBatch` + `wrapOwnedReconcile` |
+| `selected-results-denials` | 5/9 → 9/9 | `wrapOwnedBatch` |
+
+剩 6 檔（`bootstrap-physical`、`bootstrap-capture-physical`、`context-format`、
+`context-reduction`、`retained-format-ownership`、`current-context-predecessors`）——
+後兩者與 bootstrap 兩檔同時涉及 legacy upgrade／bootstrap 語義，不是單純換 seam。
+
+**量測（round 7 結束，空載重跑）**：`session-persistence-jsonl` 全套
+**257 failed / 600 passed / 17 skipped（29 個紅檔，共 98 檔）**。
+
+- 第 2 項（建構子移除）後是 273 failed / 584 passed（34 紅檔）：差異恰好是
+  `process-read-composition`（-12 failed、+12 passed）、
+  `task-transition-managed-header-retry`（-1、+1），加上
+  `canonical-connected-exclusion` 少一個 process-only 變體（總數 875 → 874）。
+- 第 3 項的 5 檔再降 16 個紅測試（4／2／2／4／4），紅檔 34 → 29。
+- round 6 結束時是 286 failed / 572 passed（36 紅檔）。
+
+**其他 gate（round 7）**：全庫 `pnpm -r --no-bail typecheck` 82 packages 全綠；
+boundaries 147/147；reachability 432 rows、70 NEW（round 6 是 71，移除的 export row
+已消失）、104 baseline rows 消失。
+
+---
+
 ## 發現的產品 bug（本輪新增，依嚴重度）
 
 1. **P0：deep-JSON 冷載入會 `RangeError` 崩潰**
@@ -216,6 +291,8 @@ reachability 仍是 71 NEW（沒有新增 row）。
    （desktop-gateway、session-executor、subagent、jsonl）。
    建議：讓它要求 `TaskTransitionConfiguration` 參數，或直接移除 export
    （私有套件，無外部使用者）。
+   **已修（round 7）**：export 與實作移除，14 個測試檔改走 composed 建構子；
+   reachability 的 export row 也跟著消失。詳見上方量測。
 
 3. **P1：`deleteOwnedSession` 先標記刪除、再 drain 已接受的寫入**
    `delete-owned.test.ts:40`：`Session is deleting or deleted`
@@ -286,14 +363,14 @@ reachability 仍是 71 NEW（沒有新增 row）。
 ## 待辦順序（下一輪起）
 
 1. ~~修 P0（deep-JSON）與 P1 #3/#4，各補一個回歸測試。~~ → round 6 完成（見上）。
-2. 決定 #2 的 API 去留（移除或補參數），同步清掉 15+ 測試的建構子。
-   **round 6 已決定：移除 export。** `createJsonlSessionCoordinator` 沒有 production
-   caller（只有 14 個測試檔），且它建不出可用的 format-14 coordinator；
-   `composeJsonlTaskTransitionCoordinator`（測試經 `test/helpers/composed.ts`）已是
-   唯一合格入口。實作時逐套件把那 14 檔改成 composed helper 並各自驗證
-   （desktop-gateway 3、subagent 1、session-executor 1、jsonl 9）。
+2. ~~決定 #2 的 API 去留（移除或補參數），同步清掉 15+ 測試的建構子。~~
+   → round 7 完成（移除 export，14 檔遷移，見上）。
 3. A 類測試（建構後 monkeypatch）逐檔改用 pre-bind seam；每檔一次 PR/commit，
    並用本文件的 `test-env` 指令驗證。
+   **round 7：11 檔中 5 檔完成**（`cleanup-diagnostic`、`required-source-ports`、
+   `recoverable-source-hold`、`coalesced-recovery`、`selected-results-denials`）；
+   剩 `bootstrap-physical`、`bootstrap-capture-physical`、`context-format`、
+   `context-reduction`、`retained-format-ownership`、`current-context-predecessors`。
 4. B 類 predecessor 語義決策：若 composed 升級 13→14 是正確行為，更新
    `child-bootstrap-predecessor`、`semantic-codec2-predecessor` 的位元組斷言；
    若否，回頭修產品。
@@ -316,11 +393,14 @@ node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence test
 node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exec vitest run test/managed-native-replay.test.ts test/delete-owned.test.ts
 ```
 
-## 交接：2026-11-05 round 6
+## 交接：2026-11-05 round 7
 
-待辦第 1 項完成（P0 e2e、P1 #3/#4 各有回歸），第 2 項的 API 決策已寫在上方
-（移除 `createJsonlSessionCoordinator`，尚未實作）。工作樹狀態以本節所在的 commit
-為準；下一輪從第 2 項的實作開始，逐套件遷移那 14 個測試檔。
+待辦第 1、2 項完成，第 3 項（A 類）完成 5／11 檔。下一輪續做其餘 6 檔：
+`bootstrap-physical`、`bootstrap-capture-physical`、`context-format`、
+`context-reduction`、`retained-format-ownership`、`current-context-predecessors`
+（後兩者與 bootstrap 兩檔同時涉及 legacy upgrade／bootstrap 語義，先做
+`context-format`／`context-reduction` 的 seam 與 code-based 斷言）。第 4 項的
+bootstrap 語義發現已列在上方。
 
 ## 交接：2026-11-05 round 5（歷史）
 
