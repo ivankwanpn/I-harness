@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 272（compaction E2E）**：以 host 建立的長歷史（8 輪長回覆）在 SCL 上 compaction 成功
+> （`compacted:true, publication:'committed'`）。先前的 assembly 失敗來自直接 seed 原始事件，非 compaction 本身。
 > **round 271（compaction 尺寸與進度檢查）**：`retention-output` 是摘要長度檢查（≥ minSummaryChars／≤ maxTokens*4）；
 > 短 session 回 checkpoint 長度後變 `no-progress`；長歷史時 compact 失敗且 host close 回報 session service cleanup 未完成，
 > 以 skip repro 保留（`host-commit-log-compact-long.test.ts`）。

@@ -1055,6 +1055,14 @@ the managed model client while producing a retained checkpoint.
 With a seeded long history the compact request fails and host close reports `session service cleanup incomplete`; the repro is
 kept skipped (`host-commit-log-compact-long.test.ts`) for the next investigation.
 
+## Plan 29c (implemented 2026-11-05): end-to-end compaction on SCL
+
+A history built **through the host** (eight prompted turns, long answers) compacts successfully on the commit log:
+`{compacted:true, outcome:'ready', publication:'committed'}` with the checkpoint summary. The earlier failure came from
+seeding raw events that the managed restore rejects (`Assembly construction and cleanup failed`), not from compaction itself.
+
+The short-session test keeps the engine-reached assertion; the long-session test asserts the committed compaction.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
