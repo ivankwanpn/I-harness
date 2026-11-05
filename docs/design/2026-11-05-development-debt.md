@@ -199,6 +199,14 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 215（seed 補寫路徑的程式地圖）**：fresh bootstrap 的 phase writer 在
+> `bootstrap.ts:527-556`：`phases=[seed?, completion]`，每個 phase 先看
+> `doc.view.events.length >= events[0].seq + events.length`（:535）決定是否已完成，否則用
+> `encodeFactBatch('bootstrap:<op>:seed'|'complete')` → `reconcileOwnedBatch`（:538，committed
+> 就代表「冷寫好了」→ :542 回 blocked）→ 否則 `entry.control.admit(phase,...)`（:546）。
+> 對「header 已發佈、0 events」的 retry，這條路**理應**補寫 seed；實測 fall-through 卻回
+> `not-issued`，所以 `not-issued` 是在這個 loop 之前產生的（:520 targetPrepared 之後、:527 之前的
+> 某條 guard），下一輪只要在 :520-527 之間加探針即可定位。這是最接近完成的一條路。
 > **round 213（binding 錯誤分類）**：`SessionBindingObservationError` 的 `reason:'conflict'`
 > 原本不帶任何 code，呼叫端無法區分「暫時失敗」與「durable 狀態衝突」。已加
 > `code:'FACT_RECOVERY_REQUIRED'`（conflict 即需 reconcile）。→ `bootstrap-physical` 再降一筆
