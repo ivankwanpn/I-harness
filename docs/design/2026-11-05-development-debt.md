@@ -334,7 +334,10 @@ re-export（`ResolvedBootstrapBirth`、`ForkHandoffMode`、`ChildInitialCommitme
 再一輪移除 `core-session` 的 5 個 type re-export（`CurrentContextComponent`、
 `SelectedResultsPreparationSemantic`、`LegacyReadVisibility`、`LegacyVisibleRef`、
 `DeliveryActionOrigin`）→ **418 rows、56 NEW**（累計 -14）。再一輪移除 `exec` 的
-`ExecFrameQuery`、`ExecOutputFramePage`、`ExecRawSummary` → **415 rows、53 NEW**（累計 -17）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+`ExecFrameQuery`、`ExecOutputFramePage`、`ExecRawSummary` → **415 rows、53 NEW**（累計 -17）。
+再一輪移除 `core-agent` 的 6 個 type re-export（`ManagedAgentDeps`、`ManagedGenerationFactory`、
+`ManagedAcknowledgedFact`、`ManagedRequestContext`、`ManagedSessionExecutor`、
+`ManagedSessionExecutorDeps`）→ **409 rows、47 NEW**（累計 -23）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---
