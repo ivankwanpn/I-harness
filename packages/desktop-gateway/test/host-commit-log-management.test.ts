@@ -46,6 +46,10 @@ it('renames, archives, restores and reloads a session on the commit log', async 
     await call('desktop/session/batch', { command: { action: 'delete', sessionIds: [second.sessionId] } })
     expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).not.toContain(second.sessionId)
     expect(await call('desktop/environment/diagnostics', { sessionId: created.sessionId })).toBeTruthy()
+    await call('desktop/project/configure', { project: { id: 'p', name: 'Project', roots: [workspace], primaryRoot: workspace } })
+    const moved = await call('desktop/session/batch', { command: { action: 'move', sessionIds: [created.sessionId], projectId: 'p', expectedOwners: { [created.sessionId]: null } } }) as { results: { ok: boolean; error?: string }[] }
+    expect(moved.results[0]?.ok).toBe(true)
+    expect(await call('desktop/session/project/state', { sessionId: created.sessionId })).toEqual({ sessionId: created.sessionId, projectId: 'p' })
   } finally {
     await host.close()
   }

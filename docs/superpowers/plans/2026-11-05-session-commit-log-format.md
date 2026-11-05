@@ -1076,6 +1076,12 @@ The dual-run corpus also covers an `agent/delivery-generation` session. A hand-w
 the historical-replacement validator; a valid compacted history has to come from the real compaction path, so the corpus keeps
 the compaction case out until such a fixture is captured.
 
+## Plan 33 (implemented 2026-11-05): batch project move on SCL
+
+`desktop/session/batch` with `action:'move'` moves a commit-log session into a configured project (the command requires
+`expectedOwners` to carry the current owner; a missing entry is a per-session `ok:false`, not a throw). The project state then
+reports the new project id.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
