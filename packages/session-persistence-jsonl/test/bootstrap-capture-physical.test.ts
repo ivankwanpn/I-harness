@@ -9,6 +9,7 @@ import { CURRENT_FORMAT_VERSION, append, canonicalJsonData, createSession, expor
 import { PROVIDER_PROTOCOLS } from '@i-harness/settings'
 import * as p from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { heldFactOwner } from '../../session-persistence/src/coordinator/fact-owner.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { buildBootstrapHeader } from '../../session-persistence/src/coordinator/bootstrap-header.ts'
@@ -25,10 +26,24 @@ function request(): p.BootstrapCaptureRequest {
   const { intent, requestDigest } = p.createBootstrapRequestIntent(core, { kind: 'unmanaged' })
   return { invocation: { version: 1, operationId: 'capture-operation', targetSessionId: 'target', createdAt: '2026-10-26T00:00:00.000Z', requestDigest }, core, requestIntent: intent }
 }
+type CaptureHook = (actual: (...args: any[]) => any, ...args: any[]) => any
+const captureMethods = ['readBootstrapCapture', 'settleBootstrapCaptureIO', 'prepareBootstrapCapture', 'prepareBootstrapHeader', 'deleteOwnedSession', 'checkBootstrapCaptureRoot', 'profile'] as const
 async function setup(root?: string) {
   root ??= await mkdtemp(join(tmpdir(), 'ih-capture-')); if (!roots.includes(root)) roots.push(root)
-  const backend = createJsonlBackend(root), coordinator = p.createSessionCoordinator(backend, { lock: { enabled: true }, acquireDeadlineMs: 40, acquireRetryMs: 5 }); coordinators.push(coordinator)
-  return { root, backend, coordinator }
+  const hooks: Partial<Record<(typeof captureMethods)[number], CaptureHook>> = {}
+  const originals: Partial<Record<(typeof captureMethods)[number], (...args: any[]) => any>> = {}
+  // Capture/frame methods are bound before the canonical-path guard snapshots
+  // the backend descriptors; patching them afterwards is PROCESS_READ_UNAVAILABLE.
+  const backend = createJsonlBackend(root, { wrap: b => {
+    for (const name of captureMethods) {
+      const actual = (b as any)[name]
+      if (typeof actual !== 'function') continue
+      originals[name] = actual.bind(b)
+      ;(b as any)[name] = (...args: any[]) => hooks[name] ? hooks[name]!(actual.bind(b), ...args) : actual.apply(b, args)
+    }
+  } }) as ReturnType<typeof createJsonlBackend>
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true }, acquireDeadlineMs: 40, acquireRetryMs: 5 }); coordinators.push(coordinator)
+  return { root, backend, coordinator, hooks, originals }
 }
 function stagePath(root: string, r: p.BootstrapCaptureRequest) { return join(root, 'target.jsonl.bootstrap-' + createHash('sha256').update(canonicalJsonData(r.invocation)).digest('hex') + '.stage') }
 function payload(r: p.BootstrapCaptureRequest): p.BootstrapRequest {
@@ -186,11 +201,15 @@ it.each(['sync','readback','close'] as const)('P09 required promotion %s failure
 })
 it('P06 actual process interruption after confirmed reservation before callback keeps the original durable fence',async()=>{
   const {root,coordinator}=await setup(),r=request();await coordinator.close()
-  const script=join(root,'capture-child.mjs'),persistenceURL=pathToFileURL(fileURLToPath(new URL('../../session-persistence/src/index.ts',import.meta.url))).href,backendURL=pathToFileURL(fileURLToPath(new URL('../src/index.ts',import.meta.url))).href
-  await writeFile(script,`import {createSessionCoordinator} from ${JSON.stringify(persistenceURL)};import {createJsonlBackend} from ${JSON.stringify(backendURL)};
-const request=${JSON.stringify(r)},backend=createJsonlBackend(${JSON.stringify(root)}),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}});
+  const script=join(root,'capture-child.mjs'),backendURL=pathToFileURL(fileURLToPath(new URL('../src/index.ts',import.meta.url))).href,factoryURL=pathToFileURL(fileURLToPath(new URL('../src/task-document-factory.ts',import.meta.url))).href,contractURL=pathToFileURL(fileURLToPath(new URL('../../subagent/src/task/storage-contract.ts',import.meta.url))).href
+  // The child runs the current build: the composed transition constructor owns
+  // format-14 creation, and the reservation writer is bound before the guard
+  // snapshots the backend descriptors.
+  await writeFile(script,`import {createJsonlBackend} from ${JSON.stringify(backendURL)};import {composeJsonlTaskTransitionCoordinator} from ${JSON.stringify(factoryURL)};import {taskDocumentStorageContract} from ${JSON.stringify(contractURL)};
+const request=${JSON.stringify(r)},root=${JSON.stringify(root)};
+const backend=createJsonlBackend(root,{wrap:b=>{const prepare=b.prepareBootstrapCapture;b.prepareBootstrapCapture=async(...args)=>{const result=await prepare(...args);if(result.kind!=='committed-new')throw new Error('reservation did not commit');process.stdout.write('confirmed-reservation\\n');await new Promise(()=>{});return result}}});
+const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract);
 await coordinator.create({sessionId:'source'});await coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'actual child source'},{type:'turn/end'}]);const source=await coordinator.openManagedDocument('source');
-const prepare=backend.prepareBootstrapCapture;backend.prepareBootstrapCapture=async(...args)=>{const result=await prepare(...args);if(result.kind!=='committed-new')throw new Error('reservation did not commit');process.stdout.write('confirmed-reservation\\n');await new Promise(()=>{});return result};
 await coordinator.bootstrapSemanticTargetWithCapture(request,{assertCurrent(){source.assertReady()},dependencies:{async confirm(){throw new Error('no artifacts')},async reconcile(){throw new Error('no artifacts')}}},async()=>{process.stdout.write('forbidden-callback\\n');throw new Error('callback must not enter')});`)
   const child=spawn(process.execPath,['--import','tsx',script],{cwd:process.cwd(),windowsHide:true,stdio:['ignore','pipe','pipe']}),confirmed=Promise.withResolvers<void>();let output='',errors=''
   child.stdout.on('data',bytes=>{output+=String(bytes);if(output.includes('confirmed-reservation\n'))confirmed.resolve()});child.stderr.on('data',bytes=>{errors+=String(bytes)})
@@ -236,19 +255,18 @@ it('P13 direct callback self-waits refuse before revoking its original current g
   expect(result.kind).toBe('ready');expect(checks).toBeGreaterThan(1)
 })
 it('P14 original held.owner identity persists through promotion, settlement and close; equal tokens cannot settle',async()=>{
-  const {root,backend,coordinator}=await setup(),r=request(),helds:p.HeldFactOwner[]=[],issuers:p.IssuingFactOwner[]=[]
-  const read=backend.readBootstrapCapture!,settle=backend.settleBootstrapCaptureIO!,prepare=backend.prepareBootstrapCapture!,header=backend.prepareBootstrapHeader!
-  backend.readBootstrapCapture=async(id,held,request)=>{helds.push(held);return read(id,held,request)}
-  backend.settleBootstrapCaptureIO=async(id,held)=>{helds.push(held);return settle(id,held)}
-  backend.prepareBootstrapCapture=async(id,issuer,bytes)=>{issuers.push(issuer);return prepare(id,issuer,bytes)}
-  backend.prepareBootstrapHeader=async(id,issuer,op)=>{issuers.push(issuer);return header(id,issuer,op)}
+  const {root,coordinator,hooks,originals}=await setup(),r=request(),helds:p.HeldFactOwner[]=[],issuers:p.IssuingFactOwner[]=[]
+  hooks.readBootstrapCapture=async(read,id,held,request)=>{helds.push(held);return read(id,held,request)}
+  hooks.settleBootstrapCaptureIO=async(settle,id,held)=>{helds.push(held);return settle(id,held)}
+  hooks.prepareBootstrapCapture=async(prepare,id,issuer,bytes)=>{issuers.push(issuer);return prepare(id,issuer,bytes)}
+  hooks.prepareBootstrapHeader=async(header,id,issuer,op)=>{issuers.push(issuer);return header(id,issuer,op)}
   expect((await coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>payload(r))).kind).toBe('ready')
   const held=helds[0]!,ownership=createOwnership({lockRoot:root},{lock:{enabled:true}})
   // A separate constructor clones even equal owner values. Its forged cleanup
   // never reaches the original ledger, irrespective of equality.
   const replacement=heldFactOwner(held.owner,ownership,()=>{})
   expect(replacement.owner).not.toBe(held.owner)
-  await expect(settle('target',replacement)).rejects.toThrow()
+  await expect(originals.settleBootstrapCaptureIO!('target',replacement)).rejects.toThrow()
   expect(helds.every(value=>value===held)).toBe(true);expect(issuers.every(value=>value===issuers[0]&&value.owner===held.owner)).toBe(true)
   await coordinator.close();expect(()=>held.assertHeld()).toThrow()
 })
@@ -267,8 +285,8 @@ it('P16 ready captured deletion inventories promote and leaves a tombstone that 
   const cold=await setup(root);expect(await cold.coordinator.inspectBootstrapCapture!(r)).toEqual({kind:'unavailable'})
 })
 it('P13 external delete joins the whole original capture before backend deletion and keeps headerless fence',async()=>{
-  const {root,backend,coordinator}=await setup(),r=request(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let backendDeletes=0,deleted=false
-  const actual=backend.deleteOwnedSession!;backend.deleteOwnedSession=async(...args)=>{backendDeletes++;return actual(...args)}
+  const {root,coordinator,hooks}=await setup(),r=request(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let backendDeletes=0,deleted=false
+  hooks.deleteOwnedSession=async(actual,...args)=>{backendDeletes++;return actual(...args)}
   const running=coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>{entered.resolve();await release.promise;return payload(r)})
   await entered.promise
   const deletion=coordinator.deleteOwnedSession!('target',{documents:[]}).finally(()=>{deleted=true}),refused=expect(deletion).rejects.toThrow()
@@ -276,31 +294,30 @@ it('P13 external delete joins the whole original capture before backend deletion
   expect(await running).toMatchObject({kind:'blocked'});await refused;expect(await readFile(stagePath(root,r))).toBeDefined()
 })
 it.each(['root','claim','read','settle'] as const)('P14 strict inspection close joins the original %s whole lifetime without target cache',async cut=>{
-  const {root,backend,coordinator}=await setup(),r=request(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),native=await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts');let closed=false,reads=0,acquires=0,releases=0,held:p.HeldFactOwner|undefined
-  const rootCheck=backend.checkBootstrapCaptureRoot!,read=backend.readBootstrapCapture!,settle=backend.settleBootstrapCaptureIO!
-  backend.checkBootstrapCaptureRoot=async()=>{await rootCheck();if(cut==='root'){entered.resolve();await release.promise}}
+  const {root,coordinator,hooks}=await setup(),r=request(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),native=await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts');let closed=false,reads=0,acquires=0,releases=0,held:p.HeldFactOwner|undefined
+  hooks.checkBootstrapCaptureRoot=async(rootCheck)=>{await rootCheck();if(cut==='root'){entered.resolve();await release.promise}}
   vi.mocked(acquireSessionLock).mockImplementation(async options=>{const raw=await native.acquireSessionLock(options);acquires++;if(cut==='claim'){entered.resolve();await release.promise}return {get held(){return raw.held},async release(){await raw.release();releases++}}})
-  backend.readBootstrapCapture=async(id,owner,request)=>{reads++;held=owner;if(cut==='read'){entered.resolve();await release.promise}return read(id,owner,request)}
-  backend.settleBootstrapCaptureIO=async(id,owner)=>{expect(owner).toBe(held);owner.assertHeld();if(cut==='settle'){entered.resolve();await release.promise}return settle(id,owner)}
+  hooks.readBootstrapCapture=async(read,id,owner,request)=>{reads++;held=owner;if(cut==='read'){entered.resolve();await release.promise}return read(id,owner,request)}
+  hooks.settleBootstrapCaptureIO=async(settle,id,owner)=>{expect(owner).toBe(held);owner.assertHeld();if(cut==='settle'){entered.resolve();await release.promise}return settle(id,owner)}
   const running=coordinator.inspectBootstrapCapture!(r)
   try{await entered.promise;const closing=coordinator.close().then(()=>{closed=true});await Promise.resolve();expect(closed).toBe(false);release.resolve();expect(await running).toEqual({kind:'unavailable'});await closing;expect(releases).toBe(acquires);expect(coordinator.ownerOf('target')).toBe(false);expect(await readdir(root)).not.toContain('target.jsonl');if(cut==='root')expect(reads).toBe(0)}finally{release.resolve();vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock)}
 })
 it('P14 close joins pending inspection even when independent original observation cleanup fails',async()=>{
-  const {backend,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts')
+  const {coordinator,hooks}=await setup(),r=request(),native=await vi.importActual<typeof import('../../fs-lock/src/index.ts')>('../../fs-lock/src/index.ts')
   await coordinator.create({sessionId:'source'})
   const observationEntered=Promise.withResolvers<void>(),leaveObservation=Promise.withResolvers<void>(),rootEntered=Promise.withResolvers<void>(),leaveRoot=Promise.withResolvers<void>();let acquisitions=0,allowRelease=false,closed=false
   vi.mocked(acquireSessionLock).mockImplementation(async options=>{const raw=await native.acquireSessionLock(options),index=++acquisitions;return {get held(){return raw.held},async release(){if(index===2&&!allowRelease)throw new Error('original observation release debt');return raw.release()}}})
   const observing=coordinator.withSessionBindingObservation!({existingSessionIds:['source'],target:{...r.invocation,targetSessionId:'observed'}},async()=>{observationEntered.resolve();await leaveObservation.promise})
   const observationFailure=expect(observing).rejects.toThrow();await observationEntered.promise
-  const root=backend.checkBootstrapCaptureRoot!;backend.checkBootstrapCaptureRoot=async()=>{await root();rootEntered.resolve();await leaveRoot.promise}
+  hooks.checkBootstrapCaptureRoot=async(actual)=>{await actual();rootEntered.resolve();await leaveRoot.promise}
   const inspecting=coordinator.inspectBootstrapCapture!(r);await rootEntered.promise
   const closing=coordinator.close().finally(()=>{closed=true}),closeFailure=expect(closing).rejects.toThrow()
   try{leaveObservation.resolve();await observationFailure;expect(closed).toBe(false);leaveRoot.resolve();expect(await inspecting).toEqual({kind:'unavailable'});await closeFailure;expect(coordinator.ownerOf('target')).toBe(false);expect(coordinator.ownerOf('source')).toBe(true);allowRelease=true;await coordinator.close();expect(coordinator.ownerOf('source')).toBe(false)}finally{allowRelease=true;leaveRoot.resolve();leaveObservation.resolve();vi.mocked(acquireSessionLock).mockImplementation(native.acquireSessionLock)}
 })
 it('P14 inspection cleanup retries its exact original handle/held and does not release a live adopter',async()=>{
-  const {root,backend,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');await coordinator.create({sessionId:'target'});await writeFile(stagePath(root,r),p.encodeBootstrapCaptureReservation({version:1,kind:'semantic-bootstrap-capture',request:r}))
-  let closes=0,releaseClose=false,original:p.HeldFactOwner|undefined;const helds:p.HeldFactOwner[]=[],settle=backend.settleBootstrapCaptureIO!
-  backend.settleBootstrapCaptureIO=async(id,held)=>{if(id==='target'){helds.push(held);original??=held;expect(held).toBe(original)}return settle(id,held)}
+  const {root,coordinator,hooks}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');await coordinator.create({sessionId:'target'});await writeFile(stagePath(root,r),p.encodeBootstrapCaptureReservation({version:1,kind:'semantic-bootstrap-capture',request:r}))
+  let closes=0,releaseClose=false,original:p.HeldFactOwner|undefined;const helds:p.HeldFactOwner[]=[]
+  hooks.settleBootstrapCaptureIO=async(settle,id,held)=>{if(id==='target'){helds.push(held);original??=held;expect(held).toBe(original)}return settle(id,held)}
   vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args);if(!String(args[0]).endsWith('.stage'))return h;return new Proxy(h,{get(target,name){if(name==='close')return async()=>{closes++;if(!releaseClose)throw new Error('original inspection close failure');return target.close()};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})})
   try{
     await expect(coordinator.inspectBootstrapCapture!(r)).rejects.toThrow('cleanup unresolved');expect(coordinator.ownerOf('target')).toBe(true);original!.assertHeld()
@@ -320,8 +337,8 @@ it('P14/P15 consumed native file close stays debt and capture never runs during 
   try{await expect(coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>{captures++;return payload(r)})).rejects.toThrow('cleanup unresolved');await expect(coordinator.close()).rejects.toThrow();await expect(coordinator.close()).rejects.toThrow();expect(closes).toBe(1);expect(captures).toBe(0);expect(coordinator.ownerOf('target')).toBe(true);expect(await readFile(stagePath(root,r))).toBeDefined()}finally{vi.mocked(open).mockImplementation(native.open)}
 })
 it('P17 reservation invokes no target preparation, dependency or profile work before actual capture',async()=>{
-  const {backend,coordinator}=await setup(),r=request();let preparing=0,profiles=0
-  const profile=backend.profile;backend.profile=async(...args)=>{profiles++;return profile(...args)}
+  const {coordinator,hooks}=await setup(),r=request();let preparing=0,profiles=0
+  hooks.profile=async(profile,...args)=>{profiles++;return profile(...args)}
   const port={async confirm():Promise<never>{preparing++;throw new Error('actual target policy trap')},async reconcile():Promise<never>{preparing++;throw new Error('actual target policy trap')},assertTargetCurrent(){}}
   expect(await coordinator.bootstrapSemanticTargetWithCapture!(r,{...guards,targetPreparation:port},async()=>{expect(preparing).toBe(0);expect(profiles).toBe(0);return payload(r)})).toMatchObject({kind:'blocked',reason:'dependency-unavailable'});expect(preparing).toBe(1)
 })
