@@ -180,6 +180,12 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 210（Q3-a 修正診斷）**：實驗證明「保留 claim」不是改 `fail()` 條件——在
+> stage-read 失敗時 transition lane **根本還沒取得 claim**（claim 在 borrow/pin 之後才拿，
+> 而讀取在其前）。真正的設計修正叫 **acquire-before-read**：
+> `resumeSemanticTarget`（bootstrap.ts:973 → `start(...)`）必須在讀 stage/header **之前**
+> 先 `borrowOwnership` + `acquireDocumentLease`，讓任何讀取失敗都自然保留 claim 直到 retry／close。
+> 這與 `direct-lease`「append 也要持 task lease」是同一條原則：先取得所有權，再做任何讀取。
 > **round 209（設計判讀，Q2/Q3 結案）**：不再以測試為規格，改以產品設計判讀。
 > - **Q3-a 保留 claim**：`blocked` 代表 durable 狀態不明，釋放 claim 會讓第二個 writer 接管
 >   不明狀態（可恢復債務→不可恢復損壞）。現行 `fail()`（task-document-transition.ts:233）
