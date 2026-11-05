@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 242（SCL 公開 fork capture）**：facade `bootstrapSemanticTargetWithCapture` 直接以 capture 建子 session（單一 commit：
+> header＋seed＋`session/bootstrap`），conflict → `refused`。`commit-fork.test.ts` 驗證 receipt 與子 log 尾端事件。
+> gateway 既有 fork 測試以 legacy `createSessionCoordinator` 建 coordinator，`create` 即 `TASK_TRANSITION_UNSUPPORTED`，屬 baseline 紅燈。
 > **round 241（產品接線）**：`sessionStore`／`IH_SESSION_STORE=commit-log` 在 desktop host 與 CLI 全站點選用 SCL；
 > `host-commit-log.test.ts` 以**真實 host** 在兩種 store 上各建立並關閉 session（首次產品級驗證）。
 > execution-host observation 在缺 retained binding 時改為 no-op preflight；retained close 以 coordinator.close 關聯。

@@ -827,6 +827,18 @@ request (`hello world`) and a clean `service.close()` all pass.
   associated with the coordinator's own `close`.
 - Tests: `host-commit-log.test.ts` creates and closes a session through the real host on **both** stores.
 
+## Plan 9a (implemented 2026-11-05): public fork capture on SCL
+
+- The facade implements `bootstrapSemanticTargetWithCapture` by creating the child directly from the captured
+  `BootstrapRequest` (`createChildSession`): header + seed entries + `session/bootstrap` completion in one commit, a
+  `CommitLogConflictError` becomes `{kind:'refused', reason:'conflict'}`.
+- Test `commit-fork.test.ts`: a fork request produces `{kind:'ready'}` with a verified receipt (seedLength, dependency closure
+  digest) and the child log ends with `session/bootstrap`.
+
+**Known:** the existing gateway `fork-session.test.ts` / `project-scope-host.test.ts` construct their coordinator with the legacy
+`createSessionCoordinator` factory, which now throws `TASK_TRANSITION_UNSUPPORTED` in `create` — they are baseline red
+independent of SCL. SCL fork needs its own host-level test (next).
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

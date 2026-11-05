@@ -6,6 +6,8 @@ import { associateTaskDocumentOperations } from '../coordinator/task-document-as
 import { associateColdExecutionWrites, createColdExecutionWrites } from '../coordinator/cold-execution-writes.ts'
 import { associateRetainedCoordinatorClose } from '../coordinator/retained-cleanup.ts'
 import type { TaskDocumentConfiguration } from '../coordinator/task-document-operation.ts'
+import { CommitLogConflictError } from '@i-harness/session-commit-log'
+import type { BootstrapCaptureRequest, BootstrapGuards, BootstrapOutcome, BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import type { CommitCoordinator } from './coordinator.ts'
 import { createCommitTaskOperations } from './capabilities.ts'
 
@@ -40,7 +42,19 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
     },
     bootstrapSemanticTarget: () => unsupported(),
     resumeSemanticTarget: () => unsupported(),
-    bootstrapSemanticTargetWithCapture: () => unsupported(),
+    async bootstrapSemanticTargetWithCapture(_request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>): Promise<BootstrapOutcome> {
+      // SCL creates the child directly: the capture is the only source of the
+      // seed, and the receipt is verified by the caller against it.
+      const captured = await capture()
+      guards.assertCurrent()
+      try {
+        const created = await coordinator.createChildSession(captured, { closure: captured.seed.dependencyDigest })
+        return { kind: 'ready' as const, receipt: created.receipt, document: created.document }
+      } catch (error) {
+        if (error instanceof CommitLogConflictError) return { kind: 'refused' as const, reason: 'conflict' as const }
+        throw error
+      }
+    },
     resumeChildTarget: coordinator.resumeChildTarget.bind(coordinator),
     bootstrapChildTargetWithCapture: coordinator.bootstrapChildTargetWithCapture.bind(coordinator),
     inspectBootstrap: async (invocation: { targetSessionId: string }) => ({ kind: 'absent', invocation, needsConfirmation: false }),
