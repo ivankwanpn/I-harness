@@ -2,13 +2,14 @@ import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { decodeFactBatch, deriveMessages } from '@i-harness/core-session'
 import { createCompactionHarness } from './fixtures/engine.ts'
 import { history, spyModel, autoConfig } from './fixtures/history.ts'
 it('commits a positional replacement through the one managed writer and agrees with cold replay', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-c3-compact-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'ih-c3-compact-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(); await coordinator.append(id, history().events)
   const document = await coordinator.openManagedDocument(id), frames: string[][] = [], actual = backend.appendOwnedBatch!
   backend.appendOwnedBatch = async (...args) => { frames.push(decodeFactBatch(args[3].bytes).events.map(event => event.type)); return actual(...args) }
@@ -20,7 +21,7 @@ it('commits a positional replacement through the one managed writer and agrees w
   } finally { await coordinator.close() }
 })
 it('managed view without a matching reduction capability never falls back to memory publication', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-c3-missing-')), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'ih-c3-missing-')), coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(); await coordinator.append(id, history().events)
   const document = await coordinator.openManagedDocument(id), before = document.view.events.length
   try {

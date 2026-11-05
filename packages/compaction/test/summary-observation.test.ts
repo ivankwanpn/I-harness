@@ -5,7 +5,8 @@ import { ProjectionCounter } from '@i-harness/token-meter'
 import { summarizeFixture } from './fixtures/summary.ts'
 import { createCompactionHarness } from './fixtures/engine.ts'
 import { append, createSession } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -26,7 +27,7 @@ it('records only an ephemeral piece observation after complete quality checks', 
   expect(JSON.stringify(observations)).not.toMatch(/exchange-accepted|acceptedSeq|anchorId/)
 })
 it('keeps accepted piece observation while an actual issued managed frame remains uncertain', async () => {
-  const root=await mkdtemp(join(tmpdir(),'ih-c3-piece-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
+  const root=await mkdtemp(join(tmpdir(),'ih-c3-piece-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
   const {id}=await coordinator.create(),session=createSession();append(session,{type:'user/message',text:'recorded completed work '.repeat(100)})
   await coordinator.append(id,session.events);const document=await coordinator.openManagedDocument(id),observations:unknown[]=[]
   const actual=backend.appendOwnedBatch!;backend.appendOwnedBatch=async(...args)=>{await actual(...args);return{kind:'unknown',key:args[3].key}}
@@ -49,7 +50,7 @@ it('cannot clear an earlier refused completion with a contradictory clean end', 
   expect(accepted).toEqual([])
 })
 it('reconciles unknown whole-group publication after accepted pages once without repeating recorded tool work', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-page-unknown-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'ih-page-unknown-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), session = createSession()
   append(session, { type: 'user/message', text: 'task' }); append(session, { type: 'step/start' })
   append(session, { type: 'tool/call', callId: 'once', name: 'read', args: { path: 'source' } })
