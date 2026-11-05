@@ -14,6 +14,12 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 219（重設計評估）**：剩餘 41 筆出生／接手紅測試指向同一個根因——**決策軸（durable 位元組是否已承諾）
+> 與清理債（handle/temp/lease 是否收斂）被混在一起**，加上 **task document 發佈失敗會擋住 session 出生**。
+> 參考 DSH 0.2.2 的 handle 模型（`create/open/stat/list` + lazy materialization + `SessionPreparation` +
+> resume 以 `interruptedTurnClosers` 補寫）後，建議先做「決策模型重設計」（不動 log 佈局），
+> 見 `docs/design/2026-11-05-birth-decision-redesign.md`；架構級（單一原子發佈、刪 stage/capture reservation）
+> 列為後續獨立專案，需先裁定 BC01（capture 是否必須先耐久 reserve）。
 > **依序執行（設計已定案，不需再問）**：
 > 1. ~~acquire-before-read~~、~~append 持 `doc:task-*` lease~~ → round 218 證實已由 composed
 >    transition 車道滿足；8 檔測試已遷移，僅 `task-transition-bootstrap-revoke` 仍紅。
