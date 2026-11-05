@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 281（full suite 量測）**：遷移後 `session-persistence` 全套為 280 failed／840 passed／1120 tests（38/125 檔案紅），
+> 來源是 legacy coordinator 與 artifact/latch fixture 缺口，非 SCL 程式；baseline 修復屬另一項大型工作，暫停。
 > **round 280（legacy 測試遷移）**：`repair.test.ts` 改用 composed factory 後 19/19 全綠；`fork-controller.test.ts` 32→6
 > （其餘為 admission／host fixture 期望差異）。`delivery-facts` 需 process-read capability，暫緩。
 > **round 279（full session-persistence 紅燈分類）**：全套件紅燈皆為既有 baseline——legacy `createSessionCoordinator` 的

@@ -1140,6 +1140,12 @@ the selection/witness lifecycle, not storage.
 instead of the plain factory: the transition gate (`TASK_TRANSITION_UNSUPPORTED`) disappears, and the file is green (19/19; one
 assertion accepts `TASK_TRANSITION_FAILED` because the composed path reports the non-positional sequence that way).
 `fork-controller.test.ts` moved the same way: 32 failures drop to 6, which have different causes (fork admission/host fixture
+
+Full-suite measurement after the migration (2026-11-06): `session-persistence` is **280 failed / 840 passed / 1120 total** across
+125 files (38 files red). The failures are legacy-coordinator and artifact/latch fixture gaps (`PROCESS_READ_UNAVAILABLE`,
+`TASK_TRANSITION_*`, win32 lock tests) rather than SCL code; restoring that baseline is a separate, larger effort and was stopped
+here. The commit-log suites stay green and independent.
+
 expectations) and are the next chunk. `delivery-facts.test.ts` was attempted but its result-page admission needs the process-read
 capability the tests do not provide; it stays as-is for now.
 
