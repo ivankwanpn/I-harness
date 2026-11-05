@@ -1179,6 +1179,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 60 (implemented 2026-11-06): cold-history control errors
+
+Control RPCs answer honestly on a cold commit-log session: `execution/stop` without a cell is `Execution unavailable`, with an
+unknown cell it is `Cell has no live execution owner; cold history cannot be stopped`, and `processes/control` on a missing
+process is `No live process owner; cold history cannot control a process`. All three are -32602 and asserted in the turn test.
+
 ## Plan 59 (implemented 2026-11-06): unavailable result pages
 
 A result ref whose digest names no stored artifact resolves to `{kind:"unavailable"}` rather than an error, and a read against an

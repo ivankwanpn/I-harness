@@ -69,6 +69,9 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     await writeFile(join(workspace, 'big.txt'), 'x'.repeat(200 * 1024))
     await call('session/prompt', { sessionId: created.sessionId, prompt: 'read big' })
     expect(toolCalls).toBe(2)
+    await expect(call('desktop/session/execution/stop', { sessionId: created.sessionId })).rejects.toThrow(/Execution unavailable/)
+    await expect(call('desktop/session/execution/stop', { sessionId: created.sessionId, cellId: 'missing-cell' })).rejects.toThrow(/cold history cannot be stopped/)
+    await expect(call('desktop/session/processes/control', { sessionId: created.sessionId, command: { action: 'close', id: 'missing-process' } })).rejects.toThrow(/cold history cannot control a process/)
     const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
     try {
       const { session } = await observer.load(created.sessionId)
