@@ -1114,3 +1114,10 @@ Port outline (multi-round):
 4. **Cleanup**: a cold-finalization equivalent that retires the witness when the child is ready.
 
 Until then the legacy coordinator stays the only selected-results implementation and the SCL store remains opt-in.
+
+## Plan 34 (implemented 2026-11-06): managed tool execution on SCL
+
+`host-commit-log-turn.test.ts` runs a prompt whose controlled model emits a `todo_write` tool call: the tool executes through the
+managed document and both `tool/call` and `tool/result` events are committed (read back with a second coordinator). This is the
+first tool-execution round trip on the commit-log store and the prerequisite for artifact-producing tools (shell/exec results).
+

@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 276（tool execution on SCL）**：controlled model 發出 `todo_write` tool call，managed document 完成 tool/call＋tool/result
+> 的提交，並由第二個 coordinator 讀回——首個工具執行 round trip。
 > **round 275（batch project move）**：`desktop/session/batch` 的 move 在 SCL 通過（需 `expectedOwners`，缺失時每筆回
 > `ok:false` 而非拋錯），project state 隨即反映新 projectId。
 > **round 274（corpus delivery 事件）**：dual-run corpus 加入 `agent/delivery-generation`；手寫的 `compaction/replacement` 被
