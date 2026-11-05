@@ -27,6 +27,7 @@ export type CommitFacadeOptions = {
 export function asSessionCoordinator(coordinator: CommitCoordinator, options: CommitFacadeOptions = {}): SessionCoordinator {
   const unsupported = <T>(): Promise<T> => Promise.reject(Object.assign(new Error('commit-log coordinator does not support the stage bootstrap API'), { code: 'TASK_TRANSITION_UNSUPPORTED' }))
   const coldWrites = createColdExecutionWrites()
+  const ports = coordinator.capabilities()
   const facade: CommitCoordinator & Record<string, unknown> = {
     ...coordinator,
     create: async (meta?: Parameters<typeof coordinator.create>[0]) => {
@@ -73,8 +74,11 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
     getDocument: coordinator.getDocument.bind(coordinator),
     putDocument: coordinator.putDocument.bind(coordinator),
     acquireExecution: coordinator.acquireExecution.bind(coordinator),
+    retainExistingSessionBindingObservation: ports.observations.retainExistingSessionBindingObservation,
   }
-  const ports = coordinator.capabilities()
+  // Retained bindings validate against the coordinator that issued them; the
+  // observations instance owns the reference ledger.
+  ports.observations.associateRetainedCoordinator(facade as never)
   if (options.taskDocument) {
     associateTaskDocumentOperations(facade as never, createCommitTaskOperations(ports, {
       putDocument: (key, data) => coordinator.putDocument(key, data),

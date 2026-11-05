@@ -919,7 +919,7 @@ Members the desktop gateway calls on its coordinator, with SCL status:
 | `inspectBootstrap` | yes (`absent`) |
 | `bootstrapSemanticTargetWithCapture` | yes (direct child create) |
 | `inspectChildBootstrap` | absent (caller guards) |
-| `retainExistingSessionBindingObservation` | absent (guarded; execution-host observation disabled) |
+| `retainExistingSessionBindingObservation` | yes (observations instance + coordinator association; test `commit-retained.test.ts`) |
 
 Free-function capabilities consumed by the gateway and still legacy-only:
 `selectedSourceFor` / `beginColdSelectedFinalization` / `captureOriginalColdObservation` (selected results and fork cleanup; guarded
@@ -928,6 +928,14 @@ or refused on SCL) and `retainSelectedProjectRead` paths in context-runtime.
 Legacy-only subsystems that the SCL product path no longer needs (deletion candidates once results are ported):
 coordinator-factory bootstrap/adoption, selected-results capture, task-document transitions (`stageInitialize`/frames), retained
 bindings, ownership batch ledgers and the JSONL journal/artifact paths.
+
+## Plan 14 (implemented 2026-11-05): retained session bindings
+
+- `createBindingObservations` already owns a `createRetainedBindings` ledger and exposes `associateRetainedCoordinator` plus
+  `retainExistingSessionBindingObservation`. `asSessionCoordinator` registers itself and forwards the method, so the
+  desktop gateway's execution-host observation is no longer disabled.
+- Test: issue a reference for an existing session, `assertCurrent`/`metadata`/`binding`/`withRead`, then `release` and verify
+  the reference is revoked.
 
 ## Follow-on plans (not in this plan)
 
