@@ -39,7 +39,7 @@ it('refuses queued and capacity-waiting optional groups while preserving an alre
 
 it('rechecks a new source hold at the actual backend beforeIssue boundary without issuing or retrying the optional group', async () => {
   const root = await mkdtemp(join(tmpdir(), 'r4a-hold-before-issue-'))
-  let attempts = 0, source!: { holdRecovery(): void }
+  let attempts = 0, source!: { holdRecovery(): void; close(): Promise<void> }
   const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { attempts++; source.holdRecovery(); return append(...args) } })
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), action = document.beginAction()

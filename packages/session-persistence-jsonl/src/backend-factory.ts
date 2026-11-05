@@ -136,6 +136,12 @@ export function createJsonlBackend(root: string, options?: {
   /** S-08/D-12: same pre-bind seam for the reconcile path. Tests need to inject
    * unknown/conflict outcomes without patching the guarded backend afterwards. */
   wrapOwnedReconcile?: (reconcile: NonNullable<PersistenceBackend['reconcileOwnedBatch']>) => NonNullable<PersistenceBackend['reconcileOwnedBatch']>
+  /** Generic pre-bind seam for the remaining capability methods (repair,
+   * replaceEvents, upgradeSessionFormat, append…). It runs once, before the
+   * canonical-path guard captures every own descriptor; replacing a method
+   * afterwards is PROCESS_READ_UNAVAILABLE by design. A test may also remove a
+   * capability here to model a backend that never had it. */
+  wrap?: (backend: PersistenceBackend) => void
 }): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const nativePrewrite = createOriginalNativePrewriteOwner()
   const pathResolution = createOriginalJsonlPathResolution(root)
@@ -572,6 +578,7 @@ export function createJsonlBackend(root: string, options?: {
       for (const path of paths) await unlink(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error })
     },
   }
+  options?.wrap?.(backend)
   const artifactOwner = pathResolution.bindBackend(backend, {
     async prepareRoot() { assertOriginal(); await mkdir(rootPath, {recursive:true}); assertOriginal() },
     async prepareDocumentParents(key: string) {

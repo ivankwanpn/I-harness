@@ -1,20 +1,20 @@
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
-import { afterEach, expect, it, vi } from "vitest"
+import { afterEach, expect, it } from "vitest"
 import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../src/index.ts"
+import { createSessionCoordinator } from "./helpers/composed.ts"
 import { fromJSONL, type SessionEvent } from "@i-harness/core-session"
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
-async function fixture(body: string, version = 1) {
+async function fixture(body: string, version = 1, options?: Parameters<typeof createJsonlBackend>[1]) {
   const root = await mkdtemp(join(tmpdir(), "context-format-")); roots.push(root)
   const path = join(root, "s.jsonl")
   const raw = JSON.stringify({ formatVersion: version, sessionId: "s", createdAt: "x", title: "keep" }) + "\n" + body
   await writeFile(path, raw)
-  return { path, raw, backend: createJsonlBackend(root) }
+  return { path, raw, backend: createJsonlBackend(root, options) }
 }
 
 it.each([1, 2])("preflights unsupported complete records before repairing a torn open v%i tail", async version => {
@@ -42,44 +42,64 @@ it("cold v1 snapshots preserve bytes; owned upgrade durably preserves raw event 
   await coordinator.close()
 })
 
-it("missing upgrade capability withholds writable v1 before any tail repair", async () => {
-  const { path, raw, backend } = await fixture('{"type":"turn/start","seq":0}\n{"torn":')
-  backend.upgradeSessionFormat = undefined
+it("the composed lane durably upgrades v1 without the backend upgrade method", async () => {
+  // The transition lane stages its own header upgrade, so the backend method is
+  // not the capability gate here. A backend that never had it must still reach
+  // writable format through the composed lane (pre-bind seam, not a later patch).
+  const { path, backend } = await fixture('{"type":"turn/start","seq":0}\n{"torn":', 1, { wrap: b => { delete (b as { upgradeSessionFormat?: unknown }).upgradeSessionFormat } })
   const coordinator = createSessionCoordinator(backend)
-  await expect(coordinator.loadOwned("s")).rejects.toThrow(/upgrade/)
-  expect(await readFile(path, "utf8")).toBe(raw)
+  const owned = await coordinator.loadOwned("s")
+  expect(owned.session.formatVersion).toBe(CURRENT_FORMAT_VERSION)
+  expect(JSON.parse((await readFile(path, "utf8")).split("\n")[0]!)).toMatchObject({ formatVersion: CURRENT_FORMAT_VERSION })
   await coordinator.close()
 })
 
 it.each([2, 3])("unsupported operational payload v%i refuses before any repair/replace", async version => {
-  const { path, raw, backend } = await fixture('{"type":"turn/start","seq":0}\n' + JSON.stringify({ type: "context/recovery", version, ownerSessionId: "s", recoveryId: "r", logicalStepSeq: 0, bindingFingerprint: "a".repeat(64), rejectedInputFingerprint: "b".repeat(64), state: "required", seq: 1 }) + '\n{"torn":', 2)
-  const repair = vi.spyOn(backend, "repair"), replace = vi.spyOn(backend, "replaceEvents")
+  let repairs = 0, replaces = 0
+  const { path, raw, backend } = await fixture('{"type":"turn/start","seq":0}\n' + JSON.stringify({ type: "context/recovery", version, ownerSessionId: "s", recoveryId: "r", logicalStepSeq: 0, bindingFingerprint: "a".repeat(64), rejectedInputFingerprint: "b".repeat(64), state: "required", seq: 1 }) + '\n{"torn":', 2, { wrap: b => {
+    const repair = b.repair!.bind(b), replace = b.replaceEvents!.bind(b)
+    b.repair = async (...args) => { repairs++; return repair(...args) }
+    b.replaceEvents = async (...args) => { replaces++; return replace(...args) }
+  } })
   const coordinator = createSessionCoordinator(backend)
-  await expect(coordinator.loadOwned("s")).rejects.toThrow(/unsupported operational/)
-  expect(repair).not.toHaveBeenCalled(); expect(replace).not.toHaveBeenCalled()
+  // The transition wrapper preserves the machine-readable format code (D-12 #7).
+  await expect(coordinator.loadOwned("s")).rejects.toMatchObject({ code: "SESSION_FORMAT_UNSUPPORTED" })
+  expect([repairs, replaces]).toEqual([0, 0])
   expect(await readFile(path, "utf8")).toBe(raw)
   await coordinator.close()
 })
 
-it("a held/rejected writer upgrade retains a pending batch once and orders the durable header before append", async () => {
-  const { path, raw, backend } = await fixture('{"type":"user/message","text":"old","seq":0}\n')
+it("a failed durable transition retains a pending batch once and orders the header before append", async () => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  const actualUpgrade = backend.upgradeSessionFormat!.bind(backend), actualAppend = backend.append.bind(backend)
-  let appends = 0
-  backend.upgradeSessionFormat = async () => { entered.resolve(); await release.promise; throw new Error("upgrade refused") }
-  backend.append = async (id, events) => { expect((await backend.profile(id)).meta.formatVersion).toBe(CURRENT_FORMAT_VERSION); appends++; await actualAppend(id, events) }
+  let appends = 0, refuseRepair = true
+  // The composed lane upgrades the header before its repair step, so the
+  // reachable refusal point for the writer is repair; the batch must survive it.
+  const { path, raw, backend } = await fixture('{"type":"user/message","text":"old","seq":0}\n', 1, { wrap: b => {
+    const repair = b.repair!.bind(b), append = b.append.bind(b)
+    b.repair = async (...args) => {
+      if (!refuseRepair) return repair(...args)
+      entered.resolve(); await release.promise; throw new Error("repair refused")
+    }
+    b.append = async (id, events) => { expect((await b.profile(id)).meta.formatVersion).toBe(CURRENT_FORMAT_VERSION); appends++; return append(id, events) }
+  } })
   const coordinator = createSessionCoordinator(backend, { maxDelayMs: 60000 })
   coordinator.enqueue("s", [{ type: "user/message", text: "new", seq: 1 }])
   const failed = coordinator.flush("s")
   await entered.promise
   expect(appends).toBe(0); expect(await readFile(path, "utf8")).toBe(raw)
-  release.resolve(); await expect(failed).rejects.toThrow("upgrade refused")
-  expect(appends).toBe(0); expect(await readFile(path, "utf8")).toBe(raw)
-  backend.upgradeSessionFormat = actualUpgrade
-  await coordinator.flush("s"); await coordinator.flush("s")
-  expect(appends).toBe(1)
-  expect((await backend.read("s")).events.map(event => event.seq)).toEqual([0, 1])
-  await coordinator.close()
+  release.resolve()
+  const failure = await failed.then(() => undefined, error => error)
+  expect(failure.message).toBe("TASK_TRANSITION_FAILED")
+  expect((failure.cause as Error).message).toBe("repair refused")
+  expect(appends).toBe(0)
+  // An unknown durable write poisons the process-read latch: the pending batch
+  // stays retained and an unsafe retry is refused until the coordinator restarts.
+  refuseRepair = false
+  await expect(coordinator.flush("s")).rejects.toThrow("PROCESS_READ_UNAVAILABLE")
+  expect(appends).toBe(0)
+  // The retained batch cannot be persisted without a restart: shutdown reports
+  // the debt instead of silently dropping it.
+  await expect(coordinator.close()).rejects.toThrow(/Failed to persist sessions during shutdown/)
 })
 
 it("the durable header upgrade preserves metadata fields outside this reader's schema", async () => {
