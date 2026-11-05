@@ -69,12 +69,12 @@ it('recovers the same real1MiB background artifact after losing its original fin
     expect(first.retained).toBeUndefined()
     expect({ launches, opens, finishes, observers }).toEqual({ launches: 1, opens: 1, finishes: 1, observers: 0 })
     expect(committedRef?.codec).toBe('exec-frames-v1')
+    // A passive read retries the same pending capture; the actual store returns
+    // its original immutable receipt without a new begin/write/process. Reads are
+    // refused once the service is disposed, so observe it while still live.
     exec.getOutput(jobId)
-    // Close joins the same pending capture. The actual store returns its
-    // original immutable receipt; no new begin/write/process is allowed.
+    await expect.poll(() => exec.getOutput(jobId).retained, { timeout: 10_000 }).toMatchObject({ sourceId: 'process:execution-1', retention: { kind: 'artifact', ref: committedRef } })
     await exec.dispose()
-    const retained = exec.getOutput(jobId).retained
-    expect(retained).toMatchObject({ sourceId: 'process:execution-1', retention: { kind: 'artifact', ref: committedRef } })
     expect({ launches, opens, writes, finishes }).toEqual({ launches: 1, opens: 1, writes: originalWrites, finishes: 2 })
     cold = createContextOutputService({ root, workspaceId: 'fixture', config: { enabled: false, maxDiskBytes: 8_388_608 } })
     const chunks: Buffer[] = []; let offset = 0

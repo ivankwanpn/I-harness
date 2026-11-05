@@ -377,17 +377,21 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         replacementDependencies: history.dependencies,
         softReduction: soft.read,
         stage(suffix, options) {
-            for (const event of suffix)
+            // Walk the proposed suffix exactly once: every later phase, including
+            // staged reads and bootstrap readiness, operates on this owned copy so a
+            // caller-supplied sequence is never re-enumerated per element.
+            const proposed = Array.from(suffix);
+            for (const event of proposed)
                 validateRuntimeContextDiscriminant(event, formatVersion);
             if (capability === semanticSourceStructure)
-                for (const event of suffix)
+                for (const event of proposed)
                     validateSemanticSourceEventShape(event, formatVersion);
             const readCurrent = options?.readCurrentEvent ?? read;
             const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0;
-            if (restoredSource) validateCommittedBootstrapSuffix(suffix,formatVersion,scope,count);
-            else validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...suffix], formatVersion, scope, capability);
-            const staged = beginStage(readCurrent, position => suffix[position - count]);
-            for (const event of suffix)
+            if (restoredSource) validateCommittedBootstrapSuffix(proposed,formatVersion,scope,count);
+            else validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...proposed], formatVersion, scope, capability);
+            const staged = beginStage(readCurrent, position => proposed[position - count]);
+            for (const event of proposed)
                 staged.advance(event);
             return staged.finish();
         },

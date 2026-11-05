@@ -142,6 +142,19 @@ round 194：sdk 由 5 紅降到 **3 紅**。
        屬產品爭用問題，不是測試期待問題；需追 `createCliForkHost.withReadyTarget` 與
        coordinator 的 session lock。
 
+round 195：三個小套件收尾。
+  - `exec` 的 `retention-store-recovery`：紅在 `await exec.dispose()` 之後才
+    `exec.getOutput(jobId).retained`——產品在 dispose 期間就把 `disposed` 設 true，之後所有
+    job 讀取都按設計回 `unknown job`。改成**在服務還活著時**用 `expect.poll` 等被動重試
+    完成（`finishes` 照樣 2、冷讀仍驗 1MiB sha256）→ 1/1。
+  - `core-session` 的 `exchange-acceptance`「indexes a large prefix once」：真因是
+    **prefix 被走訪 3 次**（實測 stage 1000 筆讓 `visits` 由 20000 暴增到 60000）。追蹤發現
+    `stage()` 對呼叫端給的序列重複枚舉（discriminant 驗證、readiness 的 `[...suffix]`、
+    staged read、`advance` 各走一次）。修法：`stage()` 進來就用 `Array.from(suffix)` 取得
+    **自有副本**，之後全部用這份副本（也順帶修掉「一次性 iterable 會被展開兩次」的潛在 bug）。
+    → `exchange-acceptance` 30/30、core-session 全套 **933/933**。
+  - `acp`：本輪重跑已全綠（先前記錄的 CLI stdio `-32603` 已被 instructions 那批修正帶過）。
+
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
 
@@ -158,6 +171,9 @@ round 194：sdk 由 5 紅降到 **3 紅**。
 > （由 13 紅）：instruction-start-recovery 5/5、surface-publication 7/7、
 > output-owner-boundaries 3/3、store 11/11、register 12/12。剩餘紅：core-agent 33（seam 遷移類）、
 > sdk 5、exec 1、acp 1、core-session 1（效能）、sandbox-windows-acl 2（native）。
+> **round 195**：`exec` **全綠**、`acp` **全綠**（重跑即過，無需改動）、
+> `core-session` **87/87 檔、933/933**。剩：sdk 3、sandbox-windows-acl 2（native）、
+> session-persistence-jsonl 全套。
 > **round 191**：core-agent 由 9 紅檔 / 33 failed 降到 **3 紅檔 / 13 failed**——
 > soft-sequence-settlement 3/3、retained-boundaries 3/3、held-policy-receipt 1/1、
 > current-context-loopback 2/2、instruction-request-context 12/12 全綠；剩下

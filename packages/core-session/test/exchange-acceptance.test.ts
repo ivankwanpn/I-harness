@@ -105,9 +105,11 @@ describe("durable exchange acceptance", () => {
   })
   it("indexes a large prefix once and visits only each proposed suffix", () => {
     let visits = 0
+    // The index reads the retained prefix by ordinal, so visitation is counted on
+    // the numeric reads rather than on entries() enumeration.
     function observed(events: SessionEvent[]): SessionEvent[] {
       return new Proxy(events, { get(target, key, receiver) {
-        if (key === "entries") return function* () { for (let index = 0; index < target.length; index++) { visits++; yield [index, target[index]] as const } }
+        if (typeof key === "string" && /^(0|[1-9]\d*)$/.test(key)) visits++
         return Reflect.get(target, key, receiver)
       } })
     }
