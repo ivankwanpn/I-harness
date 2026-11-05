@@ -1165,6 +1165,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 46 (implemented 2026-11-06): scan cache measurement
+
+`scan-cache-bench.test.ts` builds 40 sessions x 30 events and times a second full read pass: **17 ms with the cache disabled
+(`IH_COMMIT_SCAN_CACHE=0`) vs 7 ms with it enabled** on this machine — the parse savings are real, while the file read stays the
+floor for this small corpus. The env flag is also an escape hatch if the cache is ever suspected.
+
 ## Plan 45 (implemented 2026-11-06): CLI sessions show on SCL
 
 `sessions list` and `sessions show` (transcript and `--json`) both read an SCL store through `runSessionsCommand`; the test seeds a

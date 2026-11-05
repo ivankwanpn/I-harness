@@ -163,6 +163,7 @@ export async function createCommitLog(options: CommitLogOptions, first: CreateIn
   }
 }
 
+const SCAN_CACHE_ENABLED = process.env.IH_COMMIT_SCAN_CACHE !== '0'
 const scanCache = new Map<string, { length: number; records: readonly CommitRecord[] }>()
 const SCAN_CACHE_LIMIT = 64
 function cacheScan(key: string, length: number, records: readonly CommitRecord[]): void {
@@ -183,9 +184,9 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
     // Logs are append-only, so an unchanged byte length means an unchanged
     // record set; repeated read opens (profile/list/load) reuse the parse.
     const cacheKey = root + '|' + sessionId
-    const cached = mode === 'read' ? scanCache.get(cacheKey) : undefined
+    const cached = mode === 'read' && SCAN_CACHE_ENABLED ? scanCache.get(cacheKey) : undefined
     const scan = cached && cached.length === bytes.length ? { records: cached.records, tornBytes: 0 } : scanCommitLog(bytes)
-    if (mode === 'read' && (!cached || cached.length !== bytes.length)) cacheScan(cacheKey, bytes.length, scan.records)
+    if (mode === 'read' && SCAN_CACHE_ENABLED && (!cached || cached.length !== bytes.length)) cacheScan(cacheKey, bytes.length, scan.records)
     if (scan.records.length === 0) throw new CommitFormatError('corrupt', 'commit log has no complete commit')
     let size = bytes.length
     let handle: FileHandle | undefined

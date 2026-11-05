@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 293（scan cache 量測）**：40 sessions × 30 events 的第二輪讀取：cache off 17ms、cache on 7ms（約 2.4×）。
+> 新增 `IH_COMMIT_SCAN_CACHE=0` escape hatch 與 benchmark 測試。
 > **round 292（CLI sessions show）**：`sessions show`（transcript 與 `--json`）在 SCL store 通過；argv 需含 `sessions`
 > token（parser 會 slice 第一個元素）。
 > **round 291（read scan cache）**：read 開啟的 log 以 byte length 驗證、快取 64 筆 parsed records；append 改變長度即失效。
