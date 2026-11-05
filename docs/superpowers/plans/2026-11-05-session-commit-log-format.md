@@ -1132,6 +1132,13 @@ the selection/witness lifecycle, not storage.
 
 `inspectChildBootstrap(request)` now answers from the commit log: `ready` when the target header carries the same operation id,
 `conflict` for a different operation, `absent` when the target does not exist. This gives the gateway project-scope admission a
+
+Verification: the full `session-persistence` suite has a pre-existing red list unrelated to the commit-log work —
+`delivery-facts` (48), `fork-controller` (32), `repair` (8) and `ownership` (18) all fail on the legacy
+`createSessionCoordinator` gate (`TASK_TRANSITION_UNSUPPORTED` because format >= 14 requires the composed transition storage) or
+on the win32 real-lock tests, and `child-bootstrap-intent` has one stale digest expectation in the legacy reservation encoding.
+None of these files import the commit-log package; the commit suites stay green.
+
 defined answer instead of the previous absent capability (the caller still guards).
 
 

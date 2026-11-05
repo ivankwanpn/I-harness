@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 279（full session-persistence 紅燈分類）**：全套件紅燈皆為既有 baseline——legacy `createSessionCoordinator` 的
+> `TASK_TRANSITION_UNSUPPORTED` gate（delivery-facts 48、fork-controller 32、repair 8）、win32 real-lock（ownership 18）、
+> 以及 child-bootstrap-intent 一個舊 digest 期望；皆不 import commit package，SCL 套件維持全綠。
 > **round 278（child-birth inspection）**：`inspectChildBootstrap` 以 log header 的 operationId 回 ready／conflict／absent，
 > 補上 gateway project-scope admission 的查詢能力。
 > **round 277（artifact retention／result page）**：200KB `read` 產生 artifact retention（json-utf8-v1），`session/result/read`
