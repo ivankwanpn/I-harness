@@ -5,6 +5,10 @@ const isOriginalRetryable = (error: unknown): boolean => error instanceof Recipi
   || error instanceof OriginalTerminalRecoveryError
 export const isRetryableDeliveryError = (error: unknown): boolean => isOriginalRetryable(error)
   || error instanceof DeliverySourcesError && error.errors.some(isOriginalRetryable)
+/** A write that was issued but is still installing is a transient window, not a
+ *  delivery failure: the same reconcile succeeds once the write settles. */
+export const isTransientWriteReconciliation = (error: unknown): boolean =>
+  error instanceof Error && /Original issued write needs reconciliation|Writer prefix changed|Original writer dependency cleanup unresolved/i.test(error.message)
 
 /** Scheduling only. Original captures, Inbox and the existing serial lane own
  * the work; this loop has no model executor or persistent state of its own. */
@@ -26,7 +30,7 @@ export function createDeliveryDrain(options: {
       while (dirty && !retired && options.current()) {
         dirty = false
         let failed = false, retryable = false
-        try { await options.reconcile() } catch (error) { failed = true; retryable = isRetryableDeliveryError(error); options.report(error) }
+        try { await options.reconcile() } catch (error) { failed = true; retryable = isRetryableDeliveryError(error) || isTransientWriteReconciliation(error); if (!isTransientWriteReconciliation(error)) options.report(error) }
         if (retired || !options.current()) return
         // Source failure cannot erase already committed eligible inputs. The
         // actual owner readiness still gates registration on the normal lane.

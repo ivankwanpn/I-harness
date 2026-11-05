@@ -895,6 +895,14 @@ reports as `Original issued write needs reconciliation`; the selection owner the
 now retries that specific transient failure (up to 40 times, 25 ms apart) before failing the row; schedule create/list/delete
 passes 5/5 on SCL.
 
+## Plan 12 (implemented 2026-11-05): transient write reconciliation in the delivery drain
+
+After the prefix fix, the delivery drain still logged `private delivery reconciliation failed: Original issued write needs
+reconciliation` / `Original writer dependency cleanup unresolved`: those are the execution state's **in-flight** write
+windows, not delivery failures. `delivery-drain.ts` now classifies them as transient (retryable, not reported); the drain
+retries with its existing backoff. The SCL host turn and schedule tests emit no reconciliation warnings, and the legacy host
+suite still passes.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
