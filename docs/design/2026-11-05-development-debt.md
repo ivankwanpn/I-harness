@@ -538,6 +538,8 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
 round 115：`code-retrieval` **4 檔 / 54 tests 全綠**；`code-mode` **10 檔紅 / 18 檔綠
   **round 117 已遷移**：8 個 code-mode 測試檔改用 composed 建構子 → **9 檔紅 / 19 檔綠，
   **round 121 遷移配方**（給下一輪照做）：測試目前是 `backend.appendOwnedBatch = async (...args)=>…`
+  **round 122 首例完成**：`broker.test.ts` 的 `appendOwnedBatch` 掛鉤搬進 `wrapOwnedBatch` →
+  **11/11 全綠**（原本 `PROCESS_READ_UNAVAILABLE`）。其餘檔案照同一模式處理。
   與 `backend.reconcileOwnedBatch = …` 的建構後賦值。改法是：把包裹邏輯改寫成
   `createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => { …原邏輯，用 append 當原方法… },
   wrapOwnedReconcile: reconcile => async (...args) => { … } })`；需要跨測試共享的計數器/旗標先

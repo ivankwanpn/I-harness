@@ -12,7 +12,12 @@ import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts
 
 it('retains the real finalized managed result through uncertainty without redispatch or synthetic replacement', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-'))
-  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const backend = createJsonlBackend(root, { wrapOwnedBatch: append => async (...args) => {
+    const events = decodeFactBatch(args[3].bytes).events
+    const outcome = await append(...args)
+    if (events.some(event => event.type === 'code/result')) { key = args[3].key; return { kind: 'unknown', key } }
+    return outcome
+  } }), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let effects = 0, finalizations = 0, conversions = 0, key: import('@i-harness/core-session').BatchKey | undefined
@@ -23,13 +28,6 @@ it('retains the real finalized managed result through uncertainty without redisp
     expect(facts.some(event => event.type === 'code/dispatch')).toBe(true)
     effects++; return { toJSON() { conversions++; return { actual: 'result' } } }
   } })
-  const actual = backend.appendOwnedBatch!
-  backend.appendOwnedBatch = async (...args) => {
-    const events = decodeFactBatch(args[3].bytes).events
-    const outcome = await actual(...args)
-    if (events.some(event => event.type === 'code/result')) { key = args[3].key; return { kind: 'unknown', key } }
-    return outcome
-  }
   const broker = createCodeModeBroker(ctx, tools, { session: document.view as any, sessionId: id, factOwner: document } as any)
   broker.startCell('cell')
   try {
