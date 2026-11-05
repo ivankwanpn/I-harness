@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 335（未知 session 視圖）**：`processes/read`／`execution/read` 對不存在的 session 回 `does not exist`（-32602）。
 > **round 334（冷輸出錯誤）**：`processes/job-output`／`terminal-output` 對未知 id 回 `… unavailable for this owner`（-32602）。
 > **round 333（冷視圖形狀）**：`processes/read` 冷 session 為 `{live:false, terminals:[], jobs:[]}`；`execution/read` 為
 > `{live:false, cells:[], total:0}`，已由 turn 測試固定。

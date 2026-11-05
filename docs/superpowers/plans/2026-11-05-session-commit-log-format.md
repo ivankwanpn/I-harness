@@ -1191,6 +1191,12 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 80 (implemented 2026-11-06): missing sessions fail the view reads
+
+`processes/read` and `execution/read` for a session that does not exist reject with
+`commit log for session "<id>" does not exist` (-32602), matching `schedule/list`; a stale id cannot look like an idle session.
+
 ## Plan 79 (implemented 2026-11-06): cold output reads are owner-scoped errors
 
 `processes/job-output` and `processes/terminal-output` for an unknown id on a cold commit-log session answer with -32602

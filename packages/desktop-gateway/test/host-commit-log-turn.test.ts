@@ -67,6 +67,8 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
     expect(processes).toMatchObject({ live: false })
     expect(processes.terminals).toEqual([])
     expect(processes.jobs).toEqual([])
+    await expect(call('desktop/session/processes/read', { sessionId: 'missing-session' })).rejects.toThrow(/does not exist/)
+    await expect(call('desktop/session/execution/read', { sessionId: 'missing-session', offset: 0, limit: 10 })).rejects.toThrow(/does not exist/)
     await expect(call('desktop/session/processes/job-output', { sessionId: created.sessionId, id: 'missing-job' })).rejects.toThrow(/Job output unavailable for this owner/)
     await expect(call('desktop/session/processes/terminal-output', { sessionId: created.sessionId, id: 'missing-terminal' })).rejects.toThrow(/Saved terminal output unavailable for this owner/)
     const executionSurface = await call('desktop/session/execution/read', { sessionId: created.sessionId, offset: 0, limit: 10 }) as { live?: boolean; cells?: unknown[]; total?: number }
