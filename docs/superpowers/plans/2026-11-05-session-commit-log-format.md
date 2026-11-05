@@ -749,6 +749,16 @@ their legacy implementation is coupled to the ownership batch protocol. The SCL-
 ordering, and revocation is a durable marker plus a registry of live attachments. That design is the next plan (Plan 6), followed by
 `withProcessReadObservation` over the fold.
 
+## Plan 6a (implemented 2026-11-05): process read observation
+
+- `src/commit/process-read.ts` implements `withProcessReadObservation` over the fold: it captures the session view, the
+  high-water mark and the requested documents (`documentKeys`, absent/present), hands that exact snapshot to the callback,
+  and reports appended events as `{kind:'suffix', from, to, events}` from `check()`. A shrink or a rewritten prefix refuses
+  with `PROCESS_READ_UNAVAILABLE`; after the call the observation is retired and `assertCurrent` refuses.
+- The coordinator exposes it; the facade forwards it, which is what `agent-process-read.ts` requires before it will read
+  result pages.
+- Tests: capture + suffix + publish, and a retired observation refusing `assertCurrent`.
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

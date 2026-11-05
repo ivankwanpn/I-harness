@@ -13,6 +13,7 @@ import { bootstrapManifest, buildBootstrapHeader, captureBootstrapRequest } from
 import type { BootstrapRequest } from '../coordinator/bootstrap-types.ts'
 import { openCommitManagedDocument } from './managed.ts'
 import { openCommitExecution } from './execution.ts'
+import { withCommitProcessReadObservation } from './process-read.ts'
 
 /**
  * v1 commit-log coordinator: the session view is a fold of one commit log.
@@ -60,6 +61,7 @@ export type CommitCoordinator = {
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   openManagedDocument(sessionId: string): Promise<ManagedDocument>
   acquireExecution(sessionId: string): Promise<import('../execution-internal.ts').ManagedExecutionAttachment>
+  withProcessReadObservation<T, U>(id: string, options: import('../coordinator/process-read-owner.ts').ProcessReadOptions, work: (observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('../coordinator/process-read-owner.ts').ProcessReadObservation, last: import('../coordinator/process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
   closeManagedDocument(sessionId: string): Promise<void>
   revokeManagedDocumentNewWork(sessionId: string): void
   list(): Promise<string[]>
@@ -355,6 +357,9 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
       const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf })
       managed.set(sessionId, document)
       return document
+    },
+    withProcessReadObservation(id, options, work, publish) {
+      return withCommitProcessReadObservation({ open: sessionId => open(sessionId, 'read'), getDocument: getDocumentOf, metaOf }, id, options, work, publish)
     },
     async acquireExecution(sessionId) {
       let log = owned.get(sessionId)
