@@ -5,9 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  chokidar@5.0.0:
-    hash: e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0
-    path: patches/chokidar@5.0.0.patch
+  chokidar@5.0.0: e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0
 
 importers:
 
@@ -1240,6 +1238,12 @@ importers:
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
+
+  packages/session-commit-log:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
 
   packages/session-executor:
     dependencies:
