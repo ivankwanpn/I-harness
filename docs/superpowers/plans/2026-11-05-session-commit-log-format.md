@@ -773,6 +773,22 @@ batch ledger (`assertOriginalBatchParticipant`). The workable path is to give th
 instance for ordering + revocation, and build the observations/admission over SCL-backed backend adapters (`putDocument`,
 `getDocument`, `readDocumentObserved`, `profile`). That keeps one ownership identity for both capabilities.
 
+## Plan 6c (implemented 2026-11-05): real ownership for ordering + revocation
+
+- `src/commit/capabilities.ts` builds a **real** `createOwnership` over a capability sub-root (`<root>/.capabilities`):
+  it reuses the canonical JSONL artifact-path resolution bound to that sub-root, and exposes the documents/profile it needs.
+  Session data stays in the commit log; this ownership only carries the cross-session capability ledgers.
+- `createBindingObservations(backend, ownership).createResultRevocationAdmission(ownership)` is registered with
+  `associateOriginalResultRevocation`, and result ordering is now associated with the same ownership instance (replacing
+  the earlier shim) — so ordering participants validate through the real batch ledger.
+- Tests: ordering registration/expiry/cross-coordinator refusal, and a full revocation ticket cycle
+  (`beginOriginalResultOrderingRegistration` → `commit(participant)` → `issueOriginalResultRevocationScope` →
+  `admission.begin` → `close`).
+
+**Next gateway blocker:** the owned gateway now mounts past revocation and fails at `registerSubagent` with
+`Original managed Task host required`, i.e. `captureOwnedTaskContext` found no `associateTaskDocumentOperations` port.
+That task-document/registry capability is the next port to build on SCL (Plan 7).
+
 ## Follow-on plans (not in this plan)
 
 1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.

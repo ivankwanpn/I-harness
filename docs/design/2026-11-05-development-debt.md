@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 237（SCL capability ownership）**：`<root>/.capabilities` 的真實 `createOwnership`＋binding observations，
+> ordering 與 revocation 共用同一 ownership 並通過 participant 驗證；4 tests 全綠。gateway 已越過 revocation，
+> 下一個缺口是 `associateTaskDocumentOperations`（task registry port）。
 > **round 236（SCL result ordering）**：`associateOriginalResultOrdering` 以最小 ledger owner 接上（lease＋commit 順序即 ordering），
 > 3 tests 全綠。revocation 需真實 `createOwnership` 的 batch participant，下一步（Plan 6c）以同一 ownership 建 observations／admission。
 > **round 235（SCL process read）**：`withProcessReadObservation` 以 fold snapshot 實作（initial.session/highWater/documents、

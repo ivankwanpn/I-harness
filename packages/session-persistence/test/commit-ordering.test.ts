@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { captureOriginalResultOrderingRegistration, beginOriginalResultOrderingRegistration } from '../src/result-ordering-internal.ts'
+import { issueOriginalResultRevocationScope, originalResultRevocationFor } from '../src/coordinator/result-revocation.ts'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
 import { asSessionCoordinator } from '../src/commit/facade.ts'
 
@@ -19,15 +20,29 @@ afterEach(async () => {
   for (const coordinator of coordinators.splice(0)) await coordinator.close().catch(() => {})
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
 })
+const participant = () => Object.freeze({ assertOutside() {}, reserve() {} })
 
-describe('commit-log result ordering', () => {
+describe('commit-log result ordering and revocation', () => {
   it('issues and validates one ordering registration per ledger identity', async () => {
     const { coordinator } = await setup()
     const facade = asSessionCoordinator(coordinator)
     const registration = beginOriginalResultOrderingRegistration(facade as never, {})
     captureOriginalResultOrderingRegistration(facade as never, registration)
-    registration.commit({} as never)
-    expect(() => registration.commit({} as never)).toThrow(/expired/)
+    registration.commit(participant() as never)
+    expect(() => registration.commit(participant() as never)).toThrow(/expired/)
+  })
+
+  it('issues and closes a revocation ticket against the same ownership', async () => {
+    const { coordinator } = await setup()
+    const facade = asSessionCoordinator(coordinator)
+    const member = participant()
+    const registration = beginOriginalResultOrderingRegistration(facade as never, {})
+    registration.commit(member as never)
+    const admission = originalResultRevocationFor(facade as never)
+    const scope = issueOriginalResultRevocationScope(admission, { kind: 'session', sessionIds: ['s1'] }, member as never)
+    const ticket = admission.begin(scope)
+    ticket.assertCurrent()
+    await ticket.close()
   })
 
   it('refuses a registration issued by a different coordinator', async () => {
