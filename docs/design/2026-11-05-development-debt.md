@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 298（雙程序 writer lease）**：子程序持有 write lease 時父程序寫入開啟被拒；kill 後父程序可接管、append，
+> 新讀取看到新事件（證明程序死亡會釋放鎖）。
 > **round 297（fold property test）**：5 個 seed × 25 commits 的隨機 op 序列，重新編碼／掃描（驗 seq/prev/digest）後與獨立
 > 參考模型比對 fold 結果。
 > **round 296（SCL 全套回歸）**：host 13 檔/14、commit-log 7 檔/32、commit suites 9 檔/37，共 83 tests 全綠、無 flake。

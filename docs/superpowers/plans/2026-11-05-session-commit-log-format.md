@@ -1170,6 +1170,14 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 51 (implemented 2026-11-06): two-process writer lease
+
+The ADR verification item "two processes, one writer" now has a dedicated test: a child process (`node --experimental-transform-types`,
+since the sources use parameter properties) opens the session for write and holds the lease; the parent write open rejects within its
+deadline; after the child is killed the parent opens write, appends and a fresh read sees the new entry. This also proves the lock
+is released by process death (no stale-writer deadlock).
+
 ## Plan 50 (implemented 2026-11-06): fold property test
 
 `fold-property.test.ts` generates deterministic random op sequences (header, meta, doc, doc-clear, intent, intent-done, batch,
