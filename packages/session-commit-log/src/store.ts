@@ -163,6 +163,14 @@ export async function createCommitLog(options: CommitLogOptions, first: CreateIn
   }
 }
 
+const scanCache = new Map<string, { length: number; records: readonly CommitRecord[] }>()
+const SCAN_CACHE_LIMIT = 64
+function cacheScan(key: string, length: number, records: readonly CommitRecord[]): void {
+  scanCache.delete(key)
+  scanCache.set(key, { length, records })
+  while (scanCache.size > SCAN_CACHE_LIMIT) scanCache.delete(scanCache.keys().next().value as string)
+}
+
 export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMode): Promise<CommitLog> {
   const io = options.io ?? nodeIo
   const { root, sessionId } = options
@@ -172,7 +180,12 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
     if (mode === 'write') lease = await acquireCommitLease(sessionId, { lockRoot: options.lockRoot ?? root, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs })
     const bytes = await readGeneration(io, path)
     if (!bytes) throw new CommitLogNotFoundError(sessionId)
-    const scan = scanCommitLog(bytes)
+    // Logs are append-only, so an unchanged byte length means an unchanged
+    // record set; repeated read opens (profile/list/load) reuse the parse.
+    const cacheKey = root + '|' + sessionId
+    const cached = mode === 'read' ? scanCache.get(cacheKey) : undefined
+    const scan = cached && cached.length === bytes.length ? { records: cached.records, tornBytes: 0 } : scanCommitLog(bytes)
+    if (mode === 'read' && (!cached || cached.length !== bytes.length)) cacheScan(cacheKey, bytes.length, scan.records)
     if (scan.records.length === 0) throw new CommitFormatError('corrupt', 'commit log has no complete commit')
     let size = bytes.length
     let handle: FileHandle | undefined

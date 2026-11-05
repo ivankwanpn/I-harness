@@ -1163,6 +1163,14 @@ Note: a `shell` tool call (echo) executes and commits its tool/result on SCL, bu
 a cold session. The artifact assertion in the turn test now selects the `read` result by tool name so a later tool cannot shadow it.
 
 
+
+## Plan 44 (implemented 2026-11-06): read-open scan cache
+
+`openCommitLog(read)` re-scanned and JSON-parsed the whole generation on every open, and the desktop lists call `profile` per
+session. Commit logs are append-only, so an unchanged byte length means an unchanged record set: read opens now reuse the parsed
+records from a bounded (64-entry, LRU by insertion) cache keyed by root+session; an append changes the length and forces a fresh
+scan. Write opens always scan (they need torn-tail bytes). `scan-cache.test.ts` covers reuse and invalidation.
+
 ## Plan 43 (implemented 2026-11-06): incremental journal prefix
 
 `commitPrefix` re-serialized the entire event history to compute `bodyBytes` on every call, which is O(n) per commit (and the
