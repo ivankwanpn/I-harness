@@ -302,7 +302,8 @@ reachability 仍是 71 NEW（沒有新增 row）。
   （predecessor 階段已在舊 build 完成，current resume 直接視為已就緒）。
 
 **量測（round 10 結束，空載重跑）**：`session-persistence-jsonl` 全套
-**107 failed / 750 passed / 17 skipped（26 個紅檔，共 98 檔）**。
+**106 failed / 751 passed / 17 skipped（26 個紅檔，共 98 檔）**
+（round 34 空載重跑；P18 修正後 +1，與 round 10 的 107/750 對帳一致）。
 
 - round 8/9 結束時是 152 failed / 705 passed（26 紅檔）。
 - round 10 的 `bootstrap-capture-physical` 遷移：-45 failed、+45 passed（56/61），
@@ -537,8 +538,8 @@ node scripts/test-env.mjs pnpm --filter @i-harness/session-persistence-jsonl exe
   由 round 6 的 70 NEW 經 17 批移除（~50 筆 export）與 dated allowlist 收斂。
 
 **測試債務現況**：
-- `session-persistence-jsonl` 全套 107 failed / 750 passed / 26 紅檔（round 10 量測；
-  P18 修正後此檔再 +1，全套未重跑）。
+- `session-persistence-jsonl` 全套 **106 failed / 751 passed / 17 skipped / 26 紅檔**
+  （round 34 空載重跑；98 檔）。
 - 三個 A 類檔的語義紅共 25 筆：`bootstrap-physical` 12、`bootstrap-capture-physical` 4、
   `current-context-predecessors` 9（逐條形狀見上文第 4 項）。
 - 其餘 jsonl 紅檔：`task-transition-*` header/close 群、`semantic-publication` 24、
