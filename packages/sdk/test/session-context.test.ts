@@ -6,7 +6,8 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { toJSONL, type SessionEvent } from '@i-harness/core-session'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 
 it('serves literal replacement records and cold context through actual SDK readers with no model preparation', async () => {
@@ -20,7 +21,7 @@ it('serves literal replacement records and cold context through actual SDK reade
   lines[0] = JSON.stringify({ ...JSON.parse(lines[0]!), sessionId: 's', createdAt: 'literal' })
   const raw = lines.join('\n'), path = join(root, 's.jsonl')
   await writeFile(path, raw)
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   let preparations = 0
   const service = createSessionService({ workspace: root, coordinator, modelBindingFor: async () => { preparations++; return { status: 'unconfigured', reason: 'read only fixture' } } })
   const server = createSdkServer(service, { coordinator })
@@ -61,7 +62,7 @@ it('cold SDK history preserves complete retained descriptors without preparation
   const path=join(root,'retained.jsonl'), lines=toJSONL({formatVersion:10,events}).split('\n')
   lines[0]=JSON.stringify({...JSON.parse(lines[0]!),sessionId:'retained',createdAt:'literal'})
   const raw=lines.join('\n'); await writeFile(path,raw)
-  const coordinator=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
   let preparations=0,assemblies=0
   const service=createSessionService({workspace:root,coordinator,modelBindingFor:async()=>{preparations++;return {status:'unconfigured',reason:'read fixture'}}})
   const off=service.onAssembly(()=>{assemblies++}), server=createSdkServer(service,{coordinator})

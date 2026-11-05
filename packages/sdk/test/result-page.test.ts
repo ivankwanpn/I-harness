@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { acquireAssemblyResultStore } from '../../session-executor/src/lifecycle/result-store.ts'
 import { createSessionService } from '@i-harness/session-executor'
@@ -12,7 +13,7 @@ import { HarnessClient } from '../src/client.ts'
 import { decodeFrame, encodeFrame, makeRequest } from '../src/protocol.ts'
 
 it('requires an injected host port, reads a cold original result and refuses malformed pages before host admission', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'sdk-result-')), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'sdk-result-')), coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const settings = join(root, 'settings.json'); await writeFile(settings, '{}')
   await coordinator.create({ sessionId: 's' }); await coordinator.flush('s')
   const lease = await acquireAssemblyResultStore({ workspace: root, coordinator, sessionId: 's', contextOutputSettingsPath: settings }), owner = lease.service!
@@ -20,7 +21,7 @@ it('requires an injected host port, reads a cold original result and refuses mal
   const sink = await owner.beginResult(scope, 'json-utf8-v1'); await sink.write(Buffer.from('{"answer":42}'))
   const saved = await sink.finish('complete'); if (saved.kind !== 'committed') throw new Error('Original fixture refused')
   await lease.release(); await coordinator.close()
-  const cold = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const cold = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   let executions = 0, admissions = 0
   const service = createSessionService({ workspace: root, coordinator: cold, contextOutputSettingsPath: settings, modelBindingFor: async () => { executions++; throw new Error('No model may prepare') } })
   const base = createSdkServer(service), hosted = createSdkServer(service, { readResultPage: (id, query) => { admissions++; return service.readResultPage!(id, query) } })
