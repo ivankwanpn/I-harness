@@ -1200,6 +1200,18 @@ gateway native context rather than the host log.
 
 
 
+## Plan 95 (found, not fixed): archive refuses after a search in the same host
+
+In the search host test, after a prompt, `session/list`, `desktop/session/search` and the context-picker calls, archiving the same
+session fails:
+
+- `desktop/session/manage {action:"archive"}` → `Session management is in progress or session is deleted`;
+- `desktop/session/batch {action:"archive"}` → the same error in its per-session result, and `profile().meta` therefore never carries
+  `archived` (so the picker keeps returning and reading the session).
+
+The management test archives right after a prompt and passes, so one of the intervening calls leaves the session busy; the next
+investigation is to isolate which call (search fallback / context read) holds the management fence or a live execution.
+
 ## Plan 94 (implemented 2026-11-06): context files search and project guard
 
 `context/search` in `files` mode walks the workspace and returns `{kind:"file", path:"notes.txt"}` for a matching file, and

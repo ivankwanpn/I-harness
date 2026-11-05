@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 352（archive 卡住）**：prompt→list→search→context 之後，manage/batch archive 都回 `Session management is in progress or
+> session is deleted`，profile 沒有 archived。已回退探測；待隔離是哪個呼叫讓 session 變成 busy。
 > **round 351（context files／project guard）**：files 模式命中 `notes.txt`；跨專案 session reference 被拒
 > （`Session reference is outside the current project`）。
 > **round 350（context read）**：正確參數為 `{reference:{kind:"session", workspaceId, sessionId, seq}}`，回 `{text, truncated:false}`
