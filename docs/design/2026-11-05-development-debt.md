@@ -180,6 +180,10 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 199**：sdk child-context 的 model-origin spawn 改寫**嘗試過但已還原**——把 parent 改成由模型
+> yield `spawn_agent` tool_call 後，parent turn 收到 `This operation was aborted`
+> （task 從未建立）。下次先查 submit 的 abort 來源（durable session 是否需要 inbox admission、
+> 或背景子代理啟動時取消了 parent signal），再重做。
 > **round 198**：`sandbox-windows-acl` **全綠（40 檔綠 / 5 skipped，382 passed / 5 skipped）**。
 > 兩筆紅的真因不是 native 環境，而是 `init-owner-repair.test.ts` 的 mock API 缺了
 > `convertSidToStringSidW`（產品 `pipe-sid.ts:logonSidText` 現在會呼叫它）以及 koffi
