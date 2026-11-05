@@ -1,11 +1,11 @@
 import { createSessionCoordinatorCore } from './coordinator-factory.ts'
 export { captureBootstrapRoute, captureBootstrapCaptureRoute, childBootstrapPathKey, routeInvocation, routeForReservation, encodeOwnedCaptureReservation, parseOwnedCaptureReservation, validateOwnedCaptureStage, validateChildCaptureStage } from './coordinator/bootstrap-route.ts'
-export type { BootstrapRoute, BootstrapCaptureRoute, BootstrapRouteBackend, ResolvedBootstrapBirth } from './coordinator/bootstrap-route.ts'
+export type { BootstrapRoute, BootstrapCaptureRoute, BootstrapRouteBackend } from './coordinator/bootstrap-route.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from "./coordinator/types.ts"
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
 export * from './fork-contract.ts'
 export { createForkSessionController, ForkAdmissionError, ForkTargetPolicyDeniedError } from './fork-controller.ts'
-export type { ForkSessionController, ForkHost, ForkExecutionControl, ForkSourceWitness, ForkHandoffMode, ForkHandoff } from './fork-controller.ts'
+export type { ForkSessionController, ForkHost, ForkExecutionControl, ForkSourceWitness, ForkHandoff } from './fork-controller.ts'
 export { compileSemanticSeed } from './semantic-seed.ts'
 export type { CompiledSemanticSeed } from './semantic-seed.ts'
 export type { BootstrapInvocation, BootstrapPhase, BootstrapResumeToken, BootstrapCallerMetadata, BootstrapLineage, BootstrapTarget, BootstrapInitial, BootstrapRequest, BootstrapDependencyRequest, BootstrapDependencyOutcome, BootstrapDependencyPort, BootstrapGuards, BootstrapReceipt, BootstrapOutcome, BootstrapInspection, BootstrapHeaderStage, BootstrapHeaderOperation, HeaderOutcome, BootstrapReadState, BootstrapFrame, BootstrapBackend } from './coordinator/bootstrap-types.ts'
@@ -18,7 +18,7 @@ export type { BootstrapCaptureRequest, BootstrapCaptureReservation, BootstrapCap
 export { captureBootstrapCaptureRequest, parseBootstrapCaptureReservation, encodeBootstrapCaptureReservation } from './coordinator/bootstrap-capture.ts'
 export { captureChildBootstrapCore, createChildBootstrapRequestIntent, captureChildBootstrapCaptureRequest, encodeChildBootstrapReservation, parseChildBootstrapReservation, childInitialCommitment, CHILD_BOOTSTRAP_DOMAINS } from './coordinator/child-bootstrap-intent.ts'
 export { childRoleDigest } from './coordinator/child-bootstrap-intent.ts'
-export type { ChildCaller, ChildHistory, ChildInitialCommitment, ChildExecutionIntent, ChildLineage, ChildBootstrapCore, ChildBootstrapRequestIntent, ChildBootstrapCaptureRequest, ChildBootstrapReservation, ChildBootstrapCaptureInspection, OwnedCaptureReservation, OwnedCaptureInspection } from './coordinator/child-bootstrap-intent.ts'
+export type { ChildCaller, ChildHistory, ChildBootstrapCore, ChildBootstrapRequestIntent, ChildBootstrapCaptureRequest, ChildBootstrapReservation, ChildBootstrapCaptureInspection, OwnedCaptureReservation, OwnedCaptureInspection } from './coordinator/child-bootstrap-intent.ts'
 export { captureBootstrapTargetPreparationRequest } from './coordinator/bootstrap-preparation.ts'
 export type { BootstrapTargetPreparationRequest, BootstrapTargetPreparationOutcome, BootstrapTargetPreparationPort } from './coordinator/bootstrap-types.ts'
 

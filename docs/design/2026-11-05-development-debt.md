@@ -326,6 +326,12 @@ reachability 仍是 71 NEW（沒有新增 row）。
 boundaries 147/147；reachability 432 rows、70 NEW（round 6 是 71，移除的 export row
 已消失）、104 baseline rows 消失。
 
+**round 13 的 gate 進度**：`session-persistence` 移除 5 個沒有 import 端點的 type
+re-export（`ResolvedBootstrapBirth`、`ForkHandoffMode`、`ChildInitialCommitment`、
+`ChildExecutionIntent`、`ChildLineage`）→ reachability **427 rows、65 NEW**
+（-5），套件 typecheck 乾淨。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+是否為公開契約再加 allowlist 或移除。
+
 ---
 
 ## 發現的產品 bug（本輪新增，依嚴重度）
