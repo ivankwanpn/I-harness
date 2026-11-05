@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 221（SCL 動工）**：`packages/session-commit-log` 落地（format 15 codec、torn-tail scanner、fold），
+> 18 tests 全綠、`tsc --noEmit` exit 0、boundaries 147/147、reachability PASS（index 公開面暫留空，Plan 2 接上第一個消費者時再開）。
+> 計畫：`docs/superpowers/plans/2026-11-05-session-commit-log-format.md`；下一步是 Plan 2（store + lease + crash-cut）。
 > **round 220（重設計裁定）**：以產品穩定性／功能完整性／設計合理性為判準，採 **ADR-2026-11-05**：
 > 重寫耐久核心為 **Session Commit Log**（單一 append-only commit log + content-addressed sidecars +
 > flock 租約 + handle），取代分階段出生／adoption／capture reservation。約 15.5k 行的 coordinator+backend
