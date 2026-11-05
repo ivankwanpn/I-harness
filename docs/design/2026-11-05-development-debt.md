@@ -53,10 +53,11 @@ round 162：`packages/sdk/vitest.config.ts`（30s）→ cancel-stop 的 5 個 ti
 > `llm-seam` 188/188 綠。剩下的紅分兩類：(a) cleanup-debt 群（`closeOne` 的殘留 attempt
 > entry，根因已定位）；(b) 各 bootstrap／predecessor 語義紅（逐條列在第 4 項）。
 > 下一個具體動作見文末「交接：round 32」與其後的 round 41–52 記錄。
-> **round 157 更新**：48 個套件已量測（instructions、schedule、runtime-context、guard-retry、
-> guard-repeat-tool、session-query、compaction、workspace 由紅轉全綠）。剩餘紅：code-mode 83、
-> core-agent 33（多為 seam 遷移類）、sdk 10、provider 2、exec 1、acp 1、llm-openai 1、
-> core-session 1（效能）、sandbox-windows-acl 2（native）。
+> **round 187 更新**：52 個套件已量測；**10 個由紅轉全綠**（instructions、schedule、
+> runtime-context、guard-retry、guard-repeat-tool、session-query、compaction、workspace、
+> provider、llm-openai）。剩餘紅：code-mode ~12（instruction-start-recovery 4、
+> surface-publication 5、output-owner-boundaries 3、store 1）、core-agent 33（seam 遷移類）、
+> sdk 5、exec 1、acp 1、core-session 1（效能）、sandbox-windows-acl 2（native）。
 
 ## 為什麼先做這個
 
