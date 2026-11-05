@@ -218,3 +218,19 @@
 SCL 已在真實 host 驗證的產品面：session 建立／列表／改名／封存／還原／刪除、prompt turn、模型切換、fork（含 nested）、
 rewind、schedule CRUD、execution surface（訂閱／snapshot／changed 通知）、project bind／move、approval rules state、
 auto title 文件、execution／tasks／processes 讀取、compaction、CLI run＋sessions。
+
+### 8.1 決策（2026-11-06）：selected results 與最終切換
+
+selected results 是唯一仍獨占 legacy coordinator 的功能：其 capture／witness 建立在 `createDocuments(...).observations`
+（`acquireSelectedBindingRead`、cold finalization、保留式 lease）之上，並透過 `createSelectedRuntimeCapture` 建立子 session；
+SCL 的 fork capture 走不同路徑，兩者無法只靠 facade 銜接。
+
+依照「產品穩定性、功能完整性優先、開發工作量不計」的原則，本計畫的處置是：
+
+1. **維持 legacy coordinator 為預設**，SCL 以 `IH_SESSION_STORE=commit-log` opt-in；
+2. **不刪除 legacy**，直到 selected-results 移植完成；刪除階段的 gate 因此未達成；
+3. selected-results 移植列為後續大型工作（需要 SCL 版的 documents／observations selected 路徑），不在本輪承諾；
+4. SCL 的所有已驗證產品面（turn、fork、rewind、schedule、surface、management、project、title、compaction、tool/artifact、
+   CLI）維持綠燈並持續回歸驗證。
+
+這個決策讓「功能完整性」優先於「刪除 legacy 的程式碼縮減」；若之後接受在 SCL 模式失去 selected results，再啟動刪除階段。
