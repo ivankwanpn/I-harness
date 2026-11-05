@@ -534,6 +534,10 @@ round 95：`lsp` **6 檔 / 94 tests 全綠**、`media` **3 檔 / 15 tests 全綠
 round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot read properties of undefined
   **round 97 排除**：在 `startInner` 的 flight 上「barrier.headerCommitted 為真時清
   **round 98 實測欄位**（`closeOne`，`bootstrap-stage-swap`）：
+  **round 99 排除**：在 `startInner` 的 flight 上「outcome 為 ready／already-ready 就清
+  `headerUnknown`」仍三檔全紅 → 表示第二次 resume 的 `already-ready` 沒有經過該 flight（或
+  close 時 `documents` 裡的 entry 不是 flight 的 `owned`）。下一步必須在 close 時印出
+  `documents` 的所有 key 與 `owned` 的參照比較，確認是否有第二個 entry 存在。
   `{headerUnknown:true, document:false, headerCommitted:false, revoked:true, issued:true, phase:'header', current:true}`
   （`revoked` 是 closeOne 自己在 line 90 revoke 的結果；`ready` 未定義）。也就是說：第一個
   `resumeSemanticTarget` 回 `blocked` 後 entry 停在 `phase:'header'`、header issued 未 commit；
