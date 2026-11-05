@@ -1195,6 +1195,13 @@ gateway native context rather than the host log.
 
 
 
+
+## Plan 84 (implemented 2026-11-06): the `session_search` tool reaches the fallback
+
+`session-search-tool.test.ts` builds the tool with `createSessionQueryTools(createConversationQuery(coordinator, emptyIndex,
+createCommitLogSearchFallback(coordinator)))` and executes it: `{query:"needle"}` returns the commit-log hit with a snippet and an
+absent token returns `{hits: []}` — the same wiring the owned gateway leaves register.
+
 ## Plan 83 (implemented 2026-11-06): tool content is searchable
 
 After the `todo_write` turn the turn test searches for `do it` and finds it in the tool call/result events, so the commit-log
