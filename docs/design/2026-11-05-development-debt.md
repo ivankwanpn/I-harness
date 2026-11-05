@@ -532,7 +532,9 @@ round 68：`provider` **2 檔紅 / 8 檔綠（10 檔），4 failed / 172 passed�
   round 71 診斷：`visits` 只在 `entries()` yield 時遞增，而目前實作不再透過 `entries`（所以 0）。
   改測 `Symbol.iterator`＋`entries` 後得到 **60000**（3×20000）——表示 index 建構時對前綴做了
   3 次走訪，或 hooks 被呼叫多次；需先確認實作是否真的退化（效能契約）再決定修產品或重寫 probe。
-  兩次實驗均已還原。
+  兩次實驗均已還原。round 72 追加：`conversation/validation.ts` 只有一處
+  `for (const event of events)`（line 431）；3 次走訪的其他來源很可能在 `createHistoryIndex`
+  （core-session 內另一個模組），下輪沿該呼叫鏈數走訪次數即可。
   to be defined`）。
 - `runtime-context` = **「original-only management settles actual
   absent without getter/action/retain or publication replay」→ resolved undefined instead
