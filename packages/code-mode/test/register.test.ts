@@ -9,13 +9,14 @@ import type { ExecCommand, ExecRunOptions, ExecService } from '../../exec/src/in
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
 
 it('awaits actual managed startup interruption and every cell output/store/terminal receipt', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-runtime-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   await coordinator.append(id, [{ type: 'code/cell', cellId: 'old', sessionId: id, state: 'started', seq: 0 }])
   const document = await coordinator.openManagedDocument(id), ctx = createContext(), tools = createToolRegistry(ctx)
@@ -33,7 +34,7 @@ it('awaits actual managed startup interruption and every cell output/store/termi
 
 it('retains actual guest completion across an unknown store receipt and Stop without fabricating a failed terminal', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-store-unknown-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let bodies = 0, finalizations = 0, key: BatchKey | undefined, blocked=true
@@ -66,7 +67,7 @@ it('retains actual guest completion across an unknown store receipt and Stop wit
 
 it('keeps a real terminated cell unavailable until its original terminal receipt is reconciled', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-stop-receipt-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
   const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })

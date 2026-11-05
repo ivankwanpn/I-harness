@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { registerCodeMode } from '../src/register.ts'
 
@@ -16,7 +17,7 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 it.each(['before-issue', 'issued-unknown-absent'] as const)('Stop never reissues or installs the original optional store (%s)', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-store-stop-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let bodies = 0, finalizations = 0, attempts = 0, writes = 0, broken = false

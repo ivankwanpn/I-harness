@@ -6,12 +6,13 @@ import { createCodeModeBroker } from "../src/broker.ts"
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 
 it('retains the real finalized managed result through uncertainty without redispatch or synthetic replacement', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let effects = 0, finalizations = 0, conversions = 0, key: import('@i-harness/core-session').BatchKey | undefined

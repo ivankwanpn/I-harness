@@ -2,7 +2,8 @@ import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import type { FactOwner } from '@i-harness/core-session'
 import { createCodeModeEventFacts } from '../src/event-facts.ts'
@@ -20,7 +21,7 @@ function directFacts(owner: FactOwner, onChange?: () => void) {
 }
 it('releases only the recovered original output hold while keeping its live mount source usable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-output-hold-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const facts = directFacts(document)
   let blocked = true, installed = 0
@@ -40,7 +41,7 @@ it('releases only the recovered original output hold while keeping its live moun
 
 it('cannot publish a queued terminal from source pre-drain before earlier output storage settles', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-output-close-order-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const facts = directFacts(document)
   let blocked = true
@@ -65,7 +66,7 @@ it('cannot publish a queued terminal from source pre-drain before earlier output
 
 it('keeps a same-cell accepted backlog on its original source while recovery forbids new registrations', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-output-backlog-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const facts = directFacts(document)
   let blocked = true
@@ -83,7 +84,7 @@ it('keeps a same-cell accepted backlog on its original source while recovery for
 
 it('mirrors a transient original hold until its original checkpoint verifies recovery and isolates passive observation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-hold-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   let blocked = true, preparations = 0, observeRelease = false, emptyButHeld = false
   const states: string[] = []
@@ -122,7 +123,7 @@ it('mirrors a transient original hold until its original checkpoint verifies rec
 
 it('keeps installation faults unavailable through original failed close', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-install-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const facts = directFacts(document)
   try {
@@ -138,7 +139,7 @@ it('keeps installation faults unavailable through original failed close', async 
 
 it('registers pending before preparation awaits and reports installation before final availability', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-pending-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>(), states: string[] = []
   const facts = directFacts(document, () => states.push(facts.observationState()))
@@ -161,7 +162,7 @@ it('registers pending before preparation awaits and reports installation before 
 
 it('keeps cancellation bookkeeping unavailable until the original callback returns', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-cancel-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const facts = directFacts(document)
   let cancelledState: string | undefined

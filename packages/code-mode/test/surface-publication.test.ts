@@ -5,13 +5,14 @@ import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createSession, decodeFactBatch, subscribe, type BatchKey } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { registerCodeMode } from '../src/register.ts'
 
 async function managed() {
   const root = await mkdtemp(join(tmpdir(), 'ih-surface-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create()
   return { backend, coordinator, id }
 }

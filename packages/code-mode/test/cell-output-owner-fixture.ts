@@ -3,7 +3,8 @@ import { appendFile, mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createNondurableFactOwner, createSession, decodeFactBatch, type FactOwner, type ManagedAction, type ProducerFactOutcome, type SettlementFacts, type SettlementCheckpointOwner, type CapturedActionFact, type CodeSettlementFact, type SessionEvent } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createCodeModeEventFacts } from '../src/event-facts.ts'
 
@@ -19,7 +20,7 @@ export async function fixture(mode: 'native' | 'memory') {
       issues.push(entry); const result = await append(...args); entry.outcome = result; return result
     }
   }
-  const coordinator = backend && createSessionCoordinator(backend, { lock: { enabled: true } })
+  const coordinator = backend && composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const document = coordinator ? await coordinator.openManagedDocument((await coordinator.create()).id) : undefined
   const owner: FactOwner = document ?? createNondurableFactOwner(createSession())
   const trace: unknown[] = []

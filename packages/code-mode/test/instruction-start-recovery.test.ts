@@ -5,12 +5,13 @@ import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { createSession, decodeFactBatch, type BatchKey } from '@i-harness/core-session'
 import { createToolRegistry, instructionReplan } from '@i-harness/core-tools'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { registerCodeMode } from '../src/register.ts'
 
 it('retains the original cell pin through an uncertain started receipt until interrupted settlement', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-cell-start-recovery-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'ih-cell-start-recovery-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
   let released = 0, key: BatchKey | undefined, blocked = true
   const originalAppend = backend.appendOwnedBatch!, originalReconcile = backend.reconcileOwnedBatch!
@@ -35,7 +36,7 @@ it('retains the original cell pin through an uncertain started receipt until int
 })
 
 it('retains the original cell pin while Stop races a held started receipt', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-cell-start-stop-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'ih-cell-start-stop-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), stop = new AbortController()
   let released = 0
@@ -60,7 +61,7 @@ it('retains the original cell pin while Stop races a held started receipt', asyn
 })
 
 it('retains the original cell pin and failed terminal through an unknown replan receipt', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-cell-replan-recovery-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'ih-cell-replan-recovery-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
   let released = 0, key: BatchKey | undefined, blocked = true, effects = 0
   const originalAppend = backend.appendOwnedBatch!, originalReconcile = backend.reconcileOwnedBatch!
@@ -103,7 +104,7 @@ it('retains the original successful cell terminal when its pin release needs ret
 })
 
 it('does not release a policy-retired cell pin before its uncertain terminal settles', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-cell-policy-recovery-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'ih-cell-policy-recovery-')), backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
   let released = 0, key: BatchKey | undefined, blocked = true
   const originalAppend = backend.appendOwnedBatch!, originalReconcile = backend.reconcileOwnedBatch!

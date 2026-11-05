@@ -3,7 +3,8 @@ import { mkdtemp, readFile, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CapturedActionFact, CodeSettlementFact, FactOutcome, SettlementFacts } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createCodeModeEventFacts } from '../src/event-facts.ts'
 
@@ -41,7 +42,7 @@ async function fixture(control: string) {
     note('backend.outcome', { batch: identity(batch), outcome })
     return outcome
   })
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const instrumentCapture = (capture: CapturedActionFact<FactOutcome>) => {
     const captureId = identity(capture)
