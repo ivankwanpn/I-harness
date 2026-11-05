@@ -10,6 +10,8 @@ import { observeModelClient } from '@i-harness/llm-seam'
 import { ownedContextReadiness } from '../../session-persistence/src/index.ts'
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createAgent, executeToolCalls, type AgentDeps, type AgentConfig } from '../src/index.ts'
@@ -47,7 +49,7 @@ it('keeps the retained-batch injected failure after the original drain and befor
 
 async function fixture(names = ['retained']) {
   const root = await mkdtemp(join(tmpdir(), 'ih-live-batch-core-')), backend = createJsonlBackend(root)
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await coordinator.create()
   const document = await coordinator.openManagedDocument(id), ctx = createContext(), tools = createToolRegistry(ctx)
   const requests: unknown[] = [], originalErrors: unknown[] = [], preparedCalls: PreparedCall[] = []
   let bodies = 0

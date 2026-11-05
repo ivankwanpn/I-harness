@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createAgent } from '../src/index.ts'
 import { createMockClient } from '@i-harness/llm-mock'
@@ -13,7 +14,7 @@ import { observeModelClient } from '@i-harness/llm-seam'
 import { localTestGeneration } from './fixtures/generation.ts'
 
 it.each(['truncated','refused','empty'] as const)('retains the original %s step closure and its remaining turn closure exactly once after unknown',async kind=>{
-  const root=await mkdtemp(join(tmpdir(),'ih-f1-closure-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
+  const root=await mkdtemp(join(tmpdir(),'ih-f1-closure-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
   const {id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),ctx=createContext(),tools=createToolRegistry(ctx)
   let key:BatchKey|undefined,sends=0,hooks=0,blocked=true
   ctx.on('agent/stop',()=>{hooks++})

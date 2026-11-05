@@ -2,7 +2,8 @@ import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createConversationValidationIndex, type SettlementFacts, type ProducerFactOutcome } from '@i-harness/core-session'
 import { beginSoftSequence } from '../src/agent/context-reduction/sequence.ts'
@@ -10,7 +11,7 @@ import { createReductionPublication } from '../src/agent/context-reduction/publi
 import { captureContextSnapshot } from '@i-harness/context-engine'
 
 it.each(['committed', 'absent'] as const)('the original source settles an uncertain start after Stop without granting summary (%s)', async disposition => {
-  const directory = await mkdtemp(join(tmpdir(), 'ih-soft-start-')), backend = createJsonlBackend(directory), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const directory = await mkdtemp(join(tmpdir(), 'ih-soft-start-')), backend = createJsonlBackend(directory), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), action = document.beginAction(), sources: SettlementFacts<ProducerFactOutcome>[] = []
   const original = backend.appendOwnedBatch!, d = 'a'.repeat(64)
   let writes = 0
@@ -32,7 +33,7 @@ it.each(['committed', 'absent'] as const)('the original source settles an uncert
   } finally { action.finish(); await coordinator.close() }
 })
 it('publication absence after Stop settles the original start without a second optional write or a ready reset', async()=>{
- const root=await mkdtemp(join(tmpdir(),'ih-soft-publication-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}}),{id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),action=document.beginAction(),sources:SettlementFacts<ProducerFactOutcome>[]=[]
+ const root=await mkdtemp(join(tmpdir(),'ih-soft-publication-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract),{id}=await coordinator.create(),document=await coordinator.openManagedDocument(id),action=document.beginAction(),sources:SettlementFacts<ProducerFactOutcome>[]=[]
  const registerFactSource=(drain:()=>Promise<void>)=>{const source=action.registerSettlementSource(drain);sources.push(source);return source},d='a'.repeat(64)
  const deps={session:document.view,captureSoftReduction:action.captureSoftReduction.bind(action),captureContextReduction:action.captureContextReduction!.bind(action),registerFactSource}
  try{

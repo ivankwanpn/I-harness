@@ -7,7 +7,8 @@ import { createToolRegistry } from '@i-harness/core-tools'
 import { projectConversation, renderConversation, decodeFactBatch } from '@i-harness/core-session'
 import { captureContextSnapshot } from '@i-harness/context-engine'
 import { reductionGroups } from '../../context-engine/src/reduction/selection.ts'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createRuntimeContext } from '../../runtime-context/src/index.ts'
 import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts'
@@ -17,7 +18,7 @@ import { createLoopbackProvider, writeSplitSse } from './helpers/provider-loopba
 
 it('explicit source-boundary publisher sends the owned current prefix once through the managed Agent across tools, skills-only and clear', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-c12-main-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const done = async (response: Parameters<typeof writeSplitSse>[0]) => writeSplitSse(response, [
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -81,7 +82,7 @@ it('explicit source-boundary publisher sends the owned current prefix once throu
 
 it('retains the exact issued current capture after lost response and joins reconciliation before close', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-c12-unknown-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const actual = backend.appendOwnedBatch!, actualReconcile = backend.reconcileOwnedBatch!
   let issued = 0, captures = 0, blocked = true, originalKey: unknown

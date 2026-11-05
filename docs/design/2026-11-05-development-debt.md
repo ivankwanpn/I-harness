@@ -532,6 +532,10 @@ round 93：`fs` **15 檔 / 113 tests 全綠**、`shell` **11 檔 / 93 tests 全�
 round 94：`jobs` **1 檔 / 5 tests 全綠**、`workflow` **6 檔 / 66 tests 全綠**。
 round 95：`lsp` **6 檔 / 94 tests 全綠**、`media` **3 檔 / 15 tests 全綠**。
 round 96：`acp` **1 檔紅 / 16 passed（17）**（CLI stdio NDJSON：`Cannot read properties of undefined
+round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**，10 個測試檔仍是 legacy
+  建構子（全部 `TASK_TRANSITION_UNSUPPORTED`）；遷到 composed 建構子後降為 **10 檔紅 / 35 failed**，
+  `TASK_TRANSITION_UNSUPPORTED` 絕跡。剩餘紅：3 個 `Coordinator cleanup is unresolved`（同一
+  cleanup-debt）、1 個 `TASK_TRANSITION_FAILED`、若干行為斷言（`main authority`、`SYS-PROMPT`）。
   **round 97 排除**：在 `startInner` 的 flight 上「barrier.headerCommitted 為真時清
   **round 98 實測欄位**（`closeOne`，`bootstrap-stage-swap`）：
   **round 99 排除**：在 `startInner` 的 flight 上「outcome 為 ready／already-ready 就清

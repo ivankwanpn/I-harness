@@ -6,7 +6,8 @@ import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { decodeFactBatch, type BatchKey, type CapturedSettlementFact, type ProducerFactOutcome, type SettlementFacts, type SessionView, type ManagedAction } from '@i-harness/core-session'
 import { captureContextSnapshot } from '@i-harness/context-engine'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts'
 import { createAnthropicClient } from '../../llm-anthropic/src/index.ts'
@@ -52,7 +53,7 @@ const finished = (response: Parameters<typeof writeSplitSse>[0]) => writeSplitSs
 ])
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'ih-unstarted-calls-')), backend = createJsonlBackend(root)
-  const store = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await store.create(), document = await store.openManagedDocument(id)
+  const store = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await store.create(), document = await store.openManagedDocument(id)
   const sources = new Set<SettlementFacts<ProducerFactOutcome>>(), handles: CapturedSettlementFact<ProducerFactOutcome>[] = []
   const actions: ManagedAction<ProducerFactOutcome>[] = []
   const begin = document.beginAction.bind(document)
@@ -105,7 +106,7 @@ async function continueWarmAndCold(f: Awaited<ReturnType<typeof setup>>, agent: 
   expect(accepted).toHaveLength(2)
   expect(f.document.view.events.filter(event => event.type === 'context/usage' && event.version === 2 && event.op === 'sample')).toHaveLength(expectedOriginalUsage + 1)
   await f.store.close()
-  const coldStore = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } }), cold = await coldStore.openManagedDocument(f.id)
+  const coldStore = composeJsonlTaskTransitionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } }, taskDocumentStorageContract), cold = await coldStore.openManagedDocument(f.id)
   try {
     assertPaired(cold.view, f.id)
     const resumed = f.makeAgent(cold)
@@ -281,7 +282,7 @@ it.each(['absent', 'unknown-to-absent'] as const)('classifies original acceptanc
     expect(f.document.view.events.find(event => event.type === 'turn/end')!.seq!).toBeGreaterThan(f.document.view.events.find(event => event.type === 'step/end')!.seq!)
     const warm = await agent.followup('warm explicit input').catch(error => error)
     await f.store.close()
-    const coldStore = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } }), cold = await coldStore.openManagedDocument(f.id)
+    const coldStore = composeJsonlTaskTransitionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } }, taskDocumentStorageContract), cold = await coldStore.openManagedDocument(f.id)
     let coldResult: unknown
     try { coldResult = await f.makeAgent(cold).followup('cold explicit input').catch(error => error) }
     finally { await coldStore.close() }
@@ -322,7 +323,7 @@ it('joins real coordinator close during acceptance uncertainty and retries origi
     expect(await f.document.reconcile(key!)).toMatchObject({ kind: 'committed' })
     await f.store.close()
     expect(acceptanceIssues).toBe(1)
-    const coldStore = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } }), cold = await coldStore.openManagedDocument(f.id)
+    const coldStore = composeJsonlTaskTransitionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } }, taskDocumentStorageContract), cold = await coldStore.openManagedDocument(f.id)
     try {
       assertPaired(cold.view, f.id)
       expect(cold.view.events.filter(event => event.type === 'step/failed')).toHaveLength(0)

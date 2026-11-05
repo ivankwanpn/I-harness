@@ -6,7 +6,8 @@ import { createAgent, type AgentDeps, type AgentConfig } from '../src/index.ts'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { localTestGeneration } from './fixtures/generation.ts'
 import { createMockClient } from '@i-harness/llm-mock'
@@ -241,7 +242,7 @@ it('joins every created close after failures while retaining busy through genera
 
 it('keeps the actual managed source through held acceptance and refuses new work after an unresolved owner drain', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-agent-invocation-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let flushes = 0, factories = 0, sends = 0

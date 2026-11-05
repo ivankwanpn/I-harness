@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { createSession } from '@i-harness/core-session'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createAgent } from '../src/index.ts'
 import { createMockClient } from '@i-harness/llm-mock'
@@ -14,7 +15,7 @@ import { localTestGeneration } from './fixtures/generation.ts'
 
 it.each([true, false])('dispatches the actual committed call graph after producer mutation (managed=%s)', async managed => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-call-identity-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract)
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const session = managed ? document.view : createSession(), ctx = createContext(), tools = createToolRegistry(ctx)
   const args = { value: 'original' }, call = { id: 'original-call', name: 'effect', args }

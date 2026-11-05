@@ -6,7 +6,8 @@ import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createSession } from '@i-harness/core-session'
 import { wrapPreparedRequest, type ModelClient } from '@i-harness/llm-seam'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts'
@@ -17,7 +18,7 @@ const wire = (tool: boolean, ending = tool ? 'tool_calls' : 'stop') => `data: ${
 
 it.each(['success', 'notification-fault', 'flush-fault', 'stop', 'unknown', 'unknown-absent', 'refusal', 'truncation', 'observer-fault', 'fetch-fault'] as const)('original physical completion qualifies handoff and retains real sources: %s', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-instruction-source-')), backend = createJsonlBackend(root)
-  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const sources = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
   const begin = document.beginAction.bind(document)
   document.beginAction = signal => { const action = begin(signal), register = action.registerSettlementSource.bind(action); action.registerSettlementSource = (...args) => { const source = register(...args); sources.add(source); return source }; return action }

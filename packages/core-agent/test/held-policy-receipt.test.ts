@@ -3,7 +3,8 @@ import {mkdtemp,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createSession,append,toJSONL,decodeFactBatch,createConversationValidationIndex,type SettlementFacts,type ProducerFactOutcome,type BatchKey} from '@i-harness/core-session'
-import {createSessionCoordinator} from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
 import {createAgentContext} from '../src/agent/context.ts'
 import {prepareTextFixture,checkpointOfLength} from '../../compaction/test/fixtures/checkpoint.ts'
@@ -15,7 +16,7 @@ it('an actually issued unknown publication retains its original key/capture afte
  append(session,{type:'context/soft-reduction',version:1,op:'terminal',ownerSessionId:owner,sequenceId:'prior',startSeq:20,workKey:d,sourceKey:d,outcome:'failed',publication:'none',consumedBeforeKey:d})
  session.header={sessionId:owner,createdAt:'synthetic-fix2'} as typeof session.header
  const directory=await mkdtemp(join(tmpdir(),'ih-fix2-receipt-'));await writeFile(join(directory,owner+'.jsonl'),toJSONL(session))
- const backend=createJsonlBackend(directory),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}}),document=await coordinator.openManagedDocument(owner),action=document.beginAction(),sources:SettlementFacts<ProducerFactOutcome>[]=[]
+ const backend=createJsonlBackend(directory),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract),document=await coordinator.openManagedDocument(owner),action=document.beginAction(),sources:SettlementFacts<ProducerFactOutcome>[]=[]
  const appendBatch=backend.appendOwnedBatch!;let issued=0,captures=0,transports=0,originalKey:BatchKey|undefined;const reconciled:BatchKey[]=[]
  backend.appendOwnedBatch=async(...args)=>{if(decodeFactBatch(args[3].bytes).events.some(e=>e.type==='compaction/replacement')){issued++;originalKey=args[3].key;await appendBatch(...args);action.stop();return{kind:'unknown',key:args[3].key}}return appendBatch(...args)}
  const model={prepare:prepareTextFixture,async *stream(){transports++;throw Error('summary data fixture cannot transport')}}
