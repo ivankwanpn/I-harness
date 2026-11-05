@@ -349,7 +349,11 @@ type re-export：`session-executor`（`PendingRewindIntent`、`RewindIntentV1`�
 `InstructionPendingLease`；`llm-seam` 的 `SseFrame`）→ **390 rows、28 NEW**（累計 -42）。
 接下來改走「公開契約 → allowlist 註明理由」：把 `llm-seam#withPreparedRequests`
 （README 列為 public API seam，但目前 adapter 直接 import wrapper 模組）加進
-`reachability-allowlist.json`（dated 2026-11-05、附 reason/source）→ **27 NEW**。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
+`reachability-allowlist.json`（dated 2026-11-05、附 reason/source）→ **27 NEW**。
+接著修 gate 本身的盲點：`session/queued` 的 producer 存在（`session-executor/src/service.ts`
+的 `telemetry.emit({ type: 'session/queued' })`），但 gate 的 producer 掃描只認雙引號字面量，
+單引號一律漏報。把 `EVENT_LITERAL` 與 `isProducerLine` 改成引號無關 → 該筆 false positive
+消失，**26 NEW / 389 rows**（其他既有 producerless 判定不受影響）。剩下的 NEW rows 多數是 type-only／內部候選，需逐個確認
 是否為公開契約再加 allowlist 或移除。
 
 ---

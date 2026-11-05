@@ -888,7 +888,7 @@ function scanUnusedExports(files) {
 SCANNERS.push(scanUnusedExports)
 
 // ------------------------------------------- class 2: event with no producer
-const EVENT_LITERAL = /"([a-z][a-z0-9-]*\/[a-z0-9-]+)"/g
+const EVENT_LITERAL = /["']([a-z][a-z0-9-]*\/[a-z0-9-]+)["']/g
 const EVENT_DECL_FILE = /(^|\/)(events?|manifest|public-event-manifest)\.ts$/
 /** A line whose leading tokens DECLARE a type: `type X`, `export interface X`,
  *  `declare type X`. The identifier after the keyword is required, because the
@@ -911,7 +911,8 @@ const TYPE_DECL_LINE = /^\s*(?:export\s+)?(?:declare\s+)?(?:type|interface)\s+[A
  *  invented one; there is none in this tree), and only the first occurrence on
  *  a line is classified. */
 function isProducerLine(ln, name) {
-  const at = ln.indexOf(`"${name}"`)
+  const doubleQuoted = ln.indexOf(`"${name}"`), singleQuoted = ln.indexOf(`'${name}'`)
+  const at = doubleQuoted < 0 ? singleQuoted : singleQuoted < 0 ? doubleQuoted : Math.min(doubleQuoted, singleQuoted)
   if (at < 0) return false
   if (/^\s*(?:\/\/|\*|\/\*)/.test(ln)) return false
   if (/\|\s*$/.test(ln.slice(0, at))) return false
