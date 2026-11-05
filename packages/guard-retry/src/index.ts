@@ -90,6 +90,9 @@ export function createRetryGuard(_ctx: PluginContext, config?: RetryConfig): Plu
           while (isToolTimeout(result) && attempt < resolved.maxRetries) {
             if (upstream?.aborted) break // step aborted during backoff — no re-dispatch
             await sleep(backoffDelay(attempt, resolved))
+            // The step can be cancelled during the backoff window; re-check after
+            // the sleep so an aborted step never re-dispatches the tool.
+            if (upstream?.aborted) break
             attempt += 1
             // Deliberate seam-bypass: this re-invokes ONLY the cascade
             // handlers — it skips registry.execute's pre-execute hooks, the
