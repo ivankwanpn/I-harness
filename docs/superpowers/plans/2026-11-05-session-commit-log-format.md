@@ -897,6 +897,198 @@ passes 5/5 on SCL.
 
 ## Plan 12 (implemented 2026-11-05): transient write reconciliation in the delivery drain
 
+After the prefix fix, the delivery drain still logged `private delivery reconciliation failed: Original issued write needs
+reconciliation` / `Original writer dependency cleanup unresolved`: those are the execution state's **in-flight** write
+windows, not delivery failures. `delivery-drain.ts` now classifies them as transient (retryable, not reported); the drain
+retries with its existing backoff. The SCL host turn and schedule tests emit no reconciliation warnings, and the legacy host
+suite still passes.
+
+## Plan 13 (inventory 2026-11-05): coordinator surface used by the product
+
+Members the desktop gateway calls on its coordinator, with SCL status:
+
+| Member | SCL |
+|---|---|
+| `create`, `load`, `list`, `profile`, `snapshot`, `flush`, `storageRoot` | yes |
+| `putDocument`, `getDocument`, `onDocumentDeleted` | yes |
+| `openManagedDocument`, `revokeManagedDocumentNewWork` | yes |
+| `adoptOwnership`, `releaseOwnership`, `ownerOf`, `hasLiveOwnership` | yes |
+| `updateMeta`, `deleteOwnedSession`, `deletionReceipt` | yes (deletion covered by `commit-coordinator.test.ts`) |
+| `withExistingSessionBindingObservation` | yes (v1 snapshot+revalidate) |
+| `withProcessReadObservation` | yes |
+| `inspectBootstrap` | yes (`absent`) |
+| `bootstrapSemanticTargetWithCapture` | yes (direct child create) |
+| `inspectChildBootstrap` | absent (caller guards) |
+| `retainExistingSessionBindingObservation` | yes (observations instance + coordinator association; test `commit-retained.test.ts`) |
+
+Free-function capabilities consumed by the gateway and still legacy-only:
+`selectedSourceFor` / `beginColdSelectedFinalization` / `captureOriginalColdObservation` (selected results and fork cleanup; guarded
+or refused on SCL) and `retainSelectedProjectRead` paths in context-runtime.
+
+Legacy-only subsystems that the SCL product path no longer needs (deletion candidates once results are ported):
+coordinator-factory bootstrap/adoption, selected-results capture, task-document transitions (`stageInitialize`/frames), retained
+bindings, ownership batch ledgers and the JSONL journal/artifact paths.
+
+## Plan 14 (implemented 2026-11-05): retained session bindings
+
+- `createBindingObservations` already owns a `createRetainedBindings` ledger and exposes `associateRetainedCoordinator` plus
+  `retainExistingSessionBindingObservation`. `asSessionCoordinator` registers itself and forwards the method, so the
+  desktop gateway's execution-host observation is no longer disabled.
+- Test: issue a reference for an existing session, `assertCurrent`/`metadata`/`binding`/`withRead`, then `release` and verify
+  the reference is revoked.
+
+## Plan 15 (implemented 2026-11-05): execution surface events on SCL
+
+With retained bindings available, the gateway advertises `desktop-surface-events: ['1']` on SCL and the private execution
+observation can hold leases. `host-commit-log-surface.test.ts` subscribes (`desktop/surface/subscribe`), takes a snapshot
+(`desktop/surface/snapshot` with the lease epoch) and unsubscribes through the real host.
+
+## Plan 16 (implemented 2026-11-05): surface change notifications on SCL
+
+`host-commit-log-surface-changed.test.ts` subscribes to the execution surface, runs a controlled prompt turn and observes a
+`desktop/surface/changed` frame, so the private observation publishes writes made through the commit log.
+
+## Plan 16a (implemented 2026-11-05): refresh retry budget under parallel load
+
+The plugin refresh can also see `Original writer dependency cleanup unresolved` while an earlier write settles. With seven SCL host
+files running in parallel the 1 s budget was too short; the selection owner now retries those three transient messages for up to
+5 s. The parallel SCL host suite (8 tests) passed three consecutive runs.
+
+## Plan 17 (implemented 2026-11-05): session management routes on SCL
+
+`host-commit-log-management.test.ts` renames, archives, restores, reloads and reads navigation state for a commit-log session
+through the real host (`updateMeta` / `snapshot` / `list` / `load`), including the archived list and the visible list
+invariant.
+
+## Plan 18 (implemented 2026-11-05): CLI sessions command on the commit log
+
+`i-harness sessions list/show` used the legacy JSONL coordinator unconditionally, so an SCL store looked empty. The command now
+selects the commit-log coordinator when `IH_SESSION_STORE=commit-log` (with the writer lease enabled; reads take no lease).
+`listStoredSessions` already works through `list`/`profile`/`snapshot`; the artifact mtime falls back to `createdAt` when the
+legacy file is absent. Test: seed an SCL session and list it through `runSessionsCommand`.
+
+## Plan 19 (implemented 2026-11-05): explicit selected-results capability
+
+`hasSelectedSource(coordinator)` is exported (via `internal/selected-source-owner`). The gateway's selected-source acquisition
+and task-child inheritance paths check it and fail with `SELECTED_RESULTS_UNSUPPORTED` ("Selected results are unavailable on
+this session store") instead of the legacy `Original coordinator required` TypeError. SCL reports the capability as absent.
+
+## Plan 20 (implemented 2026-11-05): desktop settings/rule routes on SCL
+
+`host-commit-log.test.ts` also reads `desktop/approval-rules/state` through the real host on SCL (the rules state lives in the
+host's file-backed adapter, so this pins that the surrounding desktop surface works). `desktop/usage/query` (v1) is refused by
+the current host with `USAGE_UPGRADE_REQUIRED` regardless of store; usage reads are expected to use `desktop/usage/query-v2`.
+
+## Plan 21 (implemented 2026-11-05): project scope binding on SCL
+
+`host-commit-log-project.test.ts` configures a project, binds a commit-log session to it, reads the project state and the
+navigation state, and pins the idempotent re-bind (a bind without a project id keeps the existing binding — the gateway's
+`bind` has no unbind path). This exercises the binding-document write/read path on SCL.
+
+## Plan 22 (implemented 2026-11-05): legacy document read-through
+
+Documents written before the commit-log store (`task-*.doc.jsonl`, project bindings, …) are no longer invisible after switching:
+`LegacySessionStore.readDocument` is optional and the coordinator falls back to it when the document log has no side or does not
+exist yet. The JSONL composition supplies `backend.getDocument`. Once a key is written through the commit log its sidecar wins.
+
+## Plan 23 (implemented 2026-11-05): auto-generated title documents on SCL
+
+`host-commit-log-title.test.ts` runs a controlled turn with `autoTitle`, lets the owned post-turn write
+`session-title/<id>` (`{formatVersion:1, title}`), and reads that document back through a read-only commit-log coordinator.
+Note: the gateway's `session/list` title comes from `profile.meta.title` (rename), so auto titles are read from the document.
+
+## Plan 24 (implemented 2026-11-05): headless CLI run on SCL
+
+`apps/cli/test/run-commit-log.test.ts` runs `i-harness run hello --session-dir <tmp>` with `IH_SESSION_STORE=commit-log`
+against a local fixture provider: exit 0 and exactly one session generation (`<id>/session.v15.jsonl`) plus the `__documents__`
+log. This is the first end-to-end CLI turn on the commit-log store.
+
+## Plan 25 (implemented 2026-11-05): live model switch on SCL
+
+`host-commit-log-turn.test.ts` now also sets the live model (`session/model/set` with `{provider,model}`) and runs a second
+prompt through the rebound assembly, so the host's in-place rebind works with the commit-log execution attachment.
+
+## Plan 26 (implemented 2026-11-05): execution, task and process reads on SCL
+
+After two turns the host's `desktop/session/execution/read`, `desktop/session/tasks/integrity` and
+`desktop/session/processes/read` all succeed on the commit-log store, covering the execution attachment read path, the task
+projection and the agent-process projection.
+
+## Plan 27 (implemented 2026-11-05): batch management and diagnostics on SCL
+
+`host-commit-log-management.test.ts` archives/restores a second session and then deletes it through
+`desktop/session/batch` (exercising `deleteOwnedSession` end-to-end through the host), and reads
+`desktop/environment/diagnostics`.
+Compaction (`desktop/session/compact`) still needs a checkpoint-capable fixture model and is left for a dedicated test.
+
+## Plan 28 (investigation 2026-11-05): manual compaction on a live SCL session
+
+`desktop/session/compact` fails with `Original execution observation expired` on a live commit-log session (repro kept skipped
+in `host-commit-log-compact.test.ts`). The expiry comes from `observe()`'s identity check (`member('prefix') !== expected ||
+delivery.revision() !== fence`): the observation captured before the compaction no longer matches the execution state after the
+previous turn's writes. A bounded retry of the compact call did not help, so the mismatch is persistent rather than a transient
+race; the next step is to check whether the delivery revision advances on ordinary writes (our document's delivery control) or
+whether the compaction path must re-observe around its own writes.
+
+## Plan 28b (implemented 2026-11-05): compaction reaches the engine on SCL
+
+The expiry was not in the execution prefix but in the cached **recovery prompt**: `modelOverheadTokens` asks for the system
+prompt before `prepareModelSurface` refreshes the native-recovery observation, so the cached recovery text is stale after any
+earlier turn. `recoveryPrompt` now omits the advisory recovery section when its observation expired (the real request still
+gets a fresh one through `prepareModelSurface`). Compaction then reaches the engine. Two fixture attempts: overriding `prepare` with the compaction text fixture breaks the managed
+generation composition (`GENERATION_UNSUPPORTED`), and a plain controlled answer leaves the summarizer blocked with
+`retention-output`. The summarizer needs a checkpoint/output-retention fixture composed through the managed model client; the test
+keeps the SCL-specific assertion (`outcome` is a string, no observation expiry).
+
+## Plan 28c (investigation 2026-11-05): compaction summarizer fixture
+
+`desktop/session/compact` on SCL now reaches the compaction engine (no observation expiry). The summarizer itself is blocked
+with `retention-output` under the controlled fixture model; replacing the model with the compaction text fixture loses the
+managed generation composition (`GENERATION_UNSUPPORTED`). A real end-to-end compaction test needs a fixture that stays inside
+the managed model client while producing a retained checkpoint.
+
+## Plan 28d (investigation 2026-11-05): compaction size and progress checks
+
+`retention-output` is the summarizer's quality/size check (`compaction/src/summary/generate.ts`): the model must return at least
+`minSummaryChars` and at most `maxTokens*4` characters — the controlled `answer` is far too short. Returning a
+`checkpointOfLength(600, …)` summary fixes that on a short session, which then blocks with `no-progress` (nothing to shrink).
+With a seeded long history the compact request fails and host close reports `session service cleanup incomplete`; the repro is
+kept skipped (`host-commit-log-compact-long.test.ts`) for the next investigation.
+
+## Plan 29c (implemented 2026-11-05): end-to-end compaction on SCL
+
+A history built **through the host** (eight prompted turns, long answers) compacts successfully on the commit log:
+`{compacted:true, outcome:'ready', publication:'committed'}` with the checkpoint summary. The earlier failure came from
+seeding raw events that the managed restore rejects (`Assembly construction and cleanup failed`), not from compaction itself.
+
+The short-session test keeps the engine-reached assertion; the long-session test asserts the committed compaction.
+
+## Plan 31 (implemented 2026-11-05): legacy corpus dual run
+
+`commit-dual-run-corpus.test.ts` builds a corpus through the legacy JSONL backend (empty, single message, internal message, a full
+turn, tool call/result, steps, two turns; one titled) and checks that the commit-log coordinator returns exactly the same
+`list`, events, profile title and task document. This is the ADR §5 step-3 gate for cutting over and deleting the legacy
+coordinator.
+
+## Plan 32 (implemented 2026-11-05): corpus delivery events
+
+The dual-run corpus also covers an `agent/delivery-generation` session. A hand-written `compaction/replacement` entry is rejected by
+the historical-replacement validator; a valid compacted history has to come from the real compaction path, so the corpus keeps
+the compaction case out until such a fixture is captured.
+
+## Plan 33 (implemented 2026-11-05): batch project move on SCL
+
+`desktop/session/batch` with `action:'move'` moves a commit-log session into a configured project (the command requires
+`expectedOwners` to carry the current owner; a missing entry is a per-session `ok:false`, not a throw). The project state then
+reports the new project id.
+
+## Follow-on plans (not in this plan)
+
+1. **Store + lease + crash-cut** — temp write, fsync, `link()` no-overwrite publish, append, sidecar GC, flock via `@i-harness/fs-lock`, crash-injection matrix.
+2. **Facade** — implement `SessionCoordinator` on the store; wire `session-executor` behind a flag.
+3. **Birth/fork migration** — replace `bootstrapSemanticTarget`/`resumeSemanticTarget` and the capture reservation with intents.
+4. **Format-15 generation migration** — read 13/14, dual-run against the legacy coordinator, then cut over.
+5. **Delete legacy** — coordinator bootstrap/adoption, jsonl bootstrap/document-write paths, obsolete specs.
 
 ## Plan 36 (design 2026-11-06): selected-results port assessment
 
