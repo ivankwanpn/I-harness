@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { RpcMessage } from '@i-harness/sdk'
+import { createJsonlCommitCoordinator } from '../../session-persistence-jsonl/src/commit-coordinator.ts'
 import { createDesktopHost } from '../src/host.ts'
 
 it('renames, archives, restores and reloads a session on the commit log', async () => {
@@ -43,8 +44,12 @@ it('renames, archives, restores and reloads a session on the commit log', async 
     expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).not.toContain(second.sessionId)
     await call('desktop/session/batch', { command: { action: 'restore', sessionIds: [second.sessionId] } })
     expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).toContain(second.sessionId)
+    const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
+    try { expect(await observer.getDocument('task-' + second.sessionId)).toBeTruthy() } finally { await observer.close() }
     await call('desktop/session/batch', { command: { action: 'delete', sessionIds: [second.sessionId] } })
     expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).not.toContain(second.sessionId)
+    const after = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
+    try { expect(await after.getDocument('task-' + second.sessionId)).toBeUndefined() } finally { await after.close() }
     expect(await call('desktop/environment/diagnostics', { sessionId: created.sessionId })).toBeTruthy()
     await call('desktop/project/configure', { project: { id: 'p', name: 'Project', roots: [workspace], primaryRoot: workspace } })
     const moved = await call('desktop/session/batch', { command: { action: 'move', sessionIds: [created.sessionId], projectId: 'p', expectedOwners: { [created.sessionId]: null } } }) as { results: { ok: boolean; error?: string }[] }

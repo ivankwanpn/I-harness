@@ -1147,6 +1147,12 @@ assertion accepts `TASK_TRANSITION_FAILED` because the composed path reports the
 receipt, so a recreation cannot read stale task/title/binding state while unrelated documents stay untouched
 (`commit-coordinator.test.ts` covers task + title removal and an unrelated document).
 
+Integration: `host-commit-log-management.test.ts` creates a session through the host (the facade seeds `task-<id>`), asserts the
+document exists, deletes the session through `desktop/session/batch`, and reads the document as absent with a second
+coordinator. `child-bootstrap-admission.test.ts` failures were confirmed as the same pre-existing plain-factory gate (the test
+builds `createSessionCoordinator` directly).
+
+
 `fork-controller.test.ts` moved the same way: 32 failures drop to 6, which have different causes (fork admission/host fixture
 
 Full-suite measurement after the migration (2026-11-06): `session-persistence` is **280 failed / 840 passed / 1120 total** across
