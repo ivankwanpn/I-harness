@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 308（unavailable 頁面）**：不存在的 digest 與未知 session 的 result read 都回 `{kind:"unavailable"}`（非 RPC 錯誤）。
 > **round 307（result page 邊界）**：offset 越界回 `{kind:"unavailable", reason:"budget"}`；maxBytes 超過 query 上限被 RPC 以
 > `-32602 Invalid result page query` 拒絕。
 > **round 306（result page 分頁）**：4KB 分頁可續讀（nextOffset 前進、eof:false）；低於 page budget 的 maxBytes（如 256）

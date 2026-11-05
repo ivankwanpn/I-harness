@@ -1178,6 +1178,13 @@ a cold session. The artifact assertion in the turn test now selects the `read` r
 
 
 
+
+## Plan 59 (implemented 2026-11-06): unavailable result pages
+
+A result ref whose digest names no stored artifact resolves to `{kind:"unavailable"}` rather than an error, and a read against an
+unknown session also resolves to `{kind:"unavailable"}` (the host answers with an unavailable page, not an RPC failure). Both are
+asserted on the commit-log host so a client can render the placeholder without treating it as a transport error.
+
 ## Plan 58 (implemented 2026-11-06): result page boundaries
 
 An offset past the end is answered with `{kind:"unavailable", reason:"budget"}` (the read service treats the out-of-range request

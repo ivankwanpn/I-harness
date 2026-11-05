@@ -90,6 +90,9 @@ it('runs a full prompt turn through the desktop host on the commit log', async (
       const past = await call('session/result/read', { sessionId: created.sessionId, ref, offset: 10_000_000, maxBytes: 4096 }) as { kind?: string; reason?: string }
       expect(past).toMatchObject({ kind: 'unavailable', reason: 'budget' })
       await expect(call('session/result/read', { sessionId: created.sessionId, ref, maxBytes: 1_000_000 })).rejects.toThrow(/Invalid result page query/)
+      const unknown = { ...(ref as Record<string, unknown>), contentDigest: 'a'.repeat(64) }
+      expect(await call('session/result/read', { sessionId: created.sessionId, ref: unknown, maxBytes: 4096 })).toMatchObject({ kind: 'unavailable' })
+      expect(await call('session/result/read', { sessionId: 'missing-session', ref, maxBytes: 4096 })).toMatchObject({ kind: 'unavailable' })
     } finally { await observer.close() }
   } finally {
     await host.close()
