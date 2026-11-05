@@ -199,6 +199,14 @@ round 195：三個小套件收尾。
 > `task-document-*` 3 檔（`assertDurableTransition`）、以及其餘 seam／predecessor 群。
 > **卡點（需裁定）**：`task-transition-bootstrap-stage-swap` 的 blocked resume 之後
 > `task-target.doc.jsonl` **確實被建立**（內容以 `{"for…` 開頭），測試期待 ENOENT。
+> **round 216（barrier 模式語義，只讀）**：`task-document-transition.ts` 的 barrier `prepare()`
+> 只有三種模式語義：`'new'` → `observeBootstrap`；`'completed'` → `openBootstrapHistory`（給舊格式
+> predecessor）；其他 → `openHistory`。因此「current format、header 已提交、task doc 不存在、
+> seed 未寫」的中斷 birth **沒有可用模式**：`completed` 會走 predecessor 歷史驗證而拋錯，
+> `new` 會卡在 `prepare()` 的 `settleHeader`（line 325 的 retrying + header debt 分支）。
+> 下一輪的實作方向：在 `prepare()` 對「header 已由外部提交（無 debt）」的情況跳過
+> `settleHeader`，或新增一個 `'resume-birth'` 模式；再用單一 token `-t` 隔離驗證
+> （`bootstrap-physical` 58 筆 + `bootstrap-capture-physical` 61 筆回歸）。
 > **round 215（seed 補寫路徑的程式地圖）**：fresh bootstrap 的 phase writer 在
 > `bootstrap.ts:527-556`：`phases=[seed?, completion]`，每個 phase 先看
 > `doc.view.events.length >= events[0].seq + events.length`（:535）決定是否已完成，否則用
