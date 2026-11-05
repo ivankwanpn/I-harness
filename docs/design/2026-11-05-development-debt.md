@@ -119,6 +119,29 @@ round 193：core-agent 收尾兩檔。
     （`systemPrompt: ''`／0 tool）。→ `overflow` **13/13**，core-agent 全套
     **649/649（79 檔）**。
 
+round 194：sdk 由 5 紅降到 **3 紅**。
+  - `execution-state`（1，flush 變體）：事後 patch `backend.appendOwnedBatch` → 改走
+    `wrapOwnedBatch`（hook 只看 `turn/end`）→ 4/4。
+  - `e2e`（CLI 端到端）：斷言 `capabilities['session-fork'] === ['1']`，但 SDK 已改成只廣告
+    `session-fork-bootstrap`（`server.test.ts` 早就釘住 `session-fork` 不存在）→ 改期待
+    `session-fork-bootstrap: ['1']`、`session-fork: undefined` → 1/1。
+  - `sdk/vitest.config.ts` 由 30s 提到 **60s**：真實 fork 飛行單獨跑就要 ~24s，
+    全套並行時會超過 30s（不是 hang）。
+  - 仍紅兩個：
+    1. `admitted-context` 的 child-context ×2：`Original prepared task caller unavailable`。
+       追到 `bindPreparedTaskLaunchLeaf.enter`：body 存在、frame 對、leaf/tool 都對，
+       但 `body.managed === undefined && body.context === undefined` →
+       `prepared-body.ts:299` 直接回 undefined。原因：測試用 **host 端**
+       `parent.tools.execute('spawn_agent')`，這種呼叫的 prepared body 沒有
+       source/domain（`foreignContext`），屬於設計上的「foreign prepared execution」。
+       spawn 必須來自 **model-origin 的 turn**（或產品另開 host spawn API）。
+       下一輪：改寫 fixture 讓 parent 的模型發出 `spawn_agent` tool_call。
+    2. `cancel-stop` 的 independent fork：`Original Stop boundary pending`——fork 在
+       Stop 的 close batch 被 held 時要 **~24s** 才完成（4s `boundary()` 先爆）。
+       看起來是 fork 的 target adoption 等在來源 session 的 lease 上直到 20s 級 timeout，
+       屬產品爭用問題，不是測試期待問題；需追 `createCliForkHost.withReadyTarget` 與
+       coordinator 的 session lock。
+
 這份文件處理的是**開發債務**，不是產品功能：讓「回歸」重新有意義，然後清掉
 被產品 hardening 甩在後面的測試與 API。
 
@@ -143,7 +166,7 @@ round 193：core-agent 收尾兩檔。
 > 目前回傳 `backend` 讓測試事後 patch；照 round 192 的 `fixture(names, seams)` ＋ `arm()`
 > 模式改即可（hook 在 `openManagedDocument` 之後才生效）。**round 193 已完成**：
 > `unstarted-call-settlement` **14/14**、`compaction-binding` **9/9**（SYS-PROMPT 一條已按 A-04
-> 改成「專用 summary request」斷言）。接著：sdk 5、exec 1、acp 1、
+> 改成「專用 summary request」斷言）。**core-agent 全套 649/649（79 檔）**。接著：sdk 5、exec 1、acp 1、
 > core-session 1、sandbox-windows-acl 2（native），最後是 session-persistence-jsonl 全套。
 > 另修掉 core-agent 的 typecheck（`retained-batch-continuation` 的重複 import 與死變數，
 > HEAD 上本來就是紅的）。**round 192**：`retained-batch-continuation` 的 `fixture()` 加上

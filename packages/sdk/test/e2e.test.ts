@@ -97,7 +97,10 @@ describe("i-harness sdk end-to-end (real subprocess)", () => {
         expect(info.capabilities["session-cancel"]).toEqual(["1"])
         expect(info.capabilities["session-rewind"]).toEqual(["1"])
         expect(info.capabilities["session-create"]).toEqual(["1"])
-        expect(info.capabilities["session-fork"]).toEqual(["1"])
+        // Fork is advertised as the bootstrap route only; the raw session-fork
+        // method is intentionally absent (server.test.ts pins that).
+        expect(info.capabilities["session-fork-bootstrap"]).toEqual(["1"])
+        expect(info.capabilities["session-fork"]).toBeUndefined()
         expect(info.capabilities["session-model"]).toEqual(["1"])
 
         // high-level run through the real engine and local fixture provider

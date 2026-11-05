@@ -18,11 +18,11 @@ function gate() {
 }
 
 it.each(["stop", "flush"])("refreshes an internally submitted parent result after delayed %s settles", async delay => {
-  const root=await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(),'ih-f1-sdk-receipt-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
+  const root=await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(),'ih-f1-sdk-receipt-'))
+  const stop = gate(), entered = gate(), read = gate()
+  const backend=createJsonlBackend(root,{wrapOwnedBatch:append=>async(...args)=>{if(decodeFactBatch(args[3].bytes).events.some(event=>event.type==='turn/end')){entered.release();await stop.promise}return append(...args)}}),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
   await coordinator.create({sessionId:'parent'})
-  const session = delay==='flush'?(await coordinator.openManagedDocument('parent')).view:createSession(), stop = gate(), entered = gate(), read = gate()
-  const actual=backend.appendOwnedBatch!
-  backend.appendOwnedBatch=async(...args)=>{if(decodeFactBatch(args[3].bytes).events.some(event=>event.type==='turn/end')){entered.release();await stop.promise}return actual(...args)}
+  const session = delay==='flush'?(await coordinator.openManagedDocument('parent')).view:createSession()
   const service = createSessionService({ workspace: process.cwd(), session,
     ...(delay === "flush" ? {coordinator} : {}),
     model: controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "received" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
