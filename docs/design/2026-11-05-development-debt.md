@@ -541,6 +541,11 @@ round 101：`core-agent` 原 **13 檔紅 / 44 failed（79 檔 / 649 tests）**�
   **round 99 排除**：在 `startInner` 的 flight 上「outcome 為 ready／already-ready 就清
   **round 102**：`trackBootstrap`（bootstrap.ts:128–148）只負責 process latch 的 witness，
   **round 103**：`withBootstrapResume`（binding-observation.ts:293–299）只是 capture＋
+  **round 104 執行期追蹤**：stage-swap 測試中 `adopt` 與 remap 都有跑，且都是
+  `{doc:true,current:true,ready:true,headerUnknown:false}`——即 target 的 bootstrap entry 是
+  健康的。但 close 的 AggregateError 仍來自 `closeOne` line 96（headerUnknown 守衛），表示
+  **失敗的是另一個 entry（不同 id，很可能是 task document entry，測試裡 `task-target.doc.jsonl`
+  的 ENOENT 斷言正指向它）**。下一步：在 closeOne 印出 `id` 與 `documents` 全部 keys。實驗已還原。
   `bootstrapMutation(run)` 的薄包裝，不合成 outcome；所以 `already-ready` 仍應出自
   `start`→`adopt`。與 `document:false` 的矛盾未解，下一步只能做執行期追蹤：在
   bootstrap.ts:350（adopt 的 already-ready）與 :561（remap）各印一行（entry 是否有 document、
