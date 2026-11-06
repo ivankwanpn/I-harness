@@ -1203,6 +1203,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 150 (2026-11-06): selected-results forks are refused at the RPC boundary
+
+`session/fork/prepare` with a v2 selected-results core answers `Invalid fork preparation request` (-32602) on the commit log (the SDK
+server maps the unsupported core to a clear refusal), and the context-runtime path answers `Selected results are unavailable on this
+session store` (`SELECTED_RESULTS_UNSUPPORTED`). `host-commit-log-fork-continue.test.ts` now asserts the refusal, so the gap is pinned as
+a loud contract rather than an undefined behaviour. The snapshot-selection design (§8.2) remains the target if the feature is ported.
+
 ## Plan 149 (2026-11-06): gap inventory after the fork work
 
 The status report now marks fork-child continuation and the fork→parent-delete path as fixed, and lists **selected results** as the only

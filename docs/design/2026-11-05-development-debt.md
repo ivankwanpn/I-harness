@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 391（selected-results 邊界）**：SCL 的 v2 selected-results fork prepare 回 `Invalid fork preparation request`（清楚拒絕），
+> context-runtime 回 `SELECTED_RESULTS_UNSUPPORTED`；已在 fork-continue 測試固定。
 > **round 390（缺口清點）**：status 標記 fork child 續用與 fork→delete 已修；selected results 是唯一阻擋預設切換的功能。
 > **round 389（compaction 與 todo）**：八輪 compaction 後 todo 仍為 revision 1／內容保留（compaction 只重寫對話）。
 > **round 388（plan 閱讀指引）**：計畫檔開頭註明 Plan 區段是往前插入、編號非遞增，現況以 status 文件為準。
