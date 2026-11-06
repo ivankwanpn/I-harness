@@ -58,7 +58,8 @@ after `prepare(targets)`:
   turn), the tool call still fails with `unseen-rules` so the model replans with the new rules.
 
 `instructions` tests: 141/141. `host-write-first.test.ts` has two cases: the fresh first write
-succeeds; a rule that appears after admission still refuses the write.
+succeeds; a rule that appears after admission still refuses the write. On the rc3 build with the fix copied
+into its gateway, a fresh session wrote `notes/first.md` on the first attempt (no failure card, no rule search).
 
 ## Repro
 
