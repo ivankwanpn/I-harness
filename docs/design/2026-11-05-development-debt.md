@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 392（B2 入口）**：`heldSource()` 證明只靠 `createManagedSessionState`＋`FactOwner`＋`createCompletedPassiveContext` 就能呼叫
+> `exportSelectedResultsConversationSeed`；SCL 可提供 snapshot → Session。剩 held pages 的 `legacy()` 迭代待驗。
 > **round 391（selected-results 邊界）**：SCL 的 v2 selected-results fork prepare 回 `Invalid fork preparation request`（清楚拒絕），
 > context-runtime 回 `SELECTED_RESULTS_UNSUPPORTED`；已在 fork-continue 測試固定。
 > **round 390（缺口清點）**：status 標記 fork child 續用與 fork→delete 已修；selected results 是唯一阻擋預設切換的功能。

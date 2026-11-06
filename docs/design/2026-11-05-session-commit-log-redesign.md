@@ -262,6 +262,19 @@ revocation admission）重寫到 SCL 的 retained binding 上；這是 legacy co
 不帶 selected results 的 task child、`session/result/read` 的頁面讀取、以及 context output 都不受影響（皆已在 SCL 驗證）。
 因此 §8.1 的「功能不完整」只限於 selected-results 繼承，不是整個結果讀取面。
 
+**可行性補充（2026-11-06，B2 的具體入口）**：core-session 的 `heldSource()`（`test/selected-results-codec.test.ts`）只用了
+`createManagedSessionState(Session, {sessionId})` ＋ 一個 `FactOwner` ＋ `createCompletedPassiveContext(owner, {kind:'completed'})` ＋
+`{assertCurrent, legacy()}`，就能呼叫 `exportSelectedResultsConversationSeed(context, inherited)` 產出 v3 seed。SCL 已有能力提供
+前兩者所需的 `Session`（`coordinator.snapshot()`），因此 B2 的最小路徑是：
+
+1. 以 SCL snapshot 建立 `Session`；
+2. 以 `createManagedSessionState` ＋ 最小 `FactOwner` 建 owner；
+3. 以 `createCompletedPassiveContext` 建 context；
+4. `inherited` 以 SCL 的 result pages 讀取（`session/result/read` 已驗證）實作 `legacy()` 迭代；
+5. 呼叫 `exportSelectedResultsConversationSeed`，把結果放進 `seed` commit。
+
+未知數只剩 (4) 的 held pages 與其 currency 檢查；這是可先以單元測試驗證的範圍，不需要移植 legacy 的 `createDocuments(...).observations`。
+
 **更精確的資料流（2026-11-06 追蹤）**：selected results 的最終出口是 `exportSelectedResultsConversationSeed(context, inherited)`，
 它需要 `CompletedPassiveContext`（restored owner）、`HeldInheritedResultMetadata`、`projectSelectedResults` 與可逐頁迭代且帶
 currency 檢查的 `HeldResultPages`，輸出 `SemanticSeedV3Public`（v3 seed 協議）。換句話說，「snapshot」省掉的只是 legacy 的
