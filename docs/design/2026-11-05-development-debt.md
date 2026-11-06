@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 456（rc2 實機重現：新會話第一個 prompt 失敗）**：以可攜版＋CDP 實際操作重現 `model_error`；失敗 turn 停在 preparation 後、promotion 前，
+> gateway diag 為 `FACT_RECOVERY_REQUIRED` / 「Original pending-input observation unavailable」；同樣 RPC 由 bridge 驅動則成功。已記錄於
+> `docs/design/2026-11-07-rc2-desktop-input-recovery.md`，下一步為 instrument durable settlement source 與比較 composer/bridge trace。
 > **round 455（最終整合驗證）**：canonical host 45／store 38／commit 43／CLI 6／SDK 74＝206，加 5 個 selection／lifecycle 守門＝211；
 > typecheck、boundaries 147、reachability、bench 全 PASS，工作區乾淨。
 > **round 454（反方向不對稱）**：legacy host 不列 SCL 會話（只掃 <id>.jsonl），資料仍在磁碟、切回 commit log 可見；已測試固定並寫入指南。
