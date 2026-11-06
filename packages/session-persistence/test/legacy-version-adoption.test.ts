@@ -37,7 +37,7 @@ describe('legacy version adoption', () => {
     it(`adopts a format-${version} session and migrates it on the first write`, async () => {
       const root = await mkdtemp(join(tmpdir(), `ih-legacy-v${version}-`))
       roots.push(root)
-      const coordinator = createCommitCoordinator({ root, legacy: legacy(version, 'old') })
+      const coordinator = createCommitCoordinator({ root, legacy: legacy(version, 'old') as never })
       coordinators.push(coordinator)
       const loaded = await coordinator.load('old')
       expect(loaded.session.events).toHaveLength(6)
