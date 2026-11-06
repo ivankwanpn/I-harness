@@ -1208,8 +1208,9 @@ gateway native context rather than the host log.
 Follow-up: the unauthorized answer comes from context-output's result-page scope (`service.readResultPage` →
 `Context reference unavailable or unauthorized`), which authorizes refs against a **live observation** for the session. A freshly
 created child has no assembly, so the cold read is refused; prompting the child first was tried, but that host close then failed with
-`Desktop host cleanup incomplete: session service` (the child assembly is not released in this path) — a separate leak to fix before
-retrying that route.
+`Desktop host cleanup incomplete: session service`, whose inner failure is `AggregateError: Session service process cleanup incomplete`
+(the child assembly's own process cleanup at `assembly.ts:1947` aggregates at least one failed process close). That leak is the next
+item; the read refusal itself is understood.
 
 
 `host-commit-log-selected-read.test.ts` runs the full E2E: a turn reads a 200 KB file (real artifact), the host restarts, the product
