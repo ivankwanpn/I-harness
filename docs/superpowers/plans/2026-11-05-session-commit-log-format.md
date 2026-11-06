@@ -1202,6 +1202,14 @@ gateway native context rather than the host log.
 
 ## Plan 114 (fixed 2026-11-06): a fork child gets the empty task document
 
+Narrowed further (2026-11-06): the `FACT_CLOSED` during the parent delete comes from `createCommitTaskOperations`'s
+`captureParent(document).assertCurrent` → `document.assertReady()` on a **closed** parent document (`capabilities.ts:68`). A guard in
+`readOriginalRuntime` (returning `undefined` for a closed execution) removed the first stack but not this one, so the remaining issue is
+the task-operation parent document outliving its log. The fix is to rebind the task operation to a fresh document when the handle is
+closed (or to not close a document that the task association still references); both the guard and the test extension were reverted
+pending that fix.
+
+
 Diagnosis of the two open items (2026-11-06):
 
 1. child schedule → `Private delegated or unsupported Code owner`: the child runtime is a delegated execution and the schedule handler
