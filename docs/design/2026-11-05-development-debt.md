@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 451（settings store 重啟耐久）**：只靠 settings 選 commit-log 的 host，重啟後可列出 session、讀到 history、診斷回報 commit-log。
 > **round 450（lifecycle 兩個保證）**：刪除 session 會清掉 native-context 的 per-session artifacts（7→1 共享檔）；settings patch
 > 保留 sessionStore；兩者已從 probe 提升為永久測試（artifact-cleanup、settings-write-preserve）。
 > **round 449（閘門巡檢）**：typecheck／boundaries 147／reachability／bench 全 PASS，工作區乾淨，無需改碼。

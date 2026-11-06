@@ -1221,6 +1221,13 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 212 (2026-11-06): a settings-selected store survives a host restart
+
+`host-store-restart.test.ts` creates a session on a host whose only store selection is the settings file (`sessionStore: "commit-log"`, no
+option, no `IH_SESSION_STORE`), prompts once, and closes. A second host with the same settings lists the session, reads its history
+(`user/message` present) and reports `commit-log` in diagnostics. This pins the settings path as the durable source of the choice, not
+just a per-process flag.
+
 ## Plan 211 (2026-11-06): two lifecycle guarantees are now pinned
 
 Two behaviours were verified with probes and promoted to permanent tests:
