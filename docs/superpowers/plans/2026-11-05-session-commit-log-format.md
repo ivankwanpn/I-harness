@@ -1205,6 +1205,13 @@ gateway native context rather than the host log.
 
 ## Plan 165 (implemented 2026-11-06): the child cannot read its inherited page yet
 
+Fixed (2026-11-06): the child prompt's close failure was traced to `Owned task document is absent` during assembly setup — the
+**selected-results** fork path creates the child through `createChildSession` directly (not through the facade), so it never seeded
+`task-<id>`. `createSelectedForkController` now seeds the empty task document (when the host provides one) right after creation;
+console traces in `assembly.ts`/`service.ts` were reverted. The child prompt now closes cleanly, but the child read is still
+`unavailable/unauthorized`: the live observation does not carry the inherited selected results.
+
+
 Follow-up: the unauthorized answer comes from context-output's result-page scope (`service.readResultPage` →
 `Context reference unavailable or unauthorized`), which authorizes refs against a **live observation** for the session. A freshly
 created child has no assembly, so the cold read is refused; prompting the child first was tried, but that host close then failed with

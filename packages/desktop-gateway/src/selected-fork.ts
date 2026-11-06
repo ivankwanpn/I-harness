@@ -36,6 +36,7 @@ export type SelectedForkController = {
 export function createSelectedForkController(options: {
   coordinator: SessionCoordinator
   projectOf?: (sourceSessionId: string) => Promise<{ kind: 'project'; projectId: string } | { kind: 'unmanaged' } | { kind: 'unassigned' }>
+  taskDocumentEmpty?: () => unknown
   assertAvailable?: () => void
 }): SelectedForkController {
   const { coordinator } = options
@@ -63,6 +64,7 @@ export function createSelectedForkController(options: {
         invocation: operation.invocation, target: { kind: 'new' }, metadata: operation.prepared.core.metadata,
         lineage: { origin: 'fork', parentSession: operation.prepared.core.sourceSessionId }, seed: compiled,
       } as never, { closure: compiled.dependencyDigest })
+      if (options.taskDocumentEmpty && await coordinator.getDocument('task-' + created.id) === undefined) await coordinator.putDocument('task-' + created.id, options.taskDocumentEmpty())
       const project = operation.prepared.requestIntent.project
       if (project.kind === 'project') {
         const { createHash } = await import('node:crypto')

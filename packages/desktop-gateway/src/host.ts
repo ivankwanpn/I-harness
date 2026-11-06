@@ -603,6 +603,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       const value = await coordinator.getDocument('desktop-session-project-' + createHash('sha256').update(sourceSessionId).digest('hex')) as { projectId?: string } | undefined
       return typeof value?.projectId === 'string' ? { kind: 'project', projectId: value.projectId } : { kind: 'unmanaged' }
     },
+    taskDocumentEmpty: () => taskDocumentStorageContract.empty(),
     assertAvailable() { if (shutdownRequested) throw new Error('Desktop host is closing') },
   }) : undefined
   const base = createSdkServer(service, {

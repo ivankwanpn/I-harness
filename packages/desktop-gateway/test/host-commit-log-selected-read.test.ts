@@ -61,9 +61,9 @@ it('reads an inherited result page on the selected child', async () => {
     const operation = { version: 2, kind: 'session-fork-operation', prepared,
       invocation: { version: 1, operationId: 'selected-read', targetSessionId: 'read-child', createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest } }
     expect(await second.call(hostB, serialB, 'session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'read-child' })
-    // Current behaviour: the page bytes exist (the source reads them) but the
-    // child is not yet authorized to read them without a live observation of
-    // its inherited seed. Pinned here so the gap is visible.
+    // A live child (it has run a turn) still cannot read the inherited page: the
+    // service's observation does not carry the selected results it inherited.
+    await second.call(hostB, serialB, 'session/prompt', { sessionId: 'read-child', prompt: 'hello child' })
     const childPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref, maxBytes: 4096 }) as { kind?: string; reason?: string }
     expect(childPage).toMatchObject({ kind: 'unavailable', reason: 'unauthorized' })
   } finally { await hostB.close() }
