@@ -46,6 +46,12 @@ it("shows localized probe status with collapsed paths and explains the bundled N
   expect(screen.queryByText("not-installed")).toBeNull()
 })
 
+it("reports the selected session store", async () => {
+  render(<DiagnosticsPane bridge={{ request: async () => ({ ...cold, sessionStore: "commit-log" }) }} workspaceId="w" />)
+  expect(await screen.findByText("Commit log")).toBeTruthy()
+  expect(screen.getByText(/append-only commit log/)).toBeTruthy()
+})
+
 it("keeps WSL shell diagnosis separate from host executable checks", async () => {
   const snapshot = { ...cold, shell: { ...cold.shell!, executionTarget: "wsl" as const, resolved: { id: "bash" as const, label: "WSL Bash", command: "/bin/bash", dialect: "posix" as const } } }
   render(<DiagnosticsPane bridge={{ request: async () => snapshot }} workspaceId="w" />)

@@ -1221,6 +1221,12 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 207 (implemented 2026-11-06): the diagnostics pane shows which store is active
+
+`DiagnosticsPane` gains a **Session storage** section: the badge reads `Commit log` or `JSONL` from the diagnostics payload's
+`sessionStore` (absent reads as JSONL for older hosts), with a one-line explanation of the append-only commit log. The pane test renders a
+`commit-log` payload and asserts the badge and note; desktop diagnostics tests are 8 green and the package typechecks.
+
 ## Plan 206 (implemented 2026-11-06): the flag is verified end to end
 
 `run-commit-log.test.ts` now runs a real headless session with `--session-store` and no environment variable: with `commit-log` the store
