@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 388（plan 閱讀指引）**：計畫檔開頭註明 Plan 區段是往前插入、編號非遞增，現況以 status 文件為準。
 > **round 387（rewind 與 todo）**：conversation rewind 後 todo 仍為 revision 1／內容保留（rewind 只動對話，不動 task document）；
 > host 36 檔／41 tests。
 > **round 386（ADR 產品面）**：ADR §6 與「已驗證產品面」補上 fork child 續用、rewind 變體、search／context picker、todo、重啟耐久，

@@ -10,6 +10,9 @@
 
 **Spec:** `docs/design/2026-11-05-session-commit-log-redesign.md`
 
+**閱讀指引：** 後續的 `## Plan N` 區段是**按時間往前插入**的（最新在最前面），因此檔案中的編號不是遞增順序；
+每個區段開頭會標示 implemented／fixed／found 等狀態，最終現況以 `docs/design/2026-11-06-session-commit-log-status.md` 為準。
+
 **Progress (2026-11-05):** Tasks 1–4 and the Task 5 edge cases are implemented (`packages/session-commit-log`, 18 tests green,
 `tsc --noEmit` and both audit gates green). Two deviations from the text below, both deliberate:
 (1) `src/index.ts` exports nothing until Plan 2 wires the first consumer, because an unconsumed export fails the reachability gate;
