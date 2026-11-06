@@ -1221,6 +1221,11 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 187 (implemented 2026-11-06): the inherited fallback never widens authorization
+
+The selected-read E2E now also requests a ref the child did **not** inherit (same shape, different id/revision): the answer stays
+`unavailable`, proving the parent-chain fallback is scoped to the seed pages. Full SCL host suite: **38 files / 44 tests** green.
+
 ## Plan 186 (implemented 2026-11-06): the inherited read survives read errors
 
 `createConversationResultReader` now catches a thrown read from `service.readResultPage` and treats it as `unavailable`, so the

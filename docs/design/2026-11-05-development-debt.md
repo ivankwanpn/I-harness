@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 425（fallback 不擴大授權）**：child 請求未繼承的 ref 仍回 unavailable；host 38 檔／44 tests 全綠。
 > **round 424（read 錯誤也走 fallback）**：`direct()` 把 throw 轉為 unavailable，讓 parent-chain fallback 在讀取拋錯時也能執行；
 > host 38 檔／44 tests 全綠（result-page-host 仍是既有 baseline-red TASK_TRANSITION_UNSUPPORTED）。
 > **round 423（回歸再驗）**：host 38 檔／44 tests、store 38、commit 43 全綠；typecheck 全綠、reachability PASS，近期改動無回歸。

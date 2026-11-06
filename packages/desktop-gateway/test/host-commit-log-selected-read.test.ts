@@ -63,6 +63,11 @@ it('reads an inherited result page on the selected child', async () => {
     expect(await second.call(hostB, serialB, 'session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'read-child' })
     const childPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref, maxBytes: 4096 }) as { data?: unknown; kind?: string; reason?: string }
     expect(childPage).toMatchObject({ data: expect.anything() })
+    // A ref the child did not inherit stays denied: the fallback never widens
+    // authorization beyond the seed pages.
+    const foreign = { ...(ref as Record<string, unknown>), id: 'ctxv1_' + 'b'.repeat(64), revision: 'b'.repeat(64) }
+    const foreignPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref: foreign, maxBytes: 4096 }) as { kind?: string }
+    expect(foreignPage).toMatchObject({ kind: 'unavailable' })
     // A selected child cannot be forked again yet; the refusal names the reason
     // (the v3 export cannot re-project a completed child history).
     await expect(second.call(hostB, serialB, 'session/fork/prepare', { version: 2, sourceSessionId: 'read-child', results: 'selected-results-v1' })).rejects.toThrow(/Selected results fork unavailable: unsupported/)
