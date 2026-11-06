@@ -30,7 +30,12 @@
 - 刪除以 `rename` 為 commit point；receipt 先持久化；manifest 文件以 `doc-clear` 清除；
 - 刪除會 `markDeleted`，retained reference 立即失效；coordinator close 會 retire 全部 references；
 - legacy 讀取／列舉失敗原樣拋出（只有 ENOENT 是 not-found）；不捏造 legacy metadata；
-- 背景失敗（enqueue、deletion listener）走 `reportBackgroundFailure`。
+- 背景失敗（enqueue、deletion listener）走 `reportBackgroundFailure`；
+- fence 的 `exclusive` 只對自己的 async context 授予 admission（archive／delete 於跑過 turn 的 session 也能完成，內部 cold-rewind
+  recovery 不再被自己的 fence 擋下）；
+- fork／rewind 對「跑過 turn」或「rewind 過」的 session 皆可運作，prepared fork 仍不可跨 host 續用（與 legacy 一致的契約）；
+- `settleCapture` 對已被 rewind 釋放的 capture 視為 settled，host 關閉不再因 `Original capture obligation released` 失敗；
+- 有 fork 子會話的 parent 不可刪除（先刪 child 再刪 parent）。
 
 ## 4. 剩餘缺口
 

@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 369（status 更新）**：§3 補上 fence exclusive 授權、fork/rewind 於 turn/rewind 後、settleCapture 容錯、descendant 守門；
+> 全 host 回歸維持 31 檔／36 tests。
 > **round 368（delete 與 observer 並存）**：observer 持有 load handle 時 delete 仍成功；先前的 `does not exist` 是刪除後又呼叫
 > `rewind/points` 造成，非鎖問題。
 > **round 367（刪除 rewind 過的 session）**：rewind 後 batch delete 成功、list 清空（先關閉觀察用的 coordinator）。
