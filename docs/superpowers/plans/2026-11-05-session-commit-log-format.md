@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 147 (implemented 2026-11-06): a conversation rewind keeps the todo list
+
+`host-commit-log-rewind-todo.test.ts`: after a prompt and a `todo/write` (revision 1), a conversation rewind reports `truncated` and the
+durable `rewind/point`, and `work-state` still returns revision 1 with the item — the rewind touches the conversation, not the task
+document. The SCL host suite is **36 files / 41 tests** green.
+
 ## Plan 146 (implemented 2026-11-06): nested forks with turns
 
 `host-commit-log-fork-nested.test.ts`: parent prompt → fork child → prompt the child → fork the child into a grandchild → prompt the
