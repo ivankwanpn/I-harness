@@ -63,6 +63,9 @@ export function createReductionBridge(deps: BridgeDeps, captureCandidate: () => 
       if ((error as { code?: string }).code === 'CONTEXT_INPUT_STALE') return { kind: 'stale' }
       if ((error as { code?: string }).code === 'CONTEXT_CURRENT_UNREPRESENTABLE') return { kind: 'blocked', reason: 'source-unrepresentable' }
       if (modelFailureFacts(error)?.reason === 'native-replay') return { kind: 'blocked', reason: 'source-unrepresentable' }
+      // A rejected replacement candidate (protected sources, incomplete units,
+      // ambiguous turns) is a source-shape problem, not a capacity fact.
+      if ((error as { code?: string } | null)?.code === 'SESSION_CONTEXT_REPLACEMENT_FORMAT') return { kind: 'blocked', reason: 'source-unrepresentable' }
       return { kind: 'blocked', reason: 'capacity-unavailable' }
     }
   }

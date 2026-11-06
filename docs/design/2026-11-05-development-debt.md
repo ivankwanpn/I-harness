@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 471（compaction 錯誤映射修正）**：`bridge.prepare` 對 `SESSION_CONTEXT_REPLACEMENT_FORMAT` 改回 `source-unrepresentable`；
+> 實機同一個含工具＋rewind 的會話由 `capacity-unavailable` 變為 `source-unrepresentable`（已驗）。真正的候選保護集合問題仍待修。
 > **round 470（compaction 真正原因）**：暫存診斷顯示 `capacity-unavailable` 其實是 `bridge.prepare` 的 catch 把
 > `invalid context replacement: protected-source`（`SESSION_CONTEXT_REPLACEMENT_FORMAT`）吞掉；該會話含 bash 工具回合與
 > rewind。build 應把此類錯誤映射為 `source-unrepresentable` 而非 `capacity-unavailable`，並單獨修 reduction 候選涵蓋 protected 來源的問題。
