@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 461（rc3 實測：write 首次失敗 unseen-rules）**：新 session 第一次 write 被 `INSTRUCTIONS_REPLAN_REQUIRED/unseen-rules` 拒絕
+> （`not-dispatched`），模型搜尋 AGENTS.md 後重試成功並建立檔案。根因在 `manager.ts` preflight 的 catch-all 掩蓋真正例外；下輪
+> 以 packaged gateway log 與 headless controlled-model 測試抓真實錯誤並修。記錄於 `2026-11-07-desktop-write-first-attempt.md`。
 > **round 460（測試 harness 校正）**：core-session 先前 16 個 `memory-source-checkpoint` 失敗是直接跑 vitest 少了 `IH_STRUCTURE_EVIDENCE_ROOT`；
 > 改用 `node scripts/test-env.mjs` 後 **933/933 全綠**。測試環境 app 已換成 rc3。
 > **round 459（rc2 首個 prompt 修復）**：根因是 turn preparation 期間 session read 被 writer 以 dependency-cleanup 拒絕 → desktop recovery
