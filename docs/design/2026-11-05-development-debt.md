@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 447（store 使用文件）**：新增 `docs/session-store.md`（兩種後端、四種選擇方式與優先序、如何確認、legacy adoption、限制），
+> status §5.3 連結。
 > **round 446（diagnostics 顯示 store）**：桌面診斷頁新增 Session storage 區塊（Commit log／JSONL），資料來自 payload 的 sessionStore；
 > 8 tests 綠、desktop typecheck 乾淨。
 > **round 445（flag E2E）**：真實 headless run 以 `--session-store` 切換：commit-log 產生 1 個 v15 generation、jsonl 產生 legacy session 檔

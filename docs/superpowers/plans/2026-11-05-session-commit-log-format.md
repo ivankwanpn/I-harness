@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 208 (2026-11-06): a user-facing store-selection note
+
+`docs/session-store.md` documents the two backends, their layouts, the four selection methods with the exact precedence (host option >
+CLI flag > settings > `IH_SESSION_STORE` > legacy), how to confirm the active store (diagnostics pane, `sessionStore` payload field,
+`sessions list`), how legacy sessions are adopted (readable, migrated on first write, bytes never rewritten), and the current limits
+(opt-in default, no held-observation lineage witnesses, old-format byte samples, the local `store status` signal). The status report links
+to it from a new §5.3.
+
 ## Plan 207 (implemented 2026-11-06): the diagnostics pane shows which store is active
 
 `DiagnosticsPane` gains a **Session storage** section: the badge reads `Commit log` or `JSONL` from the diagnostics payload's
