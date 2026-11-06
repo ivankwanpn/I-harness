@@ -1205,6 +1205,14 @@ gateway native context rather than the host log.
 
 ## Plan 165 (implemented 2026-11-06): the child cannot read its inherited page yet
 
+Second trace (2026-11-06): `readManagedResultPage` dispatches to the context-output service's `readResult`, which resolves the ref from
+the session's **context store** (`current.get(id)`) and then `allowed()`. The child's store is built from its own events; its seed
+pages (`conversation/seed-results`) are not `context/result-ref` events, so the store simply does not contain the ref and the read is
+denied before authorization matters. The next experiment is to append the inherited `context/result-ref` events to the child right
+after `createChildSession` (one per page row ref), so the child's store owns what its seed carries; if the store lookup then succeeds,
+the read path should follow.
+
+
 Attempt (2026-11-06): `host.ts` `hasVisibleResultRef` was extended to fall back to the session's seed result refs (the same helper
 `visibleRefsFor` uses), so a forked child would see the refs it inherited. The child read still answered `unavailable` and the change
 was reverted; the denial therefore does not come from that hook (the `readManagedResultPage` path inside the session executor has its
