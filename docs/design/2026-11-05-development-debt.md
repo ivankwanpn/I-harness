@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 466（forked child 刪除缺口定位）**：`prepareSession` 被以 document key `session-title/forked` 呼叫（`needs-parents`）；
+> deletion participant 的 result-lineage targets 被當成 session ids 規劃。下一步在 target 規劃區分 session／document key。
 > **round 465（legacy fork 續傳修復）**：gateway fork host 在 ready target 觀察後關閉 child 的 bootstrap document（僅非 SCL），
 > 讓第一次 prompt 可 attach execution；`host-legacy-fork-continue` 綠，實機 fork→prompt 回 ok。刪除 forked child 仍有
 > 「Original session parent unavailable」的獨立缺口。

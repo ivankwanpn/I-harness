@@ -57,8 +57,23 @@ Verification: `host-legacy-fork-continue.test.ts` passes (fork → prompt → re
 `fork-session.ts`/`host.ts` copied into its gateway, forking a one-turn session and immediately prompting the child
 returns `ok`.
 
-Remaining separate gap: deleting a forked child on the legacy store fails with `Original session parent unavailable`;
-the continuation test does not assert deletion.
+## Open gap: deleting the forked child (located 2026-11-07)
+
+`desktop/session/batch { action: 'delete' }` on the fork child still fails with `Original session parent
+unavailable`. The stack lands in `session-persistence/src/coordinator/artifact-path-association.ts`
+`prepareSession`, and a diagnostic shows the argument is a **document key**:
+
+    [diag] prepareSession session-title/forked kind=needs-parents root=<sessionDir>
+
+The deletion participant (`context-output/src/service.ts` `prepare`) builds `targets = [sessionId,
+...resultLineageTargets]` and calls `scope.planTargets(targets)`, which treats every target as a session id.
+For a forked child one of those lineage targets is `session-title/<id>`, so `capture('session', ...)` looks for
+`<sessionDir>/session-title/forked.jsonl`, whose parent does not exist, returns `needs-parents`, and the binding
+throws.
+
+Next: filter/map result-deletion targets that are artifact keys (treat them as documents), or make
+`planTargets` distinguish session ids from document keys, then re-enable a delete assertion in
+`host-legacy-fork-continue.test.ts`.
 
 ## Workaround
 
