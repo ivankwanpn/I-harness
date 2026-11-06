@@ -34,9 +34,14 @@ it('compacts a long session built through the host', async () => {
     await call('initialize')
     const created = await call('session/create') as { sessionId: string }
     for (let turn = 0; turn < 8; turn++) await call('session/prompt', { sessionId: created.sessionId, prompt: 'question ' + turn + ' ' + 'x'.repeat(600) })
+    const todoBefore = await call('desktop/session/todo/write', { sessionId: created.sessionId, input: { items: [{ content: 'compaction todo', status: 'pending' }], expectedRevision: 0 } }) as { todosRevision?: number }
+    expect(todoBefore.todosRevision).toBe(1)
     const compacted = await call('desktop/session/compact', { sessionId: created.sessionId }) as { compacted?: boolean; outcome?: string; publication?: string; summary?: string }
     expect(compacted).toMatchObject({ compacted: true, outcome: 'ready', publication: 'committed' })
     expect(compacted.summary).toContain('compacted work summary line')
+    const afterWork = await call('desktop/session/work-state', { sessionId: created.sessionId }) as { todos: { content: string }[]; todosRevision?: number }
+    expect(afterWork.todosRevision).toBe(1)
+    expect(afterWork.todos[0]).toMatchObject({ content: 'compaction todo' })
   } finally {
     await host.close()
   }

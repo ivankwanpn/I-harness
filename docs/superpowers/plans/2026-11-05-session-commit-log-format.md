@@ -1203,6 +1203,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 148 (implemented 2026-11-06): compaction keeps the todo list
+
+`host-commit-log-compact-long.test.ts` now writes the todos before the eight-turn compaction: the write reports revision 1, the
+compaction still commits (`outcome:"ready"`, `publication:"committed"`) and `work-state` afterwards returns revision 1 with the item.
+Compaction rewrites the conversation, not the task document.
+
 ## Plan 147 (implemented 2026-11-06): a conversation rewind keeps the todo list
 
 `host-commit-log-rewind-todo.test.ts`: after a prompt and a `todo/write` (revision 1), a conversation rewind reports `truncated` and the
