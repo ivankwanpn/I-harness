@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 414（計劃執行完畢）**：最終回歸 host 38 檔／44 tests、store 38、commit 41、CLI 2＝125 tests 全綠；typecheck 全綠、
+> reachability PASS。selected-source 移植為唯一後續大型工作（已明確記錄）。
 > **round 413（hydration 也無效）**：補 `context/result-ref` 後仍 `unauthorized`，改動已回退。結論：child 讀取頁面需要 legacy 式
 > selected source（held observation＋owning result store）＝§8.2 的 observations 移植；其餘在 commit log 上皆已可用。
 > **round 412（store 才是關鍵）**：`readResult` 先查 child 的 context store；seed pages 不是 `context/result-ref`，store 沒有該 ref。

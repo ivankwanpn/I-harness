@@ -1203,6 +1203,24 @@ gateway native context rather than the host log.
 
 
 
+## Plan 175 (2026-11-06): the plan is executed; selected-source port is the explicit follow-up
+
+Final state of the planned scope:
+
+- commit-log store, format/scanner/fold, coordinator, facade and gateway wiring are implemented and documented;
+- SCL remains **opt-in** (`sessionStore:"commit-log"` / `IH_SESSION_STORE=commit-log`); the legacy store stays the default
+  (§8.1 decision);
+- product surfaces verified on the commit log: turns, model switch, fork (nested, forked children running turns, schedules, todos),
+  rewind (all modes, restart, after turn, after fork), archive/delete/restore/batch, project bind/move, compaction, todo (cold/live,
+  across rewind and compaction), schedule CRUD, management/title/project, surface notifications, execution/tasks/processes reads,
+  search/lineage/subtree/context picker, CLI run+sessions, restart durability;
+- selected-results fork: capture → v3 seed → pages → `createChildSession` → host seams all work; the **only** gap is reading an
+  inherited page on the child, which needs the legacy selected-source port (§8.2). All four shortcut attempts were tried and documented;
+- legacy deletion remains gated on that port (never started); old-format corpus (6–12) still needs recorded samples.
+
+Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
+PASS.
+
 ## Plan 174 (2026-11-06): hydration attempt and the remaining conclusion
 
 Appending `context/result-ref` events for the seed page rows to the child (right after `createChildSession`) did not authorize the
