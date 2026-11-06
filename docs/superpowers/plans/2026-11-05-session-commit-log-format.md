@@ -1203,6 +1203,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 152 (prototype, 2026-11-06): a v3 selected-results seed from a folded session
+
+`session-persistence/test/selected-results-scl-seed.test.ts` builds a `Session` in the shape the commit log folds (format 15, a turn with
+one artifact-backed tool result), wraps it with `createManagedSessionState` + a minimal `FactOwner`, creates a completed passive context
+and calls `exportSelectedResultsConversationSeed`: the result is a v3 seed (`selection:"completed"`, a results summary with rows/pages)
+in ~ms. This confirms the last blocker can be closed **without** porting the legacy `createDocuments(...).observations` layer: the
+remaining work is feeding a real SCL snapshot into the same three calls and committing the compiled seed from the fork host.
+
 ## Plan 150 (2026-11-06): selected-results forks are refused at the RPC boundary
 
 `session/fork/prepare` with a v2 selected-results core answers `Invalid fork preparation request` (-32602) on the commit log (the SDK

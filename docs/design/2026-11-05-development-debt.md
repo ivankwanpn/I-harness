@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 393（v3 seed 原型）**：由 folded Session＋FactOwner＋completed passive context 直接產出 v3 selected-results seed（測試 27ms），
+> 不需 legacy observations 層；剩把真實 SCL snapshot 接上並從 fork host 提交 compiled seed。
 > **round 392（B2 入口）**：`heldSource()` 證明只靠 `createManagedSessionState`＋`FactOwner`＋`createCompletedPassiveContext` 就能呼叫
 > `exportSelectedResultsConversationSeed`；SCL 可提供 snapshot → Session。剩 held pages 的 `legacy()` 迭代待驗。
 > **round 391（selected-results 邊界）**：SCL 的 v2 selected-results fork prepare 回 `Invalid fork preparation request`（清楚拒絕），
