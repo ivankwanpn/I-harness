@@ -4,6 +4,10 @@ import { createCompletedPassiveContext } from '../../core-session/src/conversati
 import { exportSelectedResultsConversationSeed } from '../../core-session/src/conversation/seed-export.ts'
 import type { FactOwner } from '../../core-session/src/managed/ports.ts'
 import { codecRef } from '../../core-session/test/fixtures/selected-results.ts'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createCommitCoordinator } from '../src/commit/coordinator.ts'
 
 // Prototype: can a v3 selected-results seed be produced from a plain Session
 // (the shape the commit log folds) without the legacy createDocuments path?
@@ -37,4 +41,28 @@ it('exports a v3 selected-results seed from a folded session', async () => {
   if (exported.kind !== 'seed') throw Error(exported.reason)
   expect(exported.seed).toMatchObject({ version: 3, selection: { kind: 'completed' } })
   expect(exported.seed.results.summary).toMatchObject({ rows: expect.any(Number), pages: expect.any(Number) })
+})
+it('exports a v3 seed from a real commit-log snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-scl-seed-'))
+  const coordinator = createCommitCoordinator({ root })
+  try {
+    await coordinator.create({ sessionId: 's1' })
+    await coordinator.append('s1', [
+      { type: 'turn/start' }, { type: 'step/start' },
+      { type: 'tool/call', callId: 'c', name: 'read', args: {} },
+      { type: 'assistant/message', text: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { type: 'tool/dispatch', callId: 'c', eventSeq: 2 },
+      { type: 'tool/result', callId: 'c', name: 'read', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'artifact', ref: { ...codecRef } } } },
+      { type: 'step/end' }, { type: 'turn/end' },
+    ] as never)
+    const loaded = await coordinator.load('s1')
+    const source = heldSource(loaded.session as never, 's1')
+    const exported = await exportSelectedResultsConversationSeed(source.context() as never, source.inherited as never)
+    expect(exported.kind).toBe('seed')
+    if (exported.kind !== 'seed') throw Error(exported.reason)
+    expect(exported.seed).toMatchObject({ version: 3, selection: { kind: 'completed' } })
+  } finally {
+    await coordinator.close().catch(() => {})
+    await rm(root, { recursive: true, force: true })
+  }
 })

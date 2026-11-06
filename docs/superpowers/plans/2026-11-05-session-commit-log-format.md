@@ -1203,6 +1203,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 153 (prototype, 2026-11-06): the seed also comes from a real commit-log snapshot
+
+The same test file now creates an SCL session, appends a turn with an artifact-backed tool result through the coordinator, loads the
+snapshot and exports the v3 seed from `loaded.session` — no in-memory fixture. Both cases pass in ~70ms. The store side of
+selected-results inheritance is therefore available; what remains is compiling the seed and committing it from the fork host, then
+wiring the gateway composer.
+
 ## Plan 152 (prototype, 2026-11-06): a v3 selected-results seed from a folded session
 
 `session-persistence/test/selected-results-scl-seed.test.ts` builds a `Session` in the shape the commit log folds (format 15, a turn with
