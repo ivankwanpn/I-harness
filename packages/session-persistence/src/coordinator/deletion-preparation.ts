@@ -57,16 +57,22 @@ type Port = { installDeletionParticipant(participant: DeletionParticipant): void
 const owners = new WeakMap<SessionCoordinator, { port: Port; deletion: SessionCoordinator['deleteOwnedSession'] }>()
 declare const selectionBrand: unique symbol
 export interface OriginalDeletionSelection { readonly [selectionBrand]: true }
-const selections = new WeakMap<OriginalDeletionSelection, readonly string[]>()
+const selections = new WeakMap<OriginalDeletionSelection, { readonly ids: readonly string[]; readonly sessions: readonly string[] }>()
 export function captureOriginalDeletionSelection(coordinator: SessionCoordinator, scope: DeletionPreparationScope): OriginalDeletionSelection {
   original(coordinator).captureDeletionScope(scope)
   const selection = Object.freeze({}) as OriginalDeletionSelection
-  selections.set(selection, Object.freeze([...new Set([scope.sessionId, ...scope.manifest.documents])].sort())); return selection
+  selections.set(selection, Object.freeze({ ids: Object.freeze([...new Set([scope.sessionId, ...scope.manifest.documents])].sort()), sessions: Object.freeze([scope.sessionId]) })); return selection
 }
 export function originalDeletionSelectionIds(selection: OriginalDeletionSelection): readonly string[] {
-  const ids = selections.get(selection)
-  if (!ids || types.isProxy(selection)) throw TypeError('Original deletion selection required')
-  return ids
+  const record = selections.get(selection)
+  if (!record || types.isProxy(selection)) throw TypeError('Original deletion selection required')
+  return record.ids
+}
+/** Session identities of the selection; artifact document keys are excluded. */
+export function originalDeletionSelectionSessions(selection: OriginalDeletionSelection): readonly string[] {
+  const record = selections.get(selection)
+  if (!record || types.isProxy(selection)) throw TypeError('Original deletion selection required')
+  return record.sessions
 }
 export function associateDeletionPreparation(coordinator: SessionCoordinator, port: Port) {
   if (owners.has(coordinator)) throw new TypeError('Deletion owner already associated')

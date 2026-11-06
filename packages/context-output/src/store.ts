@@ -20,7 +20,7 @@ import { rowCommitment, transferDirectory } from './legacy/observed-read.ts'
 import { LegacyFundingBatchOwner, fundingPass, describeApplicationFunding, fundApplicationInBatch, sum, type FundingBatchContext, type FundingBatchScope } from './legacy/funding-batch.ts'
 import type { LegacyCommitment, LegacyPage, LegacyRoot, LegacyRow } from './legacy/fork-types.ts'
 import { assertOriginalRevocationCoverage, type OriginalRevocationCoverage } from '../../session-persistence/src/coordinator/result-revocation.ts'
-import { originalDeletionSelectionIds, type OriginalDeletionSelection } from '../../session-persistence/src/coordinator/deletion-preparation.ts'
+import { originalDeletionSelectionIds, originalDeletionSelectionSessions, type OriginalDeletionSelection } from '../../session-persistence/src/coordinator/deletion-preparation.ts'
 
 interface Artifact { ref: ContextResultRef; source?: ContextCapture['source'] }
 export interface LegacyStoreInventory { readonly identity: string; readonly targets: readonly string[]; readonly expired: readonly string[]; readonly recoveryRequired: boolean }
@@ -130,13 +130,15 @@ export class ContextStore {
   }
   /** Read-only original authority. No open/recovery/body/index/cache effects. */
   passiveInventory(turn: WorkspaceMutationTurn, sessionId?: string, cutoff = Date.now()): Promise<LegacyStoreInventory> { return this.inventoryFor(turn, sessionId, cutoff) }
-  passiveDeletionInventory(turn: WorkspaceMutationTurn, selection: OriginalDeletionSelection, cutoff: number): Promise<LegacyStoreInventory> { return this.inventoryFor(turn, undefined, cutoff, originalDeletionSelectionIds(selection)) }
-  private async inventoryFor(turn: WorkspaceMutationTurn, sessionId: string | undefined, cutoff: number, selection?: readonly string[]): Promise<LegacyStoreInventory> {
+  passiveDeletionInventory(turn: WorkspaceMutationTurn, selection: OriginalDeletionSelection, cutoff: number): Promise<LegacyStoreInventory> { return this.inventoryFor(turn, undefined, cutoff, originalDeletionSelectionIds(selection), originalDeletionSelectionSessions(selection)) }
+  private async inventoryFor(turn: WorkspaceMutationTurn, sessionId: string | undefined, cutoff: number, selection?: readonly string[], sessions?: readonly string[]): Promise<LegacyStoreInventory> {
     this.assertTurn(turn)
     if (!Number.isSafeInteger(cutoff) || cutoff < 0) throw Error('Invalid original expiry frontier')
     const guard = () => this.assertTurn(turn), artifacts = new Map<string, Artifact>(), owners = new Map<string, Set<string>>(), roots = new Map<string, LegacyRoot>(), expiry = new Map<string, LegacyCommitment>()
     const requested = selection ? Object.freeze([...new Set(selection)].sort()) : sessionId === undefined ? undefined : [sessionId]
-    const targets = new Set<string>(requested), expired: string[] = []
+    // Targets are session identities: manifest document keys in the deletion
+    // selection gate artifact membership but are not sessions.
+    const targets = new Set<string>(sessions ?? (sessionId === undefined ? [] : [sessionId])), expired: string[] = []
     let recoveryRequired = false
     const directory = resolve(this.directory, 'artifacts')
     if (await exists(directory)) for (const name of (await readdir(directory)).sort()) {

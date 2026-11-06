@@ -57,7 +57,7 @@ Verification: `host-legacy-fork-continue.test.ts` passes (fork → prompt → re
 `fork-session.ts`/`host.ts` copied into its gateway, forking a one-turn session and immediately prompting the child
 returns `ok`.
 
-## Open gap: deleting the forked child (located 2026-11-07)
+## Deletion gap: fixed 2026-11-07
 
 `desktop/session/batch { action: 'delete' }` on the fork child still fails with `Original session parent
 unavailable`. The stack lands in `session-persistence/src/coordinator/artifact-path-association.ts`
@@ -71,9 +71,11 @@ For a forked child one of those lineage targets is `session-title/<id>`, so `cap
 `<sessionDir>/session-title/forked.jsonl`, whose parent does not exist, returns `needs-parents`, and the binding
 throws.
 
-Next: filter/map result-deletion targets that are artifact keys (treat them as documents), or make
-`planTargets` distinguish session ids from document keys, then re-enable a delete assertion in
-`host-legacy-fork-continue.test.ts`.
+Fix: `captureOriginalDeletionSelection` keeps the artifact ids and the **session** identities separately
+(`originalDeletionSelectionSessions`), and `context-output/src/store.ts` seeds legacy inventory targets from the
+session identities only. `host-legacy-fork-continue.test.ts` now deletes the forked child and expects `ok`; on the
+rc5 build with the fix copied into its gateway, deleting a fresh fork returned
+`{"results":[{"sessionId":"forked-session-6","ok":true}]}`.
 
 ## Workaround
 

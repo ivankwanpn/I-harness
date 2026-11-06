@@ -45,9 +45,7 @@ it('continues a forked conversation on the legacy store', async () => {
     expect(childPoints[0]).toMatchObject({ preview: 'child turn' })
     const childPlan = await call('desktop/rewind/plan', { sessionId: 'forked', target: 0, mode: 'conversation' }) as { fingerprint: string }
     expect(await call('desktop/rewind/execute', { sessionId: 'forked', target: 0, mode: 'conversation', fingerprint: childPlan.fingerprint })).toMatchObject({ truncated: true, eventAppended: true })
-    // Deleting a forked child on the legacy store is a separate gap
-    // ("Original session parent unavailable"); continuation is what this test pins.
-    const listedAfter = await call('session/list') as { sessions: { id: string }[] }
-    expect(listedAfter.sessions.map(row => row.id)).toContain('forked')
+    const childDelete = await call('desktop/session/batch', { command: { action: 'delete', sessionIds: ['forked'] } }) as { results: { ok: boolean; error?: string }[] }
+    expect(childDelete.results[0]).toMatchObject({ ok: true })
   } finally { await host.close() }
 }, 90000)
