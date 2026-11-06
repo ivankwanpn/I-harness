@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 182 (2026-11-06): why a nested selected fork is refused
+
+The refusal is `unsupported-history`, raised inside the v3 seed export (seed-export.ts, after the completed passive context is accepted):
+the source history of a selected child begins with a completed v3 seed, and the export's boundary/selection stage does not re-export such
+a history. The controller therefore maps the capture refusal to `unavailable` and the SDK answers `Session fork preparation unavailable`.
+Supporting nested selected forks means teaching the core-session seed export to capture a completed child history — part of the same
+source-port work, not a commit-log change.
+
 ## Plan 181 (2026-11-06): the inherited read walks the parent chain; a nested selected fork is refused
 
 `createConversationResultReader` now walks up to 16 parent links looking for a session that can serve the inherited page (a nested fork
