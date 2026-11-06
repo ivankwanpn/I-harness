@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 457（rc2 讀取競態定位）**：以 bridge 重現——submit 後 ~400ms 任一 session-scoped 讀取（history／context／work-state／input-state）
+> 會讓該 turn 失敗；無讀取則成功。桌面 composer 正是這個時序（submit 後 ~420ms 發 history/context/work-state）。更新設計文件。
 > **round 456（rc2 實機重現：新會話第一個 prompt 失敗）**：以可攜版＋CDP 實際操作重現 `model_error`；失敗 turn 停在 preparation 後、promotion 前，
 > gateway diag 為 `FACT_RECOVERY_REQUIRED` / 「Original pending-input observation unavailable」；同樣 RPC 由 bridge 驅動則成功。已記錄於
 > `docs/design/2026-11-07-rc2-desktop-input-recovery.md`，下一步為 instrument durable settlement source 與比較 composer/bridge trace。

@@ -64,6 +64,26 @@ path additionally could not observe pending inputs ("Original pending-input obse
 - Concurrent history/context/input-state/work-state reads: reproducing them around the submit does **not** fail;
 - Model selection: `{provider:"deepseek", model:"deepseek-flash"}` (no reasoning effort) is exactly what the bridge drives successfully.
 
+## Decisive isolation (2026-11-07)
+
+Driving the same gateway sequence over the bridge and adding **one session-scoped read** about 400 ms after the submit makes the turn fail:
+
+| read during the turn | turn outcome |
+|---|---|
+| none | completes (model connecting / settled / budget) |
+| `session/history` | fails |
+| `session/context` | fails |
+| `desktop/session/work-state` | fails |
+| `desktop/session/input/state` | fails (and the desktop reloads the session, then reports "會話狀態已重新載入，請重試") |
+| `session/tasks`, `desktop/session/project/state` (different documents) | no effect |
+
+Reads fired immediately (before preparation) do **not** fail; reads fired while the turn is live do. The desktop's own composer trace shows exactly this shape: submit at
+`t=…017`, then `session/history`, `session/context`, `desktop/session/work-state` at `t=…440` (after the UI navigates to the new session), and the turn fails.
+
+So the failure is **not** in the draft/durable-input creation; a successful write to the session
+(history/context/work-state read) invalidates the in-flight writer (`Original writer dependency cleanup unresolved` / `Original issued write needs reconciliation`,
+from `core-session/src/managed/execution-state.ts` `assertFresh`), and the input source is left unreconciled.
+
 ## Working hypothesis
 
 A recovery hold on the session's input inbox exists between preparation and promotion in the composer path (the composer is the only
