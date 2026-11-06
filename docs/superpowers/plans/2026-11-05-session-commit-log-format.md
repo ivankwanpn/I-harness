@@ -1200,7 +1200,21 @@ gateway native context rather than the host log.
 
 
 
-## Plan 112 (implemented 2026-11-06): todos on a forked child
+## Plan 113 (correction, 2026-11-06): the fork-after-turn extensions were never in the file
+
+While restoring the fork-after-turn test it turned out that the assertions documented in Plans 107–112 (descendant guard, ordered
+delete, child schedule, child todo) were **not** present in `host-commit-log-fork-after-turn.test.ts`: the edits did not apply and the
+corresponding commits only changed the docs, so the tests that "passed" did not contain those steps.
+
+Re-applying them surfaced two real issues, both left undocumented until now:
+
+1. after a child todo write, deleting the parent returns `FACT_CLOSED` instead of the intended `descendants` error;
+2. with a child schedule create/delete in the sequence, `host.close()` fails with `Desktop host cleanup incomplete: session service`
+   (the cold schedule path assembles a managed runtime that is never released).
+
+The test file is back at its committed base and the two issues are the next investigation items; the docs entries for Plans 107–112
+describe the intended coverage, not verified runs.
+
 
 The same test writes the child's todo list: `work-state` reports revision 0, `todo/write` accepts the first list and the next read
 reports revision 1 — the cold document path works on a fork child.

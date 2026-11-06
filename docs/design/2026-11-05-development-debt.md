@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 372（修正：fork-after-turn 斷言其實沒進檔案）**：Plans 107–112 的斷言未寫入測試檔（只改了文件）。重套後暴露兩個問題：
+> （a）child todo 後刪 parent 回 `FACT_CLOSED` 而非 descendants；（b）child schedule 會讓 host close 失敗（`session service`）。
+> 測試檔已回退，列為後續調查。
 > **round 371（child todo）**：fork child 的 work-state revision 0 → 寫入後 1，cold document 路徑正常。
 > **round 370（child schedule）**：forked child 上 schedule create/list/delete 皆正常。
 > **round 369（status 更新）**：§3 補上 fence exclusive 授權、fork/rewind 於 turn/rewind 後、settleCapture 容錯、descendant 守門；
