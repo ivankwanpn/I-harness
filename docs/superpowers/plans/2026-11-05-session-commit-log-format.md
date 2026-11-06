@@ -1221,6 +1221,11 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 188 (implemented 2026-11-06): integrated regression summary
+
+One run across the SCL surface: host **44**, store **38**, commit **43**, CLI **2**, SDK server/protocol **74** — **201 tests green**.
+Repo typecheck green, reachability gate PASS. The status report now records this summary.
+
 ## Plan 187 (implemented 2026-11-06): the inherited fallback never widens authorization
 
 The selected-read E2E now also requests a ref the child did **not** inherit (same shape, different id/revision): the answer stays

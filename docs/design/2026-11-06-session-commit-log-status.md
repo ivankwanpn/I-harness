@@ -57,8 +57,7 @@
 
 ## 5.1 最終回歸（2026-11-06）
 
-最終回歸（2026-11-06）：**host 38 檔 / 44 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 41 tests、CLI 2 tests，共 125 tests
-全綠；repo typecheck 全綠、reachability gate PASS。涵蓋 fork／rewind 在 turn、rewind 之後的序列、**fork child 續用與 nested fork**、fork child 的 schedule、
+最終回歸（2026-11-06）：**host 38 檔 / 44 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests、CLI 2 tests、SDK server/protocol 74 tests，共 **201 tests** 全綠；repo typecheck 全綠、reachability gate PASS。涵蓋 fork／rewind 在 turn、rewind 之後的序列、**fork child 續用與 nested fork**、fork child 的 schedule、
 archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search／context picker，以及 fence 的 exclusive 授權。
 
 ## 6. 如何重跑驗證
