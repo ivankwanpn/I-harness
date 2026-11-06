@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 438（store 重置到底）**：prune → 刪 v10/v11 → 刪整個 node_modules → 官方 registry 全新 install，install 全成功、測試正常，
+> 但 `store status` 仍 mutated → 判定為 pnpm 12.3.4 的 store/lockfile 完整性差異（環境層），非 repo 可修。
 > **round 437（預設切換差距歸零）**：3 個 legacy 版面測試改 store-agnostic（session/history、work-state、雙 factory 捕捉）；
 > 兩 store 下皆綠，6 檔 diff 在 SCL 15/15 綠。
 > **round 436（store 修復邊界）**：ffprobe `allowBuilds:false` 後 install exit 0；store 仍是共享 `D:\.pnpm-store\v11`（6.2 GB）的 mutated 狀態，

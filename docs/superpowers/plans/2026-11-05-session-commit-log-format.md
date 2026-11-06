@@ -1221,6 +1221,22 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 199 (2026-11-06): the store mutation survives a full reset — it is environmental
+
+Item "repair the pnpm store" was pushed to its limit:
+
+1. `pnpm store prune` removed one global-virtual-store entry; `store status` still failed;
+2. deleting `D:\.pnpm-store\v10` and `v11` and running `pnpm install --force` recreated v11 in seconds (packages re-linked from an
+   existing local source) and the same packages were still reported;
+3. deleting **`node_modules` entirely** and running a fresh `pnpm install --frozen-lockfile` from the official registry
+   (`registry.npmjs.org`) installed in the normal time, exit 0, and `pnpm store status` **still** reports the same mutated packages
+   (vitest, zustand, zod-to-json-schema, babel/css-tools and others).
+
+The toolchain is verified healthy after that reinstall (store 38 tests, gateway host 2 tests green). Because the mutation appears
+against a pristine `node_modules` and a registry-fetched store, it is not repo state we can repair from here — most likely a pnpm 12.3.4
+store/lockfile integrity accounting difference on this machine. The install defect itself is fixed (the ffprobe `allowBuilds: false` policy
+made `pnpm install` exit 0); the remaining `store status` signal needs an upstream/tooling decision.
+
 ## Plan 198 (implemented 2026-11-06): the default-switch delta reaches zero
 
 The three tests that still encoded legacy layout were rewritten store-agnostically:
