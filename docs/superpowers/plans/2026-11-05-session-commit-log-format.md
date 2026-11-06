@@ -1202,6 +1202,14 @@ gateway native context rather than the host log.
 
 ## Plan 114 (fixed 2026-11-06): a fork child gets the empty task document
 
+Attempt (2026-11-06): giving the execution document a view (`createManagedDocument(sessionId, context.source, ...)` in
+`openCommitExecutionDocument`) breaks the execution path — the prompt fails immediately with `FACT_OWNER_UNSUPPORTED`, and the fork
+host tests drop from green to failing at `session/prompt`. The change was reverted; the execution document must stay owner-less.
+
+Next design: a **read-only cold document** for the fork witness (`openReadOnlyManagedDocument`: open the generation in read mode, build
+the context/view, return a document that is never registered in `managed`), so the fork never closes the cached execution document.
+
+
 Attempt (2026-11-06): two local tolerances were tried — `readOriginalRuntime` returning `undefined` for a closed execution, and the task
 operation ignoring `FACT_CLOSED` from `document.assertReady()`. Each only moved the failure to the next consumer of the same closed
 attachment (`execution-inputs.pending()` → `execution.observe()` → `assertHeld`). This confirms the real fix is to stop closing the
