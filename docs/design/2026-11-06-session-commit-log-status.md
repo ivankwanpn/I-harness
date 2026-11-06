@@ -45,7 +45,7 @@
 | legacy 刪除 | 需 selected-results 缺口關閉或接受降級 | 尚未刪除任何 legacy 程式碼 |
 | 舊格式 corpus（6–12） | SCL 端 adoption 已驗證（formats 6／8／11／13／14 可讀、遷移）；此 build 只寫 v15，舊格式 byte 樣本必須由舊版本錄製 | dual-run corpus 維持 13/14 |
 | legacy `session-persistence` 基線 | 280 個既有失敗（transition gate／artifact latch／win32 lock） | 與 SCL 無關，未修復 |
-| 預設切換 | **已完成全量雙 store 比對**（277 檔／1,236 tests）：legacy 437 failed、SCL 438 failed，雜訊主因為 207 個 `TASK_TRANSITION_UNSUPPORTED`（測試 fixture 債）。逐檔 diff 6 檔，隔離重跑後 **3 個真差異**皆為 legacy 版面斷言（`owned-configured-host` 的 `.jsonl`、`task-transition-constructor` 的 `.doc.jsonl`、`private-schedule-ui` 的 service seam） | 預設切換**不再需要 observations/result-store 移植**；只需更新或以 legacy 限定這 3 個測試 |
+| 預設切換 | **量測差距已歸零**：全量雙 store 各約 437/438 failed（207 個 fixture `TASK_TRANSITION_UNSUPPORTED`＋timeout／temp 雜訊，兩 store 相同）。原本 3 個 legacy 版面測試已改為 store-agnostic（`session/history`、`work-state`、雙 factory 捕捉），6 檔 diff 在 SCL 下 **15/15 綠**、legacy 下亦綠 | 預設切換**不需要 observations/result-store 移植**；剩下的是產品決策（是否切換預設） |
 | ~~fork child 續用~~ | ~~code-mode 的 delegated owner 檢查~~ | **已修（2026-11-06）**：`origin:"fork"` 放行，child 可跑 turn、rewind、管 schedule |
 | ~~fork 後刪除 parent~~ | ~~task operation 持有已關閉的 parent document~~ | **已修（2026-11-06）**：fork witness 改用 detached read-only document |
 

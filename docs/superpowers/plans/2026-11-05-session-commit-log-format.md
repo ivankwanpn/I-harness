@@ -1221,6 +1221,20 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 198 (implemented 2026-11-06): the default-switch delta reaches zero
+
+The three tests that still encoded legacy layout were rewritten store-agnostically:
+
+- `owned-configured-host` reads the conversation through `session/history` instead of `sessions/<id>.jsonl`;
+- `task-transition-constructor` asserts the empty task document through `desktop/session/work-state` instead of reading
+  `task-<id>.doc.jsonl` and the legacy header line;
+- `private-schedule-ui` captures the coordinator from **either** factory (`createJsonlTaskTransitionCoordinator` or
+  `createJsonlCommitCoordinator`) instead of assuming the legacy one, so its private-read and snapshot assertions still run.
+
+Verification: the three files pass under the **legacy default** and under `IH_SESSION_STORE=commit-log`; the six-file diff set from
+Plan 196 now runs **15/15 green** under the commit log, so the measured default-switch delta is zero (the remaining suite-wide failures
+are the 207 fixture `TASK_TRANSITION_UNSUPPORTED` cases, timeouts and temp-path noise, identical on both stores).
+
 ## Plan 197 (2026-11-06): the store repair stops at the shared cache boundary
 
 The install itself is fixed: `pnpm-workspace.yaml` now sets `allowBuilds: false` for the six non-host ffprobe installers, so
