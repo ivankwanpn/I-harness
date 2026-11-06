@@ -1200,6 +1200,11 @@ gateway native context rather than the host log.
 
 
 
+## Plan 111 (implemented 2026-11-06): schedule on a forked child
+
+The fork-after-turn test also manages the child's schedule: `desktop/schedule/create` on `forked` succeeds, `schedule/list` returns it
+and `schedule/delete` empties the list — the cold schedule path works on a fork child as well as on a rooted session.
+
 ## Plan 109 (implemented 2026-11-06): delete a rewound session
 
 Follow-up probe (2026-11-06): deleting while a second coordinator holds a `load` handle **succeeds** (`ok:true`); a second delete then
