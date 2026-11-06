@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 463（rc4 實測：legacy fork 無法繼續）**：fork prepare/begin 成功、seed 含來源 turn，但任何 prompt 都回
+> `Original execution attachment requires its original entry construction`（session/prompt 與 durable input 皆同）。記錄於
+> `2026-11-07-desktop-legacy-fork-continue.md`，下輪測 SCL 變體並對照 host-commit-log-fork-continue 修復。
 > **round 462（first-write 修正）**：`manager.ts` preflight 在 prepare 後比較規則文字／sources；未變更則以新 snapshot 發 proof（
 > first write 成功），規則真的變更仍回 unseen-rules。instructions 141/141；host-write-first 2 tests 綠（含規則中途出現仍拒絕）。
 > **round 461（rc3 實測：write 首次失敗 unseen-rules）**：新 session 第一次 write 被 `INSTRUCTIONS_REPLAN_REQUIRED/unseen-rules` 拒絕
