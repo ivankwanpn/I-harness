@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 109 (implemented 2026-11-06): delete a rewound session
+
+The rewind-after-turn test now deletes the session after the rewind: `batch delete` reports ok and the session leaves `session/list`.
+The delete runs after the observer coordinator that checked the `rewind/point` marker is closed (it does not run while that handle is
+open).
+
 ## Plan 108 (implemented 2026-11-06): delete the fork, then the parent
 
 After the refused parent deletion the test deletes the child: `batch delete` on `forked` succeeds, the child leaves `session/list` and

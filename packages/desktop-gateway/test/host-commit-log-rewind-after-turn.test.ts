@@ -37,6 +37,8 @@ it('rewinds a conversation that has run a turn', async () => {
       const events = (await probe.load(created.sessionId)).session.events
       expect(events.map(event => event.type)).toContain('rewind/point')
     } finally { await probe.close() }
-    expect(await call('desktop/rewind/points', { sessionId: created.sessionId })).toEqual([])
+    const deleted = await call('desktop/session/batch', { command: { action: 'delete', sessionIds: [created.sessionId] } }) as { results: { ok: boolean; error?: string }[] }
+    expect(deleted.results[0]!.ok).toBe(true)
+    expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).not.toContain(created.sessionId)
   } finally { await host.close() }
 }, 90000)
