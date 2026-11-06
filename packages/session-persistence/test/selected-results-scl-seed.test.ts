@@ -38,7 +38,7 @@ it('exports a v3 selected-results seed from a folded session', async () => {
   const source = heldSource(declaredSource(), 'S')
   const exported = await exportSelectedResultsConversationSeed(source.context() as never, source.inherited as never)
   expect(exported.kind).toBe('seed')
-  if (exported.kind !== 'seed') throw Error(exported.reason)
+  if (exported.kind !== 'seed') throw Error('seed refused: ' + JSON.stringify(exported))
   expect(exported.seed).toMatchObject({ version: 3, selection: { kind: 'completed' } })
   expect(exported.seed.results.summary).toMatchObject({ rows: expect.any(Number), pages: expect.any(Number) })
 })
@@ -59,7 +59,7 @@ it('exports a v3 seed from a real commit-log snapshot', async () => {
     const source = heldSource(loaded.session as never, 's1')
     const exported = await exportSelectedResultsConversationSeed(source.context() as never, source.inherited as never)
     expect(exported.kind).toBe('seed')
-    if (exported.kind !== 'seed') throw Error(exported.reason)
+    if (exported.kind !== 'seed') throw Error('seed refused: ' + JSON.stringify(exported))
     expect(exported.seed).toMatchObject({ version: 3, selection: { kind: 'completed' } })
   } finally {
     await coordinator.close().catch(() => {})
