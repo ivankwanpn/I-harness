@@ -1203,6 +1203,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 149 (2026-11-06): gap inventory after the fork work
+
+The status report now marks fork-child continuation and the fork→parent-delete path as fixed, and lists **selected results** as the only
+remaining blocker for switching the default store. Still open: the legacy formats 6–12 corpus (needs recorded samples with valid
+`journal` metadata), the legacy `session-persistence` baseline failures (unrelated to SCL) and the legacy deletion itself (gated on
+the selected-results decision).
+
 ## Plan 148 (implemented 2026-11-06): compaction keeps the todo list
 
 `host-commit-log-compact-long.test.ts` now writes the todos before the eight-turn compaction: the write reports revision 1, the

@@ -45,17 +45,20 @@
 | legacy 刪除 | 需 selected-results 缺口關閉或接受降級 | 尚未刪除任何 legacy 程式碼 |
 | 舊格式 corpus（6–12） | 需帶有效 `journal` metadata 的錄製樣本 | dual-run corpus 維持 13/14 |
 | legacy `session-persistence` 基線 | 280 個既有失敗（transition gate／artifact latch／win32 lock） | 與 SCL 無關，未修復 |
+| ~~fork child 續用~~ | ~~code-mode 的 delegated owner 檢查~~ | **已修（2026-11-06）**：`origin:"fork"` 放行，child 可跑 turn、rewind、管 schedule |
+| ~~fork 後刪除 parent~~ | ~~task operation 持有已關閉的 parent document~~ | **已修（2026-11-06）**：fork witness 改用 detached read-only document |
 
 ## 5. 需要的決策
 
-1. **selected results**：維持 legacy-only（現況）、接受 SCL 降級並切換預設、或投入移植（§8.2 的 B2）；
+1. **selected results**：維持 legacy-only（現況）、接受 SCL 降級並切換預設、或投入移植（§8.2 的 B2）；這是**唯一**仍阻擋預設切換的功能；
 2. **legacy 刪除**：只有 (1) 決定後才有意義；
 3. **SCL 預設化**：目前為 opt-in（`IH_SESSION_STORE=commit-log` 或 host 的 `sessionStore`）。
 
 ## 5.1 最新回歸（2026-11-06）
 
 一次跑完 SCL 全部表面：**host 36 檔 / 41 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests，共 122 tests
-全綠、無 flake。涵蓋 fork／rewind 在 turn、rewind 之後的序列，archive／delete 於有歷史的 session，以及 fence 的 exclusive 授權。
+全綠、無 flake。涵蓋 fork／rewind 在 turn、rewind 之後的序列、**fork child 續用與 nested fork**、fork child 的 schedule、
+archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search／context picker，以及 fence 的 exclusive 授權。
 
 ## 6. 如何重跑驗證
 
