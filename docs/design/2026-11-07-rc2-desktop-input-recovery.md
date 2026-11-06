@@ -90,8 +90,26 @@ A recovery hold on the session's input inbox exists between preparation and prom
 driver that also mounts the new session's UI immediately). The lane then refuses admission with `FACT_RECOVERY_REQUIRED`, and the
 failure cleanup cannot reconcile the pending input, leaving the session in a state that retries cannot use.
 
+## Attempted fix (2026-11-07): debt waiters — insufficient
+
+The writer refused admission when any writer-dependency scope was outstanding
+(`core-session/src/managed/execution-state.ts`): `assertFresh` threw on any debt scope outside
+`taskHistoryScopes`, and `prepareWrite` threw when a debt scope had no admission promise. A patch
+introduced per-scope settlement promises, made `prepareWrite` wait for active scopes, and excluded
+transient read scopes from `assertFresh`. Core-session tests stayed green apart from the 16
+pre-existing `memory-source-checkpoint` failures this environment shows on a pristine tree.
+
+**The packaged app still failed with the same AggregateError, and the added `assertFresh` log
+never fired.** So the failing admission is not the transient-read debt path; the refusal is
+reported earlier (an admission returning `FACT_RECOVERY_REQUIRED`), most likely the document or
+execution `beginAction` refusing because its readiness/bootstrap is not satisfied. The experiment
+was reverted.
+
 ## Next steps
 
+0. Instrument `createManagedDocument.beginAction` / `document.assertReady` and the execution
+   attachment's `beginAction` outcome codes and stacks, and log the document's `bootstrapReady`
+   state at admission; compare the failing composer session with a succeeding bridge session;
 1. Instrument the **durable** settlement source (`session-persistence-jsonl` / managed facts), not only the nondurable adapter: log
    `hold`/`release`/`requireRecovery` with stacks, then reproduce through the composer;
 2. compare the composer's exact RPC trace with the bridge trace (main-process IPC logging), including `desktop/session/input/state` and
