@@ -67,7 +67,7 @@ archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search
 | typecheck | `pnpm -r --no-bail typecheck` | PASS |
 | package boundaries | `node scripts/audit/check-package-boundaries.mjs --gate` | PASS（147 = baseline） |
 | reachability | `node scripts/audit/check-reachability.mjs --gate` | PASS |
-| bench | `node --import tsx scripts/bench/run-bench.mts --gate` | **紅燈（既有）**：baseline 錄於 2026-09-18／他機；bench 只用 core-session，與 SCL 無關 |
+| bench | `node --import tsx scripts/bench/run-bench.mts --gate` | **紅燈（既有，已量化）**：baseline 錄於 2026-09-18／他機。實測 `append` 為**線性**、約 24 µs/event（n=500…8000 穩定），`deriveMessages` 4k events 約 65 ms/次；屬 audit 期加入的驗證成本（常數因子），與 SCL 無關，需獨立的效能任務 |
 | pnpm store | `pnpm store status` | **altered**（vitest／zustand 等），屬本機 store 狀態；`pnpm install --force` 由操作者處理 |
 
 SCL 相關測試（host／store／commit／CLI／SDK）皆綠，見 §5.1。

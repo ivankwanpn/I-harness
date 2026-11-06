@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 431（append 成本量化）**：append 線性、約 24 µs/event（n=500…8000 穩定），deriveMessages 4k events ≈ 65 ms/次；
+> baseline 是 audit 前的 63 ns/event。bench 紅燈＝驗證成本，非病態成長；probe 已刪除。
 > **round 430（閘門清單）**：status 新增 §5.2（typecheck／boundaries／reachability／bench caveat／store altered）；
 > `pnpm store status` 在本機回報 altered（vitest／zustand 等），屬環境狀態。
 > **round 429（bench gate 紅燈）**：`verify:bench` 在本機失敗（deriveMessages 35ms、append 42ms vs 0.079/0.127 baseline）。baseline 為

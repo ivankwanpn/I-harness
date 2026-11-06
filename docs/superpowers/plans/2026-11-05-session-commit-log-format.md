@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 192 (2026-11-06): the append cost is linear, not pathological
+
+A probe (deleted afterwards) measured `createSession` + N appends: 29 ms/500, 33/1000, 50/2000, 97/4000, 189/8000 — a stable **~24 µs per
+event**, i.e. linear with a large constant, not the quadratic growth a real bug would show. `deriveMessages` over 4,000 events measures
+~65 ms/call. The 2026-09 baseline (0.127 ms for 2,000 appends ≈ 63 ns/event) predates the audit's validation work, so the bench gate is
+comparing an unvalidated fast path against today's validated one. Recorded for a dedicated performance task; no commit-log change is
+implicated.
+
 ## Plan 191 (2026-11-06): the verification checklist and its two environment caveats
 
 The status report now records every gate with the command and this machine's reading: typecheck PASS, package boundaries PASS (147 =
