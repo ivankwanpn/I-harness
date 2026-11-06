@@ -73,6 +73,12 @@ archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search
 | pnpm store | `pnpm store status` | **install 已修好；`store status` 仍 mutated（環境層）**：ffprobe `allowBuilds:false` 後 install exit 0。已依序嘗試 `store prune`、刪除 v10+v11 後 `install --force`、**刪除整個 `node_modules` 後從官方 registry 全新 install**——install 皆成功、測試正常（store 38、gateway host 2），但 `store status` 仍列出同一批 packages。判定為 pnpm 12.3.4 的 store/lockfile 完整性計算差異，非 repo 狀態，需上游／工具決策 |
 
 SCL 相關測試（host／store／commit／CLI／SDK）皆綠，見 §5.1。
+### 5.2.1 store 選擇與 lifecycle（2026-11-06）
+
+專項回歸（5 檔／6 tests，全綠）：`host-store-selection`（settings 選 store 與 host 選項覆寫）、`host-store-restart`（settings 選擇跨重啟）、
+`settings-write-preserve`（其他設定寫入保留 sessionStore）、`artifact-cleanup`（刪除 session 清掉 per-session artifacts）、
+`session-store-setting`（CLI settings 與 flag 優先序）。
+
 ## 5.3 使用方式
 
 使用者／開發者如何選擇與確認 store，見 [../session-store.md](../session-store.md)。

@@ -1221,6 +1221,12 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 213 (2026-11-06): the store-selection/lifecycle suite
+
+One run over the store-choice surface: `host-store-selection`, `host-store-restart`, `settings-write-preserve`, `artifact-cleanup` and the
+CLI `session-store-setting` — **5 files / 6 tests green**. The status report records the suite under §5.2.1 so the coverage of the
+selection path is visible next to the general regression numbers.
+
 ## Plan 212 (2026-11-06): a settings-selected store survives a host restart
 
 `host-store-restart.test.ts` creates a session on a host whose only store selection is the settings file (`sessionStore: "commit-log"`, no
