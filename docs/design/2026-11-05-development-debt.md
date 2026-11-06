@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 473（小會話 capacity-unavailable）**：bridge 無例外，原因是 `assessLegacyPreparedRequest` 的 `pressure.kind==='unavailable'`
+> （reason: this model has no configured context window）：manual compaction 路徑的 contextWindow 未帶入。下一步查 `runManualGeneration`
+> → agent.compact → reduction bridge 的 model window 傳遞（一般回合有 1M window，卻在 compact 時 unknown）。
 > **round 472（compaction 根因修復）**：replacement 驗證把 rewind 前未關閉的 turn 視為 ambiguous；delivery 追蹤也把 tool delivery／舊 generation 永久視為 pending。
 > 修正後 rewind 會話可成功 compact（compacted:true, summary 產生），core-session 68/68＋新測試。
 > **round 471（compaction 錯誤映射修正）**：`bridge.prepare` 對 `SESSION_CONTEXT_REPLACEMENT_FORMAT` 改回 `source-unrepresentable`；
