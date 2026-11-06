@@ -47,14 +47,19 @@ export function createReductionBridge(deps: BridgeDeps, captureCandidate: () => 
       const assessed = ownedBudget.probe(prepared, now, rewrites.length > 0, policy.reserveRatio, policy)
       assertCurrentRepresentable(now, assessed.prepared)
       const pressure = assessed.decision.pressure
-      const targetReady = assessed.capacityFit === 'yes' && pressure.kind === 'known' && pressure.targetReady
+      // Signature/opaque replay content has no exact provider price, but it is
+      // optional replayed material: a complete heuristic projection is enough to
+      // keep reducing instead of refusing the whole compaction.
+      const unpriced = pressure.kind === 'unavailable' && pressure.reason === 'token-cost-unavailable' && assessed.snapshot.coverage === 'complete'
+      const capacityFit = unpriced ? 'no' as const : assessed.capacityFit
+      const targetReady = capacityFit === 'yes' && pressure.kind === 'known' && pressure.targetReady
       const token = Object.freeze({}), proof = { source, groups, rewrites, rewriteIdentity: projectionFingerprint(rewrites), current: now, assessmentRevision,
         afterKey: softWorkFacts(now.snapshot, policy, conversation).workKey, targetReady }
       if (!preparationCurrent(proof)) return { kind: 'stale' }
       proofs.set(token, proof)
       const { input, packet } = assessed.prepared.measurement, budget = assessed.snapshot
       const bytes = packet.bodyBytes ?? packet.sdkCommandBytesEstimate ?? Object.values(input.components).reduce((n, component) => n + component.textUtf8Bytes + component.structuredBytes + component.binaryBytes, 0)
-      return { kind: 'assessed', capacityFit: assessed.capacityFit, target: pressure.kind === 'unavailable' ? 'unavailable' : targetReady ? 'ready' : 'over-target',
+      return { kind: 'assessed', capacityFit, target: capacityFit === 'unavailable' ? 'unavailable' : targetReady ? 'ready' : 'over-target',
         currentView: projectionFingerprint([now.snapshot.coordinates.semanticRevision, now.snapshot.coordinates.protectionRevision, now.snapshot.surfaceRevision, assessmentRevision]),
         inputTokens: budget.admissionInputTokens, inputBytes: bytes, inputByteKind: packet.sizeKind, inputFingerprint: input.inputFingerprint,
         shape: projectionFingerprint([input.bindingFingerprint, input.shapeFingerprint, now.snapshot.surface.binding]), fixedInput: input.overriddenInputFields.includes('messages')

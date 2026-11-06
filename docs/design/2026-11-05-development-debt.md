@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 475（unpriced 不再阻擋 compaction）**：`bridge.prepare` 對 `token-cost-unavailable`＋coverage complete 的請求改以 `capacityFit:'no'` 繼續壓縮；
+> 小會話由 `capacity-unavailable` 變成 `no-progress`（無可減內容），不再誤報容量。core-agent 15/15、gateway compact 3/3。
 > **round 474（capacity-unavailable 真因）**：window 正常（1,000,000），pressure 回 `token-cost-unavailable`：summary/main 請求含 signature／opaque continuation 的
 > token 成本無法估計（`assessPreparedCapacity` 的 uncertainties）。下一步：讓 compaction 評估只針對可定價內容，或在不可定價時跳過 capacity 阻擋。
 > **round 473（小會話 capacity-unavailable）**：bridge 無例外，原因是 `assessLegacyPreparedRequest` 的 `pressure.kind==='unavailable'`
