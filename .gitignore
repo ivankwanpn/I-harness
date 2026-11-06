@@ -62,3 +62,8 @@ desktop.ini
 # The committed defaults describe the original workstation; every other
 # machine names its own trees here instead of editing tracked files.
 scripts/audit/source-paths.local.json
+
+# Machine-local benchmark baselines (see scripts/bench/run-bench.mts).
+# The committed bench-baseline.json is the reference workstation; other
+# machines seed their own keyed file instead of editing it.
+scripts/bench/bench-baseline.*.json

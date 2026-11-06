@@ -1221,6 +1221,16 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 194 (implemented 2026-11-06): per-machine benchmark baselines
+
+The bench harness compared every machine against `bench-baseline.json` recorded 2026-09-18 on node v22/i7-6700, so this machine failed by
+~400x while the code path was merely the audit's validation cost. `run-bench.mts` now keys the baseline by machine
+(`node|platform|arch|cpuModel|cpuCount`, sha256 slug -> `bench-baseline.<key>.json`), seeds the keyed file with `--seed-baseline`, and keeps
+`bench-baseline.json` as the reference only: a matching machine compares against it, otherwise the file is used as a **labelled foreign**
+fallback (WARN). Self-test grows to 6/6 (a foreign baseline is never treated as this machine's; the same machine matches itself). On this
+machine `--gate` now PASSES against its own seeded baseline (append 38.5 ms, deriveMessages 31.3 ms). Machine-local baselines are
+gitignored (like `scripts/audit/source-paths.local.json`).
+
 ## Plan 193 (2026-11-06): where the 24 us/append actually goes
 
 A CPU profile of 4,000 appends (probe deleted afterwards) attributes the in-repo cost to the conversation index: `stage`

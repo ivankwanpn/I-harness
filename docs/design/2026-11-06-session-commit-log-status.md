@@ -67,8 +67,8 @@ archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search
 | typecheck | `pnpm -r --no-bail typecheck` | PASS |
 | package boundaries | `node scripts/audit/check-package-boundaries.mjs --gate` | PASS（147 = baseline） |
 | reachability | `node scripts/audit/check-reachability.mjs --gate` | PASS |
-| bench | `node --import tsx scripts/bench/run-bench.mts --gate` | **紅燈（既有，已量化）**：baseline 錄於 2026-09-18／他機。實測 `append` 為**線性**、約 24 µs/event（n=500…8000 穩定），`deriveMessages` 4k events 約 65 ms/次；屬 audit 期加入的驗證成本（常數因子），與 SCL 無關，需獨立的效能任務 |
-| pnpm store | `pnpm store status` | **altered**（vitest／zustand 等），屬本機 store 狀態；`pnpm install --force` 由操作者處理 |
+| bench | `node --import tsx scripts/bench/run-bench.mts --gate` | **PASS（本機）**：harness 改為 **per-machine keyed baseline**；本機已 seed（append ~38 ms、deriveMessages ~31 ms）。其他機器用 reference baseline 並標示 `WARN foreign`。實測 append 線性約 24 µs/event，成本在 conversation-index staging，與 SCL 無關 |
+| pnpm store | `pnpm store status` | **仍 altered**（vitest／zustand 等）。已嘗試 `pnpm install --force --frozen-lockfile`：616 套件重裝後 pnpm 以 `ERR_PNPM_IGNORED_BUILDS`（ffprobe installer 未核准）結束，store 仍回報 altered，且 install 會改寫 `pnpm-workspace.yaml` 的 `allowBuilds`（已回退）。需先由操作者決定 ffprobe build 政策再重裝 |
 
 SCL 相關測試（host／store／commit／CLI／SDK）皆綠，見 §5.1。
 ## 6. 如何重跑驗證

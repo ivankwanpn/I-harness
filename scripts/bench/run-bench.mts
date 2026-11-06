@@ -29,19 +29,22 @@
  *
  * Usage:
  *   node_modules/.bin/tsx scripts/bench/run-bench.mts                 # measure + print
- *   node_modules/.bin/tsx scripts/bench/run-bench.mts --seed-baseline # write the baseline
+ *   node_modules/.bin/tsx scripts/bench/run-bench.mts --seed-baseline # write THIS machine's baseline
  *   node_modules/.bin/tsx scripts/bench/run-bench.mts --gate          # fail on regression
  *   node_modules/.bin/tsx scripts/bench/run-bench.mts --self-test     # prove the detector
  */
 
 import { readFileSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { arch, cpus, platform, release, totalmem } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { deriveMessages, createSession, append, type SessionEvent } from "../../packages/core-session/src/index.ts"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const BASELINE_PATH = join(HERE, "bench-baseline.json")
+/** The reference machine baseline kept for history; local runs compare their own
+ *  keyed file instead (see `baselineKey`). */
+const LEGACY_BASELINE_PATH = join(HERE, "bench-baseline.json")
 
 /** How many samples per case, and how many warmup runs before them. */
 const SAMPLES = 15
@@ -158,12 +161,36 @@ export function runAll(samples = SAMPLES, warmup = WARMUP): Measured[] {
   return CASES.map((c) => measure(c, samples, warmup))
 }
 
-export function readBaseline(): { fingerprint: Record<string, unknown>; cases: Measured[] } | undefined {
-  try {
-    return JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as { fingerprint: Record<string, unknown>; cases: Measured[] }
-  } catch {
-    return undefined
+/** The fields whose difference invalidates a COMPARISON (not a run). A baseline
+ *  recorded on another CPU/node must never judge this machine: it either fails
+ *  for the machine's sake or hides a real regression. */
+const MACHINE_FIELDS = ["node", "platform", "arch", "cpuModel", "cpuCount"] as const
+
+export function sameMachine(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  return MACHINE_FIELDS.every((field) => a[field] === b[field])
+}
+
+/** A filename-safe slug of the machine fields, so each machine seeds its own. */
+export function baselineKey(fp: Record<string, unknown> = fingerprint()): string {
+  return createHash("sha256").update(MACHINE_FIELDS.map((field) => String(fp[field])).join("|")).digest("hex").slice(0, 12)
+}
+
+export function baselinePath(fp: Record<string, unknown> = fingerprint()): string {
+  return join(HERE, `bench-baseline.${baselineKey(fp)}.json`)
+}
+
+export function readBaseline(): { path: string; fingerprint: Record<string, unknown>; cases: Measured[]; foreign?: boolean } | undefined {
+  let foreign: { path: string; fingerprint: Record<string, unknown>; cases: Measured[]; foreign?: boolean } | undefined
+  for (const path of [baselinePath(), LEGACY_BASELINE_PATH]) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as { fingerprint: Record<string, unknown>; cases: Measured[] }
+      if (sameMachine(parsed.fingerprint, fingerprint())) return { path, fingerprint: parsed.fingerprint, cases: parsed.cases }
+      // Keep the reference baseline as a fallback so a machine that has not been
+      // seeded still gets a comparison — clearly labelled as a foreign one.
+      foreign ??= { path, fingerprint: parsed.fingerprint, cases: parsed.cases, foreign: true }
+    } catch { /* a missing or unreadable candidate is not a baseline */ }
   }
+  return foreign
 }
 
 /** Cases whose measured time exceeds the baseline by `factor` or more.
@@ -226,6 +253,19 @@ export const SELF_TEST_CASES: { name: string; expect: string; run: () => string 
     },
   },
   {
+    name: "a baseline recorded on another machine is NOT used",
+    expect: "ignored",
+    run() {
+      const other = { ...fingerprint(), cpuModel: "another cpu" }
+      return sameMachine(other, fingerprint()) ? "USED" : "ignored"
+    },
+  },
+  {
+    name: "the same machine matches its own baseline",
+    expect: "matched",
+    run() { return sameMachine(fingerprint(), fingerprint()) ? "matched" : "MISMATCH" },
+  },
+  {
     name: "the factor is a threshold, not a ceiling — just under passes",
     expect: "clean",
     run() {
@@ -250,8 +290,9 @@ function main(argv: string[]): number {
 
   if (argv.includes("--seed-baseline")) {
     const cases = runAll()
-    writeFileSync(BASELINE_PATH, `${JSON.stringify({ fingerprint: fingerprint(), cases }, null, 2)}\n`, "utf8")
-    console.log(`seeded ${BASELINE_PATH}`)
+    const path = baselinePath()
+    writeFileSync(path, `${JSON.stringify({ fingerprint: fingerprint(), cases }, null, 2)}\n`, "utf8")
+    console.log(`seeded ${path}`)
     console.log(`  ${renderFingerprint(fingerprint())}`)
     for (const c of cases) console.log(`  ${c.name}  ${c.ms.toFixed(3)} ms`)
     return 0
@@ -261,13 +302,14 @@ function main(argv: string[]): number {
   if (argv.includes("--gate")) {
     const baseline = readBaseline()
     if (baseline === undefined) {
-      console.error(`no baseline at ${BASELINE_PATH} — run --seed-baseline first (a gate with nothing to compare is not a gate)`)
+      console.error(`no baseline for this machine (looked for ${baselinePath()}) — run --seed-baseline first (a gate with nothing to compare is not a gate)`)
       return 2
     }
     // The fingerprint is REPORTED, not enforced: a different machine does not
     // invalidate the run, it invalidates the COMPARISON, and the reader is the
     // one who can tell the difference.
-    console.log(`baseline: ${renderFingerprint(baseline.fingerprint)}`)
+    console.log(`baseline: ${renderFingerprint(baseline.fingerprint)}  (${baseline.path})`)
+    if (baseline.foreign) console.log('  WARN  this baseline was recorded on another machine — the comparison is indicative only (seed this machine with --seed-baseline)')
     console.log(`   this: ${renderFingerprint(fingerprint())}`)
     const { regressed, unbaselined } = regressions(measured, baseline.cases)
     for (const u of unbaselined) console.log(`  WARN  ${u} has no baseline — it has never been compared to anything`)
