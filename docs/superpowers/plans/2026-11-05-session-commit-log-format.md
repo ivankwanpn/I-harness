@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 107 (implemented 2026-11-06): a parent with descendants cannot be deleted
+
+The fork-after-turn test now also asks to delete the parent: the batch result is `ok:false` with a `descendants` error and the forked
+child stays in `session/list`. This pins the no-orphans rule on the commit log (the delete path checks every profile for a
+`parentSession` before draining).
+
 ## Plan 106 (fixed 2026-11-06): fork after a rewind
 
 `settleCapture` in `execution-inputs.ts` now treats `TypeError: Original capture obligation released` from `observe()`/`admit()` as
