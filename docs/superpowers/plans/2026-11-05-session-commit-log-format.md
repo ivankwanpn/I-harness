@@ -1203,6 +1203,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 162 (implemented 2026-11-06): a result reference produces seed pages
+
+Appending a `context/result-ref` event (the product's result-selection marker) to the source before capturing makes
+`exportSelectedResultsConversationSeed` emit `conversation/seed-results` pages; `selected-fork-seed.test.ts` now covers it. So the empty
+seed in the host test reflects a turn that never referenced its result, not a broken capture. The host path would populate pages for a
+turn that produces a ref (typically a large tool output).
+
 ## Plan 161 (2026-11-06): the v3 seed carries pages only when something was selected
 
 Inspecting the child created by the host test shows `conversation/seed-manifest` + `seed-group` events but **no**

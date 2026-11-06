@@ -62,3 +62,28 @@ it('prepares and executes a selected-results fork on the commit log', async () =
     await rm(root, { recursive: true, force: true })
   }
 })
+it('captures selected result pages when the source references a result', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-gw-selected-pages-'))
+  const coordinator = createCommitCoordinator({ root })
+  try {
+    const session = asSessionCoordinator(coordinator)
+    await session.create({ sessionId: 's1' })
+    await session.append('s1', [
+      { type: 'turn/start' }, { type: 'step/start' },
+      { type: 'tool/call', callId: 'c', name: 'read', args: {} },
+      { type: 'assistant/message', text: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { type: 'tool/dispatch', callId: 'c', eventSeq: 2 },
+      { type: 'tool/result', callId: 'c', name: 'read', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'artifact', ref: { ...codecRef } } } },
+      { type: 'context/result-ref', ref: { id: codecRef.id, workspaceId: 'w', sessionId: 's1', callId: 'c', label: 'read', revision: codecRef.revision, bytes: 12, originalBytes: 12, complete: true, expiresAt: 0 } },
+      { type: 'step/end' }, { type: 'turn/end' },
+    ] as never)
+    const captured = await captureSelectedResultsSeed(session, 's1')
+    expect(captured.kind).toBe('compiled')
+    if (captured.kind !== 'compiled') throw new Error(JSON.stringify(captured))
+    const pages = captured.compiled.records.filter(record => record.type === 'conversation/seed-results')
+    expect(pages.length).toBeGreaterThan(0)
+  } finally {
+    await coordinator.close().catch(() => {})
+    await rm(root, { recursive: true, force: true })
+  }
+})
