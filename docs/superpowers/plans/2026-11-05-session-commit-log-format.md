@@ -1203,6 +1203,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 158 (implemented 2026-11-06): the gateway captures the selected-results seed
+
+`packages/desktop-gateway/src/selected-fork.ts` adds `captureSelectedResultsSeed(coordinator, sourceSessionId)`: it loads the source through
+`coordinator.load` (so the commit log and the legacy store share the code), builds the managed state + `FactOwner` + completed passive
+context, exports the v3 seed and compiles it. `test/selected-fork-seed.test.ts` runs it against a commit-log session with an
+artifact-backed tool result and gets a `conversation/seed-manifest` version 3. Next: `prepareSelectedForkSession`
+(`createSelectedResultsIntent`) and `executeSelectedForkSession` (`createChildSession`).
+
 ## Plan 157 (implemented 2026-11-06): the SDK exposes selected-results fork seams
 
 `SdkServerOptions` gains `prepareSelectedForkSession(request: ForkPrepareRequestV2): Promise<ForkPreparedV2>` and
