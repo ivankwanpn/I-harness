@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 421（nested 收斂到 projection）**：child manifest 欄位齊全；拒絕來自 seed-export 的 catch-all（line 91），即
+> `projectSelectedResults` 對 completed-seed 歷史丟錯。修法在 core-session 的 projection。probe 已回退。
 > **round 420（nested 拒絕原因）**：`unsupported-history` 發生在 v3 export 的 boundary/selection 階段（來源歷史以 completed v3 seed 開始）；
 > 需 core-session 支援重新匯出 child history。instrument 已回退。
 > **round 419（parent chain）**：read-through 改為最多走 16 層 parent；nested selected fork（fork child 再 fork）仍被拒

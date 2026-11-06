@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 183 (2026-11-06): the nested re-export fails inside the projection, not the shape
+
+The SCL child session carries a complete v3 manifest (`origins`, `turns`, `selection`, `passive`, `results` with one page/row), so the wire
+shape is not the problem. `exportSelectedResultsConversationSeed` refuses with `unsupported-history` from its catch-all branch (line 91),
+which means `projectSelectedResults` (or the page iteration) throws for a history that starts with a completed seed. Supporting nested
+selected forks therefore needs that projection to accept seeded histories — core-session work, not a commit-log change. The probe was
+reverted.
+
 ## Plan 182 (2026-11-06): why a nested selected fork is refused
 
 The refusal is `unsupported-history`, raised inside the v3 seed export (seed-export.ts, after the completed passive context is accepted):
