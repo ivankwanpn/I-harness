@@ -38,5 +38,11 @@ it('archives and restores a session that has run a turn', async () => {
     await call('desktop/session/manage', { sessionId: created.sessionId, action: 'restore' })
     const restored = await call('session/list') as { sessions: { id: string; turnCount: number }[] }
     expect(restored.sessions.find(row => row.id === created.sessionId)?.turnCount).toBe(1)
+    const batchArchived = await call('desktop/session/batch', { command: { action: 'archive', sessionIds: [created.sessionId] } }) as { results: { ok: boolean; error?: string }[] }
+    expect(batchArchived.results[0]!.ok).toBe(true)
+    expect(((await call('desktop/session/archived')) as { id: string }[]).map(row => row.id)).toContain(created.sessionId)
+    const batchRestored = await call('desktop/session/batch', { command: { action: 'restore', sessionIds: [created.sessionId] } }) as { results: { ok: boolean; error?: string }[] }
+    expect(batchRestored.results[0]!.ok).toBe(true)
+    expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).toContain(created.sessionId)
   } finally { await host.close() }
 }, 90000)

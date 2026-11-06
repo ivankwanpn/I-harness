@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 99 (implemented 2026-11-06): batch archive/restore after a turn
+
+The same archive test also drives the batch route on a session with one turn: `batch archive` succeeds and lists the session under
+archived, and `batch restore` brings it back to `session/list`. Before the fence fix both batch results were `ok:false` with the
+management-in-progress error.
+
 ## Plan 98 (implemented 2026-11-06): archived sessions leave the context picker
 
 With archive working again, the picker behaves correctly: after archiving, `context/search` in `sessions` mode returns no items and
