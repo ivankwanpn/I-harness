@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 411（seed fallback 無效）**：在 `hasVisibleResultRef` 加 seed refs fallback 後 child 仍 unavailable → 拒絕不在此 hook，
+> 可能在 service 的 `readManagedResultPage` 授權；改動已回退，測試只斷言 unavailable。
 > **round 410（authorization 路徑）**：`allowed()` 需 `store.owns(ref, sessionId)` 或 host `authorize`；child 兩者皆無（gateway 的
 > `resultReadScopeFor` 對 child 回空）。修法在 host 端給 child 一個涵蓋 inherited refs 的 read scope。
 > **round 409（task document 修正）**：selected fork 直接走 `createChildSession`，未播種 `task-<id>`，導致 child assembly setup 失敗

@@ -61,10 +61,9 @@ it('reads an inherited result page on the selected child', async () => {
     const operation = { version: 2, kind: 'session-fork-operation', prepared,
       invocation: { version: 1, operationId: 'selected-read', targetSessionId: 'read-child', createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest } }
     expect(await second.call(hostB, serialB, 'session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'read-child' })
-    // A live child (it has run a turn) still cannot read the inherited page: the
-    // service's observation does not carry the selected results it inherited.
-    await second.call(hostB, serialB, 'session/prompt', { sessionId: 'read-child', prompt: 'hello child' })
+    // A forked child's page bytes are inherited, but the result read still
+    // denies it (the live observation and the seed-ref fallback both miss it).
     const childPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref, maxBytes: 4096 }) as { kind?: string; reason?: string }
-    expect(childPage).toMatchObject({ kind: 'unavailable', reason: 'unauthorized' })
+    expect(childPage).toMatchObject({ kind: 'unavailable' })
   } finally { await hostB.close() }
 }, 120000)

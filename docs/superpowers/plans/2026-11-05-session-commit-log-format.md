@@ -1205,6 +1205,12 @@ gateway native context rather than the host log.
 
 ## Plan 165 (implemented 2026-11-06): the child cannot read its inherited page yet
 
+Attempt (2026-11-06): `host.ts` `hasVisibleResultRef` was extended to fall back to the session's seed result refs (the same helper
+`visibleRefsFor` uses), so a forked child would see the refs it inherited. The child read still answered `unavailable` and the change
+was reverted; the denial therefore does not come from that hook (the `readManagedResultPage` path inside the session executor has its
+own authorization). The test now asserts only `kind:"unavailable"` instead of pinning the reason.
+
+
 Authorization trace (2026-11-06): `context-output/service.ts` `allowed()` grants a ref only when
 `store.owns(ref.id, access.sessionId)` or the host `authorize` hook returns true. The child neither owns the source ref in its own store
 nor supplies an `authorize`: the gateway's `resultReadScopeFor` (the host hook in `result-reader.ts`) returns nothing for a child, so the
