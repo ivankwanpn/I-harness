@@ -1221,6 +1221,13 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 189 (implemented 2026-11-06): the new import goes through a declared package export
+
+The package-boundary gate flagged one new cross-package src import: desktop-gateway -> core-session/src/conversation/passive-seed-context.ts
+(148 vs baseline 147). core-session now declares
+`./internal/conversation-passive-context` and selected-fork.ts imports it through that path, so the gate is back at **147 = baseline**.
+Full SCL host suite: 38 files / 44 tests green.
+
 ## Plan 188 (implemented 2026-11-06): integrated regression summary
 
 One run across the SCL surface: host **44**, store **38**, commit **43**, CLI **2**, SDK server/protocol **74** — **201 tests green**.

@@ -1,6 +1,6 @@
 import { createManagedSessionState } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
-import { createCompletedPassiveContext } from '../../core-session/src/conversation/passive-seed-context.ts'
+import { createCompletedPassiveContext } from '@i-harness/core-session/internal/conversation-passive-context'
 import { exportSelectedResultsConversationSeed } from '../../core-session/src/conversation/seed-export.ts'
 import { compileSelectedResultsSemanticSeed, type CompiledSelectedResultsSemanticSeed } from '../../session-persistence/src/semantic-seed.ts'
 import { createSelectedResultsIntent, readSelectedResultsCore, type ForkCommandV2, type ForkOutcomeV2, type ForkPrepareRequestV2, type ForkPrepareResultV2 } from '../../session-persistence/src/selected-results-fork-contract.ts'
