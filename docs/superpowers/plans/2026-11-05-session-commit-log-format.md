@@ -1203,6 +1203,15 @@ gateway native context rather than the host log.
 
 
 
+## Plan 165 (implemented 2026-11-06): the child cannot read its inherited page yet
+
+`host-commit-log-selected-read.test.ts` runs the full E2E: a turn reads a 200 KB file (real artifact), the host restarts, the product
+result-ref is appended through the coordinator, the v2 fork is prepared/executed and both source and child call `session/result/read`
+with the same ref. The **source** read returns data; the **child** read answers `{kind:"unavailable", reason:"unauthorized"}`. So the
+page bytes and the seed pages are in place, but the result-lineage gate still refuses the child. The next investigation is that gate
+(`hasVisibleResultRef` / `assertResultLineage` on the child's inherited observation). The test pins the current answer so the gap is
+visible in the suite.
+
 ## Plan 164 (planned 2026-11-06): reading an inherited page on the child
 
 The page contents live in the artifact store that the source turn wrote; a synthetic ref (the `codecRef` fixture) has no bytes, so the
