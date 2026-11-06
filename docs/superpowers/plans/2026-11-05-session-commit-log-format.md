@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 193 (2026-11-06): where the 24 us/append actually goes
+
+A CPU profile of 4,000 appends (probe deleted afterwards) attributes the in-repo cost to the conversation index: `stage`
+(core-session/src/conversation/delivery.ts) ~22 ms, `beginStage` (validation.ts) ~10 ms and the JSON stream container ~13 ms, together
+roughly 11 us/append, with GC and harness overhead making up the rest of the measured 24 us. The event-intake validation itself measures
+only ~0.84 us/event, so the cost is the per-append conversation-index staging introduced by the audit, not `append`'s bookkeeping or
+`prepareSessionEvent`. Optimising it belongs to a dedicated performance task with its own tests; the commit log is not on this path.
+
 ## Plan 192 (2026-11-06): the append cost is linear, not pathological
 
 A probe (deleted afterwards) measured `createSession` + N appends: 29 ms/500, 33/1000, 50/2000, 97/4000, 189/8000 — a stable **~24 µs per
