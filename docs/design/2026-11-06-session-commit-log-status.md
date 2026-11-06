@@ -10,7 +10,7 @@
 |---|---|
 | store（append-only commit log、prefix 鏈、flock writer lease、sidecar、GC、deletion commit point） | `session-commit-log` 9 檔 / 38 tests（format、scanner、fold、store、crash、scan-cache、benchmark、multiprocess-lock、fold-property） |
 | facade／coordinator（create、load、list、profile、snapshot、append、documents、delete、fork、birth、intent、ownership、retained references） | `session-persistence` commit 系列 10 檔 / 38 tests |
-| desktop host（create、prompt turn、model switch、tool call、artifact retention、result page 讀取／分頁／邊界／unavailable、execution/tasks/processes 讀取與冷視圖形狀、task reconcile、todo 冷／live 寫入、schedule CRUD、surface、management rename/archive/restore/reload/navigation、batch delete/move/edges、archive 與 delete 於有歷史的 session、project bind、auto title、compaction E2E、cold control 與 owner-scoped 錯誤、session search、context picker、diagnostics） | `desktop-gateway` host SCL 29 檔 / 34 tests（另 lineage／subtree／search tool 單元 3 檔） |
+| desktop host（create、prompt turn、model switch、tool call、artifact retention、result page 讀取／分頁／邊界／unavailable、execution/tasks/processes 讀取與冷視圖形狀、task reconcile、todo 冷／live 寫入、schedule CRUD、surface、management rename/archive/restore/reload/navigation、batch delete/move/edges、archive 與 delete 於有歷史的 session、project bind、auto title、compaction E2E、cold control 與 owner-scoped 錯誤、session search、context picker、diagnostics） | `desktop-gateway` host SCL 30 檔 / 35 tests（另 lineage／subtree／search tool 單元 3 檔） |
 | fork（普通 fork、nested、project 繼承、retry、turn 之後、rewind 之後、重啟契約、child task document） | `host-commit-log-fork*.test.ts`、`host-fork-restart.test.ts` |
 | rewind（points/plan/execute、files 模式、fingerprint 失效、跨 host 執行、turn 之後、fork 之後） | `host-commit-log-rewind*.test.ts`（6 檔） |
 | 重啟耐久（session 續用、metadata、schedule、batch move、prepared fork 契約） | `host-commit-log-restart*.test.ts`、`host-commit-log-schedule.test.ts`、`host-commit-log-batch-move.test.ts`、`host-fork-restart.test.ts` |
@@ -54,7 +54,7 @@
 
 ## 5.1 最新回歸（2026-11-06）
 
-一次跑完 SCL 全部表面：**host 34 檔 / 39 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests，共 120 tests
+一次跑完 SCL 全部表面：**host 35 檔 / 40 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests，共 121 tests
 全綠、無 flake。涵蓋 fork／rewind 在 turn、rewind 之後的序列，archive／delete 於有歷史的 session，以及 fence 的 exclusive 授權。
 
 ## 6. 如何重跑驗證

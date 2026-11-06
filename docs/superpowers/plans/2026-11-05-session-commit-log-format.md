@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 146 (implemented 2026-11-06): nested forks with turns
+
+`host-commit-log-fork-nested.test.ts`: parent prompt → fork child → prompt the child → fork the child into a grandchild → prompt the
+grandchild; all three stay listed, the grandchild inherits the project, and the ordered grandchild→child→parent deletion empties the
+list. The SCL host suite is now **35 files / 40 tests** green.
+
 ## Plan 145 (fixed 2026-11-06): a fork child runs turns and owns schedules
 
 `code-mode/register.ts` refused every private observation whose header carried `origin`/`parentSession`, so a commit-log fork child
