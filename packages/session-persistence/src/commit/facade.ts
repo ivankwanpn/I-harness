@@ -53,6 +53,9 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
       guards.assertCurrent()
       try {
         const created = await coordinator.createChildSession(captured, { closure: captured.seed.dependencyDigest })
+        // A fork child is a full session: its task registry needs the same empty
+        // document a created session gets (never overwrite an existing one).
+        if (options.taskDocument?.empty && await coordinator.getDocument('task-' + created.id) === undefined) await coordinator.putDocument('task-' + created.id, options.taskDocument.empty())
         // The capture's project intent also names the target's binding, which
         // the fork host re-reads before handing the target to the caller.
         const project = (_request as { requestIntent?: { project?: { kind?: string; projectId?: string } } }).requestIntent?.project

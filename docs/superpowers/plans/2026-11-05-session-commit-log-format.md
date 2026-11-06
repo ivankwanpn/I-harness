@@ -1200,6 +1200,16 @@ gateway native context rather than the host log.
 
 
 
+## Plan 114 (fixed 2026-11-06): a fork child gets the empty task document
+
+The restored fork-after-turn steps showed `desktop/session/todo/write` on a forked child failing with `Owned task document is absent`:
+`create` seeded `task-<id>` but the fork birth path (`bootstrapSemanticTargetWithCapture` → `createChildSession`) did not.
+`facade.ts` now seeds the same empty document for a fork child when it is absent (never overwriting an existing one), and
+`host-commit-log-fork-task.test.ts` forks a prompted conversation and writes the child's todo list (revision 0 → 1).
+
+Still open from the same restored sequence: `desktop/schedule/create` on the child answers `Private delegated or unsupported Code
+owner`, and deleting the parent after the child todo write answers `FACT_CLOSED` instead of the `descendants` error.
+
 ## Plan 113 (correction, 2026-11-06): the fork-after-turn extensions were never in the file
 
 While restoring the fork-after-turn test it turned out that the assertions documented in Plans 107–112 (descendant guard, ordered
