@@ -3,8 +3,8 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { captureBootstrapCaptureRequest, type ForkExecutionControl } from '@i-harness/session-persistence'
 import { readForkPrepareRequest, readForkPrepareResult, readForkCommand, readForkOperation, readForkOutcome, readForkHostErrorData, ForkOperationError,
   type ForkPrepareRequest, type ForkPrepareResult, type ForkCommand, type ForkOutcome, type ForkOperation } from './fork.ts'
-import { readSelectedResultsPrepareRequest, readSelectedResultsPrepared, readSelectedResultsCommand,
-  type ForkPrepareRequestV2, type ForkPreparedV2, type ForkCommandV2 } from '@i-harness/session-persistence/selected-results-fork-contract'
+import { readSelectedResultsPrepareRequest, readSelectedResultsPrepared, readSelectedResultsCommand, readSelectedResultsOutcome,
+  type ForkPrepareRequestV2, type ForkPrepareResultV2, type ForkCommandV2, type ForkOutcomeV2 } from '@i-harness/session-persistence/selected-results-fork-contract'
 // M27 R-C4b: the SessionService-backed SDK server — in-process JSON-RPC
 // handler over the C-region SessionService. The CLI wires it to stdio
 // (`i-harness sdk`); an embedder can wire it to any duplex.
@@ -163,8 +163,8 @@ export interface SdkServerOptions {
   prepareForkSession?: (request: ForkPrepareRequest) => Promise<ForkPrepareResult>
   executeForkSession?: (command: ForkCommand, control?: ForkExecutionControl) => Promise<ForkOutcome>
   /** Selected-results (v2) fork seams; only when the host supports the v3 seed. */
-  prepareSelectedForkSession?: (request: ForkPrepareRequestV2) => Promise<ForkPreparedV2>
-  executeSelectedForkSession?: (command: ForkCommandV2, control?: ForkExecutionControl) => Promise<ForkOutcome>
+  prepareSelectedForkSession?: (request: ForkPrepareRequestV2) => Promise<ForkPrepareResultV2>
+  executeSelectedForkSession?: (command: ForkCommandV2, control?: ForkExecutionControl) => Promise<ForkOutcomeV2>
   modelState?: (sessionId: string) => Promise<SessionModelState>
   setSessionModel?: (sessionId: string, selection: SessionModelSelection) => Promise<void>
   /** Server info version payload (defaults to "0.1.0"). */
@@ -514,8 +514,11 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           try { selected = readSelectedResultsPrepareRequest(params) } catch { return makeFailure(id, INVALID_PARAMS, 'Invalid fork preparation request') }
           if (!selectedForkAvailable()) return makeFailure(id, INVALID_PARAMS, 'Invalid fork preparation request')
           return requestFlight(async () => {
-            try { return makeSuccess(id, readSelectedResultsPrepared(await opts.prepareSelectedForkSession!(selected))) }
-            catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable') }
+            try {
+              const result = await opts.prepareSelectedForkSession!(selected)
+              if (result.kind !== 'prepared') return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable')
+              return makeSuccess(id, readSelectedResultsPrepared(result.prepared))
+            } catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable') }
           })
         }
         return requestFlight(async () => {
@@ -541,7 +544,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (selectedCommand) return requestFlight(async () => {
           try {
             const control: ForkExecutionControl = { ...forkControl, signal: AbortSignal.any([forkAbort.signal, ...(forkControl?.signal ? [forkControl.signal] : [])]) }
-            const result = readForkOutcome(await opts.executeSelectedForkSession!(selectedCommand, control), selectedCommand.operation as never)
+            const result = readSelectedResultsOutcome(await opts.executeSelectedForkSession!(selectedCommand, control), selectedCommand.operation)
             if (result.kind === 'ready' || result.kind === 'adopted') knownSessions.add(result.sessionId)
             return makeSuccess(id, result)
           } catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork unavailable') }

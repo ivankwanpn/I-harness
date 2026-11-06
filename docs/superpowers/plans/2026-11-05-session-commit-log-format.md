@@ -1203,6 +1203,15 @@ gateway native context rather than the host log.
 
 
 
+## Plan 159 (implemented 2026-11-06): the gateway prepares and executes a selected-results fork
+
+`selected-fork.ts` adds `createSelectedForkController`: `prepare` builds the v2 core + `createSelectedResultsIntent` from the captured
+seed; `execute` re-captures, calls `createChildSession` with the compiled v3 seed, writes the project binding document and returns a
+`ForkOutcomeV2` with the receipt (manifest digest, seed digest, results summary). The SDK seam now speaks `ForkPrepareResultV2`/
+`ForkOutcomeV2` and validates with `readSelectedResultsOutcome`. `selected-fork-seed.test.ts` prepares, executes and loads the child:
+its header carries `semanticSeed {version:3, codec:"semantic-seed-v3"}`. Remaining: wire the controller into the host seams and add a
+gateway host test that reads a result page on the child.
+
 ## Plan 158 (implemented 2026-11-06): the gateway captures the selected-results seed
 
 `packages/desktop-gateway/src/selected-fork.ts` adds `captureSelectedResultsSeed(coordinator, sourceSessionId)`: it loads the source through

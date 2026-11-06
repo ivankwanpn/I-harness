@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 400（selected fork controller）**：prepare/execute 在 SCL 上完成（v2 core、intent、createChildSession、project binding、
+> v2 receipt）；測試 load 到 header `semanticSeed v3`。剩 host seam 接線與 host 測試。
 > **round 399（gateway seed capture）**：`captureSelectedResultsSeed` 以 `coordinator.load` 取 snapshot、建 context、匯出並 compile v3 seed；
 > 對真實 commit-log session 的測試通過。
 > **round 398（SDK v2 seam）**：新增 `prepareSelectedForkSession`／`executeSelectedForkSession`，prepare/begin 對 v2 契約 fallback；
