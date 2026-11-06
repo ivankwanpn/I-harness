@@ -1203,6 +1203,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 154 (found, 2026-11-06): the SCL bootstrap validator refuses v3 seeds
+
+Committing the compiled v3 seed through `createChildSession` fails at `captureBootstrapRequest` (`Invalid bootstrap materialization`): the
+validator only accepts `semantic-seed-v1`/`v2` manifests and throws `Legacy bootstrap request required` for anything whose semantic seed
+is not version 1–2. That is exactly why the legacy selected path uses `createSelectedRuntimeCapture` instead of the ordinary bootstrap.
+The next step is to teach the SCL child creation the v3 record prefix (`conversation/seed-manifest` version 3 plus `conversation/seed-results`
+pages) and validate it with the core-session v3 validators before writing the seed commit.
+
 ## Plan 153 (prototype, 2026-11-06): the seed also comes from a real commit-log snapshot
 
 The same test file now creates an SCL session, appends a turn with an artifact-backed tool result through the coordinator, loads the
