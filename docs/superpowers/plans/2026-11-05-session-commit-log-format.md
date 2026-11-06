@@ -1200,6 +1200,11 @@ gateway native context rather than the host log.
 
 
 
+## Plan 112 (implemented 2026-11-06): todos on a forked child
+
+The same test writes the child's todo list: `work-state` reports revision 0, `todo/write` accepts the first list and the next read
+reports revision 1 — the cold document path works on a fork child.
+
 ## Plan 111 (implemented 2026-11-06): schedule on a forked child
 
 The fork-after-turn test also manages the child's schedule: `desktop/schedule/create` on `forked` succeeds, `schedule/list` returns it
