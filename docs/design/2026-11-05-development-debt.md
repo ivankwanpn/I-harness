@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 364（SCL 全回歸）**：host 31 檔／36 tests、`session-commit-log` 9 檔／38 tests、commit 系列 43 tests，共 117 tests 全綠；
+> status report 已更新。
 > **round 363（fork-after-rewind 修正）**：`settleCapture` 對「Original capture obligation released」視為已 settled；
 > rewind→fork 後 host close 乾淨，測試 `host-commit-log-rewind-fork.test.ts` 通過。
 > **round 362（capture 釋放堆疊）**：`expired` 堆疊顯示 close → execution-inputs `settle()` → `settleCapture(fact.observe())`，
