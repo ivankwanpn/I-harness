@@ -1203,6 +1203,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 164 (planned 2026-11-06): reading an inherited page on the child
+
+The page contents live in the artifact store that the source turn wrote; a synthetic ref (the `codecRef` fixture) has no bytes, so the
+read must use a real artifact. The end-to-end shape is: (1) a host turn that reads a large file (real artifact), (2) close the host,
+append the product's `context/result-ref` marker for that artifact through the coordinator, (3) start a fresh host on the same store,
+prepare/execute the v2 fork and (4) `session/result/read` with the same ref on the child. The first draft mixed the two phases in one
+test and lost the session id across the close; the implementation is the next round's work.
+
 ## Plan 163 (implemented 2026-11-06): the host inherits pages for a source that references a result
 
 `host-commit-log-selected-fork.test.ts` gains a second case: a commit-log source is seeded (outside the host) with a turn and a

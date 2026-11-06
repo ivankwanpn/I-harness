@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 405（child result read 計畫）**：頁面內容在 artifact store；需真實 artifact＋`context/result-ref`，流程為 turn → close → append ref
+> → 新 host → v2 fork → 在 child 讀取。草稿跨 close 遺失 session id，實作留待下一輪。
 > **round 404（host 繼承 pages）**：預先 seed 的來源（含 `context/result-ref`）經 host v2 fork 後，child 有 `conversation/seed-results`；
 > 無 ref 的來源仍為 0 pages（兩個案例都固定）。
 > **round 403（result-ref 產生 pages）**：來源加 `context/result-ref` 後 capture 產生 `conversation/seed-results` pages；
