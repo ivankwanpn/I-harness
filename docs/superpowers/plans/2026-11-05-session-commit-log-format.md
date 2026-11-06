@@ -1221,6 +1221,18 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 200 (2026-11-06): the selected-source port — inventory, plan, and the reason to wait
+
+`docs/design/2026-11-06-selected-source-port-plan.md` records the exact legacy interface inventory (`selectedSources` acquire/
+cleanupForError/retainTask/retainManagedTask, `selectedComposers` cold finalization/capture), what the commit log already provides
+(binding observations, task-source witnesses, detached read-only documents, the v3 seed path, parent-chain read-through), the four missing
+pieces (scope machinery, `retainSelected`+metadata bridge, cold finalization, registration), and an 8-step testable plan.
+
+Recommendation: **do not port now** — the measured default-switch delta is zero (Plan 196/198) and inheritance already works; porting
+the scope/revocation layer would risk the most intricate legacy code for semantics the product path no longer needs. The one remaining
+beneficiary is nested selected forks, whose cheaper fix is teaching `projectSelectedResults` to accept a seeded history (port step 4 is
+its prerequisite).
+
 ## Plan 199 (2026-11-06): the store mutation survives a full reset — it is environmental
 
 Item "repair the pnpm store" was pushed to its limit:
