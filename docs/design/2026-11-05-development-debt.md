@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 429（bench gate 紅燈）**：`verify:bench` 在本機失敗（deriveMessages 35ms、append 42ms vs 0.079/0.127 baseline）。baseline 為
+> 2026-09-18 錄製、bench 未變、core-session 已增 12.8k 行；與 commit log 無關（bench 只用 core-session 的 in-memory append/deriveMessages）。
+> 列為既有 caveat，不擅自重寫 baseline。
 > **round 428（boundary gate）**：新增的 core-session 深層 import 觸發 boundary gate（148 vs 147）；core-session 宣告
 > `./internal/conversation-passive-context` 後恢復 147，host 38 檔／44 tests 全綠。
 > **round 427（評估文件校正）**：birth/adoption assessment 的測試數更新為 201，並補上 selected-results read-through 的現況。

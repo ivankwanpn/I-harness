@@ -1221,6 +1221,16 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 190 (2026-11-06): the bench gate is red for reasons outside the commit log
+
+`node --import tsx scripts/bench/run-bench.mts --gate` fails on this machine: deriveMessages/long-session 35–37 ms vs baseline
+0.079 ms, append/many-events 42–43 ms vs 0.127 ms. The baseline was recorded 2026-09-18 (node v22, i7-6700) and `run-bench.mts` has
+not changed since; the branch's core-session has +12.8k lines from earlier audit work (validation/serialization), and the bench imports
+core-session's in-memory `append`/`deriveMessages` directly — it does not touch the commit log. The gate reports the fingerprint instead
+of enforcing it, so a different machine also compares against a foreign baseline. Recorded as a pre-existing caveat; the baseline should
+be re-seeded on a reference machine (or the core-session performance investigated) separately, and the SCL work must not silently rewrite
+it.
+
 ## Plan 189 (implemented 2026-11-06): the new import goes through a declared package export
 
 The package-boundary gate flagged one new cross-package src import: desktop-gateway -> core-session/src/conversation/passive-seed-context.ts
