@@ -24,6 +24,22 @@ Status: **reproduced 2026-11-07** (rc4, legacy JSONL store). Not yet fixed.
     session/prompt               -> RpcError: Original execution attachment requires its original entry construction
     desktop/session/input/submit -> same
 
+## Root cause (located 2026-11-07)
+
+`packages/session-persistence/src/coordinator/managed-documents.ts` `acquireExecution` refuses when the entry already has
+a document:
+
+    if (original.document || restoredEntries.has(original))
+      throw new Error('Original execution attachment requires its original entry construction')
+
+The v1 fork path creates the child through `bootstrapSemanticTargetWithCapture`, which builds and returns the child's
+**bootstrap document** (`coordinator/src/fork-controller.ts` passes `owner.document` to `host.withReadyTarget`). By the
+time the first prompt asks for an execution attachment, the entry's document exists, so the refusal fires — even
+without any UI read (verified: fork → immediate prompt fails).
+
+The commit-log coordinator has its own execution attachment lifecycle, which is why
+`host-commit-log-fork-continue.test.ts` passes and SCL forks continue.
+
 ## What it means
 
 The fork is created and its inherited history is readable, but the session never reaches a model turn: the
@@ -32,10 +48,12 @@ execution attachment is constructed without the "original entry" the fork path r
 
 ## Next steps
 
-1. Reproduce the same flow on the commit-log store (switch `sessionStore`) to see whether the gap is
-   store-specific or common to v1-seeded forks;
-2. compare with the working SCL continuation test to find the missing construction argument/entry;
-3. fix and add a legacy (`createJsonlTaskTransitionCoordinator`) continuation test.
+1. Allow `acquireExecution` to attach for a document created by this entry's own bootstrap
+   (`entry.bootstrap`/`entry.route` present), or build the execution attachment inside the bootstrap path before
+   `withReadyTarget` observes the document;
+2. add a legacy (`createJsonlTaskTransitionCoordinator`) fork-continue gateway test mirroring
+   `host-commit-log-fork-continue`;
+3. verify the UI fork flow end to end afterwards (fork → send a prompt in the child).
 
 ## Workaround
 
