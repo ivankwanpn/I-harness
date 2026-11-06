@@ -1203,6 +1203,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 157 (implemented 2026-11-06): the SDK exposes selected-results fork seams
+
+`SdkServerOptions` gains `prepareSelectedForkSession(request: ForkPrepareRequestV2): Promise<ForkPreparedV2>` and
+`executeSelectedForkSession(command: ForkCommandV2, control?)`. `session/fork/prepare` falls back to the v2 reader when the v1 reader
+rejects, and `session/fork/begin`/`retry` fall back to `readSelectedResultsCommand`; hosts without the seams keep the previous
+`Invalid fork preparation request` / `Invalid fork operation` answers, so the refusal contract is unchanged (fork-continue test still
+green). `@i-harness/session-persistence/selected-results-fork-contract` is now a package export. SDK protocol/server tests: 74 green.
+
 ## Plan 156 (planned 2026-11-06): wiring selected-results forks through the SDK seams
 
 The v2 contract readers already exist (`readSelectedResultsPrepareRequest`, `readSelectedResultsPrepared`,
