@@ -14,7 +14,7 @@ async function open(root: string, settings: Record<string, unknown>, option?: 'j
   await writeFile(settingsPath, JSON.stringify(settings), 'utf8')
   await writeFile(credentialsPath, JSON.stringify({ refs: {} }), 'utf8')
   const frames: RpcMessage[] = []
-  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, ...(option ? { sessionStore: option } : {}), onWrite: frame => frames.push(frame) } as never)
+  const host = await createDesktopHost({ workspace, sessionDir, settingsPath, credentialsPath, ...(option ? { sessionStore: option } : {}), onWrite: (frame: RpcMessage) => frames.push(frame) } as never)
   let id = 0
   const call = async (method: string, params: unknown = {}) => {
     const requestId = ++id
