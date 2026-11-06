@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 181 (2026-11-06): the inherited read walks the parent chain; a nested selected fork is refused
+
+`createConversationResultReader` now walks up to 16 parent links looking for a session that can serve the inherited page (a nested fork
+would otherwise stop at its direct parent). The existing E2E stays green. A nested selected-results fork (fork of a selected child) is
+still refused: `session/fork/prepare` answers `Session fork preparation unavailable` because the v3 export refuses to capture a
+child-history seed from a completed v3 source. That is a documented limitation of the read-through approach and the next item for the
+source port.
+
 ## Plan 180 (2026-11-06): default-switch measurement
 
 With `IH_SESSION_STORE=commit-log` set for the whole gateway suite, a representative legacy-oriented set (host-fork-restart, fork-session,
