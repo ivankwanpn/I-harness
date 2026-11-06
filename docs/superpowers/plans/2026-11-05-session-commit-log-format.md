@@ -1221,6 +1221,11 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 210 (2026-11-06): gate sweep after the store-selection work
+
+All four gates pass with the store-selection changes in place: repo typecheck clean, package boundaries **147 = baseline**, reachability
+gate PASS, bench gate PASS (per-machine baseline), working tree clean. No code changes were needed.
+
 ## Plan 209 (2026-11-06): the canonical test counts are 206
 
 Re-ran the canonical set after the CLI/store-selection additions: host **45** (39 files, including `host-store-selection`), store **38**,

@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 449（閘門巡檢）**：typecheck／boundaries 147／reachability／bench 全 PASS，工作區乾淨，無需改碼。
 > **round 448（canonical 計數）**：host 45、store 38、commit 43、CLI 6、SDK 74＝206 tests；status／session-store.md／assessment 同步。
 > **round 447（store 使用文件）**：新增 `docs/session-store.md`（兩種後端、四種選擇方式與優先序、如何確認、legacy adoption、限制），
 > status §5.3 連結。
