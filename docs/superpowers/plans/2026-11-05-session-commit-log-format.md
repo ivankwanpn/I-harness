@@ -1200,6 +1200,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 103 (found, not fixed): fork after a rewind leaves the host cleanup dirty
+
+Forking a session that was just rewound works (prepare and begin both succeed and the child is listed), but `host.close()` then fails
+with `Desktop host cleanup incomplete: session service`. The same sequence on the legacy `jsonl` store closes cleanly. Closing the
+cold source document that the fork handoff reopened does not clear it, so the leak is likely the managed rewind execution retained by
+`withRewindFacts` interacting with the fork observation. The fork step was removed from the rewind-after-turn test; the next
+investigation is to instrument the service close after that sequence.
+
 ## Plan 102 (implemented 2026-11-06): rewind a conversation that has run a turn
 
 `host-commit-log-rewind-after-turn.test.ts` prompts once (the turn records a rewind point with `files: 0`), plans and executes a
