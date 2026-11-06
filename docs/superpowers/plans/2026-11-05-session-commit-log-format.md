@@ -1221,6 +1221,13 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 206 (implemented 2026-11-06): the flag is verified end to end
+
+`run-commit-log.test.ts` now runs a real headless session with `--session-store` and no environment variable: with `commit-log` the store
+contains exactly one `session.v15.jsonl` generation, and with `jsonl` it contains the legacy session file (plus its `.doc.jsonl` companion)
+and no generation. The flag is in **both** run-flag chains, so it and its value are stripped from the task text — the `--no-compact`
+leak-class the file pins. CLI tests for this file: 3 green.
+
 ## Plan 205 (implemented 2026-11-06): the CLI has an explicit --session-store flag
 
 `i-harness run|sdk|acp ... --session-store jsonl|commit-log` selects the durable backend for every coordinator the process builds;

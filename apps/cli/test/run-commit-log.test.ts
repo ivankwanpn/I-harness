@@ -46,3 +46,33 @@ it('runs a headless session on the commit-log store', async () => {
   const generations = readdirSync(storeDir).filter(entry => entry !== '__documents__' && existsSync(join(storeDir, entry, 'session.v15.jsonl')))
   expect(generations.length).toBe(1)
 }, 60000)
+it('runs on the store selected by --session-store, without the environment variable', async () => {
+  const storeDir = mkdtempSync(join(tmpdir(), 'ih-cli-flag-scl-'))
+  const before = process.env.IH_SESSION_STORE
+  delete process.env.IH_SESSION_STORE
+  try {
+    expect(await main(['node', 'i-harness', 'run', 'hello', '--session-dir', storeDir, '--session-store', 'commit-log'])).toBe(0)
+    const generations = readdirSync(storeDir).filter(entry => entry !== '__documents__' && existsSync(join(storeDir, entry, 'session.v15.jsonl')))
+    expect(generations.length).toBe(1)
+  } finally {
+    if (before === undefined) delete process.env.IH_SESSION_STORE
+    else process.env.IH_SESSION_STORE = before
+  }
+}, 60000)
+
+it('lets --session-store jsonl override the environment', async () => {
+  const storeDir = mkdtempSync(join(tmpdir(), 'ih-cli-flag-legacy-'))
+  const before = process.env.IH_SESSION_STORE
+  delete process.env.IH_SESSION_STORE
+  try {
+    expect(await main(['node', 'i-harness', 'run', 'hello', '--session-dir', storeDir, '--session-store', 'jsonl'])).toBe(0)
+    // The legacy store writes the session file plus its task document.
+    const legacy = readdirSync(storeDir).filter(entry => entry.endsWith('.jsonl') && !entry.endsWith('.doc.jsonl'))
+    expect(legacy.length).toBe(1)
+    const generations = readdirSync(storeDir).filter(entry => entry !== '__documents__' && existsSync(join(storeDir, entry, 'session.v15.jsonl')))
+    expect(generations.length).toBe(0)
+  } finally {
+    if (before === undefined) delete process.env.IH_SESSION_STORE
+    else process.env.IH_SESSION_STORE = before
+  }
+}, 60000)

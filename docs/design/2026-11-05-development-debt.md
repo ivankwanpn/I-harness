@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 445（flag E2E）**：真實 headless run 以 `--session-store` 切換：commit-log 產生 1 個 v15 generation、jsonl 產生 legacy session 檔
+> （另有 `.doc.jsonl`）且無 generation；flag 在兩條 run-flag 鏈中，不會外洩到 prompt（3 tests 綠）。
 > **round 444（--session-store flag）**：run/sdk/acp 與 sessions 都支援 `--session-store jsonl|commit-log`；優先序 flag > settings > env > legacy；
 > usage 更新、flag guard 接受 value、測試 8 綠。
 > **round 443（CLI 讀 settings）**：`cliSessionStore()` 讓 run/sdk/acp 與 sessions 都依 settings > env > legacy；新測試以 settings 切換
