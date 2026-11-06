@@ -1203,6 +1203,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 161 (2026-11-06): the v3 seed carries pages only when something was selected
+
+Inspecting the child created by the host test shows `conversation/seed-manifest` + `seed-group` events but **no**
+`conversation/seed-results` pages: the source had no recorded selection, so the exported results summary is empty. The test now asserts
+exactly that (manifest present, zero pages). The next step for full page inheritance is to record a selection on the source (the
+context-output selection API the product uses) before preparing the fork.
+
 ## Plan 160 (implemented 2026-11-06): selected-results forks reach the host
 
 The host wires `createSelectedForkController` into the SDK seams (only when the commit-log store is selected) and derives the project

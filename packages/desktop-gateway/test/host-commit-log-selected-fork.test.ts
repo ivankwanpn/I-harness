@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
+import { createJsonlCommitCoordinator } from '../../session-persistence-jsonl/src/commit-coordinator.ts'
 import { createDesktopHost } from '../src/host.ts'
 
 // Repro for Plan 10: a host-level model turn still hits a managed-write
@@ -59,6 +60,15 @@ it('forks a session with selected results on the commit log', async () => {
       invocation: { version: 1, operationId: 'selected-fork', targetSessionId: 'selected-child', createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest } }
     expect(await call('session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'selected-child' })
     expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).toContain('selected-child')
+    const observer = createJsonlCommitCoordinator(sessionDir, { lock: { enabled: true, lockRoot: sessionDir } })
+    try {
+      const events = (await observer.load('selected-child')).session.events as { type: string; page?: { rows?: unknown[] } }[]
+      // No result was selected in the source, so the v3 seed carries the manifest
+      // but no inherited result pages; a selection would populate them.
+      expect(events.some(event => event.type === 'conversation/seed-manifest')).toBe(true)
+      const pages = events.filter(event => event.type === 'conversation/seed-results')
+      expect(pages).toHaveLength(0)
+    } finally { await observer.close() }
   } finally {
     await host.close()
   }
