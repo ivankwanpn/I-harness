@@ -85,7 +85,12 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const privateMode=!!privateOptions
   const nondurable = !privateMode && isNondurableSession(session!)
   const privateObservation=privateMode?privateOptions!.execution.observe():undefined
-  if(privateObservation && (privateObservation.formatVersion!==14||privateObservation.header?.parentSession||privateObservation.header?.delegationDepth||privateObservation.header?.subagentProtocolVersion||privateObservation.header?.origin))throw Error('Private delegated or unsupported Code owner')
+  if(privateObservation){
+    const header=privateObservation.header, fork=header?.origin==='fork'
+    // A user fork keeps its parent link but is a first-class continuation; only
+    // subagent/team delegation (or an unknown origin) is refused.
+    if(privateObservation.formatVersion!==14||header?.delegationDepth||header?.subagentProtocolVersion||(header?.origin!==undefined&&!fork)||(header?.parentSession!==undefined&&!fork))throw Error('Private delegated or unsupported Code owner')
+  }
   if (!["off", "mixed", "only"].includes(mode)) throw new Error("Invalid Code Mode mode")
   let disposed = false, closed = false, disposing: Promise<void> | undefined
   let initialized = false, localTransitions = 0, installationFailed = false

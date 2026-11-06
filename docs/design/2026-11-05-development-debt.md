@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 384（fork child 可續用）**：code-mode 對 `origin:"fork"` 放行（仍拒 delegationDepth／subagentProtocolVersion／其他 origin）；
+> child 可跑 turn、有自己 rewind point、可管理 schedule。host 34 檔／39 tests 全綠。
 > **round 383（fork child 不能跑 turn）**：SCL 上對 fork child `session/prompt` 回 `Private delegated or unsupported Code owner`（code-mode
 > register 拒絕帶 parentSession 的 header）；legacy 同序列可跑。待修：fork child header 不應帶 delegated 標記。
 > **round 382（被拒 schedule 後可刪 child）**：`readOriginalRuntime` 對缺席／已關的 runtime 回 undefined（不再丟 `Original managed runtime

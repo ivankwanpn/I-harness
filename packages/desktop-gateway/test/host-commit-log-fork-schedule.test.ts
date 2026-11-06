@@ -7,10 +7,10 @@ import { createForkOperation } from '@i-harness/session-persistence'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { createDesktopHost } from '../src/host.ts'
 
-// A fork child is a delegated owner: the product refuses schedule writes on it.
-// The refused attempt must not leave the child undeletable (it used to answer
-// "Original managed runtime unavailable" on the delete).
-it('still deletes a fork child after a refused schedule write', async () => {
+// A fork child is a first-class continuation: it can own schedules, and the
+// earlier "Private delegated or unsupported Code owner" refusal was the
+// delegated-header bug, not a product rule.
+it('manages a schedule on a fork child and deletes it', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-gateway-scl-fork-turn-')), workspace = join(root, 'workspace'), sessionDir = join(root, 'sessions')
   await mkdir(workspace)
   const settingsPath = join(root, 'settings.json'), credentialsPath = join(root, 'credentials.json')
@@ -39,7 +39,11 @@ it('still deletes a fork child after a refused schedule write', async () => {
     const listed = await call('session/list') as { sessions: { id: string }[] }
     expect(listed.sessions.map(row => row.id)).toContain('forked')
     expect(await call('desktop/session/project/state', { sessionId: 'forked' })).toEqual({ sessionId: 'forked', projectId: 'p' })
-    await expect(call('desktop/schedule/create', { sessionId: 'forked', command: { prompt: 'child later', after_seconds: 600 } })).rejects.toThrow(/Private delegated or unsupported Code owner/)
+    await call('desktop/schedule/create', { sessionId: 'forked', command: { prompt: 'child later', after_seconds: 600 } })
+    const childSchedules = await call('desktop/schedule/list', { sessionId: 'forked' }) as { schedules: { id: string }[] }
+    expect(childSchedules.schedules).toHaveLength(1)
+    await call('desktop/schedule/delete', { sessionId: 'forked', id: childSchedules.schedules[0]!.id })
+    expect(((await call('desktop/schedule/list', { sessionId: 'forked' })) as { schedules: unknown[] }).schedules).toHaveLength(0)
     expect((await call('desktop/session/batch', { command: { action: 'delete', sessionIds: ['forked'] } }) as { results: { ok: boolean }[] }).results[0]!.ok).toBe(true)
     expect((await call('desktop/session/batch', { command: { action: 'delete', sessionIds: [created.sessionId] } }) as { results: { ok: boolean }[] }).results[0]!.ok).toBe(true)
     expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions).toHaveLength(0)

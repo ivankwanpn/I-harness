@@ -1200,6 +1200,18 @@ gateway native context rather than the host log.
 
 
 
+## Plan 145 (fixed 2026-11-06): a fork child runs turns and owns schedules
+
+`code-mode/register.ts` refused every private observation whose header carried `origin`/`parentSession`, so a commit-log fork child
+(header `origin:"fork"` plus its parent link) could not run a turn. The check now permits `origin:"fork"` while still refusing
+`delegationDepth`/`subagentProtocolVersion` and any other origin (the code-mode suite confirms the delegated refusal test stays green;
+28 files / 365 tests). Consequences verified on the commit log:
+
+- `host-commit-log-fork-continue.test.ts` prompts the child, records its own rewind point and executes a conversation rewind;
+- `host-commit-log-fork-schedule.test.ts` now creates/lists/deletes a schedule on the child — the earlier `Private delegated or
+  unsupported Code owner` refusal (Plan 142) was this same header bug, not a product rule, so the runtime-absence fix (Plan 143) stays
+  as a defensive change only.
+
 ## Plan 144 (found, not fixed): prompting a forked conversation is refused on the commit log
 
 `session/prompt` on a fork child fails with `Private delegated or unsupported Code owner`; the legacy store runs the same turn (its
