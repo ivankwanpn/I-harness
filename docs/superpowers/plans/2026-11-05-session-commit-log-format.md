@@ -1202,6 +1202,23 @@ gateway native context rather than the host log.
 
 ## Plan 103 (found, not fixed): fork after a rewind leaves the host cleanup dirty
 
+Stack of the expired obligation (2026-11-06):
+
+```
+expired (execution-members.ts:20)
+execution-members.ts:150 (pin.members getter)
+handle.observe (execution-members.ts:80)
+execution-inputs.ts:73 settleCapture (fact.observe/admit)
+execution-inputs.ts:77 settleCapture
+execution-inputs.ts:273 adapter.settle -> settleReceived()
+```
+
+So the service close runs the received-input `settle()`, which observes a delivery admission capture that was already released — the
+rewind's `withRewindFacts` closes its settlement source while an execution input admission fact is still pending. The next fix is to
+settle (or release) the pending execution-input admissions before the rewind settlement source closes, or to make `settleCapture`
+tolerate a capture whose obligation is gone (it has already been settled).
+
+
 Instrumented detail: the failing `service.close()` error is `TypeError: Original capture obligation released` (from
 `core-session/managed/execution-members.ts`), i.e. the rewind/fork path retains and then touches an execution member obligation after
 its capture was released. The instrumentation and probe were removed; the next step is to find which retained member is read at close
