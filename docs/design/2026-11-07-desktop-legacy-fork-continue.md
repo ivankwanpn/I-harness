@@ -1,6 +1,6 @@
 # rc4 Desktop: a forked session cannot continue on the legacy store
 
-Status: **reproduced 2026-11-07** (rc4, legacy JSONL store). Not yet fixed.
+Status: **fixed 2026-11-07** (rc4+, legacy JSONL store).
 
 ## Reproduction
 
@@ -46,14 +46,19 @@ The fork is created and its inherited history is readable, but the session never
 execution attachment is constructed without the "original entry" the fork path requires. The SCL host has
 `host-commit-log-fork-continue` coverage; this path (legacy JSONL + v1 seed) does not.
 
-## Next steps
+## Fix (2026-11-07)
 
-1. Allow `acquireExecution` to attach for a document created by this entry's own bootstrap
-   (`entry.bootstrap`/`entry.route` present), or build the execution attachment inside the bootstrap path before
-   `withReadyTarget` observes the document;
-2. add a legacy (`createJsonlTaskTransitionCoordinator`) fork-continue gateway test mirroring
-   `host-commit-log-fork-continue`;
-3. verify the UI fork flow end to end afterwards (fork → send a prompt in the child).
+`createGatewayForkHost` gains `releaseReadyTarget`: after the ready target has been observed, the gateway closes the
+fork child's bootstrap document (`coordinator.closeManagedDocument`). With no document left on the entry, the legacy
+coordinator can attach the execution attachment on the child's first turn. `host.ts` enables it only when the store is
+not the commit log (SCL already works).
+
+Verification: `host-legacy-fork-continue.test.ts` passes (fork → prompt → rewind); on the rc4 build with the fixed
+`fork-session.ts`/`host.ts` copied into its gateway, forking a one-turn session and immediately prompting the child
+returns `ok`.
+
+Remaining separate gap: deleting a forked child on the legacy store fails with `Original session parent unavailable`;
+the continuation test does not assert deletion.
 
 ## Workaround
 

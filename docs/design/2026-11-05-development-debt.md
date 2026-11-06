@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 465（legacy fork 續傳修復）**：gateway fork host 在 ready target 觀察後關閉 child 的 bootstrap document（僅非 SCL），
+> 讓第一次 prompt 可 attach execution；`host-legacy-fork-continue` 綠，實機 fork→prompt 回 ok。刪除 forked child 仍有
+> 「Original session parent unavailable」的獨立缺口。
 > **round 464（legacy fork 根因）**：`acquireExecution` 在 entry 已有 document 時拒絕（
 > `Original execution attachment requires its original entry construction`），而 v1 fork 的 bootstrap 已建立 child document；SCL coordinator 的 execution 生命週期不同，故 SCL fork 續傳正常。下輪修 legacy bootstrap 與 execution 的順序並補測試。
 > **round 463（rc4 實測：legacy fork 無法繼續）**：fork prepare/begin 成功、seed 含來源 turn，但任何 prompt 都回

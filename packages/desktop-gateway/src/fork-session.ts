@@ -14,6 +14,10 @@ export function createGatewayForkHost(options: {
   projects: ReturnType<typeof createProjectScopeBroker>
   nativeContext: Awaited<ReturnType<typeof createNativeContextRuntime>>
   assertAvailable?(): void
+  /** Close the fork target's bootstrap document once the ready target has been
+   *  observed. The legacy coordinator refuses an execution attachment while a
+   *  document exists, so a forked child could never run its first turn. */
+  releaseReadyTarget?: boolean
 }): ForkHost {
   const { coordinator, projects, nativeContext } = options
   const cleanupErrors = new WeakMap<object, ObservationCleanupHandle>(), debt = new Map<string, () => Promise<void>>()
@@ -154,7 +158,7 @@ export function createGatewayForkHost(options: {
       const authority = await projects.authorityFor(id)
       const policy = () => { assertAvailable(); const state = authority(); if (state.kind === 'revoked' || state.kind === 'unavailable') throw new ForkTargetPolicyDeniedError() }
       policy()
-      return coordinator.withExistingSessionBindingObservation!({ sessionIds: [id] }, observation => {
+      const observe = coordinator.withExistingSessionBindingObservation!({ sessionIds: [id] }, observation => {
         const meta = observation.metadata(id), binding = observation.binding(id), project = operation.prepared.requestIntent.project, seed = meta.semanticSeed
         if (meta.archived || binding.kind !== 'present' || !binding.value || typeof binding.value !== 'object'
           || (binding.value as { projectId?: unknown }).projectId !== (project.kind === 'project' ? project.projectId : undefined)) throw new ForkTargetPolicyDeniedError()
@@ -162,6 +166,14 @@ export function createGatewayForkHost(options: {
           || seed?.operationId !== operation.invocation.operationId || seed.requestDigest !== operation.invocation.requestDigest || !same(seed, document.view.header?.semanticSeed)) throw new Error('Gateway fork target identity unavailable')
         return nativeContext.withResultObservation({ sessionId: id, sessionIds: [id], observation, document, assertHostCurrent: policy }, async () => { policy(); const result = await use(); policy(); return result })
       })
+      try { return await observe }
+      finally {
+        if (options.releaseReadyTarget) {
+          // The fork target is durable; releasing the bootstrap document lets the
+          // legacy coordinator attach an execution attachment for its first turn.
+          await coordinator.closeManagedDocument?.(id).catch(() => undefined)
+        }
+      }
     },
   }
   associateForkHostCleanupOwner(coordinator, host, cause => cause !== null && typeof cause === 'object' ? cleanupErrors.get(cause) : undefined)

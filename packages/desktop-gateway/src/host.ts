@@ -598,6 +598,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   }
   const internalIds = new Set<string>()
   const forkController=createForkSessionController(coordinator,createGatewayForkHost({workspace:options.workspace,coordinator,projects,nativeContext,
+    releaseReadyTarget: !commitLogStore,
     assertAvailable(){if(shutdownRequested)throw new Error('Desktop host is closing')}}))
   // Selected-results (v2) forks are host-supported only on the commit log: the
   // controller captures the v3 seed from the store's own snapshot.
