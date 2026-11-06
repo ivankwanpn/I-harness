@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 468（大型 workspace 的 watch 啟動失敗）**：chokidar `ignoreInitial:false` 對既有檔案逐一發 add，超過 4096 事件上限 →
+> `FS_WATCH_GAP` → instructions 永久 unavailable → CLI 回合 `CONTEXT_INPUT_STALE`。改為 `ignoreInitial:true`（baseline 已提供已知集合），
+> fs-watch 69/69＋新 4200 檔案回歸，CLI 在 repo 根目錄恢復。
 > **round 467（forked child 刪除修復）**：deletion selection 分離 artifact ids 與 session ids，legacy inventory 只用 session ids 當 targets；
 > 測試加回刪除斷言通過，實機刪除 fork child 回 ok。
 > **round 466（forked child 刪除缺口定位）**：`prepareSession` 被以 document key `session-title/forked` 呼叫（`needs-parents`）；

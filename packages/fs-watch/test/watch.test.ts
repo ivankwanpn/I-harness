@@ -34,6 +34,22 @@ function withTimeout<T>(p: Promise<T>, ms = 8000, label = "event"): Promise<T> {
 }
 
 describe("createFsWatcher", () => {
+  it("becomes ready in a tree larger than the startup event buffer", async () => {
+    const { dir, cleanup } = await makeTmp()
+    try {
+      await Promise.all(Array.from({ length: 4200 }, (_, index) => writeFile(join(dir, `f${index}.txt`), "x")))
+      const w = createFsWatcher({ roots: [dir] })
+      try {
+        await withTimeout(w.ready, 20000, "ready")
+        const it = w.events[Symbol.asyncIterator]()
+        const later = join(dir, "later.txt")
+        await writeFile(later, "x")
+        const event = await withTimeout(it.next(), 8000, "later add")
+        expect(event.value).toMatchObject({ path: later, kind: "add" })
+        await it.return?.()
+      } finally { await w.close() }
+    } finally { await cleanup() }
+  }, 60000)
   it("emits add/change/unlink events for one file", async () => {
     const { dir, cleanup } = await makeTmp()
     const w = createFsWatcher({ roots: [dir] })

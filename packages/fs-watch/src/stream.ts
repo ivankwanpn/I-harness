@@ -164,7 +164,7 @@ export function createFsWatcher(options: FsWatcherOptions): FsWatcher {
         if (code !== "ENOENT" && code !== "ENOTDIR") throw error
       }
     }
-    watcher = watch(opts.roots, { persistent: opts.persistent, ignoreInitial: false,
+    watcher = watch(opts.roots, { persistent: opts.persistent, ignoreInitial: true,
       awaitWriteFinish: false, usePolling: false, ignored })
     watcher.on("ready", () => { nativeReady = true; finishReady() })
     watcher.on("all", (name: string, path: string) => {
