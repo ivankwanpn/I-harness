@@ -1200,6 +1200,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 102 (implemented 2026-11-06): rewind a conversation that has run a turn
+
+`host-commit-log-rewind-after-turn.test.ts` prompts once (the turn records a rewind point with `files: 0`), plans and executes a
+conversation rewind with the pinned fingerprint, then asserts the points list is empty and a fresh coordinator sees the durable
+`rewind/point` marker. `session/list` keeps `turnCount` from the log, so it still reports the pre-rewind count — the rewind is a
+durable marker, not a log rewrite.
+
 ## Plan 101 (implemented 2026-11-06): fork a conversation that has run a turn
 
 `session/fork/begin` on a source that had a turn failed with `Session fork unavailable` (`reason:"internal"`) on the commit log while
