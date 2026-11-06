@@ -1221,6 +1221,13 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 215 (2026-11-06): the reverse direction is asymmetric, and documented
+
+`host-store-legacy-invisible.test.ts` seeds a commit-log session and starts a **legacy** host: the SCL id is absent from `session/list`
+because the legacy store only scans `<id>.jsonl`. The bytes remain on disk and reappear when the commit log is selected again. This is a
+deliberate current asymmetry (making legacy read commit logs would be the migration itself), now pinned by a test and stated in
+`docs/session-store.md`. The store-selection/lifecycle suite is 7 files / 8 tests.
+
 ## Plan 214 (2026-11-06): switching the store does not hide old sessions
 
 `host-store-legacy-visible.test.ts` seeds a legacy session on disk, then starts a commit-log host: `session/list` contains the legacy id

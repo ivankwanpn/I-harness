@@ -75,9 +75,10 @@ archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search
 SCL 相關測試（host／store／commit／CLI／SDK）皆綠，見 §5.1。
 ### 5.2.1 store 選擇與 lifecycle（2026-11-06）
 
-專項回歸（6 檔／7 tests，全綠）：`host-store-selection`（settings 選 store 與 host 選項覆寫）、`host-store-restart`（settings 選擇跨重啟）、
-`host-store-legacy-visible`（SCL host 仍列出並可讀 legacy 會話）、`settings-write-preserve`（其他設定寫入保留 sessionStore）、
-`artifact-cleanup`（刪除 session 清掉 per-session artifacts）、`session-store-setting`（CLI settings 與 flag 優先序）。
+專項回歸（7 檔／8 tests，全綠）：`host-store-selection`（settings 選 store 與 host 選項覆寫）、`host-store-restart`（settings 選擇跨重啟）、
+`host-store-legacy-visible`（SCL host 仍列出並可讀 legacy 會話）、`host-store-legacy-invisible`（legacy host 不列 SCL 會話，刻意的反方向不對稱）、
+`settings-write-preserve`（其他設定寫入保留 sessionStore）、`artifact-cleanup`（刪除 session 清掉 per-session artifacts）、
+`session-store-setting`（CLI settings 與 flag 優先序）。
 
 ## 5.3 使用方式
 
