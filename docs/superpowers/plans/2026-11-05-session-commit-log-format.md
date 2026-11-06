@@ -1205,6 +1205,13 @@ gateway native context rather than the host log.
 
 ## Plan 165 (implemented 2026-11-06): the child cannot read its inherited page yet
 
+Authorization trace (2026-11-06): `context-output/service.ts` `allowed()` grants a ref only when
+`store.owns(ref.id, access.sessionId)` or the host `authorize` hook returns true. The child neither owns the source ref in its own store
+nor supplies an `authorize`: the gateway's `resultReadScopeFor` (the host hook in `result-reader.ts`) returns nothing for a child, so the
+read is denied before the page is touched. The fix therefore lives on the host side: give a selected-results child a read scope that
+covers the refs it inherited (the legacy selected path does this through `createSelectedRuntimeCapture`).
+
+
 Fixed (2026-11-06): the child prompt's close failure was traced to `Owned task document is absent` during assembly setup — the
 **selected-results** fork path creates the child through `createChildSession` directly (not through the facade), so it never seeded
 `task-<id>`. `createSelectedForkController` now seeds the empty task document (when the host provides one) right after creation;
