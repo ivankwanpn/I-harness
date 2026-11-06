@@ -29,12 +29,33 @@ The `unseen-rules` label is a catch-all. The code also retains the target select
 asynchronous resolver work ("a rejected batch still informs the next normal request"), which explains
 why the immediate retry passes.
 
-## Not yet established
+## Root cause (captured 2026-11-07)
 
-- the underlying exception (the catch masks it); the packaged gateway's stderr is not forwarded by the
-  Desktop main process, so a diagnostic patch was needed to capture it;
-- whether the first-write refusal is intended when there are no instruction files at all (no AGENTS.md
-  in the workspace, no global sources present), or a regression.
+With a diagnostic log in the catch, a controlled-model gateway test (`host-write-first.test.ts`, write
+with `{path, text}`) shows the exception that is masked:
+
+```
+[diag] instruction preflight failed: Error: Target instruction evidence not issued
+```
+
+It comes from `packages/instructions/src/service.ts` `proveApplicable`: the admission snapshot (`issued`)
+has no complete target covering the file being written, so `prior.discovery.targets` yields no
+`compatible` entry and the function throws. The preflight catches everything and reports `unseen-rules`.
+The retry works because `preflightCore` retains the new target and the next admission's snapshot
+includes it.
+
+So each **new target path** costs one failed write; with no AGENTS.md/CLAUDE.md in the workspace this is
+pure noise and the model burns steps searching for rules that do not exist.
+
+## Fix direction
+
+- If the current discovery has **no instruction candidates for the target** (empty projection/slots),
+  allow the mutation without `proveApplicable` — there are no rules to withhold;
+- only report `unseen-rules` when rules are actually unseen; otherwise preserve/log the cause.
+
+## Repro
+
+`packages/desktop-gateway/test/host-write-first.test.ts` (kept skipped while the fix is pending).
 
 ## Next steps
 
