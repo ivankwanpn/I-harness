@@ -1221,6 +1221,15 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 179 (implemented 2026-11-06): a fork child reads inherited pages through its source
+
+Instead of porting the legacy held-observation/result-store layer, createConversationResultReader now falls back for a fork child:
+when the direct read answers unavailable and the requested ref id appears in the child seed pages (conversation/seed-results), the
+reader retries the same query against meta.parentSession under the fence. The child therefore reads exactly the bytes it inherited;
+the source store remains the owner and no second store is materialised. The selected-read E2E now asserts data on the child, and all
+33 host-commit-log files (35 tests) stay green. Limits (documented): the fallback needs a parent link and the ref id in the seed
+pages; it does not resurrect the legacy lineage/revocation witnesses, and a deleted source makes the inherited read unavailable.
+
 ## Plan 178 (2026-11-06): old-format samples cannot be synthesised in this build
 
 The legacy jsonl store now writes format 15 only (`backend-factory.ts`: "new session writers require current format"), and the older

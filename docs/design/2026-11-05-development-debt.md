@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 417（inherited read-through）**：child 讀取 inherited page 改由 createConversationResultReader 回退到來源 session（需 parent link
+> 且 ref 在 seed pages）；E2E 斷言 data，33 檔／35 tests 全綠。
 > **round 416（舊格式無法合成）**：legacy store 只寫 v15，舊格式的 fact-journal writer 未匯出 → 6–12 樣本只能來自舊版本錄製；
 > in-tree 可驗證的 adoption 已由 legacy-version-adoption 覆蓋。
 > **round 415（舊版本 adoption）**：formats 6／8／11／13／14 皆可經 legacy store 讀取、首次寫入遷移為 v15，profile 回報新格式；

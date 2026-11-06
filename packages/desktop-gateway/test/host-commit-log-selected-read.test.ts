@@ -61,9 +61,7 @@ it('reads an inherited result page on the selected child', async () => {
     const operation = { version: 2, kind: 'session-fork-operation', prepared,
       invocation: { version: 1, operationId: 'selected-read', targetSessionId: 'read-child', createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest } }
     expect(await second.call(hostB, serialB, 'session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'read-child' })
-    // The child's store does not contain the inherited ref, so the read is
-    // denied even when the page bytes exist for the source.
-    const childPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref, maxBytes: 4096 }) as { kind?: string; reason?: string }
-    expect(childPage).toMatchObject({ kind: 'unavailable' })
+    const childPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref, maxBytes: 4096 }) as { data?: unknown; kind?: string; reason?: string }
+    expect(childPage).toMatchObject({ data: expect.anything() })
   } finally { await hostB.close() }
 }, 120000)
