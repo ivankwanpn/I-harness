@@ -10,7 +10,7 @@
 |---|---|
 | store（append-only commit log、prefix 鏈、flock writer lease、sidecar、GC、deletion commit point） | `session-commit-log` 9 檔 / 38 tests（format、scanner、fold、store、crash、scan-cache、benchmark、multiprocess-lock、fold-property） |
 | facade／coordinator（create、load、list、profile、snapshot、append、documents、delete、fork、birth、intent、ownership、retained references） | `session-persistence` commit 系列 10 檔 / 38 tests |
-| desktop host（create、prompt turn、model switch、tool call、artifact retention、result page 讀取／分頁／邊界／unavailable、execution/tasks/processes 讀取與冷視圖形狀、task reconcile、todo 冷／live 寫入、schedule CRUD、surface、management rename/archive/restore/reload/navigation、batch delete/move/edges、archive 與 delete 於有歷史的 session、project bind、auto title、compaction E2E、cold control 與 owner-scoped 錯誤、session search、context picker、diagnostics） | `desktop-gateway` host SCL 31 檔 / 36 tests（另 lineage／subtree／search tool 單元 3 檔） |
+| desktop host（create、prompt turn、model switch、tool call、artifact retention、result page 讀取／分頁／邊界／unavailable、execution/tasks/processes 讀取與冷視圖形狀、task reconcile、todo 冷／live 寫入、schedule CRUD、surface、management rename/archive/restore/reload/navigation、batch delete/move/edges、archive 與 delete 於有歷史的 session、project bind、auto title、compaction E2E、cold control 與 owner-scoped 錯誤、session search、context picker、diagnostics） | `desktop-gateway` host SCL 32 檔 / 37 tests（另 lineage／subtree／search tool 單元 3 檔） |
 | fork（普通 fork、nested、project 繼承、retry、turn 之後、rewind 之後、重啟契約、child task document） | `host-commit-log-fork*.test.ts`、`host-fork-restart.test.ts` |
 | rewind（points/plan/execute、files 模式、fingerprint 失效、跨 host 執行、turn 之後、fork 之後） | `host-commit-log-rewind*.test.ts`（6 檔） |
 | 重啟耐久（session 續用、metadata、schedule、batch move、prepared fork 契約） | `host-commit-log-restart*.test.ts`、`host-commit-log-schedule.test.ts`、`host-commit-log-batch-move.test.ts`、`host-fork-restart.test.ts` |
@@ -41,7 +41,7 @@
 
 | 缺口 | 範圍 | 影響 |
 |---|---|---|
-| selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | **store 端已可**（v3 seed 的 `createChildSession` 與 load 已驗證）；剩 gateway composer 需改走此路徑 | 目前 prepare 仍回 `Invalid fork preparation request`（-32602）、context-runtime 回 `SELECTED_RESULTS_UNSUPPORTED`（明確拒絕，已由 fork-continue 測試固定） |`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
+| selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | **commit-log 已接線**：SDK v2 seam → gateway controller → v3 seed → `createChildSession`，host 測試通過（`host-commit-log-selected-fork`） | legacy 仍走 `createSelectedRuntimeCapture`；兩個 store 各自支援，行為尚未完全對齊（child 的 result page 讀取待驗） |`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
 | legacy 刪除 | 需 selected-results 缺口關閉或接受降級 | 尚未刪除任何 legacy 程式碼 |
 | 舊格式 corpus（6–12） | 需帶有效 `journal` metadata 的錄製樣本 | dual-run corpus 維持 13/14 |
 | legacy `session-persistence` 基線 | 280 個既有失敗（transition gate／artifact latch／win32 lock） | 與 SCL 無關，未修復 |
@@ -56,7 +56,7 @@
 
 ## 5.1 最新回歸（2026-11-06）
 
-一次跑完 SCL 全部表面：**host 36 檔 / 41 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests，共 122 tests
+一次跑完 SCL 全部表面：**host 37 檔 / 42 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests，共 123 tests
 全綠、無 flake。涵蓋 fork／rewind 在 turn、rewind 之後的序列、**fork child 續用與 nested fork**、fork child 的 schedule、
 archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search／context picker，以及 fence 的 exclusive 授權。
 

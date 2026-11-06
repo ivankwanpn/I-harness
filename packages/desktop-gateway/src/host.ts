@@ -19,6 +19,7 @@ import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createForkSessionController } from "@i-harness/session-persistence"
+import { createSelectedForkController } from "./selected-fork.ts"
 import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
 import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
 import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
@@ -595,12 +596,22 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const internalIds = new Set<string>()
   const forkController=createForkSessionController(coordinator,createGatewayForkHost({workspace:options.workspace,coordinator,projects,nativeContext,
     assertAvailable(){if(shutdownRequested)throw new Error('Desktop host is closing')}}))
+  // Selected-results (v2) forks are host-supported only on the commit log: the
+  // controller captures the v3 seed from the store's own snapshot.
+  const selectedFork = commitLogStore ? createSelectedForkController({ coordinator,
+    async projectOf(sourceSessionId) {
+      const value = await coordinator.getDocument('desktop-session-project-' + createHash('sha256').update(sourceSessionId).digest('hex')) as { projectId?: string } | undefined
+      return typeof value?.projectId === 'string' ? { kind: 'project', projectId: value.projectId } : { kind: 'unmanaged' }
+    },
+    assertAvailable() { if (shutdownRequested) throw new Error('Desktop host is closing') },
+  }) : undefined
   const base = createSdkServer(service, {
     readResultPage: conversationRead,
     supportsResultDependencyMembership: true,
     coordinator,
     prepareForkSession:request=>forkController.prepare(request),
     executeForkSession:(command,control)=>forkController.execute(command,control),
+    ...(selectedFork ? { prepareSelectedForkSession: request => selectedFork.prepare(request), executeSelectedForkSession: command => selectedFork.execute(command) } : {}),
     modelState: async (sessionId) => {
       await coordinator.profile(sessionId)
       return service.modelState(sessionId)

@@ -1203,6 +1203,13 @@ gateway native context rather than the host log.
 
 
 
+## Plan 160 (implemented 2026-11-06): selected-results forks reach the host
+
+The host wires `createSelectedForkController` into the SDK seams (only when the commit-log store is selected) and derives the project
+intent from `desktop-session-project-<sha256(source)>`. `host-commit-log-selected-fork.test.ts` prompts a source whose turn reads a
+file (an artifact-backed result), prepares a v2 fork, begins it and finds `selected-child` in `session/list`. The full SCL host suite is
+**37 files / 42 tests** green. The legacy store keeps its own `createSelectedRuntimeCapture` path (the seams are not wired for it).
+
 ## Plan 159 (implemented 2026-11-06): the gateway prepares and executes a selected-results fork
 
 `selected-fork.ts` adds `createSelectedForkController`: `prepare` builds the v2 core + `createSelectedResultsIntent` from the captured
