@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isRpcSuccess, type RpcMessage } from '@i-harness/sdk'
 import { controlledModel } from '../../session-executor/test/controlled-model.ts'
-import { createJsonlCommitCoordinator } from '../../session-persistence-jsonl/src/commit-coordinator.ts'
 import { createDesktopHost } from '../src/host.ts'
 
 // Repro for Plan 10: a host-level model turn still hits a managed-write
