@@ -1221,6 +1221,12 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 214 (2026-11-06): switching the store does not hide old sessions
+
+`host-store-legacy-visible.test.ts` seeds a legacy session on disk, then starts a commit-log host: `session/list` contains the legacy id
+with its title and `session/history` reads its message. This pins the `list()` merge of legacy ids (and lazy adoption) as user-visible
+behaviour; `docs/session-store.md` states it explicitly. The store-selection/lifecycle suite is now 6 files / 7 tests.
+
 ## Plan 213 (2026-11-06): the store-selection/lifecycle suite
 
 One run over the store-choice surface: `host-store-selection`, `host-store-restart`, `settings-write-preserve`, `artifact-cleanup` and the

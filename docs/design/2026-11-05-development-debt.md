@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 453（legacy 會話仍可見）**：SCL host 列出並可讀既有 legacy 會話（list 合併 legacy ids、lazy adoption）；docs/session-store.md 明示；
+> 專項回歸 6 檔／7 tests。
 > **round 452（store 選擇專項回歸）**：4 gateway 檔＋CLI 1 檔＝5 檔／6 tests 全綠；status 新增 §5.2.1。
 > **round 451（settings store 重啟耐久）**：只靠 settings 選 commit-log 的 host，重啟後可列出 session、讀到 history、診斷回報 commit-log。
 > **round 450（lifecycle 兩個保證）**：刪除 session 會清掉 native-context 的 per-session artifacts（7→1 共享檔）；settings patch

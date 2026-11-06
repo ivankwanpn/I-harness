@@ -34,6 +34,7 @@ settings 的合法值是 `"jsonl"` 與 `"commit-log"`；其他值會被視為「
 ## 既存工作階段的處理
 
 - commit log 可以**讀取**既有的 legacy 會話（formats 6–14 的 adoption 已由測試固定；首次寫入時會發佈一個 v15 generation）；
+- 切換到 commit log 後，**既有 legacy 會話仍會出現在列表**（`list()` 會合併 legacy ids），也能以 id 讀取／繼續，因此切換 store 不會讓舊會話「消失」；
 - 舊格式（6–12）的 **byte 樣本**仍需由舊版本錄製，dual-run corpus 目前維持 13/14；
 - legacy 會話的位元組不會被改寫：只有在該會話第一次被寫入時，commit log 才會建立自己的 generation。
 
