@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 197 (2026-11-06): the store repair stops at the shared cache boundary
+
+The install itself is fixed: `pnpm-workspace.yaml` now sets `allowBuilds: false` for the six non-host ffprobe installers, so
+`pnpm install --force --frozen-lockfile` completes with **exit 0** (616 packages, supply-chain policy verified) instead of failing with
+`ERR_PNPM_IGNORED_BUILDS`. `pnpm store status` still reports mutated packages, and the store is the **shared** `D:\.pnpm-store\v11`
+(106,857 files, 6.2 GB), so the remaining repair is a cache reset that would force a full redownload for every checkout on this machine.
+That is an operator decision, not something to do silently; the toolchain is verified working after the install (store 38 tests green).
+
 ## Plan 196 (2026-11-06): full two-store comparison — the default-switch delta is small
 
 The complete desktop-gateway suite (277 files / 1,236 tests) was run twice in the background: default legacy gives 105 failed files /

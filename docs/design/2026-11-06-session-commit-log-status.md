@@ -68,7 +68,7 @@ archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search
 | package boundaries | `node scripts/audit/check-package-boundaries.mjs --gate` | PASS（147 = baseline） |
 | reachability | `node scripts/audit/check-reachability.mjs --gate` | PASS |
 | bench | `node --import tsx scripts/bench/run-bench.mts --gate` | **PASS（本機）**：harness 改為 **per-machine keyed baseline**；本機已 seed（append ~38 ms、deriveMessages ~31 ms）。其他機器用 reference baseline 並標示 `WARN foreign`。實測 append 線性約 24 µs/event，成本在 conversation-index staging，與 SCL 無關 |
-| pnpm store | `pnpm store status` | **仍 altered**（vitest／zustand 等）。已嘗試 `pnpm install --force --frozen-lockfile`：616 套件重裝後 pnpm 以 `ERR_PNPM_IGNORED_BUILDS`（ffprobe installer 未核准）結束，store 仍回報 altered，且 install 會改寫 `pnpm-workspace.yaml` 的 `allowBuilds`（已回退）。需先由操作者決定 ffprobe build 政策再重裝 |
+| pnpm store | `pnpm store status` | **install 已修好、store 仍 altered**：`pnpm-workspace.yaml` 為 6 個非目標平台 ffprobe installer 設 `allowBuilds: false` 後，`pnpm install --force --frozen-lockfile` 以 **exit 0** 完成（616 套件、lockfile 政策通過）。但 `store status` 仍回報 mutated packages；store 位於共享的 `D:\.pnpm-store\v11`（106,857 檔／6.2 GB），完整重建會重新下載並影響其他 checkout，需操作者決定 |
 
 SCL 相關測試（host／store／commit／CLI／SDK）皆綠，見 §5.1。
 ## 6. 如何重跑驗證
