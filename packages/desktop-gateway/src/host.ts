@@ -166,9 +166,12 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
   const codingPlans = createCodingPlans(codexAccounts, runtime)
   await mkdir(options.sessionDir, { recursive: true })
+  // An explicit host option wins; then the settings document; then the
+  // environment. Absent everywhere keeps the legacy store.
+  const configuredStore = settings.get().sessionStore
   const commitLogStore = options.sessionStore
     ? options.sessionStore === 'commit-log'
-    : process.env.IH_SESSION_STORE === 'commit-log'
+    : configuredStore !== undefined ? configuredStore === 'commit-log' : process.env.IH_SESSION_STORE === 'commit-log'
   const coordinator = commitLogStore
     ? asSessionCoordinator(createJsonlCommitCoordinator(options.sessionDir, {
         lock: { enabled: true, lockRoot: options.sessionDir },
@@ -550,7 +553,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     executionObservation,
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
-    diagnostics: createDesktopDiagnostics(service, { shell: agentShell }),
+    diagnostics: createDesktopDiagnostics(service, { shell: agentShell, sessionStore: commitLogStore ? 'commit-log' : 'jsonl' }),
     taskProjection: async (id, options) => {
       if (!service.taskProjectionIntegrity) throw new Error("Task projection unavailable")
       return service.taskProjectionIntegrity(id, options)

@@ -11,6 +11,8 @@ export interface EnvironmentDiagnosticsView {
   tools: { name: string; exposure: "direct" | "deferred" | "hidden"; modelVisible: boolean }[]
   roles: { name: string; allowlist: string[] }[]
   shell?: AgentShellSettingsState; executables: ExecutableDiagnostic[]
+  /** The session persistence backend this host selected (settings/env/option). */
+  sessionStore: "jsonl" | "commit-log"
 }
 export type DiagnosticsRequest = { kind: "desktop/environment/diagnostics"; workspaceId: string; sessionId?: string; probe?: boolean }
 
@@ -50,7 +52,7 @@ export async function probeExecutable(name: string, command?: string, args: stri
   })
 }
 
-export function createDesktopDiagnostics(service: Pick<SessionService, "liveAssembly">, options: { shell: { state(): Promise<AgentShellSettingsState> } }) {
+export function createDesktopDiagnostics(service: Pick<SessionService, "liveAssembly">, options: { shell: { state(): Promise<AgentShellSettingsState> }; sessionStore?: "jsonl" | "commit-log" }) {
   return {
     async read(sessionId?: string, probe = false): Promise<EnvironmentDiagnosticsView> {
       if (typeof probe !== "boolean") throw new Error("Invalid executable probe flag")
@@ -72,7 +74,7 @@ export function createDesktopDiagnostics(service: Pick<SessionService, "liveAsse
         ? Promise.resolve({ name: spec.name, command: spec.command, status: "untested" as const, error: "Use WSL diagnostics to inspect the Linux executable." }) : probeExecutable(spec.name, spec.command, spec.args)))
         : specs.map(spec => ({ name: spec.name, command: spec.command, status: spec.command ? "untested" as const : "unconfigured" as const }))
       if (!shell.resolved && shell.error) executables[0] = { name: "Agent Shell", status: "unavailable", error: shell.error }
-      return { live: Boolean(assembly), ...(sessionId ? { sessionId } : {}), ...(state ? { effectiveMode: state.codeMode } : {}), tools,
+      return { live: Boolean(assembly), ...(sessionId ? { sessionId } : {}), ...(state ? { effectiveMode: state.codeMode } : {}), sessionStore: options.sessionStore ?? "jsonl", tools,
         roles: (assembly?.subagentState().roles ?? []).map(role => ({ name: role.name, allowlist: role.tools.slice() })), shell, executables }
     },
   }

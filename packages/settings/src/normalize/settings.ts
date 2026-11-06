@@ -53,6 +53,8 @@ export function normalizeSettings(raw: unknown): Settings {
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
+    // Absent or unknown keeps the host default (env, else the legacy store).
+    ...(raw.sessionStore === "jsonl" || raw.sessionStore === "commit-log" ? { sessionStore: raw.sessionStore } : {}),
     instructions: normalizeInstructions(raw.instructions),
     windowsSandboxBackend: oneOf(raw.windowsSandboxBackend, ["legacy", "psec", "wsl"] as const, base.windowsSandboxBackend),
     wslExecution: normalizeWslExecution(raw.wslExecution),

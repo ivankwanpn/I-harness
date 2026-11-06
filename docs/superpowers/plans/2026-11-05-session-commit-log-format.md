@@ -1221,6 +1221,15 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 203 (implemented 2026-11-06): the store is selectable from settings, not only the environment
+
+The settings document gains an optional `sessionStore: "jsonl" | "commit-log"` (unknown values normalize to absent). The host resolves the
+store as **explicit option > settings > `IH_SESSION_STORE` > legacy**, and `desktop/environment/diagnostics` now reports the selected
+`sessionStore`, so a user can see which backend is active. `host-store-selection.test.ts` proves both directions: a settings-selected
+commit log writes `<sessionDir>/<id>/session.v15.jsonl` and diagnostics reports `commit-log`; the same settings with a host option of
+`jsonl` writes `<sessionDir>/<id>.jsonl` and reports `jsonl`. Settings normalize coverage: 27 tests. Full SCL host suite: 39 files /
+45 tests green.
+
 ## Plan 202 (2026-11-06): final verification of the goal
 
 One integrated run after all of the goal's work: host **44**, store **38**, commit **43**, CLI **2**, SDK **74** — **201 tests green**;

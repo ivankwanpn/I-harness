@@ -29,6 +29,13 @@ describe("normalizeSettings", () => {
     expect(normalizeSettings({ approvalMode: "full-access" }).approvalMode).toBe("full-access")
     expect(normalizeSettings({ approvalMode: "surprise" }).approvalMode).toBe("dangerous")
   })
+  it("accepts only the named session stores and treats absent as the host default", () => {
+    expect(DEFAULTS.sessionStore).toBeUndefined()
+    expect(normalizeSettings({ sessionStore: "commit-log" }).sessionStore).toBe("commit-log")
+    expect(normalizeSettings({ sessionStore: "jsonl" }).sessionStore).toBe("jsonl")
+    expect(normalizeSettings({ sessionStore: "sqlite" }).sessionStore).toBeUndefined()
+    expect(normalizeSettings({ sessionStore: 1 }).sessionStore).toBeUndefined()
+  })
   it("falls back to defaults for a non-object / corrupt input", () => {
     // `undefined` is deliberately NOT asserted here: it IS the reference the
     // other three are compared against, so `expect(normalizeSettings(undefined))

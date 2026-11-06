@@ -264,6 +264,10 @@ export interface SettingsOnboarding {
 
 /** The full, durable settings document. Every field has a default so an
  * absent field in a partial on-disk document falls back instead of breaking. */
+export type SettingsSessionStore = "jsonl" | "commit-log"
+
+/** The full, durable settings document. Every field has a default so an
+ * absent field in a partial on-disk document falls back instead of breaking. */
 export interface Settings {
   instructions: SettingsInstructions
   contextSubsystems: SettingsContextSubsystems
@@ -275,6 +279,9 @@ export interface Settings {
   /** Additional model attempts after a transient failure; zero disables retry. */
   modelRetryLimit: number
   sandboxMode: SettingsSandboxMode
+  /** Session persistence backend. Absent = host default (the IH_SESSION_STORE
+   *  environment variable, otherwise the legacy jsonl store). */
+  sessionStore?: SettingsSessionStore
   windowsSandboxBackend: SettingsWindowsSandboxBackend
   wslExecution: SettingsWslExecution
   webSearchMode: SettingsWebSearchMode
