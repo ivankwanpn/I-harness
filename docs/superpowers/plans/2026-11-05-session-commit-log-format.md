@@ -1221,6 +1221,13 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 184 (implemented 2026-11-06): the nested refusal names its reason
+
+The SDK v2 prepare path now answers `Selected results fork unavailable: <reason>` (still `INTERNAL_ERROR`) instead of the generic
+`Session fork preparation unavailable`, and the selected-read E2E asserts the nested case answers `...: unsupported`. This turns the
+nested selected fork into a documented, diagnosable refusal while the core-session projection support stays open. SDK server/protocol
+tests remain 74 green.
+
 ## Plan 183 (2026-11-06): the nested re-export fails inside the projection, not the shape
 
 The SCL child session carries a complete v3 manifest (`origins`, `turns`, `selection`, `passive`, `results` with one page/row), so the wire

@@ -516,7 +516,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return requestFlight(async () => {
             try {
               const result = await opts.prepareSelectedForkSession!(selected)
-              if (result.kind !== 'prepared') return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable')
+              if (result.kind !== 'prepared') return makeFailure(id, INTERNAL_ERROR, `Selected results fork unavailable: ${result.reason}`)
               return makeSuccess(id, readSelectedResultsPrepared(result.prepared))
             } catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable') }
           })
