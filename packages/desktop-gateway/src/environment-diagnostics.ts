@@ -11,8 +11,9 @@ export interface EnvironmentDiagnosticsView {
   tools: { name: string; exposure: "direct" | "deferred" | "hidden"; modelVisible: boolean }[]
   roles: { name: string; allowlist: string[] }[]
   shell?: AgentShellSettingsState; executables: ExecutableDiagnostic[]
-  /** The session persistence backend this host selected (settings/env/option). */
-  sessionStore: "jsonl" | "commit-log"
+  /** The session persistence backend this host selected (settings/env/option).
+   *  Optional so older payloads and UI fixtures stay valid. */
+  sessionStore?: "jsonl" | "commit-log"
 }
 export type DiagnosticsRequest = { kind: "desktop/environment/diagnostics"; workspaceId: string; sessionId?: string; probe?: boolean }
 
