@@ -1203,6 +1203,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 163 (implemented 2026-11-06): the host inherits pages for a source that references a result
+
+`host-commit-log-selected-fork.test.ts` gains a second case: a commit-log source is seeded (outside the host) with a turn and a
+`context/result-ref` event, the host then prepares/executes a v2 fork, and the child contains `conversation/seed-results` events. The
+first case (a turn that never references its result) keeps asserting zero pages, so both sides of the selection are pinned.
+
 ## Plan 162 (implemented 2026-11-06): a result reference produces seed pages
 
 Appending a `context/result-ref` event (the product's result-selection marker) to the source before capturing makes
