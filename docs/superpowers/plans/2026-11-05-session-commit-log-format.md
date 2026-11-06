@@ -1200,6 +1200,15 @@ gateway native context rather than the host log.
 
 
 
+## Plan 106 (fixed 2026-11-06): fork after a rewind
+
+`settleCapture` in `execution-inputs.ts` now treats `TypeError: Original capture obligation released` from `observe()`/`admit()` as
+already settled (and marks the fact attempted) instead of failing the close: a rewind can close its settlement source while an
+execution-input admission is still pending. `host-commit-log-rewind-fork.test.ts` rewinds a prompted session and then forks it; the
+child is created and `host.close()` completes. `delivery-lifecycle` (22 tests including the failed-rewind-close cases) stays green;
+`rewind.test.ts` and the managed-domain/execution-attachment suites keep their pre-existing baseline failures (`TASK_TRANSITION_UNSUPPORTED`
+and the missing fixture path).
+
 ## Plan 103 (found, not fixed): fork after a rewind leaves the host cleanup dirty
 
 Stack of the expired obligation (2026-11-06):

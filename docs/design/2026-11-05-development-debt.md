@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 363（fork-after-rewind 修正）**：`settleCapture` 對「Original capture obligation released」視為已 settled；
+> rewind→fork 後 host close 乾淨，測試 `host-commit-log-rewind-fork.test.ts` 通過。
 > **round 362（capture 釋放堆疊）**：`expired` 堆疊顯示 close → execution-inputs `settle()` → `settleCapture(fact.observe())`，
 > 讀到已釋放的 delivery admission capture；疑與 rewind 關閉 settlement source 時仍有 pending admission 有關。
 > **round 361（洩漏細節）**：closeAll 的失敗是 `TypeError: Original capture obligation released`（execution-members），代表 rewind/fork

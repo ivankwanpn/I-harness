@@ -70,7 +70,16 @@ function createExecutionInputs(execution: ManagedExecutionAttachment) {
     const flights=new WeakMap<object,Promise<readonly number[]|undefined>>()
     const settleCapture=(fact:CapturedSettlementFact<ProducerFactOutcome>)=>{
       const prior=flights.get(fact);if(prior)return prior
-      const flight=(async()=>{let outcome=attempts.has(fact)?await fact.observe():await fact.admit();attempts.add(fact);if(outcome.kind!=='not-issued')everIssued.add(fact)
+      const flight=(async()=>{let outcome:ProducerFactOutcome
+        try { outcome = attempts.has(fact)?await fact.observe():await fact.admit() }
+        catch (error) {
+          // A rewind may close its settlement source while an admission is still
+          // pending; the capture obligation is then already gone and there is
+          // nothing left to settle for it.
+          if (error instanceof TypeError && error.message === 'Original capture obligation released') { attempts.add(fact); return undefined }
+          throw error
+        }
+        attempts.add(fact);if(outcome.kind!=='not-issued')everIssued.add(fact)
         if(outcome.kind==='unknown'||outcome.kind==='recovery-required'||outcome.kind==='not-issued'&&outcome.code==='FACT_RECOVERY_REQUIRED')outcome=await fact.reconcile()
         if(outcome.kind!=='not-issued')everIssued.add(fact)
         if(!everIssued.has(fact)&&outcome.kind==='not-issued'&&outcome.code==='FACT_PRECONDITION_STALE')return undefined
