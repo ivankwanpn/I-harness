@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 462（first-write 修正）**：`manager.ts` preflight 在 prepare 後比較規則文字／sources；未變更則以新 snapshot 發 proof（
+> first write 成功），規則真的變更仍回 unseen-rules。instructions 141/141；host-write-first 2 tests 綠（含規則中途出現仍拒絕）。
 > **round 461（rc3 實測：write 首次失敗 unseen-rules）**：新 session 第一次 write 被 `INSTRUCTIONS_REPLAN_REQUIRED/unseen-rules` 拒絕
 > （`not-dispatched`），模型搜尋 AGENTS.md 後重試成功並建立檔案。根因在 `manager.ts` preflight 的 catch-all 掩蓋真正例外；下輪
 > 以 packaged gateway log 與 headless controlled-model 測試抓真實錯誤並修。記錄於 `2026-11-07-desktop-write-first-attempt.md`。

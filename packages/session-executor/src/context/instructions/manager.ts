@@ -216,6 +216,16 @@ export function createMainInstructionManager(options: { session?: SessionView; d
             signal?.throwIfAborted(); check()
             const normalized = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path
             const snapshot = evidence.view.service.snapshot()
+            // Preparing the new target may discover rules the model has not seen
+            // (its admission snapshot is the evidence). When the resolved rule
+            // text and sources are unchanged there is nothing to withhold, so the
+            // proof can be issued against the fresh snapshot; a real rule change
+            // still forces a replan as `unseen-rules`.
+            const issuedSnapshot = evidence.snapshot
+            const sameRules = snapshot.text === issuedSnapshot.text
+              && snapshot.sources.length === issuedSnapshot.sources.length
+              && snapshot.sources.every((source, index) => source.path === issuedSnapshot.sources[index]?.path && source.contentHash === issuedSnapshot.sources[index]?.contentHash)
+            if (!sameRules) throw fail('unseen-rules')
             const candidates = snapshot.candidates.flatMap(candidate => candidate.canonicalPath ? [normalized(candidate.canonicalPath)] : [])
             for (let i = 0; i < mutations.length; i++) for (let j = i + 1; j < mutations.length; j++) {
               if (normalized(canonical[i]!) === normalized(canonical[j]!)) throw fail('mixed-mutation', true)
@@ -230,7 +240,7 @@ export function createMainInstructionManager(options: { session?: SessionView; d
             for (let index = 0; index < selected.length; index++) {
               const entry = selected[index]!, local = mutations.map((item, ordinal) => ({ ...item, canonical: canonical[ordinal]! })).filter(item => item.ownerIndex === index)
               if (!local.length) continue
-              const proof = evidence.view.service.proveApplicable(evidence.snapshot, local.map(item => ({ path: item.target.path, kind: item.target.kind })))
+              const proof = evidence.view.service.proveApplicable(snapshot, local.map(item => ({ path: item.target.path, kind: item.target.kind })))
               const candidatePaths = local.filter(item => candidates.includes(normalized(item.canonical))).map(item => item.canonical)
               let own: OwnedInstructionWrite | undefined
               const assertCurrent = () => { if (!admitted) throw fail('unavailable'); check(); try { evidence.view.service.assertApplicable(proof, own) } catch { throw fail('changed-dependency') } }

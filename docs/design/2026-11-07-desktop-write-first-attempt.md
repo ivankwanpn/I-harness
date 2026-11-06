@@ -47,11 +47,18 @@ includes it.
 So each **new target path** costs one failed write; with no AGENTS.md/CLAUDE.md in the workspace this is
 pure noise and the model burns steps searching for rules that do not exist.
 
-## Fix direction
+## Fix (2026-11-07)
 
-- If the current discovery has **no instruction candidates for the target** (empty projection/slots),
-  allow the mutation without `proveApplicable` — there are no rules to withhold;
-- only report `unseen-rules` when rules are actually unseen; otherwise preserve/log the cause.
+`packages/session-executor/src/context/instructions/manager.ts` now compares the resolved rules before and
+after `prepare(targets)`:
+
+- if the rule **text and sources are unchanged** (the target only adds absent candidates, so the model
+  has nothing new to read), the proof is issued against the fresh snapshot and the write proceeds;
+- if the text or sources changed (a rule file appeared, e.g. `notes/AGENTS.md` created during the
+  turn), the tool call still fails with `unseen-rules` so the model replans with the new rules.
+
+`instructions` tests: 141/141. `host-write-first.test.ts` has two cases: the fresh first write
+succeeds; a rule that appears after admission still refuses the write.
 
 ## Repro
 
