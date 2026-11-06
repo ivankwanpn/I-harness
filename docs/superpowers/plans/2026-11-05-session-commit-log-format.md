@@ -1200,6 +1200,15 @@ gateway native context rather than the host log.
 
 
 
+## Plan 144 (found, not fixed): prompting a forked conversation is refused on the commit log
+
+`session/prompt` on a fork child fails with `Private delegated or unsupported Code owner`; the legacy store runs the same turn (its
+host cleanup then failed in the probe, but the prompt itself succeeded and the child recorded a rewind point). The message comes from
+`code-mode/src/register.ts`: code-mode registration refuses a session whose header carries `parentSession`/`delegationDepth`/
+`subagentProtocolVersion`. The commit-log fork path (`createChildSession` with the captured lineage) therefore marks the child as
+delegated, unlike the legacy fork. Next: write the fork child header with `origin:"fork"` and no delegated markers (or allow
+`origin:"fork"` in the code-mode check) and re-run the child-turn test.
+
 ## Plan 143 (fixed 2026-11-06): a refused schedule write no longer blocks deleting the child
 
 The refused `schedule/create` on a fork child left `privateEntries` without a live `managedRuntimes` entry, and `readOriginalRuntime`
