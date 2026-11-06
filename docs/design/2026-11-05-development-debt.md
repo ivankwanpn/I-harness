@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 358（fork after turn）**：SCL 上 fork 跑過 turn 的 session 失敗（`Session fork unavailable` / internal），根因是 cached execution
+> document 沒有 `view`；`withHandoff` 在 view 缺失時 close 後重開冷 document。legacy 對照成功。
 > **round 357（delete after turn）**：跑過 turn 的 session 以 batch delete 刪除成功，list 與 archived 都不再出現。
 > **round 356（batch archive/restore）**：跑過 turn 的 session 走 batch 路徑也能 archive／restore（修正前兩個結果都是 ok:false）。
 > **round 355（archived context）**：archive 後 `context/search`（sessions）回空、`context/read` 被拒（outside the current project）。

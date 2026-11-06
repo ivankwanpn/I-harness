@@ -1200,6 +1200,15 @@ gateway native context rather than the host log.
 
 
 
+## Plan 101 (implemented 2026-11-06): fork a conversation that has run a turn
+
+`session/fork/begin` on a source that had a turn failed with `Session fork unavailable` (`reason:"internal"`) on the commit log while
+the legacy store forked the same source. The cause was `createForkSourceWitness(document)` reading `document.view.events`: a finished
+turn can leave its execution attachment cached in `managed`, and an execution document is built without a session view.
+`withHandoff` now reopens the source document cold when the cached one has no `view` (closing it first), keeping the
+`openManagedDocument` invariant for active executions. `host-commit-log-fork-after-turn.test.ts` forks after a prompt and checks the
+child plus its inherited project.
+
 ## Plan 100 (implemented 2026-11-06): delete a session that ran a turn
 
 The archive test ends by deleting the restored session through `batch delete`: the result is ok, and the session disappears from both

@@ -47,7 +47,17 @@ export function createGatewayForkHost(options: {
       if (!passive) {
         admission()
         if (mode.kind === 'warm') { source = mode.source; source.assertUnchanged() }
-        else { await coordinator.flush(sourceId); admission(); source = createForkSourceWitness(await coordinator.openManagedDocument(sourceId)) }
+        else {
+          await coordinator.flush(sourceId); admission()
+          let document = await coordinator.openManagedDocument(sourceId)
+          // A finished turn can leave an execution attachment cached without a
+          // session view; the fork witness needs one, so reopen cold.
+          if ((document as { view?: unknown }).view === undefined && coordinator.closeManagedDocument) {
+            await coordinator.closeManagedDocument(sourceId); admission()
+            document = await coordinator.openManagedDocument(sourceId)
+          }
+          source = createForkSourceWitness(document)
+        }
         ids = await discoverResultLineage(coordinator, sourceId, admission)
       }
       admission()
