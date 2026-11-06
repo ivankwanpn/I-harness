@@ -1203,6 +1203,21 @@ gateway native context rather than the host log.
 
 
 
+## Plan 156 (planned 2026-11-06): wiring selected-results forks through the SDK seams
+
+The v2 contract readers already exist (`readSelectedResultsPrepareRequest`, `readSelectedResultsPrepared`,
+`readSelectedResultsOperation`, `readSelectedResultsCommand`); only the transport and the host seam are missing:
+
+1. `sdk/server.ts` `session/fork/prepare`: when `readForkPrepareRequest` fails, try `readSelectedResultsPrepareRequest` and, if the host
+   provides `prepareSelectedForkSession`, return its `ForkPreparedV2` (validated by `readSelectedResultsPrepared`); otherwise keep the
+   current `Invalid fork preparation request`.
+2. `session/fork/begin`/`retry`: when `readForkCommand` fails, try `readSelectedResultsCommand` and dispatch to
+   `executeSelectedForkSession`.
+3. Gateway: implement both seams on the commit log — prepare loads the source snapshot and exports the v3 seed (Plan 153/155 path),
+   begin compiles it and calls `createChildSession` (v3 accepted since Plan 155), then writes the project binding and returns the
+   receipt. Legacy keeps its `createSelectedRuntimeCapture` path (or reports unsupported).
+4. Tests: a host test that prepares/executes a v2 fork and reads a result page on the child.
+
 ## Plan 155 (implemented 2026-11-06): the commit log bootstraps from a v3 seed
 
 `captureBootstrapRequest` now accepts a `conversation/seed-manifest` **version 3**: it validates the record prefix (manifest +

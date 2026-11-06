@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 397（selected-results wiring 計畫）**：v2 readers 已存在，缺 SDK 的 fork/prepare、begin/retry seam 與 gateway 實作；
+> 計畫列為 4 步（SDK prepare、SDK begin、gateway seam、host 測試）。
 > **round 396（SCL 接受 v3 seed）**：`captureBootstrapRequest` 接受 v3 manifest（selected-results commitment 驗證、v3 discriminator、
 > groupCount 取自 manifest）；測試以 SCL 建 session → v3 seed → `createChildSession` → load 成功。剩 gateway composer。
 > **round 395（v3 seed 被 bootstrap 拒絕）**：`createChildSession` → `captureBootstrapRequest` 只收 v1/v2 manifest，v3 回
