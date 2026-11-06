@@ -108,7 +108,7 @@ failures are never retried.
 Verification on the real rc2 build (equivalent bundle patch): creating a session in the test project and sending a prompt now completes —
 the transcript shows the model's answer, the IPC log contains **zero** `desktop/session/reload` requests, and diagnostics record
 `model/connecting → model/settled` with no `session/error`. Unit tests: `session-recovery` 5 passed, desktop typecheck clean. The rest of
-the desktop suite still shows the pre-existing `TASK_TRANSITION_UNSUPPORTED` fixture failures recorded earlier.
+the desktop suite still shows the legacy-coordinator fixture failures recorded earlier (`TASK_TRANSITION_UNSUPPORTED`).
 
 ## Attempted fix (2026-11-07): debt waiters — insufficient
 
@@ -116,8 +116,9 @@ The writer refused admission when any writer-dependency scope was outstanding
 (`core-session/src/managed/execution-state.ts`): `assertFresh` threw on any debt scope outside
 `taskHistoryScopes`, and `prepareWrite` threw when a debt scope had no admission promise. A patch
 introduced per-scope settlement promises, made `prepareWrite` wait for active scopes, and excluded
-transient read scopes from `assertFresh`. Core-session tests stayed green apart from the 16
-pre-existing `memory-source-checkpoint` failures this environment shows on a pristine tree.
+transient read scopes from `assertFresh`. Core-session tests are green when run through `node scripts/test-env.mjs`; the 16
+`memory-source-checkpoint` failures seen in a bare `vitest run` were the harness variable
+`IH_STRUCTURE_EVIDENCE_ROOT` being unset (the fixture writes evidence there), not a code failure.
 
 **The packaged app still failed with the same AggregateError, and the added `assertFresh` log
 never fired.** So the failing admission is not the transient-read debt path; the refusal is

@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 460（測試 harness 校正）**：core-session 先前 16 個 `memory-source-checkpoint` 失敗是直接跑 vitest 少了 `IH_STRUCTURE_EVIDENCE_ROOT`；
+> 改用 `node scripts/test-env.mjs` 後 **933/933 全綠**。測試環境 app 已換成 rc3。
 > **round 459（rc2 首個 prompt 修復）**：根因是 turn preparation 期間 session read 被 writer 以 dependency-cleanup 拒絕 → desktop recovery
 > gate 誤判為 poison → reload 關閉 live turn。修法：desktop IPC 對 transient reads 重試（12×150ms）再 fallback reload；實機驗證 prompt 完成、
 > 0 reload、0 session/error。commit 後續需重建 rc2 安裝檔。
