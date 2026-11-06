@@ -44,5 +44,9 @@ it('archives and restores a session that has run a turn', async () => {
     const batchRestored = await call('desktop/session/batch', { command: { action: 'restore', sessionIds: [created.sessionId] } }) as { results: { ok: boolean; error?: string }[] }
     expect(batchRestored.results[0]!.ok).toBe(true)
     expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).toContain(created.sessionId)
+    const deleted = await call('desktop/session/batch', { command: { action: 'delete', sessionIds: [created.sessionId] } }) as { results: { ok: boolean; error?: string }[] }
+    expect(deleted.results[0]!.ok).toBe(true)
+    expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions.map(row => row.id)).not.toContain(created.sessionId)
+    expect(((await call('desktop/session/archived')) as { id: string }[]).map(row => row.id)).not.toContain(created.sessionId)
   } finally { await host.close() }
 }, 90000)

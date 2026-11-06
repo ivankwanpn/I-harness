@@ -1200,6 +1200,11 @@ gateway native context rather than the host log.
 
 
 
+## Plan 100 (implemented 2026-11-06): delete a session that ran a turn
+
+The archive test ends by deleting the restored session through `batch delete`: the result is ok, and the session disappears from both
+`session/list` and `desktop/session/archived`. This covers the delete path (retire + drain) on a session with real history.
+
 ## Plan 99 (implemented 2026-11-06): batch archive/restore after a turn
 
 The same archive test also drives the batch route on a session with one turn: `batch archive` succeeds and lists the session under
