@@ -1200,6 +1200,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 142 (documented 2026-11-06): scheduling on a fork child is refused by the product
+
+`desktop/schedule/create` on a fork child answers `Private delegated or unsupported Code owner` — the **legacy** store returns the same
+error for the same sequence, so this is a product rule (a fork child is a delegated owner), not a commit-log gap. The assertion was
+not added to the fork-after-turn test because the refused attempt also leaves the child undeletable in the same host (the subsequent
+`batch delete` of the child returns `ok:false`); that side effect is recorded as the next item to investigate rather than pinned as a
+contract.
+
 ## Plan 114 (fixed 2026-11-06): a fork child gets the empty task document
 
 Fixed (2026-11-06): `CommitCoordinator` gains an optional `openReadOnlyManagedDocument(sessionId)` which opens the generation in read

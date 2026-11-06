@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 381（child schedule 契約）**：fork child 的 schedule create 在 legacy 與 SCL 都回 `Private delegated or unsupported Code owner`
+> （產品規則）；但被拒後同 host 內 child delete 會 `ok:false`，列為下一個調查項，未寫入測試契約。
 > **round 380（read-only cold document）**：新增 `openReadOnlyManagedDocument`（read 模式、不註冊 managed）；fork witness 改用它，
 > 不再關閉 cached execution document。FACT_CLOSED 邊界消失，fork-after-turn 的完整序列（child todo＋descendants＋順序刪除）通過；
 > host 32 檔／37 tests、commit 35 tests 全綠。
