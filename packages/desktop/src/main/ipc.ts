@@ -13,7 +13,7 @@ import { dispatchResultReadRequest } from "./result-pages.ts"
 import { contextQuery, contextReference, type ContextItem } from "../../../desktop-gateway/src/context-picker.ts"
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
 import { dispatchProjectFilesRequest } from "./project-files.ts"
-import { isRecoveryFailure, isSessionScopedRequest } from "./session-recovery.ts"
+import { isRecoveryFailure, isSessionScopedRequest, isTransientReadRetry } from "./session-recovery.ts"
 import { createDesktopProjectContentSearch, notifyDesktopProjectContentScopesChanged } from "./project-content-search.ts"
 import type { createGlobalProviderSettings } from "./global-provider-settings.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
@@ -754,6 +754,18 @@ export function registerDesktopIpc(
       // in-memory execution is poisoned. Rebuild the session once, then tell the
       // user to retry instead of surfacing an opaque RpcError.
       if(!isRecoveryFailure(error)||!isSessionScopedRequest(request))throw error
+      // A turn's writer refuses unrelated session work with a dependency-cleanup
+      // message while it prepares. That is transient, not corruption: retry the
+      // read briefly instead of reloading (a reload drains the live turn).
+      if(isTransientReadRetry(error,request)){
+        let last:unknown=error
+        for(let attempt=0;attempt<12;attempt+=1){
+          await new Promise(resolve=>setTimeout(resolve,150))
+          try{return await dispatchDesktopRequest(request,owned)}
+          catch(next){if(!isTransientReadRetry(next,request))throw next;last=next}
+        }
+        error=last
+      }
       try{await dispatchDesktopRequest({kind:'desktop/session/reload',workspaceId:request.workspaceId,sessionId:request.sessionId},owned)}
       catch{throw error}
       throw new Error('會話狀態已重新載入，請重試剛才的操作。')

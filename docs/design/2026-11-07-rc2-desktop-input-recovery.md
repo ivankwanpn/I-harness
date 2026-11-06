@@ -90,6 +90,26 @@ A recovery hold on the session's input inbox exists between preparation and prom
 driver that also mounts the new session's UI immediately). The lane then refuses admission with `FACT_RECOVERY_REQUIRED`, and the
 failure cleanup cannot reconcile the pending input, leaving the session in a state that retries cannot use.
 
+## Fix (2026-11-07): retry the transient read instead of reloading the session
+
+Root cause chain, confirmed with the packaged gateway's stderr and the main-process IPC log:
+
+1. While a turn prepares its writer, a session-scoped read (`desktop/session/work-state`, `desktop/session/input/state`) is refused with
+   `Original writer dependency cleanup unresolved` (the writer's `assertFresh` sees its own outstanding dependency scope);
+2. the Desktop's recovery gate (`packages/desktop/src/main/session-recovery.ts`) classifies that refusal as a poisoned session and issues
+   `desktop/session/reload`;
+3. the gateway's `reloadSession` calls `service.closeSession(id)`, which cancels/drains the **live turn**; the turn's input promotion then
+   fails with `FACT_PRECONDITION_STALE` → `model_error`.
+
+The fix is in the Desktop main process: `session-recovery.ts` now exports `TRANSIENT_READ_METHODS` and `isTransientReadRetry`, and the IPC
+catch retries those session reads up to 12 times (150 ms apart) before falling back to the reload path. Prompts, writes and non-recovery
+failures are never retried.
+
+Verification on the real rc2 build (equivalent bundle patch): creating a session in the test project and sending a prompt now completes —
+the transcript shows the model's answer, the IPC log contains **zero** `desktop/session/reload` requests, and diagnostics record
+`model/connecting → model/settled` with no `session/error`. Unit tests: `session-recovery` 5 passed, desktop typecheck clean. The rest of
+the desktop suite still shows the pre-existing `TASK_TRANSITION_UNSUPPORTED` fixture failures recorded earlier.
+
 ## Attempted fix (2026-11-07): debt waiters — insufficient
 
 The writer refused admission when any writer-dependency scope was outstanding

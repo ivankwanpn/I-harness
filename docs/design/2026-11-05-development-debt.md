@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 459（rc2 首個 prompt 修復）**：根因是 turn preparation 期間 session read 被 writer 以 dependency-cleanup 拒絕 → desktop recovery
+> gate 誤判為 poison → reload 關閉 live turn。修法：desktop IPC 對 transient reads 重試（12×150ms）再 fallback reload；實機驗證 prompt 完成、
+> 0 reload、0 session/error。commit 後續需重建 rc2 安裝檔。
 > **round 458（debt waiter 嘗試，未解）**：改 execution-state 讓 prepareWrite 等待 transient read scopes、assertFresh 排除 transient；
 > core-session 測試除既有 16 個 memory-source 失敗外全綠，但 packaged app 仍失敗且 assertFresh log 未觸發 → refusal 在更早的 admission
 > （document／execution beginAction 的 FACT_RECOVERY_REQUIRED）。已 revert，下一步 instrument beginAction/bootstrapReady。

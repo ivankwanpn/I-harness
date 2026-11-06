@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { isRecoveryFailure, isSessionScopedRequest } from "../src/main/session-recovery.ts"
+import { isRecoveryFailure, isSessionScopedRequest, isTransientReadRetry } from "../src/main/session-recovery.ts"
 
 describe("isRecoveryFailure", () => {
   it("recognises the recovery-gated sentences that cross the RPC boundary", () => {
@@ -22,5 +22,19 @@ describe("isSessionScopedRequest", () => {
     expect(isSessionScopedRequest({ workspaceId: "", sessionId: "s" })).toBe(false)
     expect(isSessionScopedRequest({ workspaceId: "w", sessionId: 3 })).toBe(false)
     expect(isSessionScopedRequest(null)).toBe(false)
+  })
+})
+describe("isTransientReadRetry", () => {
+  const failure = new Error("RpcError: Original writer dependency cleanup unresolved")
+  it("retries session reads that can refuse while a turn prepares", () => {
+    for (const kind of ["session/history", "session/context", "session/dashboard", "session/tasks", "desktop/session/work-state", "desktop/session/input/state", "desktop/session/project/state", "desktop/interaction/pending", "session/model/state", "desktop/session/navigation/state"]) {
+      expect(isTransientReadRetry(failure, { kind, workspaceId: "w", sessionId: "s" })).toBe(true)
+    }
+  })
+  it("never retries prompts, writes or non-recovery failures", () => {
+    expect(isTransientReadRetry(failure, { kind: "session/prompt", workspaceId: "w", sessionId: "s" })).toBe(false)
+    expect(isTransientReadRetry(failure, { kind: "desktop/session/reload", workspaceId: "w", sessionId: "s" })).toBe(false)
+    expect(isTransientReadRetry(new Error("ENOENT"), { kind: "session/history", workspaceId: "w", sessionId: "s" })).toBe(false)
+    expect(isTransientReadRetry(failure, { kind: "session/history", workspaceId: "w" })).toBe(false)
   })
 })
