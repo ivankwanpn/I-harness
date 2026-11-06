@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 377（FACT_CLOSED 對照）**：legacy 對同序列回正確的 descendants 錯誤，SCL 回 FACT_CLOSED——確認是 SCL 專屬；closed 的
+> parent document 正是 fork 為取得 cold witness 而關閉的那個。修法：fork 不關 cached execution document，或 task operation rebind。
 > **round 376（全回歸）**：host 32 檔／37 tests、commit 系列 31 tests 全綠（facade 的 fork task document 修正無回歸）；status 更新為 118 tests。
 > **round 375（FACT_CLOSED 收斂）**：確認錯誤來自 `captureParent(document).assertCurrent` → `document.assertReady()`（capabilities.ts:68）
 > 對已關閉的 parent document；readOriginalRuntime guard 只移除了第一段堆疊。待修：task operation 重新綁定新 document。

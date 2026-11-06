@@ -1202,6 +1202,13 @@ gateway native context rather than the host log.
 
 ## Plan 114 (fixed 2026-11-06): a fork child gets the empty task document
 
+Parity check (2026-11-06): the same sequence (fork a prompted session, write the child todo, delete the parent) on the legacy `jsonl`
+store returns `Session has descendants; coordinated deletion is unavailable`, while the commit log returns `FACT_CLOSED` — so the
+failure is commit-log specific. The closed parent document is the one `withHandoff` closed to obtain a cold fork witness; the task
+operation still references it. Fix direction: either the fork must not close the cached execution document (a separate cold handle for
+the witness), or `createCommitTaskOperations` must rebind the parent document when its handle is closed. The probe was removed.
+
+
 Narrowed further (2026-11-06): the `FACT_CLOSED` during the parent delete comes from `createCommitTaskOperations`'s
 `captureParent(document).assertCurrent` → `document.assertReady()` on a **closed** parent document (`capabilities.ts:68`). A guard in
 `readOriginalRuntime` (returning `undefined` for a closed execution) removed the first stack but not this one, so the remaining issue is
