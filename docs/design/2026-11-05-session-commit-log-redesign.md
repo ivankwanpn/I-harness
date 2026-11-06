@@ -169,7 +169,7 @@
 | 1 | **crash-cut 矩陣**：temp 寫入、fsync、link、目錄 fsync、sidecar 寫入、commit append 各步注入中止；重開只允許「不存在」或「恰好該 commit 前綴」 | ✅ | `session-commit-log/test/crash.test.ts`（5 案例，含 link 前後、sidecar 與 append 中斷）＋ `store.test.ts` |
 | 2 | **fold 性質測試**：任意 commit 序列 → fold(log) == 記憶體模型；重開冪等；torn tail 任意截斷點得到合法前綴 | ✅ | `fold-property.test.ts`（5 seed × 25 commits，全部 op）＋ `scanner.test.ts`（torn tail／seq／prev）|
 | 3 | **舊格式 corpus**：format 8/11/13/14 可讀；14 的 task doc 可重建 | ⚠️ 部分（8/11 需 journal metadata） | `commit-dual-run-corpus.test.ts` 以 8 個 legacy session 與 legacy coordinator 逐項比對（events／meta／task doc）。6–12 格式的檔案必須帶有效 `journal` metadata（fact journal），本 branch 沒有產生它們的 writer 或錄製樣本；邊界已測：缺 journal 的舊檔會把 legacy 的 `invalid session journal metadata` 原樣拋出，只有真正不存在的 session 才是 `CommitLogNotFoundError` |
-| 4 | **既有回歸**：jsonl、session-persistence、subagent、agent-team、desktop-gateway、sdk e2e | ⚠️ 部分 | SCL 相關套件全綠（13 host 檔／14 tests、store 9 檔／38 tests、commit suites 37 tests）；legacy `session-persistence` 仍有 280 個既有失敗（transition gate／artifact latch／win32 lock），與 SCL 無關，見計畫 Plan 38–39 |
+| 4 | **既有回歸**：jsonl、session-persistence、subagent、agent-team、desktop-gateway、sdk e2e | ⚠️ 部分 | SCL 相關套件全綠（**host 35 檔／40 tests**、store 9 檔／38 tests、commit 系列 43 tests）；legacy `session-persistence` 仍有既有失敗（transition gate／artifact latch／win32 lock），與 SCL 無關，見計畫 Plan 38–39 |
 | 5 | **多程序**：兩行程同開一 session，只有一個取得寫鎖；死鎖／重啟後可恢復 | ✅ | `multiprocess-lock.test.ts`：子程序持鎖時父程序被拒；kill 後父程序接管、append、新讀取可見 |
 
 ---
@@ -216,9 +216,11 @@
 - compaction：SCL 已可完整執行（長歷史 E2E 通過），僅測試 fixture 的摘要長度需注意；
 - legacy 刪除（~7,600 行）：需在預設切換後進行，並以本文件的 corpus gate 為前置。
 
-SCL 已在真實 host 驗證的產品面：session 建立／列表／改名／封存／還原／刪除、prompt turn、模型切換、fork（含 nested）、
-rewind、schedule CRUD、execution surface（訂閱／snapshot／changed 通知）、project bind／move、approval rules state、
-auto title 文件、execution／tasks／processes 讀取、compaction、CLI run＋sessions。
+SCL 已在真實 host 驗證的產品面：session 建立／列表／改名／封存／還原／刪除、prompt turn、模型切換、fork（含 nested、**fork child 續用**：
+child 可跑 turn、記錄自己的 rewind point、管理 schedule）、rewind（含 files 模式、fingerprint 失效、跨 host、turn 後、fork 後）、
+schedule CRUD（含 fork child）、execution surface（訂閱／snapshot／changed 通知）、project bind／move（含 batch 與 owner guard）、
+approval rules state、auto title 文件、execution／tasks／processes 讀取、todo 冷／live 寫入與 reconcile、session search（含混合 store、
+subtree、lineage、context picker）、compaction、CLI run＋sessions、重啟耐久（session／metadata／schedule／batch move）。
 
 ### 8.1 決策（2026-11-06）：selected results 與最終切換
 
