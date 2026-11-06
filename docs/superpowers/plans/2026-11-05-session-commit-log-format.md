@@ -1202,6 +1202,12 @@ gateway native context rather than the host log.
 
 ## Plan 103 (found, not fixed): fork after a rewind leaves the host cleanup dirty
 
+Instrumented detail: the failing `service.close()` error is `TypeError: Original capture obligation released` (from
+`core-session/managed/execution-members.ts`), i.e. the rewind/fork path retains and then touches an execution member obligation after
+its capture was released. The instrumentation and probe were removed; the next step is to find which retained member is read at close
+(the rewind `withRewindFacts` result is the prime suspect) and release it before the capture completes.
+
+
 Forking a session that was just rewound works (prepare and begin both succeed and the child is listed), but `host.close()` then fails
 with `Desktop host cleanup incomplete: session service`. The same sequence on the legacy `jsonl` store closes cleanly. Closing the
 cold source document that the fork handoff reopened does not clear it, so the leak is likely the managed rewind execution retained by
