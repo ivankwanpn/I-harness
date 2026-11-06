@@ -62,8 +62,8 @@ it('reads an inherited result page on the selected child', async () => {
       invocation: { version: 1, operationId: 'selected-read', targetSessionId: 'read-child', createdAt: new Date().toISOString(), requestDigest: prepared.requestDigest } }
     expect(await second.call(hostB, serialB, 'session/fork/begin', { operation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'read-child' })
     // Current behaviour: the page bytes exist (the source reads them) but the
-    // child is not yet authorized to read them — the inherited seed alone does
-    // not satisfy the result-lineage gate. Pinned here so the gap is visible.
+    // child is not yet authorized to read them without a live observation of
+    // its inherited seed. Pinned here so the gap is visible.
     const childPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref, maxBytes: 4096 }) as { kind?: string; reason?: string }
     expect(childPage).toMatchObject({ kind: 'unavailable', reason: 'unauthorized' })
   } finally { await hostB.close() }

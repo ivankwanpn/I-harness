@@ -1205,6 +1205,13 @@ gateway native context rather than the host log.
 
 ## Plan 165 (implemented 2026-11-06): the child cannot read its inherited page yet
 
+Follow-up: the unauthorized answer comes from context-output's result-page scope (`service.readResultPage` →
+`Context reference unavailable or unauthorized`), which authorizes refs against a **live observation** for the session. A freshly
+created child has no assembly, so the cold read is refused; prompting the child first was tried, but that host close then failed with
+`Desktop host cleanup incomplete: session service` (the child assembly is not released in this path) — a separate leak to fix before
+retrying that route.
+
+
 `host-commit-log-selected-read.test.ts` runs the full E2E: a turn reads a 200 KB file (real artifact), the host restarts, the product
 result-ref is appended through the coordinator, the v2 fork is prepared/executed and both source and child call `session/result/read`
 with the same ref. The **source** read returns data; the **child** read answers `{kind:"unavailable", reason:"unauthorized"}`. So the

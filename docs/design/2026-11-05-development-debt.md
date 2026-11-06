@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 407（unauthorized 來源）**：來自 context-output 的 result-page scope（需 live observation）。先 prompt child 再讀，會讓 host close
+> 失敗（session service 未釋放）——先修該 leak 再重試。測試維持固定 unauthorized。
 > **round 406（child result read＝unauthorized）**：E2E 完成（來源可讀、child seed 有 pages），但 child 的讀取回
 > `{kind:"unavailable",reason:"unauthorized"}`——只剩 result-lineage gate；測試固定現況。
 > **round 405（child result read 計畫）**：頁面內容在 artifact store；需真實 artifact＋`context/result-ref`，流程為 turn → close → append ref
