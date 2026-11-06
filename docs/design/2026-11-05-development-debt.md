@@ -15,7 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
-> 待確認「低於門檻」是否應回此原因，或 manual 路徑缺 budget binding；需以長會話重測。
+> **round 470（compaction 真正原因）**：暫存診斷顯示 `capacity-unavailable` 其實是 `bridge.prepare` 的 catch 把
+> `invalid context replacement: protected-source`（`SESSION_CONTEXT_REPLACEMENT_FORMAT`）吞掉；該會話含 bash 工具回合與
+> rewind。build 應把此類錯誤映射為 `source-unrepresentable` 而非 `capacity-unavailable`，並單獨修 reduction 候選涵蓋 protected 來源的問題。
 > **round 468（大型 workspace 的 watch 啟動失敗）**：chokidar `ignoreInitial:false` 對既有檔案逐一發 add，超過 4096 事件上限 →
 > `FS_WATCH_GAP` → instructions 永久 unavailable → CLI 回合 `CONTEXT_INPUT_STALE`。改為 `ignoreInitial:true`（baseline 已提供已知集合），
 > fs-watch 69/69＋新 4200 檔案回歸，CLI 在 repo 根目錄恢復。
