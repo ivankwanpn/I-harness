@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 416（舊格式無法合成）**：legacy store 只寫 v15，舊格式的 fact-journal writer 未匯出 → 6–12 樣本只能來自舊版本錄製；
+> in-tree 可驗證的 adoption 已由 legacy-version-adoption 覆蓋。
 > **round 415（舊版本 adoption）**：formats 6／8／11／13／14 皆可經 legacy store 讀取、首次寫入遷移為 v15，profile 回報新格式；
 > 剩餘的 corpus 缺口只在 legacy reader 的 byte layout（需錄製樣本）。
 > **round 414（計劃執行完畢）**：最終回歸 host 38 檔／44 tests、store 38、commit 41、CLI 2＝125 tests 全綠；typecheck 全綠、

@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 178 (2026-11-06): old-format samples cannot be synthesised in this build
+
+The legacy jsonl store now writes format 15 only (`backend-factory.ts`: "new session writers require current format"), and the older
+formats carry a binary fact-journal frame after the header (`readFactJournal`), whose historical writer is not exported. There is
+therefore no in-tree way to generate format 6–12 samples: the corpus needs files recorded by old builds. What is verifiable in this
+build is already covered — `legacy-version-adoption.test.ts` drives 6/8/11/13/14 through the coordinator and proves the adoption and
+first-write migration, so the remaining corpus gap is confined to the byte layouts read by the legacy store itself.
+
 ## Plan 177 (implemented 2026-11-06): every supported legacy version is adoptable
 
 `session-persistence/test/legacy-version-adoption.test.ts` drives formats 6, 8, 11, 13 and 14 through the commit-log coordinator: each is
