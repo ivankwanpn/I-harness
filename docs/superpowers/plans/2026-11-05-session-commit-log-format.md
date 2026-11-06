@@ -1221,6 +1221,25 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 196 (2026-11-06): full two-store comparison — the default-switch delta is small
+
+The complete desktop-gateway suite (277 files / 1,236 tests) was run twice in the background: default legacy gives 105 failed files /
+437 failed tests, and `IH_SESSION_STORE=commit-log` gives 109 / 438. The suite is dominated by environment noise either way (207
+`TASK_TRANSITION_UNSUPPORTED` from test fixtures that build the legacy coordinator without transition storage, plus timeouts and temp-path
+ENOENTs).
+
+Per-file diff: 6 files are green under legacy and not under the commit log. Re-running those six in isolation (no suite contention) leaves
+**3 real differences** and 3 flakes (`host-commit-log-compact-long` CONTEXT_INPUT_STALE, `host.test.ts` one RPC under load,
+`surface-subscriptions-connected` 15s timeout — all pass in isolation):
+
+- `owned-configured-host.test.ts` — asserts a legacy `sessions/<id>.jsonl` file exists;
+- `task-transition-constructor.test.ts` — asserts a legacy `.../task-<id>.doc.jsonl` task-document file;
+- `private-schedule-ui.test.ts` — reaches into a service seam that the commit-log host does not expose.
+
+All three assert **legacy implementation layout**, not product behaviour. Consequence: switching the default no longer needs the
+observations/result-store port — it needs these three legacy-internals tests updated or scoped to the legacy store. That is a much smaller
+change than §8.1 assumed, and it reframes the remaining work.
+
 ## Plan 195 (2026-11-06): the default-switch measurement was mostly baseline-red noise
 
 Re-running the four files behind the earlier "17 failed / 5 passed" reading shows they fail under the **default legacy store** too

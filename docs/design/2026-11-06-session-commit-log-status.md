@@ -45,7 +45,7 @@
 | legacy 刪除 | 需 selected-results 缺口關閉或接受降級 | 尚未刪除任何 legacy 程式碼 |
 | 舊格式 corpus（6–12） | SCL 端 adoption 已驗證（formats 6／8／11／13／14 可讀、遷移）；此 build 只寫 v15，舊格式 byte 樣本必須由舊版本錄製 | dual-run corpus 維持 13/14 |
 | legacy `session-persistence` 基線 | 280 個既有失敗（transition gate／artifact latch／win32 lock） | 與 SCL 無關，未修復 |
-| 預設切換 | **先前量測有誤**：fork-session／result-page-host／rewind-host／title-action 在**預設 legacy** 下同樣失敗（`TASK_TRANSITION_UNSUPPORTED`、`profile` undefined），屬既有 baseline-red。改以「legacy 下通過的 host 測試」比對：7 檔子集 legacy 6 failed／21 passed、SCL 7 failed／20 passed，唯一差異 `subagent-host` 在 legacy 為 timeout、SCL 為斷言失敗（兩者皆紅） | 尚無證據顯示 SCL 在此子集造成回歸；需做全 gateway 套件的雙 store 差異比對 |
+| 預設切換 | **已完成全量雙 store 比對**（277 檔／1,236 tests）：legacy 437 failed、SCL 438 failed，雜訊主因為 207 個 `TASK_TRANSITION_UNSUPPORTED`（測試 fixture 債）。逐檔 diff 6 檔，隔離重跑後 **3 個真差異**皆為 legacy 版面斷言（`owned-configured-host` 的 `.jsonl`、`task-transition-constructor` 的 `.doc.jsonl`、`private-schedule-ui` 的 service seam） | 預設切換**不再需要 observations/result-store 移植**；只需更新或以 legacy 限定這 3 個測試 |
 | ~~fork child 續用~~ | ~~code-mode 的 delegated owner 檢查~~ | **已修（2026-11-06）**：`origin:"fork"` 放行，child 可跑 turn、rewind、管 schedule |
 | ~~fork 後刪除 parent~~ | ~~task operation 持有已關閉的 parent document~~ | **已修（2026-11-06）**：fork witness 改用 detached read-only document |
 

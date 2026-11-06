@@ -7,6 +7,15 @@ allowBuilds:
   koffi: true
   node-pty: true # M26-B2: node-pty 原生綁定（見 Global Constraints 例外依據）
   ffmpeg-static: true # Bundled media decoder for read_video (platform binary installer).
+  # ffprobe ships per-platform installers; only the host platform needs a build.
+  # Denying the others lets a non-interactive install (pnpm 10) finish instead of
+  # prompting and writing `set this to true or false` placeholders.
+  "@ffprobe-installer/darwin-arm64": false
+  "@ffprobe-installer/darwin-x64": false
+  "@ffprobe-installer/linux-arm": false
+  "@ffprobe-installer/linux-arm64": false
+  "@ffprobe-installer/linux-ia32": false
+  "@ffprobe-installer/linux-x64": false
 
 ignoreWorkspaceCycles: true
 
