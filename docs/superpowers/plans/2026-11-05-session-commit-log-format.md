@@ -1221,6 +1221,15 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 195 (2026-11-06): the default-switch measurement was mostly baseline-red noise
+
+Re-running the four files behind the earlier "17 failed / 5 passed" reading shows they fail under the **default legacy store** too
+(`TASK_TRANSITION_UNSUPPORTED` from the legacy coordinator factory, `Cannot read properties of undefined (reading 'profile')`), so that
+measurement did not describe a commit-log gap. A better comparison is "tests that pass under legacy": for a 7-file host subset legacy
+gives 6 failed/21 passed and the commit log 7 failed/20 passed — the only difference is `subagent-host`, which times out under legacy and
+fails an assertion under the commit log, i.e. it is red either way. No commit-log-specific regression is visible in this subset; a full
+two-store gateway-suite diff is the next measurement.
+
 ## Plan 194 (implemented 2026-11-06): per-machine benchmark baselines
 
 The bench harness compared every machine against `bench-baseline.json` recorded 2026-09-18 on node v22/i7-6700, so this machine failed by

@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 434（預設切換量測修正）**：fork-session／result-page-host／rewind-host／title-action 在預設 legacy 下也失敗（baseline-red）；
+> host 子集 legacy 6F/21P vs SCL 7F/20P，唯一差異 subagent-host 兩邊皆紅。尚無 SCL 專屬回歸證據，需全 gateway 雙 store 差異比對。
 > **round 433（per-machine bench baseline）**：harness 改為以機器指紋作 key 的 baseline；本機 `--gate` PASS（append 38.5ms、deriveMessages 31.3ms），
 > 外機用 reference 並標 WARN foreign；self-test 6/6；keyed baseline 已 gitignore。store 修復受阻：`install --force` 因 ffprobe ignored builds
 > 失敗且會改寫 pnpm-workspace.yaml（已回退）。
