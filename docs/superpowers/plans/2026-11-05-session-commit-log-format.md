@@ -1202,6 +1202,18 @@ gateway native context rather than the host log.
 
 ## Plan 114 (fixed 2026-11-06): a fork child gets the empty task document
 
+Diagnosis of the two open items (2026-11-06):
+
+1. child schedule → `Private delegated or unsupported Code owner`: the child runtime is a delegated execution and the schedule handler
+   refuses it before reaching the store.
+2. parent delete after a child todo write → `FACT_CLOSED`. Two stacks were observed while instrumenting: (a) `workflowUiFor` →
+   `originalManagedRuntimeFor` → `runtime.domain.assertCurrent()` on an execution whose attachment is already closed; guarding that read
+   (return `undefined` for `FACT_CLOSED`) moved the failure to (b) a task-document operation (`task-document-operation.ts` → capability →
+   `managed-document.assertReady` → document `assertCurrent`) holding a document whose log was closed. Both point at retained
+   documents/runtimes outliving their log on fork children; the fix belongs in the SCL document lifetime (close only what the owner
+   opened, and retire the service runtime when its document closes), not in the delete path.
+
+
 The restored fork-after-turn steps showed `desktop/session/todo/write` on a forked child failing with `Owned task document is absent`:
 `create` seeded `task-<id>` but the fork birth path (`bootstrapSemanticTargetWithCapture` → `createChildSession`) did not.
 `facade.ts` now seeds the same empty document for a fork child when it is absent (never overwriting an existing one), and
