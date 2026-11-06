@@ -1200,6 +1200,12 @@ gateway native context rather than the host log.
 
 
 
+## Plan 108 (implemented 2026-11-06): delete the fork, then the parent
+
+After the refused parent deletion the test deletes the child: `batch delete` on `forked` succeeds, the child leaves `session/list` and
+the parent stays. Deleting the parent then succeeds and the list is empty — the no-orphans rule is order-sensitive, not a permanent
+block.
+
 ## Plan 107 (implemented 2026-11-06): a parent with descendants cannot be deleted
 
 The fork-after-turn test now also asks to delete the parent: the batch result is `ok:false` with a `descendants` error and the forked
