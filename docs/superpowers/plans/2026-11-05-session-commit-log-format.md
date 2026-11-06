@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 180 (2026-11-06): default-switch measurement
+
+With `IH_SESSION_STORE=commit-log` set for the whole gateway suite, a representative legacy-oriented set (host-fork-restart, fork-session,
+rewind-host, title-action, result-page-host) drops to **17 failed / 5 passed**. The failures cluster on exactly the legacy layers that are
+not ported: fork-session's held broker/observation cohorts, result-page-host's durable artifact owner, rewind-host's cold-session previews
+and title-action's held profile lookup. `host-fork-restart` passes. This is the measured evidence behind the ADR decision to keep the
+commit log opt-in: switching the default requires the observations/result-store port, not only the selected-results read-through.
+
 ## Plan 179 (implemented 2026-11-06): a fork child reads inherited pages through its source
 
 Instead of porting the legacy held-observation/result-store layer, createConversationResultReader now falls back for a fork child:
