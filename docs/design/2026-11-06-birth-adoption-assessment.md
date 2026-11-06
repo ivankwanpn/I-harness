@@ -24,7 +24,7 @@ whether that split is still the right design.
 
 Verified properties: crash/cut tests (torn line dropped, corrupt tail rejected), fold property tests against a reference fold, scan cache
 bounded reads, multiprocess lease tests, restart durability (session, metadata, schedule, batch move), fork/rewind lifecycle on turn and
-rewind edges, compaction, CLI. 201 SCL/SDK tests green (host 44, store 38, commit 43, CLI 2, SDK 74), repo typecheck green,
+rewind edges, compaction, CLI. 206 SCL/SDK tests green (host 45, store 38, commit 43, CLI 6, SDK 74), repo typecheck green,
 reachability gate PASS.
 
 ## 3. Is the redesign justified?
