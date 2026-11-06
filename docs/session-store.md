@@ -48,6 +48,6 @@ settings 的合法值是 `"jsonl"` 與 `"commit-log"`；其他值會被視為「
 
 ## 相關驗證
 
-- SCL 測試面：host 45、`session-commit-log` 38、commit 系列 43、CLI 6、SDK 74（合計 **206**）全綠；
+- SCL 測試面：host 45、`session-commit-log` 38、commit 系列 43、CLI 6、SDK 74（合計 **206**）全綠；另有 5 個 store 選擇／lifecycle 守門測試，SCL 相關合計 **211**；
 - 品質閘門：typecheck、package boundaries（147 = baseline）、reachability、bench（per-machine baseline）；
 - 詳細清單與重跑指令見 [design/2026-11-06-session-commit-log-status.md](design/2026-11-06-session-commit-log-status.md) §5–6。

@@ -59,7 +59,7 @@
 
 ## 5.1 最終回歸（2026-11-06）
 
-最新回歸（2026-11-06）：**host 39 檔 / 45 tests**（含 `host-store-selection`）、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests、CLI 6 tests（`sessions-commit-log`／`run-commit-log`／`session-store-setting`）、SDK server/protocol 74 tests，共 **206 tests** 全綠；repo typecheck 全綠、reachability gate PASS。涵蓋 fork／rewind 在 turn、rewind 之後的序列、**fork child 續用與 nested fork**、fork child 的 schedule、
+最新回歸（2026-11-06）：**host 39 檔 / 45 tests**（含 `host-store-selection`）、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests、CLI 6 tests（`sessions-commit-log`／`run-commit-log`／`session-store-setting`）、SDK server/protocol 74 tests，共 **206 tests** 全綠；另有 5 個 store 選擇／lifecycle 守門測試（`host-store-restart`、`host-store-legacy-visible`、`host-store-legacy-invisible`、`settings-write-preserve`、`artifact-cleanup`），SCL 相關合計 **211**。repo typecheck 全綠、package boundaries 147 = baseline、reachability 與 bench gate PASS。涵蓋 fork／rewind 在 turn、rewind 之後的序列、**fork child 續用與 nested fork**、fork child 的 schedule、
 archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search／context picker，以及 fence 的 exclusive 授權。
 
 ### 5.2 閘門清單與已知 caveat（2026-11-06）

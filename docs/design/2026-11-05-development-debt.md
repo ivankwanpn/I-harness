@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 455（最終整合驗證）**：canonical host 45／store 38／commit 43／CLI 6／SDK 74＝206，加 5 個 selection／lifecycle 守門＝211；
+> typecheck、boundaries 147、reachability、bench 全 PASS，工作區乾淨。
 > **round 454（反方向不對稱）**：legacy host 不列 SCL 會話（只掃 <id>.jsonl），資料仍在磁碟、切回 commit log 可見；已測試固定並寫入指南。
 > 專項回歸 7 檔／8 tests。
 > **round 453（legacy 會話仍可見）**：SCL host 列出並可讀既有 legacy 會話（list 合併 legacy ids、lazy adoption）；docs/session-store.md 明示；

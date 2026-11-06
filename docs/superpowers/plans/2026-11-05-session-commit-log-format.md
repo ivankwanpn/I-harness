@@ -1221,6 +1221,13 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 216 (2026-11-06): final integrated verification
+
+One pass over everything this goal added: canonical host **45**, store **38**, commit **43**, CLI **6**, SDK **74** = **206**; the store
+selection/lifecycle guards add 5 more tests (`host-store-restart`, `host-store-legacy-visible`, `host-store-legacy-invisible`,
+`settings-write-preserve`, `artifact-cleanup`) for **211 SCL-related tests** green. Repo typecheck clean, package boundaries
+**147 = baseline**, reachability PASS, bench PASS (per-machine baseline), working tree clean and pushed.
+
 ## Plan 215 (2026-11-06): the reverse direction is asymmetric, and documented
 
 `host-store-legacy-invisible.test.ts` seeds a commit-log session and starts a **legacy** host: the SCL id is absent from `session/list`
