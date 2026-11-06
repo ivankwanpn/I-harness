@@ -70,6 +70,9 @@ export function validateHistoricalReplacement(archive: HistoryArchive, replaceme
   for (const [index, event] of historyEntries(archive)) if (visibility.branch(event)) {
     if (event.type === 'turn/start') { if (turn !== undefined) ambiguousTurn = true; turn = index }
     else if (event.type === 'turn/end') { if (turn === undefined) ambiguousTurn = true; turn = undefined }
+    // A rewind opens a fresh branch: a turn left open before its anchor was cut
+    // and must not be paired with the next branch's turn.
+    else if (event.type === 'rewind/point') turn = undefined
     if (event.type === 'agent/input/admitted') pending.set(event.inputId!, event.seq)
     else if (event.type === 'agent/input/cancelled') pending.delete(event.inputId!)
     else if (event.type === 'user/message') { const id = event.inputId ?? event.imageInputId; if (id) consumedInputs.add(id) }
@@ -77,11 +80,17 @@ export function validateHistoricalReplacement(archive: HistoryArchive, replaceme
   // Delivery authority is interpreted from raw records, independently of rendered shadows.
   const selectedSeqs=new Set(selected.flatMap(item=>historyItemCoverage(item).map(at=>at.seq)))
   const pendingDeliverySources=new Set<number>(),deliveryInputs=new Map<string,number>()
+  let activeDeliveryGeneration: string | undefined
   for(const [,fact] of historyEntries(archive)) {
     if(fact.deliveryOperation==='close'||fact.type==='rewind/point'){pendingDeliverySources.clear();deliveryInputs.clear()}
-    if(fact.type==='agent/delivery-source'&&fact.seq!==undefined)pendingDeliverySources.add(fact.seq)
+    if(fact.type==='agent/delivery-generation'&&fact.deliveryOperation==='open'){activeDeliveryGeneration=fact.deliveryGeneration;pendingDeliverySources.clear();deliveryInputs.clear()}
+    // Tool deliveries are consumed by their exchange; their call seq is exactly
+    // what compaction may summarize. Agent/user deliveries stay pending until a
+    // receipt is promoted.
+    if(fact.type==='agent/delivery-source'&&fact.seq!==undefined&&fact.deliveryKind!=='tool'&&activeDeliveryGeneration!==undefined&&fact.deliveryGeneration===activeDeliveryGeneration)pendingDeliverySources.add(fact.seq)
     if(fact.deliverySourceSeq!==undefined)deliveryInputs.set(fact.inputId!,fact.deliverySourceSeq)
     if((fact.type==='agent/input/promoted'||fact.type==='agent/input/cancelled')&&deliveryInputs.has(fact.inputId!)){pendingDeliverySources.delete(deliveryInputs.get(fact.inputId!)!);deliveryInputs.delete(fact.inputId!)}
+    if (fact.type === 'agent/delivery-received' && fact.deliverySourceSeq !== undefined) pendingDeliverySources.delete(fact.deliverySourceSeq)
   }
   for(const [,fact] of historyEntries(archive)) {
     if((fact.type.startsWith('agent/delivery-')||fact.type==='exec/end'||fact.type==='workflow/end'||fact.type==='code/end')&&fact.seq!==undefined&&selectedSeqs.has(fact.seq))fail('protected-source',seq)

@@ -43,6 +43,26 @@ function acceptedParallel(): Session {
 }
 
 describe('strict positional replacement readers', () => {
+it('treats a rewind point as a turn boundary for replacement validation', () => {
+  const events: SessionEvent[] = [
+    { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H1' },
+    { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: 'A1' }, { type: 'step/end', seq: 4 },
+    { type: 'turn/end', seq: 5 },
+    { type: 'turn/start', seq: 6 }, { type: 'user/message', seq: 7, text: 'H2' },
+    { type: 'step/start', seq: 8 }, { type: 'assistant/message', seq: 9, text: 'A2' }, { type: 'step/end', seq: 10 },
+    { type: 'turn/end', seq: 11 },
+    { type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 7, mode: 'conversation', fileOps: [], seq: 12 },
+    { type: 'turn/start', seq: 13 }, { type: 'user/message', seq: 14, text: 'H3' },
+    { type: 'step/start', seq: 15 }, { type: 'assistant/message', seq: 16, text: 'A3' }, { type: 'step/end', seq: 17 },
+    { type: 'turn/end', seq: 18 },
+    { type: 'compaction/replacement', version: 1, seq: 19, replacementId: 'rewound', text: 'S',
+      coverage: [{ item: { kind: 'exchange', at: { seq: 16, part: 'message' } }, sources: [{ seq: 15, part: 'step' }, { seq: 16, part: 'message' }] }],
+      insertBefore: { kind: 'exchange', at: { seq: 16, part: 'message' } } },
+  ]
+  expect(() => validateConversationHistory(events, 7)).not.toThrow()
+  expect(deriveMessages({ formatVersion: 7, events }).length).toBeGreaterThan(0)
+})
+
   it('rejects an open input-only physical unit at its prefix without rejecting the readable input', () => {
     const prefix: SessionEvent[] = [
       { type: 'turn/start', seq: 0 }, { type: 'step/start', seq: 1 },
