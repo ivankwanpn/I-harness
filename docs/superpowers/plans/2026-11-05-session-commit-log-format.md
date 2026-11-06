@@ -1221,6 +1221,13 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 186 (implemented 2026-11-06): the inherited read survives read errors
+
+`createConversationResultReader` now catches a thrown read from `service.readResultPage` and treats it as `unavailable`, so the
+inherited (parent-chain) fallback also runs when the direct read rejects instead of only when it returns an unavailable page. The full
+SCL host suite stays at **38 files / 44 tests** green. (`result-page-host.test.ts` remains the known baseline-red legacy test with
+`TASK_TRANSITION_UNSUPPORTED`, unrelated to this change.)
+
 ## Plan 185 (2026-11-06): re-verification after the selected-results work
 
 After the inherited read-through, the parent-chain walk and the named SDK refusal: SCL host **38 files / 44 tests**, store **38**, commit
