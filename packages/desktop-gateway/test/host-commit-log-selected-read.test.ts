@@ -68,8 +68,14 @@ it('reads an inherited result page on the selected child', async () => {
     const foreign = { ...(ref as Record<string, unknown>), id: 'ctxv1_' + 'b'.repeat(64), revision: 'b'.repeat(64) }
     const foreignPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-child', ref: foreign, maxBytes: 4096 }) as { kind?: string }
     expect(foreignPage).toMatchObject({ kind: 'unavailable' })
-    // A selected child cannot be forked again yet; the refusal names the reason
-    // (the v3 export cannot re-project a completed child history).
-    await expect(second.call(hostB, serialB, 'session/fork/prepare', { version: 2, sourceSessionId: 'read-child', results: 'selected-results-v1' })).rejects.toThrow(/Selected results fork unavailable: unsupported/)
+    // A selected child can be forked again: the child's own seed pages supply
+    // the inherited metadata the v3 export validates against.
+    const nested = await second.call(hostB, serialB, 'session/fork/prepare', { version: 2, sourceSessionId: 'read-child', results: 'selected-results-v1' }) as { version?: number; requestDigest?: string }
+    expect(nested).toMatchObject({ version: 2, kind: 'session-fork-prepared' })
+    const nestedOperation = { version: 2, kind: 'session-fork-operation', prepared: nested,
+      invocation: { version: 1, operationId: 'selected-read-nested', targetSessionId: 'read-grandchild', createdAt: new Date().toISOString(), requestDigest: nested.requestDigest } }
+    expect(await second.call(hostB, serialB, 'session/fork/begin', { operation: nestedOperation })).toMatchObject({ version: 2, kind: 'ready', sessionId: 'read-grandchild' })
+    const grandchildPage = await second.call(hostB, serialB, 'session/result/read', { sessionId: 'read-grandchild', ref, maxBytes: 4096 }) as { data?: unknown }
+    expect(grandchildPage).toMatchObject({ data: expect.anything() })
   } finally { await hostB.close() }
 }, 120000)

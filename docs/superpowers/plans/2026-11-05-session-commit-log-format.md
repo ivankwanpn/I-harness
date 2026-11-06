@@ -1221,6 +1221,18 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 201 (implemented 2026-11-06): nested selected forks work — the child seed supplies its own inherited metadata
+
+`captureSelectedResultsSeed` now recognises a source that is itself a selected child (its first event is a v3 seed manifest) and derives
+the inherited result metadata from that child's own `conversation/seed-results` pages: for every legacy-protocol row it yields
+`{ref, original, extent, anchor:{kind:'seed-result', manifestSeq:0, pageOrdinal, rowOrdinal}}`. `exportSelectedResultsConversationSeed`
+validates those anchors against the same pages, so the previous `pendingLegacy` refusal disappears. Managed-protocol rows still take the
+v3-manifest path.
+
+Verification: `selected-fork-seed.test.ts` gains a nested case (source -> child -> capture the child again) and the selected-read E2E now
+prepares/executes a fork **of `read-child`**, creates `read-grandchild` and reads the inherited page there. Full SCL host suite: 38 files /
+44 tests green. **The last functional gap (nested selected forks) is closed.**
+
 ## Plan 200 (2026-11-06): the selected-source port — inventory, plan, and the reason to wait
 
 `docs/design/2026-11-06-selected-source-port-plan.md` records the exact legacy interface inventory (`selectedSources` acquire/

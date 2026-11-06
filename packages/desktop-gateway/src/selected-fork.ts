@@ -18,7 +18,22 @@ export async function captureSelectedResultsSeed(
   const factOwner = {} as never
   managed.bindOwner(factOwner)
   const owner = { kind: 'held-public-fork' as const, view: managed.view, factOwner, sourceSessionId, assertCurrent }
-  const inherited = { assertCurrent, async *legacy() { assertCurrent() } }
+  // A child that was itself a selected-results fork starts with a v3 seed. Its
+  // legacy-protocol rows need the inherited metadata the exporter validates
+  // against; the seed pages themselves are that source of truth.
+  type SeedPage = { ordinal: number; rows?: { ordinal: number; protocol?: string; ref?: unknown; original?: unknown; extent?: unknown }[] }
+  const events = session.events as { type: string; version?: number; page?: SeedPage }[]
+  const v3 = events[0]?.type === 'conversation/seed-manifest' && events[0]?.version === 3
+  const pages = events.filter(event => event.type === 'conversation/seed-results').map(event => event.page).filter((page): page is SeedPage => page !== undefined)
+  const inherited = v3
+    ? { assertCurrent, async *legacy() {
+        for (const page of pages) for (const row of page.rows ?? []) {
+          if (row.protocol !== 'legacy' || row.ref === undefined || row.original === undefined || row.extent === undefined) continue
+          assertCurrent()
+          yield { ref: row.ref, original: row.original, extent: row.extent, anchor: { kind: 'seed-result' as const, manifestSeq: 0 as const, pageOrdinal: page.ordinal, rowOrdinal: row.ordinal } }
+        }
+      } }
+    : { assertCurrent, async *legacy() { assertCurrent() } }
   const context = createCompletedPassiveContext(owner as never, { kind: 'completed' })
   if (context.kind !== 'ready') return { kind: 'refused', reason: context.reason }
   assertCurrent()

@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 440（nested selected fork 打通）**：capture 由 child 自身 seed pages 推導 inherited metadata（legacy rows 的 seed-result anchor），
+> nested export 不再 pendingLegacy 拒絕；host E2E 建立 read-grandchild 並讀取 inherited page；SCL host 38 檔／44 tests 綠。
 > **round 439（selected-source port 計畫）**：新增 `2026-11-06-selected-source-port-plan.md`（介面清單、4 個缺口、8 步計畫）；
 > 依量測建議暫不移植（預設切換差距為 0），nested fork 的較小修法是 projectSelectedResults 接受 seeded history。
 > **round 438（store 重置到底）**：prune → 刪 v10/v11 → 刪整個 node_modules → 官方 registry 全新 install，install 全成功、測試正常，

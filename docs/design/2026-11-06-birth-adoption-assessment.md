@@ -38,8 +38,9 @@ Yes, on all three axes:
 - **Feature completeness**: every product surface previously exercised on the legacy store now has an SCL host test, including the fork
   children running turns, schedules, todos, rewinds and nested forks. Selected-results inheritance now works end to end as well: the v2
   fork captures a v3 seed, the child is created from it, and inherited pages are read through the source (bounded parent-chain walk,
-  scoped to the seed pages). The only remaining semantic gap is the legacy held-observation lineage/revocation witness, which is an
-  implementation layer, not a structural property of birth/adoption.
+  scoped to the seed pages). Nested selected forks work too: a selected child's own seed pages supply the inherited metadata the v3 exporter validates
+  against. The only remaining semantic gap is the legacy held-observation lineage/revocation witness, which is an implementation layer,
+  not a structural property of birth/adoption.
 - **Design reasonableness**: the new model has one invariant (append-only commits, one fold) instead of route-specific staged readers.
   The format, scanner and fold are pure and independently testable; the coordinator and facade are the only impure layers. That is a
   simpler design with fewer hidden states.

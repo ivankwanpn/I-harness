@@ -41,7 +41,7 @@
 
 | 缺口 | 範圍 | 影響 |
 |---|---|---|
-| selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | **已可用**：SDK v2 seam → gateway controller → v3 seed（含 pages）→ `createChildSession`；child 讀取 inherited page 走 read-through（ref 在 seed pages 時回退到來源 session） | legacy 式 held observation／owning store 未移植，因此無 lineage／revocation 見證；來源被刪除時 inherited 讀取不可用 |`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
+| selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | **完整可用（含 nested）**：SDK v2 seam → gateway controller → v3 seed（含 pages）→ `createChildSession`；child 讀取 inherited page 走 read-through；**fork 的 fork** 由 child 自身 seed pages 推導 inherited metadata，grandchild 可建立並讀取 | legacy 式 held observation／owning store 未移植：無 lineage／revocation 見證（來源被刪除時 inherited 讀取不可用）。見 `2026-11-06-selected-source-port-plan.md` |`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
 | legacy 刪除 | 需 selected-results 缺口關閉或接受降級 | 尚未刪除任何 legacy 程式碼 |
 | 舊格式 corpus（6–12） | SCL 端 adoption 已驗證（formats 6／8／11／13／14 可讀、遷移）；此 build 只寫 v15，舊格式 byte 樣本必須由舊版本錄製 | dual-run corpus 維持 13/14 |
 | legacy `session-persistence` 基線 | 280 個既有失敗（transition gate／artifact latch／win32 lock） | 與 SCL 無關，未修復 |
