@@ -1221,6 +1221,11 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 185 (2026-11-06): re-verification after the selected-results work
+
+After the inherited read-through, the parent-chain walk and the named SDK refusal: SCL host **38 files / 44 tests**, store **38**, commit
+**43** all green; repo typecheck green and the reachability gate passes. No regression from the recent changes.
+
 ## Plan 184 (implemented 2026-11-06): the nested refusal names its reason
 
 The SDK v2 prepare path now answers `Selected results fork unavailable: <reason>` (still `INTERNAL_ERROR`) instead of the generic

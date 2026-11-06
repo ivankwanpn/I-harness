@@ -14,6 +14,7 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 423（回歸再驗）**：host 38 檔／44 tests、store 38、commit 43 全綠；typecheck 全綠、reachability PASS，近期改動無回歸。
 > **round 422（nested 明確拒絕）**：SDK v2 prepare 對非 prepared 回 `Selected results fork unavailable: <reason>`；E2E 固定 nested 為
 > `...: unsupported`。SDK 74 tests 全綠。
 > **round 421（nested 收斂到 projection）**：child manifest 欄位齊全；拒絕來自 seed-export 的 catch-all（line 91），即
