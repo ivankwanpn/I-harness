@@ -24,7 +24,8 @@ whether that split is still the right design.
 
 Verified properties: crash/cut tests (torn line dropped, corrupt tail rejected), fold property tests against a reference fold, scan cache
 bounded reads, multiprocess lease tests, restart durability (session, metadata, schedule, batch move), fork/rewind lifecycle on turn and
-rewind edges, compaction, CLI. 125 SCL tests green, repo typecheck green, reachability gate PASS.
+rewind edges, compaction, CLI. 201 SCL/SDK tests green (host 44, store 38, commit 43, CLI 2, SDK 74), repo typecheck green,
+reachability gate PASS.
 
 ## 3. Is the redesign justified?
 
@@ -35,8 +36,10 @@ Yes, on all three axes:
   now have explicit, tested lifecycle rules (fenced exclusive operations, detached read-only witness, task-document seeding, tolerant
   capture settlement).
 - **Feature completeness**: every product surface previously exercised on the legacy store now has an SCL host test, including the fork
-  children running turns, schedules, todos, rewinds and nested forks. The single remaining gap is reading an inherited *selected-results*
-  page on a child, which is a feature layer (held observations/result store), not a structural property of birth/adoption.
+  children running turns, schedules, todos, rewinds and nested forks. Selected-results inheritance now works end to end as well: the v2
+  fork captures a v3 seed, the child is created from it, and inherited pages are read through the source (bounded parent-chain walk,
+  scoped to the seed pages). The only remaining semantic gap is the legacy held-observation lineage/revocation witness, which is an
+  implementation layer, not a structural property of birth/adoption.
 - **Design reasonableness**: the new model has one invariant (append-only commits, one fold) instead of route-specific staged readers.
   The format, scanner and fold are pure and independently testable; the coordinator and facade are the only impure layers. That is a
   simpler design with fewer hidden states.
