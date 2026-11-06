@@ -24,6 +24,7 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
 import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
 import { diagnosticsFor } from "@i-harness/diagnostics"
+import { cliSessionStore } from "./session-store.ts"
 
 // W6 T5: one module-scope handle — both sites report this file's own subject,
 // the durable session store (phase `session`).
@@ -217,7 +218,7 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
     return 0
   }
   const storeRoot = options.sessionDir ?? resolveSessionStoreRoot()
-  const coordinator = process.env.IH_SESSION_STORE === 'commit-log'
+  const coordinator = cliSessionStore() === 'commit-log'
     ? asSessionCoordinator(createJsonlCommitCoordinator(storeRoot, { lock: { enabled: true, lockRoot: storeRoot } }))
     : createSessionCoordinator(createJsonlBackend(storeRoot), { lock: { enabled: false } })
   try {

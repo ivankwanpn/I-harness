@@ -1221,6 +1221,17 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 204 (implemented 2026-11-06): the CLI reads the same store setting as the host
+
+`apps/cli/src/session-store.ts` resolves the CLI store as **settings > `IH_SESSION_STORE` > legacy**, matching the Desktop host's
+precedence (which adds an explicit host option above settings). `i-harness run`/`sdk`/`acp` (via `createCliCoordinator`) and
+`i-harness sessions` now agree with a settings-selected store; before this, a user who chose `sessionStore: "commit-log"` in settings
+would see an empty `sessions list`. `session-store-setting.test.ts` writes the setting with no environment variable, lists the SCL session,
+then flips the setting to `jsonl` and observes the same directory has no such session. CLI tests: 3 green.
+
+Implementation note: an earlier edit truncated `apps/cli/src/index.ts` by writing back a `tools.read` result (the reader truncates
+large files); it was restored with `git checkout` and the change re-applied through anchored edits. No data was lost.
+
 ## Plan 203 (implemented 2026-11-06): the store is selectable from settings, not only the environment
 
 The settings document gains an optional `sessionStore: "jsonl" | "commit-log"` (unknown values normalize to absent). The host resolves the
