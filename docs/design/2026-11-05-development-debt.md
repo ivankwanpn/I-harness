@@ -14,6 +14,9 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 380（read-only cold document）**：新增 `openReadOnlyManagedDocument`（read 模式、不註冊 managed）；fork witness 改用它，
+> 不再關閉 cached execution document。FACT_CLOSED 邊界消失，fork-after-turn 的完整序列（child todo＋descendants＋順序刪除）通過；
+> host 32 檔／37 tests、commit 35 tests 全綠。
 > **round 379（execution document 帶 view 失敗）**：`openCommitExecutionDocument` 改傳 `context.source` 後 prompt 直接
 > `FACT_OWNER_UNSUPPORTED`，已回退；改走「read-only cold document 給 fork witness」方案。
 > **round 378（換位置再現）**：對 closed execution 的兩處容忍只把錯誤推到 `execution-inputs.pending()`；真正修法是 fork 不要關閉

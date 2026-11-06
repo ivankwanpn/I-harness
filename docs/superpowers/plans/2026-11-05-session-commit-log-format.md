@@ -1202,6 +1202,14 @@ gateway native context rather than the host log.
 
 ## Plan 114 (fixed 2026-11-06): a fork child gets the empty task document
 
+Fixed (2026-11-06): `CommitCoordinator` gains an optional `openReadOnlyManagedDocument(sessionId)` which opens the generation in read
+mode and returns `{document, close()}` **without** registering it in `managed`. `withHandoff` uses it when the cached document has no
+session view (a finished turn's execution attachment) and closes it once the handoff finishes — the execution document is no longer
+closed, so later operations on the parent (task writes, delete) keep a live attachment. The extended fork-after-turn test now covers
+the child todo write, the refused parent delete (`descendants`) and the ordered child→parent deletion; the full SCL host suite (32 files
+/ 37 tests) and the commit suites (35 tests) stay green.
+
+
 Attempt (2026-11-06): giving the execution document a view (`createManagedDocument(sessionId, context.source, ...)` in
 `openCommitExecutionDocument`) breaks the execution path — the prompt fails immediately with `FACT_OWNER_UNSUPPORTED`, and the fork
 host tests drop from green to failing at `session/prompt`. The change was reverted; the execution document must stay owner-less.

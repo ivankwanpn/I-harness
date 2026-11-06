@@ -43,20 +43,22 @@ export function createGatewayForkHost(options: {
       if (previous) { await previous(); debt.delete(key) }
       const passive = mode.kind === 'passive', sourceId = operation.prepared.core.sourceSessionId
       const admission = () => { assertAvailable(); if (!passive && control.signal?.aborted) throw new ForkAdmissionError('cancelled') }
-      let source: ForkSourceWitness | undefined, ids: string[] = []
+      let source: ForkSourceWitness | undefined, ids: string[] = [], coldReader: { close(): Promise<void> } | undefined
       if (!passive) {
         admission()
         if (mode.kind === 'warm') { source = mode.source; source.assertUnchanged() }
         else {
           await coordinator.flush(sourceId); admission()
-          let document = await coordinator.openManagedDocument(sourceId)
-          // A finished turn can leave an execution attachment cached without a
-          // session view; the fork witness needs one, so reopen cold.
-          if ((document as { view?: unknown }).view === undefined && coordinator.closeManagedDocument) {
-            await coordinator.closeManagedDocument(sourceId); admission()
-            document = await coordinator.openManagedDocument(sourceId)
+          const document = await coordinator.openManagedDocument(sourceId)
+          if ((document as { view?: unknown }).view !== undefined) source = createForkSourceWitness(document)
+          else {
+            // A finished turn leaves an execution attachment cached without a
+            // session view; read a detached document instead of closing it.
+            const reader = await (coordinator as { openReadOnlyManagedDocument?: (id: string) => Promise<{ document: ForkSourceWitness['document']; close(): Promise<void> }> }).openReadOnlyManagedDocument?.(sourceId)
+            if (!reader) throw new ForkAdmissionError('unsupported')
+            coldReader = reader
+            source = createForkSourceWitness(reader.document)
           }
-          source = createForkSourceWitness(document)
         }
         ids = await discoverResultLineage(coordinator, sourceId, admission)
       }
@@ -135,6 +137,7 @@ export function createGatewayForkHost(options: {
       try { result = await (passive ? run() : coordinator.withExistingSessionBindingObservation!({ sessionIds: ids, ...(control.signal ? { signal: control.signal } : {}) }, run)) }
       catch (cause) { failed = true; failure = cause; observationCleanup = observationCleanupFor(coordinator, cause) }
       active = false; finished = true
+      if (coldReader) { const reader = coldReader; coldReader = undefined; await reader.close().catch(() => {}) }
       if (legacyCleanupFailed || observationCleanup) {
         const error = new AggregateError(failed ? [failure] : [], 'Gateway original fork cleanup unresolved')
         debt.set(key, cleanup); cleanupErrors.set(error, Object.freeze({ retry: cleanup })); throw error

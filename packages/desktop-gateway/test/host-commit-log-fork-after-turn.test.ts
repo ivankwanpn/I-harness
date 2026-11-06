@@ -38,5 +38,14 @@ it('forks a conversation that has run a turn', async () => {
     const listed = await call('session/list') as { sessions: { id: string }[] }
     expect(listed.sessions.map(row => row.id)).toContain('forked')
     expect(await call('desktop/session/project/state', { sessionId: 'forked' })).toEqual({ sessionId: 'forked', projectId: 'p' })
+    const childWork = await call('desktop/session/work-state', { sessionId: 'forked' }) as { todosRevision?: number }
+    const childWrite = await call('desktop/session/todo/write', { sessionId: 'forked', input: { items: [{ content: 'child todo', status: 'pending' }], expectedRevision: childWork.todosRevision ?? 0 } }) as { todos: { content: string }[] }
+    expect(childWrite.todos[0]).toMatchObject({ content: 'child todo' })
+    const blockedDelete = await call('desktop/session/batch', { command: { action: 'delete', sessionIds: [created.sessionId] } }) as { results: { ok: boolean; error?: string }[] }
+    expect(blockedDelete.results[0]!.ok).toBe(false)
+    expect(blockedDelete.results[0]!.error).toContain('descendants')
+    expect((await call('desktop/session/batch', { command: { action: 'delete', sessionIds: ['forked'] } }) as { results: { ok: boolean }[] }).results[0]!.ok).toBe(true)
+    expect((await call('desktop/session/batch', { command: { action: 'delete', sessionIds: [created.sessionId] } }) as { results: { ok: boolean }[] }).results[0]!.ok).toBe(true)
+    expect(((await call('session/list')) as { sessions: { id: string }[] }).sessions).toHaveLength(0)
   } finally { await host.close() }
 }, 90000)

@@ -66,6 +66,8 @@ export type CommitCoordinator = {
   loadOwned(sessionId: string): Promise<{ session: Session }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   openManagedDocument(sessionId: string): Promise<ManagedDocument>
+  /** Detached read-only document that must not disturb the owner's document. */
+  openReadOnlyManagedDocument?(sessionId: string): Promise<{ document: ManagedDocument; close(): Promise<void> }>
   acquireExecution(sessionId: string): Promise<import('../execution-internal.ts').ManagedExecutionAttachment>
   sessionOfDocument(document: object): string | undefined
   capabilities(): CommitOwnershipPorts
@@ -398,6 +400,15 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
     capabilities() { return ownershipPorts },
     withProcessReadObservation(id, options, work, publish) {
       return withCommitProcessReadObservation({ open: sessionId => open(sessionId, 'read'), getDocument: getDocumentOf, metaOf }, id, options, work, publish)
+    },
+    async openReadOnlyManagedDocument(sessionId: string) {
+      // A read-only document for observers that need a session view but must not
+      // disturb (or close) the owner's cached document (the fork witness).
+      const log = await open(sessionId, 'read')
+      try {
+        const document = openCommitManagedDocument(sessionId, log, { logs: owned, metaOf, ownership: ownershipPorts.ownership })
+        return Object.freeze({ document, async close() { await document.close().catch(() => {}); await log.close().catch(() => {}) } })
+      } catch (error) { await log.close().catch(() => {}); throw error }
     },
     async acquireExecution(sessionId) {
       let log = owned.get(sessionId)
