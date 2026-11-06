@@ -1202,6 +1202,11 @@ gateway native context rather than the host log.
 
 ## Plan 109 (implemented 2026-11-06): delete a rewound session
 
+Follow-up probe (2026-11-06): deleting while a second coordinator holds a `load` handle **succeeds** (`ok:true`); a second delete then
+answers `commit log for session "<id>" does not exist`, as expected. The earlier confusion was a trailing `rewind/points` call after the
+session had been deleted — not a locking bug — so the test keeps the observer close order only for clarity.
+
+
 The rewind-after-turn test now deletes the session after the rewind: `batch delete` reports ok and the session leaves `session/list`.
 The delete runs after the observer coordinator that checked the `rewind/point` marker is closed (it does not run while that handle is
 open).
