@@ -1200,6 +1200,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 143 (fixed 2026-11-06): a refused schedule write no longer blocks deleting the child
+
+The refused `schedule/create` on a fork child left `privateEntries` without a live `managedRuntimes` entry, and `readOriginalRuntime`
+threw `Original managed runtime unavailable` — the later `batch delete` of the child then failed with that message. `readOriginalRuntime`
+now returns `undefined` for an absent/closed runtime (the callers already treat `undefined` as "no runtime").
+`host-commit-log-fork-schedule.test.ts` forks a prompted session, asserts the schedule refusal and deletes the child successfully;
+the full SCL host suite is **33 files / 38 tests** green.
+
 ## Plan 142 (documented 2026-11-06): scheduling on a fork child is refused by the product
 
 `desktop/schedule/create` on a fork child answers `Private delegated or unsupported Code owner` — the **legacy** store returns the same
