@@ -1221,6 +1221,19 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 202 (2026-11-06): final verification of the goal
+
+One integrated run after all of the goal's work: host **44**, store **38**, commit **43**, CLI **2**, SDK **74** — **201 tests green**;
+repo typecheck clean; package boundaries **147 = baseline**; reachability gate **PASS**; bench gate **PASS** (per-machine baseline);
+working tree clean and pushed.
+
+Goal outcome: (1) performance task — the bench harness compares a machine only against its own seeded baseline, the gate passes here,
+and the append cost is attributed to conversation-index staging (linear ~24 us/event) rather than a regression in the commit log;
+(2) selected-source port — measured unnecessary (default-switch delta zero) and its remaining functional beneficiary, nested selected
+forks, now works via seed-derived inherited metadata (Plan 201); the port plan is documented if a future requirement needs it;
+(3) pnpm store — the install defect is fixed (ffprobe allowBuilds policy, install exit 0) and the residual `store status` signal was proven
+environmental by deleting `node_modules` and reinstalling from the official registry. No merge was performed.
+
 ## Plan 201 (implemented 2026-11-06): nested selected forks work — the child seed supplies its own inherited metadata
 
 `captureSelectedResultsSeed` now recognises a source that is itself a selected child (its first event is a v3 seed manifest) and derives
