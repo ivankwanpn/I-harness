@@ -53,8 +53,8 @@
 
 1. **selected results**：維持 legacy-only（現況）、接受 SCL 降級並切換預設、或投入移植（§8.2 的 B2）；這是**唯一**仍阻擋預設切換的功能；
 2. **legacy 刪除**：只有 (1) 決定後才有意義；
-3. **SCL 預設化**：目前為 opt-in，三種方式：settings 文件的 `sessionStore: "commit-log"`、`IH_SESSION_STORE=commit-log`、host 選項 `sessionStore`
-   （優先序：選項 > settings > 環境變數 > legacy；CLI 亦讀 settings，順序為 settings > 環境變數 > legacy）。
+3. **SCL 預設化**：目前為 opt-in，四種方式：host 選項 `sessionStore`、CLI `--session-store commit-log`、settings 文件的
+   `sessionStore: "commit-log"`、`IH_SESSION_STORE=commit-log`。優先序：host 選項 > CLI flag > settings > 環境變數 > legacy。
    `desktop/environment/diagnostics` 會回報目前選用的 `sessionStore`。
 
 ## 5.1 最終回歸（2026-11-06）

@@ -1221,6 +1221,17 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 205 (implemented 2026-11-06): the CLI has an explicit --session-store flag
+
+`i-harness run|sdk|acp ... --session-store jsonl|commit-log` selects the durable backend for every coordinator the process builds;
+`i-harness sessions ... --session-store ...` does the same for the read-only listing. Precedence is **flag > settings > `IH_SESSION_STORE` >
+legacy**, matching the Desktop host (option > settings > env). The value is validated at dispatch (`--session-store requires one of:
+jsonl | commit-log`), `run`'s flag guard accepts it as a value flag so it never leaks into the prompt, and USAGE advertises it on the
+run/sdk/acp/sessions lines.
+
+Tests: `session-store-setting.test.ts` now also proves the flag wins over a `jsonl` settings document and an absent environment, and the
+existing bin tests stay green (8 tests in the two files).
+
 ## Plan 204 (implemented 2026-11-06): the CLI reads the same store setting as the host
 
 `apps/cli/src/session-store.ts` resolves the CLI store as **settings > `IH_SESSION_STORE` > legacy**, matching the Desktop host's

@@ -24,7 +24,7 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
 import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
 import { diagnosticsFor } from "@i-harness/diagnostics"
-import { cliSessionStore } from "./session-store.ts"
+import { cliSessionStore, type CliSessionStore } from "./session-store.ts"
 
 // W6 T5: one module-scope handle — both sites report this file's own subject,
 // the durable session store (phase `session`).
@@ -48,6 +48,8 @@ export interface StoredSessionRow {
 export interface SessionsCommandOptions {
   /** `--session-dir` override; absent → the shared default root. */
   sessionDir?: string
+  /** `--session-store jsonl|commit-log`; absent → settings, then the environment. */
+  sessionStore?: CliSessionStore
   json?: boolean
   /** `show`: how many trailing entries to print (default 20). */
   last?: number
@@ -62,6 +64,11 @@ export function parseSessionsArgs(args: string[]): { subcommand: "list" | "show"
     const token = rest[i]!
     if (token === "--json") { options.json = true; continue }
     if (token === "--session-dir") { options.sessionDir = rest[++i]; continue }
+    if (token === "--session-store") {
+      const value = rest[++i]
+      if (value === "jsonl" || value === "commit-log") options.sessionStore = value
+      continue
+    }
     if (token === "--last") {
       const value = Number(rest[++i])
       if (Number.isFinite(value) && value > 0) options.last = Math.floor(value)
@@ -218,7 +225,7 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
     return 0
   }
   const storeRoot = options.sessionDir ?? resolveSessionStoreRoot()
-  const coordinator = cliSessionStore() === 'commit-log'
+  const coordinator = cliSessionStore(options.sessionStore) === 'commit-log'
     ? asSessionCoordinator(createJsonlCommitCoordinator(storeRoot, { lock: { enabled: true, lockRoot: storeRoot } }))
     : createSessionCoordinator(createJsonlBackend(storeRoot), { lock: { enabled: false } })
   try {

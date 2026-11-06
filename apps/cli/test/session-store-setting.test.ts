@@ -40,3 +40,29 @@ it('selects the store from settings without the environment variable', async () 
     else process.env.IH_CONFIG_DIR = beforeConfig
   }
 })
+it('lets --session-store override settings and the environment', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-cli-store-flag-'))
+  roots.push(root)
+  const config = join(root, 'config'), sessions = join(root, 'sessions')
+  await mkdir(config, { recursive: true })
+  await writeFile(join(config, 'settings.json'), JSON.stringify({ sessionStore: 'jsonl' }), 'utf8')
+  const seed = asSessionCoordinator(createJsonlCommitCoordinator(sessions, { lock: { enabled: true, lockRoot: sessions } }))
+  await seed.create({ sessionId: 'flag-session', title: 'flag store' })
+  await seed.close()
+  const beforeStore = process.env.IH_SESSION_STORE, beforeConfig = process.env.IH_CONFIG_DIR
+  delete process.env.IH_SESSION_STORE
+  process.env.IH_CONFIG_DIR = config
+  const logs: string[] = []
+  const original = console.log
+  console.log = (...args: unknown[]) => { logs.push(args.map(value => String(value)).join(' ')) }
+  try {
+    expect(await runSessionsCommand(['sessions', 'list', '--session-dir', sessions, '--json', '--session-store', 'commit-log'])).toBe(0)
+    expect(logs.join('\n')).toContain('flag-session')
+  } finally {
+    console.log = original
+    if (beforeStore === undefined) delete process.env.IH_SESSION_STORE
+    else process.env.IH_SESSION_STORE = beforeStore
+    if (beforeConfig === undefined) delete process.env.IH_CONFIG_DIR
+    else process.env.IH_CONFIG_DIR = beforeConfig
+  }
+})

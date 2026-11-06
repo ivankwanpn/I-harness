@@ -14,7 +14,7 @@ import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createForkSessionController, ForkAdmissionError } from "@i-harness/session-persistence"
 import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
-import { cliSessionStore } from "./session-store.ts"
+import { cliSessionStore, setCliSessionStoreOverride } from "./session-store.ts"
 import { createJsonlCommitCoordinator } from "@i-harness/session-persistence-jsonl/internal/commit-coordinator"
 import { asSessionCoordinator } from "@i-harness/session-persistence/internal/commit-facade"
 import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-storage-contract"
@@ -79,10 +79,10 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 const USAGE =
   "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles|plugins> ...]\n" +
   "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] [--windows-sandbox legacy|psec|wsl] [--wsl-distribution NAME] [--wsl-network allow|deny] [--wsl-workspace-dependencies true|false] [--code-mode off|mixed|only] |\n" +
-  "  sdk [--session-dir DIR] [--yes] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
+  "  sdk [--session-dir DIR] [--session-store jsonl|commit-log] [--yes] | acp [--session-dir DIR] [--session-store jsonl|commit-log] [--no-auto-approve] |\n" +
   "    sdk --yes approves tool approval requests for this process, including valid explicit per-call sandbox escalation; ordinary calls keep the configured sandbox.\n" +
   "    Without --yes, SDK tool approval requests fail closed because this stdio host has no interactive approval channel.\n" +
-  "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
+  "  sessions [list] [--session-dir DIR] [--session-store jsonl|commit-log] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
   "  provider <list|add|set|key|rm> | models <list|probe|add|set|rm|use|refresh> | roles <list|set|unset> |\n" +
   "  plugins [list] [--json]"
@@ -130,6 +130,17 @@ function providerModelBindingFor(runtime: ProviderRuntime): SessionServiceOption
 
 export async function main(argv: string[]): Promise<number> {
   const args = argv.slice(2)
+  // --session-store selects the durable backend for every coordinator this
+  // process builds; settings and IH_SESSION_STORE remain the fallbacks.
+  const storeFlag = args.indexOf("--session-store")
+  if (storeFlag !== -1) {
+    const value = args[storeFlag + 1]
+    if (value !== "jsonl" && value !== "commit-log") {
+      d.error("--session-store requires one of: jsonl | commit-log")
+      return Promise.resolve(1)
+    }
+    setCliSessionStoreOverride(value)
+  }
   // M29: --session-backend is removed — JSONL is the only persistence backend
   // and the search index is derived from it (reconcile-on-search). Fail loud
   // instead of silently ignoring the old flag.
@@ -242,8 +253,8 @@ export async function main(argv: string[]): Promise<number> {
   // out again, and a flag missing from EITHER chain there leaks into the prompt
   // (the `--no-compact` defect: `run "do x" --no-compact` sent the model
   // `do x --no-compact`).
-  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--windows-sandbox", "--wsl-distribution", "--wsl-network", "--wsl-workspace-dependencies", "--no-compact", "--protocol", "--code-mode"])
-  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox", "--windows-sandbox", "--wsl-distribution", "--wsl-network", "--wsl-workspace-dependencies", "--protocol", "--code-mode"])
+  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--session-store", "--resume", "--telemetry", "--sandbox", "--windows-sandbox", "--wsl-distribution", "--wsl-network", "--wsl-workspace-dependencies", "--no-compact", "--protocol", "--code-mode"])
+  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--session-store", "--resume", "--sandbox", "--windows-sandbox", "--wsl-distribution", "--wsl-network", "--wsl-workspace-dependencies", "--protocol", "--code-mode"])
   const runArgs = args.slice(1)
   for (let i = 0; i < runArgs.length; i += 1) {
     const a = runArgs[i]!
