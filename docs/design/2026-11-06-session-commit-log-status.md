@@ -60,6 +60,17 @@
 最終回歸（2026-11-06）：**host 38 檔 / 44 tests**、`session-commit-log` 9 檔 / 38 tests、commit 系列 43 tests、CLI 2 tests、SDK server/protocol 74 tests，共 **201 tests** 全綠；repo typecheck 全綠、reachability gate PASS。涵蓋 fork／rewind 在 turn、rewind 之後的序列、**fork child 續用與 nested fork**、fork child 的 schedule、
 archive／delete 於有歷史的 session、todo 跨 rewind／compaction、search／context picker，以及 fence 的 exclusive 授權。
 
+### 5.2 閘門清單與已知 caveat（2026-11-06）
+
+| 閘門 | 指令 | 本機現況 |
+|---|---|---|
+| typecheck | `pnpm -r --no-bail typecheck` | PASS |
+| package boundaries | `node scripts/audit/check-package-boundaries.mjs --gate` | PASS（147 = baseline） |
+| reachability | `node scripts/audit/check-reachability.mjs --gate` | PASS |
+| bench | `node --import tsx scripts/bench/run-bench.mts --gate` | **紅燈（既有）**：baseline 錄於 2026-09-18／他機；bench 只用 core-session，與 SCL 無關 |
+| pnpm store | `pnpm store status` | **altered**（vitest／zustand 等），屬本機 store 狀態；`pnpm install --force` 由操作者處理 |
+
+SCL 相關測試（host／store／commit／CLI／SDK）皆綠，見 §5.1。
 ## 6. 如何重跑驗證
 
 ```powershell

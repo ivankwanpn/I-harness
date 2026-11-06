@@ -1221,6 +1221,13 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 191 (2026-11-06): the verification checklist and its two environment caveats
+
+The status report now records every gate with the command and this machine's reading: typecheck PASS, package boundaries PASS (147 =
+baseline), reachability PASS, bench **red for pre-existing reasons** (2026-09-18 baseline recorded on another machine; the bench exercises
+core-session only) and `pnpm store status` reporting altered packages (vitest/zustand and others) — a local store condition handled by
+`pnpm install --force`, not by a code change here.
+
 ## Plan 190 (2026-11-06): the bench gate is red for reasons outside the commit log
 
 `node --import tsx scripts/bench/run-bench.mts --gate` fails on this machine: deriveMessages/long-session 35–37 ms vs baseline

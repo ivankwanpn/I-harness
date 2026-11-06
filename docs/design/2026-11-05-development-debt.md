@@ -14,6 +14,8 @@
 > `acquireLease('doc:task-*')` 是另一個 lock 檔，因此永遠不會衝突。遷移方式見文末 round 218。
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
+> **round 430（閘門清單）**：status 新增 §5.2（typecheck／boundaries／reachability／bench caveat／store altered）；
+> `pnpm store status` 在本機回報 altered（vitest／zustand 等），屬環境狀態。
 > **round 429（bench gate 紅燈）**：`verify:bench` 在本機失敗（deriveMessages 35ms、append 42ms vs 0.079/0.127 baseline）。baseline 為
 > 2026-09-18 錄製、bench 未變、core-session 已增 12.8k 行；與 commit log 無關（bench 只用 core-session 的 in-memory append/deriveMessages）。
 > 列為既有 caveat，不擅自重寫 baseline。
