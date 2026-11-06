@@ -1221,6 +1221,14 @@ Final state of the planned scope:
 Final verification: host 38 files / 44 tests, store 38, commit 41, CLI 2 — 125 tests green; repo typecheck green; reachability gate
 PASS.
 
+## Plan 177 (implemented 2026-11-06): every supported legacy version is adoptable
+
+`session-persistence/test/legacy-version-adoption.test.ts` drives formats 6, 8, 11, 13 and 14 through the commit-log coordinator: each is
+read through the legacy store (`coordinator.load`), then the first `append` publishes a format-15 generation and `profile` reports the
+current format. The upgrade registry is identity for 1–13, so this pins the coordinator contract for all supported versions. The
+**remaining** corpus gap is narrower than before: only the legacy reader's own byte layouts (session-persistence-jsonl) still need
+recorded samples — the commit-log adoption path itself is verified.
+
 ## Plan 174 (2026-11-06): hydration attempt and the remaining conclusion
 
 Appending `context/result-ref` events for the seed page rows to the child (right after `createChildSession`) did not authorize the

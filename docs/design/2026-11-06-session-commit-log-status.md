@@ -43,7 +43,7 @@
 |---|---|---|
 | selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | **fork 與 seed 已接線**：SDK v2 seam → gateway controller → v3 seed（含 pages）→ `createChildSession`，host 測試通過（`-selected-fork`、`-selected-read`） | 唯一缺口是 child 的 **result page 讀取**：需 legacy 式 selected source（held observation＋owning store），即 §8.2 的 observations 移植；四種捷徑皆已驗證無效 |`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
 | legacy 刪除 | 需 selected-results 缺口關閉或接受降級 | 尚未刪除任何 legacy 程式碼 |
-| 舊格式 corpus（6–12） | 需帶有效 `journal` metadata 的錄製樣本 | dual-run corpus 維持 13/14 |
+| 舊格式 corpus（6–12） | SCL 端 adoption 已驗證（formats 6／8／11／13／14 可讀、遷移）；仍缺 legacy reader 的錄製 byte 樣本 | dual-run corpus 維持 13/14 |
 | legacy `session-persistence` 基線 | 280 個既有失敗（transition gate／artifact latch／win32 lock） | 與 SCL 無關，未修復 |
 | ~~fork child 續用~~ | ~~code-mode 的 delegated owner 檢查~~ | **已修（2026-11-06）**：`origin:"fork"` 放行，child 可跑 turn、rewind、管 schedule |
 | ~~fork 後刪除 parent~~ | ~~task operation 持有已關閉的 parent document~~ | **已修（2026-11-06）**：fork witness 改用 detached read-only document |
