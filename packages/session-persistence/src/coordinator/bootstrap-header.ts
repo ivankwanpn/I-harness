@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { CURRENT_FORMAT_VERSION, canonicalJsonData, isStrictFactData, freezeJsonData, legacyPrefixDigest, validateSubagentHeader, validateConversationEventShape, validateSemanticSeed, type BootstrapInvocation, type SessionEvent, type SeedHeader } from '@i-harness/core-session'
 import { bootstrapInitialInputDigest, semanticSeedBodyFromRecords } from '@i-harness/core-session/internal/bootstrap'
 import { PROVIDER_PROTOCOLS } from '@i-harness/settings'
-import { bootstrapHash, compileSemanticSeed } from '../semantic-seed.ts'
+import { bootstrapHash, compileSelectedResultsSemanticSeed, compileSemanticSeed } from '../semantic-seed.ts'
 import type { BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapRequest } from './bootstrap-types.ts'
 import type { SessionMeta } from './types.ts'
 import type { OwnedCaptureReservation } from './child-bootstrap-intent.ts'
@@ -53,12 +53,21 @@ export function captureBootstrapRequest(value: BootstrapRequest): BootstrapReque
   let compiled
   if (!seed.records.length) compiled=compileSemanticSeed({kind:'none'})
   else {
-    const [m,...groups]=seed.records
-    if (m?.type !== 'conversation/seed-manifest' || !(m.version === 1 && m.codec === 'semantic-seed-v1' || m.version === 2 && m.codec === 'semantic-seed-v2') || groups.some((g,i) => g.type !== 'conversation/seed-group' || g.seq !== i+1 || g.ordinal !== i || g.manifestSeq !== 0)) bad()
-    const semantic=validateSemanticSeed(semanticSeedBodyFromRecords(seed.records))
-    if (semantic.version !== 1 && semantic.version !== 2) throw new TypeError('Legacy bootstrap request required')
-    if (seed.sourceObservation.kind !== 'semantic') bad()
-    compiled=compileSemanticSeed({kind:'seed',seed:semantic,digest:seed.digest,sourceObservationDigest:(seed.sourceObservation as {kind:"semantic";digest:string}).digest})
+    const records = seed.records as readonly any[], [m,...rest]=records
+    const observation = seed.sourceObservation as { kind?: string; digest?: string }
+    if (m?.type === 'conversation/seed-manifest' && m.version === 3) {
+      if (m.codec !== 'semantic-seed-v3' || rest.some(r => r.type !== 'conversation/seed-results' && r.type !== 'conversation/seed-group')) bad()
+      const selected=validateSemanticSeed(semanticSeedBodyFromRecords(records))
+      if (selected.version !== 3 || observation.kind !== 'semantic') bad()
+      compiled=compileSelectedResultsSemanticSeed({kind:'seed',seed:selected as never,digest:seed.digest,sourceObservationDigest:observation.digest!}) as never
+    } else {
+      const groups=rest
+      if (m?.type !== 'conversation/seed-manifest' || !(m.version === 1 && m.codec === 'semantic-seed-v1' || m.version === 2 && m.codec === 'semantic-seed-v2') || groups.some((g,i) => g.type !== 'conversation/seed-group' || g.seq !== i+1 || g.ordinal !== i || g.manifestSeq !== 0)) bad()
+      const semantic=validateSemanticSeed(semanticSeedBodyFromRecords(seed.records))
+      if (semantic.version !== 1 && semantic.version !== 2) throw new TypeError('Legacy bootstrap request required')
+      if (seed.sourceObservation.kind !== 'semantic') bad()
+      compiled=compileSemanticSeed({kind:'seed',seed:semantic,digest:seed.digest,sourceObservationDigest:(seed.sourceObservation as {kind:"semantic";digest:string}).digest})
+    }
   }
   if (!sameBootstrapData(seed,compiled)) bad()
   const first=seed.records[0]
@@ -95,12 +104,15 @@ export function buildBootstrapHeader(request: BootstrapRequest, original?: Boots
     journal:{version:1,legacyBodyBytes:0,legacyEventCount:0,legacyPrefixDigest:legacyPrefixDigest(0,new Uint8Array()),separatorBytes:0},...r.metadata,...r.lineage,seedLength:r.seed.records.length }
   if(!original)for(const key of ['parentSession','delegationDepth','subagentProtocolVersion'] as const)if(r.lineage[key]===undefined)delete headerBase[key]
   const core:Omit<BootstrapHeaderStage,'headerBytes'>={version:1,kind:'semantic-bootstrap-header',invocation:r.invocation,originalTarget:original?.originalTarget ?? r.target as BootstrapHeaderStage['originalTarget'],metadata:r.metadata,lineage:r.lineage,headerBase,
-    seed:{digest:r.seed.digest,dependencyDigest:r.seed.dependencyDigest,sourceObservation:r.seed.sourceObservation,seedLength:r.seed.records.length,groupCount:Math.max(0,r.seed.records.length-1)},
+    seed:{digest:r.seed.digest,dependencyDigest:r.seed.dependencyDigest,sourceObservation:r.seed.sourceObservation,seedLength:r.seed.records.length,groupCount:(r.seed.records[0] as { groupCount?: number } | undefined)?.groupCount ?? Math.max(0,r.seed.records.length-1)},
     ...(initial ? {initial:{inputId:r.initial!.inputId,digest:bootstrapInitialInputDigest(initial,r.initial!.startedAt,r.initial!.expiresAt),startedAt:r.initial!.startedAt,expiresAt:r.initial!.expiresAt}}: {})}
   if (capturedReservation) { core.captureReservation = capturedReservation; validateOwnedCaptureStage(capturedReservation, core as BootstrapHeaderStage, r.seed.records) }
   const manifestDigest=bootstrapManifest(core,r.seed.records)
   if(r.target.kind==='resume'&&r.target.manifestDigest!==manifestDigest)bad()
-  const discriminator = r.seed.records[0]?.version === 2 ? {version:2 as const,codec:'semantic-seed-v2' as const} : {version:1 as const,codec:'semantic-seed-v1' as const}
+  const seedMeta = r.seed.records[0] as { version?: 1 | 2 | 3; profile?: Extract<SeedHeader,{version:3}>['profile']; results?: Extract<SeedHeader,{version:3}>['results']; resultPageCount?: number } | undefined
+  const discriminator = seedMeta?.version === 3
+    ? { version:3 as const, codec:'semantic-seed-v3' as const, profile:seedMeta.profile!, results:seedMeta.results!, resultPageCount:seedMeta.resultPageCount! }
+    : seedMeta?.version === 2 ? {version:2 as const,codec:'semantic-seed-v2' as const} : {version:1 as const,codec:'semantic-seed-v1' as const}
   const semanticSeed:SeedHeader={...discriminator,operationId:r.invocation.operationId,requestDigest:r.invocation.requestDigest,manifestDigest,seedDigest:r.seed.digest,dependencyDigest:r.seed.dependencyDigest,seedLength:core.seed.seedLength,groupCount:core.seed.groupCount,
     ...(core.initial ? {initialInputId:core.initial.inputId,initialInputDigest:core.initial.digest,initialStartedAt:core.initial.startedAt,initialExpiresAt:core.initial.expiresAt}: {})}
   validateSubagentHeader({semanticSeed,...r.lineage})

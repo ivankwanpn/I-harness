@@ -8,6 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCommitCoordinator } from '../src/commit/coordinator.ts'
+import { compileSelectedResultsSemanticSeed } from '../src/semantic-seed.ts'
 
 // Prototype: can a v3 selected-results seed be produced from a plain Session
 // (the shape the commit log folds) without the legacy createDocuments path?
@@ -61,6 +62,35 @@ it('exports a v3 seed from a real commit-log snapshot', async () => {
     expect(exported.kind).toBe('seed')
     if (exported.kind !== 'seed') throw Error('seed refused: ' + JSON.stringify(exported))
     expect(exported.seed).toMatchObject({ version: 3, selection: { kind: 'completed' } })
+  } finally {
+    await coordinator.close().catch(() => {})
+    await rm(root, { recursive: true, force: true })
+  }
+})
+it('bootstraps a child from a v3 selected-results seed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-scl-seed-boot-'))
+  const coordinator = createCommitCoordinator({ root })
+  try {
+    await coordinator.create({ sessionId: 's1' })
+    await coordinator.append('s1', [
+      { type: 'turn/start' }, { type: 'step/start' },
+      { type: 'tool/call', callId: 'c', name: 'read', args: {} },
+      { type: 'assistant/message', text: '', toolCalls: [{ id: 'c', name: 'read', args: {} }] },
+      { type: 'tool/dispatch', callId: 'c', eventSeq: 2 },
+      { type: 'tool/result', callId: 'c', name: 'read', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'artifact', ref: { ...codecRef } } } },
+      { type: 'step/end' }, { type: 'turn/end' },
+    ] as never)
+    const source = heldSource((await coordinator.load('s1')).session as never, 's1')
+    const exported = await exportSelectedResultsConversationSeed(source.context() as never, source.inherited as never)
+    if (exported.kind !== 'seed') throw Error('seed refused: ' + JSON.stringify(exported))
+    const compiled = compileSelectedResultsSemanticSeed(exported)
+    const created = await coordinator.createChildSession({
+      invocation: { version: 1, operationId: 'selected-op', targetSessionId: 'child', createdAt: '2026-11-06T00:00:00.000Z', requestDigest: 'd'.repeat(64) },
+      target: { kind: 'new' }, metadata: {}, lineage: { origin: 'fork', parentSession: 's1' }, seed: compiled as never,
+    }, { closure: compiled.dependencyDigest })
+    expect(created.id).toBe('child')
+    const child = await coordinator.load('child')
+    expect(child.session.header!.seedLength).toBeGreaterThan(0)
   } finally {
     await coordinator.close().catch(() => {})
     await rm(root, { recursive: true, force: true })

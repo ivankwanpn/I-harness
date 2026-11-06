@@ -41,7 +41,7 @@
 
 | 缺口 | 範圍 | 影響 |
 |---|---|---|
-| selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | 需 `selectedSourceFor` ＋ `createSelectedRuntimeCapture`（legacy `createDocuments` 的 selected 路徑），或自建 `HeldInheritedResultMetadata`／`HeldResultPages` 等價物 | SCL 模式下此種捕獲不可用：prepare 回 `Invalid fork preparation request`（-32602），context-runtime 回 `SELECTED_RESULTS_UNSUPPORTED`（兩者皆為明確拒絕，已由 fork-continue 測試固定）`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
+| selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | **store 端已可**（v3 seed 的 `createChildSession` 與 load 已驗證）；剩 gateway composer 需改走此路徑 | 目前 prepare 仍回 `Invalid fork preparation request`（-32602）、context-runtime 回 `SELECTED_RESULTS_UNSUPPORTED`（明確拒絕，已由 fork-continue 測試固定） |`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
 | legacy 刪除 | 需 selected-results 缺口關閉或接受降級 | 尚未刪除任何 legacy 程式碼 |
 | 舊格式 corpus（6–12） | 需帶有效 `journal` metadata 的錄製樣本 | dual-run corpus 維持 13/14 |
 | legacy `session-persistence` 基線 | 280 個既有失敗（transition gate／artifact latch／win32 lock） | 與 SCL 無關，未修復 |

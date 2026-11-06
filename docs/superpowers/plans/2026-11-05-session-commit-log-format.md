@@ -1203,6 +1203,16 @@ gateway native context rather than the host log.
 
 
 
+## Plan 155 (implemented 2026-11-06): the commit log bootstraps from a v3 seed
+
+`captureBootstrapRequest` now accepts a `conversation/seed-manifest` **version 3**: it validates the record prefix (manifest +
+`conversation/seed-results` pages + groups), rebuilds the semantic body, checks the selected-results commitment with
+`compileSelectedResultsSemanticSeed`, and the header discriminator writes `{version:3, codec:"semantic-seed-v3", profile, results,
+resultPageCount}`. The header `groupCount` now comes from the manifest instead of `records.length-1` (pages are not groups).
+`selected-results-scl-seed.test.ts` creates a session, exports the v3 seed, compiles it and `createChildSession`s a child that loads back
+with a seed length — the store side of selected-results inheritance works. Remaining: the gateway composer still must call this path
+instead of refusing.
+
 ## Plan 154 (found, 2026-11-06): the SCL bootstrap validator refuses v3 seeds
 
 Committing the compiled v3 seed through `createChildSession` fails at `captureBootstrapRequest` (`Invalid bootstrap materialization`): the
