@@ -1202,6 +1202,14 @@ gateway native context rather than the host log.
 
 ## Plan 114 (fixed 2026-11-06): a fork child gets the empty task document
 
+Attempt (2026-11-06): two local tolerances were tried — `readOriginalRuntime` returning `undefined` for a closed execution, and the task
+operation ignoring `FACT_CLOSED` from `document.assertReady()`. Each only moved the failure to the next consumer of the same closed
+attachment (`execution-inputs.pending()` → `execution.observe()` → `assertHeld`). This confirms the real fix is to stop closing the
+parent's cached execution document in the fork: the witness should come from a document that keeps a view (for example by giving
+`openCommitExecutionDocument` the session as its initial view, or by opening a separate cold handle). Both tolerances and the test
+extension were reverted.
+
+
 Parity check (2026-11-06): the same sequence (fork a prompted session, write the child todo, delete the parent) on the legacy `jsonl`
 store returns `Session has descendants; coordinated deletion is unavailable`, while the commit log returns `FACT_CLOSED` — so the
 failure is commit-log specific. The closed parent document is the one `withHandoff` closed to obtain a cold fork witness; the task
