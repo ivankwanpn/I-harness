@@ -1203,6 +1203,14 @@ gateway native context rather than the host log.
 
 
 
+## Plan 174 (2026-11-06): hydration attempt and the remaining conclusion
+
+Appending `context/result-ref` events for the seed page rows to the child (right after `createChildSession`) did not authorize the
+read either — it still answered `unauthorized`, and the change was reverted (a type cast also needed `unknown`). The conclusion after
+the four attempts is firm: **reading an inherited page requires the legacy-style selected source** (a held inherited observation and a
+result store that owns the inherited refs), which is the same `createDocuments(...).observations` port §8.2 describes. Everything
+before the read works on the commit log: capture, v3 seed, seed pages, child creation, task document, scheduling, turns and clean close.
+
 ## Plan 165 (implemented 2026-11-06): the child cannot read its inherited page yet
 
 Second trace (2026-11-06): `readManagedResultPage` dispatches to the context-output service's `readResult`, which resolves the ref from

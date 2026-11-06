@@ -41,7 +41,7 @@
 
 | 缺口 | 範圍 | 影響 |
 |---|---|---|
-| selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | **commit-log 已接線**：SDK v2 seam → gateway controller → v3 seed → `createChildSession`，host 測試通過（`host-commit-log-selected-fork`） | legacy 仍走 `createSelectedRuntimeCapture`；兩個 store 各自支援，行為尚未完全對齊（child 的 result page 讀取待驗） |`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
+| selected-results 繼承（`results:"selected-results-v1"` 的 fork／child 捕獲） | **fork 與 seed 已接線**：SDK v2 seam → gateway controller → v3 seed（含 pages）→ `createChildSession`，host 測試通過（`-selected-fork`、`-selected-read`） | 唯一缺口是 child 的 **result page 讀取**：需 legacy 式 selected source（held observation＋owning store），即 §8.2 的 observations 移植；四種捷徑皆已驗證無效 |`）；一般 fork、無 selected 的 task child、頁面讀取不受影響 |
 | legacy 刪除 | 需 selected-results 缺口關閉或接受降級 | 尚未刪除任何 legacy 程式碼 |
 | 舊格式 corpus（6–12） | 需帶有效 `journal` metadata 的錄製樣本 | dual-run corpus 維持 13/14 |
 | legacy `session-persistence` 基線 | 280 個既有失敗（transition gate／artifact latch／win32 lock） | 與 SCL 無關，未修復 |
