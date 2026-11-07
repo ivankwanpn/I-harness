@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 490（記憶功能實測）**：`desktop/memory/configure` 需頂層 `enabled`（不是 patch）；開啟後 `memory_note` 成功寫入，新會話以
+> `memory_search/list/read` 找回「繁體中文、簡短回答」並正確回答。測試後已把記憶還原為停用。
 > **round 489（rc13 端到端冒煙）**：一般對話＋bash 工具成功（`/d/ih0113rc2test_env/workspace/demo`）；排程 45 秒後觸發
 > `[SCHEDULE REMINDER]`、assistant 正常回應、清單歸零。rc13 主要路徑正常。
 > **round 488（CJK 計價後的測試校正）**：core-agent 全量 649/649；其中 protocol-recovery 的 fixture 用「資料」×1000，CJK 改按字計價後變小、
