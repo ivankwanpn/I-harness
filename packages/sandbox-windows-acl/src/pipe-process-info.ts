@@ -52,24 +52,30 @@ export function createProcessInfoSlot(owner: NativeInitOwner, issue: (slot: Nati
   current()
   const slot = owner.bytes(PROCESS_INFORMATION_SIZE)
   current()
-  let view: DataView
+  // koffi.view crashes under the packaged Electron runtime; there, decode the
+  // live slot for each read instead. Node keeps the original view.
+  const readSlot = () => { current(); const raw = koffi.decode(slot, 'uint8', PROCESS_INFORMATION_SIZE); current(); return new DataView(raw.buffer, raw.byteOffset, raw.byteLength) }
+  let view: DataView | undefined
+  const readView = () => view ?? readSlot()
   const state = createProcessInfoState({
     issue: () => { current(); return issue(slot) }, lastError: () => owner.api.getLastError(),
-    readProcess: () => { current(); return view.getBigUint64(0, true) },
-    readThread: () => { current(); return view.getBigUint64(8, true) },
-    readPid: () => { current(); return view.getUint32(16, true) },
+    readProcess: () => { current(); return readView().getBigUint64(0, true) },
+    readThread: () => { current(); return readView().getBigUint64(8, true) },
+    readPid: () => { current(); return readView().getUint32(16, true) },
   })
   // Reverse retirement checks this gate before freeing the underlying bytes.
   // It is a non-consuming check, so acknowledged handoff can unblock only the
   // original allocation; it never resubmits a native close/free operation.
   owner.retirementGate(slot, () => state.assertRetirable())
   current()
-  const buffer = koffi.view(slot, PROCESS_INFORMATION_SIZE)
-  current()
-  view = new DataView(buffer)
-  current()
-  new Uint8Array(view.buffer, view.byteOffset, view.byteLength).fill(0)
-  current()
+  if (!process.versions.electron) {
+    const buffer = koffi.view(slot, PROCESS_INFORMATION_SIZE)
+    current()
+    view = new DataView(buffer)
+    current()
+    new Uint8Array(view.buffer, view.byteOffset, view.byteLength).fill(0)
+    current()
+  }
   return Object.freeze({
     phase: state.phase,
     issue() { current(); state.issue() },

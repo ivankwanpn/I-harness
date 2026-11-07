@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 478（koffi.view × Electron 修正）**：`koffi.view` 在打包 Electron runtime 直接 NAPI fatal（Node 24 正常）；ACL runner 的 zero-fill 與
+> PROCESS_INFORMATION 讀取改為 Electron 路徑不使用 view（alloc 已 zero、decode 逐次讀），sandbox 382/382；實機 read-only/workspace-write 的 pwsh 恢復。
 > **round 477（受限沙箱 shell 全崩）**：`read-only` 與 `workspace-write` 下 `shell`/`bash`/`pwsh` 全部以同一 `napi_register_module_v1` fatal 崩潰；
 > `write`/`read` 正常，`danger-full-access` 正常。手動在 packaged node 載入 koffi（主執行緒與 worker）皆正常（3.1.6），故非單純 koffi ABI；
 > 崩潰發生在受限子程序的 native 載入階段。下輪測 `windowsSandboxBackend:psec` 與 dev（非打包）路徑。

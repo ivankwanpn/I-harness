@@ -15,7 +15,9 @@ export function prepareChildStartup(parent: NativeInitOwner, handles: ChildStdio
       || new Set(handles).size !== 3) throw new TypeError('Exactly three distinct child stdio handles are required')
   const parentCurrent = parent.captureCurrent(), owner = parent.scope(), ownerCurrent = owner.captureCurrent(), api = parent.api
   const current = () => { parentCurrent(); ownerCurrent() }
-  const bytes = (size: number) => { current(); const pointer = owner.bytes(size); current(); new Uint8Array(koffi.view(pointer, size)).fill(0); return pointer }
+  // koffi.alloc returns zeroed memory already; koffi.view crashes under the
+  // packaged Electron runtime, so the redundant zeroing is skipped there.
+  const bytes = (size: number) => { current(); const pointer = owner.bytes(size); current(); if (!process.versions.electron) new Uint8Array(koffi.view(pointer, size)).fill(0); return pointer }
   const sizeSlot = bytes(koffi.sizeof('size_t'))
   koffi.encode(sizeSlot, 'size_t', 0)
   const query = api.initializeProcThreadAttributeList(null, 1, 0, sizeSlot), queryError = api.getLastError()
