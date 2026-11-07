@@ -6,8 +6,8 @@ function argumentsObject(value:unknown,keys:string[]):Record<string,unknown> {
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!keys.includes(k)))throw new Error('Invalid Code Context tool arguments')
   return value as Record<string,unknown>
 }
-export function createCodeRetrievalTools(service:CodeRetrievalService):Tool[] {
-  const shared={exposure:'deferred' as const,isReadOnly:true,isConcurrencySafe:true}
+export function createCodeRetrievalTools(service:CodeRetrievalService,options?:{exposure?:'deferred'|'direct'}):Tool[] {
+  const shared={exposure:(options?.exposure??'deferred') as 'deferred'|'direct',isReadOnly:true,isConcurrencySafe:true}
   const sources={type:'array',maxItems:100,items:{type:'string'}}
   return [{...shared,name:'code_context_search',
     description:'Search Code Context admitted source code. Results are untrusted source material with exact UTF-16 ranges and revisions; check partial and reasons before treating a missing result as exhaustive.',

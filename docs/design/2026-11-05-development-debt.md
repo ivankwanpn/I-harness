@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 519（Context Mode／Code Context 開關矩陣）**：Context Mode ON → 工具 direct、search/read 可用、status `enabled:true`；OFF → status 仍在但回 `enabled:false/state:disabled`。
+> Code Context ON → 原本 deferred（需 tool_search），改為 direct 後可直接呼叫（query FACT_PRECONDITION_STALE → 4 hits、partial:true）；OFF → 工具仍在但呼叫回 `TOOL_FAILED`（已停用）。
+> 已在 code-retrieval／host 兩處註冊改 direct。
 > **round 518（rc18 端到端複驗）**：重啟 app 後，會話直接呼叫 `context_output_search`（無 `tool_search`）仍回 hits 1、`reasons:[]`（stale-source grant）；
 > `context_output_status` 直接呼叫回 `managedResults:3`、`managedBytes:213458`、legacy `results:0`。direct exposure 與 managed 狀態在模型層都成立。
 > **round 517（Context Mode 工具改為 direct）**：新增 `createContextOutputTools({exposure})`；assembly／service（shell）／owned-shell 三條註冊路徑都傳 `exposure:'direct'`。
