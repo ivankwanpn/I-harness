@@ -46,7 +46,17 @@ export function createManagedReduction(host: ManagedAgentHost, context: ReturnTy
                 assertCurrentRepresentable(initial, prepared);
                 const probe = context.budget.probe(prepared, initial, false, policy.reserveRatio, policy), pressure = probe.decision.pressure, progress = host.execution.observe().softReduction(), work = softWorkFacts(initial.snapshot, policy);
                 const cooldown = progress.sinceRewrite, allowed = !progress.state.pending && !progress.state.consumed.has(work.workKey) && (!cooldown || (resolved.cooldown.mode === 'human-turns' ? cooldown.humanTurns : cooldown.acceptedExchanges) >= resolved.cooldown.minimum);
-                if (!(host.autoCompactionEnabled?.() ?? resolved.auto) || pressure.kind !== 'known' || !pressure.softNeeded || !allowed)
+                // Unpriced replay (signature/opaque) leaves the provider price
+                // unknown; a complete heuristic prefix keeps auto-compaction
+                // available instead of skipping until the provider rejects.
+                const unpriced = pressure.kind === 'unavailable' && pressure.reason === 'token-cost-unavailable'
+                    && prepared.measurement.input.coverage === 'complete';
+                const heuristicTokens = Object.values(prepared.measurement.input.components).reduce((total, component) => total + component.heuristicTokens, 0);
+                const window = initial.snapshot.surface.contextWindow;
+                const fallbackOver = unpriced && typeof window === 'number' && window > 0
+                    && heuristicTokens > window * (policy.thresholdRatio ?? .8);
+                const over = pressure.kind === 'known' ? pressure.softNeeded : fallbackOver;
+                if (!(host.autoCompactionEnabled?.() ?? resolved.auto) || !over || !allowed)
                     return { ...unchanged(), outcome: pressure.kind === 'known' && pressure.targetReady ? 'ready' as const : 'unchanged' as const };
                 const sequenceSource = initial;
                 sequence = await beginSoftSequence({ captureSoftReduction: action.captureSoftReduction.bind(action), registerFactSource: register, softTerminalInstalled: () => published }, { type: 'context/soft-reduction', version: 1, op: 'start', ownerSessionId: host.domain.sessionId, sequenceId: randomUUID(), ...work, humanTurns: progress.humanTurns, acceptedExchanges: progress.acceptedExchanges }, () => context.current(sequenceSource));

@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 479（unpriced auto-compaction）**：capacity unknown 時兩個 auto gate 都跳過，長對話不會自動壓縮；改以完整 heuristic prefix 對 threshold 保底觸發 soft reduction。
+> 實測 soft sequence 會啟動，但常回 `no-progress`（fixed schema／retained tail 無法降到 target）。另發現 usage checkpoint 只存 excludes-cache 的 input，缺 cacheRead 無法事後核算。
 > **round 478（koffi.view × Electron 修正）**：`koffi.view` 在打包 Electron runtime 直接 NAPI fatal（Node 24 正常）；ACL runner 的 zero-fill 與
 > PROCESS_INFORMATION 讀取改為 Electron 路徑不使用 view（alloc 已 zero、decode 逐次讀），sandbox 382/382；實機 read-only/workspace-write 的 pwsh 恢復。
 > **round 477（受限沙箱 shell 全崩）**：`read-only` 與 `workspace-write` 下 `shell`/`bash`/`pwsh` 全部以同一 `napi_register_module_v1` fatal 崩潰；

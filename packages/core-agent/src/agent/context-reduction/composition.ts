@@ -51,7 +51,17 @@ export function createContextReduction(deps: AgentDeps & AgentConfig, config: Co
         throw error
       }
       const pressure = probe.decision.pressure
-      if (!(deps.autoCompactionEnabled?.() ?? resolved.auto) || pressure.kind !== 'known' || !pressure.softNeeded || !automatic.allowed(evidence.snapshot, policy) || !deps.captureSoftReduction || !deps.registerFactSource) {
+      // Unpriced replay (signature/opaque) leaves the provider price unknown; a
+      // complete heuristic prefix keeps auto-compaction available instead of
+      // skipping until the provider rejects the request.
+      const unpriced = pressure.kind === 'unavailable' && pressure.reason === 'token-cost-unavailable'
+        && probe.prepared.measurement.input.coverage === 'complete'
+      const heuristicTokens = Object.values(probe.prepared.measurement.input.components).reduce((total, component) => total + component.heuristicTokens, 0)
+      const window = evidence.snapshot.surface.contextWindow
+      const fallbackOver = unpriced && typeof window === 'number' && window > 0
+        && heuristicTokens > window * (policy.thresholdRatio ?? .8)
+      const over = pressure.kind === 'known' ? pressure.softNeeded : fallbackOver
+      if (!(deps.autoCompactionEnabled?.() ?? resolved.auto) || !over || !automatic.allowed(evidence.snapshot, policy) || !deps.captureSoftReduction || !deps.registerFactSource) {
         const outcome = pressure.kind === 'known' && pressure.targetReady ? 'ready' as const : 'unchanged' as const
         deps.telemetry?.emit({ type: 'compaction/attempt', ts: Date.now(), data: { reason: 'auto', outcome: 'skipped', outcomeState: outcome, publication: 'none', tokensBefore: probe.snapshot.admissionInputTokens, tokensAfter: probe.snapshot.admissionInputTokens, attempts: 0, durationMs: 0, shadowed: 0, pruned: 0 } })
         return { ...skipped, outcome }

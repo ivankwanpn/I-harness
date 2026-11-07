@@ -40,7 +40,7 @@ export function historyFact(event: SessionEventView, index: number, inheritedBou
   const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }), ...resultFactMetadata(event) }
   switch (event.type) {
     case 'agent/delivery-generation': return {...base, deliveryOperation:event.op, ...(event.op==='open'?{deliveryGeneration:event.generationId,deliveryDependencies:[event.originInputSeq]}:{})}
-    case 'agent/delivery-source': return {...base,deliveryGeneration:event.generationId,deliveryKind:event.delivery,deliveryDependencies:event.kind==='subagent'?[event.callSeq,event.startSeq]:[event.callSeq]}
+    case 'agent/delivery-source': return {...base,deliveryGeneration:event.generationId,deliveryKind:(event as { delivery?: string }).delivery,deliveryDependencies:event.kind==='subagent'?[event.callSeq,event.startSeq]:[event.callSeq]}
     case 'agent/delivery-handoff': return {...base,deliveryDependencies:[event.sourceSeq]}
     case 'exec/end': return {...base,deliveryDependencies:[event.sourceSeq]}
     case 'workflow/end': return {...base,deliveryDependencies:[event.sourceSeq]}
