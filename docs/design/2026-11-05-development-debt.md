@@ -15,6 +15,10 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 512（managed search host 授權）**：在 `context-runtime` 直接加 `authorizeResult` 不可行（型別 `Policy` 已 Omit，
+`createProcessAwareResultService` 內建自己的授權）。該內建授權要求 `sourceFor(session).sourceId === owner.source.sourceId`，重啟後來源變更即拒絕。
+嘗試「owner session 先行允許」會讓 `code-final-output-process-reader` 的 replaced-reader 拒絕失效（process page admission 被繞過）。需更窄條件
+（例如來源 generation 落後 vs process page 被替換）或 host grant；暫停此線。
 > **round 511（managed search 授權釐清）**：pin diag 顯示 pin／operationId／revision 全部相符（state 為 pending，但 readPin 不看 state），
 > 讀取失敗點在 `authorized` 之後的 **source-scoped `authorizeResult`**（沒有 host callback 就 throw TransferBlocked）。搜尋現在會把被略過的 artifact 反映成
 > reason `managed-read-unavailable`，不再靜默。下一步要接 host `authorizeResult` / 確認 session 對自己 source artifacts 的授權。
