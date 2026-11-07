@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 518（rc18 端到端複驗）**：重啟 app 後，會話直接呼叫 `context_output_search`（無 `tool_search`）仍回 hits 1、`reasons:[]`（stale-source grant）；
+> `context_output_status` 直接呼叫回 `managedResults:3`、`managedBytes:213458`、legacy `results:0`。direct exposure 與 managed 狀態在模型層都成立。
 > **round 517（Context Mode 工具改為 direct）**：新增 `createContextOutputTools({exposure})`；assembly／service（shell）／owned-shell 三條註冊路徑都傳 `exposure:'direct'`。
 > 實機（rc17 環境）：**全新會話直接呼叫 `context_output_search`，不再先 `tool_search`**（calls 只有 context_output_search，hits 0 因該會話無 artifact）。
 > context-output 47/47、code-final-output-process-reader 1/1。這解決了「模型說沒有這個工具、改用 bash」的提示詞陷阱。
