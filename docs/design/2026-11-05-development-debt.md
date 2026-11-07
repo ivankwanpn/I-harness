@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 491（Hooks 實測）**：workspace hook 需 `trust.script` 的 sha256，且 `command.cmd/args` 必須綁定受信任 artifact（用 app 的 `I-harness.exe` + 絕對 script 路徑、args 只放 script）；
+> 直接 `cmd: node` 會 `invalid`（trust binding）。`needs-approval` → `desktop/hooks/mutate approve` → `ready`；建立會話送 prompt 後 hook 觸發（`event=prompt/submit`）。測試後已 revoke 並刪除 hook。
 > **round 490（記憶功能實測）**：`desktop/memory/configure` 需頂層 `enabled`（不是 patch）；開啟後 `memory_note` 成功寫入，新會話以
 > `memory_search/list/read` 找回「繁體中文、簡短回答」並正確回答。測試後已把記憶還原為停用。
 > **round 489（rc13 端到端冒煙）**：一般對話＋bash 工具成功（`/d/ih0113rc2test_env/workspace/demo`）；排程 45 秒後觸發
