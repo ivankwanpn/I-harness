@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 507（資源／commands）**：`desktop/resources/list` 合法 kind 為 `commands`、`skills`（plans/agents/plugins/hooks 等 invalid）。
+> 建立 `workspace/commands/greet.md`（frontmatter description、$ARGUMENTS）後列得 `greet`；會話輸入 `/greet Ivan` 展開為 host-prepared context，
+> assistant 回「哈囉 Ivan…」，turn/end 正常、無失敗。測試檔已刪除。
 > **round 506（Git／worktree）**：會話內 bash 完成 git init／add／commit／`git worktree add ../wt1 -b wtbranch`／status／worktree list，5 次 bash 全部 succeeded；
 > 磁碟確認 `.git` 與 `wt1` 存在。測試後已刪除 gitdemo／wt1。
 > **round 505（WSL／環境診斷）**：`desktop/wsl/state` 顯示 Ubuntu/WSL2 Stopped；`diagnose` 回「WSL2 bubblewrap and x86_64 seccomp startup succeeded」；
