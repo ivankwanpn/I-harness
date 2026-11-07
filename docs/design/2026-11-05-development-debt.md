@@ -15,6 +15,10 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 484（Context Mode / Code Context 實測）**：兩者預設關閉，透過 settings/API 開啟後 UI 顯示 ON。Code Context 可用（index 5 files/5 chunks、
+> `code_context_search/status` 成功）。Context Mode 會把 >60KB 的 bash 輸出存成 managed artifact（ref `ctxv1_…`、65,007 bytes），
+> 但 `context_output_status` 仍是 `results:0/retainedBytes:0`、`context_output_search` 無命中——status/search 只覆蓋 legacy store，
+> 不含 managed artifacts；以完整 ref 呼叫 `context_output_read` 回 `unavailable: budget`，需再查 cursor/maxBytes 與 read 配額。
 > **round 483（signature 不再停用容量計算）**：metadata 的 signature 走 opaque() 會加 opaque 不確定性 → estimate unknown → compatibility、context unchecked。
 > 改為直接以 bytes/2 計價（保留 signature-token-cost），prepared 不再把它視為不可定價；實機 budget 變 estimated/known。token-meter 55/55、context-engine 98/98。
 > **round 482（CJK token 計算與 cache 記錄）**：非 ASCII 以 UTF-8 byte 計價使中文每字 3 token（實測 heuristic 32,062 vs provider 17,944，1.8x）；
