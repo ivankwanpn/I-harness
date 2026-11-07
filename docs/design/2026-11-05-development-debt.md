@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 520（live MCP 再測）**：save 新 server 後立刻 enable（back-to-back）仍 applyError → 該會話 requires recovery；
+> 但對**已存在**的 server 做 disable→enable，則無 applyError，新會話 tool_search 後可呼叫 `mcp__live4__mcp_ping`。
+> 推測是兩次 refresh 重疊（save 觸發的 refresh 尚未 settle）。建議 save 與 enable 之間等待，或修 selection refresh 的合并邏輯。
 > **round 519（Context Mode／Code Context 開關矩陣）**：Context Mode ON → 工具 direct、search/read 可用、status `enabled:true`；OFF → status 仍在但回 `enabled:false/state:disabled`。
 > Code Context ON → 原本 deferred（需 tool_search），改為 direct 後可直接呼叫（query FACT_PRECONDITION_STALE → 4 hits、partial:true）；OFF → 工具仍在但呼叫回 `TOOL_FAILED`（已停用）。
 > 已在 code-retrieval／host 兩處註冊改 direct。
