@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 494（MCP 逾時定位）**：`plugin-capabilities` catch 記到 `McpError -32001: Request timed out`（SDK `protocol.ts` initialize 逾時），
+> 即使 command 改成絕對路徑 `C:\\Program Files\\nodejs\\node.exe` 也一樣；skills 走同一 catalog 正常。下一步要 patch SDK `StdioClientTransport` 記錄 spawn/error/stderr，確認 child 是否真的啟動。
 > **round 493（Skills 實測，對比 MCP）**：建立 `config/skills/smoke/SKILL.md` 後 `desktop/resources/list (skills)` 可列出；會話中 `skill_get` 成功、
 > 模型回覆 `smoke-skill-ok`。證明 plugin catalog capabilities 正常，MCP（`pluginMcp`／`directMcp`）未掛載是該路徑特有問題。
 > **round 492（MCP 實測，未完成）**：`desktop/mcp/mutate save` 可寫入（revision 0→1），`enable` 後 state `enabled:true`，但常回 `applyError`；
