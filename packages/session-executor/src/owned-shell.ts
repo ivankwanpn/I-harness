@@ -28,7 +28,7 @@ export function mountOwnedShell(original:ManagedRegistryConstruction,workspace:s
  const recipient=receivedExecutionInputsFor(original.execution).execDelivery(original.domain)
  const scoped=createScopedPrivateExecWithReservation(pair,workspace,()=>undefined,original.execution,original.domain,original.ctx,recipient)
  for(const tool of createShellTools({exec:scoped.service,directEntry:scoped.direct,agentShell:()=>options.agentShellFor?options.agentShellFor(original.domain.sessionId):options.agentShell()}))original.tools.register(tool)
- for(const tool of createContextOutputTools(output.service))original.tools.register(tool)
+ for(const tool of createContextOutputTools(output.service, { exposure: 'direct' }))original.tools.register(tool)
  original.tools.promote(['context_output_read'])
  if(!approvalInstalled)createExecutionApprovalPolicy(original.ctx,original.tools,{workspace,workspaceRoots:()=>[workspace]})
  original.assertCurrent()

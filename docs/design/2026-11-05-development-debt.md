@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 517（Context Mode 工具改為 direct）**：新增 `createContextOutputTools({exposure})`；assembly／service（shell）／owned-shell 三條註冊路徑都傳 `exposure:'direct'`。
+> 實機（rc17 環境）：**全新會話直接呼叫 `context_output_search`，不再先 `tool_search`**（calls 只有 context_output_search，hits 0 因該會話無 artifact）。
+> context-output 47/47、code-final-output-process-reader 1/1。這解決了「模型說沒有這個工具、改用 bash」的提示詞陷阱。
 > **round 516（deferred tool 的提示詞陷阱）**：`context_output_search` 等 Context Mode 工具是 `exposure: deferred`，不在預設 active tool list；
 > 模型若不先 `tool_search` 就會宣稱「沒有這個工具」並改用 bash。先前測試 prompt 只說「呼叫 context_output_search」而沒有要求先 `tool_search`，
 > 因此看似授權／掛載問題，實際是工具探索步驟。加上「先用 tool_search 找 context_output_search」後，rc17 實機 search 回 1 hit、reasons []（跨重啟）。
