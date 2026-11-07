@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 498（子代理實測）**：`spawn_agent` 成功（child-5088…、label reply-ok、status completed、finalText `subagent-ok`、artifact ref）；
+> `subagents/list`／`history`／`result` 均可讀（result 頁 maxBytes 下限 1024，傳 1000 會 `invalid result page`）。
 > **round 497（streamable-http MCP）**：本機 HTTP MCP server（POST JSON-RPC、回 application/json、Mcp-Session-Id）設定成功；
 > initialize（id 0）/tools/list 正常，會話呼叫 `mcp__http__mcp_ping` 得 `pong:http`。stdio 與 streamable-http 兩條 transport 都可用。測試後已移除 server 並停掉 HTTP。
 > **round 496（MCP 失敗包容）**：把 MCP server 指向不存在的 script（`missing-mcp.cjs`）仍可 enable，state 無 `applyError`，
