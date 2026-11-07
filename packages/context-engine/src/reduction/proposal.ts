@@ -6,7 +6,10 @@ export function replacementProposal(run: ReductionRun, text: string, replacement
   if (!coverage.length) throw new Error('Empty reduction proposal')
   return { type: 'compaction/replacement', version: 1, replacementId, coverage, insertBefore: coverage[0]!.item, text }
 }
-export function reductionProgress(before: ReductionAssessment, after: ReductionAssessment, sizeFailure: boolean): boolean {
-  return !before.fixedInput && !after.fixedInput && after.shape === before.shape && before.inputFingerprint !== after.inputFingerprint
+export function reductionProgress(before: ReductionAssessment, after: ReductionAssessment, sizeFailure: boolean, reductionRewrites = false): boolean {
+  // A replacement rewrites the conversation; providers may then need an
+  // overridden messages field, so the candidate legitimately reports a fixed
+  // input. The reduction itself is the reason the input is overridden.
+  return !before.fixedInput && (reductionRewrites || !after.fixedInput) && after.shape === before.shape && before.inputFingerprint !== after.inputFingerprint
     && after.inputTokens < before.inputTokens && before.inputByteKind === after.inputByteKind && (!sizeFailure || after.inputBytes <= before.inputBytes)
 }

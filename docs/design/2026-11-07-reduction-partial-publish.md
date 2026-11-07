@@ -1,6 +1,6 @@
 # A large partial reduction is never published
 
-Status: **diagnosed 2026-11-07** (rc10). Not fixed yet.
+Status: **fixed 2026-11-07** (rc11).
 
 ## Reproduction
 
@@ -22,13 +22,26 @@ Consequences: for conversations whose fixed schema/system plus retained content 
 engine never publishes *any* reduction, so the context keeps growing until the provider rejects it. The
 `reduced-over-target` outcome exists but is effectively unreachable in this path.
 
-## Fix direction
+## Root cause of the abandoned candidate
 
-1. Keep the best progressing candidate and publish it as `reduced-over-target` when no further run can improve
-   (or when the call budget would otherwise be exhausted); the publication proof must be validated, so the
-   candidate has to be produced from the current source (a deferred proof goes stale — observed).
-2. Add a `context-engine` unit test with mock ports: baseline over target, first candidate improving but still
-   over target, no further run → expect publication with `reduced-over-target` instead of `no-progress`.
-3. Re-check the target formula for unpriced inputs: with schema ~11.7k heuristic and reserve 4,096, the target
-   (window*0.7) can be unreachable even though the reduction is large; consider accepting a documented
-   improvement threshold.
+Instrumentation at the publish gate showed:
+
+    gate: progressed=false baselineTokens=33083 candidateTokens=14009 fixed=true beforeFixed=false
+
+`reductionProgress` requires both assessments to be non-`fixedInput`. A compaction replacement rewrites the
+conversation, so the provider-native representation is overridden and the candidate legitimately reports
+`fixedInput: true`. The guard therefore rejected every reduced candidate, and the engine fell through to another
+(smaller, worse) run and finally `no-progress`.
+
+## Fix
+
+`reductionProgress` gains `reductionRewrites`: when the candidate carries the reduction's own rewrites, an
+after-`fixedInput` is expected and no longer blocks publication. `reduceContext` passes `rewrites.length > 0`.
+A mock-port test pins it: candidate after rewrite reports `fixedInput: true`, tokens drop 100→50, target stays
+over-target → expect `compacted: true, outcome: reduced-over-target`.
+
+## Verification
+
+* context-engine reduction suites 21/21 (new test included);
+* Desktop with the fix: the conversation that previously reported `no-progress` now publishes
+  `compaction/replacement` after the summary (33,240 → 14,014 heuristic tokens) and the turn completes.

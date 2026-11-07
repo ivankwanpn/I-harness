@@ -76,7 +76,7 @@ export async function reduceContext(ports: ContextReductionPorts, policy: Reduct
       if (before.kind === 'blocked') return block(result, before.reason)
       baseline = before
     }
-    if (!reductionProgress(baseline, candidate, options.reason === 'recovery')) { tried.add(run.id); accepted = undefined; continue }
+    if (!reductionProgress(baseline, candidate, options.reason === 'recovery', rewrites.length > 0)) { tried.add(run.id); accepted = undefined; continue }
     const published = await ports.publish(source, run.groups, rewrites, candidate.proof)
     if (published.kind === 'stale') { if (stale(attempts)) continue; return block(result, 'unstable-input') }
     if (published.kind === 'recovery-required') return { ...block(result, 'publication-recovery-required'), publication: 'recovery-required' }

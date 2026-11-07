@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 481（partial reduction 修復）**：根因是 candidate 因 replacement 重寫訊息而 `fixedInput:true`，`reductionProgress` 因此拒絕；改為 reduction 自帶 rewrites 時允許 after fixedInput。
+> 實機已發布 replacement（33.2k→14.0k heuristic tokens），context-engine 21/21。
 > **round 480（partial reduction 不發布）**：reduceContext 只在 `candidate.target==='ready'` 時發布；實測 32.9k→13.9k（仍略高於 target）的
 > 大幅縮減被丟棄，改挑 6-token 小組後候選變 33k，最終 `no-progress`，什麼都沒發布。已記錄修法（保留最佳候選並以 reduced-over-target 發布），需 mock ports 測試。
 > **round 479（unpriced auto-compaction）**：capacity unknown 時兩個 auto gate 都跳過，長對話不會自動壓縮；改以完整 heuristic prefix 對 threshold 保底觸發 soft reduction。

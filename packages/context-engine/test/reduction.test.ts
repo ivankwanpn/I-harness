@@ -77,6 +77,18 @@ it('skips an unhelpful oldest span and commits only the useful later proposal', 
   expect(await engine.reduceContext(ports, { retainTokens: 0 }, { attempts })).toMatchObject({ compacted: true, outcome: 'ready', publication: 'nondurable', summary: 'useful' })
   expect(observed).toEqual([['E1', 'E2'], ['E3', 'E4']]); expect(published).toHaveLength(1); expect(attempts.count).toBe(2)
 })
+
+it('publishes an over-target candidate whose replacement forces a fixed input', async () => {
+  const { capture } = fixture(); let published = 0
+  const attempts = { count: 0, staleRebuilds: 0 }
+  const ports: ContextReductionPorts = { capture, current: () => true,
+    prepare: async (_source, _groups, rewrites) => ({ ...assessment(rewrites.length ? 50 : 100), ...(rewrites.length ? { fixedInput: true } : {}) }),
+    summary: async source => { source.attempts.count++; return { kind: 'complete', text: 'S', groupIds: source.groups.map(group => group.id) } },
+    publish: async () => { published++; return { kind: 'nondurable' } },
+  }
+  expect(await engine.reduceContext(ports, { retainTokens: 0 }, { attempts, reason: 'manual' })).toMatchObject({ compacted: true, outcome: 'reduced-over-target', publication: 'nondurable' })
+  expect(published).toBe(1)
+})
 it('returns committed over-target progress without a second checkpoint and never certifies unknown publication', async () => {
   for (const publication of ['nondurable', 'recovery-required'] as const) {
     const { capture } = fixture(); let summaries = 0
