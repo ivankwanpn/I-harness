@@ -89,6 +89,18 @@ it('publishes an over-target candidate whose replacement forces a fixed input', 
   expect(await engine.reduceContext(ports, { retainTokens: 0 }, { attempts, reason: 'manual' })).toMatchObject({ compacted: true, outcome: 'reduced-over-target', publication: 'nondurable' })
   expect(published).toBe(1)
 })
+
+it('summarizes a reducible conversation even when the fixed surface exceeds the target', async () => {
+  const { capture } = fixture(); let published = 0
+  const attempts = { count: 0, staleRebuilds: 0 }
+  const ports: ContextReductionPorts = { capture, current: () => true,
+    prepare: async (_source, _groups, rewrites) => ({ ...assessment(rewrites.length ? 4000 : 5000), fixedInput: true, fixedTokens: 3000 }),
+    summary: async source => { source.attempts.count++; return { kind: 'complete', text: 'S', groupIds: source.groups.map(group => group.id) } },
+    publish: async () => { published++; return { kind: 'nondurable' } },
+  }
+  expect(await engine.reduceContext(ports, { retainTokens: 0 }, { attempts, reason: 'auto' })).toMatchObject({ compacted: true, outcome: 'reduced-over-target', publication: 'nondurable' })
+  expect(published).toBe(1)
+})
 it('returns committed over-target progress without a second checkpoint and never certifies unknown publication', async () => {
   for (const publication of ['nondurable', 'recovery-required'] as const) {
     const { capture } = fixture(); let summaries = 0

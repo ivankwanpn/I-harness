@@ -4,6 +4,8 @@ import { reductionGroups, selectReductionRuns } from './selection.ts'
 import { reductionProgress, replacementProposal } from './proposal.ts'
 import { pruneProposal } from './prune.ts'
 import { projectionFingerprint } from '@i-harness/token-meter'
+import { appendFileSync } from 'node:fs'
+const diag = (v: unknown) => { try { appendFileSync('D:\\ih0113rc2test_env\\run2-diag.log', JSON.stringify(v) + '\n') } catch {} }
 
 const initial = (): ReductionResult => ({ compacted: false, shadowedSeqs: [], outcome: 'unchanged', publication: 'none' })
 const block = (result: ReductionResult, blockedReason: ReductionBlockedReason): ReductionResult => ({ ...result, outcome: 'blocked', blockedReason })
@@ -36,13 +38,20 @@ export async function reduceContext(ports: ContextReductionPorts, policy: Reduct
     if (baseline.kind === 'stale') { if (stale(attempts)) continue; return block(result, 'unstable-input') }
     if (baseline.kind === 'blocked') return block(result, baseline.reason)
     if (options.reason === 'auto' && baseline.target === 'ready' || result.compacted && baseline.target === 'ready') return { ...result, outcome: 'ready' }
+    diag({ stage: 'baseline', fit: baseline.capacityFit, target: baseline.target, tokens: baseline.inputTokens, ratio: policy.thresholdRatio, targetRatio: policy.targetRatio })
     if (baseline.capacityFit === 'unavailable' || baseline.target === 'unavailable') return block(result, 'capacity-unavailable')
-    if (baseline.fixedInput) return block(result, 'fixed-input')
+    if (baseline.fixedInput) {
+      // A large fixed surface (system prompt or tool schemas) can exceed the
+      // pressure target on its own. That does not make the conversation
+      // unreducible: summarize what is reducible instead of blocking outright.
+      const fixed = baseline.fixedTokens ?? 0
+      if (baseline.inputTokens - fixed < 512) return block(result, 'fixed-input')
+    }
     if (accepted && !ports.current(accepted.source, accepted.groups)) accepted = undefined
     const run = accepted ? { id: projectionFingerprint(accepted.groups.map(group => group.id)), groups: accepted.groups }
       : selectReductionRuns(source, policy, options.protectedSeqs).find(run => !tried.has(run.id))
         ?? (baseline.capacityFit === 'no' ? selectReductionRuns(source, policy, options.protectedSeqs, true).find(run => !tried.has(run.id)) : undefined)
-    if (!run) return result.compacted ? result : block(result, tried.size ? 'no-progress' : 'no-eligible-source')
+    if (!run) { diag({ stage: 'no-run', tried: tried.size }); return result.compacted ? result : block(result, tried.size ? 'no-progress' : 'no-eligible-source') }
     let rewrites = pruneProposal(source, run, policy), candidate = rewrites.length ? await ports.prepare(source, run.groups, rewrites) : undefined
     if (candidate?.kind === 'stale') { if (stale(attempts)) continue; return block(result, 'unstable-input') }
     if (candidate?.kind === 'blocked') return block(result, candidate.reason)
@@ -67,6 +76,7 @@ export async function reduceContext(ports: ContextReductionPorts, policy: Reduct
       }
       rewrites = [...rewrites, replacementProposal(run, accepted.text, randomUUID())]
       candidate = await ports.prepare(source, run.groups, rewrites)
+      diag({ stage: 'candidate', kind: candidate.kind, target: candidate.kind === 'assessed' ? candidate.target : undefined, tokens: candidate.kind === 'assessed' ? candidate.inputTokens : undefined })
     }
     if (candidate.kind === 'stale') { if (stale(attempts)) continue; return block(result, 'unstable-input') }
     if (candidate.kind === 'blocked') return block(result, candidate.reason)

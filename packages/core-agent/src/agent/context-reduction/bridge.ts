@@ -62,7 +62,9 @@ export function createReductionBridge(deps: BridgeDeps, captureCandidate: () => 
       return { kind: 'assessed', capacityFit, target: capacityFit === 'unavailable' ? 'unavailable' : targetReady ? 'ready' : 'over-target',
         currentView: projectionFingerprint([now.snapshot.coordinates.semanticRevision, now.snapshot.coordinates.protectionRevision, now.snapshot.surfaceRevision, assessmentRevision]),
         inputTokens: budget.admissionInputTokens, inputBytes: bytes, inputByteKind: packet.sizeKind, inputFingerprint: input.inputFingerprint,
-        shape: projectionFingerprint([input.bindingFingerprint, input.shapeFingerprint, now.snapshot.surface.binding]), fixedInput: input.overriddenInputFields.includes('messages')
+        shape: projectionFingerprint([input.bindingFingerprint, input.shapeFingerprint, now.snapshot.surface.binding]),
+        fixedTokens: input.components.system.heuristicTokens + input.components.toolSchemas.heuristicTokens,
+        fixedInput: input.overriddenInputFields.includes('messages')
           || pressure.kind === 'known' && input.components.system.heuristicTokens + input.components.toolSchemas.heuristicTokens > pressure.target, proof: token }
     } catch (error) {
       if ((error as { code?: string }).code === 'CONTEXT_INPUT_STALE') return { kind: 'stale' }

@@ -10,6 +10,7 @@ export function reductionProgress(before: ReductionAssessment, after: ReductionA
   // A replacement rewrites the conversation; providers may then need an
   // overridden messages field, so the candidate legitimately reports a fixed
   // input. The reduction itself is the reason the input is overridden.
-  return !before.fixedInput && (reductionRewrites || !after.fixedInput) && after.shape === before.shape && before.inputFingerprint !== after.inputFingerprint
+  const fixedOk = reductionRewrites || (!before.fixedInput && !after.fixedInput)
+  return fixedOk && after.shape === before.shape && before.inputFingerprint !== after.inputFingerprint
     && after.inputTokens < before.inputTokens && before.inputByteKind === after.inputByteKind && (!sizeFailure || after.inputBytes <= before.inputBytes)
 }

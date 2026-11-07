@@ -65,6 +65,8 @@ export interface ReductionAssessment {
   readonly shape: string
   readonly currentView: string
   readonly fixedInput: boolean
+  /** Heuristic tokens that no reduction can remove (system prompt + tool schemas). */
+  readonly fixedTokens?: number
   /** Opaque bridge-owned capability. Its contents are never inspected here. */
   readonly proof: object
 }
