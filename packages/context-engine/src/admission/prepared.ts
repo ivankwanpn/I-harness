@@ -42,7 +42,7 @@ export function assessPreparedCapacity(prepared: PreparedModelRequest, policy: P
   const domain = policy.binding?.capacityDomain ?? { kind: 'unknown' as const, reason: 'coupling-unverified' as const }
   const estimateFor = (input: ProjectedInputFacts, priced: ProjectionEstimate): Estimate => input.coverage === 'incomplete'
     ? { kind: 'unknown', reason: 'remote-input-unavailable' }
-    : input.uncertainties.some(reason => ['image-token-cost', 'signature-token-cost', 'opaque-continuation-token-cost'].includes(reason))
+    : input.uncertainties.some(reason => ['image-token-cost', 'opaque-continuation-token-cost'].includes(reason))
       ? { kind: 'unknown', reason: 'token-cost-unavailable' }
       : { kind: 'estimated', value: priced.tokens, source: priced.calibrated ? 'provider-anchor-plus-projection' : input.coverage === 'neutral-only' ? 'neutral-only' : 'projected-heuristic' }
   validate(prepared, policy)

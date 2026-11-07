@@ -23,3 +23,11 @@ it("retains v1 fingerprint bytes including numeric key order and JSON omissions"
   const oldBytes = '{"2":2,"10":10,"b":"é🙂","__proto__":{"retained":true}}'
   expect(projectionFingerprint(value)).toBe(createHash("sha256").update(oldBytes).digest("hex"))
 })
+it('prices a protocol signature without claiming an opaque continuation', () => {
+  const counter = new ProjectionCounter()
+  counter.metadata({ signature: 'signed' })
+  const input = counter.finish({ protocol: 'fixture', modelId: 'm' }, {}, {})
+  expect(input.uncertainties).toContain('signature-token-cost')
+  expect(input.uncertainties).not.toContain('opaque-continuation-token-cost')
+  expect(input.components.opaqueContinuation).toMatchObject({ textUtf8Bytes: 6, blockCount: 1, heuristicTokens: 7 })
+})

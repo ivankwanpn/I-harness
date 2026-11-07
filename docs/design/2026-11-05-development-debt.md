@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 483（signature 不再停用容量計算）**：metadata 的 signature 走 opaque() 會加 opaque 不確定性 → estimate unknown → compatibility、context unchecked。
+> 改為直接以 bytes/2 計價（保留 signature-token-cost），prepared 不再把它視為不可定價；實機 budget 變 estimated/known。token-meter 55/55、context-engine 98/98。
 > **round 482（CJK token 計算與 cache 記錄）**：非 ASCII 以 UTF-8 byte 計價使中文每字 3 token（實測 heuristic 32,062 vs provider 17,944，1.8x）；
 > 改為 CJK 每字 1 token（ASCII bytes/3、其餘非 ASCII 維持 bytes）。`context/usage` 新增 cacheReadTokens/cacheCreationTokens 記錄。token-meter 54/54、context-engine 98/98、core-agent 66/66。
 > **round 481（partial reduction 修復）**：根因是 candidate 因 replacement 重寫訊息而 `fixedInput:true`，`reductionProgress` 因此拒絕；改為 reduction 自帶 rewrites 時允許 after fixedInput。

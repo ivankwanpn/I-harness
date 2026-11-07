@@ -69,9 +69,15 @@ export class ProjectionCounter {
         this.cacheMetadataBytes += Buffer.byteLength(stringifyJsonData(value[key])!)
     for (const key of ['signature', 'thoughtSignature'])
       if (typeof value[key] === "string") {
-        this.signatureBytes += Buffer.byteLength(value[key])
+        const bytes = Buffer.byteLength(value[key])
+        this.signatureBytes += bytes
+        // A signature is opaque bytes, but pricing them heuristically cannot
+        // hide the rest of the request: keep the uncertainty, not the block.
         this.uncertainties.add("signature-token-cost")
-        this.opaque(value[key])
+        const facts = this.components.opaqueContinuation
+        facts.textUtf8Bytes += bytes
+        facts.blockCount++
+        facts.heuristicTokens += Math.ceil(bytes / 2) + 4
       }
   }
   finish(identity: {
