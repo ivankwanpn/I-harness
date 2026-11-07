@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 526（uninstall 清理驗證）**：rc22 打包版 install+enable 後，`plugins/<id>` 與 `skills/<id>` 均存在；disable+uninstall 後兩者都消失
+> （`skills` 空容器保留屬正常），state plugins/sources 歸零；uninstall 後可再次 install／uninstall，流程正常。
 > **round 525（plugin 重裝 EPERM 續修）**：rc21 驗證發現「新裝」可、但**重裝**仍 `EPERM: rename <id> -> .<id>.old-…`；
 > 原因是安裝目錄本身被觀測/使用中。修正：staging 再往外一層（`dirname(dirname(root))`），並在 park rename 遇 EPERM/EACCES/EBUSY 時
 > 改為刪除舊目錄後直接 swap（非原子窗口極小）。實機：install×2 成功、source 更新後重裝 SKILL.md 內容由 v1 變 v2；plugin-registry 32/32（install）＋244/244。
