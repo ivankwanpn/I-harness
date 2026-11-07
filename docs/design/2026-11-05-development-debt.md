@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 502（Context Mode read maxBytes 夾取）**：`context_output_read` 的 managed ref 路徑把 maxBytes 夾到 1024..32768；
+> 實機以 maxBytes 120 讀 65,007-byte artifact，原本 `unavailable:budget`，現在回 602 bytes 頁（nextOffset 602）。`subagents/result` 的驗證錯誤訊息
+> 也補上 1024..16384 範圍提示。context-output 41/41。
 > **round 501（defer refresh 失敗）**：把 `mcp.bindRefresh` 改成 no-op、只讓新會話套用設定，結果舊會話下一次 submit 立即回
 > `MCP settings changed after selection`（selection 的 currentness 會檢查 MCP 快照）。新會話倒是正常拿到 `mcp__defer__mcp_ping`。
 > 結論：live 變更必然使舊 selection 失效；正解是背景 refresh + 版本化 selection（舊 witness 保留到新 mount 就緒），不是簡單延後。已 revert。

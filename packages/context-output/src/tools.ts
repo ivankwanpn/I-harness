@@ -66,7 +66,10 @@ export function createContextOutputTools(service: ContextOutputService, options?
           if (query.refId !== undefined || !validManagedArtifactRef(query.ref)) return { kind: 'unavailable', reason: 'range' }
           const adapted = { ...query }
           delete adapted.refId
-          if (Number.isInteger(adapted.maxBytes) && (adapted.maxBytes as number) > 32768) adapted.maxBytes = 32768
+          // A page smaller than the reference metadata can never advance; clamp
+          // the caller's budget into the transport's legal page range instead of
+          // failing the read with an opaque budget error.
+          if (Number.isInteger(adapted.maxBytes)) adapted.maxBytes = Math.min(32768, Math.max(1024, adapted.maxBytes as number))
           if (query.ref.codec === 'exec-frames-v1') {
             if (query.offset !== undefined && query.cursor !== undefined) return { kind: 'unavailable', reason: 'range' }
             if (query.offset !== undefined) { adapted.cursor = { recordOffset: query.offset, sliceOffset: 0 }; delete adapted.offset }
