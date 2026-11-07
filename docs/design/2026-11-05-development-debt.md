@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 486（rc12 手動壓縮驗證）**：`desktop/session/compact`（帶 instructions）在 8 回合 CJK 會話回 `{compacted:true, outcome:'ready', publication:'committed', shadowedSeqs:8}`，摘要正常。
+> 顯示 signature 計價修正後手動壓縮可用。
 > **round 485（Context Mode / Code Context 續測）**：Code Context 索引 91 files／250 chunks，`code_context_search` 命中正確檔案（`partial:true` reason `result-budget`）。
 > Context Mode：`context_output_read` 帶 maxBytes 4096 可正常分頁（textLen 3,629、nextOffset 3,629）；先前 `unavailable:budget` 是因為 prompt
 > 讓 maxBytes 只有約 120，小於 ref metadata 大小。status/search 仍只涵蓋 legacy store（managed artifact 不計入），屬設計限制，待評估是否納入索引。
