@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 500（MCP 熱啟用：pending 是暫時）**：重測顯示 `Gateway plugin refresh pending` 在 MCP handshake 期間（~60s timeout）會擋 submit，逾時後回覆可送；
+> 但 refresh 失敗會把 selection 標成 failed（後續 requires recovery）→ 需重啟。嘗試把 failed 放寬，`owned-plugin-refresh-adoption.test.ts` 失敗（設計上要求 poison），已 revert。
+> 建議：MCP mount 改背景執行，或 live 變更時明確提示「新會話生效」，避免 60s 阻塞。
 > **round 499（MCP 熱啟用卡死）**：在既有會話開啟 MCP server（stub）後，`save+enable` 回 `applyError`；同一會話下一次 submit 直接丟
 > `Gateway plugin refresh pending`。`owned-gateway-selection-owner` 在 refresh 失敗後把 row 標成 `failed`（後續錯誤應為 requires recovery），
 > 但 `refresh` flight 未結算前 `check()` 一直回 pending，會話等於被鎖住；重啟 app 後恢復正常（MCP 清單 0、prompt `post-mcp-ok`）。
