@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 529（plugin 提供的 MCP）**：marketplace plugin 內含 `.mcp.json`（stdio echo）→ install+enable 後，模型工具清單出現
+> `mcp__plugin_mcp-market__withmcp_echo__plugin_echo_*` 等工具，呼叫得 `plugin-pong:plugin`；disable 後新會話完全沒有 echo/plugin 工具（模型確認）。
+> 代表 plugin MCP 的掛載／卸載正常，且不受 MCP 從 selection 抽離影響。
 > **round 528（live-plugins flake 修正）**：atomic state replacement 測試失敗原因是 registry 路徑被目錄替換又還原時，watcher 漏掉最後事件，
 > `refreshError` 永久殘留（UI 需重啟）。修正：`plugins.state()` 在 refreshError 存在時先重試一次 `refreshLive()`。
 > `live-plugins` 由 10/11 → **11/11**；host 專項 3/3。
