@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 488（CJK 計價後的測試校正）**：core-agent 全量 649/649；其中 protocol-recovery 的 fixture 用「資料」×1000，CJK 改按字計價後變小、
+> 只剩 1 個 summary slice，與「>1 slices」斷言衝突；把 fixture 加大到 ×3000 恢復原意。
 > **round 487（Context/Code 子系統 action）**：`context clear` ok（legacy results 0；managed-v1 仍有 182 個 artifact，clear 不影響 managed）；
 > `code clear` → unindexed/files 0；`code update` → ready/91 files/250 chunks。環境無 Ollama，hybrid 無法測。managed artifacts 的 status/search 缺口屬介面分離（legacy search vs managed ref），暫文件化。
 > **round 486（rc12 手動壓縮驗證）**：`desktop/session/compact`（帶 instructions）在 8 回合 CJK 會話回 `{compacted:true, outcome:'ready', publication:'committed', shadowedSeqs:8}`，摘要正常。

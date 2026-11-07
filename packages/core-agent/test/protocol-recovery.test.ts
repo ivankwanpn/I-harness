@@ -115,7 +115,7 @@ it.each(variants.flatMap(variant => (["success", "repeat", "stop", "storage"] as
 
 it.each(variants)("%s prepares legal standalone summary slices for balanced autonomous tool rounds", async variant => {
   const f = setup(variant, "success"), messages: LLMMessage[] = [{ role: "user", content: "Original task and authorized scope" }]
-  for (let i = 0; i < 6; i++) messages.push({ role: "assistant", content: "", toolCalls: [{ id: `round-${i}`, name: "effect", args: {} }] }, { role: "tool", toolCallId: `round-${i}`, content: `result-${i}:` + "資料".repeat(1000) })
+  for (let i = 0; i < 6; i++) messages.push({ role: "assistant", content: "", toolCalls: [{ id: `round-${i}`, name: "effect", args: {} }] }, { role: "tool", toolCallId: `round-${i}`, content: `result-${i}:` + "資料".repeat(3000) })
   const original = JSON.stringify(messages), facts: { inputTokens: number; outputReserve: number }[] = []
   expect((await summarizeFixture(f.deps.model, "Synthetic retained transcript", 1024, undefined, undefined, 500, undefined,
     { systemPrompt: f.deps.systemPrompt, tools: f.tools.schemas(), messages }, { contextWindow: 20000, onMeasurement: value => facts.push(value) })).text).toBe(checkpoint.trim())
