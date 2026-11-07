@@ -28,6 +28,7 @@ export function createDesktopMcp(path: string) {
   return {
     state, refresh:()=>refresh(),
     active: store.active,
+    snapshot: () => store.active(),
     async activeWitness(){assertMutation();const before=fingerprint(),configs=await store.active(),after=fingerprint();assertMutation();if(before!==after)throw Error('MCP settings changed during selection');const snapshot=JSON.stringify(configs);return Object.freeze({configs,assertCurrent(){assertMutation();if(fingerprint()!==after||JSON.stringify(configs)!==snapshot)throw Error('MCP settings changed after selection')}})},
     bindRefresh(callback: () => Promise<void>) { apply = callback },
     async mutate(value: unknown) {

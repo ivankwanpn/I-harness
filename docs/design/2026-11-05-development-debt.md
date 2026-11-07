@@ -15,6 +15,10 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 522（MCP 從 selection 抽離）**：`captureOwnedGatewaySelection` 不再呼叫 `mcp.activeWitness/assertCurrent`，改用 `mcp.snapshot()`（configs 僅供
+> 初次 mount）；selection 不再因 MCP 設定變更而失效，`firstParty.refresh` 也就不會撞上 `MCP mutation pending`。
+> 實機：會話進行中 save+enable 新 stdio server → 無 applyError、submit 正常，模型直接呼叫 `mcp__live10__mcp_ping` 得 `pong:live10`（同一會話、無重啟）。
+> `live-plugins` 的 atomic-replacement 測試在未套用此變更時也失敗（環境 flake，非本次造成）。
 > **round 521（MCP refresh 串行化）**：`createDesktopMcp.refresh` 改為 chain（一次只跑一個 apply），`mcp-settings` 單元測試 1/1。
 > 但實機 save 新 server + enable 仍回 applyError → 會話 requires recovery（等 70 秒也一樣）。
 > 失敗不在 mcp.refresh 重疊，而在 `plugins.refresh()`／`service.refreshExtensions()` 內部的 mount 或 hook 檢查；下一步要 instrument 該層的真正錯誤。
