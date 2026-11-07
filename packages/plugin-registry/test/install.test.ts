@@ -484,6 +484,23 @@ describe("installPlugin: two-phase overwrite (park → swap → drop)", () => {
     expect(await readdir(installRoot)).toEqual([healed.id])
     expect(await readFile(join(healed.installPath, "commands", "hello.md"), "utf8")).not.toBe("v1-original")
   })
+
+  it("replaces a watched install when parking the old copy fails EPERM", async () => {
+    const sourceDir = await copyPlugin("hello")
+    const installRoot = await tempDir("inst-root-")
+    const first = await installPlugin(sourceDir, "mkt", "hello", installRoot)
+    await writeFile(join(first.installPath, "commands", "hello.md"), "stale", "utf8")
+    let calls = 0
+    fsMock.rename.mockImplementation(async (from: string, to: string) => {
+      calls++
+      if (calls === 1) throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })
+      return fsMock.realRename(from, to)
+    })
+    const second = await installPlugin(sourceDir, "mkt", "hello", installRoot)
+    expect(calls).toBe(2)
+    expect(await readFile(join(second.installPath, "commands", "hello.md"), "utf8")).not.toBe("stale")
+    expect(await readdir(installRoot)).toEqual([second.id])
+  })
 })
 
 describe("pluginId", () => {

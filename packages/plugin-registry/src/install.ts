@@ -533,7 +533,7 @@ export async function installPlugin(
   // handle on the freshly copied directory, which makes rename() fail EPERM on
   // Windows. The sibling directory sits on the same volume, so the swap stays
   // atomic.
-  const tmp = join(dirname(root), `.ih-plugin-tmp-${id}-${randomUUID()}`)
+  const tmp = join(dirname(dirname(root)), `.ih-plugin-tmp-${id}-${randomUUID()}`)
   const parked = join(root, `.${id}.old-${randomUUID()}`)
   try {
     await mkdir(root, { recursive: true })
@@ -544,8 +544,19 @@ export async function installPlugin(
     await rekeyMcpServers(tmp, id)
     let parkedPath: string | null = null
     if (existsSync(installPath)) {
-      await rename(installPath, parked) // phase 1: park the old copy
-      parkedPath = parked
+      try {
+        await rename(installPath, parked) // phase 1: park the old copy
+        parkedPath = parked
+      } catch (error) {
+        // A recursive watcher can hold a handle on the installed directory, so
+        // renaming it fails EPERM on Windows. Deleting it (also through the
+        // same handle) is what Windows allows; the swap below re-creates the
+        // path immediately, so the non-atomic window stays tiny.
+        const code = (error as NodeJS.ErrnoException).code
+        if (!['EPERM', 'EACCES', 'EBUSY'].includes(code ?? '')) throw error
+        await rm(installPath, { recursive: true, force: true })
+        parkedPath = null
+      }
     }
     try {
       await rename(tmp, installPath) // phase 2: swap the new copy in
