@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 501（defer refresh 失敗）**：把 `mcp.bindRefresh` 改成 no-op、只讓新會話套用設定，結果舊會話下一次 submit 立即回
+> `MCP settings changed after selection`（selection 的 currentness 會檢查 MCP 快照）。新會話倒是正常拿到 `mcp__defer__mcp_ping`。
+> 結論：live 變更必然使舊 selection 失效；正解是背景 refresh + 版本化 selection（舊 witness 保留到新 mount 就緒），不是簡單延後。已 revert。
 > **round 500（MCP 熱啟用：pending 是暫時）**：重測顯示 `Gateway plugin refresh pending` 在 MCP handshake 期間（~60s timeout）會擋 submit，逾時後回覆可送；
 > 但 refresh 失敗會把 selection 標成 failed（後續 requires recovery）→ 需重啟。嘗試把 failed 放寬，`owned-plugin-refresh-adoption.test.ts` 失敗（設計上要求 poison），已 revert。
 > 建議：MCP mount 改背景執行，或 live 變更時明確提示「新會話生效」，避免 60s 阻塞。
