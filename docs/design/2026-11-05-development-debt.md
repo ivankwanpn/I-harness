@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 493（Skills 實測，對比 MCP）**：建立 `config/skills/smoke/SKILL.md` 後 `desktop/resources/list (skills)` 可列出；會話中 `skill_get` 成功、
+> 模型回覆 `smoke-skill-ok`。證明 plugin catalog capabilities 正常，MCP（`pluginMcp`／`directMcp`）未掛載是該路徑特有問題。
 > **round 492（MCP 實測，未完成）**：`desktop/mcp/mutate save` 可寫入（revision 0→1），`enable` 後 state `enabled:true`，但常回 `applyError`；
 > 重啟後 refresh 回 ok、scheduler 無錯誤，但會話內 `tool_search` 找不到 `mcp_ping`（stub 手動測試正常，initialize/tools/list/tools/call 都有回應）。
 > 尚需追 MCP mount 到 session tool registry 的鏈路；測試 stub 已刪除、config 已移除，app 已還原 rc13 原檔。
