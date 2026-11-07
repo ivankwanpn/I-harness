@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 506（Git／worktree）**：會話內 bash 完成 git init／add／commit／`git worktree add ../wt1 -b wtbranch`／status／worktree list，5 次 bash 全部 succeeded；
+> 磁碟確認 `.git` 與 `wt1` 存在。測試後已刪除 gitdemo／wt1。
 > **round 505（WSL／環境診斷）**：`desktop/wsl/state` 顯示 Ubuntu/WSL2 Stopped；`diagnose` 回「WSL2 bubblewrap and x86_64 seccomp startup succeeded」；
 > `desktop/environment/diagnostics` 正常（shell git-bash、sessionStore jsonl）；會話內 bash 執行 `wsl.exe -e uname -a` 成功（Linux 6.6.87.2-microsoft-standard-WSL2）。
 > **round 504（專案內容搜尋＋會話搜尋）**：`desktop/project-files/content-search` 在 demo workspace 搜 `FACT_PRECONDITION_STALE` 命中 5 筆
