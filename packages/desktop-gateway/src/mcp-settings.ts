@@ -11,11 +11,18 @@ export function createDesktopMcp(path: string) {
   const assertMutation=()=>{const scope=scopes.getStore();if([...mutations].some(token=>!scope?.active||scope.token!==token))throw Error('MCP mutation pending')}
   const fingerprint=()=>{try{return createHash('sha256').update(readFileSync(path)).digest('hex')}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return 'missing';throw error}}
   const state = async () => ({ servers: await store.list(), ...(applyError ? { applyError } : {}) })
+  // Serialize live application: a save immediately followed by an enable used
+  // to overlap two plugin refreshes and poison every live session's selection.
+  let chain: Promise<void> = Promise.resolve()
   const refresh = async (token?:object) => {
+    const wait = chain
+    let release!: () => void
+    chain = new Promise<void>(resolve => { release = resolve })
+    await wait
     const scope={token,active:true}
     try { await scopes.run(scope,async()=>{await apply?.()}); applyError = undefined }
     catch { applyError = "MCP settings were saved, but live application failed. Retry after checking the server configuration."; throw new Error(applyError) }
-    finally{scope.active=false}
+    finally{scope.active=false;release()}
     return state()
   }
   return {

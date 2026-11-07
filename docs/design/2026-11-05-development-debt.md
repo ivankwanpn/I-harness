@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 521（MCP refresh 串行化）**：`createDesktopMcp.refresh` 改為 chain（一次只跑一個 apply），`mcp-settings` 單元測試 1/1。
+> 但實機 save 新 server + enable 仍回 applyError → 會話 requires recovery（等 70 秒也一樣）。
+> 失敗不在 mcp.refresh 重疊，而在 `plugins.refresh()`／`service.refreshExtensions()` 內部的 mount 或 hook 檢查；下一步要 instrument 該層的真正錯誤。
 > **round 520（live MCP 再測）**：save 新 server 後立刻 enable（back-to-back）仍 applyError → 該會話 requires recovery；
 > 但對**已存在**的 server 做 disable→enable，則無 applyError，新會話 tool_search 後可呼叫 `mcp__live4__mcp_ping`。
 > 推測是兩次 refresh 重疊（save 觸發的 refresh 尚未 settle）。建議 save 與 enable 之間等待，或修 selection refresh 的合并邏輯。
