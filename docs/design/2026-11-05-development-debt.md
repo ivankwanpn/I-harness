@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 476（workspace-write 沙箱 shell 崩潰）**：RC9 實機在 `workspace-write` 下 `write`/`read` 成功，但 `shell`/`bash` 子程序以
+> `FATAL ERROR: Error::New napi_get_last_error_info`（`napi_register_module_v1`）崩潰，tool result 為 `outcome:unknown`、stdout 空白。
+> 疑似 sandbox native runtime（legacy backend）在受限模式下載入 native addon 失敗；下輪測 `read-only` 與 `windowsSandboxBackend:psec` 釐清。
 > **round 475（unpriced 不再阻擋 compaction）**：`bridge.prepare` 對 `token-cost-unavailable`＋coverage complete 的請求改以 `capacityFit:'no'` 繼續壓縮；
 > 小會話由 `capacity-unavailable` 變成 `no-progress`（無可減內容），不再誤報容量。core-agent 15/15、gateway compact 3/3。
 > **round 474（capacity-unavailable 真因）**：window 正常（1,000,000），pressure 回 `token-cost-unavailable`：summary/main 請求含 signature／opaque continuation 的
