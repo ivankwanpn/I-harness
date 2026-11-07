@@ -11,7 +11,7 @@ export interface ContextUsageCheckpointV2 {
   version: 2; anchorId: string; accepted: AcceptedUsageReference; request: AcceptedRequestAttributionV1
   bindingId: string; shapeId: string; pricingVersion: string; normalizationVersion: 'input-usage-v1'
   usageSemantics: 'includes-cache' | 'excludes-cache'; prefixId: string; unitCount: number
-  heuristicPrefixTokens: number; reportedInputTokens: number; reportedOutputTokens?: number
+  heuristicPrefixTokens: number; reportedInputTokens: number; reportedOutputTokens?: number; cacheReadTokens?: number; cacheCreationTokens?: number
 }
 export type CalibrationRetirementReason = 'owner-changed' | 'binding-changed' | 'execution-identity-changed' | 'branch-changed' | 'context-rewritten' | 'prefix-changed' | 'shape-changed' | 'pricing-changed' | 'native-incompatible'
 export type ContextUsageEventV2 =
@@ -86,7 +86,7 @@ export function validContextCheckpointV2(value: unknown): value is ContextUsageC
     unitCount: scalarCount,
     heuristicPrefixTokens: scalarCount,
     reportedInputTokens: scalarCount,
-  }, { reportedOutputTokens: scalarCount })
+  }, { reportedOutputTokens: scalarCount, cacheReadTokens: scalarCount, cacheCreationTokens: scalarCount })
 }
 export function validContextUsageV2(value: unknown): value is ContextUsageEventV2 {
   const envelope = {

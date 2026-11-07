@@ -54,7 +54,9 @@ export function createAcceptedCalibration(ownerSessionId: string, observationLif
       const acceptedReference: ContextUsageCheckpointV2["accepted"] = { acceptedSeq: accepted.seq, exchangeId: accepted.exchangeId, actionId: accepted.actionId, attemptId: accepted.attemptId }
       const facts = { version: 2 as const, accepted: acceptedReference, request: JSON.parse(JSON.stringify(request)) as AcceptedRequestAttributionV1,
         bindingId: id.bindingId, shapeId: id.shapeId, pricingVersion: id.pricingVersion, normalizationVersion: 'input-usage-v1' as const, usageSemantics: usage.inputTokenSemantics!, prefixId: semanticPrefix(input), unitCount: input.units.length, heuristicPrefixTokens: total(input), reportedInputTokens: normalized.totalInputTokens,
-        ...(Number.isSafeInteger(usage.outputTokens) && usage.outputTokens! >= 0 ? { reportedOutputTokens: usage.outputTokens } : {}) }
+        ...(Number.isSafeInteger(usage.outputTokens) && usage.outputTokens! >= 0 ? { reportedOutputTokens: usage.outputTokens } : {}),
+        ...(usage.cacheReadTokens !== undefined ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+        ...(usage.cacheCreationTokens !== undefined ? { cacheCreationTokens: usage.cacheCreationTokens } : {}) }
       const anchorId = contextUsageAnchorId(facts), key = `${accepted.seq}:${accepted.exchangeId}`, prior = completed.get(key)
       if (prior && prior !== anchorId) throw new Error('Contradictory accepted usage completion')
       if (prior || retired.has(anchorId)) return ignore('duplicate-or-retired')

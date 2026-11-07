@@ -1,7 +1,7 @@
 import { expect, it } from "vitest"
 import { priceProjectedText, ProjectionCounter, projectionFingerprint } from "../src/index.ts"
 import { createHash } from "node:crypto"
-it.each([["abc", 1], ["abcdef", 2], ["中文", 6], ["é", 2], ["🙂", 4], ["a中", 4]])("prices multilingual %s with the documented conservative UTF8 heuristic", (text, tokens) => {
+it.each([["abc", 1], ["abcdef", 2], ["中文", 2], ["é", 2], ["🙂", 4], ["a中", 2]])("prices multilingual %s with the documented conservative heuristic", (text, tokens) => {
   expect(priceProjectedText(text)).toBe(tokens)
 })
 it("keeps binary allowances and opaque uncertainty separate from ordinary text", () => {

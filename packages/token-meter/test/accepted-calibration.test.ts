@@ -16,6 +16,12 @@ function acceptance(input = facts(), sendId = 'send1', seq = 3) {
   return { request, accepted }
 }
 const usage = { inputTokens: 100, inputTokenSemantics: 'includes-cache' as const, outputTokens: 9000 }
+it('records the reported cache reads with the accepted checkpoint', () => {
+  const source = meter.createAcceptedCalibration('owner', 'live'), input = facts(), a = acceptance(input)
+  const result = source.recordAccepted(input, a.request, a.accepted, { inputTokens: 20, cacheReadTokens: 900, cacheCreationTokens: 80, inputTokenSemantics: 'excludes-cache' })
+  // reportedInputTokens stores the normalized total (input + cache) for sizing.
+  expect(result).toMatchObject({ kind: 'sample', checkpoint: { reportedInputTokens: 1000, usageSemantics: 'excludes-cache', cacheReadTokens: 900, cacheCreationTokens: 80 } })
+})
 it('prices a prospective suffix rewrite heuristically without retiring the matched anchor', () => {
   const source = meter.createAcceptedCalibration('owner', 'live'), input = facts(), a = acceptance(input)
   source.recordAccepted(input, a.request, a.accepted, usage)

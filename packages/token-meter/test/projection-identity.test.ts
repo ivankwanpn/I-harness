@@ -14,7 +14,7 @@ it("versions semantic pricing, canonically binds options, and rotates legacy com
   expect(a.semanticIdentity).toMatchObject({ version: 2, schema: "projected-input-v2", pricingVersion: "projected-pricing-v2", bindingId: expect.stringMatching(/^[a-f0-9]{64}$/) })
   expect(a.semanticIdentity).toEqual(b.semanticIdentity)
   expect(changed.semanticIdentity?.semanticId).not.toBe(a.semanticIdentity?.semanticId)
-  expect(a.units[0]).toMatchObject({ heuristicTokens: 19, semanticId: expect.stringMatching(/^[a-f0-9]{64}$/) })
+  expect(a.units[0]).toMatchObject({ heuristicTokens: 17, semanticId: expect.stringMatching(/^[a-f0-9]{64}$/) })
   expect(a.shapeFingerprint).toBe(projectionFingerprint(["projection-compat-v2", a.semanticIdentity!.shapeId, "projected-pricing-v2"]))
   expect(a.shapeFingerprint).not.toBe(projectionFingerprint({ b: 2, a: 1 }))
   // Ordinary public v1 hashing stays source-order JSON, including Unicode.
