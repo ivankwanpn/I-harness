@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 514（stale source owner grant）**：把授權順序改為先 `sourceFor`＋`assertCurrent`，再判來源：owner session 可在來源變更後讀自己的 plain result，
+> process page 仍走原嚴格路徑。`code-final-output-process-reader` 1/1、`ownership-native-count` 81/81 通過；
+> 以 wrapper 直接驗證：sourceId 改成 `new-source-after-restart` 仍能讀 65KB artifact（text 開頭 `{"stdout":"line zzz…`）。app 內模型仍傾向用 bash，未完成模型層驗證。
 > **round 513（managed 用量可見）**：新增 `service.managedInventory(access)`（committed managed artifacts 的 results/bytes），
 > `context_output_status` 回傳 `managedResults`／`managedBytes`；managed-artifacts 測試 7/7。
 > 讓 Context Mode 即使搜尋授權未解，也能在狀態看到 managed 擷取量。
