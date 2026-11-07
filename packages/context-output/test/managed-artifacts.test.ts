@@ -7,6 +7,28 @@ import { createContextOutputService, createContextOutputTools } from '../src/ind
 type Admission = { write(bytes: Uint8Array): Promise<void>; finish(completeness: 'complete'): Promise<{ kind: string; ref?: { encodedBytes: number } }> }
 type ManagedService = { registerResultScope?(owner: { operationId: string; sessionId: string; callId: string }, current: () => boolean): { operationId: string }; beginResult?(scope: { operationId: string }, codec: 'text-utf8-v1'): Promise<Admission> }
 
+
+it('searches and reads a managed result through its context reference', async () => {
+  const base = resolve(import.meta.dirname, '../../../build/context-output-tests')
+  await mkdir(base, { recursive: true })
+  const root = await mkdtemp(resolve(base, 'managed-search-'))
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  try {
+    const scope = service.registerResultScope({ operationId: 'search', sessionId: 'a', callId: 'call' }, () => true)
+    const sink = await service.beginResult(scope, 'text-utf8-v1')
+    await sink.write(Buffer.from('hello zzz world'))
+    const result = await sink.finish('complete')
+    if (result.kind !== 'committed') throw new Error('Expected committed fixture')
+    const search = await service.search({ sessionId: 'a' }, { query: 'zzz' })
+    expect(search.hits).toHaveLength(1)
+    expect(search.hits[0]).toMatchObject({ ref: { id: result.ref.id }, offset: 6, endOffset: 9 })
+    const page = await service.read({ sessionId: 'a' }, { refId: result.ref.id })
+    expect(page.text).toBe('hello zzz world')
+    expect(page.eof).toBe(true)
+    const foreign = await service.search({ sessionId: 'b' }, { query: 'zzz' })
+    expect(foreign.hits).toHaveLength(0)
+  } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
+})
 it('provides mandatory result admission while optional Context Mode is disabled', async () => {
   const base = resolve(import.meta.dirname, '../../../build/context-output-tests')
   await mkdir(base, { recursive: true })

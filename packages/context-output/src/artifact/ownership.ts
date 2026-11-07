@@ -127,6 +127,23 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       return page
     })
   }
+  async function inventory(filterSession?: string) {
+    let names: import('node:fs').Dirent[] = []
+    try { names = await readdir(managed, { withFileTypes: true }) } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw cause
+    }
+    const entries: { ref: ManagedArtifactRef; sessionId: string; callId?: string; bytes: number }[] = []
+    for (const entry of names) {
+      if (!entry.isDirectory() || !/^ctxv1_[a-f0-9]{64}$/.test(entry.name)) continue
+      let operation: ArtifactOperation
+      try { operation = await boundedJson(resolve(managed, entry.name, 'operation.json')) as ArtifactOperation } catch { continue }
+      if (!operation || operation.phase !== 'committed' || !validManagedArtifactRef(operation.ref)) continue
+      if (filterSession !== undefined && operation.owner.sessionId !== filterSession) continue
+      entries.push({ ref: operation.ref, sessionId: operation.owner.sessionId, callId: operation.owner.callId, bytes: operation.ref.encodedBytes })
+    }
+    return entries
+  }
   async function protectedCount(): Promise<number> {
     try { return (await readdir(managed)).filter(id => /^ctxv1_[a-f0-9]{64}$/.test(id)).length }
     catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw cause }
@@ -233,7 +250,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     return Object.freeze({operationId:registered.owner.operationId,sessionId:registered.owner.sessionId,callId:registered.owner.callId,source:Object.freeze({...registered.owner.source}),ref:Object.freeze({...ref})})
   }
   const transfers = createSeedDependencyTransfer({ root, options, directory, quota, mutate, membership, authorized, available: document => !closed && !deletedDocuments.has(document) })
-  return { ...transfers, assertOriginalManifestScope, captureConfirmedCodeManifest,
+  return { ...transfers, inventory, assertOriginalManifestScope, captureConfirmedCodeManifest,
     prepareCoveredRelease(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, inventory: ManagedReleaseInventory, coverage: OriginalRevocationCoverage) { mutations.assertTurn(turn); return prepareOriginalManagedRelease(root, inventory, coverage) },
     async applyCoveredRelease(turn: import('../workspace-mutation.ts').WorkspaceMutationTurn, operation: OriginalManagedRelease) { mutations.assertTurn(turn); const documents = await applyOriginalManagedRelease(root, operation, () => mutations.assertTurn(turn)); for (const document of documents) deletedDocuments.add(document) },
     assertCoveredReleaseSettled: assertOriginalManagedReleaseSettled,

@@ -15,6 +15,10 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 510（Context Mode managed search，進行中）**：新增 `artifacts.inventory()`（掃 managed-v1/*/operation.json，依 owner.sessionId 過濾）、
+> `service.search` 合併 legacy 與 managed hits、`service.read({refId})` 支援 `ctxv1_…` refId；單元測試（text-utf8 artifact）通過 48/48。
+> 但對**執行中 app 的 live store** 直接開第二個 service 讀取時，`readResult` 回 `Artifact reference unavailable or unauthorized`（pin/access 檔都存在且 operationId 相符），
+> app 內搜尋亦為 0 hits；需再釐清 pin state（`pending`）與 ownedPath 所有權語意，才能在實機生效。status 計數尚未納入 managed。
 > **round 509（fixed surface 下的壓縮）**：22k window 的會話 soft 10 次全不發布，診斷發現 baseline `fixedInput:true`（schema 12.6k > target 11k）時
 > `reduceContext` 直接 block('fixed-input')。改為：fixedInput 但仍有可縮減內容（input - fixedTokens ≥ 512）時照常摘要；
 > `reductionProgress` 在有 rewrites 時允許 before/after fixed。實測 21,726 → 14,843 candidate 成功發布 replacement，heuristic 19,280 → 14,869。context-engine 100/100。

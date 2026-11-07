@@ -598,6 +598,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     }))
   }
 
+  type ManagedEntry = Awaited<ReturnType<typeof artifacts.inventory>>[number]
+  const managedResultRef = (entry: ManagedEntry): ContextResultRef => ({ id: entry.ref.id, workspaceId, sessionId: entry.sessionId, callId: entry.callId ?? entry.ref.id, label: 'Context Mode result', revision: entry.ref.revision, bytes: entry.bytes, originalBytes: entry.ref.encodedBytes, complete: entry.ref.completeness === 'complete', expiresAt: 0 })
   const service:ContextOutputService = {
     registerLegacyForkTransfer(capture) { assertOpen(); return legacy.register(capture) },
     confirmLegacyForkTransfer: legacy.confirm, reconcileLegacyForkTransfer: legacy.reconcile, closeLegacyForkTransfer: legacy.closeScope,
@@ -650,6 +652,12 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       const id = query.refId
       const offset = integer(query.offset ?? 0, 'offset')
       const budget = Math.min(config.maxReadBytes, integer(query.maxBytes ?? config.maxReadBytes, 'read budget', 1))
+      if (/^ctxv1_[a-f0-9]{64}$/.test(id)) {
+        const entry = (await artifacts.inventory(access.sessionId)).find(value => value.ref.id === id)
+        if (!entry) throw new Error('Context output result unavailable')
+        const page = await artifacts.readResult(access, { ref: entry.ref, offset, maxBytes: budget })
+        return { ref: managedResultRef(entry), text: page.data.kind === 'text' ? page.data.text : '', offset: page.offset, nextOffset: page.nextOffset, eof: page.eof }
+      }
       return run(access.signal, owned => withLegacyOriginals(owned, current => readLegacy(id, offset, budget, owned, () => readable(current, caller, id, owned), (id, signal) => current.bytes(id, signal))))
     },
     async search(access, query) {
@@ -662,7 +670,28 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       if (maxBytes < serializedBytes({ hits: [], partial: true, reasons: ['byte-budget'] })) throw new Error('search budget cannot fit result metadata')
       const filter = query.refIds === undefined ? undefined : new Set(query.refIds)
       if (filter && (filter.size > 100 || [...filter].some((id) => typeof id !== 'string'))) throw new Error('refIds must contain at most 100 references')
-      return run(access.signal, owned => withLegacyIndex(owned, context => searchLegacy({ terms, limit, maxBytes, filter }, context, (ref, signal) => allowed(caller, ref, signal), owned)))
+      const legacy = await run(access.signal, owned => withLegacyIndex(owned, context => searchLegacy({ terms, limit, maxBytes, filter }, context, (ref, signal) => allowed(caller, ref, signal), owned)))
+      const hits = [...legacy.hits], reasons = [...legacy.reasons]
+      if (hits.length < limit) {
+        let entries: ManagedEntry[] = []
+        try { entries = await artifacts.inventory(access.sessionId) } catch { reasons.push('managed-index-unavailable') }
+        for (const entry of entries) {
+          if (hits.length >= limit) { if (!reasons.includes('result-count-limit')) reasons.push('result-count-limit'); break }
+          if (filter && !filter.has(entry.ref.id)) continue
+          let page: Awaited<ReturnType<typeof artifacts.readResult>>
+          try { page = await artifacts.readResult(access, { ref: entry.ref, offset: 0, maxBytes: Math.min(8192, maxBytes) }) } catch { continue }
+          const text = page.data.kind === 'text' ? page.data.text : undefined
+          if (!text) continue
+          const lower = text.toLowerCase(), term = terms.find(value => lower.includes(value.toLowerCase()))
+          if (!term) continue
+          const index = lower.indexOf(term.toLowerCase())
+          hits.push({ ref: managedResultRef(entry), text: text.slice(Math.max(0, index - 160), index + 160), offset: index, endOffset: index + term.length })
+        }
+        while (serializedBytes({ hits, partial: true, reasons }) > maxBytes && hits.length) {
+          hits.pop(); if (!reasons.includes('byte-budget')) reasons.push('byte-budget')
+        }
+      }
+      return { hits, partial: reasons.length > 0, reasons }
     },
     async grant(access, refIds, targetSessionId) {
       assertOpen()
