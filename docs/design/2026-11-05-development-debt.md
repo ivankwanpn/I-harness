@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 528（live-plugins flake 修正）**：atomic state replacement 測試失敗原因是 registry 路徑被目錄替換又還原時，watcher 漏掉最後事件，
+> `refreshError` 永久殘留（UI 需重啟）。修正：`plugins.state()` 在 refreshError 存在時先重試一次 `refreshLive()`。
+> `live-plugins` 由 10/11 → **11/11**；host 專項 3/3。
 > **round 527（Code Context hybrid 實測）**：本機 fake openai-compatible embedding server（64 維 char n-gram）→ 設定 hybrid + clear/update，
 > 250 chunks 以每批 16（末批 8）embedding 完成，state ready；query 觸發 1 次 embedding，`code_context_search` 回 6 hits（partial result-budget）。
 > 停掉 embedding server 後 clear/update → state `error` / `fetch failed`（files 0，不 crash）；恢復 server 後再 update → ready 91 files/250 chunks。測試後已還原 lexical。

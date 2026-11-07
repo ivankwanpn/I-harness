@@ -54,7 +54,7 @@
 
 ## 四、已知限制／未解
 
-1. `live-plugins` 的 atomic state replacement 測試在 Windows 上不穩（rename/watch 時序），與本輪修正無關；
+1. （已修）`live-plugins` atomic state replacement：watcher 漏事件導致 refreshError 殘留，`state()` 現會自癒重試；live-plugins 11/11。
 2. Code Context hybrid 模式未測（環境無 embedding server）；
 3. heuristic 仍約 1.29x provider 上報值（保守）；
 4. plugin 重裝在 EPERM 時採「刪舊再 swap」，非原子窗口極小但存在；
