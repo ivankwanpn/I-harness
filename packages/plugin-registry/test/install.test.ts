@@ -454,7 +454,7 @@ describe("installPlugin: two-phase overwrite (park → swap → drop)", () => {
     expect(calls).toHaveLength(3) // park(2), swap(3); dropping the parked copy is an rm, not a rename
     expect(calls[1][0]).toBe(first.installPath)
     expect(calls[1][1].includes(`.${second.id}.old-`)).toBe(true)
-    expect(calls[2][0].includes(`.${second.id}.tmp-`)).toBe(true)
+    expect(calls[2][0]).toContain(`.ih-plugin-tmp-${second.id}-`)
     expect(calls[2][1]).toBe(first.installPath)
     // content refreshed, no staging leftovers
     expect(await readFile(join(first.installPath, "commands", "hello.md"), "utf8")).not.toBe("stale")

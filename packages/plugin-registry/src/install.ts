@@ -529,8 +529,11 @@ export async function installPlugin(
   if (!existsSync(src)) {
     failInvalid(`plugin source directory does not exist: ${src}`)
   }
-  // Staged and parked copies live in installRoot so the renames stay on one volume.
-  const tmp = join(root, `.${id}.tmp-${randomUUID()}`)
+  // Stage outside the install root: a recursive watcher on that root can hold a
+  // handle on the freshly copied directory, which makes rename() fail EPERM on
+  // Windows. The sibling directory sits on the same volume, so the swap stays
+  // atomic.
+  const tmp = join(dirname(root), `.ih-plugin-tmp-${id}-${randomUUID()}`)
   const parked = join(root, `.${id}.old-${randomUUID()}`)
   try {
     await mkdir(root, { recursive: true })

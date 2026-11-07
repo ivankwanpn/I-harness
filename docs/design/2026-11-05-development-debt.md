@@ -15,6 +15,10 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 524（plugin 安裝 EPERM）**：app 內從 marketplace install 一直 `install failed: EPERM: rename .<id>.tmp-… -> <id>`；
+> 同一 installPlugin 在 app 外（tsx）直接跑**成功** → 是 app 進程內（watch/handle）讓 rename 失敗。
+> 修正：staging 目錄改到 installRoot 的**兄弟目錄**（同 volume），不再被 recursive watcher 握著；plugin-registry 244/244。
+> 實機：marketplace 兩個 plugin install+enable 成功，`skill_get` 取回 brainstorming、`/review-changes example.ts` 展開為 `private command body example.ts`。
 > **round 523（rc20 live MCP 增量驗證）**：同一會話 enable → 呼叫得 `A:one`；save revision 1 改 command → 呼叫得 `B:two`（capabilities 自動 remount）；
 > remove server 後模型無法再取得該工具（沒有第三次 mcp 呼叫）。plugin/marketplace 路徑未受影響（live-plugins 10/11，唯一失敗為既有 flake）。
 > **round 522（MCP 從 selection 抽離）**：`captureOwnedGatewaySelection` 不再呼叫 `mcp.activeWitness/assertCurrent`，改用 `mcp.snapshot()`（configs 僅供
