@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 516（deferred tool 的提示詞陷阱）**：`context_output_search` 等 Context Mode 工具是 `exposure: deferred`，不在預設 active tool list；
+> 模型若不先 `tool_search` 就會宣稱「沒有這個工具」並改用 bash。先前測試 prompt 只說「呼叫 context_output_search」而沒有要求先 `tool_search`，
+> 因此看似授權／掛載問題，實際是工具探索步驟。加上「先用 tool_search 找 context_output_search」後，rc17 實機 search 回 1 hit、reasons []（跨重啟）。
 > **round 515（managed search 端到端通過）**：新會話先用 bash 產生 >60KB 輸出（artifact 1 個），tool_search 找到 `context_output_search` 後呼叫，
 > 重啟 app（source 變更）再搜尋仍回 1 hit、`reasons:[]`；`context_output_read`（refId=ctxv1_550a…、maxBytes 2048）回
 > `{"stdout":"NEEDLE_MARKER_ABC…`、nextOffset 1534。stale-source grant 與 managed search/read 在實機成立。
