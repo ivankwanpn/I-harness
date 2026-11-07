@@ -57,7 +57,13 @@ export function createDesktopPlugins(root: string, options: { watch: FsWatchServ
   }
   return {
     refresh: () => refreshLive(),
-    state: () => managed.run(async (registry) => ({ sources: await registry.listSources({ fetchMissing: false }), ...(await registry.catalog({ fetchMissing: false })), diagnostics: Object.fromEntries(diagnostics), ...((watchError ?? refreshError) !== undefined ? { refreshError: watchError ?? refreshError } : {}) })),
+    async state() {
+      // Self-heal a stale refresh error: a watcher can miss the last event when
+      // the registry path is replaced (for example a file briefly becoming a
+      // directory), leaving a permanent error in the UI until restart.
+      if (refreshError !== undefined) await refreshLive().catch(() => {})
+      return managed.run(async (registry) => ({ sources: await registry.listSources({ fetchMissing: false }), ...(await registry.catalog({ fetchMissing: false })), diagnostics: Object.fromEntries(diagnostics), ...((watchError ?? refreshError) !== undefined ? { refreshError: watchError ?? refreshError } : {}) }))
+    },
     bindRefresh(callback: () => Promise<void>) { refresh = callback; return managed.observe(() => refreshLive(), (error) => { refreshError = String(error) }) },
     commands: () => managed.run((registry) => registry.runtimeInputs().commandDescriptors.map(({ name, description, argumentHints }) => ({ name, description, argumentHints }))),
     report(sessionId: string, messages: string[]) {
