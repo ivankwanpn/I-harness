@@ -620,6 +620,11 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     async readExecResult(access, query) { assertOpen(); return artifacts.readExecResult(access, query) },
     reconcileResult: artifacts.reconcileResult,
     status,
+    async managedInventory(access) {
+      identity(access.sessionId, 'sessionId')
+      const entries = await artifacts.inventory(access.sessionId)
+      return { results: entries.length, bytes: entries.reduce((sum, entry) => sum + entry.bytes, 0) }
+    },
     async configure(patch) {
       while (pendingDeletionTopologies().length) await joinDeletionUse()
       while (finiteClear) await joinFiniteClear()

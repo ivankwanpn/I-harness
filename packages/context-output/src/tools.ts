@@ -86,7 +86,13 @@ export function createContextOutputTools(service: ContextOutputService, options?
       description: 'Inspect Context Mode enablement, limits, retained output counts, and active jobs.',
       searchHint: 'Context Mode retained output status configuration limits',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      async execute(args, exec) { caller(exec); argumentsObject(args, []); return service.status() },
+      async execute(args, exec) {
+        const access = caller(exec); argumentsObject(args, [])
+        const status = service.status()
+        if (!service.managedInventory) return status
+        const managed = await service.managedInventory(access)
+        return { ...status, managedResults: managed.results, managedBytes: managed.bytes }
+      },
     },
   ]
 }

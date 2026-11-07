@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 513（managed 用量可見）**：新增 `service.managedInventory(access)`（committed managed artifacts 的 results/bytes），
+> `context_output_status` 回傳 `managedResults`／`managedBytes`；managed-artifacts 測試 7/7。
+> 讓 Context Mode 即使搜尋授權未解，也能在狀態看到 managed 擷取量。
 > **round 512（managed search host 授權）**：在 `context-runtime` 直接加 `authorizeResult` 不可行（型別 `Policy` 已 Omit，
 `createProcessAwareResultService` 內建自己的授權）。該內建授權要求 `sourceFor(session).sourceId === owner.source.sourceId`，重啟後來源變更即拒絕。
 嘗試「owner session 先行允許」會讓 `code-final-output-process-reader` 的 replaced-reader 拒絕失效（process page admission 被繞過）。需更窄條件

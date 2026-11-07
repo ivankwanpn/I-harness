@@ -46,6 +46,8 @@ export interface ContextOutputService {
   reconcileResult(operationId: string, id: string): Promise<import('./artifact/types.ts').ArtifactSettlement>;
   configure(patch: Partial<ContextOutputConfig>): Promise<ContextOutputStatus>;
   status(): ContextOutputStatus;
+  /** Counts of committed managed result artifacts owned by the caller. */
+  managedInventory?(access: ContextAccess): Promise<{ results: number; bytes: number }>;
   capture(input: ContextCapture, signal?: AbortSignal, producer?: (access:{maxBytes:number;signal:AbortSignal})=>Promise<{text:string;complete:boolean;originalBytes?:number}>): Promise<ContextResultRef|undefined>;
   read(access: ContextAccess, query: { refId: string; offset?: number; maxBytes?: number }): Promise<ContextReadResult>;
   search(access: ContextAccess, query: { query: string; refIds?: string[]; limit?: number; maxBytes?: number }): Promise<ContextSearchResult>;
