@@ -15,6 +15,10 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 499（MCP 熱啟用卡死）**：在既有會話開啟 MCP server（stub）後，`save+enable` 回 `applyError`；同一會話下一次 submit 直接丟
+> `Gateway plugin refresh pending`。`owned-gateway-selection-owner` 在 refresh 失敗後把 row 標成 `failed`（後續錯誤應為 requires recovery），
+> 但 `refresh` flight 未結算前 `check()` 一直回 pending，會話等於被鎖住；重啟 app 後恢復正常（MCP 清單 0、prompt `post-mcp-ok`）。
+> 待修：MCP-only refresh 失敗時重建 selection 或 reset row，而不是 poison；並讓 refresh 失敗快速結算。
 > **round 498（子代理實測）**：`spawn_agent` 成功（child-5088…、label reply-ok、status completed、finalText `subagent-ok`、artifact ref）；
 > `subagents/list`／`history`／`result` 均可讀（result 頁 maxBytes 下限 1024，傳 1000 會 `invalid result page`）。
 > **round 497（streamable-http MCP）**：本機 HTTP MCP server（POST JSON-RPC、回 application/json、Mcp-Session-Id）設定成功；
