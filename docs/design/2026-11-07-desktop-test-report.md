@@ -1,7 +1,7 @@
-# IH Desktop 實測報告（2026-11-07，rc22）
+# IH Desktop 實測報告（2026-11-07，rc23）
 
 環境：`D:\ih0113rc2test_env`（portable app、獨立 userdata／config、Windows x64）
-建置：0.1.13-rc2 → rc22（未合併測試分支；rc22 為目前最新交付）
+建置：0.1.13-rc2 → rc23（未合併測試分支；rc23 為目前最新交付）
 測試方式：CDP 驅動 `window.ihDesktop.request`、repo 單元／整合測試、實際會話。
 
 ## 一、修正總覽（依版本）
@@ -26,6 +26,7 @@
 | rc19 | Code Context 工具 direct exposure |
 | rc20 | MCP 移出 selection witness → live enable/改 command/移除可用 |
 | rc21–rc22 | plugin 安裝／重裝 staging 與 EPERM 修正 |
+| rc23 | plugin registry 自癒（refreshError 重試；live-plugins 11/11） |
 
 ## 二、驗證矩陣（最新）
 
@@ -64,13 +65,14 @@
 
 | 版本 | Setup SHA256 | Zip SHA256 |
 |---|---|---|
+| rc23 | `6b570d65db8d33b25dbbb6e98905622d1e1eccc85539fb3dd9779d25c9d43cac` | `2593e17b5106dcb2986ecc05056c5df205b4d354b26c8897ae03dea76f2ae110` |
 | rc22 | `ec40e7f94c06ff70518ae4fd586adde5dddfd76643b040b0af8f2aab5c4ce05b` | `719850e6dca849c1ae4ddc0e4d16215af2175237e8085296d5226212885616d6` |
 | rc21 | `ed24155858b06eb949ff19da9d3b2dbab9674b612fd5de0a31a0df83759fce40` | `287e82d85d1568033e1b8832a9d9f73a09a290f699f98f46090dd3d937252b7c` |
 | rc20 | `5b7113f60524a676e89f66c7c8877a0f188099e3f13f39455f028e6cc3137675` | `6f5737fcc5857f3aae51b7330511d18afcff7c75feb955a2b4934802cc8740a8` |
 
 ## 六、目前測試環境狀態
 
-- app：rc22；window 1,000,000；
+- app：rc23；window 1,000,000；
 - Context Mode／Code Context：ON（Code Context 已索引 91 files）；
 - Memory：停用；Hooks：清空；MCP：清單空；plugins／sources：0；
 - `workspace/demo/codecorpus`（91 個 .ts）保留供 Code Context 測試。
