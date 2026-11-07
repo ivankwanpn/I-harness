@@ -49,6 +49,24 @@ it.each([false, true])('separates capacity from unresolved recovery (authorized=
   expect(Object.isFrozen(result.snapshot)).toBe(true)
   expect(Object.isFrozen(result.snapshot.requestContext)).toBe(true)
 })
+
+it('keeps a signed request priced while an opaque continuation stays unresolved', () => {
+  const signed = new ProjectionCounter('projected-pricing-v2')
+  signed.unit('prefix', 'user', () => signed.text('visibleText', 'prefix'))
+  signed.metadata({ signature: 'signed-payload' })
+  const withSignature = { ...signed.finish({ modelId: 'm', protocol: 'openai-compatible' }, 'signed', 'signed'), coverage: 'complete' as const }
+  const signedResult = assessLegacyPreparedRequest(prepared(withSignature), policy, readers())
+  expect(signedResult.capacityFit).toBe('yes')
+  expect(signedResult.snapshot.admission).toBe('fit')
+
+  const opaque = new ProjectionCounter('projected-pricing-v2')
+  opaque.unit('prefix', 'user', () => opaque.text('visibleText', 'prefix'))
+  opaque.opaque('continuation-payload')
+  const withOpaque = { ...opaque.finish({ modelId: 'm', protocol: 'openai-compatible' }, 'opaque', 'opaque'), coverage: 'complete' as const }
+  const opaqueResult = assessLegacyPreparedRequest(prepared(withOpaque), policy, readers())
+  expect(opaqueResult.capacityFit).toBe('unavailable')
+  expect(opaqueResult.snapshot.admission).toBe('unavailable')
+})
 it('fits a final 7399 input plus 600 reserve and retains historical coordinates', () => {
   const result = assessLegacyPreparedRequest(prepared(), policy, readers())
   expect(result.capacityFit).toBe('yes')
