@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 523（rc20 live MCP 增量驗證）**：同一會話 enable → 呼叫得 `A:one`；save revision 1 改 command → 呼叫得 `B:two`（capabilities 自動 remount）；
+> remove server 後模型無法再取得該工具（沒有第三次 mcp 呼叫）。plugin/marketplace 路徑未受影響（live-plugins 10/11，唯一失敗為既有 flake）。
 > **round 522（MCP 從 selection 抽離）**：`captureOwnedGatewaySelection` 不再呼叫 `mcp.activeWitness/assertCurrent`，改用 `mcp.snapshot()`（configs 僅供
 > 初次 mount）；selection 不再因 MCP 設定變更而失效，`firstParty.refresh` 也就不會撞上 `MCP mutation pending`。
 > 實機：會話進行中 save+enable 新 stdio server → 無 applyError、submit 正常，模型直接呼叫 `mcp__live10__mcp_ping` 得 `pong:live10`（同一會話、無重啟）。
