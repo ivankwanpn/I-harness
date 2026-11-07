@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 511（managed search 授權釐清）**：pin diag 顯示 pin／operationId／revision 全部相符（state 為 pending，但 readPin 不看 state），
+> 讀取失敗點在 `authorized` 之後的 **source-scoped `authorizeResult`**（沒有 host callback 就 throw TransferBlocked）。搜尋現在會把被略過的 artifact 反映成
+> reason `managed-read-unavailable`，不再靜默。下一步要接 host `authorizeResult` / 確認 session 對自己 source artifacts 的授權。
 > **round 510（Context Mode managed search，進行中）**：新增 `artifacts.inventory()`（掃 managed-v1/*/operation.json，依 owner.sessionId 過濾）、
 > `service.search` 合併 legacy 與 managed hits、`service.read({refId})` 支援 `ctxv1_…` refId；單元測試（text-utf8 artifact）通過 48/48。
 > 但對**執行中 app 的 live store** 直接開第二個 service 讀取時，`readResult` 回 `Artifact reference unavailable or unauthorized`（pin/access 檔都存在且 operationId 相符），

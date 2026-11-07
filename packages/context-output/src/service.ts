@@ -673,13 +673,13 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       const legacy = await run(access.signal, owned => withLegacyIndex(owned, context => searchLegacy({ terms, limit, maxBytes, filter }, context, (ref, signal) => allowed(caller, ref, signal), owned)))
       const hits = [...legacy.hits], reasons = [...legacy.reasons]
       if (hits.length < limit) {
-        let entries: ManagedEntry[] = []
+        let entries: ManagedEntry[] = [], skipped = 0
         try { entries = await artifacts.inventory(access.sessionId) } catch { reasons.push('managed-index-unavailable') }
         for (const entry of entries) {
           if (hits.length >= limit) { if (!reasons.includes('result-count-limit')) reasons.push('result-count-limit'); break }
           if (filter && !filter.has(entry.ref.id)) continue
           let page: Awaited<ReturnType<typeof artifacts.readResult>>
-          try { page = await artifacts.readResult(access, { ref: entry.ref, offset: 0, maxBytes: Math.min(8192, maxBytes) }) } catch { continue }
+          try { page = await artifacts.readResult(access, { ref: entry.ref, offset: 0, maxBytes: Math.min(8192, maxBytes) }) } catch { skipped++; continue }
           const text = page.data.kind === 'text' ? page.data.text : undefined
           if (!text) continue
           const lower = text.toLowerCase(), term = terms.find(value => lower.includes(value.toLowerCase()))
@@ -687,6 +687,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
           const index = lower.indexOf(term.toLowerCase())
           hits.push({ ref: managedResultRef(entry), text: text.slice(Math.max(0, index - 160), index + 160), offset: index, endOffset: index + term.length })
         }
+        if (skipped > 0 && !reasons.includes('managed-read-unavailable')) reasons.push('managed-read-unavailable')
         while (serializedBytes({ hits, partial: true, reasons }) > maxBytes && hits.length) {
           hits.pop(); if (!reasons.includes('byte-budget')) reasons.push('byte-budget')
         }
