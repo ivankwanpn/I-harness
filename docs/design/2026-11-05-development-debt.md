@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 504（專案內容搜尋＋會話搜尋）**：`desktop/project-files/content-search` 在 demo workspace 搜 `FACT_PRECONDITION_STALE` 命中 5 筆
+> （status `limited`、reason `result-count-limit`，路徑／行號正確）。`desktop/session/search` 以 JSON／smoke 查到 BM25 結果與 snippet；`compaction` 無命中（索引以訊息／工具文字為主）。
 > **round 503（rc14 重測 live MCP）**：即使 MCP stub 正常、server 已可用，會話進行中 enable 仍回 `applyError`，之後該會話 `Gateway plugin refresh requires recovery`
 > （永久，重啟才恢復）；新會話不受影響。與 round 71/73「先設定再開會話」正常對照，確認問題只在 **live 變更**。
 > **round 502（Context Mode read maxBytes 夾取）**：`context_output_read` 的 managed ref 路徑把 maxBytes 夾到 1024..32768；
