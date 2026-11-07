@@ -15,6 +15,8 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 508（11 回合小 window 壓力）**：window 22,000、10 個主題各約 500 字，共 11 回合：0 failed、0 replacement、soft 10 次（皆未發布），
+> 最後 heuristic 19,280／reported 14,761（約 88% window），未觸發 prompt_too_long 或 overflow。可再查為何 soft 全未發布（可能 no-progress）。
 > **round 507（資源／commands）**：`desktop/resources/list` 合法 kind 為 `commands`、`skills`（plans/agents/plugins/hooks 等 invalid）。
 > 建立 `workspace/commands/greet.md`（frontmatter description、$ARGUMENTS）後列得 `greet`；會話輸入 `/greet Ivan` 展開為 host-prepared context，
 > assistant 回「哈囉 Ivan…」，turn/end 正常、無失敗。測試檔已刪除。
