@@ -15,6 +15,9 @@
 > 因此 **acquire-before-read／append 持 task lease 不再是待辦**（結構已滿足），
 > 剩下的唯一 bootstrap 語義缺口是 `task-transition-bootstrap-revoke`（見 round 218 末）。
 > **round 469（legacy compaction 觀察）**：app 對短 legacy 會話按 compact 回 `blocked:capacity-unavailable`；repo 測試可達 engine（fixture 摘要失敗為 `retention-output`）。
+> **round 492（MCP 實測，未完成）**：`desktop/mcp/mutate save` 可寫入（revision 0→1），`enable` 後 state `enabled:true`，但常回 `applyError`；
+> 重啟後 refresh 回 ok、scheduler 無錯誤，但會話內 `tool_search` 找不到 `mcp_ping`（stub 手動測試正常，initialize/tools/list/tools/call 都有回應）。
+> 尚需追 MCP mount 到 session tool registry 的鏈路；測試 stub 已刪除、config 已移除，app 已還原 rc13 原檔。
 > **round 491（Hooks 實測）**：workspace hook 需 `trust.script` 的 sha256，且 `command.cmd/args` 必須綁定受信任 artifact（用 app 的 `I-harness.exe` + 絕對 script 路徑、args 只放 script）；
 > 直接 `cmd: node` 會 `invalid`（trust binding）。`needs-approval` → `desktop/hooks/mutate approve` → `ready`；建立會話送 prompt 後 hook 觸發（`event=prompt/submit`）。測試後已 revoke 並刪除 hook。
 > **round 490（記憶功能實測）**：`desktop/memory/configure` 需頂層 `enabled`（不是 patch）；開啟後 `memory_note` 成功寫入，新會話以
