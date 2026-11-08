@@ -151,6 +151,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
       onManage={async (_id, action, title, source) => { if (source) await manage(source, action, title) }}
       onCopyId={async id => { await navigator.clipboard.writeText(id) }}
       onOpenFolder={async source => { if (source) await bridge.request({ kind: "workspace/reveal", workspaceId: source.workspaceId }) }}
+      onManageSessions={props.onManageSessions ? (id, source) => { if (source) props.onManageSessions!(source.workspaceId, id) } : undefined}
       onNewSession={props.onNewSession ? () => props.onNewSession!(props.projectId) : undefined}
       newSessionActive={props.newSessionActive}
       /> : null}
