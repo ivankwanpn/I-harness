@@ -7,6 +7,7 @@ import type { DesktopSubagentCatalog, DesktopSubagentControl, DesktopSubagentCon
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowLeft, Bot, ChevronRight, GitBranch, MessageSquare, RefreshCw, Send, Square, X } from "lucide-react"
 import { useText, type Message } from "../design/i18n.ts"
+import { displayError } from "../design/error-display.ts"
 import { Timeline } from "./Timeline.tsx"
 import { projectTimeline } from "./project.ts"
 import { loadRecentHistory, type HistoryLoad } from "./history.ts"
@@ -24,7 +25,7 @@ export interface SubagentPaneProps {
 const STATUS_LABELS: Record<DesktopSubagentStatus, Message> = {
   queued: "等候中", running: "執行中", waiting: "等待中", completed: "已完成", failed: "已失敗", cancelled: "已取消", unavailable: "不可用",
 }
-const errorText = (reason: unknown) => reason instanceof Error ? reason.message : String(reason)
+const errorText = (reason: unknown) => displayError(reason).summary
 type Feedback = { error?: string; notice?: string }
 // Exact gateway guidance only. Saved diagnostics and transcript content keep
 // their original text, including unknown policy reasons from other peers.

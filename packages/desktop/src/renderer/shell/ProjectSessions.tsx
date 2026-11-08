@@ -1,3 +1,4 @@
+import { displayError } from "../design/error-display.ts"
 import type { SessionDashboardResult } from "@i-harness/sdk"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
@@ -124,7 +125,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
 
   return <div className="project-sidebar-sessions">
     {workspaces.filter(row => views[row.id]?.error).map(workspace => <p key={workspace.id} role="alert" className="notice error-text">
-      {workspaces.length > 1 ? <span>{workspace.label} · </span> : null}{views[workspace.id]!.error}
+      {workspaces.length > 1 ? <span>{workspace.label} · </span> : null}<span title={views[workspace.id]!.error}>{displayError(views[workspace.id]!.error).summary}</span>
       <button type="button" className="link-button" onClick={() => void read(workspace.id)}>{t("重試")}</button>
     </p>)}
     {listingUnavailable.map(workspace => <p key={workspace.id} className="notice">{workspaces.length > 1 ? `${workspace.label} · ` : ""}{t("無法取得會話列表")}</p>)}

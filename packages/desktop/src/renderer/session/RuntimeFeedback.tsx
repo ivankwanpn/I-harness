@@ -3,6 +3,7 @@ import { AlertCircle, LoaderCircle, X } from "lucide-react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { RuntimeActivity, RuntimeDiagnosticEntry } from "../../shared/runtime-diagnostics.ts"
 import { useText } from "../design/i18n.ts"
+import { displayError } from "../design/error-display.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { RuntimeDetails } from "../settings/RuntimeLog.tsx"
 import "./RuntimeFeedback.css"
@@ -175,7 +176,7 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         </div>
       </div> : null}
       {failure ? <div className="runtime-feedback-card runtime-feedback-error" role="alert">
-        <AlertCircle size={18} aria-hidden="true" /><div><strong>{t("請求未完成")}</strong><p>{failure.code==='TEAM_RECOVERY_REQUIRED'?t('工作需要恢復，請重試以繼續。'):failure.message}</p>
+        <AlertCircle size={18} aria-hidden="true" /><div><strong>{t("請求未完成")}</strong><p title={failure.message}>{failure.code==='TEAM_RECOVERY_REQUIRED'?t('工作需要恢復，請重試以繼續。'):displayError(failure.message).summary}</p>
           <div className="runtime-feedback-actions">{failure.code==='TEAM_RECOVERY_REQUIRED'&&failure.workspaceId&&failure.sessionId?<Button variant="ghost" size="small" disabled={recovering} onClick={()=>{const flight={};recoveryFlight.current=flight;setRecovering(true);setRecoveryFailed(false);void bridge.request({kind:'desktop/session/input/resume',workspaceId:failure.workspaceId!,sessionId:failure.sessionId!}).then(()=>{setScopes(previous=>{const next=new Map(previous),key=scopeKey(failure.workspaceId,failure.sessionId),current=next.get(key);if(current?.error?.id===failure.id)next.set(key,{...current,error:undefined});return next})},()=>{if(recoveryFlight.current===flight&&failureId.current===failure.id)setRecoveryFailed(true)}).finally(()=>{if(recoveryFlight.current===flight){recoveryFlight.current=undefined;setRecovering(false)}})}}>{t('重試')}</Button>:null}<Button variant="ghost" size="small" onClick={() => setDetails(failure)}>{t("詳細資料")}</Button><Button variant="ghost" size="small" onClick={onOpenLog}>{t("診斷記錄")}</Button></div>{recoveryFailed?<p>{t('重試失敗，請稍後再試。')}</p>:null}
         </div><Button variant="ghost" size="small" className="runtime-feedback-close" aria-label={t("關閉錯誤通知")} icon={<X size={15} />} onClick={() => setScopes(previous => {
           const next = new Map(previous), key = scopeKey(failure.workspaceId, failure.sessionId)

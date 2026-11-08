@@ -371,7 +371,18 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                 }
                 catch (error) {
                     if (current?.issued) {
-                        completed = finish(current, { kind: 'unknown', key: current.batch.key });
+                        // The append may have committed before the failure. Ask the
+                        // backend to reconcile that exact batch before declaring an
+                        // unknown outcome: an unreconciled unknown leaves the
+                        // execution's pending write set forever and wedges every
+                        // later write in the process.
+                        let reconciled: BackendFactOutcome | undefined
+                        try {
+                            reconciled = bootstrap?.selected
+                                ? await selectedJournal!.reconcileOwnedBatch(id, held, selectedLane!, prefix, current.batch)
+                                : await backend.reconcileOwnedBatch!(id, held, prefix, current.batch)
+                        } catch { reconciled = undefined }
+                        completed = finish(current, reconciled ?? { kind: 'unknown', key: current.batch.key });
                     }
                     else {
                         (current?.staged??executionStage)?.discardUnissued();
