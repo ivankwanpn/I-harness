@@ -101,6 +101,8 @@ export interface RegisterSubagentOptions extends RoleModelHost {
    * ever registered into, which made `role.model` throw `references unknown
    * provider` for every value it could ever hold. */
   resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
+  /** Host-side per-role tool override (settings); absent = role definition. */
+  roleToolsFor?(role: string): string[] | undefined
   exec: ExecService
   parentModel?: ModelClient
   /** Constructor-bound live parent model, read only by actual child work. */
@@ -373,6 +375,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // Omitted when the host passed none — an unset switch is OFF, and the
     // subagent package must not read one into existence.
     ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+    ...(opts.roleToolsFor !== undefined ? { roleToolsFor: opts.roleToolsFor } : {}),
     ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     ...(opts.inheritedSystemContext ? { inheritedSystemContext: opts.inheritedSystemContext } : {}),

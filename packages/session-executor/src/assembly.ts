@@ -315,6 +315,8 @@ export interface AssemblyOptions {
    * next spawn without restarting the session (spec §3). Absent → no role has a
    * declared model and every spawn inherits the session's client. */
   roleSelectionFor?: (roleName: string) => RoleModelSelection | undefined
+  /** Per-role tool allowlist override from settings (absent = role definition). */
+  roleToolsFor?: (roleName: string) => string[] | undefined
   /** `plugins.subagentModel`: whether a role may run on its own declared model
    * at all. ABSENT MEANS OFF — the setting's own default is false, and a host
    * that never wired it has not enabled the feature. Off, a spawn of a role
@@ -1341,6 +1343,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // silently. Both are omitted when the host passed neither: an unset
       // switch is OFF, never "enabled by omission".
       ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+      ...(opts.roleToolsFor !== undefined ? { roleToolsFor: opts.roleToolsFor } : {}),
       ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
       ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
       // M73: the session's OWN model's numbers, on the same host shape as the
@@ -1486,6 +1489,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // The gate travels with the resolver it gates (rule stated at the
         // registerSubagent chain above): THIS spawn site is role-carrying too.
         ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+      ...(opts.roleToolsFor !== undefined ? { roleToolsFor: opts.roleToolsFor } : {}),
         ...(opts.guardian.allowModelSelection !== undefined || opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.guardian.allowModelSelection ?? opts.allowSubagentModelSelection } : {}),
         // M73: the same two numbers, with the same absent-stays-absent rule —
         // but this site passes them WITHOUT judging whether they apply: the
@@ -1543,6 +1547,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // The gate travels with the resolver it gates — same rule, same two
           // options as the other spawn sites above.
           ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+      ...(opts.roleToolsFor !== undefined ? { roleToolsFor: opts.roleToolsFor } : {}),
           ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
           ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
           // M73: the session's numbers ride the same subagents branch as the

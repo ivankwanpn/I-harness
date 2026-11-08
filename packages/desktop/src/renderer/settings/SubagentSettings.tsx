@@ -14,7 +14,7 @@ export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridg
   const [state, setState] = useState<SubagentSettingsState>()
   const [routes, setRoutes] = useState<Route[]>([])
   const [error, setError] = useState<string>()
-  const [notice, setNotice] = useState<"代審模型已儲存，下一次核準檢查會使用此設定。" | "角色設定已儲存，下一個新子代理會讀取此設定。">()
+  const [notice, setNotice] = useState<"代審模型已儲存，下一次核準檢查會使用此設定。" | "角色設定已儲存，下一個新子代理會讀取此設定。" | "工具權限已儲存，下一個新子代理會讀取此設定。">()
   const [busy, setBusy] = useState(false)
   const [reload, setReload] = useState(0)
   const [adding, setAdding] = useState(false)
@@ -37,15 +37,16 @@ export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridg
     lock.current = true; setBusy(true); setError(undefined); setNotice(undefined)
     try {
       setState(await bridge.request({ kind: "desktop/subagents/mutate", workspaceId, command }) as SubagentSettingsState)
-      if (command.action !== "enable") setNotice(command.role === "reviewer"
+      if (command.action === "role/tools") setNotice("工具權限已儲存，下一個新子代理會讀取此設定。")
+      else if (command.action !== "enable") setNotice(command.role === "reviewer"
         ? "代審模型已儲存，下一次核準檢查會使用此設定。"
         : "角色設定已儲存，下一個新子代理會讀取此設定。")
     } catch (reason) { setError(String(reason)) }
     finally { lock.current = false; setBusy(false) }
   }
-  const reviewer = state?.roles.find((row) => row.name === "reviewer") ?? { name: "reviewer" }
+  const reviewer = state?.roles.find((row) => row.name === "reviewer") ?? { name: "reviewer", tools: [] }
   const roles = state?.roles.filter((row) => row.name !== "reviewer") ?? []
-  if (draftRole && !state?.roles.some((row) => row.name === draftRole)) roles.push({ name: draftRole })
+  if (draftRole && !state?.roles.some((row) => row.name === draftRole)) roles.push({ name: draftRole, tools: [] })
   return <section aria-label={t("子代理")}>
     <p className="settings-description">{t("未覆寫時沿用角色定義；內建角色預設繼承主會話。模型配置在下一次建立子代理時讀取，不會更換已執行中的子代理。")}</p>
     {error ? <p role="alert" className="error-text">{error}<button disabled={busy} onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></p> : null}
@@ -53,7 +54,7 @@ export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridg
       {notice ? <p role="status">{t(notice)}</p> : null}
       <h2>{t("代我審批")}</h2>
       <p className="muted">{t("代審模型獨立於任務子代理開關；未指定時沿用主會話模型。變更會在下一次核準檢查生效。")}</p>
-      <RoleCard row={reviewer} title={t("代我審批")} description={t("檢查待核準的操作，無法執行工具。可選擇較便宜的模型。") } routes={routes} busy={busy} onSave={save} />
+      <RoleCard row={reviewer} title={t("代我審批")} description={t("檢查待核準的操作，無法執行工具。可選擇較便宜的模型。") } routes={routes} busy={busy} onSave={save} groups={[]} />
       <h2>{t("任務子代理")}</h2>
       <SettingsGroup><SettingsRow label={t("允許角色使用獨立模型")} description={t("儲存後立即生效；關閉時會拒絕使用獨立模型的新子代理，已執行中的子代理保持原模型。")}
         control={<input type="checkbox" aria-label={t("允許角色使用獨立模型")} checked={state.enabled} disabled={busy} onChange={(event) => { void save({ action: "enable", enabled: event.target.checked }) }} />} /></SettingsGroup>
@@ -67,12 +68,12 @@ export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridg
       }}><label>{t("角色名稱")}<input required maxLength={128} pattern="[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}" value={roleName} onChange={(event) => setRoleName(event.target.value)} /></label>
         <p className="muted">{t("填入既有角色名稱；此設定不會建立新的角色或工具權限。")}</p><button type="submit">{t("新增角色配置")}</button>
       </form> : null}
-      <div className="role-model-list">{roles.map((row) => <RoleCard key={row.name} row={row} routes={routes} busy={busy} onSave={save} />)}</div>
+      <div className="role-model-list">{roles.map((row) => <RoleCard key={row.name} row={row} routes={routes} busy={busy} onSave={save} groups={state.toolGroups} />)}</div>
     </>}
   </section>
 }
 
-function RoleCard({ row, title = row.name, description, routes, busy, onSave }: { row: Row; title?: string; description?: string; routes: Route[]; busy: boolean; onSave(command: SubagentSettingsCommand): Promise<void> }) {
+function RoleCard({ row, title = row.name, description, routes, busy, onSave, groups }: { row: Row; title?: string; description?: string; routes: Route[]; busy: boolean; onSave(command: SubagentSettingsCommand): Promise<void>; groups: { id: string; label: string; tools: string[] }[] }) {
   const t = useText()
   const current = row.selection
   const route = routes.find((entry) => entry.id === current?.provider)
@@ -110,5 +111,18 @@ function RoleCard({ row, title = row.name, description, routes, busy, onSave }: 
       {efforts.map(([effort, label]) => <option key={effort} value={effort}>{label}</option>)}
     </select></label>
     {current && (!configured || !resolved) ? <p className="role-model-status muted">{t(!configured ? "此提供商尚未設定憑證，無法供子代理使用。" : "請先在模型與提供商設定通訊協定。")}</p> : null}
+    {groups.length > 0 ? <fieldset className="role-tools"><legend>{t("工具權限")}</legend>
+      <p className="muted">{t("勾選的群組會成為此角色完整的工具清單；未勾選即不提供。變更在下一個新子代理生效。")}</p>
+      <div className="role-tool-groups">{groups.map((group) => {
+        const enabled = group.tools.every((tool) => row.tools.includes(tool))
+        return <label key={group.id} className="role-tool-group"><input type="checkbox" checked={enabled} disabled={busy} onChange={(event) => {
+          const next = new Set(row.tools)
+          if (event.target.checked) for (const tool of group.tools) next.add(tool)
+          else for (const tool of group.tools) next.delete(tool)
+          void onSave({ action: "role/tools", role: row.name, tools: [...next] })
+        }} />{t(group.label as Parameters<typeof t>[0])}</label>
+      })}</div>
+      <button type="button" disabled={busy} onClick={() => void onSave({ action: "role/tools", role: row.name, tools: [] })}>{t("重設為角色預設")}</button>
+    </fieldset> : null}
   </article>
 }

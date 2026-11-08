@@ -155,14 +155,23 @@ function normalizeRoleModel(raw: unknown): SettingsRoleModel | null {
 }
 
 export function normalizeAgents(raw: unknown, base: SettingsAgents): SettingsAgents {
-  if (!isRecord(raw)) return { roles: { ...base.roles } }
+  if (!isRecord(raw)) return { roles: { ...base.roles }, ...(base.roleTools === undefined ? {} : { roleTools: { ...base.roleTools } }) }
   const rolesRaw = isRecord(raw.roles) ? raw.roles : {}
   const roles: Record<string, SettingsRoleModel> = {}
   for (const [name, value] of Object.entries(rolesRaw)) {
     const entry = normalizeRoleModel(value)
     if (entry !== null) roles[name] = entry
   }
-  return { roles }
+  const roleTools: Record<string, string[]> = {}
+  if (isRecord(raw.roleTools)) {
+    for (const [name, value] of Object.entries(raw.roleTools)) {
+      if (!Array.isArray(value)) continue
+      const tools = [...new Set(value.filter((tool): tool is string =>
+        typeof tool === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(tool)))].slice(0, 256)
+      if (tools.length > 0) roleTools[name] = tools
+    }
+  }
+  return { roles, ...(Object.keys(roleTools).length === 0 ? {} : { roleTools }) }
 }
 
 /** M59: extra request headers — dynamic string keys, non-empty string values;

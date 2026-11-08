@@ -192,6 +192,9 @@ export interface SettingsRoleModel {
  * Package-private; see SettingsRoleModel. */
 export interface SettingsAgents {
   roles: Record<string, SettingsRoleModel>
+  /** Per-role tool allowlist. Absent role = the role definition's own list;
+   * a present role is the COMPLETE list (not an addition). */
+  roleTools?: Record<string, string[]>
 }
 
 /** Canonical provider overrides + the default model. */

@@ -18,7 +18,7 @@ export const executionOptionMode = Object.freeze({
  compact:'complete',autoCompactionEnabled:'complete',rewindStoreRoot:'complete',preset:'complete',planMode:'complete',guardian:'complete',
  session:'complete',detachedSession:'complete',detachedPolicySession:'complete',policyDocument:'complete',policySession:'complete',
  coordinator:'forward',restoredState:'complete',telemetry:'forward',jobStatusEvents:'complete',contextWindow:'forward',budgetBinding:'forward',contextMetadata:'forward',maxOutputTokens:'forward',parentNotify:'complete',reasoningEffort:'forward',
- resolveRoleModel:'complete',roleSelectionFor:'complete',allowSubagentModelSelection:'complete',subagentStaleAfterMs:'complete',
+ resolveRoleModel:'complete',roleSelectionFor:'complete',roleToolsFor:'complete',allowSubagentModelSelection:'complete',subagentStaleAfterMs:'complete',
  managedRuntime:'forward',resultReadScopeFor:'forward',modelMetadataFor:'forward',sessionOperation:'forward',projectContextFor:'complete',executionAuthorityFor:'complete',windowsSandboxBackendFor:'complete',wslExecutionFor:'complete',webSearchModeFor:'complete',
  transformPrompt:'complete',afterSuccessfulSubmit:'complete',extensionsFor:'complete',beforeDispose:'forward',loadMeta:'forward',modelBuilder:'forward',modelBindingFor:'forward',sessionFor:'complete',contextWindowFor:'forward',reasoningEffortFor:'forward',
 } satisfies Record<keyof SessionServiceOptions,'forward'|'complete'|'policy'>)

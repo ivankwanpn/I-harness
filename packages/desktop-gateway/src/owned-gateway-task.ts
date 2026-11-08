@@ -16,6 +16,7 @@ export function createOwnedGatewayTaskOptions(options:{
  prepareTaskChild:NonNullable<RegisterSubagentOptions['prepareTaskChild']>
  resolveModel:RegisterSubagentOptions['resolveModel']
  roleSelectionFor:NonNullable<RegisterSubagentOptions['roleSelectionFor']>
+ roleToolsFor?:RegisterSubagentOptions['roleToolsFor']
  allowSubagentModelSelection:NonNullable<RegisterSubagentOptions['allowSubagentModelSelection']>
  autoCompactionEnabled:NonNullable<RegisterSubagentOptions['autoCompactionEnabled']>
  childOptions:Pick<RegisterSubagentOptions,'generationFactoryFor'|'modelActionTimeoutMs'|'modelActionMaxAttempts'|'summaryFactory'|'inheritedBindingForStep'|'codeModeFactory'|'inheritedSystemContext'|'contextWindow'|'budgetBinding'|'contextMetadata'|'reasoningEffort'|'maxOutputTokens'>
@@ -35,7 +36,7 @@ export function createOwnedGatewayTaskOptions(options:{
    createInstructionContext:child.create,results:createTaskResultRetention(live.output.service,live.output.sourceFor,original.domain.sessionId),
    reportPolicy:SHIPPING_REPORT_POLICY,includeAgentShell:true,includeNativeContext:true,
    ...(options.childShellFactory ? { childShellFactory: options.childShellFactory } : {}),
-   roleSelectionFor:options.roleSelectionFor,allowSubagentModelSelection:options.allowSubagentModelSelection,autoCompactionEnabled:options.autoCompactionEnabled,
+   roleSelectionFor:options.roleSelectionFor,...(options.roleToolsFor?{roleToolsFor:options.roleToolsFor}:{}),allowSubagentModelSelection:options.allowSubagentModelSelection,autoCompactionEnabled:options.autoCompactionEnabled,
    persist:{coordinator:options.coordinator,stateId:original.domain.sessionId,parentSessionId:original.domain.sessionId}}
   if(types.isProxy(options.childOptions)||![null,Object.prototype].includes(Object.getPrototypeOf(options.childOptions)))throw TypeError('Original child options required')
   const descriptors=Object.getOwnPropertyDescriptors(options.childOptions),allowed=new Set(['generationFactoryFor','modelActionTimeoutMs','modelActionMaxAttempts','summaryFactory','inheritedBindingForStep','codeModeFactory','inheritedSystemContext','contextWindow','budgetBinding','contextMetadata','reasoningEffort','maxOutputTokens'])

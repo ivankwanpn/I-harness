@@ -43,6 +43,8 @@ export interface SubagentToolDeps extends RoleModelHost {
    * ever registered into, which made `role.model` throw `references unknown
    * provider` for every value it could ever hold. */
   resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
+  /** Host-side per-role tool override (settings). Absent = the role's own list. */
+  roleToolsFor?(role: string): string[] | undefined
   exec: ExecService
   // M9: live Agent instances retained for the child's session id, enabling
   // followup re-drives (Task 3) without re-creating the agent.

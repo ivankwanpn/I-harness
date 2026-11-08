@@ -193,7 +193,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           parentSession: deps.parentSession,
           parentCtx: deps.parentCtx,
           ...(deps.childShellFactory ? { childShellFactory: deps.childShellFactory } : {}),
-          role,
+          role: deps.roleToolsFor?.(role.name) === undefined ? role : { ...role, tools: deps.roleToolsFor!(role.name)! },
           parentModel: deps.parentModel,
           codeMode: deps.codeMode, codeModeFactory: deps.codeModeFactory,
           createInstructionContext: deps.createInstructionContext,

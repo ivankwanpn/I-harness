@@ -149,7 +149,7 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     case "desktop/subagents/mutate": {
       if (!value.command || typeof value.command !== "object" || Array.isArray(value.command)) throw new Error("invalid subagent settings command")
       const command = value.command as Record<string, unknown>
-      if (!["enable", "role/set", "role/clear"].includes(String(command.action))) throw new Error("invalid subagent settings action")
+      if (!["enable", "role/set", "role/clear", "role/tools"].includes(String(command.action))) throw new Error("invalid subagent settings action")
       return { ...command }
     }
     case "desktop/wsl/state":
