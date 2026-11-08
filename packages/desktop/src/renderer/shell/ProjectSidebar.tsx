@@ -92,7 +92,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
       memberWorkspaceIds={new Set(project?.workspaceIds ?? [])} assignedWorkspaceIds={assigned} knownProjectIds={knownProjectIds}
       selectedWorkspaceId={selected ? selectedWorkspaceId : undefined} selectedSessionId={selected ? selectedSessionId : undefined}
       dashboard={selected ? props.dashboard : undefined} attentionBySession={selected ? props.attentionBySession : undefined}
-      onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived}
+      onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived} onManageSessions={props.onManageSessions}
       onNewSession={props.onCreateSession ? (projectId) => props.onCreateSession!(projectId ?? project?.id) : undefined}
       newSessionActive={selected && selectedSessionId === undefined} />
   }
