@@ -28,10 +28,11 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   let streamIndex: number | undefined
   let groupScope: string | undefined
   let turn: TimelineRow["turn"]
+  let truncatedStep = false
   const appendRow = (row: TimelineRow) => rows.push(turn ? { ...row, turn } : row)
   for (const [index, event] of events.entries()) {
-    if (event.type === "turn/start") { groupScope = `turn:${event.seq ?? index}`; turn = { id: groupScope, complete: false } }
-    if (event.type === "turn/end") { if (turn) turn.complete = true; turn = undefined; groupScope = undefined; promotedInput = undefined }
+    if (event.type === "turn/start") { groupScope = `turn:${event.seq ?? index}`; turn = { id: groupScope, complete: false }; truncatedStep = false }
+    if (event.type === "turn/end") { if (turn) turn.complete = true; turn = undefined; groupScope = undefined; promotedInput = undefined; truncatedStep = false }
     if (event.type === "user/message" && event.internal) continue
     if (event.type === "agent/input/admitted") { admittedInputs.set(event.inputId, event); continue }
     if (event.type === "agent/input/promoted") { promotedInput = admittedInputs.get(event.inputId); continue }
@@ -116,6 +117,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
           ...(event.empty === true ? { empty: true as const } : {}),
         },
       })
+      if (event.truncated === true) truncatedStep = true
     } else if (event.type === "user/message" || event.type === "assistant/message") {
       if (event.type === "user/message") {
         // Old records can be linked only through the trusted promotion and an
@@ -155,6 +157,9 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
       // Structural markers carry no readable content.
       if (event.type !== "step/end") streamIndex = undefined
     } else if (ACTIVITY_EVENT_TYPES.has(event.type)) {
+      // A truncated step already renders the explicit outcome row; labelling the
+      // paired step/failed as "response interrupted" contradicts the cause.
+      if (event.type === "step/failed" && truncatedStep) continue
       const detail = readableEventDetail(event)
       appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, ...(detail ? { detail } : {}) })
     }

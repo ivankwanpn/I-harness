@@ -144,17 +144,27 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   const retry = selected?.retry?.retry
   const [repairing,setRepairing]=useState(false)
   const [repairError,setRepairError]=useState<string>()
+  const [repairNotice,setRepairNotice]=useState<string>()
+  const autoRepair=useRef<string|undefined>(undefined)
   const repairable=failure!==undefined&&/recovery|reconcil|cleanup unresolved|source drain/i.test(failure.message)
-  const repairWorkspace=async()=>{
+  const repairWorkspace=async(auto=false)=>{
     if(!failure?.workspaceId)return
     setRepairing(true);setRepairError(undefined)
     try{
       await bridge.request({kind:'desktop/workspace/repair',workspaceId:failure.workspaceId})
       if(failure.sessionId)await bridge.request({kind:'desktop/session/reload',workspaceId:failure.workspaceId,sessionId:failure.sessionId}).catch(()=>undefined)
       setScopes(previous=>{const next=new Map(previous),key=scopeKey(failure.workspaceId,failure.sessionId);next.set(key,{...next.get(key),error:undefined});return next})
+      if(auto)setRepairNotice("工作區已自動修復，請重試。")
     }catch(error){setRepairError(displayError(error).summary)}
     finally{setRepairing(false)}
   }
+  // Recovery-gated failures get one automatic repair attempt (the native state
+  // is parked as .i-harness.bak-*). If that fails the button stays available.
+  useEffect(()=>{
+    if(!failure?.workspaceId||!repairable||autoRepair.current===failure.id)return
+    autoRepair.current=failure.id
+    void repairWorkspace(true)
+  },[failure?.id,repairable])
   const activity = selected?.activity
   const quiet = activity?.phase === "quiet" && !retry
   useEffect(() => {
@@ -197,6 +207,7 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         })} />
       </div> : null}
     </aside> : null}
+    {repairNotice ? <aside className="runtime-feedback" aria-label={t("連線與錯誤通知")}><div className="runtime-feedback-card" role="status"><div><strong>{t("工作區已修復")}</strong><p>{t(repairNotice as Parameters<typeof t>[0])}</p></div></div></aside> : null}
     {details ? <RuntimeDetails key={details.id} bridge={bridge} entry={details} onClose={() => setDetails(undefined)} /> : null}
   </>
 }

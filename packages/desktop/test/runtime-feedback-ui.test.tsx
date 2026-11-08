@@ -244,14 +244,14 @@ it("shows a projection warning for the selected session and can dismiss or open 
   fireEvent.click(screen.getByLabelText("關閉工作狀態提示"))
   expect(screen.queryByRole("status")).toBeNull()
 })
-it("offers workspace repair for a recovery-gated failure", async () => {
+it("repairs a recovery-gated failure automatically", async () => {
   const f = fixture()
   const request = vi.fn(async () => ({ repaired: true }))
   f.bridge.request = request
   render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
   f.entry({ id: "repair", kind: "session/error", level: "error", message: "Original issued write needs reconciliation", retry: undefined })
   expect(screen.getByRole("alert").textContent).toContain("工作狀態需要恢復")
-  fireEvent.click(screen.getByRole("button", { name: "修復工作區" }))
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/workspace/repair", workspaceId: "w" }))
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/reload", workspaceId: "w", sessionId: "a" }))
+  await screen.findByText("工作區已自動修復，請重試。")
 })
