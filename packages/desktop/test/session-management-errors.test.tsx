@@ -32,10 +32,17 @@ it("keeps a New session row visible and active", () => {
   expect(create).toHaveBeenCalledOnce()
 })
 
-it("disables archive while a conversation has pending messages", () => {
+it("keeps archive available while a conversation has pending messages", () => {
   render(<TaskList dashboard={{ sessions: [{ id: "s", title: "First", live: false, turnCount: 1 }] }} attentionCounts={{ s: 2 }} onSelect={() => {}} onManage={async () => {}} />)
   fireEvent.click(screen.getByRole("button", { name: "更多會話操作 First" }))
   const archive = screen.getByRole("menuitem", { name: "封存會話" }) as HTMLButtonElement
+  expect(archive.disabled).toBe(false)
+})
+
+it("disables archive while a turn is running", () => {
+  render(<TaskList dashboard={{ sessions: [{ id: "s", title: "First", live: true, running: true, turnCount: 1 }] }} onSelect={() => {}} onManage={async () => {}} />)
+  fireEvent.click(screen.getByRole("button", { name: "更多會話操作 First" }))
+  const archive = screen.getByRole("menuitem", { name: "封存會話" }) as HTMLButtonElement
   expect(archive.disabled).toBe(true)
-  expect(archive.title).toContain("請先處理待處理訊息")
+  expect(archive.title).toContain("先停止目前回合")
 })

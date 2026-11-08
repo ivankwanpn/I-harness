@@ -45,10 +45,10 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     void job.finally(() => { if (writes.get(id) === job) writes.delete(id) }).catch(() => undefined)
     return job
   }
-  async function assertIdle(id: string, inspectArtifacts = true): Promise<void> {
+  async function assertIdle(id: string, inspectArtifacts = true, allowPending = false): Promise<void> {
     if (await options.activeWork?.(id)) throw new Error("Session has active workflow work")
     const queue = service.queueState(id)
-    if (queue.running || queue.queued || service.tasks(id).some(task => ["queued", "running"].includes(task.status))) throw new Error("Session is busy")
+    if (queue.running || (!allowPending && queue.queued) || service.tasks(id).some(task => (allowPending ? task.status === "running" : ["queued", "running"].includes(task.status)))) throw new Error("Session is busy")
     const assembly = service.liveAssembly?.(id)
     if (assembly) {
       if (!assembly.liveResources) throw new Error("Live resource inspection is unavailable")
@@ -59,22 +59,22 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     if (!coordinator.snapshot) throw new Error("Durable session inspection is unavailable")
     await coordinator.flush(id)
     const snapshot = (await coordinator.snapshot(id)).session
-    if (readInbox(snapshot).pending().length) throw new Error("Session has pending durable inputs")
+    if (!allowPending && readInbox(snapshot).pending().length) throw new Error("Session has pending durable inputs")
     let inTurn = false
     for (const event of snapshot.events) { if (event.type === "turn/start") inTurn = true; if (event.type === "turn/end") inTurn = false }
-    if (inTurn) throw new Error("Session has an unfinished durable turn")
+    if (inTurn && !allowPending) throw new Error("Session has an unfinished durable turn")
     const state = await coordinator.getDocument(id) as ManagedAgentState | undefined
     const idleChildren = new Set<string>()
     async function inspectAgents(state: ManagedAgentState | undefined) {
       if (state === undefined) return
       if (!state || (state.formatVersion !== 1 && state.formatVersion !== 2) || !Array.isArray(state.agentTable) || !Array.isArray(state.jobs)) throw new Error("Session durable agent state is invalid")
       if (state.agentTable.some(row => !row || !["running", "waiting", "completed", "killed", "error"].includes(row.status ?? "") || !Array.isArray(row.mailbox)) || state.jobs.some(row => !row || !["running", "completed", "killed", "error"].includes(row.status ?? ""))) throw new Error("Session durable agent rows are invalid")
-      if (state.agentTable.some(row => row.status === "running" || (row.mailbox?.length ?? 0) > 0) || state.jobs.some(row => row.status === "running")) throw new Error("Session has active or pending durable agents/inbox")
+      if (state.agentTable.some(row => row.status === "running") || (!allowPending && state.agentTable.some(row => (row.mailbox?.length ?? 0) > 0)) || state.jobs.some(row => row.status === "running")) throw new Error("Session has active or pending durable agents/inbox")
       for (const row of state.agentTable) {
         if (row.status !== "waiting") continue
         // Waiting is also the reusable state of a settled child. Its durable
         // inbox, not the status label alone, determines whether work remains.
-        if (!row.sessionId || row.sessionId === id || (row.lastInboxSeq !== undefined && (!Number.isInteger(row.lastInboxSeq) || row.lastInboxSeq < 0))) throw new Error("Session has active or pending durable agents/inbox")
+        if (!row.sessionId || row.sessionId === id || (!allowPending && row.lastInboxSeq !== undefined && (!Number.isInteger(row.lastInboxSeq) || row.lastInboxSeq < 0))) throw new Error("Session has active or pending durable agents/inbox")
         await coordinator.flush(row.sessionId)
         const child = service.liveSession?.(row.sessionId) ?? (await coordinator.snapshot!(row.sessionId)).session
         let ended = false
@@ -82,10 +82,10 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
         for (const event of child.events) {
           if (event.type === "turn/start") ended = false
           if (event.type === "turn/end") ended = true
-          if (event.type === "subagent/inbox" && (event.seq ?? 0) > (row.lastInboxSeq ?? -1)) throw new Error("Session has active or pending durable agents/inbox")
+          if (!allowPending && event.type === "subagent/inbox" && (event.seq ?? 0) > (row.lastInboxSeq ?? -1)) throw new Error("Session has active or pending durable agents/inbox")
           if (event.type === "code/cell") { if (event.state === "started") cells.add(event.cellId); else cells.delete(event.cellId) }
         }
-        if (!ended || cells.size || readInbox(child).pending().length || service.queueState(row.sessionId).running || service.queueState(row.sessionId).queued) throw new Error("Session has active or pending durable agents/inbox")
+        if ((!ended && !allowPending) || cells.size || (!allowPending && readInbox(child).pending().length) || service.queueState(row.sessionId).running || (!allowPending && service.queueState(row.sessionId).queued)) throw new Error("Session has active or pending durable agents/inbox")
         const resources = service.liveAssembly?.(row.sessionId)?.liveResources?.()
         const ownerResources = assembly?.liveResources?.(row.sessionId)
         if ([resources, ownerResources].some(resources => resources?.backgroundJobs?.length)) throw new Error("Session has active background producers")
@@ -97,14 +97,14 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     // The copied live registry also catches a child that started before its
     // next persisted snapshot, even when its task has an older terminal result.
     if (assembly?.subagentState) await inspectAgents(assembly.subagentState())
-    if (service.tasks(id).some(task => task.status === "waiting" && (task.group !== "subagent" || !idleChildren.has(task.id)))) throw new Error("Session is busy")
+    if (!allowPending && service.tasks(id).some(task => task.status === "waiting" && (task.group !== "subagent" || !idleChildren.has(task.id)))) throw new Error("Session is busy")
     const tasks = await coordinator.getDocument(`task-${id}`) as { formatVersion?: unknown; tasks?: { status?: string }[]; notifications?: { status?: string }[] } | undefined
     if (tasks !== undefined) {
       if (!tasks || (tasks.formatVersion !== 1 && tasks.formatVersion !== 2) || !Array.isArray(tasks.tasks) || !Array.isArray(tasks.notifications)) throw new Error("Session durable task state is invalid")
       if (tasks.tasks.some(row => !row || !["accepted", "running", "completed", "error", "cancelled", "recovery-required"].includes(row.status ?? "")) || tasks.notifications.some(row => !row || !["pending", "delivered", "woken", "error", "suppressed"].includes(row.status ?? ""))) throw new Error("Session durable task rows are invalid")
-      if (tasks.tasks.some(row => ["accepted", "running", "recovery-required"].includes(row.status ?? "")) || tasks.notifications.some(row => ["pending", "delivered", "error"].includes(row.status ?? ""))) throw new Error("Session has pending durable tasks/outbox")
+      if (!allowPending && (tasks.tasks.some(row => ["accepted", "running", "recovery-required"].includes(row.status ?? "")) || tasks.notifications.some(row => ["pending", "delivered", "error"].includes(row.status ?? "")))) throw new Error("Session has pending durable tasks/outbox")
     }
-    if ((await options.pendingInteractions?.(id))?.length) throw new Error("Session has pending interactions")
+    if (!allowPending && (await options.pendingInteractions?.(id))?.length) throw new Error("Session has pending interactions")
     // turn/end reaches the event log before its rewind journal I/O completes.
     // Join only that live finalizer; cold unresolved recordings remain guarded.
     await assembly?.rewind?.drain?.()
@@ -112,7 +112,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     // A previously admitted short writer can schedule a turn while the durable
     // inspection awaits. Refuse that new live work before entering the drain.
     const latestQueue = service.queueState(id)
-    if (latestQueue.running || latestQueue.queued) throw new Error("Session is busy")
+    if (latestQueue.running || (!allowPending && latestQueue.queued)) throw new Error("Session is busy")
   }
   const manager = {
     fence,
@@ -181,6 +181,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
         }
         const profile = await coordinator.profile(sessionId)
         if (profile.meta.origin === "subagent" || profile.meta.origin === "approval-review" || (profile.meta.origin === "team" && profile.meta.parentSession) || !await visible(sessionId, profile.meta)) throw new Error("Session is unavailable")
+        const allowPending = profile.meta.archived
         if (navigationActions.has(action)) {
           return fence.run(sessionId, async () => {
           const navigation = await navigationFor(sessionId)
@@ -189,7 +190,17 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
           return { sessionId }
           })
         }
-        const recoverInterrupted = action === "archive" || action === "delete"
+        if (action === "archive") {
+          // Archiving is reversible: pending inputs, interactions and tasks stay
+          // in the saved conversation. Only running work blocks it.
+          return fence.run(sessionId, async () => {
+            await assertIdle(sessionId, false, true)
+            await coordinator.updateMeta(sessionId, { archived: true })
+            options.onVisibilityWithdrawn?.(sessionId)
+            return { sessionId }
+          })
+        }
+        const recoverInterrupted = action === "delete"
         return fence.exclusive(sessionId, async cleanupOperation => {
           // Recovery writes filesystem artifacts, so hold the durable lease in
           // addition to the local fence. Read-only snapshots hold no lease.
@@ -200,28 +211,27 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
               // Preflight only inspected work: an already admitted writer may
               // have changed durable state while the fence drained it. Prove
               // idle again and never recover a process-local recorder.
-              await assertIdle(sessionId, false)
+              await assertIdle(sessionId, false, allowPending)
               if (!service.liveAssembly?.(sessionId) && options.sessionDir && options.workspace) {
                 await recoverColdSessionRewind(options.sessionDir, options.workspace, sessionId)
               }
             }
-            await assertIdle(sessionId)
+            await assertIdle(sessionId, true, allowPending)
             if (action === "delete") {
               if (!coordinator.deleteOwnedSession || !options.sessionDir || !options.workspace || !options.pendingInteractions || !options.drainSession) throw new Error("Permanent deletion is unavailable for this backend/runtime")
               for (const id of await coordinator.list()) if ((await coordinator.profile(id)).meta.parentSession === sessionId) throw new Error("Session has descendants; coordinated deletion is unavailable")
               await options.drainSession(sessionId)
-              await assertIdle(sessionId)
+              await assertIdle(sessionId, true, allowPending)
               const manifest = await sessionArtifactManifest(options.sessionDir, options.workspace, sessionId)
               // Keep admission closed even if cleanup partially fails after durable closure.
               await fence.retire(sessionId, cleanupOperation)
               await coordinator.deleteOwnedSession(sessionId, manifest)
               return { sessionId }
             }
-            await coordinator.updateMeta(sessionId, action === "rename" ? { title: title!.trim() } : { archived: action === "archive" })
-            if (action === 'archive') options.onVisibilityWithdrawn?.(sessionId)
+            await coordinator.updateMeta(sessionId, action === "rename" ? { title: title!.trim() } : { archived: false })
             return { sessionId }
           } finally { if (borrowed) await coordinator.releaseOwnership(sessionId) }
-        }, () => assertIdle(sessionId, !recoverInterrupted))
+        }, () => assertIdle(sessionId, !recoverInterrupted, allowPending))
       })
     },
     async batch(command: SessionBatchCommand): Promise<SessionBatchResult> {
