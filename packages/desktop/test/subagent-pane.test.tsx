@@ -309,3 +309,18 @@ describe("dedicated subagent pane", () => {
     expect((screen.getByRole("textbox", { name: "子代理輸入" }) as HTMLTextAreaElement).value).toBe("Preserve this draft")
   })
 })
+it("retries a failed subagent catalog beside the error", async () => {
+  let calls = 0
+  const f = fixture(request => {
+    if (request.kind !== "desktop/session/subagents/list") return
+    calls += 1
+    if (calls === 1) return Promise.reject(new Error("catalog unavailable"))
+    return { parentSessionId: "parent", agents: [child] }
+  })
+  render(<SubagentPane bridge={f.bridge} workspaceId="w" sessionId="parent" />)
+  const alert = await screen.findByText(/catalog unavailable/)
+  expect(alert.textContent).toContain("重試")
+  fireEvent.click(screen.getByRole("button", { name: "重試" }))
+  expect(await screen.findByRole("button", { name: "查看子代理 Reader" })).toBeTruthy()
+  expect(calls).toBe(2)
+})
