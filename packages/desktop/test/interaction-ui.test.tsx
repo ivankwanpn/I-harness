@@ -92,6 +92,16 @@ describe("PendingPanel", () => {
     expect(screen.getByText(/Remove-Item outside/)).toBeTruthy()
   })
 
+  it("uses a model-provided Other option as the fixed custom choice", async () => {
+    const onReply = vi.fn(async () => {})
+    render(<PendingPanel pending={[{ ...question, payload: { prompt: "要用哪個方案？", options: ["A", "B", "其他"] } }]} onReply={onReply} />)
+    expect(screen.getAllByRole("radio", { name: "其他" })).toHaveLength(1)
+    fireEvent.click(screen.getByRole("radio", { name: "其他" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "回答 要用哪個方案？" }), { target: { value: "自訂方案" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出回答" }))
+    await waitFor(() => expect(onReply).toHaveBeenCalledWith({ requestId: "r2", decision: { kind: "question", answer: "自訂方案" } }))
+  })
+
   it("answers a question with the selected option", async () => {
     const onReply = vi.fn(async () => {})
     render(<PendingPanel pending={[question]} onReply={onReply} />)

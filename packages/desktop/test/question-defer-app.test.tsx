@@ -77,13 +77,15 @@ it.each([false, true])("keeps deferred cards after acknowledgement (cancel befor
   const before = reads
   fireEvent.click(screen.getByText("Refresh connection"))
   await waitFor(() => expect(reads).toBeGreaterThan(before))
-  const answer = screen.getByRole("textbox", { name: "回答 Which plan?" }) as HTMLTextAreaElement
   fireEvent.click(screen.getByRole("radio", { name: "A" }))
+  fireEvent.click(screen.getByRole("radio", { name: "其他" }))
+  const answer = screen.getByRole("textbox", { name: "回答 Which plan?" }) as HTMLTextAreaElement
   fireEvent.change(answer, { target: { value: "My own approach" } })
   expect((screen.getByRole("radio", { name: "A" }) as HTMLInputElement).checked).toBe(false)
   fireEvent.click(screen.getByRole("radio", { name: "B" }))
-  expect(answer.value).toBe("")
-  fireEvent.change(answer, { target: { value: "Final free answer" } })
+  expect(screen.queryByRole("textbox", { name: "回答 Which plan?" })).toBeNull()
+  fireEvent.click(screen.getByRole("radio", { name: "其他" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "回答 Which plan?" }), { target: { value: "Final free answer" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存回答" }))
   await waitFor(() => expect(screen.queryByRole("textbox", { name: "回答 Which plan?" })).toBeNull())
   expect(decisions).toEqual([{ kind: "question", deferred: true }, { kind: "question", answer: "Final free answer" }])
