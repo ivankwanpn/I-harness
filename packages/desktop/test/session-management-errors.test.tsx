@@ -23,3 +23,19 @@ it.each(["zh-TW", "en"] as const)("explains the pending rewind blocker without I
   expect(alert.textContent).toContain(locale === "en" ? "rewind recording" : "回復記錄")
   expect(alert.textContent).toContain(locale === "en" ? "retry" : "重試")
 })
+it("keeps a New session row visible and active", () => {
+  const create = vi.fn()
+  render(<TaskList dashboard={{ sessions: [{ id: "s", title: "First", live: false, turnCount: 1 }] }} onSelect={() => {}} onNewSession={create} newSessionActive />)
+  const row = screen.getByRole("button", { name: /新會話/ })
+  expect(row.getAttribute("aria-current")).toBe("true")
+  fireEvent.click(row)
+  expect(create).toHaveBeenCalledOnce()
+})
+
+it("disables archive while a conversation has pending messages", () => {
+  render(<TaskList dashboard={{ sessions: [{ id: "s", title: "First", live: false, turnCount: 1 }] }} attentionCounts={{ s: 2 }} onSelect={() => {}} onManage={async () => {}} />)
+  fireEvent.click(screen.getByRole("button", { name: "更多會話操作 First" }))
+  const archive = screen.getByRole("menuitem", { name: "封存會話" }) as HTMLButtonElement
+  expect(archive.disabled).toBe(true)
+  expect(archive.title).toContain("請先處理待處理訊息")
+})
