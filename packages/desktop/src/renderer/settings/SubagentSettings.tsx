@@ -68,12 +68,12 @@ export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridg
       }}><label>{t("角色名稱")}<input required maxLength={128} pattern="[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}" value={roleName} onChange={(event) => setRoleName(event.target.value)} /></label>
         <p className="muted">{t("填入既有角色名稱；此設定不會建立新的角色或工具權限。")}</p><button type="submit">{t("新增角色配置")}</button>
       </form> : null}
-      <div className="role-model-list">{roles.map((row) => <RoleCard key={row.name} row={row} routes={routes} busy={busy} onSave={save} groups={state.toolGroups} />)}</div>
+      <div className="role-model-list">{roles.map((row) => <RoleCard key={row.name} row={row} routes={routes} busy={busy} onSave={save} groups={state.toolGroups ?? []} />)}</div>
     </>}
   </section>
 }
 
-function RoleCard({ row, title = row.name, description, routes, busy, onSave, groups }: { row: Row; title?: string; description?: string; routes: Route[]; busy: boolean; onSave(command: SubagentSettingsCommand): Promise<void>; groups: { id: string; label: string; tools: string[] }[] }) {
+function RoleCard({ row, title = row.name, description, routes, busy, onSave, groups = [] }: { row: Row; title?: string; description?: string; routes: Route[]; busy: boolean; onSave(command: SubagentSettingsCommand): Promise<void>; groups?: { id: string; label: string; tools: string[] }[] }) {
   const t = useText()
   const current = row.selection
   const route = routes.find((entry) => entry.id === current?.provider)

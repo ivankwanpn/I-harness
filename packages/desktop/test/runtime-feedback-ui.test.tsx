@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import type { DesktopBridge, DesktopEvent } from "../src/shared/bridge.ts"
 import type { RuntimeDiagnosticEntry } from "../src/shared/runtime-diagnostics.ts"
@@ -243,4 +243,15 @@ it("shows a projection warning for the selected session and can dismiss or open 
   expect(onOpenLog).toHaveBeenCalledTimes(1)
   fireEvent.click(screen.getByLabelText("關閉工作狀態提示"))
   expect(screen.queryByRole("status")).toBeNull()
+})
+it("offers workspace repair for a recovery-gated failure", async () => {
+  const f = fixture()
+  const request = vi.fn(async () => ({ repaired: true }))
+  f.bridge.request = request
+  render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
+  f.entry({ id: "repair", kind: "session/error", level: "error", message: "Original issued write needs reconciliation", retry: undefined })
+  expect(screen.getByRole("alert").textContent).toContain("工作狀態需要恢復")
+  fireEvent.click(screen.getByRole("button", { name: "修復工作區" }))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/workspace/repair", workspaceId: "w" }))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/reload", workspaceId: "w", sessionId: "a" }))
 })

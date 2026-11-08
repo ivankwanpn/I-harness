@@ -3,6 +3,7 @@ import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { WorkbenchTools, type WorkbenchTool } from "./WorkbenchTools.tsx"
 import { useUiStore } from "./ui-store.ts"
+import { displayError } from "../design/error-display.ts"
 import { useText, useLocale } from "../design/i18n.ts"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
 import { SessionSearch } from "../session/SessionSearch.tsx"
@@ -429,8 +430,8 @@ export function Workbench({
         {error === undefined
           ? null
           : (
-            <p className="notice error-text">
-              {error}
+            <p className="notice error-text" title={error}>
+              {displayError(error).summary}
               {onRetry === undefined ? null : (
                 <button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button>
               )}
@@ -440,8 +441,8 @@ export function Workbench({
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>
-                {conversation.historyError ? <p role="alert" className="notice error-text">{conversation.historyError}<button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button></p> : null}
-                {capabilities["desktop-work-state"]?.includes("1") && conversation.workStateError ? <p role="alert" className="notice error-text">{t("工作狀態讀取失敗")}：{conversation.workStateError}{conversation.onRetryWorkState ? <button type="button" className="link-button" onClick={conversation.onRetryWorkState}>{t("重試")}</button> : null}{conversation.onReloadSession ? <button type="button" className="link-button" onClick={() => { void conversation.onReloadSession?.() }}>{t("重新載入會話")}</button> : null}</p> : null}
+                {conversation.historyError ? <p role="alert" className="notice error-text" title={conversation.historyError}>{displayError(conversation.historyError).summary}<button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button></p> : null}
+                {capabilities["desktop-work-state"]?.includes("1") && conversation.workStateError ? <p role="alert" className="notice error-text">{t("工作狀態讀取失敗")}：{displayError(conversation.workStateError).summary}{conversation.onRetryWorkState ? <button type="button" className="link-button" onClick={conversation.onRetryWorkState}>{t("重試")}</button> : null}{conversation.onReloadSession ? <button type="button" className="link-button" onClick={() => { void conversation.onReloadSession?.() }}>{t("重新載入會話")}</button> : null}</p> : null}
                 {conversation.historyNotice ? <p className="notice history-notice">{conversation.historyNotice}</p> : null}
                 {capabilities["desktop-work-state"]?.includes("1") && !conversation.workStateError && conversation.workState?.goal ? <div className="conversation-goal" title={conversation.workState.goal.objective}>
                   <span className="conversation-goal-label">{t("目前目標")}</span><span className="conversation-goal-objective">{conversation.workState.goal.objective}</span>
@@ -452,7 +453,7 @@ export function Workbench({
                   ? <div className="empty-conversation"><div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1><p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div></div>
                   : <Timeline resultReader={resultReader} key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} running={conversation.running} navigation={fileNavigation} />}
                 <div className="conversation-dock">
-                {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text">{conversation.taskError}</p> : null}
+                {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text" title={conversation.taskError}>{displayError(conversation.taskError).summary}</p> : null}
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} />
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
                 <div hidden={conversation.pending.length > 0}>
