@@ -29,6 +29,7 @@ interface ProjectSessionsProps {
   onManageSessions?: ProjectSidebarProps["onManageSessions"]
   onNewSession?(projectId?: string): void
   newSessionActive?: boolean
+  filter?: string
 }
 
 function confirmedDashboard(value: unknown): value is SessionDashboardResult {
@@ -139,6 +140,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
         if (!source) return
         const scope = epoch.current
         props.onSelectSession(source.workspaceId, id, props.projectId)
+        if (navigation[projectSessionKey(source.workspaceId, id)]?.unread !== true) return
         void (async () => {
           try {
             await props.onManageSession(source.workspaceId, id, "read")
@@ -154,6 +156,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
       onManageSessions={props.onManageSessions ? (id, source) => { if (source) props.onManageSessions!(source.workspaceId, id) } : undefined}
       onNewSession={props.onNewSession ? () => props.onNewSession!(props.projectId) : undefined}
       newSessionActive={props.newSessionActive}
+      filter={props.filter}
       /> : null}
   </div>
 }

@@ -1,5 +1,5 @@
 import type { SessionDashboardResult } from "@i-harness/sdk"
-import { useLocale, useText } from "../design/i18n.ts"
+import { useLocale, useText, type Message } from "../design/i18n.ts"
 import { relativeActivity } from "./relative-activity.ts"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { MoreHorizontal, Pin } from "lucide-react"
@@ -25,10 +25,11 @@ export interface TaskListProps {
   /** A synthetic New Session row keeps the composer draft visible in the list. */
   onNewSession?(): void
   newSessionActive?: boolean
+  filter?: string
 }
 
 /** Sessions with only the fields the host actually reported — never invented. */
-export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, workspaceId, rowScopes, navigation, onManage, onCopyId, onOpenFolder, onManageArchived, onManageSessions, showBatchManagement = true, onNewSession, newSessionActive }: TaskListProps) {
+export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, workspaceId, rowScopes, navigation, onManage, onCopyId, onOpenFolder, onManageArchived, onManageSessions, showBatchManagement = true, onNewSession, newSessionActive, filter }: TaskListProps) {
   const t = useText()
   const locale = useLocale((state) => state.locale)
   const [menu, setMenu] = useState<{ id: string; workspaceId?: string; source?: TaskRowScope; x: number; y: number; element: HTMLElement }>()
@@ -58,19 +59,37 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
   if (dashboard.listingUnavailable === true) {
     return <p className="notice">{t("無法取得會話列表")}</p>
   }
+  const needle = filter?.trim().toLowerCase() ?? ""
+  const visibleSessions = needle ? dashboard.sessions.filter(row => (row.title ?? "").toLowerCase().includes(needle) || row.id.toLowerCase().includes(needle)) : dashboard.sessions
+  const now = Date.now()
+  const hasDates = visibleSessions.some(row => row.updatedAt !== undefined)
+  const dayLabel = (updatedAt: number | undefined): Message => {
+    if (updatedAt === undefined) return "更早"
+    const date = new Date(updatedAt), today = new Date(now)
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
+    if (date.getTime() >= start) return "今天"
+    if (date.getTime() >= start - 86_400_000) return "昨天"
+    return "更早"
+  }
   if (dashboard.sessions.length === 0) {
     return <><p className="notice">{t("尚無會話")}</p>{onManageArchived ? <button type="button" className="session-archived-button" onClick={onManageArchived}>{t("管理已封存會話")}</button> : null}</>
   }
+  if (visibleSessions.length === 0) return <p className="notice">{t("沒有符合的會話")}</p>
   return (
     <>{onManageSessions && showBatchManagement ? <button type="button" className="session-archived-button" onClick={() => onManageSessions()}>{t("批次管理會話")}</button> : null}<ul className="session-list">
-      {onNewSession ? <li className="session-list-row session-new-row">
+      {onNewSession && !needle ? <li className="session-list-row session-new-row">
         <button type="button" className="row-button" aria-current={newSessionActive ? "true" : undefined} onClick={onNewSession}>
           <span className="row-title">{t("新會話")}</span>
           <span className="row-meta">{t("描述你的目標，從這裡開始。")}</span>
         </button>
       </li> : null}
-      {[...dashboard.sessions].sort((a, b) => Number(navigation?.[b.id]?.pinned === true) - Number(navigation?.[a.id]?.pinned === true)).map((row) => (
-        <li key={row.id} className="session-list-row" onContextMenu={(event) => { if (canManage) { event.preventDefault(); const element = event.currentTarget.querySelector<HTMLButtonElement>(".row-button")!; showMenu(row.id, element, event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined) } }}>
+      {(() => { let previous: string | undefined; return [...visibleSessions].sort((a, b) => Number(navigation?.[b.id]?.pinned === true) - Number(navigation?.[a.id]?.pinned === true) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).map((row) => {
+        const pinned = navigation?.[row.id]?.pinned === true
+        const bucketLabel = pinned ? "置頂" as const : dayLabel(row.updatedAt)
+        const bucket = pinned ? "pinned" : bucketLabel
+        const label = hasDates && bucket !== previous ? <li key={`group:${bucket}`} className="session-group-label" role="presentation">{t(bucketLabel)}</li> : null
+        previous = bucket
+        return <>{label}<li key={row.id} className="session-list-row" onContextMenu={(event) => { if (canManage) { event.preventDefault(); const element = event.currentTarget.querySelector<HTMLButtonElement>(".row-button")!; showMenu(row.id, element, event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined) } }}>
           <button
             type="button"
             className="row-button"
@@ -83,8 +102,8 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
             <span className="row-meta">{[row.running === true ? t("執行中") : "", row.updatedAt === undefined ? "" : `${t("最後活動")} ${relativeActivity(row.updatedAt, locale)}`, row.turnCount === undefined ? "" : `${row.turnCount} ${t("回合")}`, row.queued === undefined || row.queued === 0 ? "" : `${t("佇列")} ${row.queued}`, row.tasks === undefined || row.tasks === 0 ? "" : `${t("任務")} ${row.tasks}`, row.modelLabel ?? ""].filter(Boolean).join(" · ")}</span>
           </button>
           {canManage ? <button type="button" className="session-row-more" disabled={busy[actionKey(row.id)] === true} aria-label={t("更多會話操作 {title}", { title: row.title ?? t("未命名會話") })} aria-haspopup="menu" aria-expanded={active?.id === row.id} onClick={(event) => { if (active?.id === row.id) setMenu(undefined); else showMenu(row.id, event.currentTarget) }}><MoreHorizontal size={16} /></button> : null}
-        </li>
-      ))}
+        </li></>
+      }) })()}
     </ul>
     {onManageArchived ? <button type="button" className="session-archived-button" onClick={onManageArchived}>{t("管理已封存會話")}</button> : null}
     {active && menu ? <SessionActions key={JSON.stringify([activeScope?.workspaceId ?? workspaceId, activeScope?.sessionId ?? active.id])} session={activeScope ? { ...active, id: activeScope.sessionId, pending: attentionCounts?.[active.id] ?? 0 } : { ...active, pending: attentionCounts?.[active.id] ?? 0 }} navigation={navigation?.[active.id]} anchor={menu}

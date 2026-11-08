@@ -4,7 +4,7 @@ import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { SessionAction } from './SessionActions.tsx'
 import { useEffect, useState } from "react"
-import { ChevronRight, FolderOpen, Pin, Plus, Settings, SlidersHorizontal } from "lucide-react"
+import { ChevronRight, FolderOpen, Pin, Settings, SlidersHorizontal } from "lucide-react"
 import { useText, useLocale } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { createRefreshScheduler } from "../session/refresh-scheduler.ts"
@@ -44,6 +44,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   const en = useLocale(state => state.locale) === "en"
   const { projects, workspaces, selectedProjectId, selectedWorkspaceId, selectedSessionId, bridge } = props
   const [workspaceOwners, setWorkspaceOwners] = useState<Record<string, (string | undefined)[]>>({})
+  const [search, setSearch] = useState("")
   const [ownerError, setOwnerError] = useState<string>()
   const workspaceKey = JSON.stringify(workspaces.map(row => row.id))
   useEffect(() => {
@@ -92,7 +93,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
       memberWorkspaceIds={new Set(project?.workspaceIds ?? [])} assignedWorkspaceIds={assigned} knownProjectIds={knownProjectIds}
       selectedWorkspaceId={selected ? selectedWorkspaceId : undefined} selectedSessionId={selected ? selectedSessionId : undefined}
       dashboard={selected ? props.dashboard : undefined} attentionBySession={selected ? props.attentionBySession : undefined}
-      onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived} onManageSessions={props.onManageSessions}
+      onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived} onManageSessions={props.onManageSessions} filter={search}
       onNewSession={props.onCreateSession ? (projectId) => props.onCreateSession!(projectId ?? project?.id) : undefined}
       newSessionActive={selected && selectedSessionId === undefined} />
   }
@@ -100,7 +101,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
     <div className="sidebar-header">
     <div className="brand">I-harness</div>
-    <Button variant="ghost" className="sidebar-new" icon={<Plus size={17} />} disabled={!props.canCreate} onClick={props.onCreate}>{t("新增會話")}</Button>
+    <input className="project-sidebar-search" type="search" aria-label={t("搜尋會話")} placeholder={t("搜尋會話")} value={search} onChange={event => setSearch(event.target.value)} />
     <div className="project-sidebar-heading"><h2 className="sidebar-title">{t("專案")}</h2><Button variant="ghost" size="small" className="project-sidebar-manage" icon={<SlidersHorizontal size={14} />} onClick={props.onProjects}>{t("管理專案")}</Button></div>
     </div>
     <div className="sidebar-scroll">
@@ -108,7 +109,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     <ul className="project-sidebar-tree">
       {[...projects].sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true)).map((project) => {
         const key = projectKey(project.id)
-        const expanded = expandedProjects.has(key)
+        const expanded = expandedProjects.has(key) || search.trim() !== ""
         const members = workspaces.filter(workspace => project.workspaceIds.includes(workspace.id) || workspaceOwners[workspace.id]?.includes(project.id))
         return <li key={project.id}>
           <div className={`project-sidebar-project-row${project.id === effectiveProjectId ? " is-selected" : ""}`}>
@@ -127,14 +128,15 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
         <button type="button" className="project-sidebar-unassigned-toggle" aria-expanded={expandedProjects.has(projectKey())} onClick={() => toggle(setExpandedProjects, projectKey())}>
           <ChevronRight size={14} aria-hidden="true" /><span>{t("未分類會話")}</span>
         </button>
-        {expandedProjects.has(projectKey()) ? renderSessions(unassigned) : null}
+        {expandedProjects.has(projectKey()) || search.trim() !== "" ? renderSessions(unassigned) : null}
       </li>}
     </ul>
     {workspaces.length === 0 && projects.length === 0 ? <p className="notice">{t("尚未開啟專案")}</p> : null}
     </div>
     {managementWorkspace ? <div className="project-sidebar-management">
-      {props.onManageSessions ? <button type="button" className="session-archived-button" onClick={() => props.onManageSessions!(managementWorkspace.id, undefined)}>{t("批次管理會話")}</button> : null}
-      <button type="button" className="session-archived-button" onClick={() => props.onManageArchived(managementWorkspace.id)}>{t("管理已封存會話")}</button>
+      {props.onManageSessions
+        ? <button type="button" className="session-archived-button" onClick={() => props.onManageSessions!(managementWorkspace.id, undefined)}>{t("管理會話…")}</button>
+        : <button type="button" className="session-archived-button" onClick={() => props.onManageArchived(managementWorkspace.id)}>{t("管理已封存會話")}</button>}
     </div> : null}
     {props.onSettings ? <div className="sidebar-footer"><Button variant="ghost" className="sidebar-open" icon={<Settings size={17} />} onClick={props.onSettings}>{t("設定")}</Button></div> : null}
   </nav>

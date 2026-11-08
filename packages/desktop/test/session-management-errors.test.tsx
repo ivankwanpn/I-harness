@@ -46,3 +46,13 @@ it("disables archive while a turn is running", () => {
   expect(archive.disabled).toBe(true)
   expect(archive.title).toContain("先停止目前回合")
 })
+it("groups sessions by relative day and filters by title", () => {
+  const now = Date.now()
+  render(<TaskList dashboard={{ sessions: [{ id: "a", title: "Alpha", live: false, updatedAt: now }, { id: "b", title: "Beta", live: false, updatedAt: now - 86_400_000 }] }} onSelect={() => {}} />)
+  expect(screen.getByText("今天")).toBeTruthy()
+  expect(screen.getByText("昨天")).toBeTruthy()
+  cleanup()
+  render(<TaskList dashboard={{ sessions: [{ id: "a", title: "Alpha", live: false, updatedAt: now }, { id: "b", title: "Beta", live: false, updatedAt: now }] }} filter="alp" onSelect={() => {}} />)
+  expect(screen.queryByText("Beta")).toBeNull()
+  expect(screen.getByText("Alpha")).toBeTruthy()
+})

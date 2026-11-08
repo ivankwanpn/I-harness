@@ -638,12 +638,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         let conversation = false
         let title: string | undefined
         try {
-          const { meta } = await coordinator.profile(id)
+          const profile = await coordinator.profile(id)
+          const { meta } = profile
           if (meta.archived || !await isConversation(id, meta)) return undefined
           conversation = true; title = meta.title
           const execution=originalManagedExecutionFor(service,id)
           const turnCount=execution?(()=>{const observation=execution.observe(),count=observation.turnCount;observation.assertCurrent();return count})():(service.liveSession(id) ?? (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session).events.filter((event) => event.type === "turn/end").length
-          return { id, turnCount, ...(meta.title === undefined ? {} : { title: meta.title }) }
+          return { id, turnCount, updatedAt: profile.updatedAt, ...(meta.title === undefined ? {} : { title: meta.title }) }
         } catch {
           return conversation ? { id, ...(title ? { title } : {}) } : undefined
         }
