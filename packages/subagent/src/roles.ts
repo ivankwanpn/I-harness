@@ -63,7 +63,7 @@ export function builtinRoles(options: { agentShell?: boolean; nativeContext?: bo
       name: "general",
       description: "General agent for researching questions and executing multi-step tasks.",
       systemPrompt: "You are a general-purpose coding agent. Investigate the task, execute steps, and report concrete results with evidence.",
-      tools: [...(options.agentShell ? ["shell"] : []), "bash", "pwsh", "read", "write", "list_dir", "grep"],
+      tools: [...(options.agentShell ? ["shell"] : []), "bash", "pwsh", "read", "write", "list_dir", "grep", "glob"],
     },
     {
       name: "explore",
@@ -75,13 +75,13 @@ export function builtinRoles(options: { agentShell?: boolean; nativeContext?: bo
       name: "research",
       description: "Deep research agent for evidence-based, cross-module analysis.",
       systemPrompt: "You are a research specialist. Investigate the assigned question using read-only tools, build conclusions from evidence, and cite file paths and line ranges. Do not modify files.",
-      tools: ["read", "list_dir", "grep"],
+      tools: ["read", "list_dir", "grep", "glob", "webfetch", "websearch"],
     },
     {
       name: "worker",
       description: "Strong implementation agent for code changes, tests, and verification.",
       systemPrompt: "You are an implementation agent. Make the requested code changes, write tests, and verify them. Report what changed and the verification result.",
-      tools: [...(options.agentShell ? ["shell"] : []), "bash", "pwsh", "read", "write", "list_dir", "grep"],
+      tools: [...(options.agentShell ? ["shell"] : []), "bash", "pwsh", "read", "write", "list_dir", "grep", "glob"],
     },
   ]
   if(options.nativeContext) for(const role of roles){

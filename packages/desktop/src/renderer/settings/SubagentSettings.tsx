@@ -114,7 +114,7 @@ function RoleCard({ row, title = row.name, description, routes, busy, onSave, gr
     {groups.length > 0 ? <fieldset className="role-tools"><legend>{t("工具權限")}</legend>
       <p className="muted">{t("勾選的群組會成為此角色完整的工具清單；未勾選即不提供。變更在下一個新子代理生效。")}</p>
       <div className="role-tool-groups">{groups.map((group) => {
-        const enabled = group.tools.every((tool) => row.tools.includes(tool))
+        const enabled = group.tools.some((tool) => row.tools.includes(tool))
         return <label key={group.id} className="role-tool-group"><input type="checkbox" checked={enabled} disabled={busy} onChange={(event) => {
           const next = new Set(row.tools)
           if (event.target.checked) for (const tool of group.tools) next.add(tool)

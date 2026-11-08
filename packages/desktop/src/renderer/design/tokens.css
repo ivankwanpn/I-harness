@@ -426,6 +426,12 @@ html[data-pane-resizing] *, html[data-pane-resizing] { cursor: col-resize !impor
 .role-model-description h3 { margin: 0 0 4px; font-size: inherit; }
 .role-model-description p { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
 .role-model-card label { display: grid; gap: 6px; color: var(--ih-muted); font-size: 12px; }
+.role-model-card fieldset.role-tools { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 10px 14px 12px; border: 1px solid var(--ih-divider); border-radius: 10px; }
+.role-tools legend { padding: 0 6px; color: var(--ih-muted); font-size: 12px; }
+.role-tool-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px 18px; margin: 8px 0 10px; }
+.role-model-card label.role-tool-group { display: flex; align-items: center; gap: 8px; color: var(--ih-text); font-size: 12px; }
+.role-tool-group input { flex: none; margin: 0; }
+.role-tools > button { margin-top: 2px; }
 .role-model-card select { width: 100%; min-width: 0; color: var(--ih-text); }
 .role-model-status { grid-column: 1 / -1; margin: 0; }
 .role-add-form { padding: 16px; margin-bottom: 12px; border: 1px solid var(--ih-divider); border-radius: 12px; }

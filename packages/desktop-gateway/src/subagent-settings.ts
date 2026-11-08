@@ -18,7 +18,7 @@ export interface SubagentSettingsState {
  * own; a role's explicit list may also name anything else the host mounts. */
 export const ROLE_TOOL_GROUPS: readonly { id: string; label: string; tools: string[] }[] = [
   { id: "read", label: "讀取檔案", tools: ["read", "list_dir", "grep", "glob"] },
-  { id: "write", label: "寫入檔案", tools: ["write", "edit", "apply_patch"] },
+  { id: "write", label: "寫入檔案", tools: ["write"] },
   { id: "shell", label: "執行命令", tools: ["bash", "pwsh", "shell"] },
   { id: "web", label: "網頁（webfetch／websearch）", tools: ["webfetch", "websearch"] },
   { id: "context", label: "Context／Code Context", tools: ["context_output_search", "context_output_read", "context_output_status", "code_context_search", "code_context_status", "code_context_index"] },
