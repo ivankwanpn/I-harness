@@ -136,7 +136,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
           <div className="session-manager-selection" aria-live="polite"><strong>{c(`已選取 ${selected.size} 筆`, `${selected.size} selected`)}</strong><span>{c("每批最多 100 筆", "Up to 100 per batch")}</span></div>
           <Button variant="ghost" size="small" disabled={blocked || !selected.size} onClick={() => setSelected(new Set())}>{c("取消選取", "Clear selection")}</Button>
           <Button size="small" disabled={batchBlocked} aria-label={archived ? c("還原所選會話", "Restore selected conversations") : c("封存所選會話", "Archive selected conversations")} icon={archived ? <ArchiveRestore size={14} /> : <Archive size={14} />} onClick={() => confirmBatch(archived ? "restore" : "archive")}>{archived ? c("還原", "Restore") : c("封存", "Archive")}</Button>
-          <Button variant="danger" size="small" disabled={batchBlocked} aria-label={c("永久刪除所選會話", "Permanently delete selected conversations")} icon={<Trash2 size={14} />} onClick={() => confirmBatch("delete")}>{c("永久刪除", "Delete permanently")}</Button>
+          {archived ? <Button variant="danger" size="small" disabled={batchBlocked} aria-label={c("永久刪除所選會話", "Permanently delete selected conversations")} icon={<Trash2 size={14} />} onClick={() => confirmBatch("delete")}>{c("永久刪除", "Delete permanently")}</Button> : null}
         </div>
         {projects && currentOwners && executionWorkspace ? <div className="session-manager-move">
           <span>{c("目的專案", "Destination project")}</span>

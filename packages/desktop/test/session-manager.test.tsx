@@ -126,9 +126,13 @@ it("shows pending list loading and gives the shared batch dialog IME Escape owne
 })
 it("offers exact native cleanup retry after a deleted session disappears from the list", async () => {
   let deleted = false
-  const request = async () => ({ sessions: deleted ? [] : [{ id: "a", title: "Delete me" }] })
+  const request = async (input: { kind?: string }) => {
+    const sessions = deleted ? [] : [{ id: "a", title: "Delete me" }]
+    return input.kind === "desktop/session/archived" ? sessions : { sessions }
+  }
   const batch = vi.fn().mockImplementationOnce(async () => { deleted = true; return { results: [{ sessionId: "a", ok: false, sessionDeleted: true, error: "Native draft cleanup failed" }] } }).mockResolvedValueOnce({ results: [{ sessionId: "a", ok: true }] })
   render(<SessionManager workspaceId="w" bridge={{ request, onEvent: () => () => {} }} onManage={async () => {}} onBatch={batch} />)
+  fireEvent.click(screen.getByRole("button", { name: "已封存會話" }));
   fireEvent.click(await screen.findByRole("checkbox", { name: "選取 Delete me" })); fireEvent.click(screen.getByRole("button", { name: "永久刪除所選會話" })); fireEvent.click(screen.getByRole("button", { name: "確認永久刪除" }))
   await screen.findByText(/Native draft cleanup failed/); await screen.findByText("尚無會話")
   expect(screen.getByText("a · 會話已刪除，本機草稿尚未清理。")).toBeTruthy()
@@ -153,9 +157,13 @@ it("bounds mounted session rows while batch selection remains explicit across pa
   await waitFor(() => expect(batch).toHaveBeenCalledWith({ action: "archive", sessionIds: ["s0", "s50"] }))
 })
 it("confirms explicit batch IDs, reports partial failures, and retains failed selections", async () => {
-  const request = vi.fn(async () => ({ sessions: [{ id: "a", title: "First" }, { id: "b", title: "Busy" }] }))
+  const request = vi.fn(async (input: { kind?: string }) => {
+    const sessions = [{ id: "a", title: "First" }, { id: "b", title: "Busy" }]
+    return input.kind === "desktop/session/archived" ? sessions : { sessions }
+  })
   const batch = vi.fn(async () => ({ results: [{ sessionId: "a", ok: true as const }, { sessionId: "b", ok: false as const, error: "pending input" }] }))
   render(<SessionManager workspaceId="w" bridge={{ request, onEvent: () => () => {} }} onManage={async () => {}} onBatch={batch} />)
+  fireEvent.click(screen.getByRole("button", { name: "已封存會話" }))
   fireEvent.click(await screen.findByRole("checkbox", { name: "選取 First" }))
   fireEvent.click(screen.getByRole("checkbox", { name: "選取 Busy" }))
   fireEvent.click(screen.getByRole("button", { name: "永久刪除所選會話" }))
