@@ -99,7 +99,18 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       // tools, so no subagent can reach this guard until a custom role adds
       // it — exactly the configuration a host must pair with a maxDepth
       // review.
-      const observation=deps.managedParent?.execution.observe()
+      let observation=deps.managedParent?.execution.observe()
+      if(deps.managedParent){
+        try{observation=deps.managedParent.execution.observe()}
+        catch(error){
+          // A previous child start can leave exact-cleanup debt; retry that
+          // cleanup once before failing the new spawn (the workspace would
+          // otherwise stay wedged for every later write).
+          if(!/dependency cleanup unresolved|issued write needs reconciliation/i.test(String((error as Error)?.message??error)))throw error
+          await (await import('@i-harness/core-session/internal/execution')).settleManagedExecutionDependencies(deps.managedParent.domain)
+          observation=deps.managedParent.execution.observe()
+        }
+      }
       if(observation){if(observation.identity!==deps.managedParent!.domain.identity)throw Error('Foreign parent observation');observation.assertCurrent()}
       const callerDepth = (observation?.header ?? deps.parentSession?.header)?.delegationDepth ?? 0
       const maxDepth = deps.maxDepth ?? 1
