@@ -27,6 +27,8 @@ interface ProjectSessionsProps {
   onManageSession: ProjectSidebarProps["onManageSession"]
   onManageArchived: ProjectSidebarProps["onManageArchived"]
   onManageSessions?: ProjectSidebarProps["onManageSessions"]
+  onNewSession?(projectId?: string): void
+  newSessionActive?: boolean
 }
 
 function confirmedDashboard(value: unknown): value is SessionDashboardResult {
@@ -40,7 +42,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
   const en = useLocale(state => state.locale) === "en"
   const { bridge, workspaces, selectedWorkspaceId, selectedSessionId } = props
   const [snapshots, setSnapshots] = useState<Record<string, WorkspaceSessionSnapshot>>({})
-  const [managementSource, setManagementSource] = useState(selectedWorkspaceId ?? props.primaryWorkspaceId)
+
   const workspaceKey = JSON.stringify(workspaces.map(row => row.id))
   const active = useRef(false)
   const epoch = useRef(0)
@@ -98,15 +100,12 @@ export function ProjectSessions(props: ProjectSessionsProps) {
       ...current, [selectedWorkspaceId]: { ...current[selectedWorkspaceId], dashboard },
     })
   }, [selectedWorkspaceId, props.dashboard])
-  useEffect(() => { if (selectedWorkspaceId) setManagementSource(selectedWorkspaceId) }, [selectedWorkspaceId])
   const views = { ...snapshots }
   if (selectedWorkspaceId && props.dashboard) views[selectedWorkspaceId] = { ...views[selectedWorkspaceId], dashboard: props.dashboard }
   const rows = collectProjectSessions({ ...props, snapshots: views })
   const rowScopes = Object.fromEntries(rows.map(row => [row.key, row.source]))
   const navigation = Object.fromEntries(rows.map(row => [row.key, row.navigation]))
   const attentionCounts = Object.fromEntries(rows.filter(row => row.source.workspaceId === selectedWorkspaceId).map(row => [row.key, props.attentionBySession?.[row.source.sessionId] ?? 0]))
-  const managementWorkspace = workspaces.find(row => row.id === managementSource)
-    ?? workspaces.find(row => row.id === props.primaryWorkspaceId) ?? workspaces[0]
   const loading = workspaces.some(row => !views[row.id]?.navigation && !views[row.id]?.error)
   const hasError = workspaces.some(row => !!views[row.id]?.error)
   const listingUnavailable = workspaces.filter(row => views[row.id]?.dashboard?.listingUnavailable)
@@ -152,19 +151,8 @@ export function ProjectSessions(props: ProjectSessionsProps) {
       onManage={async (_id, action, title, source) => { if (source) await manage(source, action, title) }}
       onCopyId={async id => { await navigator.clipboard.writeText(id) }}
       onOpenFolder={async source => { if (source) await bridge.request({ kind: "workspace/reveal", workspaceId: source.workspaceId }) }}
-      onManageSessions={props.onManageSessions ? (id, source) => {
-        const workspaceId = source?.workspaceId ?? managementWorkspace?.id
-        if (workspaceId) props.onManageSessions!(workspaceId, id)
-      } : undefined}
+      onNewSession={props.onNewSession ? () => props.onNewSession!(props.projectId) : undefined}
+      newSessionActive={props.newSessionActive}
       /> : null}
-    {managementWorkspace ? <div className="project-sidebar-management">
-      {workspaces.length > 1 ? <label className="project-sidebar-management-source-label">{t("來源資料夾")}
-        <select className="project-sidebar-management-source" aria-label={t("選擇來源資料夾")} title={managementWorkspace.path} value={managementWorkspace.id} onChange={event => setManagementSource(event.target.value)}>
-          {workspaces.map(workspace => <option key={workspace.id} value={workspace.id} title={workspace.path}>{workspace.label}</option>)}
-        </select>
-      </label> : null}
-      {props.onManageSessions ? <button type="button" className="session-archived-button" onClick={() => props.onManageSessions!(managementWorkspace.id, undefined)}>{t("批次管理會話")}</button> : null}
-      <button type="button" className="session-archived-button" onClick={() => props.onManageArchived(managementWorkspace.id)}>{t("管理已封存會話")}</button>
-    </div> : null}
   </div>
 }

@@ -22,10 +22,13 @@ export interface TaskListProps {
   onManageSessions?(sessionId?: string, scope?: TaskRowScope): void
   showBatchManagement?: boolean
   onSelect(sessionId: string, scope?: TaskRowScope): void
+  /** A synthetic New Session row keeps the composer draft visible in the list. */
+  onNewSession?(): void
+  newSessionActive?: boolean
 }
 
 /** Sessions with only the fields the host actually reported — never invented. */
-export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, workspaceId, rowScopes, navigation, onManage, onCopyId, onOpenFolder, onManageArchived, onManageSessions, showBatchManagement = true }: TaskListProps) {
+export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, workspaceId, rowScopes, navigation, onManage, onCopyId, onOpenFolder, onManageArchived, onManageSessions, showBatchManagement = true, onNewSession, newSessionActive }: TaskListProps) {
   const t = useText()
   const locale = useLocale((state) => state.locale)
   const [menu, setMenu] = useState<{ id: string; workspaceId?: string; source?: TaskRowScope; x: number; y: number; element: HTMLElement }>()
@@ -60,6 +63,12 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
   }
   return (
     <>{onManageSessions && showBatchManagement ? <button type="button" className="session-archived-button" onClick={() => onManageSessions()}>{t("批次管理會話")}</button> : null}<ul className="session-list">
+      {onNewSession ? <li className="session-list-row session-new-row">
+        <button type="button" className="row-button" aria-current={newSessionActive ? "true" : undefined} onClick={onNewSession}>
+          <span className="row-title">{t("新會話")}</span>
+          <span className="row-meta">{t("描述你的目標，從這裡開始。")}</span>
+        </button>
+      </li> : null}
       {[...dashboard.sessions].sort((a, b) => Number(navigation?.[b.id]?.pinned === true) - Number(navigation?.[a.id]?.pinned === true)).map((row) => (
         <li key={row.id} className="session-list-row" onContextMenu={(event) => { if (canManage) { event.preventDefault(); const element = event.currentTarget.querySelector<HTMLButtonElement>(".row-button")!; showMenu(row.id, element, event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined) } }}>
           <button
@@ -71,21 +80,14 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
           >
             <span className="row-title">{navigation?.[row.id]?.unread ? <span className="session-unread-dot" aria-label={t("未讀")} /> : null}{navigation?.[row.id]?.pinned ? <Pin size={12} aria-label={t("已釘選")} /> : null}<span className="row-label">{row.title ?? t("未命名會話")}</span></span>
             {(attentionCounts?.[row.id] ?? 0) > 0 ? <span className="attention-badge">{t("待人處理")} · {attentionCounts![row.id]}</span> : null}
-            <span className="row-meta">
-              {row.running === true ? t("執行中") : ""}
-              {row.updatedAt === undefined ? "" : ` · ${t("最後活動")} ${relativeActivity(row.updatedAt, locale)}`}
-              {row.turnCount === undefined ? "" : ` · ${row.turnCount} ${t("回合")}`}
-              {row.queued === undefined || row.queued === 0 ? "" : ` · ${t("佇列")} ${row.queued}`}
-              {row.tasks === undefined || row.tasks === 0 ? "" : ` · ${t("任務")} ${row.tasks}`}
-              {row.modelLabel === undefined ? "" : ` · ${row.modelLabel}`}
-            </span>
+            <span className="row-meta">{[row.running === true ? t("執行中") : "", row.updatedAt === undefined ? "" : `${t("最後活動")} ${relativeActivity(row.updatedAt, locale)}`, row.turnCount === undefined ? "" : `${row.turnCount} ${t("回合")}`, row.queued === undefined || row.queued === 0 ? "" : `${t("佇列")} ${row.queued}`, row.tasks === undefined || row.tasks === 0 ? "" : `${t("任務")} ${row.tasks}`, row.modelLabel ?? ""].filter(Boolean).join(" · ")}</span>
           </button>
           {canManage ? <button type="button" className="session-row-more" disabled={busy[actionKey(row.id)] === true} aria-label={t("更多會話操作 {title}", { title: row.title ?? t("未命名會話") })} aria-haspopup="menu" aria-expanded={active?.id === row.id} onClick={(event) => { if (active?.id === row.id) setMenu(undefined); else showMenu(row.id, event.currentTarget) }}><MoreHorizontal size={16} /></button> : null}
         </li>
       ))}
     </ul>
     {onManageArchived ? <button type="button" className="session-archived-button" onClick={onManageArchived}>{t("管理已封存會話")}</button> : null}
-    {active && menu ? <SessionActions key={JSON.stringify([activeScope?.workspaceId ?? workspaceId, activeScope?.sessionId ?? active.id])} session={activeScope ? { ...active, id: activeScope.sessionId } : active} navigation={navigation?.[active.id]} anchor={menu}
+    {active && menu ? <SessionActions key={JSON.stringify([activeScope?.workspaceId ?? workspaceId, activeScope?.sessionId ?? active.id])} session={activeScope ? { ...active, id: activeScope.sessionId, pending: attentionCounts?.[active.id] ?? 0 } : { ...active, pending: attentionCounts?.[active.id] ?? 0 }} navigation={navigation?.[active.id]} anchor={menu}
       onManage={onManage ? (id, action, title) => guarded(active.id, () => activeScope ? onManage(id, action, title, activeScope) : onManage(id, action, title)) : undefined}
       onCopyId={onCopyId ? (id) => guarded(active.id, () => activeScope ? onCopyId(id, activeScope) : onCopyId(id)) : undefined}
       onOpenFolder={onOpenFolder ? () => guarded(active.id, () => activeScope ? onOpenFolder(activeScope) : onOpenFolder()) : undefined}

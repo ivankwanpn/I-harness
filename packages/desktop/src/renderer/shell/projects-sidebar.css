@@ -14,7 +14,7 @@
 .project-sidebar-project-select svg, .project-sidebar-pin { flex-shrink: 0; color: var(--ih-muted); }
 .project-sidebar-sessions .session-list { margin: 2px 0 5px 16px; padding: 0; }
 .project-sidebar-sessions .notice { margin: 6px 6px 6px 24px; font-size: 12px; overflow-wrap: anywhere; }
-.project-sidebar-management { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 4px 4px 10px 24px; }
+.project-sidebar-management { display: flex; flex-shrink: 0; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin: 0 4px 6px 24px; padding-top: 8px; border-top: 1px solid var(--ih-divider); }
 .project-sidebar-management-source-label { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; color: var(--ih-muted); font-size: 11px; }
 .project-sidebar-management-source { flex: 1; min-width: 0; max-width: 100%; padding: 4px 5px; border: 1px solid var(--ih-divider); border-radius: 5px; background: var(--ih-bg); color: var(--ih-text); font: inherit; }
 .project-sidebar-management .session-archived-button { min-height: 28px; margin: 0; padding: 3px 0; font-size: 11px; text-align: left; }

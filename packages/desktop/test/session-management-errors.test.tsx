@@ -4,13 +4,14 @@ import { afterEach, expect, it, vi } from "vitest"
 import { TaskList } from "../src/renderer/shell/TaskList.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 afterEach(() => { cleanup(); useUiStore.setState({ locale: "zh-TW" }) })
-it.each(['zh-TW', 'en'] as const)('offers explicit fresh fork in the existing action surface in %s', async locale => {
+it.each(['zh-TW', 'en'] as const)('offers a single fork action in the existing action surface in %s', async locale => {
   useUiStore.setState({ locale })
   const manage = vi.fn(async () => {})
   render(<TaskList dashboard={{ sessions: [{ id: 's', title: 'First', live: false, turnCount: 1 }] }} onSelect={() => {}} onManage={manage} />)
   fireEvent.click(screen.getByRole('button', { name: locale === 'en' ? 'More actions for First' : '更多會話操作 First' }))
-  fireEvent.click(screen.getByRole('menuitem', { name: locale === 'en' ? 'Fork another conversation' : '建立另一個分支' }))
-  await vi.waitFor(() => expect(manage).toHaveBeenCalledExactlyOnceWith('s', 'fork-fresh', undefined))
+  expect(screen.queryByRole('menuitem', { name: locale === 'en' ? 'Fork another conversation' : '建立另一個分支' })).toBeNull()
+  fireEvent.click(screen.getByRole('menuitem', { name: locale === 'en' ? 'Fork conversation' : '建立分支' }))
+  await vi.waitFor(() => expect(manage).toHaveBeenCalledExactlyOnceWith('s', 'fork', undefined))
 })
 it.each(["zh-TW", "en"] as const)("explains the pending rewind blocker without IPC framing in %s", async locale => {
   useUiStore.setState({ locale })

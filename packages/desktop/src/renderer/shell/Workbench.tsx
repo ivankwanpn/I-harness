@@ -322,12 +322,12 @@ export function Workbench({
     onOpenFile: path => { if (!reviewOpen) toggleReview(); setWorkPaneTab("files"); review.onSelect(path, "preview") },
   } : undefined
 
-  async function createSession(): Promise<void> {
+  async function createSession(projectId?: string): Promise<void> {
     if (!canCreate || newSessionWorkspaceId === undefined) return
     drawer.closeTemporary()
     drawer.setOpen(false)
     setMemoryOpen(false)
-    onSelectWorkspace(newSessionWorkspaceId, selectedProject?.id)
+    onSelectWorkspace(newSessionWorkspaceId, projectId ?? selectedProject?.id)
   }
 
   const settingsVisited = useRef(surface === "settings")
@@ -389,7 +389,7 @@ export function Workbench({
             onSelectWorkspace={(id, projectId) => { drawer.closeTemporary(); setSurface("conversation"); onSelectWorkspace(id, projectId) }}
             onSelectSession={(workspaceId, sessionId, projectId) => { drawer.closeTemporary(); setMemoryOpen(false); setSurface("conversation"); if (onSelectSessionInWorkspace) onSelectSessionInWorkspace(workspaceId, sessionId, projectId); else if (workspaceId === selectedWorkspaceId) onSelectSession(sessionId) }}
             onManageSession={async (workspaceId, sessionId, action, title) => { if (action === "delete") throw new Error("Session deletion unavailable"); await manageSourceSession(workspaceId, sessionId, action, title) }} onManageArchived={(workspaceId) => openManager(workspaceId, undefined, true)}
-            onProjects={() => navigate("projects")} onCreate={() => { void createSession() }} canCreate={canCreate}
+            onProjects={() => navigate("projects")} onCreate={() => { void createSession() }} onCreateSession={(projectId) => { void createSession(projectId) }} canCreate={canCreate}
           />}
         </div>
         {!drawer.temporary ? <PaneResizeHandle side="left" label={t("調整側欄寬度")} width={sidebarWidth} min={200} max={sidebarMax} defaultWidth={240} onResize={setSidebarWidth} /> : null}

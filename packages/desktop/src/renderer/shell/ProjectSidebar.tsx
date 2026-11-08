@@ -25,6 +25,7 @@ export interface ProjectSidebarProps {
   attentionBySession?: Record<string, number>
   canCreate: boolean
   onCreate(): void
+  onCreateSession?(projectId?: string): void
   onProjects(): void
   onSettings?(): void
   onPlugins?(): void
@@ -72,6 +73,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   const assigned = new Set(projects.flatMap((project) => project.workspaceIds))
   const knownProjectIds = new Set(projects.map(project => project.id))
   const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id) || workspaceOwners[workspace.id]?.some(id => id === undefined || !knownProjectIds.has(id)))
+  const managementWorkspace = workspaces.find(workspace => workspace.id === selectedWorkspaceId) ?? workspaces[0]
   const effectiveProjectId = selectedProjectId && knownProjectIds.has(selectedProjectId) ? selectedProjectId : undefined
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(selectedWorkspaceId || selectedProjectId ? [projectKey(effectiveProjectId)] : []))
 
@@ -90,7 +92,9 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
       memberWorkspaceIds={new Set(project?.workspaceIds ?? [])} assignedWorkspaceIds={assigned} knownProjectIds={knownProjectIds}
       selectedWorkspaceId={selected ? selectedWorkspaceId : undefined} selectedSessionId={selected ? selectedSessionId : undefined}
       dashboard={selected ? props.dashboard : undefined} attentionBySession={selected ? props.attentionBySession : undefined}
-      onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageSessions={props.onManageSessions} onManageArchived={props.onManageArchived} />
+      onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived}
+      onNewSession={props.onCreateSession ? (projectId) => props.onCreateSession!(projectId ?? project?.id) : undefined}
+      newSessionActive={selected && selectedSessionId === undefined} />
   }
 
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
@@ -128,6 +132,10 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     </ul>
     {workspaces.length === 0 && projects.length === 0 ? <p className="notice">{t("尚未開啟專案")}</p> : null}
     </div>
+    {managementWorkspace ? <div className="project-sidebar-management">
+      {props.onManageSessions ? <button type="button" className="session-archived-button" onClick={() => props.onManageSessions!(managementWorkspace.id, undefined)}>{t("批次管理會話")}</button> : null}
+      <button type="button" className="session-archived-button" onClick={() => props.onManageArchived(managementWorkspace.id)}>{t("管理已封存會話")}</button>
+    </div> : null}
     {props.onSettings ? <div className="sidebar-footer"><Button variant="ghost" className="sidebar-open" icon={<Settings size={17} />} onClick={props.onSettings}>{t("設定")}</Button></div> : null}
   </nav>
 }

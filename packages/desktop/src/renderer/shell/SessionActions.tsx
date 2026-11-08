@@ -9,7 +9,7 @@ import "./session-actions.css"
 export type SessionAction = "rename" | "archive" | "restore" | "fork" | "fork-fresh" | "pin" | "unpin" | "read" | "unread"
 export interface SessionNavigation { pinned: boolean; unread: boolean }
 export interface SessionActionsProps {
-  session: { id: string; title?: string; running?: boolean; queued?: number; turnCount?: number }
+  session: { id: string; title?: string; running?: boolean; queued?: number; pending?: number; turnCount?: number }
   navigation?: SessionNavigation
   anchor: { x: number; y: number; element: HTMLElement }
   onManage?(sessionId: string, action: SessionAction, title?: string): Promise<void>
@@ -78,6 +78,7 @@ export function SessionActions({ session, navigation, anchor, onManage, onCopyId
     } else if (!renaming && event.key === "Tab") close()
   }
   const structuralBusy = busy || session.running === true || (session.queued ?? 0) > 0
+  const archiveBlocked = busy || session.running === true || (session.queued ?? 0) > 0 || (session.pending ?? 0) > 0
   const manage = (action: SessionAction, name?: string) => { if (onManage) void run(() => onManage(session.id, action, name)) }
 
   return createPortal(renaming ? <div className="session-rename-backdrop">
@@ -95,8 +96,7 @@ export function SessionActions({ session, navigation, anchor, onManage, onCopyId
       <button type="button" role="menuitem" disabled={structuralBusy} onClick={() => { setError(undefined); setRenaming(true) }}><Pencil size={15} />{t("重新命名")}</button>
       <button type="button" role="menuitem" disabled={busy} onClick={() => manage(navigation?.unread ? "read" : "unread")}>{navigation?.unread ? <MailOpen size={15} /> : <Mail size={15} />}{t(navigation?.unread ? "標記為已讀" : "標記為未讀")}</button>
       <button type="button" role="menuitem" disabled={structuralBusy || session.turnCount === 0} title={session.turnCount === 0 ? t("完成一輪後才能建立分支") : undefined} onClick={() => manage("fork")}><GitBranch size={15} />{t("建立分支")}</button>
-      <button type="button" role="menuitem" disabled={structuralBusy || session.turnCount === 0} title={session.turnCount === 0 ? t("完成一輪後才能建立分支") : undefined} onClick={() => manage("fork-fresh")}><GitBranch size={15} />{t("建立另一個分支")}</button>
-      <button type="button" role="menuitem" disabled={structuralBusy} onClick={() => manage("archive")}><Archive size={15} />{t("封存會話")}</button>
+      <button type="button" role="menuitem" disabled={archiveBlocked} title={(session.pending ?? 0) > 0 ? t("請先處理待處理訊息") : undefined} onClick={() => manage("archive")}><Archive size={15} />{t("封存會話")}</button>
     </> : null}
     {onManageSession ? <button type="button" role="menuitem" disabled={busy} onClick={() => { onManageSession(session.id); close() }}><Archive size={15} />{t("管理此會話")}</button> : null}
     {onCopyId || onOpenFolder ? <div className="session-menu-separator" role="separator" /> : null}
