@@ -78,6 +78,20 @@ export async function dispatchDesktopRequest(
   if(!kind||!('value' in kind))throw Error('Invalid Desktop request kind')
   if(typeof value.kind==='string'&&value.kind.startsWith('desktop/surface/')) {if(!dependencies.surfaceObservation)throw Error('Native surface window unavailable');return dependencies.surfaceObservation.request(value)}
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
+  if (value.kind === "desktop/workspace/repair") {
+    if (Object.keys(value).some(key => !["kind", "workspaceId"].includes(key))) throw new Error("Invalid workspace repair request")
+    const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+    const workspace = dependencies.catalog.get(workspaceId)
+    if (!workspace) throw new Error(`unknown workspace id: ${workspaceId}`)
+    if (!dependencies.runtimes.invalidate) throw new Error("Workspace runtime cannot be restarted")
+    await dependencies.runtimes.invalidate(workspaceId)
+    const { rename } = await import("node:fs/promises")
+    const { join } = await import("node:path")
+    const root = join(workspace.path, ".i-harness")
+    const backup = `${root}.bak-${Date.now()}`
+    try { await rename(root, backup) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+    return { repaired: true, backup }
+  }
   if (value.kind.startsWith("desktop/diagnostics/")) {
     if (!dependencies.diagnostics) throw new Error("Runtime diagnostics unavailable")
     if (value.kind === "desktop/diagnostics/list" || value.kind === "desktop/diagnostics/export") {

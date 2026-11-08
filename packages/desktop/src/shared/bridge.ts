@@ -65,7 +65,8 @@ export type DesktopRequest =
   | { kind: "desktop/mcp/mutate"; workspaceId: string; command: McpSettingsCommand }
   | { kind: "desktop/hooks/state" | "desktop/hooks/refresh"; workspaceId: string }
   | { kind: "desktop/hooks/mutate"; workspaceId: string; command: HookSettingsCommand }
-  | { kind: "desktop/subagents/state"; workspaceId: string }
+  | { kind: "desktop/workspace/repair"; workspaceId: string }
+| { kind: "desktop/subagents/state"; workspaceId: string }
   | { kind: "desktop/subagents/mutate"; workspaceId: string; command: SubagentSettingsCommand }
   | { kind: "desktop/session/subagents/list"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/subagents/history"; workspaceId: string; sessionId: string; childSessionId: string; afterSeq?: number; limit?: number }

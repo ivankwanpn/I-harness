@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
+import { mkdir, mkdtemp, readdir, stat } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { BrowserWindow } from "electron"
 import type { HarnessClient } from "@i-harness/sdk"
 import { dispatchDesktopRequest, registerDesktopIpc } from "../src/main/ipc.ts"
@@ -428,4 +431,18 @@ describe("Desktop scoped IPC", () => {
     expect(ipc.removeHandler).toHaveBeenCalledWith(DESKTOP_REQUEST_CHANNEL)
     expect(f.offEvent).toHaveBeenCalledTimes(1)
   })
+})
+it("repairs a workspace by restarting its runtime and parking the native execution state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-ws-repair-"))
+  await mkdir(join(root, ".i-harness"))
+  const invalidate = vi.fn(async () => {})
+  const dependencies = {
+    catalog: { get: (id: string) => id === "ws-r" ? { id: "ws-r", path: root, label: "repair" } : undefined },
+    runtimes: { invalidate },
+  } as unknown as DesktopIpcDependencies
+  const result = await dispatchDesktopRequest({ kind: "desktop/workspace/repair", workspaceId: "ws-r" }, dependencies) as { repaired?: boolean; backup?: string }
+  expect(result.repaired).toBe(true)
+  expect(invalidate).toHaveBeenCalledWith("ws-r")
+  await expect(stat(join(root, ".i-harness"))).rejects.toThrow()
+  expect((await readdir(root)).some(name => name.startsWith(".i-harness.bak-"))).toBe(true)
 })

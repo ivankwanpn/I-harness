@@ -142,6 +142,19 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   const failureId=useRef<string|undefined>(undefined);failureId.current=failure?.id
   useEffect(()=>{recoveryFlight.current=undefined;setRecovering(false);setRecoveryFailed(false)},[failure?.id])
   const retry = selected?.retry?.retry
+  const [repairing,setRepairing]=useState(false)
+  const [repairError,setRepairError]=useState<string>()
+  const repairable=failure!==undefined&&/recovery|reconcil|cleanup unresolved|source drain/i.test(failure.message)
+  const repairWorkspace=async()=>{
+    if(!failure?.workspaceId)return
+    setRepairing(true);setRepairError(undefined)
+    try{
+      await bridge.request({kind:'desktop/workspace/repair',workspaceId:failure.workspaceId})
+      if(failure.sessionId)await bridge.request({kind:'desktop/session/reload',workspaceId:failure.workspaceId,sessionId:failure.sessionId}).catch(()=>undefined)
+      setScopes(previous=>{const next=new Map(previous),key=scopeKey(failure.workspaceId,failure.sessionId);next.set(key,{...next.get(key),error:undefined});return next})
+    }catch(error){setRepairError(displayError(error).summary)}
+    finally{setRepairing(false)}
+  }
   const activity = selected?.activity
   const quiet = activity?.phase === "quiet" && !retry
   useEffect(() => {
@@ -177,7 +190,7 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
       </div> : null}
       {failure ? <div className="runtime-feedback-card runtime-feedback-error" role="alert">
         <AlertCircle size={18} aria-hidden="true" /><div><strong>{t("請求未完成")}</strong><p title={failure.message}>{failure.code==='TEAM_RECOVERY_REQUIRED'?t('工作需要恢復，請重試以繼續。'):displayError(failure.message).summary}</p>
-          <div className="runtime-feedback-actions">{failure.code==='TEAM_RECOVERY_REQUIRED'&&failure.workspaceId&&failure.sessionId?<Button variant="ghost" size="small" disabled={recovering} onClick={()=>{const flight={};recoveryFlight.current=flight;setRecovering(true);setRecoveryFailed(false);void bridge.request({kind:'desktop/session/input/resume',workspaceId:failure.workspaceId!,sessionId:failure.sessionId!}).then(()=>{setScopes(previous=>{const next=new Map(previous),key=scopeKey(failure.workspaceId,failure.sessionId),current=next.get(key);if(current?.error?.id===failure.id)next.set(key,{...current,error:undefined});return next})},()=>{if(recoveryFlight.current===flight&&failureId.current===failure.id)setRecoveryFailed(true)}).finally(()=>{if(recoveryFlight.current===flight){recoveryFlight.current=undefined;setRecovering(false)}})}}>{t('重試')}</Button>:null}<Button variant="ghost" size="small" onClick={() => setDetails(failure)}>{t("詳細資料")}</Button><Button variant="ghost" size="small" onClick={onOpenLog}>{t("診斷記錄")}</Button></div>{recoveryFailed?<p>{t('重試失敗，請稍後再試。')}</p>:null}
+          <div className="runtime-feedback-actions">{repairable?<Button variant="ghost" size="small" disabled={repairing} onClick={()=>void repairWorkspace()}>{t(repairing?'正在修復…':'修復工作區')}</Button>:null}{repairError?<small role="status">{repairError}</small>:null}{failure.code==='TEAM_RECOVERY_REQUIRED'&&failure.workspaceId&&failure.sessionId?<Button variant="ghost" size="small" disabled={recovering} onClick={()=>{const flight={};recoveryFlight.current=flight;setRecovering(true);setRecoveryFailed(false);void bridge.request({kind:'desktop/session/input/resume',workspaceId:failure.workspaceId!,sessionId:failure.sessionId!}).then(()=>{setScopes(previous=>{const next=new Map(previous),key=scopeKey(failure.workspaceId,failure.sessionId),current=next.get(key);if(current?.error?.id===failure.id)next.set(key,{...current,error:undefined});return next})},()=>{if(recoveryFlight.current===flight&&failureId.current===failure.id)setRecoveryFailed(true)}).finally(()=>{if(recoveryFlight.current===flight){recoveryFlight.current=undefined;setRecovering(false)}})}}>{t('重試')}</Button>:null}<Button variant="ghost" size="small" onClick={() => setDetails(failure)}>{t("詳細資料")}</Button><Button variant="ghost" size="small" onClick={onOpenLog}>{t("診斷記錄")}</Button></div>{recoveryFailed?<p>{t('重試失敗，請稍後再試。')}</p>:null}
         </div><Button variant="ghost" size="small" className="runtime-feedback-close" aria-label={t("關閉錯誤通知")} icon={<X size={15} />} onClick={() => setScopes(previous => {
           const next = new Map(previous), key = scopeKey(failure.workspaceId, failure.sessionId)
           next.set(key, { ...next.get(key), error: undefined }); return next
