@@ -205,7 +205,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle, instruct
 
   return <section className="subagent-pane" aria-label={t("子代理")}>
     <header className="subagent-pane-header"><h2><GitBranch size={17} aria-hidden="true" />{t("子代理列表")}</h2><button type="button" className="link-button" disabled={busy !== undefined || reading} onClick={() => { void readCatalog().catch(() => undefined); if (selected) void readHistory(selected) }}><RefreshCw size={13} aria-hidden="true" />{t("重新整理")}</button></header>
-    {catalogError !== undefined ? <p role="alert" className="notice error-text">{catalogError}</p> : null}
+    {catalogError !== undefined ? <p role="alert" className="notice error-text">{catalogError}<button type="button" className="link-button" disabled={reading} onClick={() => { void readCatalog().catch(() => undefined) }}>{t("重試")}</button></p> : null}
     {catalog?.errors?.map((error, index) => <p role="alert" className="subagent-source-error" key={`${error.sessionId ?? "source"}:${index}`}>{error.sessionId ? <code>{error.sessionId}</code> : null}{error.message}</p>)}
     {selected === undefined ? <>
       {catalog ? <div className="subagent-status-counts">{Object.entries(STATUS_LABELS).map(([status, label]) => {
