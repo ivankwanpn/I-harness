@@ -18,6 +18,7 @@ const unavailableMessages: Record<string, Message> = {
   "Accepted output awaits the next protocol projection": "模型已回覆；下一次請求準備完成後會重新估算容量。",
   "No prepared request budget is available": "尚未準備模型請求，暫無上下文估算。",
   "Provider context recovery remains required": "供應商拒絕了目前上下文，需先壓縮或更換模型。",
+  "Prepared admission is historical": "顯示上一次請求的估算；下一次請求準備完成後會更新。",
   "Model-visible history changed since the prepared budget": "上下文內容已變更；下一次請求準備完成後會更新估算。",
   "Projection revision changed since the prepared budget": "上下文內容已變更；下一次請求準備完成後會更新估算。",
   "Model request surface changed since the prepared budget": "上下文內容已變更；下一次請求準備完成後會更新估算。",
@@ -170,14 +171,27 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
   const state = current?.state
   const error = current?.error
   const unavailableReason = state?.kind === "unavailable" ? unavailableMessages[state.reason] ? t(unavailableMessages[state.reason]!) : state.reason : undefined
-  const ready = state?.kind === "ready" ? state : undefined
+  // A completed turn leaves the prepared admission historical: the estimate is
+  // still the best known number, so show it (labelled) instead of a dash until
+  // the next request prepares a fresh admission.
+  const historical = state?.kind === "unavailable" && state.observation !== undefined
+    && state.observation.freshness !== "current" && state.observation.estimate.kind === "estimated"
+    && state.observation.pressure.kind === "known" && state.observation.pressure.inputBudget > 0
+    ? state.observation : undefined
+  const ready = state?.kind === "ready" ? state : historical === undefined ? undefined : {
+    estimatedTokens: historical.estimate.kind === "estimated" ? historical.estimate.value : 0,
+    contextWindow: historical.pressure.kind === "known" ? historical.pressure.inputBudget : 0,
+    roleTokens: { user: historical.components.user, assistant: historical.components.assistant, tool: historical.components.tool },
+    observation: historical,
+  }
+  const stale = historical !== undefined
   const snapshot = state?.snapshot
   const roleTokens = ready?.roleTokens
-  const percent = ready ? ready.estimatedTokens / ready.contextWindow * 100 : undefined
+  const percent = ready && ready.contextWindow > 0 ? ready.estimatedTokens / ready.contextWindow * 100 : undefined
   const reading = percent === undefined ? "—" : ready!.estimatedTokens > 0 && percent < 0.1 ? "<0.1%" : `${percent.toFixed(1)}%`
   const number = (value: number) => new Intl.NumberFormat("en-US").format(value)
   return <>
-    <button ref={trigger} type="button" className="icon-button context-usage-trigger" aria-label={t("上下文容量")} aria-describedby={readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("估算上下文容量")} · ${reading}`} onClick={activate}
+    <button ref={trigger} type="button" className="icon-button context-usage-trigger" aria-label={t("上下文容量")} aria-describedby={readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("估算上下文容量")} · ${reading}${stale ? ` · ${t("上次請求估算")}` : ""}`} onClick={activate}
       onMouseEnter={preview} onMouseLeave={scheduleClose} onPointerEnter={event => { if (event.pointerType !== "touch") preview() }} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
       <svg className="context-usage-gauge" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
         <circle className="context-usage-gauge-track" cx="8" cy="8" r="6" />
@@ -190,6 +204,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
       <strong>{t("估算上下文容量")}</strong>
       {error !== undefined || state?.kind === "unavailable" ? <div><p role={error !== undefined ? "alert" : undefined}>{error || unavailableReason || t("無法取得上下文容量。")}</p><Button variant="secondary" size="small" loading={current?.loading} loadingLabel={t("正在處理…")} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("刷新狀態")}</Button></div> : ready ? <>
         <p className="context-usage-capacity">{number(ready.estimatedTokens)} / {number(ready.contextWindow)} ({reading})</p>
+        {stale ? <p className="muted">{t("顯示上一次請求的估算；下一次請求準備完成後會更新。")}</p> : null}
         <progress max={ready.contextWindow} value={Math.min(ready.estimatedTokens, ready.contextWindow)} aria-label={t("估算已用 Token")} />
         {snapshot?.remainingInputBudget !== undefined ? <dl className="context-usage-remaining">
           <div className="context-usage-fact"><dt>{t("剩餘輸入預算")}</dt><dd>{number(snapshot.remainingInputBudget)}</dd></div>
