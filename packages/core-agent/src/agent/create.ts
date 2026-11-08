@@ -61,8 +61,19 @@ export function createAgent(ctx: PluginContext, host: AgentDeps & AgentConfig): 
       failed = true
     }
     const sourceDrains = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
+    // A drain can fail on a transient reconciliation state (a pending write, a
+    // snapshot lock); a bounded retry lets the turn settle without wedging the
+    // session, while a genuinely broken source still surfaces after the budget.
+    const closeSettled = async (close: () => Promise<void>) => {
+      let last: unknown
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try { await close(); return }
+        catch (error) { last = error; await new Promise(resolve => setTimeout(resolve, 60 * (attempt + 1))) }
+      }
+      throw last
+    }
     const drainDelegates = async () => {
-      const results = await Promise.allSettled([...sourceDrains].map(source => source.close()))
+      const results = await Promise.allSettled([...sourceDrains].map(source => closeSettled(() => source.close())))
       const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
       if (errors.length) throw new AggregateError(errors, 'Agent settlement requires recovery')
     }
@@ -118,7 +129,7 @@ export function createAgent(ctx: PluginContext, host: AgentDeps & AgentConfig): 
     catch (error) { recordFailure(error, 'Generation settlement requires recovery') }
     try { action.finish() }
     catch (error) { recordFailure(error, 'Action finish requires recovery') }
-    try { await sourceFacts?.close() }
+    try { if (sourceFacts) await closeSettled(() => sourceFacts!.close()) }
     catch (settlement) {
       if (!failed) throw settlement
       throw Object.assign(savingFailure(failure, [settlement], 'Agent settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
