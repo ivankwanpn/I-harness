@@ -20,11 +20,13 @@ async function capture() {
   const replay: LLMRequest = { ...request, maxOutputTokens: 2048, messages: [...request.messages, { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read', args: {} }], thinkingBlocks: end!.thinkingBlocks, providerContinuation: structuredClone(end!.providerContinuation) }, { role: 'tool', toolCallId: 'a', content: 'done' }] }
   return { client, config, replay, end: end!, bodies, sends: () => sends }
 }
-it('binds thinking to the selected derivative and blocks current-tool-turn budget drift before send', async () => {
+it('binds thinking to the selected derivative, keeps cap drift compatible and blocks mode drift before send', async () => {
   const f = await capture()
   expect(f.end.providerContinuation).toMatchObject({ producerWitness: { budgetTokens: 2047 } })
   expect((await f.client.prepare!(f.replay)).validation?.native).toBe('preserved')
-  await expect(f.client.prepare!({ ...f.replay, maxOutputTokens: 4096 })).rejects.toMatchObject({ modelFailure: { reason: 'native-replay' } })
+  // The cap clamps budget_tokens, so a new cap for the same mode must replay.
+  await expect(f.client.prepare!({ ...f.replay, maxOutputTokens: 4096 })).resolves.toBeDefined()
+  await expect(f.client.prepare!({ ...f.replay, reasoningEffort: 'off' })).rejects.toMatchObject({ modelFailure: { reason: 'native-replay' } })
   expect(f.sends()).toBe(1)
   await expect(f.client.prepare!({ ...f.replay, maxOutputTokens: 4096, messages: [...f.replay.messages, { role: 'assistant', content: 'completed answer' }, { role: 'user', content: 'next independent turn' }] })).resolves.toBeDefined()
 })

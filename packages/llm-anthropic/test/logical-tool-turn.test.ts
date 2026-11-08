@@ -70,9 +70,15 @@ it.each(['mixed', 'consecutive'] as const)('rejects actual current-turn thinking
         : [{ role: 'user', content: [result('a')] }, { role: 'user', content: [image] }, { role: 'user', content: 'companion' }]),
     ],
   }
-  expect(anthropicValidator(config, replay.messages, { adapter: 'anthropic-messages', revision: 'anthropic-cache-v1', edits: [] })(body, packet)).toMatchObject({ kind: 'rejected', reason: 'native-replay' })
-  const changed = createAnthropicClient({ ...config, options: { thinking: { type: 'enabled', budget_tokens: 2048 } } })
-  await expect(changed.prepare!(replay)).rejects.toMatchObject({ modelFailure: { reason: 'native-replay' } })
+  const raw = anthropicValidator(config, replay.messages, { adapter: 'anthropic-messages', revision: 'anthropic-cache-v1', edits: [] })
+  // The budget is a per-request generation knob (clamped by the request cap),
+  // not producer identity: the same mode must replay under a new budget.
+  expect(raw(body, packet)).toMatchObject({ kind: 'accepted' })
+  expect(raw({ ...body, thinking: { type: 'disabled' } }, packet)).toMatchObject({ kind: 'rejected', reason: 'native-replay' })
+  const changedBudget = createAnthropicClient({ ...config, options: { thinking: { type: 'enabled', budget_tokens: 2048 } } })
+  await expect(changedBudget.prepare!(replay)).resolves.toBeDefined()
+  const changedMode = createAnthropicClient({ ...config, options: { thinking: { type: 'disabled' } } })
+  await expect(changedMode.prepare!(replay)).rejects.toMatchObject({ modelFailure: { reason: 'native-replay' } })
   expect(sends).toBe(1)
-  await expect(changed.prepare!({ ...replay, messages: [...replay.messages, { role: 'assistant', content: 'completed answer' }, { role: 'user', content: 'new independent task' }] })).resolves.toBeDefined()
+  await expect(changedBudget.prepare!({ ...replay, messages: [...replay.messages, { role: 'assistant', content: 'completed answer' }, { role: 'user', content: 'new independent task' }] })).resolves.toBeDefined()
 })

@@ -50,7 +50,12 @@ export function validateAnthropicNative(body: Record<string, unknown>, config: A
     preserved = true
     if (turn?.assistantIndices.has(wireIndex)) {
       const cap = anthropicCapabilities(config)
-      const changedMode = witness.thinkingConfigId !== current.thinkingConfigId
+      // The MODE is the producer identity the replay contract must preserve.
+      // The budget is a generation knob clamped by each request's output cap
+      // (body.ts clamps budget_tokens to max_tokens - 1), so it legitimately
+      // differs between steps of the same thinking tool turn; hashing it made
+      // every child turn fail when its selected cap changed.
+      const changedMode = witness.mode !== 'unknown' && current.mode !== 'unknown' && witness.mode !== current.mode
       const effectiveBetaChanged = cap?.manualInterleaving === true && current.mode === 'manual' && witness.interleavedBeta !== current.interleavedBeta
       if (changedMode || effectiveBetaChanged) { check.issue('native-replay', 'native', 'native-replay'); incompatible = true }
       if (witness.effortConfigId !== current.effortConfigId) unverified = true
