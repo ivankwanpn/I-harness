@@ -40,11 +40,15 @@ export function QuestionCard({ requestId, prompt, options, busy, interrupted, dr
         <span className="ih-question-number" aria-hidden="true">{selected === String(index) ? <Check size={12} /> : index + 1}</span>
         <span className="ih-question-option-label">{label}</span>
       </label>)}
-      <label className={`ih-question-custom${typed.length > 0 ? " is-active" : ""}`}>
+      <label className={`ih-question-custom${selected === "custom" || typed.length > 0 ? " is-active" : ""}`}>
+        <input type="radio" name={`question-${requestId}`} value="custom" aria-label={t("其他")} checked={selected === "custom" || typed.length > 0} disabled={busy}
+          onChange={() => setSelected("custom")} />
         <span className="ih-question-number" aria-hidden="true"><Pencil size={12} /></span>
+        <span className="ih-question-other-label">{t("其他")}</span>
         <textarea className="ih-question-answer" aria-label={`${t("回答")} ${prompt}`} rows={1} value={answer}
-          placeholder={t("自行輸入回答")} disabled={busy}
-          onChange={(event) => { setAnswer(event.target.value); if (event.target.value !== "") setSelected("") }}
+          placeholder={t("請輸入回答")} disabled={busy}
+          onFocus={() => setSelected("custom")}
+          onChange={(event) => { setAnswer(event.target.value); setSelected("custom") }}
           onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit() } }} />
       </label>
     </div>

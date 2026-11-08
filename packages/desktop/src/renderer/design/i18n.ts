@@ -297,7 +297,7 @@ const english = {
   "沙箱尚未接線：宿主未回報可執行模式，送出已停用": "The host has not reported an active sandbox; sending is disabled",
   "模型狀態未知，送出已停用": "Model state unavailable; sending is disabled", "正在壓縮上下文": "Compacting context",
   "模型拒絕產生內容": "The model declined to produce content", "輸出達到上限被截斷": "Output was truncated at its limit", "模型回覆為空": "The model returned no content",
-  "圖片": "Image", "工具請求": "Tool request", "代理提出問題": "The agent has a question", "自行輸入回答": "Type your own answer",
+  "圖片": "Image", "工具請求": "Tool request", "代理提出問題": "The agent has a question", "自行輸入回答": "Type your own answer", "其他": "Other", "請輸入回答": "Type your answer",
   "已選擇會話 {title}": "Selected conversation: {title}", "SDK 連線中斷：{message}": "SDK disconnected: {message}",
   "歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。": "Loaded {count} history events. Use conversation search to find other content.",
   "設定": "Settings", "設定分類": "Settings categories", "一般": "General", "關於": "About", "外觀": "Appearance", "界面語言": "Interface language", "選擇應用界面的顯示語言。": "Choose the language used by the app interface.",
