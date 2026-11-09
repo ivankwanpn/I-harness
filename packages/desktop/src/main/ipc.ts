@@ -467,6 +467,34 @@ export async function dispatchDesktopRequest(
       }
       return created
     }
+    case "desktop/session/open": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      const queueRead = runtime.info.capabilities["desktop-input"]?.includes("1")
+        ? runtime.client.request("desktop/session/input/state", { sessionId })
+        : runtime.client.request("session/queue", { sessionId })
+      const [tail, queue, dashboard] = await Promise.allSettled([
+        runtime.client.history(sessionId, { afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 }),
+        queueRead,
+        runtime.client.dashboard(),
+      ])
+      const queueRows = queue.status === "fulfilled"
+        ? (Array.isArray(queue.value) ? queue.value as Array<{ state?: string }> : (queue.value as { items?: Array<{ state?: string }> } | undefined)?.items ?? [])
+        : []
+      const summary = dashboard.status === "fulfilled"
+        ? (dashboard.value.sessions as Array<{ id: string }>).find(row => row.id === sessionId)
+        : undefined
+      return {
+        summary: summary ?? { id: sessionId },
+        ...(tail.status === "fulfilled" ? { history: tail.value } : {}),
+        ...(tail.status === "rejected" ? { historyError: tail.reason instanceof Error ? tail.reason.message : String(tail.reason) } : {}),
+        queue: queueRows,
+        running: queueRows.some(row => row.state === "running"),
+        queueResumable: queue.status === "fulfilled" && !Array.isArray(queue.value) && (queue.value as { resumable?: boolean }).resumable === true,
+        ...(queue.status === "rejected" ? { queueError: queue.reason instanceof Error ? queue.reason.message : String(queue.reason) } : {}),
+      }
+    }
     case "session/history": {
       // Validate every field BEFORE any runtime side effect.
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")

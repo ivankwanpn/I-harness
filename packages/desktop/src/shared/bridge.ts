@@ -134,6 +134,7 @@ export type DesktopRequest =
   | { kind: "session/dashboard"; workspaceId: string }
   | { kind: "session/create"; workspaceId: string; projectId?: string; clientToken?: string }
   | { kind: "session/history"; workspaceId: string; sessionId: string; afterSeq: number; beforeSeq?: number; limit: number }
+| { kind: "desktop/session/open"; workspaceId: string; sessionId: string }
   | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string; context?: string; images?: ImageInput[]; clientToken?: string }
   | { kind: "session/cancel"; workspaceId: string; sessionId: string }
   | { kind: "session/queue"; workspaceId: string; sessionId: string }

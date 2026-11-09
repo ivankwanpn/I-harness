@@ -504,7 +504,38 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     // Start every selection read together. Waiting for history before the
     // model/interaction/task reads added their latencies to one another.
     const fail = (reason: unknown) => { if (active) setTaskError(reason instanceof Error ? reason.message : String(reason)) }
-    void pageHistory(selectedWorkspaceId, selectedSessionId, 0).catch(fail)
+    type OpenResult = {
+      summary?: { id: string }
+      history?: HistoryRange
+      historyError?: string
+      queue?: SessionQueueItem[]
+      running?: boolean
+      queueResumable?: boolean
+      queueError?: string
+    }
+    void (async () => {
+      const raw = await bridge.request({ kind: "desktop/session/open", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+        .catch(() => undefined)
+      const opened = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? raw as OpenResult : undefined
+      if (!active) return
+      if (opened?.history && Array.isArray(opened.history.events)) {
+        setEventWindow((current) => {
+          const next = applyHistory(current, { events: opened.history!.events, nextSeq: opened.history!.nextSeq })
+          eventWindowCache.current.set(selectionKey, next)
+          return next
+        })
+        setHistoryLoading(false)
+        if (opened.historyError) setHistoryError(opened.historyError)
+      } else {
+        if (opened?.historyError) setHistoryError(opened.historyError)
+        await pageHistory(selectedWorkspaceId, selectedSessionId, 0)
+      }
+      if (opened && !opened.queueError && Array.isArray(opened.queue)) {
+        setQueue(opened.queue)
+        setRunning(opened.running === true)
+        setQueueResumable(opened.queueResumable === true)
+      }
+    })().catch(fail)
     const version = ++modelRequest.current
     void bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
       .then(value => { if (active && version === modelRequest.current) setModel(value as SessionModelState) }).catch(fail)
