@@ -714,6 +714,11 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, "session/warm requires a non-empty sessionId")
         }
         try {
+          // Private/managed runtimes refuse a direct assembly request until
+          // their compatibility adapter exists. `managedInputFor` is the exact
+          // path a prompt takes, so warming through it prepares that adapter.
+          const managed = await service.managedInputFor?.(p.sessionId, { completePreparation: true })
+          if (managed) return makeSuccess(id, { ready: true })
           const assembly = await service.assemblyFor(p.sessionId)
           return makeSuccess(id, { ready: assembly !== undefined })
         } catch (error) {
