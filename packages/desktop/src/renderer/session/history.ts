@@ -21,8 +21,16 @@ export async function loadRecentHistory(
   options: { limit: number; maxEvents?: number },
 ): Promise<HistoryLoad> {
   const tail = await request({ afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: options.limit })
-  if (!Number.isSafeInteger(tail.nextSeq) || !Number.isSafeInteger(tail.headSeq) || !Number.isSafeInteger(tail.startSeq)) throw new Error("Invalid history tail")
-  return { events: tail.events, cursor: tail.nextSeq, exhausted: tail.nextSeq >= tail.headSeq!, startSeq: tail.startSeq }
+  if (Number.isSafeInteger(tail.nextSeq) && Number.isSafeInteger(tail.headSeq) && Number.isSafeInteger(tail.startSeq)) {
+    return { events: tail.events, cursor: tail.nextSeq, exhausted: tail.nextSeq >= tail.headSeq!, startSeq: tail.startSeq }
+  }
+  // Older gateway: no tail metadata. Fall back to the head probe so mixed
+  // desktop/gateway versions still show the newest bounded window.
+  const head = await request({ afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })
+  if (!Number.isSafeInteger(head.nextSeq) || head.nextSeq < 0) throw new Error("Invalid history head")
+  const startSeq = Math.max(0, head.nextSeq - (options.maxEvents ?? 1000))
+  const loaded = await loadHistory(request, { afterSeq: startSeq, limit: options.limit, maxPages: Math.ceil((options.maxEvents ?? 1000) / options.limit) })
+  return { ...loaded, startSeq, exhausted: loaded.cursor >= head.nextSeq }
 }
 
 /**

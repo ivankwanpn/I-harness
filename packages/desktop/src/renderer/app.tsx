@@ -80,6 +80,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [sandbox, setSandbox] = useState<SandboxState>()
   const [error, setError] = useState<string>()
   const [eventWindow, setEventWindow] = useState<EventWindow>(() => emptyEventWindow())
+  const eventWindowCache = useRef(new Map<string, EventWindow>())
   const [optimistic, setOptimistic] = useState<{ scope: string; id: string; text: string }>()
   const [model, setModel] = useState<SessionModelState>()
   const [queue, setQueue] = useState<SessionQueueItem[]>()
@@ -286,7 +287,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         ? await loadRecentHistory(request, { limit: HISTORY_LIMIT, maxEvents: MAX_RETAINED_EVENTS })
         : await loadHistory(request, { afterSeq, limit: HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES })
       if (selection.current !== scope) return
-      setEventWindow((current) => applyHistory(current, { events: load.events, nextSeq: load.cursor }))
+      setEventWindow((current) => {
+        const next = applyHistory(current, { events: load.events, nextSeq: load.cursor })
+        eventWindowCache.current.set(JSON.stringify([workspaceId, sessionId]), next)
+        return next
+      })
       setHistoryError(undefined)
       if (afterSeq === 0 || !load.exhausted) setHistoryCount((load.startSeq ?? 0) > 0 || !load.exhausted ? load.events.length : undefined)
     } catch (reason) {
@@ -480,7 +485,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   useEffect(() => {
     if (selectedWorkspaceId === undefined || selectedSessionId === undefined) return
     let active = true
-    setEventWindow(emptyEventWindow())
+    const selectionKey = JSON.stringify([selectedWorkspaceId, selectedSessionId])
+    setEventWindow(eventWindowCache.current.get(selectionKey) ?? emptyEventWindow())
     setModel(undefined)
     setQueue(undefined)
     setTasks(undefined)
@@ -491,29 +497,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     runningRevision.current++
     setQueueResumable(false)
     chunkBuffer.current.length = 0
-    void (async () => {
-      try {
-        await pageHistory(selectedWorkspaceId, selectedSessionId, 0)
-      } catch (reason) {
-        if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
-      }
-      try {
-        if (!active) return
-        const version = ++modelRequest.current
-        const modelState = await bridge.request({
-          kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId,
-        })
-        if (active && version === modelRequest.current) setModel(modelState as SessionModelState)
-      } catch (reason) {
-        if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
-      }
-      try {
-        if (active) await interactions.refresh(selectedSessionId)
-      } catch (reason) {
-        if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
-      }
-      if (active) await refreshTasks(selectedWorkspaceId, selectedSessionId)
-    })()
+    // Start every selection read together. Waiting for history before the
+    // model/interaction/task reads added their latencies to one another.
+    const fail = (reason: unknown) => { if (active) setTaskError(reason instanceof Error ? reason.message : String(reason)) }
+    void pageHistory(selectedWorkspaceId, selectedSessionId, 0).catch(fail)
+    const version = ++modelRequest.current
+    void bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+      .then(value => { if (active && version === modelRequest.current) setModel(value as SessionModelState) }).catch(fail)
+    void interactions.refresh(selectedSessionId).catch(fail)
+    void refreshTasks(selectedWorkspaceId, selectedSessionId).catch(fail)
     return () => {
       active = false
       if (chunkFrame.current !== undefined) {
