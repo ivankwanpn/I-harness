@@ -826,6 +826,12 @@ export function registerDesktopIpc(
       }
       try{await dispatchDesktopRequest({kind:'desktop/session/reload',workspaceId:request.workspaceId,sessionId:request.sessionId},owned)}
       catch{throw error}
+      // A durable input submit is idempotent by clientToken. Retrying it once
+      // after the reload repairs the poisoned in-memory writer without asking
+      // the user to press Send again.
+      if((request as {kind?:unknown}).kind==='desktop/session/input/submit'){
+        try{return await dispatchDesktopRequest(request,owned)}catch{/* retain the recovery message */}
+      }
       throw new Error('會話狀態已重新載入，請重試剛才的操作。')
     }})}
   if(windows.has(registeredWebContents))throw Error('Desktop window already registered')
