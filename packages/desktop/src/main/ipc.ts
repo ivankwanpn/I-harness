@@ -762,7 +762,14 @@ export function registerDesktopIpc(
   let removed = false
   let windows=ipcWindows.get(ipc)
   if(!windows){windows=new Map();ipcWindows.set(ipc,windows);ipc.handle(DESKTOP_REQUEST_CHANNEL,async(event,request)=>{const owned=windows!.get(event.sender);if(!owned)throw Error('untrusted IPC sender');
-    try{return await dispatchDesktopRequest(request,owned)}
+    try{
+      const result=await dispatchDesktopRequest(request,owned)
+      const created=request as {kind?:unknown;workspaceId?:unknown}|null, sessionId=(result as {sessionId?:unknown}|null)?.sessionId
+      if(created&&created.kind==="session/create"&&typeof created.workspaceId==="string"&&typeof sessionId==="string"){
+        try{window.webContents.send(DESKTOP_EVENT_CHANNEL,{kind:"sdk/notification",workspaceId:created.workspaceId,method:"desktop/session/navigation/changed",params:{sessionId}})}catch{/* A destroyed window needs no refresh. */}
+      }
+      return result
+    }
     catch(error){
       // Recovery-gated failures are repairable: the journal is durable, only the
       // in-memory execution is poisoned. Rebuild the session once, then tell the
