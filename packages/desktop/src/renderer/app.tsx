@@ -545,7 +545,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }
       // Warm the session assembly while the user is reading the restored tail;
       // the first prompt then does not pay the lazy assembly cost.
-      if (opened) void bridge.request({ kind: "desktop/session/warm", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => undefined)
+      if (opened) void bridge.request({ kind: "desktop/session/warm", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+        .then((warm: unknown) => { const result = warm as { ready?: boolean; error?: string } | undefined; if (result?.ready === false) console.warn("session warm failed", result.error) })
+        .catch((error: unknown) => console.warn("session warm failed", error))
     })().catch(fail)
     const version = ++modelRequest.current
     void bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })

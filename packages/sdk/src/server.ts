@@ -722,7 +722,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           const assembly = await service.assemblyFor(p.sessionId)
           return makeSuccess(id, { ready: assembly !== undefined })
         } catch (error) {
-          return makeFailure(id, INTERNAL_ERROR, `session/warm: ${error instanceof Error ? error.message : String(error)}`)
+          // Warmup is an optimization. Report the failure as data so the UI can
+          // log it without turning a slow first prompt into a protocol error.
+          return makeSuccess(id, { ready: false, error: error instanceof Error ? error.message : String(error) })
         }
       }
       case "session/history": {
