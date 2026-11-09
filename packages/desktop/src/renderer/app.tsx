@@ -80,6 +80,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [sandbox, setSandbox] = useState<SandboxState>()
   const [error, setError] = useState<string>()
   const [eventWindow, setEventWindow] = useState<EventWindow>(() => emptyEventWindow())
+  const [optimistic, setOptimistic] = useState<{ scope: string; id: string; text: string }>()
   const [model, setModel] = useState<SessionModelState>()
   const [queue, setQueue] = useState<SessionQueueItem[]>()
   const [tasks, setTasks] = useState<AgentTaskView[]>()
@@ -545,10 +546,18 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [bridge, providerRevision, selectedWorkspaceId, selectedSessionId, model?.status])
 
   const gate = sendGate({ model, sandbox, connection }, t)
+  const currentScope = JSON.stringify([selectedWorkspaceId, selectedSessionId])
+  useEffect(() => {
+    if (!optimistic) return
+    if (optimistic.scope !== currentScope) { setOptimistic(undefined); return }
+    if (timelineEvents(eventWindow).some(event => event.type === "user/message" && event.text === optimistic.text)) { setOptimistic(undefined); return }
+    const timer = setTimeout(() => setOptimistic(current => current?.id === optimistic.id ? undefined : current), 15_000)
+    return () => clearTimeout(timer)
+  }, [optimistic, currentScope, eventWindow])
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
     : {
-        rows: projectTimeline(timelineEvents(eventWindow)),
+        rows: [...projectTimeline(timelineEvents(eventWindow)), ...(optimistic && optimistic.scope === currentScope ? [{ id: optimistic.id, kind: "message" as const, role: "user" as const, text: optimistic.text }] : [])],
         canSend: gate.canSend && projectReady && !(operation?.busy && operation.kind !== "prompt"),
         projectReady,
         sendReason: !projectReady ? projectBinding?.error ?? t("正在套用專案資料夾…") : operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
@@ -614,8 +623,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         pending: pendingForSession(pending, selectedSessionId),
         onPrompt: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void): Promise<void> => {
           const scope = selection.current
-          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
-          await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted)
+          const pending = { scope: currentScope, id: `optimistic:${crypto.randomUUID()}`, text }
+          setOptimistic(pending)
+          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { setOptimistic(current => current?.id === pending.id ? undefined : current); throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
+          try { await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted) }
+          catch (reason) { setOptimistic(current => current?.id === pending.id ? undefined : current); throw reason }
           if (selection.current !== scope) return
           if (connection === "online") {
             void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
