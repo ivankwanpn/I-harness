@@ -128,6 +128,7 @@ export function SessionModelPicker({ bridge, workspaceId, current, disabled, onS
           <button type="button" disabled={busy || !customProvider || !customModel.trim()} onClick={() => apply({ provider: customProvider, model: customModel.trim() })}>{t("套用模型")}</button>
         </div> : null}
       </> : <div className="model-effort-options">{ready ? effortOptions.filter((option) => !option.value || ready.reasoningEfforts === undefined || ready.reasoningEfforts.includes(option.value)).map((option) => <button key={option.value} type="button" disabled={busy} aria-pressed={effort === option.value} onClick={() => apply({ provider: ready.providerId, model: ready.modelId, ...(ready.protocol ? { protocol: ready.protocol } : {}), ...(option.value ? { reasoningEffort: option.value } : {}) })}><span>{option.label}</span>{effort === option.value ? <Check size={14} aria-hidden="true" /> : null}</button>) : null}</div>}
+      {effort === "max" || effort === "xhigh" ? <p className="model-effort-hint">{t("高推理強度會明顯增加首個回覆的等待時間。")}</p> : null}
       {error ? <p role="alert" className="model-picker-error error-text">{error}{loadError && !applyError ? <button type="button" onClick={() => setRetry(retry + 1)}>{t("重試")}</button> : null}</p> : null}
     </div>, document.body) : null}
   </div>

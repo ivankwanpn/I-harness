@@ -348,6 +348,7 @@ html[data-pane-resizing] *, html[data-pane-resizing] { cursor: col-resize !impor
 .composer-queue-item button { width: 20px; height: 20px; flex: none; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ih-muted); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
 .composer-queue-item button:hover { color: var(--ih-text); background: color-mix(in srgb, var(--ih-text) 8%, transparent); }
 .composer-queue-more { color: var(--ih-muted); font-size: 11px; }
+.model-effort-hint { margin: 6px 2px 0; color: var(--ih-muted); font-size: 11px; line-height: 1.4; }
 .conversation-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 32px clamp(20px, 8vw, 120px); width: 100%; }
 .skeleton-line { height: 14px; border-radius: 7px; background: color-mix(in srgb, var(--ih-text) 7%, transparent); animation: skeleton-pulse 1.4s ease-in-out infinite; }
 .skeleton-line-user { width: 42%; align-self: flex-end; height: 16px; }

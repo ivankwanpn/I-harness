@@ -197,6 +197,28 @@ submit → append user/message → return accepted（<100ms 目標）
 - `model_error` 必須帶來源與 provider facts，不再 generic；
 - 同一 session 不再出現 `Earlier owned task save requires resolution`。
 
+## 十一、Warm session 的實測結果
+
+在 rc76 免安裝版上量到：
+
+```json
+{"warm": 539, "admission": 37}
+```
+
+對照沒有 warm 的直接 submit：
+
+```json
+{"ms": 1539}
+```
+
+也就是 admission 的 1.5 秒主要不是 receipt 文件寫入，而是 **冷 session assembly／managed input 初始化**。先做 `session/warm` 後，submit→accepted 降到 37ms。
+
+因此：
+
+- 不需要為了 admission 先拆掉 token receipt 的 durability；
+- 真正有效的順序是：warm session → 再處理 context；
+- fast admission 的目標已由 rc76 的 warm 路徑達成（37ms）。
+
 ## 十、建議
 
 不要先重寫 gateway。先把 **parent task ledger 從 critical path 移除**、把 **admission 改成 append + async**、把 **context projection 快取** 做起。這三件事完成後，再評估 resident actor 是否還需要更大規模的 gateway 改造。
