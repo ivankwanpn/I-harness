@@ -9,9 +9,6 @@ import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 
 /** Exact producer-owned document identity for permanent session cleanup. */
 export const desktopInputReceiptDocumentKey = (sessionId: string) => `desktop-input-tokens-${createHash("sha256").update(sessionId).digest("hex")}`
-interface TokenReceipt { fingerprint: string; inputId: string }
-interface TokenReceipts { version: 1; sessionId: string; receipts: Record<string, TokenReceipt> }
-const MAX_TOKEN_RECEIPTS = 4096
 type ManagedInputOwner=NonNullable<Awaited<ReturnType<NonNullable<SessionService['managedInputFor']>>>>
 type ManagedInputObservation=ReturnType<ManagedInputOwner['observe']>
 
@@ -98,32 +95,20 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         const managed=await service.managedInputFor?.(id,{completePreparation:options.prepare!==undefined&&!options.managedPreparation,supplementalContext:raw.context!==undefined})
         await coordinator.profile(id)
         managed?.observe().assertCurrent()
-        let receipt: TokenReceipt | undefined
-        if (raw.clientToken) {
-          const tokenHash = createHash("sha256").update(JSON.stringify([id, raw.clientToken])).digest("hex")
-          const documentKey = desktopInputReceiptDocumentKey(id)
-          const fingerprint = createHash("sha256").update(JSON.stringify({ text: raw.text, context: raw.context, delivery: raw.delivery, images: raw.images })).digest("hex")
-          const document = await coordinator.getDocument(documentKey) as TokenReceipts | undefined
-          managed?.observe().assertCurrent()
-          if (document && (document.version !== 1 || document.sessionId !== id || !document.receipts || typeof document.receipts !== "object" || Array.isArray(document.receipts) || Object.keys(document.receipts).length > MAX_TOKEN_RECEIPTS)) throw new Error("Invalid input token receipts")
-          if (document && Object.entries(document.receipts).some(([key, value]) => !/^[a-f0-9]{64}$/.test(key) || !value || !/^[a-f0-9]{64}$/.test(value.fingerprint) || typeof value.inputId !== "string" || value.inputId.length > 128)) throw new Error("Invalid input token receipt identity")
-          const stored = document?.receipts[tokenHash]
-          if (stored && (stored.fingerprint !== fingerprint || typeof stored.inputId !== "string")) throw new Error("Input token payload does not match its durable admission")
-          receipt = stored ? { fingerprint, inputId: stored.inputId as string } : { fingerprint, inputId: `desktop-token-${tokenHash}` }
-          if (!stored) {
-            if (Object.keys(document?.receipts ?? {}).length >= MAX_TOKEN_RECEIPTS) throw new Error("Conversation input receipt limit reached; start a new conversation")
-            await coordinator.putDocument(documentKey, { version: 1, sessionId: id, receipts: { ...document?.receipts, [tokenHash]: receipt } } satisfies TokenReceipts)
-            managed?.observe().assertCurrent()
-            const saved = await coordinator.getDocument(documentKey) as TokenReceipts | undefined
-            managed?.observe().assertCurrent()
-            if (saved?.receipts[tokenHash]?.fingerprint !== fingerprint || saved?.receipts[tokenHash]?.inputId !== receipt.inputId) throw new Error("Could not persist input token receipt")
-          }
-          // Inspect durable/live events before assembly startup. Retrying an
-          // acknowledged input must never recreate execution or replay tools.
+        // The durable admission event is the idempotency record. A client
+        // token deterministically selects its input id, so no second receipt
+        // document (and no write→readback round trip) is needed.
+        const tokenInputId = raw.clientToken
+          ? `desktop-token-${createHash("sha256").update(JSON.stringify([id, raw.clientToken])).digest("hex")}`
+          : undefined
+        if (tokenInputId !== undefined) {
           const observation=managed?.observe()
-          const existing = observation?await observation.inbox.admitted(receipt.inputId):(await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === receipt!.inputId)
+          const existing = observation?await observation.inbox.admitted(tokenInputId):(await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === tokenInputId)
           observation?.assertCurrent()
-          if (existing?.type === "agent/input/admitted") return acknowledgeExisting(id, existing, raw.start !== false,managed,observation)
+          if (existing?.type === "agent/input/admitted") {
+            if (existing.text !== raw.text || existing.delivery !== raw.delivery) throw new Error("Input token payload does not match its durable admission")
+            return acknowledgeExisting(id, existing, raw.start !== false,managed,observation)
+          }
         }
         const session = managed?undefined:await ownSession(id)
         const inbox = managed?.inbox??await service.receivedInputFor(id)
@@ -131,7 +116,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         if(managed)managed.observe().assertCurrent()
         else try { (await coordinator.openManagedDocument(id)).assertReady() } catch { blocked = true }
         const observation=managed?.observe()
-        let inputId = receipt?.inputId ?? raw.inputId ?? randomUUID()
+        let inputId = tokenInputId ?? raw.inputId ?? randomUUID()
         // A canceled admission grants no delivery. A shutdown-compensated
         // recovery can use a deterministic new generation; pending/promoted
         // generations remain exactly once across the crash window.

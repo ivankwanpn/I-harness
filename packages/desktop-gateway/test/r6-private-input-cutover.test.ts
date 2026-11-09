@@ -14,7 +14,7 @@ vi.mock('../../session-persistence-jsonl/src/backend/fact-journal.ts',async load
 const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'probe',function:{name:'probe',arguments:'{}'}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
 async function fixture(){const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'private-input-'));const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract);await coordinator.create({sessionId:'main'});return {root,coordinator}}
 
-it('Gateway refuses old start:false admission reply after original native ACK and retirement, retaining exact token receipt',async()=>{
+it('Gateway refuses old start:false admission reply after original native ACK and retirement, retaining one durable admission',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'input-ack-')),backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
  await coordinator.create({sessionId:'main'})
  const append=vi.mocked(backend.appendOwnedBatch!).getMockImplementation()!,entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>();let writes=0
@@ -84,18 +84,15 @@ it('Gateway cancelled recovered admission derives retry ID from original cancell
  }finally{await input.close();await service.close();opened.mockRestore();await coordinator.close()}
 },30000)
 
-it('Gateway held token retry cannot publish an old private owner after original close',async()=>{
+it('Gateway token retry reuses the first durable admission without a receipt document',async()=>{
  const {root,coordinator}=await fixture()
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'original',tools:[]}}),input=createDesktopInput(coordinator,service)
- const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),get=coordinator.getDocument.bind(coordinator)
- let hold=false
- const read=vi.spyOn(coordinator,'getDocument').mockImplementation(async key=>{const value=await get(key);if(hold&&key===desktopInputReceiptDocumentKey('main')){entered.resolve();await release.promise}return value})
  try{
   const raw={text:'parked',delivery:'queue' as const,clientToken:'held-original-token',start:false}
-  const first=await input.admit('main',raw);hold=true
-  const retry=input.admit('main',raw),outcome=retry.then(()=>({failed:false}),error=>({failed:true,error}))
-  await entered.promise;await service.closeSession('main');release.resolve()
-  expect((await outcome).failed).toBe(true)
+  const first=await input.admit('main',raw)
+  const second=await input.admit('main',raw)
+  expect(second.inputId).toBe(first.inputId)
   expect((await service.receivedInputFor('main')).pending().map(item=>item.inputId)).toEqual([first.inputId])
- }finally{release.resolve();await input.close();await service.close();read.mockRestore();await coordinator.close()}
+  expect(await coordinator.getDocument(desktopInputReceiptDocumentKey('main'))).toBeUndefined()
+ }finally{await input.close();await service.close();await coordinator.close()}
 },30000)
