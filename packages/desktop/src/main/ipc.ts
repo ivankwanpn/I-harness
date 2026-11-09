@@ -467,6 +467,12 @@ export async function dispatchDesktopRequest(
       }
       return created
     }
+    case "desktop/session/warm": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      return await runtime.client.request("session/warm", { sessionId })
+    }
     case "desktop/session/open": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")

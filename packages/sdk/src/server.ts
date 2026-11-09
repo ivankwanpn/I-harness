@@ -708,6 +708,18 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       case "ping": {
         return makeSuccess(id, { ok: true })
       }
+      case "session/warm": {
+        const p = params as { sessionId?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/warm requires a non-empty sessionId")
+        }
+        try {
+          const assembly = await service.assemblyFor(p.sessionId)
+          return makeSuccess(id, { ready: assembly !== undefined })
+        } catch (error) {
+          return makeFailure(id, INTERNAL_ERROR, `session/warm: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
       case "session/history": {
         // M41a v1: event-log walk over the in-process assembly. A cold durable
         // session is verified/adopted through the coordinator and assembled

@@ -543,6 +543,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setRunning(opened.running === true)
         setQueueResumable(opened.queueResumable === true)
       }
+      // Warm the session assembly while the user is reading the restored tail;
+      // the first prompt then does not pay the lazy assembly cost.
+      if (opened) void bridge.request({ kind: "desktop/session/warm", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => undefined)
     })().catch(fail)
     const version = ++modelRequest.current
     void bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
