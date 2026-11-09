@@ -179,6 +179,29 @@ warm 已完成後：
 | receipt 降級 | 可做，但 admission 已 23ms，高風險低回報 |
 | task document projection | 長期架構清理，非阻斷 |
 
+## Gateway 冷啟動量測
+
+同一個 rc80 portable、userdata 複本：
+
+```json
+{"cold":507,"warm":436,"n":1}
+```
+
+第一次 `session/dashboard` 507ms，第二次 436ms。gateway spawn 不是 prompt 延遲的主要來源，與 DSH／OpenCode 的 host 模型差異不構成必須重寫的理由。
+
+## 稽核結論
+
+到這裡，F0–F9 都已經有實際量測或程式證據：
+
+- gateway 冷啟動 ~0.5s；
+- admission 冷 13.2s → warm 23ms；
+- first token 1.7s（短 context）／1.66s（552KB context）；
+- spawn／close 可重複；
+- queue／stop 乾淨；
+- catalog／queue／warm gating 的疑似過度設計已被排除。
+
+真正剩下的只是長期雙記錄（token receipt、task document），目前不是阻斷性問題。繼續改的風險高於回報。
+
 ## 優先順序（原始）
 
 | 優先 | 項目 | 套件 | 風險 |
