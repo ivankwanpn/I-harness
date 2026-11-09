@@ -520,6 +520,25 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [bridge, interactions.refresh, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
 
   useEffect(() => {
+    if (!selectedWorkspaceId || !dashboard || dashboard.listingUnavailable) return
+    let cancelled = false
+    // Warm the first few conversation tails while the user is still looking at
+    // the list; the click then restores a ready window instead of a skeleton.
+    for (const row of dashboard.sessions.slice(0, 3)) {
+      const key = JSON.stringify([selectedWorkspaceId, row.id])
+      if (eventWindowCache.current.has(key)) continue
+      void bridge.request({ kind: "session/history", workspaceId: selectedWorkspaceId, sessionId: row.id, afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 })
+        .then(value => {
+          if (cancelled) return
+          const range = value as HistoryRange
+          if (!Number.isSafeInteger(range.nextSeq) || !Array.isArray(range.events)) return
+          eventWindowCache.current.set(key, applyHistory(emptyEventWindow(), { events: range.events, nextSeq: range.nextSeq }))
+        }).catch(() => { /* prefetch is best effort */ })
+    }
+    return () => { cancelled = true }
+  }, [bridge, dashboard, selectedWorkspaceId])
+
+  useEffect(() => {
     if (!selectedWorkspaceId || !selectedSessionId || operation?.kind !== "model" || operation.busy) return
     const scope = selection.current
     const version = ++modelRequest.current
