@@ -446,3 +446,10 @@ it("repairs a workspace by restarting its runtime and parking the native executi
   await expect(stat(join(root, ".i-harness"))).rejects.toThrow()
   expect((await readdir(root)).some(name => name.startsWith(".i-harness.bak-"))).toBe(true)
 })
+it("force-stops a session by restarting only its workspace runtime", async () => {
+  const invalidate = vi.fn(async () => {})
+  const dependencies = { catalog: { get: (id: string) => id === "ws-1" ? ENTRY : undefined }, runtimes: { invalidate } } as unknown as DesktopIpcDependencies
+  const result = await dispatchDesktopRequest({ kind: "desktop/session/force-stop", workspaceId: "ws-1", sessionId: "s-1" }, dependencies) as { restarted?: boolean }
+  expect(result.restarted).toBe(true)
+  expect(invalidate).toHaveBeenCalledWith("ws-1")
+})
