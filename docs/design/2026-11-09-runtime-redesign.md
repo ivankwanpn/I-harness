@@ -236,6 +236,34 @@ submit → append user/message → return accepted（<100ms 目標）
 
 這是短 prompt、無圖片、無大 context 的 baseline。你那個 524KB／Max 的 session 應另外量 firstTokenMs，才能知道延遲是在 IH 還是模型推理。
 
+## 十三、Private runtime 的 warm（rc80）
+
+使用者那個 524KB／Max 的 session 是 private runtime；rc79 的 `session/warm` 直接呼叫 `assemblyFor` 會失敗：
+
+```text
+Private runtime requires explicit complete compatibility adapter
+```
+
+rc80 改成先走 `managedInputFor({completePreparation:true})`，也就是 prompt admission 的同一條路徑。
+
+實測同一個 session：
+
+```json
+{
+  "warm": 2497,
+  "admission": 23,
+  "firstTokenMs": 1662,
+  "durationMs": 16328,
+  "bodyBytes": 552376,
+  "reasoningTokens": 1275
+}
+```
+
+- 冷啟動 admission 13228ms；
+- warm 後 admission 23ms；
+- 首 token 1662ms；
+- 552KB context 並不是首 token 的直接瓶頸，這次主要時間在輸出生成（16.3s）。
+
 ## 十、建議
 
 不要先重寫 gateway。先把 **parent task ledger 從 critical path 移除**、把 **admission 改成 append + async**、把 **context projection 快取** 做起。這三件事完成後，再評估 resident actor 是否還需要更大規模的 gateway 改造。
