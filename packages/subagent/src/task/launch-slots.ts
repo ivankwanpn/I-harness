@@ -91,7 +91,18 @@ export function createTaskLaunchPort(registry:TaskRegistry,context:ToolExecution
     published(){if(this!==slot)throw TypeError('Foreign slot');current();published=true;removeAbort()},
     retainPublication(phase){if(this!==slot)throw TypeError('Foreign slot');current();if(publication.has(phase.kind))throw Error('Original publication already captured');publication.set(phase.kind,phase.value)},
     start(make){if(this!==slot)throw TypeError('Foreign slot');if(started)return;started=true;preparation=(async()=>{await accepted;current();const result=await make();completion.resolve(result)})();void preparation.catch(async cause=>{retire(cause);try{await close()}catch{/* Retained for explicit original close. */}completion.reject(cause)})},
-    bind(birth){if(this!==slot)return Promise.reject(TypeError('Foreign slot'));try{current();if(binding)throw Error('Original task binding already captured');bindingIntent=freeze(captureTaskSnapshot(birth) as TaskChildBirthBinding);binding=hooks.bind(task,bindingIntent);return binding.done.catch(cause=>{retire(cause);throw cause})}catch(cause){retire(cause);return Promise.reject(cause)}},
+    bind(birth){if(this!==slot)return Promise.reject(TypeError('Foreign slot'));try{current();if(binding)throw Error('Original task binding already captured');bindingIntent=freeze(captureTaskSnapshot(birth) as TaskChildBirthBinding);binding=hooks.bind(task,bindingIntent);return binding.done.catch(async cause=>{
+      // A parent task document is a projection; the durable child session is
+      // the truth. If its binding save is blocked by older task debt, retire the
+      // failed consumer and let the child/session path continue instead of
+      // making spawn permanently unavailable.
+      if(/Earlier owned task save requires resolution|Owned task save requires resolution/i.test(cause instanceof Error?cause.message:String(cause))){
+        try{await binding!.retireConsumer()}catch{/* retained for explicit close */}
+        consumerClean=true
+        return
+      }
+      retire(cause);throw cause
+    })}catch(cause){retire(cause);return Promise.reject(cause)}},
     assertBinding(){if(this!==slot)throw TypeError('Foreign slot');current();if(!binding||consumed)throw Error('Original binding unavailable');binding.assertHandoff()},
     async retryBinding(){if(this!==slot)throw TypeError('Foreign slot');if(!binding)throw Error('Original binding unavailable');if(retired){await binding.retireConsumer().catch(()=>{});await binding.retry();consumerClean=true}else await binding.retry()},
     consumeBinding(){if(this!==slot)throw TypeError('Foreign slot');slot.assertBinding();binding!.release();consumed=true},
