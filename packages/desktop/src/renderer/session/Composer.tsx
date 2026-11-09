@@ -411,7 +411,6 @@ function SessionComposer({
   const [stopPending, setStopPending] = useState(false)
   const [forceStopReady, setForceStopReady] = useState(false)
   const [dispatching, setDispatching] = useState(false)
-  const flight = useRef(false)
   useEffect(() => {
     if (!running) { setStopPending(false); setForceStopReady(false); return }
     if (!stopPending) return
@@ -457,8 +456,7 @@ function SessionComposer({
   const primaryState = primaryBusy ? "sending" : running ? "running" : "idle"
   async function send(invertDelivery = false): Promise<void> {
     const text = value
-    if (flight.current || !canSend || readingImages || draftLoading || !hasPayload || sends.get(key)?.sending) return
-    flight.current = true
+    if (!canSend || readingImages || draftLoading || !hasPayload || sends.get(key)?.sending) return
     const client = draftRequest ? durableClients.get(key) : undefined
     const sentDraft = client?.capture()
     publishSend(key, { sending: true })
@@ -528,7 +526,6 @@ function SessionComposer({
       // cleanup still belong here, and rejected requests retain their input.
       publishSend(key, { sending: false, ...(!remoteRequest || reason instanceof ComposerPreparationError ? { error: reason instanceof Error ? reason.message : String(reason) } : {}) })
     } finally {
-      flight.current = false
       setDispatching(false)
     }
   }
@@ -626,7 +623,7 @@ function SessionComposer({
         <button type={primaryStops ? "button" : "submit"} className="composer-send" data-state={primaryState} aria-busy={primaryBusy || undefined}
           aria-label={t(primaryStops ? "停止" : "送出")}
           title={dispatching ? t("已送出，等待代理") : primaryBusy ? t("操作進行中") : primaryStops ? t("停止") : running ? deliveryLabel : t("送出")}
-          disabled={dispatching || primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? requestStop : undefined}>
+          disabled={primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? requestStop : undefined}>
           {primaryBusy ? <LoaderCircle size={18} className="composer-spinner" aria-hidden="true" /> : primaryStops ? <Square size={14} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={18} aria-hidden="true" />}
         </button>
       </>}
