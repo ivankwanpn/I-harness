@@ -324,6 +324,9 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         return base
       } catch (error) {
         originalSlot?.retire(error)
+        if (/Earlier owned task save requires resolution/i.test(error instanceof Error ? error.message : String(error))) {
+          try { await deps.tasks.recoverPersistence() } catch { /* terminalize still reports the original refusal */ }
+        }
         if (source.hasPublished()) {
           if (observationAborted) throw error
           throw source.recoverPublished(error)

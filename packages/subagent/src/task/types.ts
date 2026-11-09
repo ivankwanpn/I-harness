@@ -137,6 +137,9 @@ export interface TaskRegistry {
   save(): Promise<void>
   /** Drain already-scheduled saves without creating another document write. */
   flushPersistence(): Promise<void>
+  /** Retire failed task-save consumers and flush the original writer so a
+   * later spawn is not blocked by durable task debt. */
+  recoverPersistence(): Promise<void>
   /** D-08: admission-time drain that reports a document failure instead of
    * failing the caller; job records remain the durable fallback. */
   flushPersistenceBestEffort(): Promise<{ ok: boolean; error?: unknown }>

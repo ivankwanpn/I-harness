@@ -27,7 +27,14 @@ export function createCloseTool(deps: SubagentToolDeps): Tool {
     isReadOnly: false,
     execute: async (args) => {
       const entry = deps.table.get(args.target)
-      if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+      if (!entry) {
+        // Closing an already-terminal task is idempotent. The durable record is
+        // the evidence that this management path existed; do not turn cleanup
+        // into a permanent TOOL_FAILED loop after a session recovery.
+        const known = deps.tasks.list().some(task => task.agentPath === args.target && task.outcome !== undefined)
+        if (known) return { previous_status: "inactive" }
+        throw new Error(`unknown subagent: ${args.target}`)
+      }
       const previous = entry.status
       deps.table.update(entry.path, entry, { closing: true })
       entry.controller.abort()

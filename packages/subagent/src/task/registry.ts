@@ -401,6 +401,11 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       return true
     },
     terminalize,
+    async recoverPersistence() {
+      assertReady()
+      await persistence.retireConsumers()
+      await persistence.flush()
+    },
     annotateProjection(taskId, warning) {
       assertReady()
       const task = currentState.records.get(taskId)
