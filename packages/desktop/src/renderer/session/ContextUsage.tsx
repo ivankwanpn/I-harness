@@ -49,6 +49,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
   const open = popup?.bridge === bridge && popup.workspaceId === workspaceId && popup.sessionId === sessionId
   const mode = open ? popup.mode : undefined
   const [estimate, setEstimate] = useState<Estimate>()
+  const [request, setRequest] = useState<{ bodyBytes?: number; firstTokenMs?: number; durationMs?: number }>()
   const [placement, setPlacement] = useState({ right: 24, bottom: 72 })
   function cancelClose() { clearTimeout(closeTimer.current); closeTimer.current = undefined }
   function closePopup(returnFocus = false) {
@@ -146,7 +147,13 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
     refresh.current = control
     const mountRevision = revision
     const unsubscribe = bridge.onEvent(message => {
-      if (!active || message.kind === "window/state" || message.kind === "runtime/diagnostic" || message.kind === "runtime/activity" || message.workspaceId !== workspaceId) return
+      if (!active || message.kind === "window/state" || message.kind === "runtime/activity") return
+      if (message.kind === "runtime/diagnostic") {
+        const entry = message.entry
+        if (entry.workspaceId === workspaceId && entry.kind === "context/request" && entry.sessionId === sessionId) setRequest({ bodyBytes: entry.requestMetrics?.bodyBytes, firstTokenMs: entry.firstTokenMs, durationMs: entry.durationMs })
+        return
+      }
+      if (message.workspaceId !== workspaceId) return
       if (message.kind === "sdk/disconnected") {
         disconnected = { message: message.message }
         revision++; dirty = false; immediate = false
@@ -229,6 +236,14 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
         </dl>
         {snapshot.capSupport === "unsupported" ? <small>{t("此路由未套用傳送給供應商的輸出上限。")}</small> : null}
         {snapshot.fullByProvider ? <p>{t("供應商拒絕了上下文；請先壓縮或更換模型，再重試。")}</p> : snapshot.admission === "compact" ? <p>{t("需要先壓縮上下文才能繼續請求。")}</p> : null}
+      </div> : null}
+      {request && (request.bodyBytes !== undefined || request.firstTokenMs !== undefined) ? <div className="context-usage-facts" aria-label={t("最近一次模型請求")}>
+        <small>{t("最近一次模型請求")}</small>
+        <dl className="context-usage-fact-group">
+          {request.bodyBytes !== undefined ? <div className="context-usage-fact"><dt>{t("請求大小")}</dt><dd>{Math.round(request.bodyBytes / 1024)} KB</dd></div> : null}
+          {request.firstTokenMs !== undefined ? <div className="context-usage-fact"><dt>{t("首個 token")}</dt><dd>{request.firstTokenMs} ms</dd></div> : null}
+          {request.durationMs !== undefined ? <div className="context-usage-fact"><dt>{t("完整請求")}</dt><dd>{request.durationMs} ms</dd></div> : null}
+        </dl>
       </div> : null}
     </div>, document.body) : null}
   </>

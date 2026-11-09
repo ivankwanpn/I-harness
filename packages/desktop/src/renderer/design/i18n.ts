@@ -318,7 +318,7 @@ const english = {
   "需要你的確認": "Your confirmation is needed", "選擇回覆": "Choose a response", "批准": "Allow", "拒絕": "Deny",
   "僅允許這一次": "Only this time", "不執行此操作": "Do not perform this action", "選擇後按確認送出": "Choose an option, then confirm",
   "或自行輸入回答": "Or type your own answer", "選擇選項，或自行輸入後送出": "Choose an option, or type your own, then confirm", "保留問題，稍後回答": "Keep this question, answer later",
-  "正在送出…": "Submitting…", "正在停止…": "Stopping…", "高推理強度會明顯增加首個回覆的等待時間。": "High reasoning effort significantly delays the first reply.", "已送出，等待代理": "Sent; waiting for the agent", "正在載入會話…": "Loading conversation…", "待送出訊息": "Queued messages", "取消佇列訊息": "Cancel queued message", "強制停止": "Force stop", "停止沒有回應": "Stop is not responding", "確認": "Confirm",
+  "正在送出…": "Submitting…", "正在停止…": "Stopping…", "高推理強度會明顯增加首個回覆的等待時間。": "High reasoning effort significantly delays the first reply.", "最近一次模型請求": "Latest model request", "請求大小": "Request size", "首個 token": "First token", "完整請求": "Full request", "已送出，等待代理": "Sent; waiting for the agent", "正在載入會話…": "Loading conversation…", "待送出訊息": "Queued messages", "取消佇列訊息": "Cancel queued message", "強制停止": "Force stop", "停止沒有回應": "Stop is not responding", "確認": "Confirm",
   "工作區記憶": "Workspace memory", "啟用工作區記憶": "Enable workspace memory",
   "筆記保存在此工作區，可供不同會話查找。目前不會自動生成記憶。": "Notes are stored in this workspace for recall across conversations. Automatic memory generation is not available.",
   "搜尋筆記": "Search notes", "搜尋": "Search", "全部筆記": "All notes", "正在讀取…": "Loading…",
