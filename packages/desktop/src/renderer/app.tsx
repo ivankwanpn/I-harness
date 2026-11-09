@@ -566,9 +566,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     if (!optimistic) return
     if (optimistic.scope !== currentScope) { setOptimistic(undefined); return }
     if (timelineEvents(eventWindow).some(event => event.type === "user/message" && event.text === optimistic.text)) { setOptimistic(undefined); return }
+    // A queued prompt has not become a durable user/message yet. Keep its local
+    // row until the queue admits it instead of making it vanish on a timer.
+    if (running || (queue ?? []).some(item => item.text === optimistic.text)) return
     const timer = setTimeout(() => setOptimistic(current => current?.id === optimistic.id ? undefined : current), 15_000)
     return () => clearTimeout(timer)
-  }, [optimistic, currentScope, eventWindow])
+  }, [optimistic, currentScope, eventWindow, running, queue])
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
     : {
