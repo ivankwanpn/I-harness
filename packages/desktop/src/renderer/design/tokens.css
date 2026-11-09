@@ -341,6 +341,13 @@ html[data-pane-resizing] *, html[data-pane-resizing] { cursor: col-resize !impor
 .session-list .row-meta { font-size: 11px; line-height: 1.5; max-height: 30px; overflow: hidden; }
 .session-new-row .row-title { color: var(--ih-muted); }
 .session-new-row .row-meta { color: var(--ih-muted); }
+.composer-queue { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; border: 1px solid var(--ih-divider); border-radius: 9px; background: var(--ih-panel); }
+.composer-queue-label { color: var(--ih-muted); font-size: 11px; }
+.composer-queue-item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 240px; padding: 2px 4px 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--ih-text) 6%, transparent); color: var(--ih-text); font-size: 12px; }
+.composer-queue-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-queue-item button { width: 20px; height: 20px; flex: none; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ih-muted); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+.composer-queue-item button:hover { color: var(--ih-text); background: color-mix(in srgb, var(--ih-text) 8%, transparent); }
+.composer-queue-more { color: var(--ih-muted); font-size: 11px; }
 .conversation-skeleton { display: flex; flex-direction: column; gap: 14px; padding: 32px clamp(20px, 8vw, 120px); width: 100%; }
 .skeleton-line { height: 14px; border-radius: 7px; background: color-mix(in srgb, var(--ih-text) 7%, transparent); animation: skeleton-pulse 1.4s ease-in-out infinite; }
 .skeleton-line-user { width: 42%; align-self: flex-end; height: 16px; }

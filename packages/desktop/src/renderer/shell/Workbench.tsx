@@ -463,6 +463,18 @@ export function Workbench({
                 <div className="conversation-dock">
                 {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text" title={conversation.taskError}>{displayError(conversation.taskError).summary}</p> : null}
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} />
+                {(() => {
+                  const queued = (conversation.queue ?? []).filter(row => row.state === "queued")
+                  if (queued.length === 0) return null
+                  return <div className="composer-queue" aria-label={t("待送出訊息")}>
+                    <span className="composer-queue-label">{t("佇列")} {queued.length}</span>
+                    {queued.slice(0, 3).map(row => <span className="composer-queue-item" key={row.id} title={row.text}>
+                      <span className="composer-queue-text">{row.text}</span>
+                      <button type="button" aria-label={`${t("取消佇列訊息")} ${row.text}`} onClick={() => conversation.onCancelQueue(row.id)}>×</button>
+                    </span>)}
+                    {queued.length > 3 ? <span className="composer-queue-more">+{queued.length - 3}</span> : null}
+                  </div>
+                })()}
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
                 <div hidden={conversation.pending.length > 0}>
                 {composerProject}
