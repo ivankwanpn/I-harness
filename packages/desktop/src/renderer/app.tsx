@@ -372,6 +372,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const unsubscribe = bridge.onEvent((event) => {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       if (event.workspaceId !== selectedWorkspaceId) return
+      if (event.kind === "sdk/ready") {
+        executionRevision.current = undefined
+        setConnection("online")
+        setError(undefined)
+        refresh.schedule()
+        if (selectedSessionId) void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
+        return
+      }
       if (event.kind === "sdk/disconnected") {
         executionRevision.current = undefined
         setConnection("offline")
