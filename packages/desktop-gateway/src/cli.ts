@@ -91,6 +91,14 @@ export async function main(args: string[]): Promise<number> {
   return 0
 }
 
+// The gateway is a long-lived child of the desktop app. A rejected
+// fire-and-forget task (for example an optional title request) must be
+// reported, not allowed to terminate the whole session process.
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.stack ?? reason.message : String(reason)
+  console.error(`[desktop-gateway] unhandled rejection: ${message}`)
+})
+
 const entry = process.argv[1]
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
   void main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => {
