@@ -58,6 +58,8 @@ export function parseHeader(line: string): SessionMeta {
     ...(typeof h.seedLength === "number" ? { seedLength: h.seedLength } : {}),
     ...(h.semanticSeed !== undefined ? { semanticSeed: h.semanticSeed } : {}),
     ...(h.subagentProtocolVersion === 1 ? { subagentProtocolVersion: 1 as const } : {}),
+    ...(typeof h.subagentTaskId === "string" ? { subagentTaskId: h.subagentTaskId } : {}),
+    ...(typeof h.subagentAgentPath === "string" ? { subagentAgentPath: h.subagentAgentPath } : {}),
     ...(typeof h.delegationDepth === "number" ? { delegationDepth: h.delegationDepth } : {}),
     ...(typeof h.origin === "string" ? { origin: h.origin } : {}),
     // C5 workspace grouping: keep workspaceId through read AND repair — a

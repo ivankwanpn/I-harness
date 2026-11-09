@@ -29,7 +29,7 @@ const same=(a:unknown,b:unknown)=>canonicalJsonData(a)===canonicalJsonData(b)
 function matchesHeader(stage:BootstrapHeaderStage,meta:SessionMeta) {
  const original=JSON.parse(stage.headerBytes) as SessionMeta
  if(meta.formatVersion!==original.formatVersion&&!([11,12].includes(original.formatVersion)&&meta.formatVersion>original.formatVersion&&meta.formatVersion<=CURRENT_FORMAT_VERSION)&&!(original.formatVersion===13&&meta.formatVersion===14))throw TypeError('Bootstrap format mismatch')
- for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'] as const)if(!same(meta[key],original[key]))throw TypeError('Bootstrap header mismatch')
+ for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath','semanticSeed'] as const)if(!same(meta[key],original[key]))throw TypeError('Bootstrap header mismatch')
 }
 export async function lookupBootstrapStage(path:string,expectation:StageExpectation,io:StageLookupIO):Promise<StageLookup> {
  let present=false

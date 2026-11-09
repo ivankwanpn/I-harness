@@ -42,7 +42,7 @@ export async function bootstrapTaskChild(slot:TaskLaunchSlot,deps:SubagentToolDe
  const start=Object.freeze({wall:Date.now(),monotonic:performance.now()}),window=captureGenerationBudget('main',{timeoutMs:deps.modelActionTimeoutMs,maxAttempts:deps.modelActionMaxAttempts},start.wall)
  const initial=Object.freeze({inputId:randomUUID(),text:slot.task.prompt,parentSessionId:slot.caller.identity.parentSessionId,startedAt:window.startedAt,expiresAt:window.expiresAt})
  const observation=deps.managedParent?.execution.observe();if(observation){if(observation.identity!==deps.managedParent!.domain.identity)throw Error('Foreign parent observation');observation.assertCurrent()}
- const lineage=Object.freeze({origin:'subagent' as const,subagentProtocolVersion:1 as const,parentSession:slot.caller.identity.parentSessionId,delegationDepth:((observation?.header??deps.parentSession?.header)?.delegationDepth??0)+1})
+ const lineage=Object.freeze({origin:'subagent' as const,subagentProtocolVersion:1 as const,parentSession:slot.caller.identity.parentSessionId,delegationDepth:((observation?.header??deps.parentSession?.header)?.delegationDepth??0)+1,subagentTaskId:slot.task.id,subagentAgentPath:slot.task.agentPath})
  const invocation={version:1 as const,operationId:randomUUID(),targetSessionId:'child-'+randomUUID(),createdAt:new Date(start.wall).toISOString()}
  const inherited=slot.history?inspectTaskChildHistory(slot.history,slot.caller.identity.parentSessionId):undefined
  const seed=inherited?.seed??compileSemanticSeed({kind:'none'}),partial={invocation:{...invocation,requestDigest:'0'.repeat(64)},target:{kind:'new' as const},metadata:host.metadata,lineage,seed,initial}

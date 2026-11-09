@@ -29,7 +29,7 @@ export async function preserveBootstrapBirth(path: string, raw: Buffer, meta: Se
   const stage=selected.stage
   const original = JSON.parse(stage.headerBytes) as SessionMeta
   if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION) && !(original.formatVersion===13 && meta.formatVersion===14)) throw new TypeError('Bootstrap storage format changed')
-  for (const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'] as const) {
+  for (const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath','semanticSeed'] as const) {
     if (canonicalJsonData(meta[key]) !== canonicalJsonData(original[key])) throw new TypeError('Bootstrap birth scope changed')
   }
   const end = raw.indexOf(10), body = raw.subarray(end + 1)

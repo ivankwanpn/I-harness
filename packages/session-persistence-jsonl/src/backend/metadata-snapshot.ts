@@ -1,7 +1,7 @@
 import { canonicalJsonData, isStrictFactData, validateSubagentHeader } from '@i-harness/core-session'
 import type { SessionMeta } from '@i-harness/session-persistence'
 
-export const selectedImmutableHeaderKeys = ['formatVersion','journal','semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion','sessionId','createdAt'] as const
+export const selectedImmutableHeaderKeys = ['formatVersion','journal','semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath','sessionId','createdAt'] as const
 
 /** Public metadata edits cannot mint or change a semantic birth reservation.
  * Inspect protected descriptors before the later merge/serializer can read them;
