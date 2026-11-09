@@ -80,6 +80,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [sandbox, setSandbox] = useState<SandboxState>()
   const [error, setError] = useState<string>()
   const [eventWindow, setEventWindow] = useState<EventWindow>(() => emptyEventWindow())
+  const [historyLoading, setHistoryLoading] = useState(false)
   const eventWindowCache = useRef(new Map<string, EventWindow>())
   const [optimistic, setOptimistic] = useState<{ scope: string; id: string; text: string }>()
   const [model, setModel] = useState<SessionModelState>()
@@ -292,10 +293,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         eventWindowCache.current.set(JSON.stringify([workspaceId, sessionId]), next)
         return next
       })
+      setHistoryLoading(false)
       setHistoryError(undefined)
       if (afterSeq === 0 || !load.exhausted) setHistoryCount((load.startSeq ?? 0) > 0 || !load.exhausted ? load.events.length : undefined)
     } catch (reason) {
-      if (selection.current === scope) setHistoryError(reason instanceof Error ? reason.message : String(reason))
+      if (selection.current === scope) { setHistoryLoading(false); setHistoryError(reason instanceof Error ? reason.message : String(reason)) }
     }
   }, [bridge])
 
@@ -486,7 +488,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     if (selectedWorkspaceId === undefined || selectedSessionId === undefined) return
     let active = true
     const selectionKey = JSON.stringify([selectedWorkspaceId, selectedSessionId])
-    setEventWindow(eventWindowCache.current.get(selectionKey) ?? emptyEventWindow())
+    const cached = eventWindowCache.current.get(selectionKey)
+    setEventWindow(cached ?? emptyEventWindow())
+    setHistoryLoading(cached === undefined)
     setModel(undefined)
     setQueue(undefined)
     setTasks(undefined)
@@ -550,6 +554,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     ? undefined
     : {
         rows: [...projectTimeline(timelineEvents(eventWindow)), ...(optimistic && optimistic.scope === currentScope ? [{ id: optimistic.id, kind: "message" as const, role: "user" as const, text: optimistic.text }] : [])],
+        loading: historyLoading,
         canSend: gate.canSend && projectReady && !(operation?.busy && operation.kind !== "prompt"),
         projectReady,
         sendReason: !projectReady ? projectBinding?.error ?? t("正在套用專案資料夾…") : operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
