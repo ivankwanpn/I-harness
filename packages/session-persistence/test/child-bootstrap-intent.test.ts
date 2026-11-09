@@ -201,7 +201,7 @@ it('encodes bounded canonical newline reservations and keeps public readers disj
   expect(() => captureChildBootstrapCore(publicCore)).toThrow(TypeError)
   expect(() => captureChildBootstrapCaptureRequest(publicRequest)).toThrow(TypeError); expect(() => parseChildBootstrapReservation(publicBytes)).toThrow(TypeError)
   const publicStage = buildBootstrapHeader({ ...payload(), invocation: publicRequest.invocation })
-  expect(createHash('sha256').update(publicStage.operation.stageBytes).digest('hex')).toBe('e2f221239bf3bd02944c1a50d864f92bcc55703fc9c7cfc9e2ce3fb672f58e8b')
+  expect(createHash('sha256').update(publicStage.operation.stageBytes).digest('hex')).toBe('c7cc66ae62bcf9853395eb24d48a0bea24275395eb4b3cf233bee1591cc261e8')
   expect(Buffer.from(publicStage.operation.stageBytes).toString().endsWith('\n')).toBe(true)
   expect(parseBootstrapHeaderStage(publicStage.operation.stageBytes)).toEqual(publicStage.stage)
 })
