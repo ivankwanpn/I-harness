@@ -189,7 +189,7 @@ export interface ComposerProps {
 
 /** Failed admission retains both the complete Composer draft and its created
  * session. A stable token makes an ambiguous admission response safe to retry. */
-export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenProjectFile, workspaceId, projectId, capabilities, onSubmitted, onWorkflow, onPermissionsChanged }: { bridge: DesktopBridge; draftRequest?: DraftRequester; onOpenHistory?: ComposerProps["onOpenHistory"]; onOpenProjectFile?: ComposerProps["onOpenProjectFile"]; workspaceId: string; projectId?: string; capabilities: Record<string, string[]>; onSubmitted(id: string): void; onWorkflow?(name: string): void; onPermissionsChanged?(mode: AgentDefaults["sandboxMode"]): void }) {
+export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenProjectFile, workspaceId, projectId, capabilities, onSubmitted, onDraftCreated, onWorkflow, onPermissionsChanged }: { bridge: DesktopBridge; draftRequest?: DraftRequester; onOpenHistory?: ComposerProps["onOpenHistory"]; onOpenProjectFile?: ComposerProps["onOpenProjectFile"]; workspaceId: string; projectId?: string; capabilities: Record<string, string[]>; onSubmitted(id: string): void; onDraftCreated?(id: string): void; onWorkflow?(name: string): void; onPermissionsChanged?(mode: AgentDefaults["sandboxMode"]): void }) {
   const t = useText()
   const sessionId = `new-task:${projectId ?? "unassigned"}`
   const metadataKey = `${draftKey(workspaceId, sessionId)}:submission`
@@ -235,6 +235,7 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
         if (!created?.sessionId) throw new ComposerPreparationError(t("無法準備新會話；草稿仍保留。"))
         state = { ...state, createdId: created.sessionId }
         save({ ...latest.current, createdId: created.sessionId })
+        onDraftCreated?.(created.sessionId)
       }
       const modelKey = JSON.stringify(state.selection)
       if (state.appliedModel !== modelKey) {
