@@ -47,3 +47,9 @@
   border: 0;
   pointer-events: none;
 }
+
+.context-usage-stack { display: flex; width: 100%; height: 8px; margin: 10px 0 0; overflow: hidden; border-radius: 999px; background: var(--ih-divider); }
+.context-usage-segment { height: 100%; flex: none; }
+.context-usage-segment-system { background: var(--ih-accent); }
+.context-usage-segment-tools { background: color-mix(in srgb, var(--ih-accent) 55%, var(--ih-muted)); }
+.context-usage-segment-messages { background: var(--ih-muted); }

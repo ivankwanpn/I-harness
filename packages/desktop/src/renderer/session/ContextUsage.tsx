@@ -49,7 +49,6 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
   const open = popup?.bridge === bridge && popup.workspaceId === workspaceId && popup.sessionId === sessionId
   const mode = open ? popup.mode : undefined
   const [estimate, setEstimate] = useState<Estimate>()
-  const [request, setRequest] = useState<{ bodyBytes?: number; firstTokenMs?: number; durationMs?: number }>()
   const [placement, setPlacement] = useState({ right: 24, bottom: 72 })
   function cancelClose() { clearTimeout(closeTimer.current); closeTimer.current = undefined }
   function closePopup(returnFocus = false) {
@@ -147,13 +146,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
     refresh.current = control
     const mountRevision = revision
     const unsubscribe = bridge.onEvent(message => {
-      if (!active || message.kind === "window/state" || message.kind === "runtime/activity") return
-      if (message.kind === "runtime/diagnostic") {
-        const entry = message.entry
-        if (entry.workspaceId === workspaceId && entry.kind === "context/request" && entry.sessionId === sessionId) setRequest({ bodyBytes: entry.requestMetrics?.bodyBytes, firstTokenMs: entry.firstTokenMs, durationMs: entry.durationMs })
-        return
-      }
-      if (message.workspaceId !== workspaceId) return
+      if (!active || message.kind === "window/state" || message.kind === "runtime/diagnostic" || message.kind === "runtime/activity" || message.workspaceId !== workspaceId) return
       if (message.kind === "sdk/disconnected") {
         disconnected = { message: message.message }
         revision++; dirty = false; immediate = false
@@ -193,8 +186,10 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
   }
   const stale = historical !== undefined
   const snapshot = state?.snapshot
-  const roleTokens = ready?.roleTokens
   const percent = ready && ready.contextWindow > 0 ? ready.estimatedTokens / ready.contextWindow * 100 : undefined
+  const systemTokens = snapshot?.systemTokens ?? 0, toolTokens = snapshot?.schemaTokens ?? 0
+  const messageTokens = ready ? Math.max(0, ready.estimatedTokens - systemTokens - toolTokens) : 0
+  const breakdownTotal = systemTokens + toolTokens + messageTokens || 1
   const reading = percent === undefined ? "—" : ready!.estimatedTokens > 0 && percent < 0.1 ? "<0.1%" : `${percent.toFixed(1)}%`
   const number = (value: number) => new Intl.NumberFormat("en-US").format(value)
   return <>
@@ -212,13 +207,21 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
       {error !== undefined || state?.kind === "unavailable" ? <div><p role={error !== undefined ? "alert" : undefined}>{error || unavailableReason || t("無法取得上下文容量。")}</p><Button variant="secondary" size="small" loading={current?.loading} loadingLabel={t("正在處理…")} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("刷新狀態")}</Button></div> : ready ? <>
         <p className="context-usage-capacity">{number(ready.estimatedTokens)} / {number(ready.contextWindow)} ({reading})</p>
         {stale ? <p className="muted">{t("顯示上一次請求的估算；下一次請求準備完成後會更新。")}</p> : null}
-        <progress max={ready.contextWindow} value={Math.min(ready.estimatedTokens, ready.contextWindow)} aria-label={t("估算已用 Token")} />
+        {snapshot ? <div className="context-usage-breakdown" aria-label={t("訊息來源")}>
+          <div className="context-usage-stack" aria-hidden="true">
+            {([['system', systemTokens], ['tools', toolTokens], ['messages', messageTokens]] as const).map(([key, tokens]) =>
+              <span key={key} className={`context-usage-segment context-usage-segment-${key}`} style={{ width: `${(percent ?? 0) * tokens / breakdownTotal}%` }} />)}
+          </div>
+          <dl className="context-usage-fact-group">
+            <div className="context-usage-fact"><dt>{t("系統提示")}</dt><dd>~{number(systemTokens)}</dd></div>
+            <div className="context-usage-fact"><dt>{t("工具定義")}</dt><dd>~{number(toolTokens)}</dd></div>
+            <div className="context-usage-fact"><dt>{t("訊息")}</dt><dd>~{number(messageTokens)}</dd></div>
+          </dl>
+        </div> : <progress max={ready.contextWindow} value={Math.min(ready.estimatedTokens, ready.contextWindow)} aria-label={t("估算已用 Token")} />}
         {snapshot?.remainingInputBudget !== undefined ? <dl className="context-usage-remaining">
           <div className="context-usage-fact"><dt>{t("剩餘輸入預算")}</dt><dd>{number(snapshot.remainingInputBudget)}</dd></div>
         </dl> : null}
-        {roleTokens ? <div className="context-usage-breakdown" aria-label={t("訊息來源")}>
-          {(["user", "assistant", "tool"] as const).map((role) => <div className="context-usage-role" key={role} data-role={role}><span>{t(role === "user" ? "使用者訊息" : role === "assistant" ? "助手訊息" : "工具訊息")}</span><output>{number(roleTokens[role])}</output></div>)}
-        </div> : null}
+
         <small>{t(snapshot ? "根據已準備的供應商輸入估算，包含系統提示與工具定義；與帳單和快取計數分開。" : "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。")}</small>
       </> : <p>{t("讀取上下文容量中…")}</p>}
       {snapshot ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
@@ -237,14 +240,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
         {snapshot.capSupport === "unsupported" ? <small>{t("此路由未套用傳送給供應商的輸出上限。")}</small> : null}
         {snapshot.fullByProvider ? <p>{t("供應商拒絕了上下文；請先壓縮或更換模型，再重試。")}</p> : snapshot.admission === "compact" ? <p>{t("需要先壓縮上下文才能繼續請求。")}</p> : null}
       </div> : null}
-      {request && (request.bodyBytes !== undefined || request.firstTokenMs !== undefined) ? <div className="context-usage-facts" aria-label={t("最近一次模型請求")}>
-        <small>{t("最近一次模型請求")}</small>
-        <dl className="context-usage-fact-group">
-          {request.bodyBytes !== undefined ? <div className="context-usage-fact"><dt>{t("請求大小")}</dt><dd>{Math.round(request.bodyBytes / 1024)} KB</dd></div> : null}
-          {request.firstTokenMs !== undefined ? <div className="context-usage-fact"><dt>{t("首個 token")}</dt><dd>{request.firstTokenMs} ms</dd></div> : null}
-          {request.durationMs !== undefined ? <div className="context-usage-fact"><dt>{t("完整請求")}</dt><dd>{request.durationMs} ms</dd></div> : null}
-        </dl>
-      </div> : null}
+
     </div>, document.body) : null}
   </>
 }
