@@ -472,8 +472,9 @@ export async function dispatchDesktopRequest(
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
       const afterSeq = requireNonNegativeInteger(value.afterSeq, "afterSeq")
+      const beforeSeq = value.beforeSeq === undefined ? undefined : requireNonNegativeInteger(value.beforeSeq, "beforeSeq")
       const limit = requireHistoryLimit(value.limit)
-      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.history(sessionId, { afterSeq, limit })
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.history(sessionId, { afterSeq, ...(beforeSeq === undefined ? {} : { beforeSeq }), limit })
     }
     case "session/context": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
