@@ -645,8 +645,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           const pending = { scope: currentScope, id: `optimistic:${crypto.randomUUID()}`, text }
           setOptimistic(pending)
           if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { setOptimistic(current => current?.id === pending.id ? undefined : current); throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
+          // Queue state can change before the admission promise resolves; a
+          // short refresh makes a queued second prompt visible while the first
+          // turn is still starting.
+          const queueRefresh = setTimeout(() => { if (selection.current === scope) void refreshTasks(selectedWorkspaceId, selectedSessionId) }, 500)
           try { await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted) }
-          catch (reason) { setOptimistic(current => current?.id === pending.id ? undefined : current); throw reason }
+          catch (reason) { clearTimeout(queueRefresh); setOptimistic(current => current?.id === pending.id ? undefined : current); throw reason }
+          clearTimeout(queueRefresh)
           if (selection.current !== scope) return
           if (connection === "online") {
             void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
