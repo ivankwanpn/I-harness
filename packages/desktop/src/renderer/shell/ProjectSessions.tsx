@@ -91,7 +91,10 @@ export function ProjectSessions(props: ProjectSessionsProps) {
       if (kind === "durable" || kind === "status") refreshers.get(event.workspaceId)?.schedule()
     })
     for (const workspace of workspaces) void read(workspace.id, supplied.current.workspaceId !== workspace.id || supplied.current.dashboard === undefined)
-    return () => { active.current = false; epoch.current++; for (const refresh of refreshers.values()) refresh.dispose(); unsubscribe() }
+    // Reconcile low-frequency changes that have no live notification (for
+    // example an empty durable draft created before its first send).
+    const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") for (const workspace of workspaces) void read(workspace.id) }, 5000)
+    return () => { active.current = false; epoch.current++; window.clearInterval(timer); for (const refresh of refreshers.values()) refresh.dispose(); unsubscribe() }
   }, [bridge, workspaceKey, read, props.revision])
 
   useEffect(() => {
