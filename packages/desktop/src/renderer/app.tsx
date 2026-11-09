@@ -524,7 +524,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     let cancelled = false
     // Warm the first few conversation tails while the user is still looking at
     // the list; the click then restores a ready window instead of a skeleton.
-    for (const row of dashboard.sessions.slice(0, 3)) {
+    for (const row of dashboard.sessions.slice(0, 20)) {
       const key = JSON.stringify([selectedWorkspaceId, row.id])
       if (eventWindowCache.current.has(key)) continue
       void bridge.request({ kind: "session/history", workspaceId: selectedWorkspaceId, sessionId: row.id, afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 })
