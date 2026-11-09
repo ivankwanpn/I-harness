@@ -202,6 +202,29 @@ warm 已完成後：
 
 真正剩下的只是長期雙記錄（token receipt、task document），目前不是阻斷性問題。繼續改的風險高於回報。
 
+## rc81：Token receipt 降級
+
+已完成：
+
+- client token 直接決定 `inputId`；
+- admission 前只查 durable admission event；
+- 不再讀寫 receipt document，也不做 write→readback；
+- 舊 receipt document 只保留作 cleanup metadata。
+
+r6 測試：
+
+```text
+Tests  5 passed | 1 failed
+```
+
+唯一失敗是 baseline 已有的 `unsupported private context` 測試，與本次改動無關。
+
+rc81 本地 smoke：
+
+```json
+{"warm":2812,"admission":20,"accepted":true}
+```
+
 ## 優先順序（原始）
 
 | 優先 | 項目 | 套件 | 風險 |
