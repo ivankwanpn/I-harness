@@ -21,8 +21,8 @@ export interface ChildExecutionIntent {
   approval: 'ordinary' | 'parent-review'; timeoutMs?: number; maxAttempts?: number;
 }
 export type ChildLineage =
-  | { origin: 'subagent'; subagentProtocolVersion: 1; parentSession?: string; delegationDepth?: number }
-  | { origin: 'team' | 'approval-review'; parentSession?: string; delegationDepth?: number }
+  | { origin: 'subagent'; subagentProtocolVersion: 1; parentSession?: string; delegationDepth?: number; subagentTaskId?: string; subagentAgentPath?: string }
+  | { origin: 'team' | 'approval-review'; parentSession?: string; delegationDepth?: number; subagentTaskId?: string; subagentAgentPath?: string }
 export interface ChildBootstrapCore {
   version: 1; kind: 'child-bootstrap-core'; caller: ChildCaller; history: ChildHistory;
   metadata: BootstrapCallerMetadata; lineage: ChildLineage; initial: ChildInitialCommitment; execution: ChildExecutionIntent;
@@ -78,10 +78,10 @@ export function captureChildBootstrapCore(input: unknown): ChildBootstrapCore {
   if (c.version !== 1 || c.kind !== 'child-bootstrap-core') invalid()
   const { caller, history, lineage, initial, execution } = c
   validateCreation(c.metadata, lineage)
-  bootstrapFields(lineage, ['origin'], ['parentSession', 'delegationDepth', 'subagentProtocolVersion'])
+  bootstrapFields(lineage, ['origin'], ['parentSession', 'delegationDepth', 'subagentProtocolVersion', 'subagentTaskId', 'subagentAgentPath'])
   if (!['subagent', 'team', 'approval-review'].includes(lineage.origin)
     || lineage.parentSession !== undefined && !safeId(lineage.parentSession)) invalid()
-  if (lineage.origin === 'subagent') bootstrapFields(lineage, ['origin', 'subagentProtocolVersion'], ['parentSession', 'delegationDepth'])
+  if (lineage.origin === 'subagent') bootstrapFields(lineage, ['origin', 'subagentProtocolVersion'], ['parentSession', 'delegationDepth', 'subagentTaskId', 'subagentAgentPath'])
   else bootstrapFields(lineage, ['origin'], ['parentSession', 'delegationDepth'])
 
   bootstrapFields(caller, ['kind'], ['taskId', 'parentSessionId', 'callEventSeq', 'toolCallId', 'teamId', 'memberId', 'reviewId'])

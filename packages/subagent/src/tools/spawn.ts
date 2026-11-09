@@ -198,6 +198,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           signal: exec.abortSignal,
           generationFactoryFor: deps.generationFactoryFor, modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,
           taskName: args.task_name,
+          taskId: task.id,
+          agentPath: task.agentPath,
           message: args.message,
           parentPath,
           parentRegistry: deps.parentRegistry,

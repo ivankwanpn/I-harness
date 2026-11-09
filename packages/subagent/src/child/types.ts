@@ -17,6 +17,9 @@ export interface SpawnOptions extends RoleModelHost {
   sharedGeneration?: import('@i-harness/llm-seam').ApprovalGenerationAction
   signal?: AbortSignal
   taskName: string
+  /** Immutable projection hints for the durable child header; absent on legacy callers. */
+  taskId?: string
+  agentPath?: string
   message: string
   parentPath: string
   parentRegistry: ToolRegistry

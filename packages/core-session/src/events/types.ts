@@ -251,6 +251,9 @@ export interface SessionHeader {
   delegationDepth?: number
   /** Minted only by current ordinary child creation; never a permission. */
   subagentProtocolVersion?: 1
+  /** Immutable child projection hints; absent on older sessions. */
+  subagentTaskId?: string
+  subagentAgentPath?: string
   origin?: string
 }
 

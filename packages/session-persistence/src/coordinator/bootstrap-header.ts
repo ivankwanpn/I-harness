@@ -35,7 +35,7 @@ function validateTarget(value: BootstrapRequest['target']) {
   } else bad()
 }
 export function validateCreation(metadata: BootstrapRequest['metadata'], lineage: BootstrapRequest['lineage']) {
-  fields(metadata,[],['title','workspaceId','modelSelection']); fields(lineage,['origin'],['parentSession','delegationDepth','subagentProtocolVersion'])
+  fields(metadata,[],['title','workspaceId','modelSelection']); fields(lineage,['origin'],['parentSession','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath'])
   if (metadata.title !== undefined && (typeof metadata.title !== 'string' || Buffer.byteLength(metadata.title) > 32768) || metadata.workspaceId !== undefined && !id(metadata.workspaceId)) bad()
   if (metadata.modelSelection !== undefined) {
     const m=metadata.modelSelection; fields(m,['provider','model'],['protocol','reasoningEffort'])
@@ -43,7 +43,10 @@ export function validateCreation(metadata: BootstrapRequest['metadata'], lineage
   }
   if (!['subagent','approval-review','team','fork','import'].includes(lineage.origin) || lineage.parentSession !== undefined && !id(lineage.parentSession)
     || lineage.delegationDepth !== undefined && !count(lineage.delegationDepth) || (lineage.origin === 'subagent') !== (lineage.subagentProtocolVersion === 1)
-    || lineage.origin === 'import' && lineage.parentSession !== undefined) bad()
+    || lineage.origin === 'import' && lineage.parentSession !== undefined
+    || lineage.subagentTaskId !== undefined && !id(lineage.subagentTaskId)
+    || lineage.subagentAgentPath !== undefined && (typeof lineage.subagentAgentPath !== 'string' || lineage.subagentAgentPath.length > 1024)
+    || lineage.origin !== 'subagent' && (lineage.subagentTaskId !== undefined || lineage.subagentAgentPath !== undefined)) bad()
 }
 export function captureBootstrapRequest(value: BootstrapRequest): BootstrapRequest {
   fields(value,['invocation','target','metadata','lineage','seed'],['initial'])
@@ -102,7 +105,7 @@ export function buildBootstrapHeader(request: BootstrapRequest, original?: Boots
   if (r.target.kind === 'resume' && !original) bad()
   const headerBase:SessionMeta=original?.headerBase ?? { ...existing, formatVersion:CURRENT_FORMAT_VERSION, sessionId:r.invocation.targetSessionId,createdAt:r.invocation.createdAt,
     journal:{version:1,legacyBodyBytes:0,legacyEventCount:0,legacyPrefixDigest:legacyPrefixDigest(0,new Uint8Array()),separatorBytes:0},...r.metadata,...r.lineage,seedLength:r.seed.records.length }
-  if(!original)for(const key of ['parentSession','delegationDepth','subagentProtocolVersion'] as const)if(r.lineage[key]===undefined)delete headerBase[key]
+  if(!original)for(const key of ['parentSession','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath'] as const)if(r.lineage[key]===undefined)delete headerBase[key]
   const core:Omit<BootstrapHeaderStage,'headerBytes'>={version:1,kind:'semantic-bootstrap-header',invocation:r.invocation,originalTarget:original?.originalTarget ?? r.target as BootstrapHeaderStage['originalTarget'],metadata:r.metadata,lineage:r.lineage,headerBase,
     seed:{digest:r.seed.digest,dependencyDigest:r.seed.dependencyDigest,sourceObservation:r.seed.sourceObservation,seedLength:r.seed.records.length,groupCount:(r.seed.records[0] as { groupCount?: number } | undefined)?.groupCount ?? Math.max(0,r.seed.records.length-1)},
     ...(initial ? {initial:{inputId:r.initial!.inputId,digest:bootstrapInitialInputDigest(initial,r.initial!.startedAt,r.initial!.expiresAt),startedAt:r.initial!.startedAt,expiresAt:r.initial!.expiresAt}}: {})}

@@ -113,16 +113,17 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   controller.signal.throwIfAborted()
   const ordinary = (opts.childSessions?.origin ?? "subagent") === "subagent"
   const protocol = ordinary ? { subagentProtocolVersion: 1 as const } : {}
+  const projection = ordinary ? { ...(opts.taskId ? { subagentTaskId: opts.taskId } : {}), ...(opts.agentPath ? { subagentAgentPath: opts.agentPath } : {}) } : {}
   if (committed) sessionId=committed.request.invocation.targetSessionId
   else if (opts.childSessions) {
     sessionId = `child-${randomUUID()}`
     await opts.childSessions.coordinator.create({ sessionId,
       parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length,
-      origin: opts.childSessions.origin ?? "subagent", delegationDepth: childDepth, ...protocol })
+      origin: opts.childSessions.origin ?? "subagent", delegationDepth: childDepth, ...protocol, ...projection })
   }
   controller.signal.throwIfAborted()
   const opened = committed?{session:committed.document.view,factOwner:committed.document,document:committed.document}:await openChildDocument(seedEvents,
-    { ...(opts.childSessions ? { parentSession: opts.childSessions.parentSessionId } : {}), seedLength: seedEvents.length, origin: opts.childSessions?.origin ?? 'subagent', delegationDepth: childDepth, ...protocol },
+    { ...(opts.childSessions ? { parentSession: opts.childSessions.parentSessionId } : {}), seedLength: seedEvents.length, origin: opts.childSessions?.origin ?? 'subagent', delegationDepth: childDepth, ...protocol, ...projection },
     opts.childSessions && sessionId ? { coordinator: opts.childSessions.coordinator, sessionId } : undefined)
   const { session: childSession, factOwner } = opened
   document = opened.document

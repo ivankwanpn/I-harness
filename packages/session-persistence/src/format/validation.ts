@@ -74,12 +74,14 @@ export function buildSession(meta: SessionMeta | undefined, events: SessionEvent
   validateSubagentHeader(meta)
   const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events }
   if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined || meta.semanticSeed !== undefined
-    || meta.delegationDepth !== undefined || meta.origin !== undefined)) {
+    || meta.delegationDepth !== undefined || meta.subagentTaskId !== undefined || meta.subagentAgentPath !== undefined || meta.origin !== undefined)) {
     session.header = {
       ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
       ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
       ...(meta.semanticSeed !== undefined ? { semanticSeed: meta.semanticSeed } : {}),
       ...(meta.subagentProtocolVersion === 1 ? { subagentProtocolVersion: 1 as const } : {}),
+      ...(meta.subagentTaskId !== undefined ? { subagentTaskId: meta.subagentTaskId } : {}),
+      ...(meta.subagentAgentPath !== undefined ? { subagentAgentPath: meta.subagentAgentPath } : {}),
       ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
       ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
     }

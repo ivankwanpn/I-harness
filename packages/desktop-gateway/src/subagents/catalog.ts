@@ -79,6 +79,15 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
       try { runtimes.set(ownerId, live(ownerId)) }
       catch (error) { errors.push({ sessionId: ownerId === parentId ? undefined : ownerId, message: errorText(error) }) }
     }
+    // Immutable child-header projection hints survive a missing task document.
+    // The task document stays as a fallback for sessions created before these
+    // fields existed; it never overrides a live/runtime entry below.
+    for (const row of scoped) {
+      const path = row.meta.subagentAgentPath, taskId = row.meta.subagentTaskId
+      if (path === undefined) continue
+      const previous = hints.get(row.sessionId)
+      hints.set(row.sessionId, { ...previous, currentFormat: true, sessionId: row.sessionId, path, status: previous?.status ?? "unavailable", ...(taskId ? { taskId } : {}) })
+    }
     const agents: DesktopSubagentRow[] = []
     for (const { sessionId, meta, chain } of scoped) {
       const runtime = chain.map((ownerId) => ({ ownerId, runtime: runtimes.get(ownerId) })).find(({ runtime }) => runtime?.entries.some((row) => row.sessionId === sessionId))

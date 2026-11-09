@@ -102,7 +102,7 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
   if(stage.captureReservation)validateOwnedCaptureStage(stage.captureReservation,stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])
   const meta=state.meta!,original=JSON.parse(stage.headerBytes)
   if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION && readyState(state)) && !(original.formatVersion===13 && meta.formatVersion===14 && readyState(state))) throw new Error('Bootstrap storage format conflict')
-  for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
+  for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
   if(bootstrapManifest(stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])!==manifest(stage))throw new Error('Bootstrap manifest conflict')
   const first=state.events![0]
   if(stage.seed.seedLength&&first?.type==='conversation/seed-manifest') {
@@ -386,7 +386,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(!state.meta?.semanticSeed||!stage||!state.events||!state.prefix||!readyState(state))return{kind:'refused',reason:'cached-unprepared'}
         if(state.meta.sessionId!==invocation.targetSessionId||state.meta.createdAt!==invocation.createdAt)return{kind:'refused',reason:'conflict'}
         if(!sameBootstrapData(cached.prefix,state.prefix)||cached.view.formatVersion!==state.meta.formatVersion
-          ||['semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion'].some(key=>!sameBootstrapData((cached.view.header as any)?.[key],(state.meta as any)[key])))return{kind:'refused',reason:'wrong-view'}
+          ||['semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion','subagentTaskId','subagentAgentPath'].some(key=>!sameBootstrapData((cached.view.header as any)?.[key],(state.meta as any)[key])))return{kind:'refused',reason:'wrong-view'}
         checkBirth(stage,state);assertCurrent()
         const result = await adopt(candidate,state,guards,cached,undefined,entry); if (entry.cachedTaskBarrier?.completed) entry.cachedTaskBarrier = undefined; return result
       }catch(error){

@@ -5,7 +5,7 @@ import type { SessionMeta, SessionModelSelection } from './types.ts'
 export type { BootstrapInvocation, BootstrapPhase, BootstrapResumeToken }
 export type { BootstrapDependencyRequest, BootstrapDependencyOutcome }
 export interface BootstrapCallerMetadata { title?: string; workspaceId?: string; modelSelection?: SessionModelSelection }
-export interface BootstrapLineage { parentSession?: string; origin: 'subagent'|'approval-review'|'team'|'fork'|'import'; delegationDepth?: number; subagentProtocolVersion?: 1 }
+export interface BootstrapLineage { parentSession?: string; origin: 'subagent'|'approval-review'|'team'|'fork'|'import'; delegationDepth?: number; subagentProtocolVersion?: 1; subagentTaskId?: string; subagentAgentPath?: string }
 export type BootstrapTarget = { kind: 'new' } | { kind: 'existing-empty'; expectedHeaderDigest: string; expectedPrefix: JournalPrefix } | { kind: 'resume'; manifestDigest: string }
 export interface BootstrapInitial { inputId: string; text: string; parentSessionId?: string; startedAt: number; expiresAt: number }
 export interface BootstrapRequest { invocation: BootstrapInvocation; target: BootstrapTarget; metadata: BootstrapCallerMetadata; lineage: BootstrapLineage; seed: CompiledSemanticSeed; initial?: BootstrapInitial }
