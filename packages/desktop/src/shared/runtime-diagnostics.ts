@@ -19,7 +19,7 @@ export interface RuntimeDiagnosticEntry {
   projectionIssues?: Array<"terminal-without-turn-end" | "missing-child-session"
     | "job-record-missing" | "job-record-terminal-ahead" | "job-record-terminal-missing" | "job-record-child-mismatch"
     | "document-write-pending" | "rewind-intent-pending">
-  close?: { generation: number; reason: "scope-changed" | "subprocess-exited" | "manager-closed" }
+  close?: { generation: number; reason: "scope-changed" | "subprocess-exited" | "manager-closed"; code?: number | null; signal?: string | null; stderr?: string }
   id: string
   timestamp: number
   level: RuntimeDiagnosticLevel

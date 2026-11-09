@@ -28,12 +28,23 @@ export interface LaunchedRuntime {
   client: HarnessClient
   /** Resolves when the SDK subprocess is gone (exit or spawn failure). */
   exited: Promise<void>
+  /** Last stderr bytes of the child, for exit diagnostics. */
+  stderrTail?: () => string
+  exitInfo?: () => { code: number | null; signal: string | null } | undefined
 }
 
 /** A child that writes more than the pipe buffer holds would block forever if
  * nobody reads that stream; its diagnostics are not a protocol channel. */
 export function drainChildStream(stream: NodeJS.ReadableStream | null | undefined): void {
   stream?.resume()
+}
+
+/** Drain a child stream while retaining a bounded tail for exit diagnostics. */
+export function captureChildStream(stream: NodeJS.ReadableStream | null | undefined, limit = 8192): () => string {
+  let tail = ""
+  stream?.on("data", (chunk: Buffer | string) => { tail = (tail + chunk.toString()).slice(-limit) })
+  stream?.resume()
+  return () => tail
 }
 
 export interface WorkspaceRuntimeManager {
@@ -81,12 +92,13 @@ export function launchLocalGateway(workspace: WorkspaceEntry, sessionDir: string
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   })
-  drainChildStream(child.stderr)
+  const stderrTail = captureChildStream(child.stderr)
+  let exitInfo: { code: number | null; signal: string | null } | undefined
   const exited = new Promise<void>((resolveExit) => {
-    child.once("exit", () => resolveExit())
-    child.once("error", () => { if (child.pid === undefined) resolveExit() })
+    child.once("exit", (code, signal) => { exitInfo = { code, signal }; resolveExit() })
+    child.once("error", () => { if (child.pid === undefined) { exitInfo = { code: null, signal: null }; resolveExit() } })
   })
-  return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited }
+  return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited, stderrTail, exitInfo: () => exitInfo }
 }
 
 /**
@@ -107,12 +119,13 @@ export function launchBundledGateway(
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   })
-  drainChildStream(child.stderr)
+  const stderrTail = captureChildStream(child.stderr)
+  let exitInfo: { code: number | null; signal: string | null } | undefined
   const exited = new Promise<void>((resolveExit) => {
-    child.once("exit", () => resolveExit())
-    child.once("error", () => { if (child.pid === undefined) resolveExit() })
+    child.once("exit", (code, signal) => { exitInfo = { code, signal }; resolveExit() })
+    child.once("error", () => { if (child.pid === undefined) { exitInfo = { code: null, signal: null }; resolveExit() } })
   })
-  return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited }
+  return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited, stderrTail, exitInfo: () => exitInfo }
 }
 
 export function createWorkspaceRuntimeManager(options: {
@@ -276,7 +289,10 @@ export function createWorkspaceRuntimeManager(options: {
               if (runtimes.get(workspace.id)?.client !== runtime.client) return
               runtimes.delete(workspace.id)
               children.delete(workspace.id)
-              if (!closed) emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "SDK subprocess exited", close: { generation, reason: "subprocess-exited" } })
+              const exit = launched.exitInfo?.() ?? { code: null, signal: null }
+              const tail = launched.stderrTail?.().trim()
+              const detail = `SDK subprocess exited (code ${exit.code ?? "?"}${exit.signal ? `, signal ${exit.signal}` : ""})${tail ? `: ${tail.slice(-1800)}` : ""}`
+              if (!closed) emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: detail, close: { generation, reason: "subprocess-exited", code: exit.code, signal: exit.signal, stderr: tail?.slice(-1800) } })
             })
           }
           return runtime
