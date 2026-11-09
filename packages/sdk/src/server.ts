@@ -705,6 +705,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           } catch (error) { return hostMethodFailure(id, 'session/cancel', error) }
         })
       }
+      case "ping": {
+        return makeSuccess(id, { ok: true })
+      }
       case "session/history": {
         // M41a v1: event-log walk over the in-process assembly. A cold durable
         // session is verified/adopted through the coordinator and assembled

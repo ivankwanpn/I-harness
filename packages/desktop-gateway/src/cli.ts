@@ -94,15 +94,30 @@ export async function main(args: string[]): Promise<number> {
 // The gateway is a long-lived child of the desktop app. A rejected
 // fire-and-forget task (for example an optional title request) must be
 // reported, not allowed to terminate the whole session process.
+function reportFatal(reason: unknown): void {
+  const message = reason instanceof Error ? reason.stack ?? reason.message : String(reason)
+  console.error(`[desktop-gateway] fatal: ${message}`)
+  try {
+    // A structured fatal notification lets the desktop show the real failure
+    // before/with the process exit instead of only "subprocess exited".
+    process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "desktop/gateway/fatal", params: { message: reason instanceof Error ? reason.message : String(reason), diagnostic: message.slice(0, 8192) } })}\n`)
+  } catch { /* stderr remains the fallback diagnostic */ }
+}
+
 process.on("unhandledRejection", (reason) => {
   const message = reason instanceof Error ? reason.stack ?? reason.message : String(reason)
   console.error(`[desktop-gateway] unhandled rejection: ${message}`)
 })
 
+process.on("uncaughtException", (error) => {
+  reportFatal(error)
+  process.exitCode = 1
+})
+
 const entry = process.argv[1]
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
   void main(process.argv.slice(2)).then((code) => { process.exitCode = code }, (error) => {
-    console.error(`[desktop-gateway] fatal: ${error instanceof Error ? error.message : String(error)}`)
+    reportFatal(error)
     process.exitCode = 1
   })
 }

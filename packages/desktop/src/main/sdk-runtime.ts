@@ -31,6 +31,8 @@ export interface LaunchedRuntime {
   /** Last stderr bytes of the child, for exit diagnostics. */
   stderrTail?: () => string
   exitInfo?: () => { code: number | null; signal: string | null } | undefined
+  /** Structured fatal payload reported by the gateway before exit. */
+  fatal?: string
 }
 
 /** A child that writes more than the pipe buffer holds would block forever if
@@ -140,6 +142,7 @@ export function createWorkspaceRuntimeManager(options: {
   const children = new Map<string, LaunchedRuntime>()
   const generations = new Map<string, number>()
   const restartWindow = new Map<string, { count: number; since: number }>()
+  const healthTimers = new Map<string, NodeJS.Timeout>()
   const closingClients = new WeakMap<HarnessClient, Promise<void>>()
   let closed = false
   let activityVersion = 0
@@ -190,6 +193,11 @@ export function createWorkspaceRuntimeManager(options: {
       }
       launched.client.onNotification((frame) => {
         if (closed || (generations.get(workspace.id) ?? 0) !== generation || children.get(workspace.id) !== launched) return
+        if (frame.method === "desktop/gateway/fatal") {
+          const params = frame.params as { message?: unknown; diagnostic?: unknown } | undefined
+          launched.fatal = [typeof params?.message === "string" ? params.message : "Gateway fatal error", typeof params?.diagnostic === "string" ? params.diagnostic : ""].filter(Boolean).join("\n").slice(0, 8192)
+          return
+        }
         // One lookup derived from the shared method list; bridge.ts asserts at
         // compile time that every DesktopNotificationMethod is listed there, so
         // a new notification cannot be silently dropped by a stale chain.
@@ -217,6 +225,8 @@ export function createWorkspaceRuntimeManager(options: {
       const child = children.get(id)
       if (!runtime && !starting && !child) return
       const generation = generations.get(id) ?? 0
+      const health = healthTimers.get(id)
+      if (health !== undefined) { clearInterval(health); healthTimers.delete(id) }
       generations.set(id, generation + 1)
       runtimes.delete(id)
       pending.delete(id)
@@ -283,6 +293,24 @@ export function createWorkspaceRuntimeManager(options: {
           // No await between checking the epoch/generation and publication.
           runtimes.set(workspace.id, runtime)
           restartWindow.delete(workspace.id)
+          const health = setInterval(() => {
+            if (closed || (generations.get(workspace.id) ?? 0) !== generation || runtimes.get(workspace.id) !== runtime) return
+            let timeout: NodeJS.Timeout | undefined
+            void Promise.race([
+              runtime.client.request("ping", {}).then(() => true, () => false),
+              new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), 3_000); timeout.unref() }),
+            ]).then((ok) => {
+              if (timeout !== undefined) clearTimeout(timeout)
+              if (ok || closed || runtimes.get(workspace.id) !== runtime) return
+              if (healthTimers.get(workspace.id) !== health) return
+              clearInterval(health)
+              healthTimers.delete(workspace.id)
+              emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "Gateway health check failed; restarting.", close: { generation, reason: "unhealthy" } })
+              void runtime.client.close().catch(() => undefined)
+            })
+          }, 15_000)
+          health.unref()
+          healthTimers.set(workspace.id, health)
           try {emit({kind:'sdk/ready',method:'sdk/ready',workspaceId:workspace.id,runtimeGeneration:generation})} catch(error) {void manager.invalidate!(workspace.id).catch(()=>{});throw error}
           activityVersion += 1
           const launched = children.get(workspace.id)
@@ -291,9 +319,12 @@ export function createWorkspaceRuntimeManager(options: {
               if (runtimes.get(workspace.id)?.client !== runtime.client) return
               runtimes.delete(workspace.id)
               children.delete(workspace.id)
+              const healthTimer = healthTimers.get(workspace.id)
+              if (healthTimer !== undefined) { clearInterval(healthTimer); healthTimers.delete(workspace.id) }
               const exit = launched.exitInfo?.() ?? { code: null, signal: null }
               const tail = launched.stderrTail?.().trim()
-              const detail = `SDK subprocess exited (code ${exit.code ?? "?"}${exit.signal ? `, signal ${exit.signal}` : ""})${tail ? `: ${tail.slice(-1800)}` : ""}`
+              const fatal = launched.fatal?.trim()
+              const detail = `SDK subprocess exited (code ${exit.code ?? "?"}${exit.signal ? `, signal ${exit.signal}` : ""})${fatal ? `: ${fatal}` : tail ? `: ${tail.slice(-1800)}` : ""}`
               if (!closed) emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: detail, close: { generation, reason: "subprocess-exited", ...(typeof exit.code === "number" ? { code: exit.code } : {}), ...(typeof exit.signal === "string" ? { signal: exit.signal } : {}), ...(tail ? { stderr: tail.slice(-1800) } : {}) } })
               // Own the recovery here instead of leaving the renderer on a
               // dead transport until the user discovers Reconnect. A bounded
@@ -360,6 +391,8 @@ export function createWorkspaceRuntimeManager(options: {
     async close() {
       if (closed) return
       closed = true
+      for (const timer of healthTimers.values()) clearInterval(timer)
+      healthTimers.clear()
       const closingIds = [...new Set([...runtimes.keys(), ...children.keys()])]
       const clients = [...children.values()].map((launched) => launched.client)
       const starters = [...pending.values()]
