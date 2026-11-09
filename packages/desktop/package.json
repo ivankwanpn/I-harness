@@ -1,6 +1,6 @@
 {
   "name": "@i-harness/desktop",
-  "version": "0.1.13-rc64",
+  "version": "0.1.13-rc65",
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
