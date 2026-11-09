@@ -112,7 +112,33 @@
 
 **建議**：長期只保留 session event log 為 truth；其他都是 rebuildable。
 
-## 優先順序
+## 稽核修正（2026-11-09 晚）
+
+### Catalog 不是 P1
+
+重新讀 `desktop-gateway/src/subagents/catalog.ts` 後確認：
+
+- 列的來源是 child session（`coordinator.list()` 的 `origin=subagent`）；
+- task document 只提供 `agentPath`／role 等 hint；
+- task document 缺失或版本不支援時，`currentFormat` 會讓列仍由 child session events 推導；
+- 因此 **不需要**把 catalog 改成 projection-first；原本的 P1 判斷過重。
+
+### Context-output 對既有 session 幫助有限
+
+- context-output 只影響 **未來** 的大 tool result；
+- 使用者那個 552KB session 的既有 tool result 已經 inline，開啟 context-output 不會縮小它；
+- 真正能縮小既有 session 的是 `/compact`（UI 已支援），不是 context-output。
+
+### 修正後的優先順序
+
+| 優先 | 項目 | 備註 |
+|---|---|---|
+| P1 | queue 單一 projection | 仍有 dual projection 風險 |
+| P2 | warm 完成前送出 | UI gating，比 catalog 改寫有效 |
+| P3 | receipt 降級 | 高風險，admission 已 23ms，不急 |
+| P3 | 共用 gateway host | 需先量冷啟動 |
+
+## 優先順序（原始）
 
 | 優先 | 項目 | 套件 | 風險 |
 |---|---|---|---|
