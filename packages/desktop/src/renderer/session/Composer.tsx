@@ -411,6 +411,7 @@ function SessionComposer({
   const [stopPending, setStopPending] = useState(false)
   const [forceStopReady, setForceStopReady] = useState(false)
   const [dispatching, setDispatching] = useState(false)
+  const [sendDiagnostic, setSendDiagnostic] = useState("")
   useEffect(() => {
     if (!running) { setStopPending(false); setForceStopReady(false); return }
     if (!stopPending) return
@@ -456,7 +457,9 @@ function SessionComposer({
   const primaryState = primaryBusy ? "sending" : running ? "running" : "idle"
   async function send(invertDelivery = false): Promise<void> {
     const text = value
-    if (!canSend || readingImages || draftLoading || !hasPayload || sends.get(key)?.sending) return
+    const blocked = !canSend ? "!canSend" : readingImages ? "readingImages" : draftLoading ? "draftLoading" : !hasPayload ? "!hasPayload" : sends.get(key)?.sending ? "sending" : ""
+    setSendDiagnostic(blocked || "started")
+    if (blocked) return
     const client = draftRequest ? durableClients.get(key) : undefined
     const sentDraft = client?.capture()
     publishSend(key, { sending: true })
@@ -621,7 +624,7 @@ function SessionComposer({
           <Square size={14} fill="currentColor" aria-hidden="true" />
         </button> : null}
         <button type="button" className="composer-send" data-state={primaryState} aria-busy={primaryBusy || undefined}
-          data-can-send={canSend ? "1" : "0"} data-payload={hasPayload ? "1" : "0"} data-sending={sending ? "1" : "0"} data-dispatching={dispatching ? "1" : "0"}
+          data-can-send={canSend ? "1" : "0"} data-payload={hasPayload ? "1" : "0"} data-sending={sending ? "1" : "0"} data-dispatching={dispatching ? "1" : "0"} data-send-diag={sendDiagnostic}
           aria-label={t(primaryStops ? "停止" : "送出")}
           title={dispatching ? t("已送出，等待代理") : primaryBusy ? t("操作進行中") : primaryStops ? t("停止") : running ? deliveryLabel : t("送出")}
           disabled={primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? requestStop : () => { void send() }}>
