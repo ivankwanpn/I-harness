@@ -219,6 +219,23 @@ submit → append user/message → return accepted（<100ms 目標）
 - 真正有效的順序是：warm session → 再處理 context；
 - fast admission 的目標已由 rc76 的 warm 路徑達成（37ms）。
 
+## 十二、First-token 量測（rc79）
+
+```json
+{
+  "admission": 39,
+  "durationMs": 1665,
+  "firstTokenMs": 1197,
+  "bodyBytes": 60836
+}
+```
+
+- admission 39ms（warm session）；
+- first token 1197ms；
+- 完整 request 1665ms。
+
+這是短 prompt、無圖片、無大 context 的 baseline。你那個 524KB／Max 的 session 應另外量 firstTokenMs，才能知道延遲是在 IH 還是模型推理。
+
 ## 十、建議
 
 不要先重寫 gateway。先把 **parent task ledger 從 critical path 移除**、把 **admission 改成 append + async**、把 **context projection 快取** 做起。這三件事完成後，再評估 resident actor 是否還需要更大規模的 gateway 改造。
