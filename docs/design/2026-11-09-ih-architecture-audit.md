@@ -1,0 +1,132 @@
+# IH 架構稽核（2026-11-09，rc80 基線）
+
+目標：效率、穩定性、避免過度設計。以日常流程 F0–F9 逐段檢查，對照 DSH／Codex／OpenCode／Pi。
+
+## 總結
+
+目前最值得處理的不是 gateway 進程模型，而是三個「第二套真相／第二套状态」：
+
+1. parent task document（subagent 的第二個 durable writer）
+2. token receipt document（admission 的第二份記錄）
+3. queue 與 durable input 的雙 projection
+
+## 分段發現
+
+### F0 啟動／gateway
+
+**現況**：Electron main → 每個 workspace 一個 gateway child（stdio），244 packages，supervisor／health／fatal IPC。
+
+**優點**：workspace 隔離、crash 可重啟、renderer 有 online 狀態。
+
+**問題**：
+- 每個 workspace 冷啟動成本高；多 workspace 時 process 數量線性成長。
+- 與 DSH（單 desktop-host）、OpenCode（單 background service）相比，IH 的 process 模型較重。
+- 但目前沒有證據顯示這是 prompt 延遲主因；不建議先重寫。
+
+**建議**：保留 supervisor；先量 gateway 冷啟動與記憶體，再決定是否共用 host。
+
+### F1 開啟會話
+
+**現況**：`session/open` 並行 dashboard／history／input state；rc80 加 `session/warm`。
+
+**問題**：warm 只 warm 目前選中的 session；private runtime 在 rc79 直接失敗，rc80 才修好。
+
+**建議**：把 warm 失敗記錄成 diagnostic（目前 renderer `.catch(()=>{})` 完全吞掉），避免再次靜默失效。
+
+### F2 Admission
+
+**現況**：token receipt document 寫入＋讀回＋managed document＋inbox admit。
+
+**量測**：冷啟動 13228ms、warm 後 23ms（private 552KB session）。
+
+**問題**：
+- receipt document 與 admission event 是同一件事的兩份 durable 記錄。
+- `getDocument` 讀回驗證是額外 RTT；但 warm 後 admission 只有 23ms，已不是主要瓶頸。
+- 直接移除 receipt 會破壞既有 archive／cutover invariant（rc79 實驗造成 27 個測試失敗）。
+
+**建議**：不急著拆；先把 receipt 降級成「cleanup metadata」，不再參與 admission 決策。
+
+### F3 Assembly／session runtime
+
+**現況**：lazy assembly，rc80 warm 可提前建立。
+
+**問題**：warm 只對被打開的 session 生效；如果使用者立即送出，仍可能撞上冷啟動。
+
+**建議**：UI 在 warm 完成前顯示「準備中」，或 send 時等待 warm promise，而不是讓 submit 自己付冷啟動。
+
+### F4 Context
+
+**現況**：552KB body、200KB inline image、13.7k schema tokens；context-output 預設 disabled。
+
+**量測**：同一個 session warm 後 firstTokenMs 1662ms，duration 16328ms。
+
+**問題**：
+- 524–552KB body 每次重送；圖片仍 inline。
+- context-output 已存在但預設關閉，等於有現成機制沒用。
+
+**建議**：先量 context-output 開啟後 body／firstToken 差異；不要先重寫 projection。
+
+### F5 模型串流
+
+**現況**：diagnostics 已有 firstTokenMs／durationMs。
+
+**問題**：first token 變異大（同一 session 40s → 1.7s），主要是 reasoning effort／模型。
+
+**建議**：不要用單次 firstToken 判斷 IH 好壞；看 p50／p95。
+
+### F6 工具
+
+**現況**：tool result 大量 inline；大結果進 context。
+
+**問題**：與 F4 相同，是 body 膨胀來源。
+
+**建議**：與 context-output 一起處理。
+
+### F7 Subagent
+
+**現況**：parent task document＋child session＋runtime table＋job registry；rc80 binding debt 不阻塞、terminal close idempotent。
+
+**驗證**：真實問題 session 可重複 spawn／close；queue／stop 正常。
+
+**問題**：
+- task document 仍是第二個 durable truth；catalog／session-management 直接讀它。
+- 這次只是讓 debt 不阻塞，不是 projection-first。
+
+**建議**：把 catalog 的 task document 讀取改成「hint only」；缺失時完全由 child session 推導。
+
+### F8 Queue／停止
+
+**現況**：durable inbox＋lane queue＋queue projection。
+
+**驗證**：queue cancel、session cancel 都回 true，queue 清空、running false。
+
+**問題**：兩套 projection，draft session stop 仍需 fallback。
+
+**建議**：queue API 回傳單一 projection；UI 不再自行合併兩個來源。
+
+### F9 持久化／recovery
+
+**現況**：session event log＋task document＋token receipt＋managed document。
+
+**問題**：recovery 要同時處理四個 durable 狀態，任何一個 debt 都會放大。
+
+**建議**：長期只保留 session event log 為 truth；其他都是 rebuildable。
+
+## 優先順序
+
+| 優先 | 項目 | 套件 | 風險 |
+|---|---|---|---|
+| P1 | catalog task document 改 hint-only | desktop-gateway/subagents | 中 |
+| P1 | warm 失敗不再靜默 | renderer | 低 |
+| P2 | context-output 實測 | context-output | 中 |
+| P2 | queue 單一 projection | desktop-gateway/desktop | 中 |
+| P3 | receipt 降級 | desktop-gateway/input | 高 |
+| P3 | 共用 gateway host | desktop/main | 高 |
+
+## 版本策略
+
+依使用者指示：不再每個修正都發 GitHub release。
+
+- 以 rc81 作為工作版本，本地 build／portable 測試；
+- 全部完成後才發一次 rc81；
+- 在此之前不建立 GitHub release。
