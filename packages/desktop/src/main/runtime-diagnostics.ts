@@ -102,6 +102,8 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     const kind = value.kind as RuntimeDiagnosticKind
     const retry = safeRetry(value.retry)
     const httpStatus = integer(value.httpStatus, 100, 599) ? value.httpStatus : undefined
+    const durationMs = integer(value.durationMs, 0, Number.MAX_SAFE_INTEGER) ? value.durationMs : undefined
+    const firstTokenMs = integer(value.firstTokenMs, 0, Number.MAX_SAFE_INTEGER) ? value.firstTokenMs : undefined
     const modelFailure = safeModelFailureFacts(value.modelFailure)
     let requestMetrics: RuntimeDiagnosticEntry["requestMetrics"]
     try { if (value.requestMetrics !== undefined) requestMetrics = validateRequestMetrics(value.requestMetrics) } catch { /* Reject optional facts. */ }
@@ -138,7 +140,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       ...(integer(value.runtimeGeneration, 0, Number.MAX_SAFE_INTEGER) ? { runtimeGeneration: value.runtimeGeneration } : {}),
       ...(safeId(value.requestId) ? { requestId: safeId(value.requestId) } : {}), ...(code ? { code } : {}), ...(httpStatus ? { httpStatus } : {}), ...(retry ? { retry } : {}),
       ...(modelFailure ? { modelFailure } : {}),
-      ...(requestMetrics ? { requestMetrics } : {}), ...(compaction ? { compaction } : {}), ...(close ? { close } : {}), ...(projectionIssues ? { projectionIssues } : {}),
+      ...(requestMetrics ? { requestMetrics } : {}), ...(durationMs === undefined ? {} : { durationMs }), ...(firstTokenMs === undefined ? {} : { firstTokenMs }), ...(compaction ? { compaction } : {}), ...(close ? { close } : {}), ...(projectionIssues ? { projectionIssues } : {}),
       ...(contextAdmission ? { contextAdmission } : {}),
       ...(contextBudget ? { contextBudget: { estimatedInputTokens: contextBudget.estimatedInputTokens, outputReserve: contextBudget.outputReserve, contextWindow: contextBudget.contextWindow,
         effectiveOutputCap: contextBudget.effectiveOutputCap, safetyMargin: contextBudget.safetyMargin, coverage: contextBudget.coverage, estimateSource: contextBudget.estimateSource,

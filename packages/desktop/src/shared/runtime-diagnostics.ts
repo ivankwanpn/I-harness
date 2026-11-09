@@ -11,6 +11,10 @@ export interface RuntimeDiagnosticEntry {
   modelId?: string
   runtimeGeneration?: number
   requestMetrics?: import("@i-harness/usage-stats").RequestMetrics
+  /** End-to-end model request duration from usage capture. */
+  durationMs?: number
+  /** Time to the first provider token, when the provider reported it. */
+  firstTokenMs?: number
   compaction?: import("@i-harness/desktop-gateway/src/context-diagnostics.ts").CompactionDiagnostic
   contextBudget?: { estimatedInputTokens: number; outputReserve: number; contextWindow?: number; effectiveOutputCap?: number; safetyMargin: number; coverage: string; estimateSource: string; capSupport: string; admission: string; recoveryRequired: boolean; fullByProvider: boolean }
   contextAdmission?: import('../../../core-session/src/events/admission.ts').RequestBudgetSnapshotV2
