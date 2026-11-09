@@ -277,7 +277,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
         const compaction = safeCompactionDiagnostic(event.params.compaction)
         if (compaction) add({ kind: "context/compaction", ...scope, compaction }, randomUUID())
         try {
-          if (event.params.requestMetrics !== undefined) add({ kind: "context/request", ...scope, requestMetrics: validateRequestMetrics(event.params.requestMetrics) }, JSON.stringify([event.workspaceId, params.runtimeGeneration, safeId(params.id) ?? randomUUID()]))
+          if (event.params.requestMetrics !== undefined) add({ kind: "context/request", ...scope, requestMetrics: validateRequestMetrics(event.params.requestMetrics), ...(integer(params.durationMs, 0, Number.MAX_SAFE_INTEGER) ? { durationMs: params.durationMs } : {}), ...(integer(params.firstTokenMs, 0, Number.MAX_SAFE_INTEGER) ? { firstTokenMs: params.firstTokenMs } : {}) }, JSON.stringify([event.workspaceId, params.runtimeGeneration, safeId(params.id) ?? randomUUID()]))
         } catch { /* Optional diagnostics never affect model execution. */ }
         return
       }
