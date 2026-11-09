@@ -2,6 +2,7 @@ import type { HistoryRange } from "@i-harness/sdk"
 
 export interface HistoryPageRequest {
   afterSeq: number
+  beforeSeq?: number
   limit: number
 }
 
@@ -13,17 +14,15 @@ export interface HistoryLoad {
   startSeq?: number
 }
 
-/** Existing SDK history clamps an oversized cursor to the durable log head.
- * Probe that head without loading content, then load only the latest window. */
+/** Tail read: one request returns the newest bounded window plus the durable
+ * head, instead of probing and then re-snapshotting the full log page by page. */
 export async function loadRecentHistory(
   request: (params: HistoryPageRequest) => Promise<HistoryRange>,
-  options: { limit: number; maxEvents: number },
+  options: { limit: number; maxEvents?: number },
 ): Promise<HistoryLoad> {
-  const head = await request({ afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })
-  if (!Number.isSafeInteger(head.nextSeq) || head.nextSeq < 0) throw new Error("Invalid history head")
-  const startSeq = Math.max(0, head.nextSeq - options.maxEvents)
-  const loaded = await loadHistory(request, { afterSeq: startSeq, limit: options.limit, maxPages: Math.ceil(options.maxEvents / options.limit) })
-  return { ...loaded, startSeq, exhausted: loaded.cursor >= head.nextSeq }
+  const tail = await request({ afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: options.limit })
+  if (!Number.isSafeInteger(tail.nextSeq) || !Number.isSafeInteger(tail.headSeq) || !Number.isSafeInteger(tail.startSeq)) throw new Error("Invalid history tail")
+  return { events: tail.events, cursor: tail.nextSeq, exhausted: tail.nextSeq >= tail.headSeq!, startSeq: tail.startSeq }
 }
 
 /**

@@ -709,7 +709,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         // M41a v1: event-log walk over the in-process assembly. A cold durable
         // session is verified/adopted through the coordinator and assembled
         // on demand; an unknown id is NEVER auto-created by this read.
-        const p = params as { sessionId?: unknown; afterSeq?: unknown; limit?: unknown } | undefined
+        const p = params as { sessionId?: unknown; afterSeq?: unknown; beforeSeq?: unknown; limit?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/history requires a non-empty sessionId")
         }
@@ -722,6 +722,10 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, "session/history limit must be a positive integer")
         }
         const limit = Math.min(rawLimit, HISTORY_LIMIT_CAP)
+        const beforeSeq = p.beforeSeq
+        if (beforeSeq !== undefined && (typeof beforeSeq !== "number" || !Number.isSafeInteger(beforeSeq) || beforeSeq < 0)) {
+          return makeFailure(id, INVALID_PARAMS, "session/history beforeSeq must be a non-negative integer")
+        }
         let session: Session | undefined
         try {
           session = await sessionForHistory(p.sessionId)
@@ -733,11 +737,12 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
         }
         // The live log seqs are the 0-based positions in events (assigned at
-        // append), so the walk is a slice: [afterSeq exclusive, nextSeq).
-        const start = Math.min(afterSeq, session.events.length)
-        const end = Math.min(start + limit, session.events.length)
+        // append). A tail read starts from `beforeSeq` so a cold conversation
+        // needs one round trip instead of a head probe plus repeated snapshots.
+        const end = beforeSeq === undefined ? Math.min(afterSeq + limit, session.events.length) : Math.min(beforeSeq, session.events.length)
+        const start = beforeSeq === undefined ? Math.min(afterSeq, session.events.length) : Math.max(0, end - limit)
         try {
-          return makeSuccess(id, { events: transportSessionEvents(session, session.events.slice(start, end)), nextSeq: end })
+          return makeSuccess(id, { events: transportSessionEvents(session, session.events.slice(start, end)), nextSeq: end, ...(beforeSeq === undefined ? {} : { startSeq: start, headSeq: session.events.length }) })
         } catch (error) {
           return makeFailure(id, INTERNAL_ERROR, `session/history: ${error instanceof Error ? error.message : String(error)}`)
         }

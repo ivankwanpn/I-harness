@@ -277,7 +277,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const request = async (params: HistoryPageRequest) => {
       if (selection.current !== scope) throw new Error("History selection changed")
       return bridge.request({
-        kind: "session/history", workspaceId, sessionId, afterSeq: params.afterSeq, limit: params.limit,
+        kind: "session/history", workspaceId, sessionId, afterSeq: params.afterSeq, ...(params.beforeSeq === undefined ? {} : { beforeSeq: params.beforeSeq }), limit: params.limit,
       }) as Promise<HistoryRange>
     }
     try {

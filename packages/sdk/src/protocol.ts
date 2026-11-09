@@ -348,6 +348,10 @@ export interface HistoryRange {
   events: SessionEvent[]
   /** Seq of the next unreturned event (== the log length when returned in full). */
   nextSeq: number
+  /** First seq included when the page was requested with `beforeSeq`. */
+  startSeq?: number
+  /** Durable log head at read time; a tail page can settle its before/after state in one round trip. */
+  headSeq?: number
 }
 
 /** M41a v1: one row of a session/list result. All fields beyond `id` are

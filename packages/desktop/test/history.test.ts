@@ -13,21 +13,21 @@ function page(from: number, count: number, nextSeq: number): HistoryRange {
 }
 
 describe("loadHistory", () => {
-  it("opens the newest bounded window rather than the first pages of a large log", async () => {
+  it("opens the newest bounded tail in one request", async () => {
     const size = 100_000
-    const request = vi.fn(async ({ afterSeq, limit }: { afterSeq: number; limit: number }) => {
-      const start = Math.min(size, afterSeq)
-      const end = Math.min(size, start + limit)
-      return page(start, end - start, end)
+    const request = vi.fn(async ({ beforeSeq, limit }: { afterSeq: number; beforeSeq?: number; limit: number }) => {
+      const end = Math.min(size, beforeSeq ?? 0)
+      const start = Math.max(0, end - limit)
+      return { ...page(start, end - start, end), startSeq: start, headSeq: size }
     })
-    const result = await loadRecentHistory(request, { limit: 500, maxEvents: 20_000 })
-    expect(request.mock.calls[0]![0]).toEqual({ afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })
-    expect(result.startSeq).toBe(80_000)
-    expect(result.events[0]?.seq).toBe(80_000)
+    const result = await loadRecentHistory(request, { limit: 500 })
+    expect(request.mock.calls[0]![0]).toEqual({ afterSeq: 0, beforeSeq: Number.MAX_SAFE_INTEGER, limit: 500 })
+    expect(result.startSeq).toBe(99_500)
+    expect(result.events[0]?.seq).toBe(99_500)
     expect(result.events.at(-1)?.seq).toBe(99_999)
     expect(result.cursor).toBe(100_000)
-    expect(result.events).toHaveLength(20_000)
-    expect(request).toHaveBeenCalledTimes(41)
+    expect(result.events).toHaveLength(500)
+    expect(request).toHaveBeenCalledTimes(1)
   })
   it("pages from the cursor until the durable log is exhausted", async () => {
     const pages = [page(0, 500, 500), page(500, 500, 1000), page(1000, 120, 1120)]
