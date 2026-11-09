@@ -621,6 +621,7 @@ function SessionComposer({
           <Square size={14} fill="currentColor" aria-hidden="true" />
         </button> : null}
         <button type={primaryStops ? "button" : "submit"} className="composer-send" data-state={primaryState} aria-busy={primaryBusy || undefined}
+          data-can-send={canSend ? "1" : "0"} data-payload={hasPayload ? "1" : "0"} data-sending={sending ? "1" : "0"} data-dispatching={dispatching ? "1" : "0"}
           aria-label={t(primaryStops ? "停止" : "送出")}
           title={dispatching ? t("已送出，等待代理") : primaryBusy ? t("操作進行中") : primaryStops ? t("停止") : running ? deliveryLabel : t("送出")}
           disabled={primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? requestStop : undefined}>
