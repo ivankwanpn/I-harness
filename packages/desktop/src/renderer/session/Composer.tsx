@@ -410,6 +410,8 @@ function SessionComposer({
   const [draftLoading, setDraftLoading] = useState(!!draftRequest)
   const [stopPending, setStopPending] = useState(false)
   const [forceStopReady, setForceStopReady] = useState(false)
+  const [dispatching, setDispatching] = useState(false)
+  const flight = useRef(false)
   useEffect(() => {
     if (!running) { setStopPending(false); setForceStopReady(false); return }
     if (!stopPending) return
@@ -440,8 +442,8 @@ function SessionComposer({
   }, [draftRequest, workspaceId, sessionId, key, refsKey])
   const { sending, error } = sendState
   useEffect(() => {
-    if (!sending) setValue(readDraft(workspaceId, sessionId))
-  }, [sending, workspaceId, sessionId])
+    if (!sending && !dispatching) setValue(readDraft(workspaceId, sessionId))
+  }, [sending, dispatching, workspaceId, sessionId])
 
   const defaultDelivery = useUiStore((state) => state.followupDelivery)
   const [deliveryOverride, setDeliveryOverride] = useState<FollowupDelivery | null>(null)
@@ -450,12 +452,13 @@ function SessionComposer({
   const deliveryLabel = t(delivery === "steer" ? "引導目前執行" : "加入佇列")
   useEffect(() => { if (!running) setDeliveryOverride(null) }, [running])
   const hasPayload = value.trim() !== "" || references.length > 0 || images.length > 0 || texts.length > 0 || contextRefs.length > 0
-  const primaryBusy = sending || readingImages || draftLoading
-  const primaryStops = running && !hasPayload && !primaryBusy
+  const primaryBusy = (sending && !dispatching) || readingImages || draftLoading
+  const primaryStops = running && !hasPayload && !primaryBusy && !dispatching
   const primaryState = primaryBusy ? "sending" : running ? "running" : "idle"
   async function send(invertDelivery = false): Promise<void> {
     const text = value
-    if (!canSend || readingImages || draftLoading || !hasPayload || sends.get(key)?.sending) return
+    if (flight.current || !canSend || readingImages || draftLoading || !hasPayload || sends.get(key)?.sending) return
+    flight.current = true
     const client = draftRequest ? durableClients.get(key) : undefined
     const sentDraft = client?.capture()
     publishSend(key, { sending: true })
@@ -510,6 +513,8 @@ function SessionComposer({
       // durability can take a round trip; the draft stays on disk until the
       // gateway accepts it, and a failure restores the text.
       setValue("")
+      setDispatching(true)
+      publishSend(key, idleSend)
       remoteRequest = true
       await dispatch(prompt, context, images.length ? images.map(({ id: _id, ...image }) => image) : undefined, clearAccepted)
       remoteRequest = false
@@ -522,6 +527,9 @@ function SessionComposer({
       // Native diagnostics own remote request errors. Local validation and draft
       // cleanup still belong here, and rejected requests retain their input.
       publishSend(key, { sending: false, ...(!remoteRequest || reason instanceof ComposerPreparationError ? { error: reason instanceof Error ? reason.message : String(reason) } : {}) })
+    } finally {
+      flight.current = false
+      setDispatching(false)
     }
   }
 
@@ -617,8 +625,8 @@ function SessionComposer({
         </button> : null}
         <button type={primaryStops ? "button" : "submit"} className="composer-send" data-state={primaryState} aria-busy={primaryBusy || undefined}
           aria-label={t(primaryStops ? "停止" : "送出")}
-          title={primaryBusy ? t("操作進行中") : primaryStops ? t("停止") : running ? deliveryLabel : t("送出")}
-          disabled={primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? requestStop : undefined}>
+          title={dispatching ? t("已送出，等待代理") : primaryBusy ? t("操作進行中") : primaryStops ? t("停止") : running ? deliveryLabel : t("送出")}
+          disabled={dispatching || primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? requestStop : undefined}>
           {primaryBusy ? <LoaderCircle size={18} className="composer-spinner" aria-hidden="true" /> : primaryStops ? <Square size={14} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={18} aria-hidden="true" />}
         </button>
       </>}
