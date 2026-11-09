@@ -559,7 +559,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       if (!service.taskProjectionIntegrity) throw new Error("Task projection unavailable")
       return service.taskProjectionIntegrity(id, options)
     },
-    draftSession: createDraftSession(coordinator),
+    draftSession: async (clientToken: string) => {
+      const created = await createDraftSession(coordinator)(clientToken)
+      // The empty durable draft is a real sidebar row. Without this notification
+      // a failed/queued first send leaves it visible only after the next refresh.
+      try { options.onWrite(makeNotification("desktop/session/navigation/changed", { sessionId: created.sessionId })) } catch { /* refresh is best effort */ }
+      return created
+    },
     sessionReload: reloadSession,
     contextPicker: createContextPicker(options.workspace, coordinator, review, { visible: isConversation, projectFor: projects.projectFor, query: sessionQuery }),
     workflow, agentShell, wslSettings, input, projects: { ...projects, bind: (id, projectId) => fence.run(id, () => projects.bind(id, projectId)) },
