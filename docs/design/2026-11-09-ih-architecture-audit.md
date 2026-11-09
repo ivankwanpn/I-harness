@@ -138,6 +138,47 @@
 | P3 | receipt 降級 | 高風險，admission 已 23ms，不急 |
 | P3 | 共用 gateway host | 需先量冷啟動 |
 
+## 第二輪稽核修正（queue／warm gating）
+
+### Queue 已經是單一 projection
+
+`desktop/session/open` 在 `desktop-input` capability 存在時只讀：
+
+```text
+desktop/session/input/state
+```
+
+只有在舊 gateway 沒有 durable input 時才退回 `session/queue`。renderer 的 `queue` 就是這個單一來源；`onCancelQueue` 同時呼叫 lane cancel 是為了取消已進入 lane 的項目，不是兩個 UI projection。
+
+因此「queue 雙 projection」不是目前的設計問題，優先級下調。
+
+### Submit 已經會等 warm，不需要 UI gating
+
+冷啟動同時開 warm 與 submit：
+
+```json
+{"submitMs":2386,"warmDoneMs":2634,"accepted":true}
+```
+
+warm 已完成後：
+
+```json
+{"submitMs":57,"warmDoneMs":58}
+```
+
+直接冷 submit 則是 13228ms。也就是 submit 會 coalesce 到正在進行的 warm，不需要再在 UI 加一層 gating。
+
+### 修正後的真正剩餘項
+
+| 項目 | 判斷 |
+|---|---|
+| catalog projection | 已 tolerant，不需要重寫 |
+| context-output | 不影響既有 inline history |
+| queue projection | 已是單一來源 |
+| warm gating | 已 coalesce，不需要 |
+| receipt 降級 | 可做，但 admission 已 23ms，高風險低回報 |
+| task document projection | 長期架構清理，非阻斷 |
+
 ## 優先順序（原始）
 
 | 優先 | 項目 | 套件 | 風險 |
