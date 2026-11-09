@@ -143,6 +143,7 @@ export function createWorkspaceRuntimeManager(options: {
   const generations = new Map<string, number>()
   const restartWindow = new Map<string, { count: number; since: number }>()
   const healthTimers = new Map<string, NodeJS.Timeout>()
+  const healthFailures = new Map<string, number>()
   const closingClients = new WeakMap<HarnessClient, Promise<void>>()
   let closed = false
   let activityVersion = 0
@@ -227,6 +228,7 @@ export function createWorkspaceRuntimeManager(options: {
       const generation = generations.get(id) ?? 0
       const health = healthTimers.get(id)
       if (health !== undefined) { clearInterval(health); healthTimers.delete(id) }
+      healthFailures.delete(id)
       generations.set(id, generation + 1)
       runtimes.delete(id)
       pending.delete(id)
@@ -298,17 +300,25 @@ export function createWorkspaceRuntimeManager(options: {
             let timeout: NodeJS.Timeout | undefined
             void Promise.race([
               runtime.client.request("ping", {}).then(() => true, () => false),
-              new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), 3_000); timeout.unref() }),
+              // A busy model stream can delay the event loop; one slow ping is
+              // not a dead gateway. Give it a generous single probe and only
+              // restart after two consecutive misses.
+              new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), 10_000); timeout.unref() }),
             ]).then((ok) => {
               if (timeout !== undefined) clearTimeout(timeout)
-              if (ok || closed || runtimes.get(workspace.id) !== runtime) return
+              if (closed || runtimes.get(workspace.id) !== runtime) return
+              if (ok) { healthFailures.delete(workspace.id); return }
               if (healthTimers.get(workspace.id) !== health) return
+              const misses = (healthFailures.get(workspace.id) ?? 0) + 1
+              healthFailures.set(workspace.id, misses)
+              if (misses < 2) return
               clearInterval(health)
               healthTimers.delete(workspace.id)
-              emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "Gateway health check failed; restarting.", close: { generation, reason: "unhealthy" } })
+              healthFailures.delete(workspace.id)
+              emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "Gateway health check failed twice; restarting.", close: { generation, reason: "unhealthy" } })
               void runtime.client.close().catch(() => undefined)
             })
-          }, 15_000)
+          }, 20_000)
           health.unref()
           healthTimers.set(workspace.id, health)
           try {emit({kind:'sdk/ready',method:'sdk/ready',workspaceId:workspace.id,runtimeGeneration:generation})} catch(error) {void manager.invalidate!(workspace.id).catch(()=>{});throw error}
