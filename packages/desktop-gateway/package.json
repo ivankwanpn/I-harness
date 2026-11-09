@@ -1,6 +1,6 @@
 {
   "name": "@i-harness/desktop-gateway",
-  "version": "0.1.13-rc79",
+  "version": "0.1.13-rc80",
   "private": true,
   "type": "module",
   "files": ["src"],
