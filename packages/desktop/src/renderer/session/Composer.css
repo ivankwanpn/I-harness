@@ -103,6 +103,9 @@
 .composer-delivery-control > svg { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--ih-muted); pointer-events: none; }
 
 .session-composer .composer-send { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--ih-accent); color: var(--ih-panel); }
+.session-composer .composer-stop-note { flex: none; color: var(--ih-muted); font-size: 11px; white-space: nowrap; }
+.session-composer .composer-force-stop { flex: none; min-height: 30px; padding: 0 10px; border: 1px solid color-mix(in srgb, #d9756b 50%, var(--ih-divider)); border-radius: 7px; background: transparent; color: #e08a80; font: inherit; font-size: 12px; cursor: pointer; }
+.session-composer .composer-force-stop:hover { background: color-mix(in srgb, #d9756b 10%, transparent); }
 .session-composer .composer-send:disabled { opacity: 1; background: color-mix(in srgb, var(--ih-text) 12%, var(--ih-panel)); color: var(--ih-muted); }
 .session-composer .composer-send:focus-visible, .composer-delivery:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
 .composer-spinner { animation: composer-spin 1s linear infinite; }

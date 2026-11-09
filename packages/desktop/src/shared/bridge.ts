@@ -97,6 +97,7 @@ export type DesktopRequest =
   | { kind: "desktop/schedule/delete"; workspaceId: string; sessionId: string; id: string }
   | { kind: "desktop/session/work-state"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/reload"; workspaceId: string; sessionId: string }
+| { kind: "desktop/session/force-stop"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/todo/write"; workspaceId: string; sessionId: string; input: import("@i-harness/desktop-gateway/src/work-state.ts").DesktopTodoWriteInput }
   | { kind: "desktop/plugins/state" | "desktop/plugins/commands" | "desktop/plugins/refresh"; workspaceId: string }
   | { kind: "desktop/plugins/mutate"; workspaceId: string; command: PluginCommand }

@@ -408,6 +408,21 @@ function SessionComposer({
   const [value, setValue] = useState(() => readDraft(workspaceId, sessionId))
   const [draftError, setDraftError] = useState<string>()
   const [draftLoading, setDraftLoading] = useState(!!draftRequest)
+  const [stopPending, setStopPending] = useState(false)
+  const [forceStopReady, setForceStopReady] = useState(false)
+  useEffect(() => {
+    if (!running) { setStopPending(false); setForceStopReady(false); return }
+    if (!stopPending) return
+    const timer = setTimeout(() => setForceStopReady(true), 4000)
+    return () => clearTimeout(timer)
+  }, [running, stopPending])
+  const requestStop = () => { setStopPending(true); setForceStopReady(false); onCancel() }
+  async function forceStop() {
+    if (!bridge) return
+    setForceStopReady(false); setStopPending(true)
+    try { await bridge.request({ kind: "desktop/session/force-stop", workspaceId, sessionId }) } catch { /* reported by the reconnect surface */ }
+    try { await bridge.request({ kind: "desktop/session/reload", workspaceId, sessionId }) } catch { /* the restart already cleared live work */ }
+  }
   useEffect(() => {
     let mounted = true
     const read = () => readUnsentDraft(workspaceId, sessionId)
@@ -491,6 +506,10 @@ function SessionComposer({
         else clearMemory()
       }
       const dispatch = selectedDelivery === "steer" && onSteer ? onSteer : onPrompt
+      // Clear the editor as soon as the request is being dispatched. Admission
+      // durability can take a round trip; the draft stays on disk until the
+      // gateway accepts it, and a failure restores the text.
+      setValue("")
       remoteRequest = true
       await dispatch(prompt, context, images.length ? images.map(({ id: _id, ...image }) => image) : undefined, clearAccepted)
       remoteRequest = false
@@ -499,6 +518,7 @@ function SessionComposer({
       await cleanupAccepted
       publishSend(key, idleSend)
     } catch (reason) {
+      setValue(current => current === "" ? text : current)
       // Native diagnostics own remote request errors. Local validation and draft
       // cleanup still belong here, and rejected requests retain their input.
       publishSend(key, { sending: false, ...(!remoteRequest || reason instanceof ComposerPreparationError ? { error: reason instanceof Error ? reason.message : String(reason) } : {}) })
@@ -590,13 +610,15 @@ function SessionComposer({
         </span> : null}
         {bridge && contextUsageEnabled ? <ContextUsage bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} refreshKey={contextRefreshKey} /> : null}
         {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
-        {running && !primaryStops ? <button type="button" className="composer-send" data-state="running" aria-label={t("停止")} title={t("停止")} onClick={onCancel}>
+        {stopPending && running ? <span className="composer-stop-note" role="status">{t(forceStopReady ? "停止沒有回應" : "正在停止…")}</span> : null}
+        {forceStopReady && bridge ? <button type="button" className="composer-force-stop" onClick={() => { void forceStop() }}>{t("強制停止")}</button> : null}
+        {running && !primaryStops ? <button type="button" className="composer-send" data-state="running" aria-label={t("停止")} title={t("停止")} onClick={requestStop}>
           <Square size={14} fill="currentColor" aria-hidden="true" />
         </button> : null}
         <button type={primaryStops ? "button" : "submit"} className="composer-send" data-state={primaryState} aria-busy={primaryBusy || undefined}
           aria-label={t(primaryStops ? "停止" : "送出")}
           title={primaryBusy ? t("操作進行中") : primaryStops ? t("停止") : running ? deliveryLabel : t("送出")}
-          disabled={primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? onCancel : undefined}>
+          disabled={primaryBusy || (!primaryStops && (!canSend || !hasPayload))} onClick={primaryStops ? requestStop : undefined}>
           {primaryBusy ? <LoaderCircle size={18} className="composer-spinner" aria-hidden="true" /> : primaryStops ? <Square size={14} fill="currentColor" aria-hidden="true" /> : <ArrowUp size={18} aria-hidden="true" />}
         </button>
       </>}

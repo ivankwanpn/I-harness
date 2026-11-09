@@ -687,7 +687,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
               const known = service.liveSession(sessionId) !== undefined || knownSessions.has(sessionId) || inflight.has(sessionId)
               const response = result.cancelled ? result : { cancelled: false, reason: known ? "not-running" : "not-found" }
               if (typeof service.awaitDeliveryStop !== 'function') throw new Error('Cancellation settlement unavailable')
-              await service.awaitDeliveryStop(sessionId)
+              // A provider stream that ignores abort must not hang the cancel RPC:
+              // the UI can then offer Force stop instead of waiting forever.
+              await Promise.race([service.awaitDeliveryStop(sessionId), new Promise<void>(resolve => setTimeout(resolve, 2500))])
               return makeSuccess(id, response)
             }
             // Explicit legacy compatibility: FIFO abort has no delivery owner.

@@ -78,6 +78,14 @@ export async function dispatchDesktopRequest(
   if(!kind||!('value' in kind))throw Error('Invalid Desktop request kind')
   if(typeof value.kind==='string'&&value.kind.startsWith('desktop/surface/')) {if(!dependencies.surfaceObservation)throw Error('Native surface window unavailable');return dependencies.surfaceObservation.request(value)}
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
+  if (value.kind === "desktop/session/force-stop") {
+    if (Object.keys(value).some(key => !["kind", "workspaceId", "sessionId"].includes(key))) throw new Error("Invalid force-stop request")
+    const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+    requireNonEmpty(value.sessionId, "sessionId")
+    if (!dependencies.runtimes.invalidate) throw new Error("Workspace runtime cannot be restarted")
+    await dependencies.runtimes.invalidate(workspaceId)
+    return { restarted: true }
+  }
   if (value.kind === "desktop/workspace/repair") {
     if (Object.keys(value).some(key => !["kind", "workspaceId"].includes(key))) throw new Error("Invalid workspace repair request")
     const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
