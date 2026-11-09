@@ -139,6 +139,7 @@ export function createWorkspaceRuntimeManager(options: {
   const pending = new Map<string, Promise<WorkspaceRuntime>>()
   const children = new Map<string, LaunchedRuntime>()
   const generations = new Map<string, number>()
+  const restartWindow = new Map<string, { count: number; since: number }>()
   const closingClients = new WeakMap<HarnessClient, Promise<void>>()
   let closed = false
   let activityVersion = 0
@@ -281,6 +282,7 @@ export function createWorkspaceRuntimeManager(options: {
           }
           // No await between checking the epoch/generation and publication.
           runtimes.set(workspace.id, runtime)
+          restartWindow.delete(workspace.id)
           try {emit({kind:'sdk/ready',method:'sdk/ready',workspaceId:workspace.id,runtimeGeneration:generation})} catch(error) {void manager.invalidate!(workspace.id).catch(()=>{});throw error}
           activityVersion += 1
           const launched = children.get(workspace.id)
@@ -292,7 +294,21 @@ export function createWorkspaceRuntimeManager(options: {
               const exit = launched.exitInfo?.() ?? { code: null, signal: null }
               const tail = launched.stderrTail?.().trim()
               const detail = `SDK subprocess exited (code ${exit.code ?? "?"}${exit.signal ? `, signal ${exit.signal}` : ""})${tail ? `: ${tail.slice(-1800)}` : ""}`
-              if (!closed) emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: detail, close: { generation, reason: "subprocess-exited", code: exit.code, signal: exit.signal, stderr: tail?.slice(-1800) } })
+              if (!closed) emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: detail, close: { generation, reason: "subprocess-exited", ...(typeof exit.code === "number" ? { code: exit.code } : {}), ...(typeof exit.signal === "string" ? { signal: exit.signal } : {}), ...(tail ? { stderr: tail.slice(-1800) } : {}) } })
+              // Own the recovery here instead of leaving the renderer on a
+              // dead transport until the user discovers Reconnect. A bounded
+              // restart window prevents a crash loop from spawning forever.
+              if (closed || (generations.get(workspace.id) ?? 0) !== generation) return
+              const now = Date.now()
+              const window = restartWindow.get(workspace.id)
+              const next = window === undefined || now - window.since > 60_000 ? { count: 0, since: now } : window
+              if (next.count >= 3) return
+              next.count += 1
+              restartWindow.set(workspace.id, next)
+              setTimeout(() => {
+                if (closed || (generations.get(workspace.id) ?? 0) !== generation || runtimes.has(workspace.id) || pending.has(workspace.id)) return
+                void manager.get(workspace).catch(() => { /* the next explicit open reports the failure */ })
+              }, 500 * next.count)
             })
           }
           return runtime
