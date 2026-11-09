@@ -674,15 +674,19 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         },
         onCancelQueue: (queueId: string) => {
           const scope = selection.current
+          const queued = queue?.find(row => row.id === queueId)
           void (async () => {
             const primary = durableInputSupported.current
               ? await bridge.request({ kind: "desktop/session/input/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, inputId: queueId })
               : await bridge.request({ kind: "session/queue/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: queueId })
+            let cancelled = (primary as { cancelled?: boolean } | undefined)?.cancelled !== false
             // Durable input and the M49 queue project different ids for some
             // service-front rows; a refused durable cancel gets one lane retry.
-            if (durableInputSupported.current && (primary as { cancelled?: boolean } | undefined)?.cancelled === false) {
-              await bridge.request({ kind: "session/queue/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: queueId })
+            if (durableInputSupported.current && !cancelled) {
+              const fallback = await bridge.request({ kind: "session/queue/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: queueId }) as { cancelled?: boolean } | undefined
+              cancelled = fallback?.cancelled !== false
             }
+            if (cancelled && queued && optimistic?.text === queued.text) setOptimistic(undefined)
             if (selection.current === scope) setTaskActionFailure(undefined)
             return refreshTasks(selectedWorkspaceId, selectedSessionId)
           })().catch((reason: unknown) => { if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) }) })
