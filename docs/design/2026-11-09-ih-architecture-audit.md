@@ -225,6 +225,52 @@ rc81 本地 smoke：
 {"warm":2812,"admission":20,"accepted":true}
 ```
 
+## rc81 最終回歸
+
+### Child projection
+
+實際 child header：
+
+```json
+{"subagentTaskId":"task-14","subagentAgentPath":"root/verify-rc81c"}
+```
+
+Bootstrap intent 測試：28/28。
+
+### Spawn／close
+
+```json
+{"spawn_agent":"succeeded (DONE)","close_agent":"succeeded"}
+```
+
+### Queue／stop
+
+```json
+{"qc":{"cancelled":true},"sc":{"cancelled":true},"queue":[],"running":false}
+```
+
+### Admission
+
+```json
+{"warm":1,"admission":24}
+```
+
+（warm 已預熱；冷啟動 warm 約 2.5s。）
+
+## rc81 完成範圍
+
+- token receipt 降級；
+- context 請求延遲面板；
+- child header task 投影（taskId／agentPath）；
+- catalog 優先 child header，task document fallback；
+- bootstrap hash 測試修正；
+- spawn／close／queue 回歸。
+
+## 未做（有意識地）
+
+- **Max 預設變更**：目前只警告；不改使用者已選的 reasoning effort。
+- **Context artifact**：實測 first token 1.7s、體積 552KB 不是主要瓶頸；先不重寫 projection。
+
 ## 優先順序（原始）
 
 | 優先 | 項目 | 套件 | 風險 |
