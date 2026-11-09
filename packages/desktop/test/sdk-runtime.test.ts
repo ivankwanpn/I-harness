@@ -447,4 +447,22 @@ describe("Desktop close-time active work", () => {
     expect(await manager.hasActiveWork()).toBe(true)
     await manager.close()
   })
+
+  it("includes a structured fatal notification in the exit diagnostic", async () => {
+    const host = fakeClient()
+    let exit!: () => void
+    const manager = createWorkspaceRuntimeManager({
+      sessionsRoot: join(tempRoot(), "sessions"),
+      launch: () => ({ client: host.client, exited: new Promise<void>((resolve) => { exit = resolve }) }),
+    })
+    const events: DesktopEvent[] = []
+    manager.onEvent((event) => events.push(event))
+    await manager.get(workspace("ws-fatal"))
+    for (const listener of host.listeners) listener({ jsonrpc: "2.0", method: "desktop/gateway/fatal", params: { message: "boom", diagnostic: "boom-stack" } })
+    exit()
+    await new Promise((resolve) => setImmediate(resolve))
+    const disconnected = events.find((event) => event.kind === "sdk/disconnected")
+    expect(disconnected !== undefined && "message" in disconnected ? disconnected.message : "").toContain("boom-stack")
+    await manager.close()
+  })
 })
