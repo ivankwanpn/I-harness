@@ -372,7 +372,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     webSearchModeFor: () => webSearchMode,
     webCacheRoot: join(options.sessionDir, "web-cache"),
     agentShell: agentShell.resolve,
-    team: {}, concurrentSessionTeams: true, jobStatusEvents: true,
+    jobStatusEvents: true,
     codeMode: () => codeSettings.resolve(),
     additionalSystemPrompt(session) {
       const goal = foldGoal(session.events)
@@ -531,7 +531,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const projectContentSearch = createProjectContentSearch(options.workspace)
   const managedWorkflowUis=new Map<string,{execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment;ui:ReturnType<typeof createManagedWorkflowUi>}>()
   const workflowUiFor=(id:string)=>{const runtime=originalManagedRuntimeFor(service,id);if(!runtime)return undefined;const existing=managedWorkflowUis.get(id);if(existing?.execution===runtime.execution){runtime.assertCurrent();return existing.ui}if(existing)throw Error('Original managed workflow owner changed');const retain=(close:()=>Promise<void>)=>retainManagedExecutionCleanup(service,id,runtime.execution,close);const ui=createManagedWorkflowUi({id,...runtime,retain,coordinator,service,teamEnabled:true,async jobEvents(documentJobIds){runtime.assertCurrent();const observation=runtime.execution.observe(),events=await observation.jobStatusEvents(documentJobIds);observation.assertCurrent();runtime.assertCurrent();return events},async lastStepSince(ordinal){runtime.assertCurrent();const observation=runtime.execution.observe(),end=await observation.lastStepEndSince(ordinal);observation.assertCurrent();runtime.assertCurrent();return end}});retain(async()=>{if(managedWorkflowUis.get(id)?.ui===ui)managedWorkflowUis.delete(id)});managedWorkflowUis.set(id,{execution:runtime.execution,ui});return ui}
-  const rawWorkflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,managed:workflowUiFor,async managedForMutation(id){const runtime=await prepareOriginalManagedRuntime(service,id);return runtime?workflowUiFor(id):undefined},
+  const rawWorkflow = createDesktopWorkflow(coordinator, service, { reviews: approvals.read, onChanged: notifyWorkflow,managed:workflowUiFor,async managedForMutation(id){const runtime=await prepareOriginalManagedRuntime(service,id);return runtime?workflowUiFor(id):undefined},
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "error" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }
   management = createSessionManagement(coordinator, service, isConversation, { workspace: options.workspace, sessionDir: options.sessionDir, fence,
