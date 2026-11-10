@@ -76,7 +76,6 @@ import { createOwnedGatewayPromptParts } from './owned-gateway-prompt-parts.ts'
 import { createOwnedGatewaySelectionOwner } from './owned-gateway-selection-owner.ts'
 import { composeOwnedGatewayDefault } from './owned-gateway-default.ts'
 import { mountOwnedGatewayGuardian } from './owned-gateway-guardian.ts'
-import { mountOwnedGatewayTeam } from './owned-gateway-team.ts'
 import { DEFAULT_AGENT_PRESET } from '../../preset/src/index.ts'
 import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts'
 import { createOwnedMetadataFold } from '../../session-executor/src/lifecycle/owned-metadata-fold.ts'
@@ -440,7 +439,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       async mountDefaultSurface(original, live) {
         const id=original.domain.sessionId
         if(!live.task||!live.output||!live.shell||!live.parentNotify||!original.instructions)throw Error('Original Gateway owners unavailable')
-        const task=live.task,output=live.output,shell=live.shell,parentNotify=live.parentNotify,instructions=original.instructions
+        const task=live.task,output=live.output,instructions=original.instructions
         if(ownedBindings.has(id))throw Error('Original model binding already installed')
         original.retain(()=>{if(ownedBindings.get(id)===live.modelBinding)ownedBindings.delete(id)})
         ownedBindings.set(id,live.modelBinding)
@@ -452,7 +451,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
           bindHookContext(read){if(ownedHookContexts.has(id))throw Error('Original hook context already installed');original.retain(()=>{if(ownedHookContexts.get(id)===read)ownedHookContexts.delete(id)});ownedHookContexts.set(id,read)},
           leaves:{workspace:options.workspace,webCacheRoot:join(options.sessionDir,'web-cache'),webSearchMode:()=>webSearchMode,resolveCredential:ref=>nativeCredentials.resolve(ref),sessionQuery,videoAudioAnalyzer:input=>runtime.analyzeVideoAudio?.(input)??Promise.resolve({status:'unconfigured',reason:'Video audio analysis is unavailable in this provider runtime.'}),additionalTools:[...createMemoryTools(memory,()=>memory.enabled()),...createCodeRetrievalTools(nativeContext.codeRetrieval, { exposure: 'direct' })]},
           extensions:{roles:task.roles,workspace:options.workspace,configDir:dirname(settingsPath),startSource:(()=>{const observed=original.execution.observe(),source=observed.hasConversationMessages?'resume':'startup';observed.assertCurrent();return source})(),report:messages=>plugins.report(id,messages),interaction,policy:()=>({workspace:options.workspace,sandbox:mode,approval:approvalMode,project:()=>projectContexts.get(id)?.(),executionAuthority:executionAuthorities.get(id),hookConfigs:[],grantPaths:[resolveHookTrustPath(dirname(settingsPath)),join(dirname(settingsPath),'hook-authoring-grants.json')],pluginAuthority:{}})},
-          surface:{policyPrompt:parts.policy,shellPrompt:parts.shell,projectPrompt:parts.project,schemas:live.modelToolSchemas,goalChanged:()=>notifyWorkflow(id),async reconcileAuthority(){instructions.manager.diagnostics.invalidate();ownedChildHosts.get(id)?.invalidateDiagnostics();await ownedNative.reconcile(id)},async activateAfterTaskReady(){const taskOptions=ownedTaskInputs.get(id);if(!taskOptions)throw Error('Original Task options unavailable');await mountOwnedGatewayTeam(original,{task,taskOptions,shell,coordinator,parentNotify,modelBinding:live.modelBinding,retainTeamRecovery:live.retainTeamRecovery})}},
+          surface:{policyPrompt:parts.policy,shellPrompt:parts.shell,projectPrompt:parts.project,schemas:live.modelToolSchemas,goalChanged:()=>notifyWorkflow(id),async reconcileAuthority(){instructions.manager.diagnostics.invalidate();ownedChildHosts.get(id)?.invalidateDiagnostics();await ownedNative.reconcile(id)},async activateAfterTaskReady(){/* Teams are no longer mounted by default; old team ledgers stay read-only. */}},
         })
       },
     },
