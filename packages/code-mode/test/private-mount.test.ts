@@ -44,11 +44,13 @@ it('private original mount interrupts a restored cell and refuses manual Code ex
 },20000)
 
 
-it.each(['model-projection-success-receipt-unknown','source-hook-epoch-receipt-unknown','model-hook-epoch-unknown','source-hook-epoch','source-foreign','source-hook-revoked','simple','nested','held-stop','held-call','yielded','zero-delay','nested-stop','handoff-stop','handoff-unknown-stop','hook-writer','model-hook-writer','hook-stop-writer','model-hook-stop','model-prepare-writer','model-attach-writer','model-double-next','hook-unknown','model-hook-unknown'] as const)('private original model Code call reaches Worker and retains final output: %s',async mode=>{
+it.each(['model-projection-throw-undefined','model-projection-throw-null','model-projection-throw-false','model-projection-throw-zero','model-projection-throw-empty','model-projection-success-receipt-unknown','source-hook-epoch-receipt-unknown','model-hook-epoch-unknown','source-hook-epoch','source-foreign','source-hook-revoked','simple','nested','held-stop','held-call','yielded','zero-delay','nested-stop','handoff-stop','handoff-unknown-stop','hook-writer','model-hook-writer','hook-stop-writer','model-hook-stop','model-prepare-writer','model-attach-writer','model-double-next','hook-unknown','model-hook-unknown'] as const)('private original model Code call reaches Worker and retains final output: %s',async mode=>{
  const {mkdir}=await import('node:fs/promises')
  const {createToolRegistryWithModelOrigin}=await import('@i-harness/core-tools/model-origin')
  const {declareToolResultOutcome}=await import('@i-harness/core-tools')
- const epoch=mode==='source-hook-epoch'||mode==='source-hook-epoch-receipt-unknown',unknownPhysical=mode==='model-hook-epoch-unknown',projectedRetry=mode==='model-projection-success-receipt-unknown',projectionCase=epoch||unknownPhysical||projectedRetry
+ const falseyCauses=new Map<string,unknown>([['model-projection-throw-undefined',undefined],['model-projection-throw-null',null],['model-projection-throw-false',false],['model-projection-throw-zero',0],['model-projection-throw-empty','']])
+ const falseyProjection=falseyCauses.has(mode),projectionCause=falseyCauses.get(mode)
+ const epoch=mode==='source-hook-epoch'||mode==='source-hook-epoch-receipt-unknown',unknownPhysical=mode==='model-hook-epoch-unknown',projectedRetry=mode==='model-projection-success-receipt-unknown',projectionCase=epoch||unknownPhysical||projectedRetry||falseyProjection
  let physicalExec:import('@i-harness/core-tools').ToolExec|undefined
  const {captureExecutionHookChannel,onExecutionCascade,onExecutionEvent}=await import('@i-harness/core-plugin')
  const {createManagedAgent}=await import('../../core-agent/src/index.ts')
@@ -66,15 +68,15 @@ it.each(['model-projection-success-receipt-unknown','source-hook-epoch-receipt-u
  const output=createContextOutputService({root:join(root,'output'),workspaceId:'private-code-test'})
  let permanentHookCalls=0,originalPostCalls=0,projectionCalls=0
  if(epoch||unknownPhysical)onExecutionEvent(ctx,'tools/post-execute',()=>{originalPostCalls++})
- if(projectedRetry)onExecutionCascade(ctx,'tools/project-synthetic-result',async()=>{projectionCalls++;return {error:'redacted original tool failure',code:'PROJECTED_FAILURE'}})
+ if(projectedRetry||falseyProjection)onExecutionCascade(ctx,'tools/project-synthetic-result',async()=>{projectionCalls++;if(falseyProjection){onExecutionEvent(ctx,'tools/pre-execute',()=>{permanentHookCalls++});throw projectionCause}return {error:'redacted original tool failure',code:'PROJECTED_FAILURE'}})
  const probeEntered=Promise.withResolvers<void>(),probeRelease=Promise.withResolvers<void>(),hookEntered=Promise.withResolvers<void>(),hookRelease=Promise.withResolvers<void>(),hookResumed=Promise.withResolvers<void>(),ownerWait=Promise.withResolvers<void>(),hookFailed=Promise.withResolvers<unknown>()
  if(mode==='model-double-next')onExecutionCascade(ctx,'tools/execute',async(input,next)=>{if((input as {name:string}).name!=='probe')return next();const first=next();expect(()=>next()).toThrow(/called next\(\) twice/);return await first})
  if(mode==='model-prepare-writer')onExecutionEvent(ctx,'tools/pre-execute',async input=>{if((input as {name:string}).name==='probe'){hookEntered.resolve();await hookRelease.promise;hookResumed.resolve()}})
  if(mode==='nested-stop'||mode==='hook-writer'||mode==='model-hook-writer'||mode==='hook-stop-writer'||mode==='model-hook-stop'||mode==='hook-unknown'||mode==='model-hook-unknown')onExecutionCascade(ctx,'tools/execute',async(input,next)=>{if((input as {name:string}).name==='probe'){hookEntered.resolve();await hookRelease.promise;hookResumed.resolve()}try{return await next()}catch(error){hookFailed.resolve(error);throw error}})
  const pair=createToolRegistryWithModelOrigin(ctx,{executionOwner:{kind:'managed-execution',domain:origin.domain,context:ctx,sessionId:'private-code'},resultRetention:createToolResultRetention(output,async()=>({sourceId:'actual-native-source'}))},origin.verifier)
- pair.registry.register({name:'probe',description:'nested original probe',inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value']},async execute(args,exec){gate.bodies++;if(unknownPhysical||projectedRetry){physicalExec=exec;throw Error('RAW_UNPROJECTED_SECRET')};const value=(args as {value:string}).value;if(value==='bad')throw Error('actual nested failure');if(value==='wait'){probeEntered.resolve();await probeRelease.promise}return value}})
+ pair.registry.register({name:'probe',description:'nested original probe',inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value']},async execute(args,exec){gate.bodies++;if(unknownPhysical||projectedRetry||falseyProjection){physicalExec=exec;throw Error('RAW_UNPROJECTED_SECRET')};const value=(args as {value:string}).value;if(value==='bad')throw Error('actual nested failure');if(value==='wait'){probeEntered.resolve();await probeRelease.promise}return value}})
  const mount=registerCodeMode(ctx,pair.registry,{kind:'managed-execution',execution,domain:origin.domain,sessionId:'private-code',config:{mode:'mixed'},retainText:createCodeTextRetention({service:output,sessionId:'private-code',sourceFor:async()=>({sourceId:'actual-native-source'})}),finalOutput:createCodeFinalOutputRetention({service:output,sourceFor:async()=>({sourceId:'actual-native-source'})})})
- const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'code-call',function:unknownPhysical||projectedRetry||mode==='model-hook-writer'||mode==='model-hook-stop'||mode==='model-hook-unknown'||mode==='model-prepare-writer'||mode==='model-attach-writer'||mode==='model-double-next'?{name:'probe',arguments:JSON.stringify({value:'success'})}:{name:'code_exec',arguments:JSON.stringify({code:mode==='simple'||mode==='held-stop'?'store("persisted",7);text("original private output")':mode==='hook-writer'||mode==='hook-stop-writer'||mode==='hook-unknown'?'text(await tools.probe({value:"success"}))':(mode==='yielded'||mode==='zero-delay'||mode==='handoff-stop'||mode==='handoff-unknown-stop')?'await tools.probe({value:"wait"});text(await tools.probe({value:"success"}))':'text(await tools.probe({value:"success"}));try{await tools.probe({value:"bad"})}catch(e){text("caught")}',yield_time_ms:mode==='zero-delay'?0:mode==='yielded'||mode==='handoff-stop'||mode==='handoff-unknown-stop'?1000:60000})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
+ const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'code-call',function:unknownPhysical||projectedRetry||falseyProjection||mode==='model-hook-writer'||mode==='model-hook-stop'||mode==='model-hook-unknown'||mode==='model-prepare-writer'||mode==='model-attach-writer'||mode==='model-double-next'?{name:'probe',arguments:JSON.stringify({value:'success'})}:{name:'code_exec',arguments:JSON.stringify({code:mode==='simple'||mode==='held-stop'?'store("persisted",7);text("original private output")':mode==='hook-writer'||mode==='hook-stop-writer'||mode==='hook-unknown'?'text(await tools.probe({value:"success"}))':(mode==='yielded'||mode==='zero-delay'||mode==='handoff-stop'||mode==='handoff-unknown-stop')?'await tools.probe({value:"wait"});text(await tools.probe({value:"success"}))':'text(await tools.probe({value:"success"}));try{await tools.probe({value:"bad"})}catch(e){text("caught")}',yield_time_ms:mode==='zero-delay'?0:mode==='yielded'||mode==='handoff-stop'||mode==='handoff-unknown-stop'?1000:60000})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
  const server=await createLoopbackProvider('/v1/chat/completions',[async r=>{r.end(wire(true))},async r=>{if(mode==='zero-delay')await probeEntered.promise;r.end(wire(false))}])
  const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),failedCell=Promise.withResolvers<never>()
  void failedCell.promise.catch(()=>{})
@@ -96,16 +98,22 @@ it.each(['model-projection-success-receipt-unknown','source-hook-epoch-receipt-u
   }
   const running=agent.run('run Code',stop.signal,undefined,undefined,{provenance:{kind:'human',authority:'request',scope:'turn',producer:'session.prompt'}})
   if(projectionCase){
-   const failure=await running.then(()=>undefined,error=>error)
+   let failed=false,failure:unknown
+   try{await running}catch(error){failed=true;failure=error}
+   expect(failed).toBe(true)
    const hasHookFailure=(error:unknown):boolean=>error instanceof Error&&((error as Error&{code?:string}).code==='EXECUTION_HOOK_SURFACE_CHANGED'||error.cause!==undefined&&hasHookFailure(error.cause))||error instanceof AggregateError&&error.errors.some(hasHookFailure)
-   if(!projectedRetry)expect(hasHookFailure(failure)).toBe(true)
+   if(falseyProjection){
+    const includesCause=(error:unknown):boolean=>Object.is(error,projectionCause)||error instanceof AggregateError&&error.errors.some(includesCause)||error instanceof Error&&Object.hasOwn(error,'cause')&&includesCause(error.cause)
+    expect(includesCause(failure)).toBe(true)
+   }else if(!projectedRetry)expect(hasHookFailure(failure)).toBe(true)
    else expect(failure).toBeDefined()
    expect(gate.syntheticExecution).toEqual({outcome:'failed',dispatch:'dispatched'})
-   expect(sourceMutations).toBe(epoch?1:0);expect(gate.bodies).toBe(unknownPhysical||projectedRetry?1:0);expect(gate.worker).toBe(0)
+   expect(sourceMutations).toBe(epoch?1:0);expect(gate.bodies).toBe(unknownPhysical||projectedRetry||falseyProjection?1:0);expect(gate.worker).toBe(0)
    const slot=gate.records!.getSlot(0)!
    if(!('synthetic'in slot))throw Error('Original synthetic failure required')
    const projection=slot.projected
    expect(projection?.kind).toBe(projectedRetry?'projected':'revoked')
+   if(falseyProjection){if(projection?.kind!=='revoked')throw Error('Original revocation required');expect(projection.cause).toBe(projectionCause)}
    if(unknownPhysical||gate.resultUnknown){
     expect((await backend.read('private-code')).events.filter(e=>e.type==='tool/result'&&e.callId==='code-call')).toHaveLength(unknownPhysical?0:1)
     expect(slot.recorded).toBeUndefined()
@@ -126,11 +134,11 @@ it.each(['model-projection-success-receipt-unknown','source-hook-epoch-receipt-u
    expect(results[0]).toMatchObject({envelope:{execution:{outcome:'failed',dispatch:'dispatched'},retention:{kind:'inline',value:{code:projectedRetry?'PROJECTED_FAILURE':'TOOL_RESULT_PROJECTION_UNAVAILABLE'}}}})
    expect(JSON.stringify(results)).not.toContain('Managed facts require reconciliation')
    expect(JSON.stringify(results)).not.toContain('RAW_UNPROJECTED_SECRET')
-   expect(gate.resultWrites).toBe(1);expect(slot.projected).toBe(projection);expect(projectionCalls).toBe(projectedRetry?1:0)
+   expect(gate.resultWrites).toBe(1);expect(slot.projected).toBe(projection);expect(projectionCalls).toBe(projectedRetry||falseyProjection?1:0)
    const cold=composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true}},taskDocumentStorageContract)
    try{expect((await cold.snapshot!('private-code')).session.events.filter(e=>e.type==='tool/result'&&e.callId==='code-call')).toEqual(results)}finally{await cold.close()}
    expect(events.filter(e=>e.type==='agent/delivery-source'&&e.kind==='code'||e.type==='code/store'||e.type==='code/end')).toHaveLength(0)
-   expect(gate.bodies).toBe(unknownPhysical||projectedRetry?1:0);expect(originalPostCalls).toBe(0);expect(permanentHookCalls).toBe(0)
+   expect(gate.bodies).toBe(unknownPhysical||projectedRetry||falseyProjection?1:0);expect(originalPostCalls).toBe(0);expect(permanentHookCalls).toBe(0)
    return
   }
   if(mode==='source-foreign'||mode==='source-hook-revoked'){
