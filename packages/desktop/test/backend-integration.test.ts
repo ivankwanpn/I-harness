@@ -25,7 +25,7 @@ afterEach(async () => {
     await rm(owned.root, { recursive: true, force: true })
   }
 })
-async function fixture(options: { modelOrigin?: string } = {}) {
+async function fixture(options: { modelOrigin?: string; sessionStore?: 'jsonl' | 'commit-log' } = {}) {
   const root = await mkdtemp(join(tmpdir(), "desktop-native-gateway-"))
   const owner = createHostFixtureOwner()
   let globals: ReturnType<typeof createGlobalProviderSettings> | undefined
@@ -38,7 +38,7 @@ async function fixture(options: { modelOrigin?: string } = {}) {
     if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Desktop fixture cleanup incomplete")
   } })
   const openHost = async (workspace: string, sessionDir: string, settingsPath: string, frames: RpcMessage[], label: string) => {
-    return owner.own(() => trace.run(label, () => createDesktopHost({ workspace, sessionDir, settingsPath,
+    return owner.own(() => trace.run(label, () => createDesktopHost({ workspace, sessionDir, settingsPath, sessionStore: options.sessionStore,
       ...(options.modelOrigin ? { buildProviderClient: createHostFixtureModel(options.modelOrigin, trace) } : {}),
       onWrite: frame => { trace.observe(frame); frames.push(frame) } })))
   }
@@ -142,7 +142,8 @@ it("persists providers and auto-title through native configuration routes with n
     expect(await f.request("session/list")).toEqual({ sessions: [] })
     await writeFile(f.settingsPath, "{ corrupt")
     expect(await native({ kind: "desktop/global-preferences/state" })).toEqual({ enabled: false })
-    await expect(native({ kind: "desktop/global-preferences/configure", autoTitle: true })).rejects.toThrow(/settings document/i)
+    await expect(native({ kind: "desktop/global-preferences/configure", autoTitle: true })).rejects.toThrow()
+    expect(await readFile(f.settingsPath, 'utf8')).toBe('{ corrupt')
   } finally { await f.globals.close(); await f.host.close() }
 })
 
@@ -234,7 +235,7 @@ it("fences a native save authorized from a navigation reply captured before perm
   } finally { release.resolve(); vi.restoreAllMocks(); await f.globals.close(); await f.host.close() }
 })
 
-it("consults the latest saved auto-title preference on real host turns using a local fixture model", async () => {
+it.each(['jsonl', 'commit-log'] as const)("consults the latest saved auto-title preference and preserves manual titles across %s restart", async sessionStore => {
   let f: Awaited<ReturnType<typeof fixture>> | undefined
   let calls = 0
   const server = createServer(async (request, response) => {
@@ -246,10 +247,10 @@ it("consults the latest saved auto-title preference on real host turns using a l
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
   const address = server.address() as { port: number }
   try {
-    f = await fixture({ modelOrigin: `http://127.0.0.1:${address.port}` })
+    f = await fixture({ modelOrigin: `http://127.0.0.1:${address.port}`, sessionStore })
     const native = (value: unknown) => dispatchDesktopRequest(value, f!.dependencies)
-    await f.request("desktop/provider/mutate", { action: "provider/create", id: "local-fixture", fields: { protocol: "openai-completions", baseURL: `http://127.0.0.1:${address.port}` } })
-    await f.request("desktop/provider/mutate", { action: "key/set", id: "local-fixture", value: "fixture-no-provider-fee" })
+    await writeFile(join(f.root, 'credentials.json'), JSON.stringify({ refs: { FIXTURE_LOCAL_API_KEY: 'fixture-no-provider-fee' } }))
+    await f.request("desktop/provider/mutate", { action: "provider/create", id: "local-fixture", fields: { protocol: "openai-completions", baseURL: `http://127.0.0.1:${address.port}`, apiKeyEnv: 'FIXTURE_LOCAL_API_KEY' } })
     await f.request("desktop/provider/mutate", { action: "model/add", id: "local-fixture", model: "fixture-model", fields: { contextWindow: 32000, maxTokens: 4096 } })
     await f.request("desktop/provider/mutate", { action: "default/set", id: "local-fixture", model: "fixture-model" })
     const first = await f.request("session/create") as { sessionId: string }
@@ -263,8 +264,16 @@ it("consults the latest saved auto-title preference on real host turns using a l
     const list = await f.request("session/list") as { sessions: { id: string; title?: string }[] }
     expect(list.sessions.find(row => row.id === second.sessionId)?.title).toBe("Fixture title")
     expect(list.sessions.find(row => row.id === first.sessionId)?.title).toBeUndefined()
+    await f.restart()
+    expect((await f.request('session/list') as typeof list).sessions.find(row=>row.id===second.sessionId)?.title).toBe('Fixture title')
+    await f.request('desktop/session/manage', {sessionId:second.sessionId,action:'rename',title:'Manual title'})
+    await f.request('session/prompt', {sessionId:second.sessionId,prompt:'Keep the manual name'})
+    expect((await f.request('session/list') as typeof list).sessions.find(row=>row.id===second.sessionId)?.title).toBe('Manual title')
+    await f.restart()
+    const cold = await f.request('session/list') as typeof list
+    expect(cold.sessions.find(row=>row.id===second.sessionId)?.title).toBe('Manual title')
   } finally {
     try { await f?.globals.close(); await f?.host.close() }
     finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
   }
-})
+}, 75_000)
