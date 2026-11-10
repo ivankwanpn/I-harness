@@ -1,7 +1,7 @@
 import { it,expect } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createSession,legacyPrefixDigest } from '@i-harness/core-session'
+import { createSession,legacyPrefixDigest,CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createOwnership } from '../src/coordinator/ownership.ts'
 import { createManagedDocument,retainSelectedSourceRead } from '../src/coordinator/managed-document.ts'
@@ -16,7 +16,7 @@ it('notifies the real selected source witness when managed admission begins',asy
 it('connects the genuine document witness to the original retained binding across two uses',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'source-connected-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),claim=await ownership.pinOwnership('source')
  try{
-  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:13})
+  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
   const {createBindingObservations}=await import('../src/coordinator/binding-observation.ts'),bindings=createBindingObservations(backend,ownership),retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']})
   const document=createManagedDocument('source',createSession(),{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())},backend,ownership,undefined,()=>{})
   let revoked=false;const witness=retainSelectedSourceRead(document,ownership,()=>{retained.revoke();revoked=true});let first:unknown,second:unknown
@@ -37,11 +37,11 @@ it('rejects a forged document or other ownership and revokes on close admission'
 
 it.each(['revoke','admit'] as const)('retires automatically when the genuine source %s occurs inside its active selected use',async mode=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'source-self-revoke-')),backend=createJsonlBackend(root),real=createOwnership({lockRoot:root},{lock:{enabled:true}}),released=Promise.withResolvers<void>()
- let original!:Awaited<ReturnType<typeof real.acquireLease>>
- const ownership={...real,async acquireLease(name:string){original=await real.acquireLease(name);return {...original,get held(){return original.held},async release(){await original.release();released.resolve()}}}},claim=await ownership.pinOwnership('source')
+ let original!:Awaited<ReturnType<typeof real.acquireDocumentLease>>
+ const ownership={...real,async acquireDocumentLease(name:string){original=await real.acquireDocumentLease(name);return {...original,get held(){return original.held},async release(){await original.release();released.resolve()}}}},claim=await ownership.pinOwnership('source')
  const {createBindingObservations}=await import('../src/coordinator/binding-observation.ts'),bindings=createBindingObservations(backend,ownership)
  try {
-  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:13})
+  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
   const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']}),document=createManagedDocument('source',createSession(),{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())},backend,ownership,undefined,()=>{})
   const witness=retainSelectedSourceRead(document,ownership,retained.revoke),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>()
   let write:Promise<unknown>|undefined
@@ -69,11 +69,11 @@ it('rejects witness acquisition while a managed admission is suspended before qu
 
 it('releases the original binding automatically when its genuine managed source changes while idle',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'source-idle-revoke-')),backend=createJsonlBackend(root),real=createOwnership({lockRoot:root},{lock:{enabled:true}}),released=Promise.withResolvers<void>()
- let original!:Awaited<ReturnType<typeof real.acquireLease>>
- const ownership={...real,async acquireLease(name:string){original=await real.acquireLease(name);return {...original,get held(){return original.held},async release(){await original.release();released.resolve()}}}},claim=await ownership.pinOwnership('source')
+ let original!:Awaited<ReturnType<typeof real.acquireDocumentLease>>
+ const ownership={...real,async acquireDocumentLease(name:string){original=await real.acquireDocumentLease(name);return {...original,get held(){return original.held},async release(){await original.release();released.resolve()}}}},claim=await ownership.pinOwnership('source')
  const {createBindingObservations}=await import('../src/coordinator/binding-observation.ts'),bindings=createBindingObservations(backend,ownership)
  try {
-  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:13})
+  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
   const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']}),document=createManagedDocument('source',createSession(),{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())},backend,ownership,undefined,()=>{})
   const witness=retainSelectedSourceRead(document,ownership,retained.revoke)
   await retained.use(async()=>{witness.assertCurrent()});expect(original.held).toBe(true)

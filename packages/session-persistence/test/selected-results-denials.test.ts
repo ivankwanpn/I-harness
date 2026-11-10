@@ -23,14 +23,19 @@ function withV3Header(stage: p.BootstrapHeaderStage, exported: any): p.Bootstrap
   return { ...stage, headerBase: { ...stage.headerBase, seedLength: meta.seedLength }, seed: { digest: compiled.digest, dependencyDigest: compiled.dependencyDigest,
     sourceObservation: compiled.sourceObservation, seedLength: wire.header.seedLength, groupCount: exported.seed.groups.length }, headerBytes: canonicalJsonData(meta) + '\n' }
 }
-it.each(['public-completed', 'child-history'])('denies supplied zero-page V3 %s at the actual legacy request/compiler/header/facts entry points', profile => {
+it.each(['public-completed', 'child-history'])('parses zero-page V3 %s data without authorizing a legacy writer or source capture', profile => {
   const exported = codecSeed(profile), original = legacyRequest(), v3: any = { ...original, seed: compileSelectedResultsSemanticSeed(exported) }
   expect(() => p.compileSemanticSeed(exported)).toThrow('Legacy semantic seed')
-  expect(() => captureBootstrapRequest(v3)).toThrow()
-  expect(() => buildBootstrapHeader(v3)).toThrow()
+  expect(captureBootstrapRequest(v3)).toEqual(v3)
+  expect(() => buildBootstrapHeader(v3)).not.toThrow()
   const stage = withV3Header(buildBootstrapHeader(original).stage, exported)
-  expect(() => parseBootstrapHeaderStage(Buffer.from(canonicalJsonData(stage) + '\n'))).toThrow()
+  expect(() => parseBootstrapHeaderStage(Buffer.from(canonicalJsonData(stage) + '\n'))).toThrow('Invalid bootstrap materialization')
   expect(() => preparationFacts(stage, codecWire(exported).records)).toThrow('Legacy preparation facts')
+  const core = p.readForkRequestCore({ version: 1, kind: 'session-fork-core', sourceSessionId: 'source', selection: { kind: 'completed' }, sourceCapture: 'first-authorized-capture', metadata: {} })
+  const intent = p.createBootstrapRequestIntent(core, { kind: 'unmanaged' })
+  const reservation = { version: 1 as const, kind: 'semantic-bootstrap-capture' as const, request: { invocation: { ...original.invocation, requestDigest: intent.requestDigest }, core, requestIntent: intent.intent } }
+  const captureStage = withV3Header(buildBootstrapHeader({ ...original, invocation: reservation.request.invocation }).stage, exported)
+  expect(() => validateCaptureStage(reservation, captureStage)).toThrow('Legacy public seed')
   expect(captureBootstrapRequest(original)).toEqual(original)
 })
 it('denies V3 public capture headers and supplied manifests before accepting original source/selection bindings', () => {

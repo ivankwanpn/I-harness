@@ -104,7 +104,7 @@ it('withholds the original delivery record until its exact cleanup succeeds',asy
  let failing=true
  const f=await fixture({async close(){if(failing)throw Error('held delivery close')}}),observation=f.state.observe()
  await expect(observation.delivery.ownHuman()).rejects.toThrow('held delivery close')
- expect(f.reads).toEqual([0]);expect(()=>f.state.observe()).toThrow('cleanup unresolved')
+ expect(f.reads).toEqual([0]);expect(()=>f.state.observe()).toThrow(expect.objectContaining({code:'FACT_RECOVERY_REQUIRED'}))
  failing=false;await f.state.settleDependencies();expect(f.closed).toBe(1);await f.state.close()
 })
 
@@ -178,7 +178,7 @@ it('retains falsey primary and cleanup failures with the exact original cleanup 
  const f=await fixture({async read(){throw null},async close(){if(failing)throw 0}}),observed=f.state.observe()
  const failure=await observed.inbox.admitted('done').catch(error=>error)
  expect(failure).toBeInstanceOf(AggregateError);expect(failure.errors).toEqual([null,0])
- expect(()=>f.state.observe()).toThrow('cleanup unresolved');expect(f.opened).toBe(1)
+ expect(()=>f.state.observe()).toThrow(expect.objectContaining({code:'FACT_RECOVERY_REQUIRED'}));expect(f.opened).toBe(1)
  f.lastScope.close=async()=>{replacement++};failing=false;await f.state.close()
  expect(f.closed).toBe(1);expect(replacement).toBe(0)
 })
@@ -187,7 +187,7 @@ it('withholds a valid admission until its original cleanup ACK and retries clean
  let failing=true
  const f=await fixture({async close(){if(failing)throw undefined}}),observed=f.state.observe()
  await expect(observed.inbox.admitted('done')).rejects.toBeUndefined()
- expect(f.reads).toEqual([0]);expect(()=>observed.assertCurrent()).toThrow('cleanup unresolved')
+ expect(f.reads).toEqual([0]);expect(()=>observed.assertCurrent()).toThrow(expect.objectContaining({code:'FACT_RECOVERY_REQUIRED'}))
  failing=false;await f.state.settleDependencies();observed.assertCurrent()
  expect(f.reads).toEqual([0]);expect(f.closed).toBe(1);await f.state.close()
 })
@@ -200,7 +200,9 @@ for(const end of ['ready','abort','Stop','falsey-close','unknown'] as const)it(`
  const add=vi.spyOn(controller.signal,'addEventListener'),remove=vi.spyOn(controller.signal,'removeEventListener');const wait=getManagedExecutionAdmissionWait(domain,f.action,controller.signal);expect(wait).toBeInstanceOf(Promise);let advanced=false;const result=wait!.then(()=>{advanced=true;return {ok:true}},error=>({ok:false,error}))
  await Promise.resolve();expect(advanced).toBe(false)
  if(end==='abort')controller.abort('cancelled');if(end==='Stop')f.state.stopNewWork();if(end==='falsey-close')fail=true;if(end==='unknown')f.state.readinessChanged(true)
- release();const readResult=await reading.then(()=>true,()=>false);expect(readResult).toBe(end!=='Stop'&&end!=='falsey-close')
+ // A cancelled admission waiter does not invalidate its known read. An unknown
+ // owner outcome does: successful cleanup cannot authorize publication again.
+ release();const readResult=await reading.then(()=>true,()=>false);expect(readResult).toBe(end!=='Stop'&&end!=='falsey-close'&&end!=='unknown')
  expect((await result).ok).toBe(end==='ready');expect(advanced).toBe(end==='ready');expect(add).toHaveBeenCalledTimes(1);expect(remove).toHaveBeenCalledTimes(1)
  if(end==='ready')expect(getManagedExecutionAdmissionWait(domain,f.action,controller.signal)).toBeUndefined()
  if(end==='falsey-close'){expect(()=>getManagedExecutionAdmissionWait(domain,f.action,controller.signal)).toThrow();fail=false;await f.state.settleDependencies()}

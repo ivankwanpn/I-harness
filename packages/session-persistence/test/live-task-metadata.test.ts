@@ -40,6 +40,7 @@ it.each(['title','failed','authority'] as const)('retains only actual live Task 
 it('classifies every known metadata field and refuses unclosed authority',()=>{
  const base={formatVersion:14,sessionId:'parent',createdAt:'2026-11-02T00:00:00.000Z'}
  expect(taskParentMetadataProjection({...base,title:'new display'})).toBe(taskParentMetadataProjection(base))
- for(const patch of [{archived:true},{workspaceId:'other'},{parentSession:'other'},{seedLength:1},{delegationDepth:1},{subagentProtocolVersion:1},{origin:'subagent'},{modelSelection:{provider:'fixture',model:'other'}}])expect(taskParentMetadataProjection({...base,...patch})).not.toBe(taskParentMetadataProjection(base))
+ expect(taskParentMetadataProjection({...base,archived:true})).toBe(taskParentMetadataProjection(base))
+ for(const patch of [{workspaceId:'other'},{parentSession:'other'},{seedLength:1},{delegationDepth:1},{subagentProtocolVersion:1},{origin:'subagent'},{modelSelection:{provider:'fixture',model:'other'}}])expect(taskParentMetadataProjection({...base,...patch})).not.toBe(taskParentMetadataProjection(base))
  for(const patch of [{futureAuthority:true},{modelSelection:{provider:'fixture',model:'m',future:true}},{journal:{version:1}},{semanticSeed:{version:1}},{archived:'yes'},{workspaceId:undefined}])expect(()=>taskParentMetadataProjection({...base,...patch})).toThrow()
 })
