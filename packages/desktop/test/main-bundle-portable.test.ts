@@ -10,7 +10,7 @@ import { copyRuntimePackage, runtimePackageRoot } from "../scripts/runtime-copy.
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const roots: string[] = []
 const owner = "Desktop production main import closure test"
-type Chunk = { fileName: string; isEntry: boolean; imports: string[]; dynamicImports: string[] }
+type Chunk = { fileName: string; isEntry: boolean; imports: string[]; dynamicImports: string[]; modules: string[] }
 type Resolution = { chunk: string; specifier: string; resolved?: string; error?: string }
 
 afterEach(() => {
@@ -32,6 +32,9 @@ it("resolves the production main bundle from the shipped app layout without work
   })
   expect(built.status, `${built.error?.message ?? ""}\n${built.stdout}\n${built.stderr}`).toBe(0)
   const chunks = JSON.parse(readFileSync(report, "utf8")) as Chunk[]
+  const modules = chunks.flatMap(chunk => chunk.modules).map(path => path.replaceAll("\\", "/"))
+  expect(modules.some(path => path.includes("/packages/sdk/src/server.ts"))).toBe(false)
+  expect(modules.some(path => path.includes("/packages/session-executor/src/service.ts"))).toBe(false)
   const localChunks = new Set(chunks.map(chunk => chunk.fileName))
   const externalImports = [...new Set(chunks.flatMap(chunk => [...chunk.imports, ...chunk.dynamicImports]).filter(name => !localChunks.has(name)))].sort()
   // These are runtime-owned dependencies, so bundling them would break the

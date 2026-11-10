@@ -4,7 +4,7 @@ name: verify
 # because nothing ever ran them. This workflow is the missing trigger.
 on:
   push:
-    branches: [main, "experiment/**"]
+    branches: [main, "experiment/**", "codex/**"]
   pull_request:
   workflow_dispatch:
   schedule:
@@ -22,18 +22,35 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.34.5
       - uses: actions/setup-node@v4
         with:
           node-version: 22.18.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm verify:test-runner
       # --no-bail on purpose: the fail-fast prefix hides every package after the
       # first failure, which is exactly how four broken packages shipped.
-      - run: pnpm -r --no-bail typecheck
+      - run: pnpm typecheck
       # 147 imports already reach into another package's src/ by relative path.
       # They are baselined; this step fails only when the number grows.
       - run: node scripts/audit/check-package-boundaries.mjs --gate
+
+  compiled-gateway:
+    name: compiled gateway and Windows ACL
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify:gateway
 
   full:
     name: verify:all
@@ -44,7 +61,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 10.34.5
       - uses: actions/setup-node@v4
         with:
           node-version: 22.18.0

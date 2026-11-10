@@ -17,11 +17,11 @@ export function createInstallerFixture(source, target, variant = "old") {
     "resources/app/out/main/attachment-reader-worker.mjs", "resources/app/out/main/pdf.worker.mjs",
     "resources/app/out/main/cmaps/fixture.bcmap", "resources/app/out/main/standard_fonts/fixture.pfb",
     "resources/app/out/main/wasm/fixture.wasm", "resources/app/out/main/node_modules/@napi-rs/canvas/package.json",
-    "resources/app/licenses/opencode/LICENSE", "resources/app/licenses/zcode/LICENSE", "resources/gateway/cli/src/cli.ts",
-    "resources/gateway/cli/src/host.ts", "resources/gateway/node_modules/tsx/dist/loader.mjs",
+    "resources/app/licenses/opencode/LICENSE", "resources/app/licenses/zcode/LICENSE", "resources/gateway/cli/src/cli.js",
+    "resources/gateway/cli/src/host.js",
     variant === "old" ? "resources/gateway/obsolete-owned.txt" : "resources/gateway/current-only.txt",
   ]) put(file)
-  for (const file of ["version", "resources/app/package.json", "resources/app/LICENSE", "resources/app/THIRD_PARTY_NOTICES", "resources/gateway/cli/package.json", "resources/gateway/node_modules/tsx/package.json"]) {
+  for (const file of ["version", "resources/app/package.json", "resources/app/LICENSE", "resources/app/THIRD_PARTY_NOTICES", "resources/gateway/cli/package.json"]) {
     const path = join(target, file); mkdirSync(dirname(path), { recursive: true }); copyFileSync(join(source, file), path)
   }
   const gateway = JSON.parse(readFileSync(join(source, "resources/gateway/cli/package.json"), "utf8"))

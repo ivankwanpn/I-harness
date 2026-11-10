@@ -12,7 +12,7 @@
 import { mkdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { spawnSync } from "node:child_process"
+import spawn from "cross-spawn"
 import { pathToFileURL } from "node:url"
 
 /** Directory-valued variables: tests `mkdtemp(join(process.env.X, ...))`. */
@@ -57,7 +57,8 @@ function main(argv) {
     return 1
   }
   const [command, ...args] = argv
-  const result = spawnSync(command, args, { env: testEnvironment(), stdio: "inherit", shell: process.platform === "win32" })
+  const result = spawn.sync(command, args, { env: testEnvironment(), stdio: "inherit", windowsHide: true })
+  if (result.error) console.error(result.error.message)
   return result.status ?? 1
 }
 

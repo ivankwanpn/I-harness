@@ -1,4 +1,4 @@
-import { parseResultPageQuery, type ResultPageQuery, type ResultPageResult } from '@i-harness/session-executor'
+import { parseResultPageQuery, type ResultPageQuery, type ResultPageResult } from './results.ts'
 import { INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, makeFailure, makeSuccess } from './protocol.ts'
 
 export type ResultPageHost = (sessionId: string, query: ResultPageQuery) => Promise<ResultPageResult>

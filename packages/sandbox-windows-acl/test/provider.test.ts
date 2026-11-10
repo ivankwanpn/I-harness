@@ -19,6 +19,17 @@ const DLL_INIT_FAILED = 3221225794
 const readOnly: SandboxPolicy = { mode: "read-only", workspaceRoot: process.cwd() }
 
 describe("createWindowsAclSandbox", () => {
+  it("keeps the standalone runner independent of the source loader", () => {
+    vi.stubEnv('I_HARNESS_DIST', '1')
+    const provider = createWindowsAclSandbox({ writableDirs: [], mode: 'read-only' })
+    try {
+      const invocation = provider.confine(['cmd.exe', '/c', 'echo marker'], readOnly).argv
+      expect(invocation[0]).toBe(process.execPath)
+      expect(invocation[1]).toMatch(/runner\.mjs$/)
+      expect(invocation).not.toContain('--import')
+      expect(invocation.some(value => value.includes('tsx'))).toBe(false)
+    } finally { provider.dispose(); vi.unstubAllEnvs() }
+  })
   it("returns a SandboxProvider (shape)", () => {
     const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "read-only" })
     expect(typeof provider.confine).toBe("function")

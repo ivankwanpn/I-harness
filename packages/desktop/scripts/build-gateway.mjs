@@ -4,11 +4,10 @@
 // Usage (from packages/desktop): node scripts/build-gateway.mjs
 // Output: .gateway-dist/  →  extraResources → <app>/resources/gateway/
 //
-// Why a source tree instead of a single-file bundle: the gateway's dependency
+// Why a package tree instead of a single-file bundle: the gateway's dependency
 // graph resolves real files relative to `import.meta.url` (sandbox ACL runner,
-// provider model catalogue, tsx loader). Copying the actual package trees with
-// their resolved dependencies keeps the packaged runtime identical to the
-// launch path the e2e tests already exercise.
+// provider model catalogue). Workspace TypeScript is compiled in place, with
+// package exports rewritten to JavaScript so shipped launches need no loader.
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { transformSync } from "esbuild"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
@@ -17,6 +16,7 @@ import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
 import { copyWslAssets, verifyWslAssets } from "../../../scripts/runtime-wsl-assets.mjs"
 import { verifyAclWaitSourceAssets } from "../../../scripts/runtime-acl-wait-assets.mjs"
+import { validateGatewayRuntime } from './package-inputs.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
@@ -127,5 +127,7 @@ verifyNativeAssets(join(modulesDir, "@i-harness/sandbox-windows-psec"))
 const wslWorker = join(modulesDir, "@i-harness/sandbox-wsl/worker")
 copyWslAssets(join(repoRoot, "packages/sandbox-wsl/worker/runner.py"), wslWorker)
 verifyWslAssets(wslWorker)
+validateGatewayRuntime(outDir, JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version)
+if (!existsSync(join(modulesDir, '@i-harness/sandbox-windows-acl/src/runner.js'))) throw new Error('Compiled ACL runner is missing')
 
 console.log(`gateway runtime: ${outDir} (${copied.size} packages shipped)`)

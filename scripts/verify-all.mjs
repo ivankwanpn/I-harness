@@ -16,7 +16,7 @@
 // A record in a handoff document does not make either unforgettable. A command
 // that refuses to report a total it cannot substantiate does.
 //
-// WHAT IT PROVES: that the five named steps ran, that every workspace project
+// WHAT IT PROVES: that the seven named steps ran, that every workspace project
 // with a `test` script REPORTED a result, and each step's reading is printed
 // rather than inferred.
 //
@@ -30,7 +30,7 @@
 //
 // Usage: pnpm verify:all   (or: node scripts/verify-all.mjs)
 
-import { spawn } from "node:child_process"
+import spawn from "cross-spawn"
 import { readFileSync, readdirSync, existsSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -79,7 +79,7 @@ function expectedPopulation() {
  *  minutes must not look like a hang). Returns { code, text }. */
 function run(cmd, args) {
   return new Promise((done) => {
-    const child = spawn(cmd, args, { cwd: ROOT, shell: true, windowsHide: true, env: TEST_ENV })
+    const child = spawn(cmd, args, { cwd: ROOT, windowsHide: true, env: TEST_ENV })
     let text = ""
     const sink = (chunk) => {
       const s = chunk.toString()
@@ -88,12 +88,20 @@ function run(cmd, args) {
     }
     child.stdout.on("data", sink)
     child.stderr.on("data", sink)
+    child.once("error", (error) => sink(`Failed to start ${cmd}: ${error.message}\n`))
     child.on("close", (code) => done({ code: code ?? 1, text: strip(text) }))
   })
 }
 
 const readings = {}
 let failed = false
+
+rule("prepare · test command argument handling")
+const runnerCheck = await run("node", ["--test", "scripts/test-env.test.mjs"])
+if (runnerCheck.code !== 0) {
+  console.error("Test command preparation failed; no suite result can be claimed.")
+  process.exit(1)
+}
 
 // A fresh checkout has no ignored Desktop worker payload. Build it before the
 // document-reader tests so results do not depend on a prior development build.
@@ -105,8 +113,8 @@ if (preparation.code !== 0) {
   process.exit(1)
 }
 
-// ── 1/5 · the recursive suite, captured so its POPULATION can be counted ──────
-rule("1/5 · pnpm -r --no-bail --no-sort --stream --workspace-concurrency=1 test --maxWorkers=2 --minWorkers=1")
+// ── 1/7 · the recursive suite, captured so its POPULATION can be counted ──────
+rule("1/7 · pnpm -r --no-bail --no-sort --stream --workspace-concurrency=1 test --maxWorkers=2 --minWorkers=1")
 const expected = expectedPopulation()
 // Native integration fixtures have finite deadlines. Keep workspace suites
 // serial so another package's process workload cannot consume their budget.
@@ -134,8 +142,8 @@ console.log(`\n   reading: exit ${suite.code} · ${passed} passed | ${skipped} s
 console.log(`   reading: ${reportedDirs.length} of ${expected.length} projects reported${failedProjects.length > 0 ? ` · FAILED: ${failedProjects.join(", ")}` : ""}`)
 if (suite.code !== 0) failed = true
 
-// ── 2/5 · the load-bearing half: a short population is NOT a total ───────────
-rule("2/5 · population")
+// ── 2/7 · the load-bearing half: a short population is NOT a total ───────────
+rule("2/7 · population")
 if (reportedDirs.length !== expected.length) {
   const missing = expected.filter((d) => !reportedDirs.includes(d))
   console.log(`   ✗ SHORT RUN: ${reportedDirs.length} of ${expected.length} projects reported.`)
@@ -146,28 +154,38 @@ if (reportedDirs.length !== expected.length) {
   console.log(`   ✓ all ${expected.length} projects with a test script reported`)
 }
 
-// ── 3/5 · typecheck ──────────────────────────────────────────────────────────
-rule("3/5 · pnpm -r typecheck")
-const types = await run("pnpm", ["-r", "typecheck"])
+// ── 3/7 · typecheck ──────────────────────────────────────────────────────────
+rule("3/7 · pnpm typecheck")
+const types = await run("pnpm", ["typecheck"])
 readings.typecheck = { code: types.code }
 console.log(`\n   reading: exit ${types.code}`)
 if (types.code !== 0) failed = true
 
-// ── 4/5 · the suite the recursive walk does not reach ────────────────────────
-rule("4/5 · pnpm e2e")
+// ── 4/7 · the suite the recursive walk does not reach ────────────────────────
+rule("4/7 · pnpm e2e")
 const e2e = await run("pnpm", ["e2e", "--maxWorkers=2", "--minWorkers=1"])
 const e2eFiles = [...e2e.text.matchAll(/✓ (e2e\/[\w.-]+)\s+\((\d+) tests?\)/g)].map((m) => `${m[1]} ${m[2]}`)
 readings.e2e = { code: e2e.code, files: e2eFiles.length }
 console.log(`\n   reading: exit ${e2e.code} · ${e2eFiles.length} files · ${e2eFiles.join(" · ")}`)
 if (e2e.code !== 0) failed = true
 
-// ── 5/5 · the reachability gate ──────────────────────────────────────────────
-rule("5/5 · node scripts/audit/check-reachability.mjs --gate")
+// ── 5/7 · the reachability gate ──────────────────────────────────────────────
+rule("5/7 · node scripts/audit/check-reachability.mjs --gate")
 const gate = await run("node", ["scripts/audit/check-reachability.mjs", "--gate"])
 const gateLine = gate.text.match(/^reachability: (.*)$/m)
 readings.gate = { code: gate.code, line: gateLine?.[1] ?? "(no reading line)" }
 console.log(`\n   reading: exit ${gate.code} · ${readings.gate.line}`)
 if (gate.code !== 0) failed = true
+
+rule("6/7 · package boundaries")
+const boundaries = await run("node", ["scripts/audit/check-package-boundaries.mjs", "--gate"])
+readings.boundaries = { code: boundaries.code }
+if (boundaries.code !== 0) failed = true
+
+rule("7/7 · compiled gateway and native runner")
+const artifact = await run("pnpm", ["verify:gateway"])
+readings.artifact = { code: artifact.code }
+if (artifact.code !== 0) failed = true
 
 // ── the summary ──────────────────────────────────────────────────────────────
 rule(failed ? "VERIFY:ALL FAILED" : "VERIFY:ALL PASSED")
@@ -176,6 +194,8 @@ console.log(`   population : ${readings.population.reported} of ${readings.popul
 console.log(`   typecheck  : exit ${readings.typecheck.code}`)
 console.log(`   e2e        : exit ${readings.e2e.code} · ${readings.e2e.files} files`)
 console.log(`   gate       : exit ${readings.gate.code} · ${readings.gate.line}`)
+console.log(`   boundaries : exit ${readings.boundaries.code}`)
+console.log(`   artifact   : exit ${readings.artifact.code}`)
 console.log("\n   SCOPE IS CHECKED HERE; MEANING IS NOT. A green run of a suite that asserts nothing")
 console.log("   is indistinguishable from this one. This command can only tell you how much ran.")
 process.exit(failed ? 1 : 0)

@@ -1,4 +1,4 @@
-import { parseResultPageQuery } from "@i-harness/sdk/server"
+import { parseResultPageQuery } from "@i-harness/sdk/results"
 import type { ResultPageResult } from "@i-harness/sdk"
 import type { WorkspaceRuntime } from "./sdk-runtime.ts"
 

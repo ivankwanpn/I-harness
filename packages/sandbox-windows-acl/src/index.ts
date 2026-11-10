@@ -466,13 +466,14 @@ const RUNNER_FAILURE_RULES = [
   { allowedExitCodes: [WINDOWS_ACL_MSYS_INIT_FAILURE_EXIT], fatalSignatures: ["couldn't create signal pipe"] },
 ]
 
-/** The runner entry argv prefix. Source launch: the package source through
- * tsx. DIST (build-dist defines I_HARNESS_DIST): the sibling bundle entry
- * `<out>/runner.mjs`, emitted next to ih.mjs — the sandbox never needs a
- * source checkout or tsx there. */
+/** Source packages use tsx, compiled packages use their emitted JS runner,
+ * and the standalone distribution carries its sibling runner.mjs bundle. */
 function runnerInvocation(): string[] {
   if (process.env.I_HARNESS_DIST === '1') {
     return [process.execPath, fileURLToPath(new URL('./runner.mjs', import.meta.url))]
+  }
+  if (!new URL(import.meta.url).pathname.endsWith('.ts')) {
+    return [process.execPath, fileURLToPath(new URL('./runner.js', import.meta.url))]
   }
   const sourceEntry = fileURLToPath(new URL('./runner.ts', import.meta.url))
   // The tsx loader is named by an ABSOLUTE file URL resolved from THIS module,

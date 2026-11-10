@@ -79,7 +79,7 @@ import { createNondurableFactOwner, isNondurableSession, subscribe, IMAGE_MEDIA_
 import { createRewindIntentLog, withRewindFacts } from '@i-harness/session-executor'
 import { transportSessionEvents } from "./image-transport.ts"
 import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
-export { parseResultPageQuery } from '@i-harness/session-executor'
+export { parseResultPageQuery } from './results.ts'
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
 import { createManagedEventBridge } from "./managed-event-bridge.ts"

@@ -5,7 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  chokidar@5.0.0: e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0
+  chokidar@5.0.0:
+    hash: e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0
+    path: patches/chokidar@5.0.0.patch
 
 importers:
 
@@ -14,6 +16,9 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
+      cross-spawn:
+        specifier: 7.0.6
+        version: 7.0.6
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
@@ -1223,6 +1228,9 @@ importers:
       '@i-harness/context-engine':
         specifier: workspace:*
         version: link:../context-engine
+      '@i-harness/context-output':
+        specifier: workspace:*
+        version: link:../context-output
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session

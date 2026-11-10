@@ -33,8 +33,8 @@ function runtime(root: string, version = "0.1.13-rc.1") {
     writeFileSync(join(root, file), text)
   }
   put("cli/package.json", JSON.stringify({ name: "@i-harness/desktop-gateway", version, dependencies: { "@i-harness/sdk": "workspace:*" } }))
-  for (const file of ["cli/src/cli.ts", "cli/src/host.ts", "node_modules/tsx/dist/loader.mjs"]) put(file, "runtime fixture")
-  for (const name of ["tsx", "@i-harness/sdk"]) put(`node_modules/${name}/package.json`, JSON.stringify({ name }))
+  for (const file of ["cli/src/cli.js", "cli/src/host.js"]) put(file, "runtime fixture")
+  for (const name of ["@i-harness/sdk"]) put(`node_modules/${name}/package.json`, JSON.stringify({ name }))
   return root
 }
 
@@ -160,7 +160,7 @@ it.each(["0.1.13", "0.1.12", "0.1.13-rc.2"])("requires full gateway identity equ
 
 it.each(["missing-entry", "missing-dependency", "unsafe-dependency", "wrong-dependency", "wrong-owner"])("refuses unqualified runtime: %s", failure => {
   const root = fixture(), desktop = join(root, "packages/desktop"), source = runtime(join(root, "qualified-runtime"))
-  if (failure === "missing-entry") rmSync(join(source, "cli/src/host.ts"))
+  if (failure === "missing-entry") rmSync(join(source, "cli/src/host.js"))
   if (failure === "missing-dependency") rmSync(join(source, "node_modules/@i-harness/sdk/package.json"))
   if (failure === "wrong-dependency") writeFileSync(join(source, "node_modules/@i-harness/sdk/package.json"), '{"name":"other"}')
   if (failure === "unsafe-dependency") writeFileSync(join(source, "cli/package.json"), JSON.stringify({ name: "@i-harness/desktop-gateway", version: "0.1.13-rc.1", dependencies: { "../escape": "*" } }))

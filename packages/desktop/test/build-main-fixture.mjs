@@ -21,6 +21,7 @@ const chunks = outputs.flatMap(output => output.output).filter(item => item.type
   isEntry: chunk.isEntry,
   imports: chunk.imports,
   dynamicImports: chunk.dynamicImports,
+  modules: Object.keys(chunk.modules),
 }))
 if (!chunks.some(chunk => chunk.isEntry)) throw new Error("production main build emitted no entry chunk")
 writeFileSync(reportFile, `${JSON.stringify(chunks, null, 2)}\n`)

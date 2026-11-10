@@ -5,6 +5,7 @@
   "description": "I-harness agent runtime monorepo",
   "type": "module",
   "license": "MIT",
+  "packageManager": "pnpm@10.34.5",
   "engines": {
     "node": ">=22.18",
     "pnpm": ">=10"
@@ -12,20 +13,23 @@
   "scripts": {
     "test": "node scripts/test-env.mjs pnpm -r --no-bail test",
     "test:default": "node scripts/test-env.mjs pnpm -r --no-bail test",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r --no-bail --no-sort typecheck",
     "e2e": "vitest run e2e/ --config e2e/vitest.config.ts",
     "verify:reachability": "node scripts/audit/check-reachability.mjs --gate",
     "verify:boundaries": "node scripts/audit/check-package-boundaries.mjs --gate",
+    "verify:gateway": "node packages/desktop/scripts/smoke-compiled-gateway.mjs",
+    "verify:test-runner": "node --test scripts/test-env.test.mjs",
     "verify:all": "node scripts/verify-all.mjs",
-  "bench": "tsx scripts/bench/run-bench.mts",
-  "verify:bench": "tsx scripts/bench/run-bench.mts --gate",
+    "bench": "tsx scripts/bench/run-bench.mts",
+    "verify:bench": "tsx scripts/bench/run-bench.mts --gate",
     "verify:store": "bash scripts/check-store.sh"
   },
   "devDependencies": {
-    "typescript": "^5.9.0",
-    "vitest": "^3.2.0",
     "@types/node": "^24.0.0",
+    "cross-spawn": "7.0.6",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.0",
-    "esbuild": "^0.28.2"
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
   }
 }

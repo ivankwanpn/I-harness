@@ -35,8 +35,7 @@ function fixture(version: unknown = sourceManifest.version) {
     "resources/app/out/main/node_modules/@napi-rs/canvas/package.json",
     "resources/app/licenses/opencode/LICENSE", "resources/app/licenses/zcode/LICENSE",
     "resources/app/LICENSE", "resources/app/THIRD_PARTY_NOTICES",
-    "resources/gateway/cli/src/cli.ts", "resources/gateway/cli/src/host.ts",
-    "resources/gateway/node_modules/tsx/dist/loader.mjs",
+    "resources/gateway/cli/src/cli.js", "resources/gateway/cli/src/host.js",
   ]) put(file, file.endsWith(".exe") ? "MZfixture executable" : "fixture")
   put("version", sourceManifest.devDependencies.electron)
   put("resources/app/package.json", JSON.stringify({
@@ -48,7 +47,6 @@ function fixture(version: unknown = sourceManifest.version) {
     dependencies: { "@i-harness/sdk": "workspace:*" },
   }))
   put("resources/gateway/node_modules/@i-harness/sdk/package.json", JSON.stringify({ name: "@i-harness/sdk", version: "0.1.0" }))
-  put("resources/gateway/node_modules/tsx/package.json", JSON.stringify({ name: "tsx", version: "4.23.12" }))
   return { root, app, put }
 }
 
