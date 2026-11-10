@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
-import { DeepSeekSearchProvider, DEEPSEEK_SEARCH_DEFAULT_BASE_URL } from "../src/web-search/deepseek.ts"
-import { TavilySearchProvider, TAVILY_SEARCH_ENDPOINT } from "../src/web-search/tavily.ts"
+import {
+  DeepSeekSearchProvider, TavilySearchProvider,
+  DEEPSEEK_SEARCH_DEFAULT_BASE_URL, DEEPSEEK_SEARCH_DEFAULT_MODEL,
+  DEEPSEEK_SEARCH_DEFAULT_API_VERSION, DEEPSEEK_SEARCH_DEFAULT_MAX_TOKENS,
+  DEEPSEEK_SEARCH_DEFAULT_MAX_USES, TAVILY_SEARCH_ENDPOINT,
+  type DeepSeekSearchOptions, type TavilySearchOptions,
+} from "../src/index.ts"
 
 describe("DeepSeekSearchProvider", () => {
   it("sends the native web_search tool and maps result blocks", async () => {
@@ -15,13 +20,18 @@ describe("DeepSeekSearchProvider", () => {
         ] },
       ] }), { status: 200 })
     }) as unknown as typeof fetch
-    const provider = new DeepSeekSearchProvider({ apiKey: "secret", fetchImpl })
+    const options: DeepSeekSearchOptions = { apiKey: "secret", fetchImpl }
+    const provider = new DeepSeekSearchProvider(options)
     const result = await provider.search({ query: "hello" })
     expect(calls[0]!.url).toBe(DEEPSEEK_SEARCH_DEFAULT_BASE_URL + "/messages")
     const headers = calls[0]!.init.headers as Record<string, string>
     expect(headers["x-api-key"]).toBe("secret")
     expect(headers["anthropic-version"]).toBe("2023-06-01")
     const body = JSON.parse(String(calls[0]!.init.body))
+    expect(headers["anthropic-version"]).toBe(DEEPSEEK_SEARCH_DEFAULT_API_VERSION)
+    expect(body.model).toBe(DEEPSEEK_SEARCH_DEFAULT_MODEL)
+    expect(body.max_tokens).toBe(DEEPSEEK_SEARCH_DEFAULT_MAX_TOKENS)
+    expect(body.tools[0].max_uses).toBe(DEEPSEEK_SEARCH_DEFAULT_MAX_USES)
     expect(body.tools).toEqual([{ type: "web_search_20250305", name: "web_search", max_uses: 5 }])
     expect(body.messages[0].content[0].text).toContain("hello")
     expect(result.sources).toEqual([
@@ -56,7 +66,8 @@ describe("TavilySearchProvider", () => {
         { title: "T", url: "https://t.example/1", content: "snippet" },
       ] }), { status: 200 })
     }) as unknown as typeof fetch
-    const result = await new TavilySearchProvider({ fetchImpl }).search({ query: "q", maxResults: 3 })
+    const options: TavilySearchOptions = { fetchImpl }
+    const result = await new TavilySearchProvider(options).search({ query: "q", maxResults: 3 })
     const headers = calls[0]!.headers as Record<string, string>
     expect(headers["x-tavily-access-mode"]).toBe("keyless")
     expect(headers.authorization).toBeUndefined()

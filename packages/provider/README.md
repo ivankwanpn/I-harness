@@ -35,6 +35,20 @@ API. Abort signals and the HTTP probe timeout bound requests; adapter lifecycle
 and protocol details remain with the individual LLM packages. The web-search
 registry remains owned by the injected plugin context.
 
+## Web search configuration
+
+The facade exports `DeepSeekSearchProvider` with `DeepSeekSearchOptions` and
+`TavilySearchProvider` with `TavilySearchOptions`. Consumers can override the
+endpoint, credentials and supported request options through these constructor
+types.
+
+`DEEPSEEK_SEARCH_DEFAULT_BASE_URL`, `DEEPSEEK_SEARCH_DEFAULT_MODEL`,
+`DEEPSEEK_SEARCH_DEFAULT_API_VERSION`, `DEEPSEEK_SEARCH_DEFAULT_MAX_TOKENS`,
+`DEEPSEEK_SEARCH_DEFAULT_MAX_USES` and `TAVILY_SEARCH_ENDPOINT` expose the same
+defaults used by those constructors. These existing exports support configuration
+inspection outside this workspace. `test/websearch-providers.test.ts` imports
+the public facade and checks its defaults against the emitted requests.
+
 | Tests | Contracts covered |
 | --- | --- |
 | `test/provider.test.ts`, `test/directory.test.ts` | Catalogue/provenance, resolution precedence, independent registries, probe priority, candidates, headers and response normalization. |
