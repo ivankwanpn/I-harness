@@ -11,7 +11,7 @@ export async function runOwnedPostTurn(options:{execution:ManagedExecutionAttach
  if(!isManagedExecutionAttachment(execution))throw TypeError('Original execution attachment required')
  const read=()=>{options.assertCurrent();const observation=execution.observe();if(!isOriginalExecutionObservation(observation)||observation.identity!==execution.identity)throw TypeError('Original title observation required');observation.assertCurrent();const value=observation.metadata.title;if(value.kind!=='available'||!isOwnedTitleSnapshot(value.snapshot))throw TypeError('Original title fold unavailable');observation.assertCurrent();return value.snapshot}
  const selected=read()
- if(options.coordinator)void options.coordinator.putDocument(`session-title/${options.sessionId}`,{formatVersion:1,title:selected.title?.title??null}).catch(()=>{})
+ if(options.coordinator)await options.coordinator.putDocument(`session-title/${options.sessionId}`,{formatVersion:1,title:selected.title?.title??null,...selected.title?{source:selected.title.source}:{}}).catch(()=>{})
  if(selected.title!==null||selected.candidate===null)return
  const action=execution.owner.beginAction(options.signal)
  let generation:ReturnType<typeof createExecutionTitleGenerationContext>|undefined,source:ReturnType<typeof action.registerSettlementSource>|undefined
@@ -39,7 +39,7 @@ export async function runOwnedPostTurn(options:{execution:ManagedExecutionAttach
   source=action.registerSettlementSource(async()=>{if(!terminal)committedFactSeqs(await settle())})
   committedFactSeqs(await settle())
   action.assertOpen();options.assertCurrent()
-  if(options.coordinator)void options.coordinator.putDocument(`session-title/${options.sessionId}`,{formatVersion:1,title:result.title,source:result.source}).catch(()=>{})
+  if(options.coordinator)await options.coordinator.putDocument(`session-title/${options.sessionId}`,{formatVersion:1,title:result.title,source:result.source}).catch(()=>{})
  }catch(error){failed=true;failure=error}
  try{await cleanup()}catch(error){if(failed)throw new AggregateError([failure,error],'Post-turn settlement requires recovery',{cause:failure});throw error}
  if(failed)throw failure

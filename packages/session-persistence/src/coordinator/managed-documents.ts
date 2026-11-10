@@ -101,17 +101,34 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   }
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions,(id,entry)=>{if(documents.get(id)!==entry||!entry.ready||!entry.document)throw new FactRecoveryRequiredError();resolved.set(id,entry.document)},(id,entry)=>{if(documents.get(id)!==entry||entry.ready||!entry.document||entry.revoked)throw new FactRecoveryRequiredError();const document=entry.document;return ()=>{resolved.set(id,document)}})
   function materializeExecution(id:string,existing:ManagedEntry):Promise<ReturnType<typeof createManagedDocument>>{
-        const prior=existing.flight;
-        const operation=(async()=>{await prior;return ownership.withSessionOperation(id,async()=>{
-          if(documents.get(id)!==existing||existing.revoked||!existing.document)throw new FactRecoveryRequiredError()
-          const document=existing.document;if(Object.hasOwn(document,'view'))return document
-          document.assertReady();document.assertObservable();const original=originalManagedExecution(document,ownership),expected=original.core.prefix;
-          const archive=await backend.read(id);original.assertCurrent();original.held.assertHeld();
-          const actual=await backend.readJournalPrefix!(id,original.held);original.assertCurrent();
-          if(archive.version!==original.core.formatVersion||archive.events.length!==expected.eventCount||actual.eventCount!==expected.eventCount||actual.bodyBytes!==expected.bodyBytes||actual.prefixDigest!==expected.prefixDigest)throw new FactRecoveryRequiredError()
-          return original.materialize(archive.events)
-        })})();const flight=operation.then(()=>{});existing.flight=flight;void flight.catch(()=>{});void flight.finally(()=>{if(existing.flight===flight)existing.flight=undefined}).catch(()=>{});return operation
-      }
+    const prior = existing.flight
+    const operation = (async () => {
+      await prior
+      if (documents.get(id) !== existing || existing.revoked || !existing.document) throw new FactRecoveryRequiredError()
+      const document = existing.document
+      if (Object.hasOwn(document, 'view')) return document
+      document.assertReady()
+      document.assertObservable()
+      const original = originalManagedExecution(document, ownership)
+      const expected = original.core.prefix
+      const archive = await backend.read(id)
+      original.assertCurrent()
+      original.held.assertHeld()
+      const actual = await backend.readJournalPrefix!(id, original.held)
+      original.assertCurrent()
+      document.assertObservable()
+      if (documents.get(id) !== existing || existing.revoked || original.core.prefix !== expected
+        || archive.version !== original.core.formatVersion || archive.events.length !== expected.eventCount
+        || actual.eventCount !== expected.eventCount || actual.bodyBytes !== expected.bodyBytes
+        || actual.prefixDigest !== expected.prefixDigest) throw new FactRecoveryRequiredError()
+      return original.materialize(archive.events)
+    })()
+    const flight = operation.then(() => {})
+    existing.flight = flight
+    void flight.catch(() => {})
+    void flight.finally(() => { if (existing.flight === flight) existing.flight = undefined }).catch(() => {})
+    return operation
+  }
   async function acquireExecution(id:string):Promise<ManagedExecutionAttachment>{
     if(!transitions||!ownership.lockEnabled||!hasExecutionDependencies(backend))throw Object.assign(new Error('Original execution backend unavailable'),{code:'FACT_OWNER_UNSUPPORTED'})
     let entry=documents.get(id);assertEntry(entry)
@@ -136,7 +153,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         if(isArtifactCurrentGuard(current)&&typeof ready==='function'&&isArtifactCurrentGuard(ready)&&Object.getOwnPropertyDescriptor(exact,'assertCurrent')?.value===current&&Object.getOwnPropertyDescriptor(state,'observe')?.value===stateObserve&&Object.getOwnPropertyDescriptor(document,'assertReady')?.value===ready)return runOriginalCurrentnessRead(ready,read)
         let result:ReturnType<typeof state.observe>;withImmediateArtifactCurrentChecks(()=>{result=read()});return result!
       }
-      const attachment:ManagedExecutionAttachment=Object.freeze({identity:state.identity,owner:document,async prepare(){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepare()})},observe(){if(this!==attachment)throw TypeError('Original execution receiver required');return observe()},async prepareRequest(action:ReturnType<ManagedExecutionAttachment['owner']['beginAction']>){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepareRequest(action)})},revokeNewWork(){if(this!==attachment)throw TypeError('Original execution receiver required');document.revokeNewWork()},close(){if(this!==attachment)throw TypeError('Original execution receiver required');return closeOne(id)}})
+      const attachment:ManagedExecutionAttachment=Object.freeze({identity:state.identity,owner:document,async prepare(){if(this!==attachment)throw TypeError('Original execution receiver required');if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepare()},observe(){if(this!==attachment)throw TypeError('Original execution receiver required');return observe()},async prepareRequest(action:ReturnType<ManagedExecutionAttachment['owner']['beginAction']>){if(this!==attachment)throw TypeError('Original execution receiver required');return ownership.withSessionOperation(id,async()=>{if(documents.get(id)!==original||original.revoked)throw new FactRecoveryRequiredError();exact.assertCurrent();document.assertReady();return state.prepareRequest(action)})},revokeNewWork(){if(this!==attachment)throw TypeError('Original execution receiver required');document.revokeNewWork()},close(){if(this!==attachment)throw TypeError('Original execution receiver required');return closeOne(id)}})
       record.attachment=attachment;
     })();original.flight=flight
     try{await flight;return record.attachment!}finally{if(original.flight===flight)original.flight=undefined}

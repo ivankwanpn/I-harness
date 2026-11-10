@@ -23,6 +23,6 @@ export function taskParentMetadataProjection(value:unknown):string {
   if(initial.some(key=>Object.hasOwn(s,key))&&(!initial.every(key=>Object.hasOwn(s,key))||!text(s.initialInputId)||!digest(s.initialInputDigest)||!integer(s.initialStartedAt)||!integer(s.initialExpiresAt)))return fail()
   if(s.version===3){const summary=s.results;if(!['public-completed','child-history'].includes(s.profile as string)||!integer(s.resultPageCount)||!closed(summary,['version','rows','pages','digest'])||summary.version!==1||!integer(summary.rows)||!integer(summary.pages)||!digest(summary.digest))return fail()}
  }
- const {title:displayTitle,...authority}=value
+ const {title:displayTitle,archived:visibility,...authority}=value
  return canonicalJsonData(authority)
 }

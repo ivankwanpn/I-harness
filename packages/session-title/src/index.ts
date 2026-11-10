@@ -6,6 +6,8 @@ import { assessPreparedCapacity } from '@i-harness/context-engine'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { resolveTitleAction, type TitleAction } from './execution.ts'
 
+export { isOwnedTitleSnapshot } from './owned-projection.ts'
+
 export const TITLE_MAX_BYTES = 120
 export const TITLE_MAX_WORDS = 8
 const TITLE_GENERATION_TIMEOUT_MS = 30_000

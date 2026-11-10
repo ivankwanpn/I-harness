@@ -1,9 +1,11 @@
 import { ForkAdmissionError, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createHash } from "node:crypto"
-import { readInbox } from "@i-harness/core-session"
+import { readInbox, committedFactSeqs, deriveSessionTitle } from "@i-harness/core-session"
 import { recoverColdSessionRewind, sessionArtifactManifest } from "./session-artifacts.ts"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
+import { originalManagedExecutionFor } from '../../session-executor/src/host-managed-execution.ts'
+import { acquireManagedExecution } from '../../session-persistence/src/execution-internal.ts'
 
 export type SessionManagementAction = "rename" | "archive" | "restore" | "pin" | "unpin" | "read" | "unread" | "delete"
 export interface SessionBatchCommand { action: "archive" | "restore" | "delete" | "move"; sessionIds: string[]; projectId?: string; expectedOwners?: Record<string, string | null> }
@@ -147,7 +149,10 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
         const profile = await coordinator.profile(id)
         if (!profile.meta.archived || !await visible(id, profile.meta)) return undefined
         const projectId = await options.projectFor?.(id)
-        return { id, title: profile.meta.title, updatedAt: profile.updatedAt, ...(projectId ? { projectId } : {}) }
+        const session = (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
+        const committed = deriveSessionTitle(session)
+        const title = committed?.source === 'user' ? committed.title : profile.meta.title ?? committed?.title
+        return { id, title, updatedAt: profile.updatedAt, ...(projectId ? { projectId } : {}) }
       }))
       return rows.filter((row) => row !== undefined)
     },
@@ -190,6 +195,18 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
           return { sessionId }
           })
         }
+        if (action === 'rename') {
+          return fence.run(sessionId, async () => {
+            const execution = originalManagedExecutionFor(service, sessionId) ?? await acquireManagedExecution(coordinator, sessionId)
+            const document = execution.owner
+            const action = document.beginAction()
+            try {
+              committedFactSeqs(await action.facts.metadata.admit({ type: 'session/title', title: title!.trim(), source: 'user', messageSeqs: [] }))
+              await coordinator.putDocument(`session-title/${sessionId}`, { formatVersion: 1, title: title!.trim(), source: 'user' })
+            } finally { action.finish() }
+            return { sessionId }
+          })
+        }
         if (action === "archive") {
           // Archiving is reversible: pending inputs, interactions and tasks stay
           // in the saved conversation. Only running work blocks it.
@@ -228,7 +245,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
               await coordinator.deleteOwnedSession(sessionId, manifest)
               return { sessionId }
             }
-            await coordinator.updateMeta(sessionId, action === "rename" ? { title: title!.trim() } : { archived: false })
+            await coordinator.updateMeta(sessionId, { archived: false })
             return { sessionId }
           } finally { if (borrowed) await coordinator.releaseOwnership(sessionId) }
         }, () => assertIdle(sessionId, !recoverInterrupted, allowPending))

@@ -188,6 +188,10 @@ export function createMainInstructionManager(options: { session?: SessionView; d
             return { ...entry, inspection: inspect(entry.capture), install }
           })
           const mutations = selected.flatMap((entry, ownerIndex) => (entry.inspection.native?.targets ?? []).filter(target => target.mode === 'mutate').map(target => ({ ownerIndex, target })))
+          // Instruction discovery is scoped to the project. An external write
+          // still needs the native sandbox/escalation gate, but must not cause
+          // the instruction reader to inspect paths outside its authority.
+          const instructionRoots = authority().roots
           const fail = (reason: 'unseen-rules' | 'changed-dependency' | 'unavailable' | 'mixed-mutation' | 'revoked', splitRequired = false) => instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason, currentFingerprint: evidence.view.service.snapshot().fingerprint, ...(splitRequired ? { splitRequired: true as const } : {}) })
           const check = () => {
             try {
@@ -199,20 +203,23 @@ export function createMainInstructionManager(options: { session?: SessionView; d
           }
           signal?.throwIfAborted(); check()
           if (!mutations.length) return
-          // Retain target selection before any asynchronous resolver work so a
-          // rejected batch still informs the next normal request.
-          for (const { target } of mutations) {
-            const value: InstructionTarget = { path: target.path, kind: target.kind }, id = instructionTargetKey(value)
-            if (!pending && consumed.has(id)) continue
-            if (!pending) { pending = new Map(); selection++ }
-            if (!pending.has(id)) { pending.set(id, Object.freeze(value)); selection++; invalidateDiagnostics() }
-          }
           try {
             signal?.throwIfAborted(); check()
-            const targets = mutations.map(({ target }) => ({ path: target.path, kind: target.kind }))
-            await evidence.view.service.prepare(targets)
+            const canonicalRoots = await Promise.all(instructionRoots.map(root => resolveInstructionCanonical(root)))
+            const canonical = await Promise.all(mutations.map(({ target }) => instructionRoots.some(root => contained(root, target.path)) ? resolveInstructionCanonical(target.path) : Promise.resolve(resolve(target.path))))
             signal?.throwIfAborted(); check()
-            const canonical = await Promise.all(mutations.map(({ target }) => resolveInstructionCanonical(target.path)))
+            const scopedMutation = (index: number) => instructionRoots.some(root => contained(root, mutations[index]!.target.path)) && canonicalRoots.some(root => contained(root, canonical[index]!))
+            const scopedMutations = mutations.filter((_mutation, index) => scopedMutation(index))
+            // Retain authorized target discovery before instruction preparation,
+            // so a changed rule still informs the next normal request.
+            for (const { target } of scopedMutations) {
+              const value: InstructionTarget = { path: target.path, kind: target.kind }, id = instructionTargetKey(value)
+              if (!pending && consumed.has(id)) continue
+              if (!pending) { pending = new Map(); selection++ }
+              if (!pending.has(id)) { pending.set(id, Object.freeze(value)); selection++; invalidateDiagnostics() }
+            }
+            const targets = scopedMutations.map(({ target }) => ({ path: target.path, kind: target.kind }))
+            await evidence.view.service.prepare(targets)
             signal?.throwIfAborted(); check()
             const normalized = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path
             const snapshot = evidence.view.service.snapshot()
@@ -240,7 +247,8 @@ export function createMainInstructionManager(options: { session?: SessionView; d
             for (let index = 0; index < selected.length; index++) {
               const entry = selected[index]!, local = mutations.map((item, ordinal) => ({ ...item, canonical: canonical[ordinal]! })).filter(item => item.ownerIndex === index)
               if (!local.length) continue
-              const proof = evidence.view.service.proveApplicable(snapshot, local.map(item => ({ path: item.target.path, kind: item.target.kind })))
+              const scoped = local.filter(item => scopedMutations.some(scoped => scoped.target === item.target))
+              const proof = evidence.view.service.proveApplicable(snapshot, scoped.length ? scoped.map(item => ({ path: item.target.path, kind: item.target.kind })) : [{ path: options.cwd, kind: 'directory' }])
               const candidatePaths = local.filter(item => candidates.includes(normalized(item.canonical))).map(item => item.canonical)
               let own: OwnedInstructionWrite | undefined
               const assertCurrent = () => { if (!admitted) throw fail('unavailable'); check(); try { evidence.view.service.assertApplicable(proof, own) } catch { throw fail('changed-dependency') } }

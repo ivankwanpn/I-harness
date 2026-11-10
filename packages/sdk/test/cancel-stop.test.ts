@@ -170,7 +170,9 @@ it('an independent actual fork finishes while the original cancel Stop remains h
     if (prepared.kind !== 'prepared') throw new Error('Actual independent fork preparation refused')
     const actualOperation = createForkOperation(prepared.prepared, { operationId: 'independent-stop', targetSessionId: 'independent-child', createdAt: new Date().toISOString() })
     forking = request(server, 'session/fork/begin', { operation: actualOperation })
-    await boundary(entered.promise)
+    // Preparation precedes Stop admission; its native/durable work is bounded
+    // by the suite deadline, not the short Stop-settlement watchdog below.
+    await entered.promise
     let replied = false
     cancelling = request(server, 'session/cancel', { sessionId: 'stop' }).then(reply => { replied = true; return reply })
     await f.entered(); expect(forkSignal?.aborted).toBe(false)

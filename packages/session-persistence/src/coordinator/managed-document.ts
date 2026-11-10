@@ -53,6 +53,7 @@ type Entry = {
     authorization: Authorization;
 };
 type Pending = {
+    active?: boolean;
     staged?:Awaited<ReturnType<Awaited<ReturnType<typeof restoreManagedExecutionState>>['prepareWrite']>>;
     processReconciliation?: { token: ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']> | undefined; users: number };
     batch: ReturnType<typeof encodeFactBatch>;
@@ -352,6 +353,7 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                     const batch = encodeFactBatch(entries[0]!.bootstrap?.batchId ?? randomUUID(), prefix.prefixDigest, staged.events);
                     const operation:Pending = { batch, prefix, entries, events: staged.events,staged:executionStage, install(receipt) { if(executionStage)executionStage.install(batch,receipt);else (staged as ReturnType<NonNullable<typeof state>['stage']>).install(); restored?.install(batch,receipt) }, issued: false, settlement: Promise.withResolvers<void>(), settlementSettled: false };
                     pending = current = operation;
+                    operation.active = true;
                     const issuer = issuingFactOwner(held, () => {
                         if (requiredWriter) throw new FactRecoveryRequiredError();
                         if (operation.issued)
@@ -396,7 +398,11 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
                 }
             });
             // Join only this original batch, after its disposition and outside its lane.
-            if(current){current.settlementSettled=true;current.settlement.resolve()}
+            if (current) {
+                current.active = false;
+                current.settlementSettled = true;
+                current.settlement.resolve();
+            }
             // The operation lane is released before any observer may append again.
             if (current && completed) {
                 for (const [index, entry] of current.entries.entries())
@@ -623,8 +629,11 @@ export function createManagedDocument(id: string, source: Session|undefined, ini
         },
         ownsAction: action => ownedActions.has(action),
         assertObservable() {
-            if (!bootstrapReady || pending || quarantined)
+            const uncertainWrite = pending !== undefined && !pending.active;
+            if (!bootstrapReady || uncertainWrite || quarantined || sourceFault || recoveryHolds.size > 0)
                 throw new FactRecoveryRequiredError();
+            execution?.assertCurrent();
+            held.assertHeld();
         },
         ...(state?{view:state.view}:{}),
         async reconcile(key) {

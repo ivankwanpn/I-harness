@@ -46,6 +46,23 @@ it('connects an original private writer and nonresident dependency without a man
  expect(captureRestoredContextSnapshot(lease,input)).toEqual(captureContextSnapshot(publicDocument.view,input));expect(probe.views).toBe(0)
  await lease.settle();await source.close();action.finish()
 },20000)
+it('reads the committed prefix during a known writer dependency cleanup',async()=>{
+ const {execution,coordinator}=await fixture(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ probe.denyView=false
+ const committedCount=execution.observe().eventCount
+ const action=execution.owner.beginAction(),source=action.registerSettlementSource(async()=>{})
+ probe.closeGate={entered:()=>entered.resolve(),wait:release.promise}
+ const work=source.tools.captureResult({type:'tool/result',callId:'original-call',name:'read',output:'next result'}).admit()
+ await entered.promise
+ try {
+  const observation=execution.observe();observation.assertCurrent()
+  expect(observation.eventCount).toBe(committedCount)
+  const context=await execution.prepare();await context.settle()
+  const snapshot=await coordinator.snapshot!('owner')
+  expect(snapshot.session?.events).toHaveLength(committedCount)
+ }finally{release.resolve();await work;await source.close();action.finish()}
+ expect(execution.observe().eventCount).toBeGreaterThan(committedCount)
+},20000)
 it('keeps original unknown work fenced and reconciles its original batch without another append',async()=>{
  const {execution}=await fixture(),action=execution.owner.beginAction(),source=action.registerSettlementSource(async()=>{}),captured=source.tools.captureResult({type:'tool/result',callId:'original-call',name:'read',output:'unknown response'})
  probe.unknown=true;expect((await captured.admit()).kind).toBe('unknown');await expect(execution.prepare()).rejects.toThrow();expect(()=>execution.owner.beginAction()).toThrow();expect(probe.appends).toBe(1)
@@ -240,6 +257,12 @@ it('reports an original falsey fold failure after a busy dependency clears',asyn
  probe.closeGate={entered:entered.resolve,wait:release.promise}
  const writing=action.facts.metadata.admit({type:'plan/mode',mode:'on'});await entered.promise
  const off=core.subscribeManagedExecutionReadiness(domain,()=>{},(error,terminal)=>unavailable.resolve({error,terminal}))
- try{fail=true;release.resolve();await writing;expect(await unavailable.promise).toEqual({error:false,terminal:true})}
+ try {
+  fail=true;release.resolve();await writing
+  const failure=await unavailable.promise
+  expect(failure.terminal).toBe(true)
+  expect(failure.error).toBeInstanceOf(TypeError)
+  expect(failure.error).toMatchObject({message:'Original fold callback failed',cause:false})
+ }
  finally{fail=false;release.resolve();await writing.catch(()=>{});off();action.finish()}
 },20000)

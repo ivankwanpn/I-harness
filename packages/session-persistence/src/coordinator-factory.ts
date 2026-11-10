@@ -177,7 +177,17 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       if (Object.hasOwn(patch, 'formatVersion') && patch.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('cannot downgrade session format')
       const taskMetadata=managed.beginTaskMetadataUpdate(id);let succeeded=false
       try {
-        managed.invalidateMetadataWitness(id)
+        const fields = Object.getOwnPropertyDescriptors(patch)
+        const names = Reflect.ownKeys(fields)
+        const presentationOnly = names.length > 0 && names.every(name => {
+          if (name !== 'archived') return false
+          const field = fields[name]
+          return field !== undefined && 'value' in field && typeof field.value === 'boolean'
+        })
+        // Archive visibility does not change execution or task lineage.
+        // The transition still validates and commits the metadata under its
+        // original writer lane; structural changes retain the retirement fence.
+        if (!presentationOnly) managed.invalidateMetadataWitness(id)
         if(!transitionStorage)return await mutations.updateMeta(id,patch)
         let updated: Awaited<ReturnType<typeof mutations.updateMetaTransitionUnlocked>> | undefined
         await loads.transitionLoad(id, async (_check, markIssue) => { updated = await mutations.updateMetaTransitionUnlocked(id, patch, markIssue,taskMetadata) })

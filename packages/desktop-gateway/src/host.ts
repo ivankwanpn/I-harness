@@ -17,7 +17,7 @@ import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
 import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
-import { maybeAutoTitle } from "@i-harness/session-title"
+import { isOwnedTitleSnapshot, maybeAutoTitle } from "@i-harness/session-title"
 import { createForkSessionController } from "@i-harness/session-persistence"
 import { createSelectedForkController } from "./selected-fork.ts"
 import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
@@ -529,7 +529,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const review = createWorkspaceReview(options.workspace)
   const projectContentSearch = createProjectContentSearch(options.workspace)
   const managedWorkflowUis=new Map<string,{execution:import('../../session-persistence/src/execution-internal.ts').ManagedExecutionAttachment;ui:ReturnType<typeof createManagedWorkflowUi>}>()
-  const workflowUiFor=(id:string)=>{const runtime=originalManagedRuntimeFor(service,id);if(!runtime)return undefined;const existing=managedWorkflowUis.get(id);if(existing?.execution===runtime.execution){runtime.assertCurrent();return existing.ui}if(existing)throw Error('Original managed workflow owner changed');const retain=(close:()=>Promise<void>)=>retainManagedExecutionCleanup(service,id,runtime.execution,close);const ui=createManagedWorkflowUi({id,...runtime,retain,coordinator,service,teamEnabled:true,async jobEvents(documentJobIds){runtime.assertCurrent();const observation=runtime.execution.observe(),events=await observation.jobStatusEvents(documentJobIds);observation.assertCurrent();runtime.assertCurrent();return events},async lastStepSince(ordinal){runtime.assertCurrent();const observation=runtime.execution.observe(),end=await observation.lastStepEndSince(ordinal);observation.assertCurrent();runtime.assertCurrent();return end}});retain(async()=>{if(managedWorkflowUis.get(id)?.ui===ui)managedWorkflowUis.delete(id)});managedWorkflowUis.set(id,{execution:runtime.execution,ui});return ui}
+  const workflowUiFor=(id:string)=>{const runtime=originalManagedRuntimeFor(service,id);if(!runtime)return undefined;const existing=managedWorkflowUis.get(id);if(existing?.execution===runtime.execution){runtime.assertCurrent();return existing.ui}if(existing)throw Error('Original managed workflow owner changed');const retain=(close:()=>Promise<void>)=>retainManagedExecutionCleanup(service,id,runtime.execution,close);const ui=createManagedWorkflowUi({id,...runtime,retain,coordinator,service,teamEnabled:!!(runtime.tools.get("team_spawn_teammate")??runtime.tools.get("spawn_teammate")),async jobEvents(documentJobIds){runtime.assertCurrent();const observation=runtime.execution.observe(),events=await observation.jobStatusEvents(documentJobIds);observation.assertCurrent();runtime.assertCurrent();return events},async lastStepSince(ordinal){runtime.assertCurrent();const observation=runtime.execution.observe(),end=await observation.lastStepEndSince(ordinal);observation.assertCurrent();runtime.assertCurrent();return end}});retain(async()=>{if(managedWorkflowUis.get(id)?.ui===ui)managedWorkflowUis.delete(id)});managedWorkflowUis.set(id,{execution:runtime.execution,ui});return ui}
   const rawWorkflow = createDesktopWorkflow(coordinator, service, { reviews: approvals.read, onChanged: notifyWorkflow,managed:workflowUiFor,async managedForMutation(id){const runtime=await prepareOriginalManagedRuntime(service,id);return runtime?workflowUiFor(id):undefined},
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "error" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }
@@ -648,8 +648,21 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
           if (meta.archived || !await isConversation(id, meta)) return undefined
           conversation = true; title = meta.title
           const execution=originalManagedExecutionFor(service,id)
-          const turnCount=execution?(()=>{const observation=execution.observe(),count=observation.turnCount;observation.assertCurrent();return count})():(service.liveSession(id) ?? (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session).events.filter((event) => event.type === "turn/end").length
-          return { id, turnCount, updatedAt: profile.updatedAt, ...(meta.title === undefined ? {} : { title: meta.title }) }
+          let committedTitle: ReturnType<typeof deriveSessionTitle> = null
+          let turnCount: number
+          if (execution) {
+            const observation = execution.observe()
+            turnCount = observation.turnCount
+            const projection = observation.metadata.title
+            if (projection.kind === 'available' && isOwnedTitleSnapshot(projection.snapshot)) committedTitle = projection.snapshot.title
+            observation.assertCurrent()
+          } else {
+            const session = service.liveSession(id) ?? (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
+            turnCount = session.events.filter(event => event.type === 'turn/end').length
+            committedTitle = deriveSessionTitle(session)
+          }
+          if (committedTitle && (committedTitle.source === 'user' || title === undefined)) title = committedTitle.title
+          return { id, turnCount, updatedAt: profile.updatedAt, ...(title === undefined ? {} : { title }) }
         } catch {
           return conversation ? { id, ...(title ? { title } : {}) } : undefined
         }

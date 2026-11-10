@@ -3,7 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1] = {}) => composeJsonlTaskTransitionCoordinator(backend, { ...options, lock: { enabled: true, ...options.lock } }, taskDocumentStorageContract)
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { SessionService } from "@i-harness/session-executor"
 import { createSessionManagement } from "../src/session-management.ts"
@@ -61,7 +63,7 @@ async function setup(owned = false) {
 describe("session navigation metadata", () => {
   it("refuses hidden or currently unavailable deletion receipts and never treats missing sessions as deleted", async () => {
     const { root, coordinator, service } = await setup()
-    await coordinator.create({ sessionId: "hidden", origin: "subagent", parentSession: "s1" })
+    await coordinator.create({ sessionId: "hidden", origin: "subagent", parentSession: "s1" , seedLength: 0})
     await coordinator.deleteOwnedSession!("hidden", { documents: [] })
     await coordinator.deleteOwnedSession!("s2", { documents: [] })
     const options = { workspace: root, sessionDir: root, pendingInteractions: async () => [], drainSession: async () => {} }
@@ -149,7 +151,7 @@ describe("session navigation metadata", () => {
       await coordinator.putDocument("task-s1", { formatVersion: 1, tasks: [], notifications: [{ status: "pending" }] })
       await expect(manager.mutate("s1", "delete")).rejects.toThrow(/outbox|pending/i)
       await coordinator.putDocument("task-s1", { formatVersion: 1, tasks: [], notifications: [] })
-      await coordinator.create({ sessionId: "hidden", origin: "subagent", parentSession: "s1" })
+      await coordinator.create({ sessionId: "hidden", origin: "subagent", parentSession: "s1" , seedLength: 0})
       await expect(manager.mutate("s1", "delete")).rejects.toThrow(/descendant/i)
       await expect(manager.mutate("hidden", "delete")).rejects.toThrow(/unavailable/i)
       expect(await coordinator.profile("s2")).toBeDefined()
@@ -173,7 +175,7 @@ describe("session navigation metadata", () => {
       expect(await broker.move("s1", "p1", "p2")).toMatchObject({ sessionId: "s1", projectId: "p2", executionWorkspace: root })
       expect((await broker.forSession("s1"))()?.roots).toEqual([destination])
       await expect(broker.bind("s1", "p1")).rejects.toThrow(/explicit move/)
-      await coordinator.create({ sessionId: "descendant", origin: "subagent", parentSession: "s2" })
+      await coordinator.create({ sessionId: "descendant", origin: "subagent", parentSession: "s2" , seedLength: 0})
       await expect(broker.move("s2", undefined, "p2")).rejects.toThrow(/descendant/)
       await coordinator.close()
       const restored = createSessionCoordinator(createJsonlBackend(root))
@@ -261,7 +263,7 @@ describe("session navigation metadata", () => {
       await manager.mutate("s1", "unread")
       expect((await manager.navigation()).s1).toEqual({ pinned: true, unread: true })
       await expect(manager.mutate("s1", "archive")).rejects.toThrow("busy")
-      await expect(manager.mutate("s1", "rename", "New")).rejects.toThrow("busy")
+      await expect(manager.mutate("s1", "rename", "New")).resolves.toMatchObject({ sessionId: "s1" })
       await expect(manager.withForkSource("s1", async () => { throw new Error('Busy source must not be admitted') })).rejects.toMatchObject({ name: 'ForkAdmissionError', reason: 'busy' })
     } finally { await coordinator.close() }
   })
@@ -273,7 +275,7 @@ describe("session navigation metadata", () => {
       await expect(manager.mutate("s1", "invalid" as never)).rejects.toThrow(/Invalid/)
       await expect(manager.mutate("s1", "rename", " ")).rejects.toThrow(/title/)
       await manager.mutate("s1", "rename", "  New name  ")
-      expect((await coordinator.profile("s1")).meta.title).toBe("New name")
+      expect((await coordinator.snapshot!("s1")).session.events).toContainEqual(expect.objectContaining({ type: "session/title", title: "New name", source: "user" }))
       await manager.mutate("s1", "archive")
       expect(await manager.archived()).toMatchObject([{ id: "s1", title: "New name" }])
       expect((await manager.navigation()).s1).toEqual({ pinned: false, unread: false })
@@ -286,7 +288,7 @@ describe("session navigation metadata", () => {
 it("archives an idle reusable child without changing its durable state", async () => {
   const { coordinator, service } = await setup()
   try {
-    await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" })
+    await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" , seedLength: 0})
     await coordinator.append("idle-child", [{ type: "turn/start", seq: 0 }, { type: "turn/end", seq: 1 }])
     const saved = { formatVersion: 1, jobs: [{ status: "completed" }], agentTable: [{ path: "root/child", sessionId: "idle-child", status: "waiting", mailbox: [] }], roles: [] }
     await coordinator.putDocument("s1", saved)
@@ -295,18 +297,29 @@ it("archives an idle reusable child without changing its durable state", async (
     expect(await coordinator.getDocument("s1")).toEqual(saved)
   } finally { await coordinator.close() }
 })
-it.each(["inbox", "turn", "mailbox", "cell", "missing"])("keeps reusable-child archive blocked by %s", async (blocker: string) => {
+it.each(["inbox", "turn", "mailbox", "cell", "missing"])("preserves reusable-child %s state and refuses running or missing authority", async (blocker: string) => {
   const { coordinator, service } = await setup()
   try {
     if (blocker !== "missing") {
-      await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" })
+      await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" , seedLength: 0})
       await coordinator.append("idle-child", [{ type: "turn/start", seq: 0 }, ...(blocker === "turn" ? [] : [{ type: "turn/end", seq: 1 }]),
         ...(blocker === "inbox" ? [{ type: "subagent/inbox", seq: 2, from: "root", message: "pending" }] : []),
         ...(blocker === "cell" ? [{ type: "code/cell", seq: 2, cellId: "c", state: "started", source: "" }] : [])] as never)
     }
     await coordinator.putDocument("s1", { formatVersion: 1, jobs: [], agentTable: [{ path: "root/child", sessionId: "idle-child", status: "waiting", mailbox: blocker === "mailbox" ? ["pending"] : [] }], roles: [] })
-    await expect(createSessionManagement(coordinator, service).mutate("s1", "archive")).rejects.toThrow()
-    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+    const childState = await coordinator.getDocument('s1')
+    const manager = createSessionManagement(coordinator, service)
+    if (blocker === 'cell' || blocker === 'missing') {
+      await expect(manager.mutate('s1', 'archive')).rejects.toThrow()
+      expect((await coordinator.profile('s1')).meta.archived).not.toBe(true)
+      expect(await coordinator.getDocument('s1')).toEqual(childState)
+      return
+    }
+    await manager.mutate('s1', 'archive')
+    expect((await coordinator.profile('s1')).meta.archived).toBe(true)
+    expect(await coordinator.getDocument('s1')).toEqual(childState)
+    await manager.mutate('s1', 'restore')
+    expect(await coordinator.getDocument('s1')).toEqual(childState)
   } finally { await coordinator.close() }
 })
 it.each([undefined, "Named conversation"])("archives a settled cold recording and retains its recovery evidence regardless of title %s", async (title: string | undefined) => {
@@ -327,15 +340,15 @@ it.each([undefined, "Named conversation"])("archives a settled cold recording an
     await createSessionManagement(reopened, service, undefined, { workspace: root, sessionDir: root }).mutate("rewind-title", "archive")
     expect((await reopened.profile("rewind-title")).meta.archived).toBe(true)
     expect((await reopened.snapshot!("rewind-title")).session.events).toHaveLength(3)
-    expect(await store.readPending()).toBeNull()
-    expect(await store.readOrphans()).toEqual([{ ...pending, recoveredAt: expect.any(Number) }])
+    expect(await store.readPending()).toEqual(pending)
+    expect(await store.readOrphans()).toEqual([])
     expect(Buffer.from(await store.readBlob(taken.blobId!)).toString()).toBe("before")
     expect(await readFile(join(root, "source.txt"), "utf8")).toBe("after")
     expect(await store.readPoints()).toEqual([])
   } finally { await reopened?.close(); await coordinator.close() }
 })
 
-it("keeps an unresolved live recorder guarded even when its runtime queue is idle", async () => {
+it("archives an idle session without changing its unresolved live recorder", async () => {
   const { root, coordinator, service } = await setup()
   const store = new RewindStore({ root, workspace: root, sessionId: "s1" })
   const recorder = new RewindRecorder({ store, workspace: root })
@@ -345,11 +358,11 @@ it("keeps an unresolved live recorder guarded even when its runtime queue is idl
   const pending = await store.readPending()
   const live = { ...service, liveAssembly: () => ({ liveResources: () => ({ codeCells: [], terminals: [] }), rewind: { store, recorder, drain: async () => {} } }) } as unknown as SessionService
   try {
-    await expect(createSessionManagement(coordinator, live, undefined, { workspace: root, sessionDir: root }).mutate("s1", "archive")).rejects.toThrow("Session has a pending rewind recording")
+    await createSessionManagement(coordinator, live, undefined, { workspace: root, sessionDir: root }).mutate("s1", "archive")
     expect(await store.readPending()).toEqual(pending)
     expect(await store.readOrphans()).toEqual([])
     expect(Buffer.from(await store.readBlob(taken.blobId!)).toString()).toBe("before")
-    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+    expect((await coordinator.profile("s1")).meta.archived).toBe(true)
   } finally { await coordinator.close() }
 })
 
@@ -380,14 +393,14 @@ it.each(["input", "turn"])("preserves a cold recording while durable %s work is 
     ? [{ type: "agent/input/admitted", version: 1, seq: 0, inputId: "unresolved", text: "pending", delivery: "queue", intent: "user" }]
     : [{ type: "turn/start", seq: 0 }])
   try {
-    await expect(createSessionManagement(coordinator, service, undefined, { workspace: root, sessionDir: root }).mutate("s1", "archive")).rejects.toThrow(/pending|unfinished/)
+    await createSessionManagement(coordinator, service, undefined, { workspace: root, sessionDir: root }).mutate("s1", "archive")
     expect(await store.readPending()).toEqual(pending)
     expect(await store.readOrphans()).toEqual([])
-    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+    expect((await coordinator.profile("s1")).meta.archived).toBe(true)
   } finally { await coordinator.close() }
 })
 
-it("waits for admitted writers and refuses their newly pending work before recovering a cold recording", async () => {
+it("preserves admitted writers and pending recovery while archiving presentation metadata", async () => {
   const { root, coordinator, service } = await setup()
   const fence = createSessionManagementFence()
   const release = Promise.withResolvers<void>()
@@ -404,19 +417,20 @@ it("waits for admitted writers and refuses their newly pending work before recov
   const archive = createSessionManagement(coordinator, service, undefined, { workspace: root, sessionDir: root, fence }).mutate("s1", "archive")
   void archive.catch(() => {})
   try {
-    await vi.waitFor(() => expect(() => fence.assertOpen("s1")).toThrow(/management/))
+    await expect(archive).resolves.toMatchObject({ sessionId: "s1" })
+    expect(() => fence.assertOpen("s1")).not.toThrow()
     expect(await store.readOrphans()).toEqual([])
     expect(await store.readPending()).toEqual(pending)
     release.resolve()
     await writer
-    await expect(archive).rejects.toThrow("pending durable inputs")
+    expect((await coordinator.snapshot!("s1")).session.events).toContainEqual(expect.objectContaining({ type: "agent/input/admitted", inputId: "late-input" }))
     expect(await store.readPending()).toEqual(pending)
     expect(await store.readOrphans()).toEqual([])
-    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+    expect((await coordinator.profile("s1")).meta.archived).toBe(true)
   } finally { release.resolve(); await Promise.allSettled([writer, archive]); await coordinator.close() }
 })
 
-it("awaits the live rewind finalizer before judging a settled turn's sidecar", async () => {
+it("preserves an independent live rewind finalizer while archiving presentation metadata", async () => {
   const { root, coordinator, service } = await setup()
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -429,17 +443,20 @@ it("awaits the live rewind finalizer before judging a settled turn's sidecar", a
   void archive.catch(() => {})
   try {
     await vi.waitFor(() => expect(drain).toHaveBeenCalled())
-    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+    expect((await coordinator.profile('s1')).meta.archived).not.toBe(true)
+    expect(await store.readPending()).not.toBeNull()
     release()
+    await finalized
     await archive
-    expect((await coordinator.profile("s1")).meta.archived).toBe(true)
+    expect((await coordinator.profile('s1')).meta.archived).toBe(true)
+    expect(await store.readPoints()).toHaveLength(1)
   } finally { release(); await Promise.allSettled([archive, finalized]); await coordinator.close() }
 })
 
 it("keeps archive blocked by a reusable child's terminal owned by the parent runtime", async () => {
   const { coordinator, service } = await setup()
   try {
-    await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" })
+    await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" , seedLength: 0})
     await coordinator.append("idle-child", [{ type: "turn/start", seq: 0 }, { type: "turn/end", seq: 1 }])
     await coordinator.putDocument("s1", { formatVersion: 1, jobs: [], agentTable: [{ path: "root/child", sessionId: "idle-child", status: "waiting", mailbox: [] }], roles: [] })
     const live = { ...service, liveAssembly: (id: string) => id === "s1" ? { liveResources: (owner?: string) => ({ codeCells: [], terminals: owner === "idle-child" ? [{ status: "running" }] : [] }) } : undefined } as unknown as SessionService

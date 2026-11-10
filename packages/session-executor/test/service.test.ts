@@ -90,6 +90,7 @@ describe("createSessionService", () => {
       expect(resolve).not.toHaveBeenCalled()
       const assembly = await service.assemblyFor("live")
       expect(service.liveAssembly("live")).toBe(assembly)
+      expect(service.inspectActivity!("live")).toMatchObject({live:true,running:false,active:false})
       await service.closeSession("live")
       expect(service.liveAssembly("live")).toBeUndefined()
       expect(resolve).toHaveBeenCalledTimes(1)

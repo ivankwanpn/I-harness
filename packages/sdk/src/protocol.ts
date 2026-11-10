@@ -489,6 +489,8 @@ export interface DashboardSessionRow {
   /** True when the session has a live assembly (honest — a listing-only
    * session is live: false, never a guessed default). */
   live: boolean
+  /** Current execution, retained resources, schedules, or pending cleanup. */
+  active?: boolean
   running?: boolean
   queued?: number
   tasks?: number
@@ -497,6 +499,7 @@ export interface DashboardSessionRow {
 
 /** M49 Task 13: the session/dashboard response payload. */
 export interface SessionDashboardResult {
+  active?: boolean
   sessions: DashboardSessionRow[]
   /** True when no listing source was wired (honest "unknown" — never read as
    * "no sessions exist"). */

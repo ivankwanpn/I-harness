@@ -798,8 +798,10 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         try {
           const listed = await opts.listSessions()
           const sessions: DashboardSessionRow[] = []
+          const active = (service.activitySessionIds?.() ?? []).some(sessionId => service.inspectActivity?.(sessionId).active === true)
           for (const row of listed.sessions) {
-            const live = service.hasAssembly(row.id)
+            const activity = service.inspectActivity?.(row.id)
+            const live = activity?.live ?? service.hasAssembly(row.id)
             const out: DashboardSessionRow = {
               id: row.id,
               ...(typeof row.title === "string" ? { title: row.title } : {}),
@@ -808,12 +810,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
               ...(typeof row.contextUsed === "number" ? { contextUsed: row.contextUsed } : {}),
               ...(typeof row.contextTotal === "number" ? { contextTotal: row.contextTotal } : {}),
               live,
+              ...(activity ? { active: activity.active } : {}),
             }
             if (live) {
-              const queue = service.queueState(row.id)
+              const queue = activity ?? service.queueState(row.id)
               out.running = queue.running
               if (queue.queued > 0) out.queued = queue.queued
-              const liveTasks = service.tasks(row.id)
+              const liveTasks = activity?.tasks ?? service.tasks(row.id)
                 .filter((task) => task.status === "queued" || task.status === "running" || task.status === "waiting")
                 .length
               if (liveTasks > 0) out.tasks = liveTasks
@@ -828,7 +831,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             }
             sessions.push(out)
           }
-          return makeSuccess(id, { sessions })
+          return makeSuccess(id, { sessions, active })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           return makeFailure(id, INTERNAL_ERROR, message)

@@ -18,6 +18,23 @@ import {createManagedExecutionRuntime} from '../src/managed-assembly.ts'
 import {controlledModel} from './controlled-model.ts'
 import {completeCheckpoint} from '../../compaction/test/fixtures/checkpoint.ts'
 import {committedFactSeqs} from '@i-harness/core-session'
+import {createSessionManagement} from '../../desktop-gateway/src/session-management.ts'
+
+it('inspects a held managed request without claiming a legacy assembly',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'managed-activity-'))
+ const coordinator=composeJsonlTaskTransitionCoordinator(createJsonlBackend(root),{lock:{enabled:true}},taskDocumentStorageContract)
+ await coordinator.create({sessionId:'main'})
+ const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[]},model:controlledModel(async function*(){entered.resolve();await release.promise;yield {type:'text/chunk',text:'done'};yield {type:'end'}}),contextWindow:4096,maxOutputTokens:128})
+ const turn=service.submit('main','held',new AbortController().signal)
+ try{
+  await entered.promise
+  expect(service.hasAssembly('main')).toBe(false)
+  expect(service.inspectActivity!('main')).toMatchObject({live:true,running:true,active:true})
+  release.resolve();await turn
+  expect(service.inspectActivity!('main')).toMatchObject({live:true,running:false,active:false})
+ }finally{release.resolve();await turn.catch(()=>{});await service.close();await coordinator.close()}
+},30000)
 
 it('private runtime honors live automatic compaction policy',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'runtime-auto-'))
@@ -623,11 +640,12 @@ it('owned schedule dispatches an original timer input through the managed servic
   await service.submit('main','schedule a reminder',new AbortController().signal)
   await Promise.race([delivered.promise,new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('Scheduled original input did not reach model')),10000))])
   expect(server.requests.some(request=>hasReminder(request.body))).toBe(true)
+  await vi.waitFor(()=>expect(service.inspectActivity!('main').running).toBe(false),{timeout:10000})
   await service.closeSession('main')
   const events=(await backend.read('main')).events;const dispatch=events.find(event=>event.type==='schedule/change'&&event.operation==='dispatch')
   expect(dispatch).toBeDefined();expect(events[dispatch!.seq!+1]).toMatchObject({type:'agent/input/admitted',intent:'system',provenance:{producer:'session.schedule'}});expect(notifications).toBeGreaterThan(0)
  }finally{off();await service.close();await coordinator.close();await server.close()}
-},30000)
+},75000)
 
 it('stopping during the original filesystem approval await prevents the native write',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-fs-stop-approval-'))
@@ -661,23 +679,33 @@ it('a throwing request telemetry observer does not orphan or hide the original t
  try{await service.submit('main','run',new AbortController().signal);expect(server.requests).toHaveLength(1);await service.closeSession('main')}finally{await service.close();await coordinator.close();await server.close()}
 },30000)
 
-it('owned schedule timer wakes an idle service with the original system input',async()=>{
+it('owned schedule timer wakes an idle archived service once at its original deadline',async()=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'owned-schedule-idle-'))
  const {createScheduleFoldSink}=await import('@i-harness/schedule')
  const backend=createJsonlBackend(root),coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true},originalExecutionFoldFactory:createScheduleFoldSink},taskDocumentStorageContract);await coordinator.create({sessionId:'main'})
  const wire=(tool:boolean)=>`data: ${JSON.stringify({choices:[{delta:tool?{tool_calls:[{index:0,id:'schedule-idle',function:{name:'schedule_create',arguments:JSON.stringify({prompt:'IDLE_TIMER_ORIGINAL',after_seconds:25})}}]}:{content:'done'},finish_reason:tool?'tool_calls':'stop'}],usage:{prompt_tokens:20,completion_tokens:2}})}\n\ndata: [DONE]\n\n`
  const delivered=Promise.withResolvers<void>(),settled=Promise.withResolvers<void>();let idle=false,firstAt=0,received=false
- const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{firstAt=Date.now();response.end(wire(true))},async response=>{response.end(wire(false))},async(response,request)=>{expect(idle).toBe(true);const messages=request.body.messages as {role:string;content:unknown}[];expect(messages.some(message=>message.role==='user'&&typeof message.content==='string'&&message.content.includes('[SCHEDULE REMINDER]')&&message.content.includes('IDLE_TIMER_ORIGINAL'))).toBe(true);received=true;delivered.resolve();response.end(wire(false))}])
+ const server=await createLoopbackProvider('/v1/chat/completions',[async response=>{firstAt=Date.now();response.end(wire(true))},async response=>{response.end(wire(false))},async(response,request)=>{expect(Date.now()-firstAt).toBeGreaterThanOrEqual(25000);expect(idle).toBe(true);const messages=request.body.messages as {role:string;content:unknown}[];expect(messages.some(message=>message.role==='user'&&typeof message.content==='string'&&message.content.includes('[SCHEDULE REMINDER]')&&message.content.includes('IDLE_TIMER_ORIGINAL'))).toBe(true);received=true;delivered.resolve();response.end(wire(false))}])
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],originalSchedule:true,async mount(ctx){registerApprovalAnswerer(ctx,async()=>({approved:true}))}},model:createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl}),contextWindow:4096,maxOutputTokens:128})
  const off=service.onExecutionState!(state=>{if(received&&!state.running&&state.queued===0)settled.resolve()})
  try{
   await service.submit('main','schedule an idle reminder',new AbortController().signal);idle=true
+  expect(service.hasAssembly('main')).toBe(false)
+  expect(service.inspectActivity!('main')).toMatchObject({live:true,running:false,active:true})
+  const management=createSessionManagement(coordinator,service,async()=>true)
+  await management.mutate('main','archive')
+  expect((await coordinator.profile('main')).meta.archived).toBe(true)
+  expect(service.inspectActivity!('main')).toMatchObject({live:true,running:false,active:true})
+  expect(server.requests).toHaveLength(2)
   expect(Date.now()-firstAt).toBeLessThan(25000)
   await Promise.race([delivered.promise,new Promise<never>((_,reject)=>setTimeout(()=>reject(Error('Idle timer did not reach model')),45000))])
   expect(server.requests).toHaveLength(3);await settled.promise
+  await management.mutate('main','restore')
+  expect((await coordinator.profile('main')).meta.archived).toBe(false)
   await service.closeSession('main')
   const events=(await backend.read('main')).events,dispatch=events.find(event=>event.type==='schedule/change'&&event.operation==='dispatch')
   expect(dispatch).toBeDefined();const admitted=events[dispatch!.seq!+1];expect(admitted).toMatchObject({type:'agent/input/admitted',intent:'system',provenance:{producer:'session.schedule'}})
+  expect(events.filter(event=>event.type==='schedule/change'&&event.operation==='dispatch')).toHaveLength(1)
   if(!admitted||admitted.type!=='agent/input/admitted')throw Error('Original scheduled admission missing')
   expect(events.some(event=>event.type==='agent/input/promoted'&&event.inputId===admitted.inputId)).toBe(true)
  }finally{off();await service.close();await coordinator.close();await server.close()}

@@ -2,7 +2,7 @@ import { controlledModel } from '../../session-executor/test/controlled-model.ts
 import { observeModelClient } from '@i-harness/llm-seam'
 import { captureRequestCandidate } from "../../core-agent/src/agent/request-snapshot.ts"
 import { expect, it, vi } from "vitest"
-import { createSessionService } from "@i-harness/session-executor"
+import { createSessionService, createUnmanagedTaskChildHost } from "@i-harness/session-executor"
 import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
@@ -70,10 +70,20 @@ it.each([false, true])("child context reader preserves its owner and current par
   const parentGate = new Promise<void>(resolve => { releaseParent = resolve })
   let liveChildState: unknown
   let liveChildWire: unknown
-  const service = createSessionService({ workspace: root, coordinator, approveAll: true, contextWindow: 100000, compact: { auto: false }, autoCompactionEnabled: () => false, pluginAgents: [{ name: "context-inspector", description: "Context inspector", systemPrompt: "Inspect your own prepared context", tools: ["get_context_remaining"] }],
+  let parentLaunched = false
+  const service = createSessionService({ workspace: root, coordinator, prepareTaskChild: createUnmanagedTaskChildHost({ coordinator, policy: "unmanaged" }), approveAll: true, contextWindow: 100000, compact: { auto: false }, autoCompactionEnabled: () => false, pluginAgents: [{ name: "context-inspector", description: "Context inspector", systemPrompt: "Inspect your own prepared context", tools: ["get_context_remaining"] }],
     model: observeModelClient(controlledModel(async function* (request) {
       const first = measurements.length === 1
-      if (request.sessionId === 'parent') { enterParent(); await parentGate }
+      if (request.sessionId === 'parent') {
+        if (!parentLaunched) {
+          parentLaunched = true
+          yield { type: 'tool_call', call: { name: 'spawn_agent', args: { task_name: 'child', agent_type: 'context-inspector', message: 'inspect your context', background: true } } }
+        } else if (service.liveAssembly('parent')?.tasks().some(row => row.group === 'subagent' && row.status === 'completed')) {
+          enterParent(); await parentGate
+        } else yield { type: 'text/chunk', text: 'Waiting for the background child.' }
+        yield { type: 'end' }
+        return
+      }
       if (first) {
         liveChildState = await service.contextState(request.sessionId!)
         liveChildWire = decodeFrame((await childServer.handleLine(encodeFrame(makeRequest(2, 'session/context', { sessionId: request.sessionId }))))!)
@@ -82,14 +92,17 @@ it.each([false, true])("child context reader preserves its owner and current par
         yield { type: 'tool_call', call: { name: 'get_context_remaining', args: {} } }
       } else yield { type: 'text/chunk', text: 'done' }
       yield { type: 'end' }
-    }), { start(_request, measurement) { measurements.push(measurement) }, finish() {} }) })
+    }), { start(request, measurement) { if (request.sessionId !== 'parent') measurements.push(measurement) }, finish() {} }) })
   const childServer = createSdkServer(service)
   await childServer.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
   try {
     const parent = await service.assemblyFor("parent")
     expect(await service.contextState("parent")).toMatchObject({ kind: "unavailable" })
-    await parent.tools.execute({ name: "spawn_agent", args: { task_name: "child", agent_type: "context-inspector", message: "inspect your context", background: true } })
-    await vi.waitFor(() => expect(parent.tasks().find(row => row.group === "subagent")?.status).toBe("completed"))
+    // Task launch requires the real model-origin prepared caller, retained by
+    // the agent's tool dispatch. A direct registry execution has no such caller.
+    let submitError: unknown
+    void service.submit("parent", "inspect the child context", new AbortController().signal).catch(error => { submitError = error })
+    await vi.waitFor(() => { if (submitError) throw submitError; expect(parent.tasks().find(row => row.group === "subagent")?.status).toBe("completed") }, { timeout: 45000 })
     const childId = parent.subagentState().agentTable[0]!.sessionId!
     const child = parent.liveChildSession!(childId)!
     expect(liveChildState).toMatchObject({ kind: "unavailable", observation: { ownerSessionId: childId, components: { system: measurements[0]!.input.components.system.heuristicTokens } } })

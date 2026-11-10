@@ -1,4 +1,5 @@
 import {TeamMountRecoveryRequired,isOriginalTeamRecoveryPort,type TeamMountHandle,type createOriginalTeamRecoveryPort} from '@i-harness/agent-team'
+import {foldScheduleEvents} from '@i-harness/schedule'
 import {associateOriginalTeamRetry} from './host-team-recovery.ts'
 import {mountOwnedRewind,withManagedRewindFacts,type OwnedRewindHandle} from './owned-rewind.ts'
 import {associateOriginalManagedRewind} from './host-managed-rewind.ts'
@@ -289,6 +290,9 @@ export interface SessionService {
   /** Synchronous observation only; never resolves a model or constructs an Agent. */
   liveAssembly(sessionId: string): SessionAssembly | undefined
   hasAssembly(sessionId: string): boolean
+  /** Read current owners without creating a runtime. Unknown resource state stays active. */
+  inspectActivity?(sessionId: string): { live: boolean; running: boolean; queued: number; tasks: number; active: boolean }
+  activitySessionIds?(): string[]
   /** Service queue truth, including lane execution and post-turn settlement.
    * queued counts paced submits and pending inbox inputs from queue(). */
   queueState(sessionId: string): { running: boolean; queued: number }
@@ -372,6 +376,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const managedTaskOwners=new Map<string,TaskLifecycle>()
   const managedWorkflowOwners=new Map<string,{list():import('@i-harness/exec').BackgroundJobView[];kill(id:string):'cancellation-requested'|'already-finished';journal():Promise<void>}>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
+  const managedShellOwners=new Map<string,import('./owned-shell.ts').OwnedShellMount>()
   const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
   const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>}>()
   const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
@@ -1171,7 +1176,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if(opts.managedRuntime!.ownedCode&&!shellOutput){let acquiring=true;try{shellOutput=await opts.managedRuntime!.ownedCode.acquireOutput(sessionId,cleanup=>{if(!acquiring||retired)throw Error('Original output retention expired');assertWritableOpen(sessionId);if(typeof cleanup!=='function')throw TypeError('Original output cleanup required');mounted.add(cleanup)})}finally{acquiring=false}assertWritableOpen(sessionId)}
       const filesystemPolicy=shellExecution?originalFilesystemPolicyFor(shellExecution,entry.execution):undefined
       if(opts.managedRuntime!.requireFilesystemPolicy&&!filesystemPolicy)throw TypeError('Original filesystem policy required')
-      const common={...opts.managedRuntime!,...filesystemPolicy?{filesystemPolicy}:{},context,execution:entry.execution,workspace:opts.workspace,...instructionBinding?{instructionBinding}:{},...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{void submit(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>d.warn('[i-harness] scheduled input failed: '+String(error)))},
+      const common={...opts.managedRuntime!,...filesystemPolicy?{filesystemPolicy}:{},context,execution:entry.execution,workspace:opts.workspace,...instructionBinding?{instructionBinding}:{},...(shellOutput?{resultRetention:createToolResultRetention(shellOutput.service,shellOutput.sourceFor)}:{}),retainConstructionCleanup:(cleanup:()=>Promise<void>)=>{mounted.add(cleanup)},scheduleWake:(inputId:string,text:string)=>{if(retired||closed||closing.has(sessionId)||!entry.execution.observe().inbox.isPending(inputId))return;void submitUnfenced(sessionId,text,new AbortController().signal,{admittedInputId:inputId}).catch(error=>{if(!closed&&!closing.has(sessionId))d.warn('[i-harness] scheduled input failed: '+String(error))})},
         modelActionTimeoutMs:opts.modelActionTimeoutMs,modelActionMaxAttempts:opts.modelActionMaxAttempts,maxParallelToolCalls:opts.maxParallelToolCalls,telemetry:opts.telemetry,
         ...(opts.passiveGeneration?{passiveGeneration:opts.passiveGeneration}:{})}
       if(opts.managedRuntime!.mountRegistry||opts.managedRuntime!.ownedShell||opts.managedRuntime!.ownedCode||opts.managedRuntime!.ownedTask||opts.managedRuntime!.ownedWorkflow||opts.managedRuntime!.ownedRewind||opts.managedRuntime!.mountDefaultSurface){
@@ -1205,7 +1210,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const drain=privateDrain;unsubscribe=subscribeManagedExecution(runtime.domain,event=>{if(['agent/delivery-received','agent/delivery-generation','agent/delivery-source','exec/end','code/end','workflow/end','subagent/end','agent/delivery-handoff','agent/input/promoted','agent/input/cancelled','turn/end'].includes(event.type))drain.signal()})
         unsubscribeReadiness=subscribeManagedExecutionReadiness(runtime.domain,()=>drain.signal(),(error,terminal)=>{if(terminal)drain.retire();if(!retired)d.warn('[i-harness] private delivery readiness unavailable: '+String(error))})
       }
-      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);published=true;managedPrepubSettlers.delete(sessionId);if(rewindMount)managedRewinds.set(sessionId,{handle:rewindMount,runtime});if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
+      assertWritableOpen(sessionId);managedRuntimes.set(sessionId,runtime);if(shellMount){managedShellOwners.set(sessionId,shellMount);mounted.add(async()=>{managedShellOwners.delete(sessionId)})}published=true;managedPrepubSettlers.delete(sessionId);if(rewindMount)managedRewinds.set(sessionId,{handle:rewindMount,runtime});if(title)managedTitles.set(sessionId,title);if(recipient)managedRecipients.set(sessionId,recipient);if(codeMount)managedCodeMounts.set(sessionId,codeMount);if(taskLifecycle)managedTaskOwners.set(sessionId,taskLifecycle);if(workflowMount){const mounted=workflowMount,executor=mounted.executor,list=executor.listJobs.bind(executor),kill=executor.killJob.bind(executor),journal=mounted.reconcileCapturedHandoffs.bind(mounted);managedWorkflowOwners.set(sessionId,{list,kill,journal})}
       publishManaged(sessionId,runtime)
       privateDrain?.signal()
       return runtime
@@ -1726,6 +1731,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return options?.reconcile === true ? owner.reconcileProjection() : owner.projectionIntegrity()
   }
 
+  const instructionOwner = (sessionId: string, childSessionId?: string) => {
+    const legacy = liveAssembly(sessionId)?.instructionDiagnostics?.(childSessionId)
+    if (legacy || childSessionId !== undefined) return legacy
+    const publication = managedPublications.get(sessionId)
+    return publication && !publication.retired ? managedRuntimes.get(sessionId)?.instructionDiagnostics : undefined
+  }
   const service:SessionService = {
     async refreshExtensions() {
       if (closed) return
@@ -1800,27 +1811,50 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     receivedInputFor,
     managedInputFor,
     liveAssembly,
-    instructionState(sessionId, childSessionId) { return liveAssembly(sessionId)?.instructionDiagnostics?.(childSessionId)?.read() ?? { state: 'not-published' } },
+    instructionState(sessionId, childSessionId) { return instructionOwner(sessionId, childSessionId)?.read() ?? { state: 'not-published' } },
     onInstructionsChanged(sessionId, childSessionId, listener) {
       let active = true, assembly: SessionAssembly | undefined, owner: ReturnType<NonNullable<SessionAssembly['instructionDiagnostics']>>, offOwner: (() => void) | undefined, offChildren: (() => void) | undefined
       const emit = () => { if (active) listener() }
       const bind = () => {
-        const next = liveAssembly(sessionId), nextOwner = next?.instructionDiagnostics?.(childSessionId)
+        const next = liveAssembly(sessionId), nextOwner = instructionOwner(sessionId, childSessionId)
         if (assembly !== next) { offChildren?.(); offChildren = next?.onSubagentsChanged?.(() => { bind(); emit() }); assembly = next }
         if (owner !== nextOwner) { offOwner?.(); owner = nextOwner; offOwner = owner?.subscribe(emit) }
       }
       const lifecycle = (event: SurfaceLifecycle) => { if (event.sessionId === sessionId) { bind(); emit() } }
-      surfaceListeners.add(lifecycle); bind()
-      return () => { if (!active) return; active = false; surfaceListeners.delete(lifecycle); offOwner?.(); offChildren?.() }
+      const managed = (event: ManagedRuntimeLifecycle) => { if (event.sessionId === (childSessionId ?? sessionId)) { bind(); emit() } }
+      surfaceListeners.add(lifecycle); managedLifecycleListeners.add(managed); bind()
+      return () => { if (!active) return; active = false; surfaceListeners.delete(lifecycle); managedLifecycleListeners.delete(managed); offOwner?.(); offChildren?.() }
     },
     async refreshInstructions(sessionId, childSessionId, signal) {
-      const assembly = liveAssembly(sessionId), owner = assembly?.instructionDiagnostics?.(childSessionId)
+      const owner = instructionOwner(sessionId, childSessionId)
       if (!owner) return { state: 'not-published' }
       const report = await owner.refresh(signal)
-      if (liveAssembly(sessionId) !== assembly || assembly?.instructionDiagnostics?.(childSessionId) !== owner) return { state: 'revoked' }
+      if (instructionOwner(sessionId, childSessionId) !== owner) return { state: 'revoked' }
       return report
     },
     hasAssembly: (sessionId) => assemblies.has(sessionId),
+    activitySessionIds: () => [...new Set([...assemblies.keys(), ...managedRuntimes.keys(), ...creating.keys(), ...chains.keys(), ...closing.keys(), ...failedClose])],
+    inspectActivity(sessionId) {
+      const assembly = assemblies.get(sessionId), runtime = managedRuntimes.get(sessionId)
+      const state = queueState(sessionId)
+      const tasks = service.tasks(sessionId).filter(task => task.status === 'queued' || task.status === 'running' || task.status === 'waiting').length
+      let resources = false
+      try {
+        resources = (managedCodeMounts.get(sessionId)?.liveCells?.().length ?? 0) > 0
+        resources ||= managedShellOwners.get(sessionId)?.service.listJobs().some(job => job.status === 'running') ?? false
+        if (assembly) {
+          const live = assembly.liveResources?.()
+          resources = !!(live?.codeCells.length || live?.backgroundJobs?.length || assembly.backgroundJobs?.().some(job => job.status === 'running'))
+          resources ||= foldScheduleEvents(assembly.session.events, assembly.session.header?.seedLength ?? 0).active.length > 0
+        }
+        if (runtime && opts.managedRuntime?.originalSchedule) {
+          const schedules = runtime.execution.observe().schedules
+          resources ||= schedules.kind !== 'available' || (schedules.snapshot as { active: readonly unknown[] }).active.length > 0
+        }
+      } catch { resources = true }
+      const pending = (creating.has(sessionId) && !assembly && !runtime) || firstPartyFlights.has(sessionId) || chains.has(sessionId) || closing.has(sessionId) || failedClose.has(sessionId) || notificationAdmissions.has(sessionId) || managedPrepubSettlers.has(sessionId) || deliveryStops.has(sessionId) || managedStopReceipts.has(sessionId) || managedCodeStops.has(sessionId)
+      return { live: !!assembly || !!runtime, ...state, tasks, active: state.running || state.queued > 0 || tasks > 0 || resources || pending }
+    },
     queueState,
     onManagedRuntimeLifecycle:(listener,options)=>{if(closed)return()=>{};managedLifecycleListeners.add(listener);if(options?.includeExisting)for(const [sessionId,record] of managedPublications)if(!record.retired)try{listener({sessionId,owner:record.owner,kind:'published'})}catch{/* Observer isolation. */};return()=>{managedLifecycleListeners.delete(listener)}},
     onExecutionState: listener => {

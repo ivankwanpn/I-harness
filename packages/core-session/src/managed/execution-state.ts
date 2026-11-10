@@ -296,6 +296,18 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
   const settleDependencies=async()=>{const errors:unknown[]=[];for(const scope of debt)try{await scope.close();activeDependencyScopes.delete(scope);taskHistoryScopes.delete(scope);debt.delete(scope)}catch(error){errors.push(error)}if(errors.length){const error=aggregateErrors(errors,'Exact writer dependency cleanup unresolved');signalUnavailable(error,!sameHeldOwner());throw error};dependencyFailure=undefined;readinessFailure=undefined;signalReady()}
   const assertFresh=(reading?:OriginalWriterDependencyScope)=>{assertHeld();if(stopped||closed)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'});if(pendingWrite)throw Object.assign(new Error('Original issued write needs reconciliation'),{code:'FACT_RECOVERY_REQUIRED'});if([...debt].some(scope=>scope!==reading&&!taskHistoryScopes.has(scope)))throw Object.assign(new Error('Original writer dependency cleanup unresolved',{cause:dependencyFailure?.cause}),{code:'FACT_RECOVERY_REQUIRED'})}
   const assertNewWork=()=>assertFresh()
+  // A known live dependency may be preparing the next write while readers
+  // inspect the installed committed prefix. Failed cleanup and uncertain
+  // issuance still require explicit recovery.
+  const assertCommittedRead = (reading?: OriginalWriterDependencyScope): void => {
+    assertHeld()
+    if (stopped || closed) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
+    const uncertainWrite = pendingWrite !== undefined && !pendingWriteActive
+    const failedDependency = [...debt].some(scope => scope !== reading && !activeDependencyScopes.has(scope))
+    if (ownerRecoveryBlocked || dependencyFailure || uncertainWrite || failedDependency) {
+      throw Object.assign(new Error('Original committed observation requires recovery', { cause: dependencyFailure?.cause }), { code: 'FACT_RECOVERY_REQUIRED' })
+    }
+  }
   const requestActions=new WeakMap<object,()=>void>()
   function observe():ExecutionObservation{
     return runOriginalCurrentnessRead(assertHeld,()=>{
@@ -303,14 +315,14 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     const member=<T>(key:'prefix'|'header'|'formatVersion')=>readOriginalCurrentnessMember<T>(assertHeld,original,key)
     const method=<T>(key:'foldSnapshot'|'foldView'|'hasFoldView',...args:unknown[])=>callOriginalCurrentnessMethod<T>(assertHeld,original,key,args)
     const copy=<T>(value:T)=>{const clone=originalCurrentnessClone();return clone&&isStrictFactData(value)?freezeJsonData(clone(value)):opaque(()=>freezeJsonData(structuredClone(value)))}
-    assertNewWork();const bound=owners.get(identity);if(!bound)throw TypeError('Original execution owner unbound');bound.current()
+    assertCommittedRead();const bound=owners.get(identity);if(!bound)throw TypeError('Original execution owner unbound');bound.current()
     // The frozen original delivery witness is issued by a private WeakMap;
     // revision closes only over its scalar, never a supplied callback.
     const expected=member<Readonly<JournalPrefix>>('prefix'),delivery=originalDeliveryObservation(original.delivery),fence=delivery.revision();
     // This is only a batching prerequisite, never an authority certificate.
     const immutablePrefix=isStrictFactData(expected)&&Object.isFrozen(expected)&&Reflect.ownKeys(expected).length===3&&typeof expected.eventCount==='number'&&typeof expected.bodyBytes==='number'&&typeof expected.prefixDigest==='string'
     const construct=()=>{
-    const current=(reading?:OriginalWriterDependencyScope)=>runOriginalCurrentnessRead(assertHeld,()=>{assertFresh(reading);bound.current();if(member<Readonly<JournalPrefix>>('prefix')!==expected||delivery.revision()!==fence)throw TypeError('Original execution observation expired')})
+    const current=(reading?:OriginalWriterDependencyScope)=>runOriginalCurrentnessRead(assertHeld,()=>{assertCommittedRead(reading);bound.current();if(member<Readonly<JournalPrefix>>('prefix')!==expected||delivery.revision()!==fence)throw TypeError('Original execution observation expired')})
     const floor=(value:number)=>{if(!Number.isSafeInteger(value)||value<0||value>expected.eventCount)throw RangeError('Invalid original inbox floor')}
     const inbox:ExecutionObservation['inbox']=Object.freeze({pending(fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.pending(fromSeq)},isPending(inputId:string,fromSeq=0){if(this!==inbox)throw TypeError('Original inbox receiver required');current();floor(fromSeq);return original.intake.isPending(inputId)&&(original.intake.admission(inputId)??-1)>=fromSeq},everAdmitted(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.everAdmitted(inputId)},isExecutable(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return delivery.isExecutable(inputId)},
       lastCancellationSeq(inputId:string){if(this!==inbox)throw TypeError('Original inbox receiver required');current();return original.intake.lastCancellationSeq(inputId)},
@@ -448,7 +460,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     delivery:original.delivery,
     intake:original.intake,
     materialize(events:readonly import('./types.ts').SessionEventView[],owner:ManagedExecutionOwner){
-      assertNewWork();if(!isManagedExecutionOwner(identity,owner))throw TypeError('Original execution owner required');if(compatibility)return compatibility
+      assertCommittedRead();if(!isManagedExecutionOwner(identity,owner))throw TypeError('Original execution owner required');if(compatibility)return compatibility
       const captured=events.map((event,index)=>{if(event.seq!==index)throw TypeError('Complete compatibility history required');return liveEvents.get(index)?.deref()??freezeJsonData(event)})
       compatibility=original.compatibility(captured,owner);const listeners=subscribers.get(identity);if(listeners)subscribers.set(compatibility.view,listeners);else{const set=new Set<(event:import('../events/types.ts').SessionEvent)=>void>();subscribers.set(identity,set);subscribers.set(compatibility.view,set)}liveEvents.clear();return compatibility
     },
@@ -469,7 +481,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     readinessUnavailable(error:unknown,terminal=false){pendingWriteActive=false;signalUnavailable(error,terminal)},
     settleDependencies,
     stopNewWork(){if(!stopped){stopped=true;signalUnavailable(Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'}),true)}},
-    prepare(){assertNewWork();return original.prepare()},
+    prepare(){assertCommittedRead();return original.prepare()},
     observe,prepareRequest,
     async prepareWrite(groups:readonly CapturedFactGroup[],rejectInvalidGroups=false){
       // Only the original writer invokes this after its real authorization;
@@ -517,7 +529,7 @@ export async function restoreManagedExecutionState(input:OriginalConversationRes
     associateActionCaptureSource(action:object,source:object,capture:object){const relation=actionSources.get(source),bound=owners.get(identity);if(!bound||relation?.identity!==identity||relation.action!==action||!bound.owner.ownsAction(action)||!isExecutionCaptureSource(capture,action)||actionCaptureSources.has(capture))throw TypeError('Original action capture source required');bound.current();sources.get(source)!.current();actionCaptureSources.set(capture,source)},
     associateActionSource(action:object,source:object){const bound=owners.get(identity),registered=sources.get(source);if(!bound||!bound.owner.ownsAction(action)||registered?.identity!==identity||actionSources.has(source))throw TypeError('Original action source required');bound.current();registered.current();actionSources.set(source,{identity,action})},
     captureHooks(source:object,assertCaptureCurrent:()=>void):OriginalExecutionCaptureHooks{
-      assertNewWork();assertCaptureCurrent()
+      assertCommittedRead();assertCaptureCurrent()
       const bound=owners.get(identity);bound?.current();if(bound?.owner.ownsAction(source)){
         const field=Object.getOwnPropertyDescriptor(source,'assertOpen');if(!field||!('value'in field)||typeof field.value!=='function'||types.isProxy(field.value))throw TypeError('Original action currentness required');const originalAction=bindOriginalCurrentnessDescriptors({receiver:source,method:field.value,before:[],after:[],message:'Original action changed'}),assert=originalAction??field.value.bind(source) as ()=>void;
         const fields=Object.getOwnPropertyDescriptors(source),facts=fields.facts?.value as object|undefined,groups=facts?Object.entries(Object.getOwnPropertyDescriptors(facts)).map(([key,value])=>({key,value:value.value,fields:value.value&&typeof value.value==='object'?Object.getOwnPropertyDescriptors(value.value):undefined})):[];

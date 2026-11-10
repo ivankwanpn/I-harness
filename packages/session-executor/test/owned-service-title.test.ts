@@ -1,4 +1,4 @@
-import {expect,it} from 'vitest'
+import {expect,it,vi} from 'vitest'
 import {mkdtemp} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createJsonlBackend} from '../../session-persistence-jsonl/src/index.ts'
@@ -18,7 +18,29 @@ it('runs original owned title within the actual private service submission',asyn
  const server=await createLoopbackProvider('/v1/chat/completions',[async r=>{r.end(wire('done'))},async r=>{r.end(wire('Queue title'))}])
  const model=createOpenAICompatibleClient({apiKey:'loopback',model:'fixture',baseUrl:server.baseUrl})
  const service=createSessionService({workspace:root,coordinator,managedRuntime:{systemPrompt:'system',tools:[],ownedTitle:{enabled:true,titleMaxOutputTokens:32}},model,contextWindow:4096,maxOutputTokens:128})
- try{await service.submit('main','Build a queue',new AbortController().signal);expect(server.requests).toHaveLength(2);expect(server.requests[1]!.body).toMatchObject({max_tokens:32});const events=(await backend.read('main')).events;expect(events).toContainEqual(expect.objectContaining({type:'session/title',title:'Queue title',source:'provider'}));expect(service.liveSession('main')).toBeUndefined()}finally{await service.close();await coordinator.close();await server.close()}
+ const nullEntered=Promise.withResolvers<void>(),nullRelease=Promise.withResolvers<void>(),finalEntered=Promise.withResolvers<void>(),finalRelease=Promise.withResolvers<void>()
+ const put=coordinator.putDocument.bind(coordinator),order:string[]=[]
+ vi.spyOn(coordinator,'putDocument').mockImplementation(async (...args)=>{
+  if(args[0]==='session-title/main'){
+   const title=(args[1] as {title:unknown}).title
+   if(title===null){nullEntered.resolve();await nullRelease.promise;order.push('null')}
+   else{finalEntered.resolve();await finalRelease.promise;order.push('title')}
+  }
+  return put(...args)
+ })
+ let settled=false
+ const turn=service.submit('main','Build a queue',new AbortController().signal).finally(()=>{settled=true})
+ try {
+  await nullEntered.promise
+  expect(server.requests).toHaveLength(1);expect(settled).toBe(false)
+  nullRelease.resolve();await finalEntered.promise
+  expect(order).toEqual(['null']);expect(settled).toBe(false)
+  finalRelease.resolve();await turn
+  expect(order).toEqual(['null','title'])
+  expect(server.requests).toHaveLength(2);expect(server.requests[1]!.body).toMatchObject({max_tokens:32})
+  expect((await backend.read('main')).events).toContainEqual(expect.objectContaining({type:'session/title',title:'Queue title',source:'provider'}))
+  expect(service.liveSession('main')).toBeUndefined()
+ } finally {nullRelease.resolve();finalRelease.resolve();await turn;await service.close();await coordinator.close();await server.close()}
 },30000)
 
 it('rebinds the published private runtime before the next physical service request',async()=>{

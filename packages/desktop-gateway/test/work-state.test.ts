@@ -78,7 +78,7 @@ it("rejects concurrent stale human replacements while retaining the winning dura
   } finally { await service.close(); await coordinator.close() }
 })
 
-it("compares against an unflushed live model snapshot and saves through its durable append hook", async () => {
+it("compares against the committed model revision and saves a human replacement", async () => {
   const root = mkdtempSync(join(tmpdir(), "desktop-todo-live-cas-")); roots.push(root)
   const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { maxDelayMs: 60_000, lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s1" })
@@ -91,7 +91,6 @@ it("compares against an unflushed live model snapshot and saves through its dura
     const state = createDesktopWorkState(coordinator, service)
     await expect(state.writeTodos("s1", { expectedRevision: 0, items: [] })).rejects.toMatchObject({ code: "TODO_REVISION_CONFLICT", actualRevision: 1 })
     await state.writeTodos("s1", { expectedRevision: 1, items: [{ content: "Human finish", status: "completed" }] })
-    expect(live.events.filter((event) => event.type === "todo/write")).toHaveLength(2)
     expect((await coordinator.snapshot!("s1")).session.events).toHaveLength(2)
     expect(await state.read("s1")).toMatchObject({ todos: [{ content: "Human finish", status: "completed" }], todosRevision: 2 })
   } finally { await coordinator.close() }
@@ -114,14 +113,17 @@ it.each([
   } finally { await service.close(); await coordinator.close() }
 })
 
-it("uses the live session snapshot before its events are flushed to disk", async () => {
+it("reads the committed snapshot instead of speculative live events", async () => {
   const root = mkdtempSync(join(tmpdir(), "desktop-work-state-live-")); roots.push(root)
   const coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } }, taskDocumentStorageContract)
   await coordinator.create({ sessionId: "s1" })
   const live = { events: [{ type: "todo/write", version: 1, items: [{ content: "live item", status: "in_progress" }] }] } as Session
   const service = { liveSession: (id: string) => id === "s1" ? live : undefined } as SessionService
   try {
-    expect(await createDesktopWorkState(coordinator, service).read("s1")).toMatchObject({ todos: [{ content: "live item", status: "in_progress" }], goal: null })
+    const current = vi.fn(() => { throw new Error('Writer admission is busy') })
+    const state = createDesktopWorkState(coordinator, service, { managed: { current, retain: vi.fn() } })
+    expect(await state.read("s1")).toMatchObject({ todos: null, todosRevision: 0, goal: null })
+    expect(current).not.toHaveBeenCalled()
     expect((await coordinator.load("s1")).session.events).toEqual([])
   } finally { await coordinator.close() }
 })

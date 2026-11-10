@@ -20,9 +20,7 @@ import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.t
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createSdkServer, type SdkServer } from "../src/server.ts"
 
-// D-12: composed-coordinator fork capture takes ~20s per operation (JSONL
-// durability); keep the default gate but give these evidence tests room.
-vi.setConfig({ testTimeout: 30_000 })
+// Real fork cases inherit the SDK suite ceiling from vitest.config.ts.
 import {
   decodeFrame,
   encodeFrame,
@@ -1720,6 +1718,30 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
       await client.close()
       await server.close()
     }
+  })
+
+  it("reports managed runtime activity independently of legacy assemblies", async () => {
+    const service = makeStubService()
+    service.hasAssembly = () => false
+    service.inspectActivity = () => ({ live: true, running: true, queued: 0, tasks: 0, active: true })
+    service.queueState = () => ({ running: true, queued: 0 })
+    const server = createSdkServer(service, { listSessions: async () => ({ sessions: [{ id: 'managed' }] }) })
+    await handshake(server)
+    const client = linkClient(server)
+    try {
+      expect((await client.dashboard()).sessions).toContainEqual(expect.objectContaining({ id: 'managed', live: true, running: true, active: true }))
+    } finally { await client.close(); await server.close() }
+  })
+
+  it("reports hidden owner activity without disclosing an internal session row", async () => {
+    const service = makeStubService()
+    service.activitySessionIds = () => ['internal-review']
+    service.inspectActivity = () => ({ live: true, running: true, queued: 0, tasks: 0, active: true })
+    const server = createSdkServer(service, { listSessions: async () => ({ sessions: [] }) })
+    await handshake(server)
+    const client = linkClient(server)
+    try { expect(await client.dashboard()).toEqual({sessions:[],active:true}) }
+    finally { await client.close(); await server.close() }
   })
 
   it("session/dashboard without a listing source → honest blank (never fabricated rows)", async () => {
