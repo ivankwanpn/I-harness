@@ -817,7 +817,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       capabilities={capabilities}
       capabilitiesReady={capabilitiesReady}
       sandbox={sandbox}
-      error={error ?? projectError}
+      error={error && !(connection === "online" && /SdkConnectionError|sdk subprocess exited|sdk-connection/i.test(error)) ? error : projectError}
       selectedWorkspaceId={selectedWorkspaceId}
       selectedSessionId={selectedSessionId}
       connection={selectedWorkspaceId ? connection : undefined}
