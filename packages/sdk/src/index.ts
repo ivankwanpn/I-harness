@@ -13,6 +13,7 @@ export {
   createHarnessClient,
   runHarness,
   SdkConnectionError,
+  SdkTimeoutError,
   SdkRunError,
   type ServerInfo,
   type RunInput,

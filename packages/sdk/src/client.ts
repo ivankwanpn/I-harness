@@ -81,7 +81,18 @@ export class SdkRunError extends Error {
   }
 }
 
+export class SdkTimeoutError extends Error {
+  readonly code = "sdk-timeout" as const
+  constructor(readonly method: string, readonly timeoutMs: number) {
+    super(`Request "${method}" timed out after ${timeoutMs}ms`)
+    this.name = "SdkTimeoutError"
+  }
+}
+
 export interface RunInput {
+  /** Total deadline: integer milliseconds through 2147483647; 0 (default)
+   * waits for task completion. Does not cancel server work. */
+  timeoutMs?: number
   /** Additional user context, appended after any host prompt-command expansion. */
   context?: string
   /** Optional caller correlation token returned only on the admitted event. */
@@ -132,14 +143,27 @@ export class HarnessClient {
   private exitError: Error | undefined
   private child: ChildProcess | undefined
   private closed = false
+  private closeFlight: Promise<void> | undefined
+  private stderrTail = ""
   private serverInfo: ServerInfo | undefined
 
   constructor(readable: Readable, writable: Writable, opts?: { child?: ChildProcess }) {
     this.transport = new JsonRpcLineTransport(readable, writable)
     this.transport.onMessage((message) => this.onMessage(message))
+    const disconnected = (error?: Error): void => {
+      this.exitError ??= new SdkConnectionError(error ? `transport error: ${error.message}` : "transport ended")
+      this.rejectAll(this.exitError)
+    }
+    readable.once("end", () => disconnected())
+    readable.once("close", () => disconnected())
+    readable.on("error", disconnected)
+    writable.on("error", disconnected)
     const child = opts?.child
     if (child !== undefined) {
       this.child = child
+      child.stderr?.on("data", (chunk: Buffer) => {
+        this.stderrTail = (this.stderrTail + chunk.toString("utf8")).slice(-16_384)
+      })
       child.once("error", (error) => {
         this.exitError = new SdkConnectionError(`sdk subprocess error: ${error.message}`)
         this.rejectAll(this.exitError)
@@ -170,25 +194,40 @@ export class HarnessClient {
     return new HarnessClient(child.stdout, child.stdin, { child })
   }
 
-  /** Issue one request; resolves with the result, rejects with RpcError
-   * (server error response) or SdkConnectionError (no server). */
+  /** Bounded diagnostic tail from the spawned peer. */
+  get stderr(): string { return this.stderrTail }
+
+  /** Issue one request. The deadline is integer milliseconds from 0 through
+   * 2147483647; 0 disables it. Timeouts reject with SdkTimeoutError while the
+   * transport may remain connected. */
   request(method: string, params?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
+    if (this.closeFlight) return Promise.reject(this.exitError ?? new SdkConnectionError("client is closing"))
+    return this.requestInternal(method, params, timeoutMs)
+  }
+
+  private requestInternal(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 2_147_483_647) return Promise.reject(new RangeError("timeoutMs must be an integer from 0 through 2147483647 (0 disables the deadline)"))
     if (this.exitError !== undefined) return Promise.reject(this.exitError)
     if (this.closed) return Promise.reject(new SdkConnectionError("client is closed"))
     const id = String(this.nextId++)
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = timeoutMs === 0 ? undefined : setTimeout(() => {
         this.pending.delete(id)
-        reject(new SdkConnectionError(`request "${method}" timed out after ${timeoutMs}ms`))
+        reject(new SdkTimeoutError(method, timeoutMs))
       }, timeoutMs)
       this.pending.set(id, { resolve, reject, timer })
-      this.transport.send(makeRequest(id, method, params))
+      try { this.transport.send(makeRequest(id, method, params)) }
+      catch (error) {
+        this.pending.delete(id)
+        if (timer !== undefined) clearTimeout(timer)
+        reject(error)
+      }
     })
   }
 
   /** Fire-and-forget notification (e.g. shutdown). */
   notify(method: string, params?: unknown): void {
-    if (this.closed || this.exitError !== undefined) return
+    if (this.closeFlight || this.closed || this.exitError !== undefined) return
     this.transport.send(makeNotification(method, params))
   }
 
@@ -319,7 +358,7 @@ export class HarnessClient {
       }
     })
     try {
-      await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(input.context !== undefined ? { context: input.context } : {}), ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) })
+      await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(input.context !== undefined ? { context: input.context } : {}), ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) }, input.timeoutMs ?? 0)
     } catch (error) {
       if (error instanceof RpcError) {
         throw new SdkRunError(
@@ -437,34 +476,58 @@ export class HarnessClient {
    * the host's acknowledgement that teardown began), end the write side, await
    * the subprocess exit (kill after 2s when the server does not exit).
    * A notification is sent only when the peer does not answer the request. */
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.closeFlight) return this.closeFlight
+    const flight = Promise.withResolvers<void>()
+    this.closeFlight = flight.promise
+    // Admission is installed before any protocol write can synchronously call
+    // back into this client through an in-process transport.
+    void this.closeOnce().then(flight.resolve, flight.reject)
+    return flight.promise
+  }
+  private async closeOnce(): Promise<void> {
     if (this.closed) return
     let acknowledged = false
     try {
-      await this.request("shutdown", {}, 1500)
+      await this.requestInternal("shutdown", {}, 1500)
       acknowledged = true
     } catch {
       // Older hosts ignore the request form; the legacy notification is still
       // sent below before the write side ends.
     }
-    this.closed = true
+
     if (!acknowledged) {
       try {
-        this.notify("shutdown")
+        if (!this.exitError) this.transport.send(makeNotification("shutdown"))
       } catch { /* best-effort */ }
     }
     try {
+      this.closed = true
+      this.rejectAll(new SdkConnectionError("client is closed"))
       this.transport.endWrite()
     } catch { /* already ended */ }
     const child = this.child
-    if (child !== undefined) {
-      const exited = await Promise.race([
-        new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000)),
-      ])
-      if (!exited) child.kill()
-    }
-    this.transport.close()
+    try {
+      if (child !== undefined && child.pid !== undefined) {
+        const waitForExit = (): Promise<boolean> => {
+          if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true)
+          return new Promise((resolve) => {
+            const done = (value: boolean) => {
+              clearTimeout(timer)
+              child.removeListener("exit", onExit)
+              resolve(value)
+            }
+            const onExit = () => done(true)
+            const timer = setTimeout(() => done(false), 2000)
+            child.once("exit", onExit)
+          })
+        }
+        if (!await waitForExit()) {
+          child.kill("SIGKILL")
+          if (!await waitForExit()) throw new SdkConnectionError("sdk subprocess did not exit after termination")
+        }
+      }
+    } finally { this.transport.close() }
   }
 
   private onMessage(message: RpcSuccess | RpcFailure | RpcNotification): void {
@@ -610,10 +673,11 @@ export async function runHarness(
   const command = opts?.command ?? "i-harness"
   const client = createHarnessClient({
     command,
-    args: opts?.args ?? [],
+    args: opts?.args ?? ["sdk"],
     cwd: opts?.cwd,
   })
   try {
+    await client.initialize()
     return await client.run(typeof input === "string" ? { prompt: input } : input)
   } finally {
     if (opts?.keepAlive !== true) await client.close()
