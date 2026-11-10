@@ -19,6 +19,6 @@ export async function acquireCommitLease(sessionId: string, options: CommitLease
   let released = false
   return {
     get held() { return !released && lock.held },
-    async release() { if (released) return; released = true; await lock.release() },
+    async release() { if (released) return; await lock.release(); released = true },
   }
 }

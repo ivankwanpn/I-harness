@@ -11,19 +11,19 @@ import { buildSession, preflightSessionFormat } from '../format/validation.ts'
 /** Prefix derivation shared by the fact-batch adapter and the document's start.
  *  `bodyBytes` is accumulated per appended event and cached by log identity, so a
  *  long session does not re-serialize its whole history on every commit. */
-const prefixCache = new WeakMap<CommitLog, { eventCount: number; bodyBytes: number; prefixDigest: string }>()
+const prefixCache = new WeakMap<CommitLog, { eventCount: number; bodyBytes: number; prefixDigest: string; boundary?: SessionEvent }>()
 export function commitPrefix(log: CommitLog): { eventCount: number; bodyBytes: number; prefixDigest: string } {
-  const view = log.view()
-  const eventCount = view.entries.length
-  const cached = prefixCache.get(log)
-  const last = [...view.batches.values()].at(-1)
+  const eventCount = log.entryCount()
+  const previous = prefixCache.get(log)
+  const cached = previous && (previous.eventCount === 0 || log.entryAt(previous.eventCount - 1) === previous.boundary) ? previous : undefined
+  const last = log.lastBatchDigest()
   const digest = last ?? createHash('sha256').update(stringifyJsonData(log.header()) ?? '{}').digest('hex')
   if (cached && cached.eventCount === eventCount && cached.prefixDigest === digest) return cached
   let bodyBytes = cached && cached.eventCount < eventCount ? cached.bodyBytes : 0
   for (let index = cached && cached.eventCount < eventCount ? cached.eventCount : 0; index < eventCount; index++) {
-    bodyBytes += Buffer.byteLength(stringifyJsonData(view.entries[index]) ?? 'null')
+    bodyBytes += Buffer.byteLength(stringifyJsonData(log.entryAt(index)) ?? 'null')
   }
-  const next = { eventCount, bodyBytes, prefixDigest: digest }
+  const next = { eventCount, bodyBytes, prefixDigest: digest, boundary: log.entryAt(eventCount - 1) }
   prefixCache.set(log, next)
   return next
 }
@@ -40,12 +40,17 @@ function createFactBackend(log: CommitLog, control?: FactBackendControl): Persis
     capabilities: { seekableRead: true, rawArtifacts: false },
     async appendOwnedBatch(_id: string, owner: IssuingFactOwner, _prefix: unknown, batch: { bytes: Uint8Array }) {
       const decoded = decodeFactBatch(batch.bytes)
-      const current = prefix()
-      if (decoded.key.previousPrefixDigest !== current.prefixDigest || decoded.key.firstSeq !== current.eventCount) return { kind: 'conflict' as const, key: decoded.key }
-      owner.beforeIssue()
-      if (control) control.suspended = false
-      await log.append({ entries: decoded.events, ops: [{ kind: 'batch', id: decoded.key.batchId, prefixDigest: decoded.prefixDigest }] })
-      if (control) control.suspended = true
+      const conflict = new Error('stale fact prefix')
+      try {
+        await log.append(() => {
+          const current = prefix()
+          if (decoded.key.previousPrefixDigest !== current.prefixDigest || decoded.key.firstSeq !== current.eventCount) throw conflict
+          owner.beforeIssue()
+          if (control) control.suspended = false
+          return { entries: decoded.events, ops: [{ kind: 'batch', id: decoded.key.batchId, prefixDigest: decoded.prefixDigest }] }
+        })
+      } catch (error) { if (error === conflict) return { kind: 'conflict' as const, key: decoded.key }; throw error }
+      finally { if (control) control.suspended = true }
       return { kind: 'committed' as const, receipt: receipt(owner.owner, decoded.key, decoded.prefixDigest) }
     },
     async reconcileOwnedBatch(_id: string, owner: { owner: { sessionId: string; incarnation: string } }, _prefix: unknown, batch: { bytes: Uint8Array }) {

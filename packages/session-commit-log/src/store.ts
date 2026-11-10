@@ -33,6 +33,7 @@ export type CommitLogOptions = {
   readonly root: string
   readonly sessionId: string
   readonly io?: CommitLogIo
+  readonly recreateDeleted?: boolean
   readonly now?: () => Date
   /** Lease root; defaults to the store root. */
   readonly lockRoot?: string
@@ -56,11 +57,15 @@ export type CommitLog = {
   /** False once closed; the writer lease is held for the handle's whole life. */
   readonly open: boolean
   header(): Readonly<Record<string, unknown>>
+  metadata(): Readonly<Record<string, unknown>>
   view(): CommitView
   records(): readonly CommitRecord[]
   /** Re-read the generation file and re-fold (read handles observe later commits). */
   refresh(): Promise<void>
-  append(input: CommitInput): Promise<CommitRecord>
+  append(input: CommitInput | ((current: { readonly entryCount: number; readonly lastRecord: CommitRecord }) => CommitInput)): Promise<CommitRecord>
+  entryCount(): number
+  entryAt(index: number): SessionEvent | undefined
+  lastBatchDigest(): string | undefined
   writeSidecar(bytes: Uint8Array): Promise<CommitDocument>
   readSidecar(digest: string): Promise<Uint8Array>
   close(): Promise<void>
@@ -103,7 +108,7 @@ async function writeAll(handle: FileHandle, text: string, position: number): Pro
 /** Publish a brand-new session generation atomically: temp write + fsync, then a
  *  no-overwrite link. A crash before the link leaves only a temporary file, so the
  *  session never existed; the link itself is the single commit point. */
-async function publish(io: CommitLogIo, root: string, sessionId: string, line: string): Promise<void> {
+async function publish(io: CommitLogIo, root: string, sessionId: string, line: string, replaceDeleted = false): Promise<void> {
   const directory = sessionDirectory(root, sessionId)
   await io.mkdir(directory)
   const finalPath = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
@@ -116,7 +121,8 @@ async function publish(io: CommitLogIo, root: string, sessionId: string, line: s
     await handle.close().catch(() => {})
   }
   try {
-    await io.link(temporary, finalPath)
+    if (replaceDeleted) await io.rename(temporary, finalPath)
+    else await io.link(temporary, finalPath)
   } catch (error) {
     if (isAlreadyExists(error)) throw new CommitLogConflictError(sessionId)
     throw error
@@ -149,9 +155,18 @@ export async function createCommitLog(options: CommitLogOptions, first: CreateIn
       ops,
     }
     const line = encodeCommit(payload) + '\n'
-    await publish(io, root, sessionId, line)
     const record = decodeCommit(line.slice(0, -1))
     const view = foldCommits([record])
+    let replaceDeleted = false
+    if (options.recreateDeleted) {
+      const existing = await readGeneration(io, generationPath(root, sessionId, COMMIT_LOG_GENERATION))
+      if (existing) {
+        if (!foldCommits(scanCommitLog(existing).records).deleted) throw new CommitLogConflictError(sessionId)
+        replaceDeleted = true
+      }
+    }
+    // Atomic file replacement keeps the durable tombstone until new birth commits.
+    await publish(io, root, sessionId, line, replaceDeleted)
     const handle = await io.open(generationPath(root, sessionId, COMMIT_LOG_GENERATION), 'r+')
     const state = openState([record], view, Buffer.byteLength(line))
     state.handle = handle
@@ -164,11 +179,11 @@ export async function createCommitLog(options: CommitLogOptions, first: CreateIn
 }
 
 const SCAN_CACHE_ENABLED = process.env.IH_COMMIT_SCAN_CACHE !== '0'
-const scanCache = new Map<string, { length: number; records: readonly CommitRecord[] }>()
+const scanCache = new Map<string, { fingerprint: string; records: readonly CommitRecord[] }>()
 const SCAN_CACHE_LIMIT = 64
-function cacheScan(key: string, length: number, records: readonly CommitRecord[]): void {
+function cacheScan(key: string, fingerprint: string, records: readonly CommitRecord[]): void {
   scanCache.delete(key)
-  scanCache.set(key, { length, records })
+  scanCache.set(key, { fingerprint, records })
   while (scanCache.size > SCAN_CACHE_LIMIT) scanCache.delete(scanCache.keys().next().value as string)
 }
 
@@ -177,19 +192,19 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
   const { root, sessionId } = options
   const path = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
   let lease: CommitLease | undefined
+  let handle: FileHandle | undefined
   try {
     if (mode === 'write') lease = await acquireCommitLease(sessionId, { lockRoot: options.lockRoot ?? root, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs })
     const bytes = await readGeneration(io, path)
     if (!bytes) throw new CommitLogNotFoundError(sessionId)
-    // Logs are append-only, so an unchanged byte length means an unchanged
-    // record set; repeated read opens (profile/list/load) reuse the parse.
+    // Content identity also detects replacement with an equal-length generation.
     const cacheKey = root + '|' + sessionId
     const cached = mode === 'read' && SCAN_CACHE_ENABLED ? scanCache.get(cacheKey) : undefined
-    const scan = cached && cached.length === bytes.length ? { records: cached.records, tornBytes: 0 } : scanCommitLog(bytes)
-    if (mode === 'read' && SCAN_CACHE_ENABLED && (!cached || cached.length !== bytes.length)) cacheScan(cacheKey, bytes.length, scan.records)
+    const fingerprint = sha256Hex(bytes)
+    const scan = cached?.fingerprint === fingerprint ? { records: cached.records, tornBytes: 0 } : scanCommitLog(bytes)
+    if (scan.tornBytes === 0 && mode === 'read' && SCAN_CACHE_ENABLED && (!cached || cached.fingerprint !== fingerprint)) cacheScan(cacheKey, fingerprint, scan.records)
     if (scan.records.length === 0) throw new CommitFormatError('corrupt', 'commit log has no complete commit')
     let size = bytes.length
-    let handle: FileHandle | undefined
     if (mode === 'write') {
       handle = await io.open(path, 'r+')
       if (scan.tornBytes > 0) {
@@ -203,20 +218,23 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
     state.handle = handle
     state.lease = lease
     const log = makeLog(options, mode, state, lease)
-    if (mode === 'write') await collectGarbage(options, view)
+    if (mode === 'write') await collectGarbage(options, scan.records)
     return log
   } catch (error) {
+    await handle?.close().catch(() => {})
     if (lease) await lease.release().catch(() => {})
     throw error
   }
 }
 
-async function collectGarbage(options: CommitLogOptions, view: CommitView): Promise<void> {
+async function collectGarbage(options: CommitLogOptions, records: readonly CommitRecord[]): Promise<void> {
   const io = options.io ?? nodeIo
   const directory = sidecarDirectory(options.root, options.sessionId)
   let names: string[]
   try { names = await io.readdir(directory) } catch (error) { if (isNotFound(error)) return; throw error }
-  const referenced = new Set([...view.documents.values()].map(document => document.digest))
+  // Readers may hold any published prefix; reclaim only never-committed orphans.
+  const referenced = new Set<string>()
+  for (const record of records) for (const op of record.ops) if (op.kind === 'doc') referenced.add(op.side.digest)
   for (const name of names) {
     if (!/^[0-9a-f]{64}$/.test(name) || referenced.has(name)) continue
     await io.rm(sidecarPath(options.root, options.sessionId, name)).catch(() => {})
@@ -226,43 +244,67 @@ async function collectGarbage(options: CommitLogOptions, view: CommitView): Prom
 function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, lease: CommitLease | undefined): CommitLog {
   const io = options.io ?? nodeIo
   const path = generationPath(options.root, options.sessionId, COMMIT_LOG_GENERATION)
+  let latestBatch: string | undefined
+  for (const value of state.view.batches.values()) latestBatch = value
+  let poisoned = false
+  let snapshot: CommitView | undefined
+  let recordSnapshot: readonly CommitRecord[] | undefined
+  const invalidate = () => { snapshot = undefined; recordSnapshot = undefined }
   const assertOpen = () => { if (state.closed) throw new CommitLogClosedError() }
-  const assertWrite = () => { assertOpen(); if (mode !== 'write' || !state.handle) throw new CommitLogReadOnlyError() }
-  return {
+  const assertWrite = () => { assertOpen(); if (poisoned) throw new Error('commit log writer requires reopening after failed rollback'); if (mode !== 'write' || !state.handle) throw new CommitLogReadOnlyError() }
+  let queue: Promise<unknown> = Promise.resolve()
+  const serialize = <T>(op: () => Promise<T>): Promise<T> => { const result = queue.then(op); queue = result.catch(() => {}); return result }
+  const log: CommitLog = {
     sessionId: options.sessionId,
     mode,
     get open() { return !state.closed },
     header: () => state.view.header,
-    view: () => state.view,
-    records: () => state.records,
+    metadata: () => ({ ...state.view.meta }),
+    view: () => snapshot ??= { ...state.view, entries: [...state.view.entries], meta: { ...state.view.meta }, documents: new Map(state.view.documents), intents: new Map(state.view.intents), batches: new Map(state.view.batches) },
+    records: () => recordSnapshot ??= [...state.records],
     async refresh() {
       assertOpen()
       const bytes = await readGeneration(io, path)
       if (!bytes) throw new CommitLogNotFoundError(options.sessionId)
       const scan = scanCommitLog(bytes)
+      const view = foldCommits(scan.records)
+      invalidate()
       state.records = [...scan.records]
-      state.view = foldCommits(scan.records)
+      state.view = view
+      latestBatch = undefined
+      for (const value of view.batches.values()) latestBatch = value
       if (mode === 'write') state.size = bytes.length - scan.tornBytes
     },
-    async append(input: CommitInput) {
+    entryCount: () => state.view.entries.length,
+    entryAt: index => state.view.entries[index],
+    lastBatchDigest: () => latestBatch,
+    async append(input) {
       assertWrite()
+      input = typeof input === 'function' ? input({ entryCount: state.view.entries.length, lastRecord: state.records[state.records.length - 1]! }) : input
       const entries = [...(input.entries ?? [])]
       const ops = parseOps(input.ops ?? [])
       const last = state.records[state.records.length - 1]!
       const payload: CommitPayload = { v: COMMIT_FORMAT_VERSION, seq: last.seq + 1, prev: last.digest, at: nowIso(options), entries, ops }
       const line = encodeCommit(payload) + '\n'
+      const record = decodeCommit(line.slice(0, -1))
+      let entryCount = state.view.entries.length + record.entries.length
+      for (const op of record.ops) if (op.kind === 'rewind') {
+        if (op.toSeq > entryCount) throw new CommitFormatError('ops', 'rewind exceeds committed entries')
+        entryCount = op.toSeq
+      }
       const previousSize = state.size
       try {
         await writeAll(state.handle!, line, previousSize)
         await state.handle!.sync()
       } catch (error) {
-        try { await state.handle!.truncate(previousSize); await state.handle!.sync() } catch { /* best-effort rollback */ }
+        try { await state.handle!.truncate(previousSize); await state.handle!.sync() } catch { poisoned = true }
         throw error
       }
       state.size += Buffer.byteLength(line)
-      const record = decodeCommit(line.slice(0, -1))
-      state.records = [...state.records, record]
-      state.view = foldCommits(state.records)
+      invalidate()
+      state.records.push(record)
+      state.view = foldCommits([record], state.view)
+      for (const op of record.ops) if (op.kind === 'batch') latestBatch = op.prefixDigest
       return record
     },
     async writeSidecar(bytes: Uint8Array) {
@@ -292,12 +334,54 @@ function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, l
     },
     async readSidecar(digest: string) {
       assertOpen()
-      return new Uint8Array(await io.readFile(sidecarPath(options.root, options.sessionId, digest)))
+      const bytes = new Uint8Array(await io.readFile(sidecarPath(options.root, options.sessionId, digest)))
+      const doc = [...state.view.documents.values()].find(value => value.digest === digest)
+      if (sha256Hex(bytes) !== digest || (doc && doc.bytes !== bytes.byteLength)) throw new CommitFormatError('corrupt', 'sidecar integrity verification failed')
+      return bytes
     },
     async close() {
       if (state.closed) return
+      if (state.handle) {
+        await state.handle.close()
+        state.handle = undefined
+      }
+      if (lease) await lease.release()
       state.closed = true
-      try { if (state.handle) await state.handle.close() } finally { if (lease) await lease.release() }
+    },
+  }
+  let closing = false
+  let closePromise: Promise<void> | undefined
+  const admit = () => { if (closing || state.closed) throw new CommitLogClosedError() }
+  return {
+    ...log,
+    get open() { return !state.closed },
+    async refresh() {
+      admit()
+      return serialize(() => log.refresh())
+    },
+    async append(input) {
+      admit()
+      // Object inputs belong to this call; callbacks deliberately observe queued state.
+      const captured = typeof input === 'function' ? input : structuredClone(input)
+      return serialize(() => log.append(captured))
+    },
+    async writeSidecar(bytes) {
+      admit()
+      const captured = new Uint8Array(bytes)
+      return serialize(() => log.writeSidecar(captured))
+    },
+    async readSidecar(digest) {
+      admit()
+      return serialize(() => log.readSidecar(digest))
+    },
+    close() {
+      if (!closePromise) {
+        closing = true
+        const flight = serialize(() => log.close())
+        closePromise = flight
+        void flight.catch(() => { if (closePromise === flight) closePromise = undefined })
+      }
+      return closePromise
     },
   }
 }

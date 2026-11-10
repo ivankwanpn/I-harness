@@ -26,9 +26,20 @@ export type CommitFacadeOptions = {
  */
 export function asSessionCoordinator(coordinator: CommitCoordinator, options: CommitFacadeOptions = {}): SessionCoordinator {
   const unsupported = <T>(): Promise<T> => Promise.reject(Object.assign(new Error('commit-log coordinator does not support the stage bootstrap API'), { code: 'TASK_TRANSITION_UNSUPPORTED' }))
+  const inspectTarget = async (invocation: import('../coordinator/bootstrap-types.ts').BootstrapInvocation): Promise<import('../coordinator/bootstrap-types.ts').BootstrapInspection> => {
+    try {
+      const { meta } = await coordinator.profile(invocation.targetSessionId)
+      const seed = (meta as { semanticSeed?: { operationId?: string; requestDigest?: string } }).semanticSeed
+      const matching = seed?.operationId === invocation.operationId && (seed.requestDigest === undefined || seed.requestDigest === invocation.requestDigest)
+      return { kind: matching ? 'ready' : 'conflict', invocation, needsConfirmation: false }
+    } catch (error) {
+      if ((error as { code?: string }).code === 'COMMIT_LOG_NOT_FOUND') return { kind: 'absent', invocation, needsConfirmation: false }
+      throw error
+    }
+  }
   const coldWrites = createColdExecutionWrites()
   const ports = coordinator.capabilities()
-  const facade: CommitCoordinator & Record<string, unknown> = {
+  const facade: SessionCoordinator & Pick<CommitCoordinator, 'acquireExecution'> = {
     ...coordinator,
     create: async (meta?: Parameters<typeof coordinator.create>[0]) => {
       const result = await coordinator.create(meta)
@@ -71,7 +82,7 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
     },
     resumeChildTarget: coordinator.resumeChildTarget.bind(coordinator),
     bootstrapChildTargetWithCapture: coordinator.bootstrapChildTargetWithCapture.bind(coordinator),
-    inspectBootstrap: async (invocation: { targetSessionId: string }) => ({ kind: 'absent', invocation, needsConfirmation: false }),
+    inspectBootstrap: inspectTarget,
     inspectChildBootstrap: async (request: { invocation: { targetSessionId: string; operationId: string } }) => {
       const invocation = request.invocation as never
       try {
@@ -79,9 +90,13 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
         const seed = (meta as { semanticSeed?: { operationId?: string } }).semanticSeed
         const kind = seed?.operationId === request.invocation.operationId ? 'ready' as const : 'conflict' as const
         return { kind, invocation, needsConfirmation: false }
-      } catch { return { kind: 'absent' as const, invocation, needsConfirmation: false } }
+      } catch (error) { if ((error as { code?: string }).code === 'COMMIT_LOG_NOT_FOUND') return { kind: 'absent' as const, invocation, needsConfirmation: false }; throw error }
     },
-    inspectBootstrapCapture: async () => ({ kind: 'absent' }),
+    inspectBootstrapCapture: async request => {
+      const result = await inspectTarget(request.invocation)
+      if (result.kind === 'absent') return { kind: 'absent' }
+      return { kind: result.kind === 'ready' ? 'materialized' : 'conflict' }
+    },
     revokeManagedDocumentNewWork: coordinator.revokeManagedDocumentNewWork.bind(coordinator),
     getDocument: coordinator.getDocument.bind(coordinator),
     putDocument: coordinator.putDocument.bind(coordinator),
@@ -110,5 +125,5 @@ export function asSessionCoordinator(coordinator: CommitCoordinator, options: Co
     acquire: id => coordinator.acquireExecution(id),
     assertAdmission: () => {},
   })
-  return facade as unknown as SessionCoordinator
+  return facade
 }

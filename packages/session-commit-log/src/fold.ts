@@ -18,17 +18,17 @@ export type CommitView = {
 }
 
 /** Derive the session view from committed records; the log is the only truth. */
-export function foldCommits(records: readonly CommitRecord[]): CommitView {
-  let header: Readonly<Record<string, unknown>> | undefined
-  let entries: SessionEvent[] = []
-  const meta: Record<string, unknown> = {}
-  const documents = new Map<string, CommitDocument>()
-  const intents = new Map<string, Readonly<Record<string, unknown>>>()
-  const batches = new Map<string, string>()
-  let seed: CommitSeed | undefined
-  let deleted = false
+export function foldCommits(records: readonly CommitRecord[], previous?: CommitView): CommitView {
+  let header: Readonly<Record<string, unknown>> | undefined = previous?.header
+  let entries: SessionEvent[] = previous ? previous.entries as SessionEvent[] : []
+  const meta: Record<string, unknown> = previous ? previous.meta as Record<string, unknown> : {}
+  const documents = previous ? previous.documents as Map<string, CommitDocument> : new Map<string, CommitDocument>()
+  const intents = previous ? previous.intents as Map<string, Readonly<Record<string, unknown>>> : new Map<string, Readonly<Record<string, unknown>>>()
+  const batches = previous ? previous.batches as Map<string, string> : new Map<string, string>()
+  let seed: CommitSeed | undefined = previous?.seed
+  let deleted = previous?.deleted ?? false
   for (const record of records) {
-    entries.push(...record.entries)
+    for (const entry of record.entries) entries.push(entry)
     for (const op of record.ops) {
       switch (op.kind) {
         case 'header': header ??= op.value; break

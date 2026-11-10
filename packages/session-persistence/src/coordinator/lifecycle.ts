@@ -74,6 +74,8 @@ export function createLifecycle(
       const deletionResources = ownership.exclusionScope([sessionId], manifest.documents)
       deletionResources.assertCurrent()
       if ([...attempts].some(attempt => deletionResources.keys.some(key => attempt.resources.has(key))) || [...reservations].some(resources => deletionResources.keys.some(key => resources.has(key)))) throw fail()
+      observations.assertOutsideObservedSession(sessionId)
+      for (const key of manifest.documents) observations.assertOutsideObservedDocument(key)
       observations.assertOutsideOwnedOperations([sessionId], manifest.documents)
       const token = processLatches?.beginMutation({ sessionIds: [sessionId], documentKeys: manifest.documents, kind: 'other' })
       const reservation = new Set(deletionResources.keys); reservations.add(reservation)

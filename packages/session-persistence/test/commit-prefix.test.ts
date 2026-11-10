@@ -38,3 +38,24 @@ describe('commit prefix', () => {
     } finally { await reopened.close() }
   })
 })
+
+it('reads only the appended prefix delta without materializing views', async () => {
+  const base = await root()
+  const log = await createCommitLog(options(base), { header: {}, entries: Array.from({ length: 10000 }, () => ({ type: 'user/message', text: 'history' })) })
+  let reads = 0
+  const bounded = new Proxy(log, { get(target, key) {
+    if (key === 'view' || key === 'records') return () => { throw new Error('full history materialization') }
+    if (key === 'entryAt') return (index: number) => { reads++; return target.entryAt(index) }
+    return Reflect.get(target, key)
+  } })
+  try {
+    expect(commitPrefix(bounded).eventCount).toBe(10000)
+    reads = 0
+    await log.append({ entries: [{ type: 'user/message', text: 'delta' }] })
+    expect(commitPrefix(bounded).eventCount).toBe(10001)
+    expect(reads).toBeLessThanOrEqual(3)
+    reads = 0
+    commitPrefix(bounded)
+    expect(reads).toBeLessThanOrEqual(1)
+  } finally { await log.close() }
+})
