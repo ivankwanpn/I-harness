@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest"
 import { createDocuments } from "../src/coordinator/documents.ts"
 
-it("strict document rejects its own write while the shared legacy chain remains usable", async () => {
+it("document writes reject their own failures while the shared chain remains usable", async () => {
   const putDocument = vi.fn().mockRejectedValueOnce(new Error("disk full")).mockResolvedValue(undefined)
   const report = vi.fn(), acquireLease = vi.fn()
   const docs = createDocuments({ putDocument, getDocument: async () => undefined }, { lockEnabled: false, acquireLease }, report)
@@ -9,8 +9,10 @@ it("strict document rejects its own write while the shared legacy chain remains 
   await docs.putDocumentStrict("owned", { result: "later" })
   expect(putDocument).toHaveBeenCalledTimes(2)
   putDocument.mockRejectedValueOnce(new Error("legacy failure"))
-  await expect(docs.putDocument("legacy", {})).resolves.toBeUndefined()
+  await expect(docs.putDocument("legacy", {})).rejects.toThrow("legacy failure")
   expect(report).toHaveBeenCalledWith(expect.objectContaining({ message: "legacy failure" }))
+  await expect(docs.putDocument("legacy", { recovered: true })).resolves.toBeUndefined()
+  await expect(docs.pendingWrites()).resolves.toBeUndefined()
 })
 
 it("strict operations use and release the existing document lease on rejection and later success", async () => {

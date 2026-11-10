@@ -85,8 +85,8 @@ function admittedTypes(): Set<string> {
   const src = readFileSync(PERSISTENCE_SRC, "utf8")
   const start = src.indexOf("const KNOWN_EVENT_TYPES")
   const builtinBlock = src.slice(start, src.indexOf("])", start))
-  const admitted = new Set([...builtinBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]))
-  for (const m of src.matchAll(/registerEventType\("([^"]+)"\)/g)) admitted.add(m[1])
+  const admitted = new Set([...builtinBlock.matchAll(/(["'])([^"']+)\1/g)].map((m) => m[2]))
+  for (const m of src.matchAll(/registerEventType\((["'])([^"']+)\1\)/g)) admitted.add(m[2])
   return admitted
 }
 
@@ -117,5 +117,10 @@ describe("load-gate coverage: no durable producer may be unloadable", () => {
     // A direct pin so the specific regression cannot silently return even if the
     // scan above is ever weakened.
     expect(admittedTypes().has("model/retry")).toBe(true)
+  })
+
+  it("recognizes single-quoted durable delivery and generation registrations", () => {
+    expect(admittedTypes().has("agent/delivery-handoff")).toBe(true)
+    expect(admittedTypes().has("context/action")).toBe(true)
   })
 })

@@ -66,12 +66,11 @@ every held lease release (including synchronous throws), and clears held leases.
 It aggregates exactly the original flush failures. Write-behinds remain available
 after close, including retained failed batches for a later enqueue/flush retry.
 
-Legacy `putDocument` reports ordinary write/lease failures and resolves if the
-reporter returns normally. The document chain survives those failures. An
-injected reporter that throws still rejects the caller, including a report for
-a deleted document. Close drains the recovered document chain rather than the
-reporter's promise. This package does not provide a strict document commit
-receipt or isolate observer failures through this structural decomposition.
+`putDocument` reports ordinary write/lease failures and rejects the caller.
+`putDocumentStrict` propagates its failure directly. The document chain survives
+both failures, so a later write can retry. An injected reporter that throws
+rejects the reporting call with that error. Close drains the recovered document
+chain. Durable callers must await their own operation result.
 
 ## Verification entry points
 

@@ -24,6 +24,7 @@ import type { createTaskDocumentTransitions } from './task-document-transition.t
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
   loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
   report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>, executionChanges?: ReturnType<typeof createColdExecutionWrites>) {
+  const foldFactory = options?.originalExecutionFoldFactory
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
   }
@@ -139,7 +140,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     let retained=executions.get(original)
     if(retained?.attachment)return retained.attachment
     if(original.document||restoredEntries.has(original))throw Object.assign(new Error('Original execution attachment requires its original entry construction'),{code:'FACT_OWNER_UNSUPPORTED'})
-    if(!retained){const source=createManagedExecutionSource({id,entry:original,backend,ownership,transitions,loadOwned,foldFactory:options?.originalExecutionFoldFactory,assertEntry:createArtifactCurrentGuard(()=>{if(documents.get(id)!==original)throw new FactRecoveryRequiredError();assertEntry(original)})});retained={source};executions.set(original,retained)}
+    if(!retained){const source=createManagedExecutionSource({id,entry:original,backend,ownership,transitions,loadOwned,foldFactory,assertEntry:createArtifactCurrentGuard(()=>{if(documents.get(id)!==original)throw new FactRecoveryRequiredError();assertEntry(original)})});retained={source};executions.set(original,retained)}
     const record=retained;
     const flight=(async()=>{
       const state=await record.source.initialize();

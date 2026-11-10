@@ -2,6 +2,9 @@ import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
 import { createSessionCoordinator, registerEventType, registerUpgrade, type CoordinatorOptions, type PersistenceBackend } from "../src/index.ts"
+import { createOwnership } from "../src/coordinator/ownership.ts"
+import { createMutations } from "../src/coordinator/mutations.ts"
+import { createLoads } from "../src/coordinator/load.ts"
 
 function backend(): PersistenceBackend {
   return {
@@ -25,12 +28,12 @@ describe("coordinator callback and evaluation order", () => {
     registerEventType("s9/custom")
     registerUpgrade(0, (events) => events.map(event => ({ ...event, upgraded: true })))
     expect((await first.snapshot!("s")).session.events).toEqual([{ type: "s9/custom", seq: 0, upgraded: true }])
-    expect((await second.load("s")).session.events).toEqual([{ type: "s9/custom", seq: 0, upgraded: true }])
+    expect((await second.snapshot!("s")).session.events).toEqual([{ type: "s9/custom", seq: 0, upgraded: true }])
     await first.close()
     await second.close()
   })
 
-  it("keeps initialization getter order and reads append after its operation await", async () => {
+  it("keeps initialization getter order and lazy lease acquisition options", async () => {
     const reads: string[] = []
     const store = backend()
     Object.defineProperty(store, "lockRoot", { get() { reads.push("backend.lockRoot"); return undefined } })
@@ -46,12 +49,20 @@ describe("coordinator callback and evaluation order", () => {
     }
     const coordinator = createSessionCoordinator(store, options)
     expect(reads).toEqual(["report", "delay", "lock", "enabled", "lock", "root", "backend.lockRoot"])
-    const pending = coordinator.append("s", [])
+    await expect(coordinator.append("s", [])).rejects.toThrow("TASK_TRANSITION_UNSUPPORTED")
+    await coordinator.close()
+  })
+
+  it("reads the structural mutation backend after its operation await", async () => {
+    const store = backend()
+    const ownership = createOwnership(store)
+    const mutations = createMutations(store, ownership, 200, () => {})
+    const pending = mutations.append("s", [])
     let calls = 0
     store.append = async function () { expect(this).toBe(store); calls++ }
     await pending
     expect(calls).toBe(1)
-    await coordinator.close()
+    await Promise.all(ownership.releaseHeldLocks())
   })
 
   it("lets a throwing document reporter reject while the next document and close still drain", async () => {
@@ -81,8 +92,10 @@ describe("coordinator callback and evaluation order", () => {
     const repaired = Promise.withResolvers<Awaited<ReturnType<PersistenceBackend["repair"]>>>()
     const entered = Promise.withResolvers<void>()
     store.repair = async function () { expect(this).toBe(store); entered.resolve(); return repaired.promise }
-    const coordinator = createSessionCoordinator(store)
-    const loaded = coordinator.loadOwned("s")
+    const ownership = createOwnership(store)
+    const mutations = createMutations(store, ownership, 200, () => {})
+    const loads = createLoads(store, ownership, mutations)
+    const loaded = loads.loadOwned("s")
     await entered.promise
     let calls = 0
     store.replaceEvents = async function (_id, events) { expect(this).toBe(store); calls++; expect(events[0]?.seq).toBe(0) }
@@ -91,6 +104,6 @@ describe("coordinator callback and evaluation order", () => {
     repaired.resolve({ version: CURRENT_FORMAT_VERSION, events: [{ type: "assistant/message", text: "persist me" }] })
     await loaded
     expect(calls).toBe(1)
-    await coordinator.close()
+    await Promise.all(ownership.releaseHeldLocks())
   })
 })
