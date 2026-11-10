@@ -39,6 +39,20 @@ retain their atomic save ordering. Layered writes patch the highest-priority
 existing raw document, retaining unknown keys and the existing comment rules.
 Unreadable patch input remains fail-closed.
 
+Each queued mutation stages its current saved base before applying the captured
+patch or checking a section revision. An already-loaded second store preserves
+acknowledged unrelated edits. Layered guards use the current master revision and sum current
+instruction revisions across sources. The staged base is published only after
+the atomic replacement succeeds. A conflict or failed write retains the store's
+last-good view. Ordinary mutations reject unreadable saved documents, while
+single-store `reset()` retains its explicit tolerant repair behavior.
+
+Cross-process read-dependent transactions use an external write lease covering
+load, derivation and mutation. Desktop settings and file-provider-runtime
+cooperate on the normalized settings path's `.provider.lock`. Independent CLI
+role edits currently derive replacement sections outside that lease, leaving a
+race between concurrent writers. [CLI role edits](D:/codex-ih-development/apps/cli/src/roles.ts:245)
+
 The watcher uses `@i-harness/fs-watch` by package name so packaging includes its
 dependency. It establishes an initial baseline, observes only selected paths
 (including missing files), and recovers using retained fingerprints without

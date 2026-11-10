@@ -85,12 +85,18 @@ describe("observed saved settings load", () => {
     await fs.writeFile(f.path, JSON.stringify({ instructions: policy, _instructionsMigration: meta, _revision: { instructions: 11 }, extension: { token: "private-observed-credential" } }))
     await f.store.loadObserved()
     const saved = f.store.get()
+    const validDocument = await realFs.readFile(f.path, "utf8")
     for (const bad of [null, { ...meta, profilePath: join(f.root, "other.json") }, { ...meta, sourceHash: "bad" }, { ...meta, extra: true }, { version: 1, mode: "native", profilePath: f.path, globalSources: [] }]) {
       await fs.writeFile(f.path, JSON.stringify({ _instructionsMigration: bad }))
       await expect(f.store.loadObserved()).rejects.toThrow()
       expect(f.store.get()).toEqual(saved)
       expect(f.store.getSectionRevision("instructions")).toBe(11)
     }
+    const invalidDocument = await realFs.readFile(f.path, "utf8")
+    await expect(f.store.set({ compaction: { auto: false } })).rejects.toThrow()
+    expect(await realFs.readFile(f.path, "utf8")).toBe(invalidDocument)
+    expect(f.store.get()).toEqual(saved)
+    await fs.writeFile(f.path, validDocument)
     await f.store.set({ compaction: { auto: false } })
     const persisted = JSON.parse(await realFs.readFile(f.path, "utf8"))
     expect(persisted._instructionsMigration).toEqual(meta)
@@ -106,8 +112,8 @@ describe("observed saved settings load", () => {
     expect(f.store.isLoaded()).toBe(true)
     expect(validate).not.toHaveBeenCalled()
     await f.store.set({ instructions: policy })
-    // The first missing read initialized the actual store, so set did not read again.
-    expect(fs.readFile).toHaveBeenCalledTimes(1)
+    // A mutation checks the current saved base even after an observed missing read.
+    expect(fs.readFile).toHaveBeenCalledTimes(2)
     const saved = f.store.get()
     const revision = f.store.getSectionRevision("instructions")
     await fs.unlink(f.path)
@@ -178,9 +184,9 @@ describe("observed saved settings load", () => {
     held.release()
     expect(await observed).toMatchObject({ kind: "loaded", settings: { instructions: policy }, stamp: { kind: "present", sha256: digest(bytes) } })
     expect(validated).toEqual([policy])
-    expect(await written).toMatchObject({ compaction: { auto: false }, instructions: policy })
+    expect(await written).toMatchObject({ compaction: { auto: false }, instructions: { enabled: true, maxBytes: 999 } })
     expect((await reset).instructions).toEqual({ enabled: true, maxBytes: 24000 })
-    expect(f.store.getSectionRevision("instructions")).toBe(4)
+    expect(f.store.getSectionRevision("instructions")).toBe(1)
     expect(f.store.get().compaction.auto).toBe(true)
   })
 
@@ -217,8 +223,8 @@ describe("observed saved settings load", () => {
       await written
     }
     expect(await observed).toMatchObject({ kind: "loaded", settings: { instructions: policy }, stamp: { kind: "present", sha256: digest(bytes) } })
-    expect(await written).toMatchObject({ instructions: policy, compaction: { auto: false } })
-    expect(f.store.getSectionRevision("instructions")).toBe(6)
+    expect(await written).toMatchObject({ instructions: { enabled: true, maxBytes: 999 }, compaction: { auto: false } })
+    expect(f.store.getSectionRevision("instructions")).toBe(0)
   })
 
   it("joins asynchronous validator rejection without publishing or losing last-good revisions, including on a fresh store", async () => {
@@ -250,7 +256,7 @@ describe("observed saved settings load", () => {
     }
     expect(f.store.get()).toEqual(saved)
     // A rejected async observation does not poison the original write queue.
-    expect((await f.store.set({ compaction: { auto: false } })).instructions).toEqual(policy)
-    expect(f.store.getSectionRevision("instructions")).toBe(9)
+    expect((await f.store.set({ compaction: { auto: false } })).instructions).toMatchObject({ enabled: true, maxBytes: 999 })
+    expect(f.store.getSectionRevision("instructions")).toBe(100)
   })
 })

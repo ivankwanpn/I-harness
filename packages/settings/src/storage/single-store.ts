@@ -68,6 +68,16 @@ export class SettingsStore {
     this.loaded = true
   }
 
+  private async mutationBase(repair = false) {
+    let raw: Record<string, unknown> | undefined
+    if (repair) {
+      // reset is an explicit repair operation, retaining its tolerant load contract.
+      try { raw = parseDocumentTolerant(await readFile(this.filename, "utf8")) } catch { /* reset defaults */ }
+      if (raw) instructionMigrationMeta(raw, this.filename)
+    } else raw = (await readObservedDocument(this.filename, undefined))?.raw
+    return { raw: raw ?? {}, settings: normalizeSettings(raw), revision: loadRevisionMeta(raw) }
+  }
+
   set(input: Partial<Settings>, guard?: SettingsRevisionGuard): Promise<Settings> {
     // Capture before entering the queue; later caller edits cannot change the write.
     assertInstructionData(input)
@@ -76,34 +86,35 @@ export class SettingsStore {
     assertInstructionData(guard)
     const capturedGuard = structuredClone(guard)
     return this.queue.run(async () => {
-      if (!this.loaded) await this.read()
-      if (capturedGuard !== undefined && this.getSectionRevision(capturedGuard.section) !== capturedGuard.expectedRevision) {
-        throw new SettingsConflictError(capturedGuard.expectedRevision, this.getSectionRevision(capturedGuard.section))
+      const base = await this.mutationBase()
+      const actualRevision = capturedGuard ? base.revision[capturedGuard.section] ?? 0 : 0
+      if (capturedGuard !== undefined && actualRevision !== capturedGuard.expectedRevision) {
+        throw new SettingsConflictError(capturedGuard.expectedRevision, actualRevision)
       }
-      const source: Record<string, unknown> = { ...this.raw, ...this.settings, ...patch }
+      const source: Record<string, unknown> = { ...base.raw, ...base.settings, ...patch }
       // Preserve the unprojected canonical provider plane and legacy read pin.
       if ("llm" in patch) source.llm = normalizeLlm(patch.llm, SETTINGS_DEFAULTS.llm)
-      else if (Object.hasOwn(this.raw, "llm")) source.llm = normalizeLlm(this.raw.llm, SETTINGS_DEFAULTS.llm)
+      else if (Object.hasOwn(base.raw, "llm")) source.llm = normalizeLlm(base.raw.llm, SETTINGS_DEFAULTS.llm)
       else delete source.llm
-      const legacy = isRecord(this.raw.tui) ? this.raw.tui.providers : undefined
+      const legacy = isRecord(base.raw.tui) ? base.raw.tui.providers : undefined
       if (isRecord(legacy)) source.tui = { ...(isRecord(source.tui) ? source.tui : {}), providers: legacy }
       const next: Record<string, unknown> = { ...source, ...normalizeSettings(source), llm: source.llm, tui: source.tui }
       if (source.llm === undefined) delete next.llm
-      return this.save(next, Object.keys(patch))
+      return this.save(next, Object.keys(patch), base)
     })
   }
 
   reset(): Promise<Settings> {
     return this.queue.run(async () => {
-      if (!this.loaded) await this.read()
-      return this.save({ ...this.raw, ...normalizeSettings(undefined) }, ["llm", "onboarding", "tui", "instructions"])
+      const base = await this.mutationBase(true)
+      return this.save({ ...base.raw, ...normalizeSettings(undefined) }, ["llm", "onboarding", "tui", "instructions"], base)
     })
   }
 
   dropLegacyTuiProvider(id: string): Promise<void> {
     return this.queue.run(async () => {
-      if (!this.loaded) await this.read()
-      const doc = structuredClone(this.raw)
+      const base = await this.mutationBase()
+      const doc = structuredClone(base.raw)
       const tui = isRecord(doc.tui) ? doc.tui : undefined
       const pin = isRecord(tui?.providers) ? tui.providers : undefined
       const rows = isRecord(pin?.providers) ? pin.providers : undefined
@@ -111,7 +122,7 @@ export class SettingsStore {
       delete rows[id]
       if (Object.keys(rows).length === 0) delete tui.providers
       else if (pin.activeProviderId === id) pin.activeProviderId = ""
-      await this.save(doc, [])
+      await this.save(doc, [], base)
     })
   }
 
@@ -132,13 +143,13 @@ export class SettingsStore {
     })
   }
 
-  private async save(doc: Record<string, unknown>, changed: readonly string[]): Promise<Settings> {
+  private async save(doc: Record<string, unknown>, changed: readonly string[], base: { raw: Record<string, unknown>; revision: Record<string, number> }): Promise<Settings> {
     // Raw extension data survives ordinary writes, but these known retired
     // preferences must not be restored by merging that data with the snapshot.
     for (const key of ["theme", "busyEnter", "transcriptMode"]) delete doc[key]
-    const meta = instructionMigrationMeta(this.raw, this.filename)
+    const meta = instructionMigrationMeta(base.raw, this.filename)
     doc._instructionsMigration = meta ?? nativeInstructionMeta(this.filename)
-    const revision = { ...this.revision }
+    const revision = { ...base.revision }
     for (const name of ["llm", "onboarding", "tui", "instructions"]) if (changed.includes(name)) revision[name] = (revision[name] ?? 0) + 1
     if (Object.keys(revision).length > 0) doc._revision = revision
     await writeSettingsDocument(this.filename, JSON.stringify(doc, null, 2))

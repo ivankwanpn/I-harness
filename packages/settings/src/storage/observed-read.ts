@@ -12,6 +12,15 @@ function freezeJson(value: unknown): void {
   Object.freeze(value)
 }
 
+/** Strict known-policy checks shared by observed reads and staged mutations. */
+export function validateSavedSettingsDocument(raw: Record<string, unknown>, filename: string): void {
+  if (Object.hasOwn(raw, "instructions")) {
+    if (!isRecord(raw.instructions)) throw new Error("instructions: expected object")
+    validateInstructions({ ...normalizeInstructions(undefined), ...raw.instructions })
+  }
+  instructionMigrationMeta(raw, filename)
+}
+
 /** Stateless strict read. Parsing, validation and attestation share one buffer. */
 export async function readObservedDocument(filename: string, validate: ObservedSettingsLoadOptions["validate"]): Promise<{
   raw: Record<string, unknown>; stamp: Extract<ObservedSettingsLoad, { kind: "loaded" }>["stamp"]
@@ -25,12 +34,7 @@ export async function readObservedDocument(filename: string, validate: ObservedS
   let raw: Record<string, unknown>
   try { raw = parseDocumentTolerant(bytes.toString("utf8")) }
   catch { throw new Error("invalid settings: expected a valid document object") }
-  if (Object.hasOwn(raw, "instructions")) {
-    if (!isRecord(raw.instructions)) throw new Error("instructions: expected object")
-    // Default only absent fields; supplied values must survive strict validation.
-    validateInstructions({ ...normalizeInstructions(undefined), ...raw.instructions })
-  }
-  instructionMigrationMeta(raw, filename)
+  validateSavedSettingsDocument(raw, filename)
   if (validate !== undefined) {
     const isolated = structuredClone(raw)
     freezeJson(isolated)

@@ -12,6 +12,7 @@ import { SettingsConflictError } from "../sections.ts"
 import { assertInstructionData, validateInstructions } from "../instructions.ts"
 import { captureLegacyInstructionImport, InstructionMigrationError, instructionMigrationMeta, nativeInstructionMeta, stageInstructionImport, type LegacyInstructionImport } from "./instruction-migration.ts"
 import { SettingsWriteQueue, writeSettingsDocument } from "./transaction.ts"
+import { validateSavedSettingsDocument } from "./observed-read.ts"
 
 /**
  * A layered Settings store (SettingsStore-compatible surface — usable where a
@@ -55,9 +56,10 @@ export class LayeredSettingsStore {
     return this.queue.run(() => this.read())
   }
 
-  private async read(): Promise<Settings> {
+  private async readSources() {
     const raws = new Map<string, Record<string, unknown>>()
     const stamps = new Map<string, SettingsSourceStamp>()
+    const texts = new Map<string, string>()
     for (const source of this.resolvedRoots) {
       if (source.path === null) continue
       let bytes: Buffer
@@ -68,10 +70,16 @@ export class LayeredSettingsStore {
         stamps.set(source.path, { kind: "missing" }); continue
       }
       stamps.set(source.path, stampBytes(bytes))
-      const raw = parseDocumentTolerant(bytes.toString("utf8"))
+      const text = bytes.toString("utf8"), raw = parseDocumentTolerant(text)
       instructionMigrationMeta(raw, source.path)
       raws.set(source.path, raw)
+      texts.set(source.path, text)
     }
+    return { raws, stamps, texts }
+  }
+
+  private async read(): Promise<Settings> {
+    const { raws, stamps } = await this.readSources()
     this.sourceStamps = stamps
     this.rawsByPath = raws
     for (const source of this.resolvedRoots) source.raws = source.path === null ? undefined : raws.get(source.path)
@@ -97,17 +105,11 @@ export class LayeredSettingsStore {
     if (this.disposed) return Promise.reject(new Error("Settings store is closed"))
     assertInstructionData(input)
     if (Object.hasOwn(input, "instructions")) validateInstructions(input.instructions)
-    let patch = structuredClone(input)
+    const patch = structuredClone(input)
     assertInstructionData(guard)
     const capturedGuard = structuredClone(guard)
     return this.queue.run(async () => {
-      if (!this.loaded) await this.read()
-      if (capturedGuard !== undefined && this.getSectionRevision(capturedGuard.section) !== capturedGuard.expectedRevision) {
-        throw new SettingsConflictError(capturedGuard.expectedRevision, this.getSectionRevision(capturedGuard.section))
-      }
-      // First durable writes retain the new-store web default.
-      if (this.rawsByPath.size === 0 && patch.webSearchMode === undefined) patch = { ...patch, webSearchMode: this.current.webSearchMode }
-      await this.writeMaster(patch, Object.keys(patch), ["instructions", ...(options?.replaceSections ?? [])])
+      await this.writeMaster(patch, Object.keys(patch), ["instructions", ...(options?.replaceSections ?? [])], capturedGuard)
       return this.get()
     })
   }
@@ -115,7 +117,6 @@ export class LayeredSettingsStore {
   reset(): Promise<Settings> {
     if (this.disposed) return Promise.reject(new Error("Settings store is closed"))
     return this.queue.run(async () => {
-      if (!this.loaded) await this.read()
       const defaults = normalizeSettings(undefined)
       await this.writeMaster(defaults as unknown as Record<string, unknown>, ["llm", "onboarding", "tui", "instructions"], Object.keys(defaults))
       return this.get()
@@ -167,10 +168,10 @@ export class LayeredSettingsStore {
   }
 
   /** Highest-priority EXISTING source; the write target. */
-  private masterSource(): LayerSource | undefined {
+  private masterSource(raws = this.rawsByPath): LayerSource | undefined {
     for (let i = this.resolvedRoots.length - 1; i >= 0; i -= 1) {
       const source = this.resolvedRoots[i]!
-      if (source.path !== null && this.rawsByPath.has(source.path)) return source
+      if (source.path !== null && raws.has(source.path)) return source
     }
     return this.resolvedRoots.find((s) => s.path !== null) ?? this.resolvedRoots.at(-1)
   }
@@ -182,20 +183,33 @@ export class LayeredSettingsStore {
    * patcher's parser rejects is untouched and the write throws
    * SettingsPatchError (fail-closed — never a destructive rewrite).
    */
-  private async writeMaster(patch: Record<string, unknown>, changed: readonly string[], replaceKeys: readonly string[] = ["instructions"]): Promise<void> {
-    const master = this.masterSource()
+  private async writeMaster(patch: Record<string, unknown>, changed: readonly string[], replaceKeys: readonly string[] = ["instructions"], guard?: SettingsRevisionGuard): Promise<void> {
+    // Stage all current sources without replacing this store's last-good view.
+    // The caller owns cross-process exclusion for read-dependent transactions.
+    const { raws, texts, stamps } = await this.readSources()
+    const master = this.masterSource(raws)
     if (master?.path === undefined || master.path === null) throw new SettingsPatchError("no configured settings source")
-    const existing = await readFile(master.path, "utf8").catch(() => undefined)
-    const raw = existing !== undefined ? parseDocumentTolerant(existing) : {}
+    const existing = texts.get(master.path), raw = raws.get(master.path) ?? {}
+    const baseRevision = loadRevisionMeta(raw)
+    if (guard) {
+      const actual = guard.section === "instructions"
+        ? [...raws.values()].reduce((sum, value) => sum + (loadRevisionMeta(value).instructions ?? 0), 0)
+        : baseRevision[guard.section] ?? 0
+      if (guard.expectedRevision !== actual) throw new SettingsConflictError(guard.expectedRevision, actual)
+    }
+    if (raws.size === 0 && patch.webSearchMode === undefined) patch = { ...patch, webSearchMode: normalizeSettings(undefined).webSearchMode }
     const meta = instructionMigrationMeta(raw, master.path)
     const doc = mergeRawLayers([{ raws: raw }, { raws: patch }])
     for (const key of replaceKeys) if (Object.hasOwn(patch, key)) doc[key] = patch[key]
-    const nextRevision = loadRevisionMeta(raw)
+    const nextRevision = { ...baseRevision }
     for (const name of ["llm", "onboarding", "tui", "instructions"]) if (changed.includes(name)) nextRevision[name] = (nextRevision[name] ?? 0) + 1
     if (Object.keys(nextRevision).length > 0) doc._revision = nextRevision
     if (meta !== undefined) doc._instructionsMigration = meta
     else if (master.label === "global" || (master.label === "file" && this.options.instructionProfilePath !== undefined && isAbsolute(this.options.instructionProfilePath)
       && resolve(this.options.instructionProfilePath) === master.path)) doc._instructionsMigration = nativeInstructionMeta(master.path)
+    // Validate only the policy being published. Untouched lower layers can
+    // retain extensions while a complete master policy overrides them.
+    validateSavedSettingsDocument(doc, master.path)
 
     let text: string
     if (existing !== undefined) {
@@ -209,10 +223,14 @@ export class LayeredSettingsStore {
       text = JSON.stringify(doc, null, 2)
     }
     await writeSettingsDocument(master.path, text)
-    this.sourceStamps.set(master.path, stampBytes(Buffer.from(text, "utf8")))
-    this.rawsByPath.set(master.path, doc)
-    master.raws = doc
+    stamps.set(master.path, stampBytes(Buffer.from(text, "utf8")))
+    raws.set(master.path, doc)
+    this.sourceStamps = stamps
+    this.rawsByPath = raws
+    for (const source of this.resolvedRoots) source.raws = source.path === null ? undefined : raws.get(source.path)
     this.publish()
+    this.loaded = true
+    this.ensureWatcher()
   }
 
   /** Import targets only the host-selected global profile, never the master
