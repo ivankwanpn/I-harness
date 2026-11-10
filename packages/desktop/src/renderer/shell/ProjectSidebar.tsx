@@ -52,7 +52,12 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     let version = 0
     async function readOwners() {
       const own = ++version
-      const results = await Promise.allSettled(workspaces.map(async workspace => {
+      // Reading every workspace at startup spawned a gateway for every folder.
+      // Ownership is only needed for the active workspace; other folders load
+      // when the user selects one of their sessions.
+      const targets = workspaces.filter(workspace => workspace.id === selectedWorkspaceId)
+      if (targets.length === 0) { setOwnerError(undefined); return }
+      const results = await Promise.allSettled(targets.map(async workspace => {
         const rows = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId: workspace.id })
         if (!isSessionNavigationState(rows)) throw new Error(en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認")
         return { workspaceId: workspace.id, owners: [...new Set(Object.values(rows).flatMap(row => confirmedSessionNavigation(row) ? [row.projectId] : []))] }
@@ -60,7 +65,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
       if (!active || own !== version) return
       setWorkspaceOwners(previous => {
         const next = { ...previous }
-        results.forEach((result, index) => { if (result.status === "fulfilled") next[result.value.workspaceId] = result.value.owners; else if (workspaces[index]) next[workspaces[index]!.id] = [] })
+        results.forEach((result, index) => { if (result.status === "fulfilled") next[result.value.workspaceId] = result.value.owners; else if (targets[index]) next[targets[index]!.id] = [] })
         return next
       })
       const failed = results.find(result => result.status === "rejected")
@@ -70,7 +75,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     const unsubscribe = bridge.onEvent(event => { if (event.kind === "sdk/notification" && (event.method === "desktop/session/navigation/changed" || event.method === "session/status")) refresh.schedule() })
     void readOwners()
     return () => { active = false; version++; refresh.dispose(); unsubscribe() }
-  }, [bridge, workspaceKey, props.revision, en])
+  }, [bridge, workspaceKey, props.revision, en, selectedWorkspaceId])
   const assigned = new Set(projects.flatMap((project) => project.workspaceIds))
   const knownProjectIds = new Set(projects.map(project => project.id))
   const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id) || workspaceOwners[workspace.id]?.some(id => id === undefined || !knownProjectIds.has(id)))
