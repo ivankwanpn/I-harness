@@ -13,7 +13,7 @@ it('P01 recomputes the complete intent binding and canonical reservation bytes',
   expect(()=>captureBootstrapCaptureRequest({...r,extra:undefined})).toThrow()
 })
 it.each(['checkBootstrapCaptureRoot','readBootstrapCapture','prepareBootstrapCapture','settleBootstrapCaptureIO','prepareBootstrapHeader','reconcileBootstrapHeader','readBootstrapState','confirmBootstrapFrames','appendOwnedBatch','reconcileOwnedBatch'])('P01 exposes both optional entries only with complete backend gate (%s missing)',name=>{
-  const backend=createJsonlBackend('unused-capture-gate');delete (backend as any)[name]
+  const backend=createJsonlBackend('unused-capture-gate',{wrap(original){delete (original as unknown as Record<string,unknown>)[name]}})
   const c=createSessionCoordinator(backend,{lock:{enabled:true}})
   expect(c.inspectBootstrapCapture).toBeUndefined();expect(c.bootstrapSemanticTargetWithCapture).toBeUndefined()
 })

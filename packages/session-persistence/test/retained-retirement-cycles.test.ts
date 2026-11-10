@@ -16,10 +16,10 @@ it.each(['explicit', 'read-ticket'] as const)('keeps one held failing native att
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'cycle-native-debt-'))
   const backend = createJsonlBackend(root), options = { lock: { enabled: true, lockRoot: root }, acquireRetryMs: 1, acquireDeadlineMs: 25 }
   const seed = createSessionCoordinator(backend, options), other = createSessionCoordinator(createJsonlBackend(root), options)
-  const ownership = createOwnership(backend, options), acquire = ownership.acquireLease, pin = ownership.pinOwnership
+  const ownership = createOwnership(backend, options), acquire = ownership.acquireDocumentLease, pin = ownership.pinOwnership
   const held = Promise.withResolvers<void>(), releaseGate = Promise.withResolvers<void>(), sinkEntered = Promise.withResolvers<void>()
   let releases = 0, pins = 0, notifications = 0
-  ownership.acquireLease = async key => { const lock = await acquire(key); return { get held() { return lock.held }, async release() { releases++; if (releases === 1) { held.resolve(); await releaseGate.promise; throw false }; await lock.release() } } }
+  ownership.acquireDocumentLease = async key => { const lock = await acquire(key); return { get held() { return lock.held }, async release() { releases++; if (releases === 1) { held.resolve(); await releaseGate.promise; throw false }; await lock.release() } } }
   ownership.pinOwnership = async id => { const claim = await pin(id); return { assertHeld: claim.assertHeld, retainLive: claim.retainLive, async release() { pins++; await claim.release() } } }
   const owner = createBindingObservations(backend, ownership), operation = createRetainedCleanupOperation()
   // Associate only the original retained-owner lifecycle identity in this

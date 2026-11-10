@@ -6,7 +6,7 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createOwnership } from '../src/coordinator/ownership.ts'
 import { createBindingObservations } from '../src/coordinator/binding-observation.ts'
 it('retains one original binding across uses and revokes it before idle mutation joins',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),bindings=createBindingObservations(backend,ownership)
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-')),backend=createJsonlBackend(root),ownership=createOwnership(backend,{lock:{enabled:true,lockRoot:root}}),bindings=createBindingObservations(backend,ownership)
  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']});let first:unknown,second:unknown,revoked=0
  retained.onRevoke(()=>revoked++);await retained.use(async()=>{first=retained.observation;expect(retained.observation.metadata('source').sessionId).toBe('source')});await retained.use(async()=>{second=retained.observation});expect(second).toBe(first)
@@ -16,15 +16,15 @@ it('retains one original binding across uses and revokes it before idle mutation
  await retained.release();await bindings.closeAdmission()()
 })
 it('revokes immediately but joins an active use before releasing the original locks',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-active-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),bindings=createBindingObservations(backend,ownership)
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-active-')),backend=createJsonlBackend(root),ownership=createOwnership(backend,{lock:{enabled:true,lockRoot:root}}),bindings=createBindingObservations(backend,ownership)
  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']}),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>()
  const running=retained.use(async()=>{entered.resolve();await leave.promise}).catch(error=>error);await entered.promise
  const mutation=bindings.beginMutation(['source'],[]);let joined=false;const joining=mutation.join().then(()=>{joined=true});await Promise.resolve();expect(joined).toBe(false);expect(()=>retained.assertCurrent()).toThrow();leave.resolve();await running;await joining;expect(joined).toBe(true);mutation.finish();await retained.release();await bindings.closeAdmission()()
 })
 it('retries the same original lock after a release failure',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-cleanup-')),backend=createJsonlBackend(root),real=createOwnership({lockRoot:root},{lock:{enabled:true}});let attempts=0
- const ownership={...real,async acquireLease(name:string){const lock=await real.acquireLease(name);return {...lock,get held(){return lock.held},async release(){if(++attempts===1)throw Error('injected release');await lock.release()}}}}
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-cleanup-')),backend=createJsonlBackend(root),real=createOwnership(backend,{lock:{enabled:true,lockRoot:root}});let attempts=0
+ const ownership={...real,async acquireDocumentLease(name:string){const lock=await real.acquireDocumentLease(name);return {...lock,get held(){return lock.held},async release(){if(++attempts===1)throw Error('injected release');await lock.release()}}}}
  const bindings=createBindingObservations(backend,ownership);await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']});let closes=0
  retained.installRetirementDependency({revoke(){},async close(){if(++closes>1)throw Error('dependent already closed')}})
@@ -33,7 +33,7 @@ it('retries the same original lock after a release failure',async()=>{
  } finally {await bindings.closeAdmission()().catch(()=>{})}
 })
 it('does not leave a completed use in inherited binding ALS',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-als-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),bindings=createBindingObservations(backend,ownership)
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-als-')),backend=createJsonlBackend(root),ownership=createOwnership(backend,{lock:{enabled:true,lockRoot:root}}),bindings=createBindingObservations(backend,ownership)
  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']}),go=Promise.withResolvers<void>();let escaped!:Promise<void>
  await retained.use(async()=>{escaped=(async()=>{await go.promise;const mutation=bindings.beginMutation(['source'],[]);await mutation.join();mutation.finish()})()})
@@ -41,16 +41,16 @@ it('does not leave a completed use in inherited binding ALS',async()=>{
 })
 
 it.each(['lease','pin','both'] as const)('returns original cleanup debt when acquisition and its first %s release fail',async mode=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-acquire-debt-')),backend=createJsonlBackend(root),real=createOwnership({lockRoot:root},{lock:{enabled:true}})
- let acquisitions=0,attempts=0,profiles=0,pins=0,pinAttempts=0;let original!:Awaited<ReturnType<typeof real.acquireLease>>
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-acquire-debt-')),backend=createJsonlBackend(root),real=createOwnership(backend,{lock:{enabled:true,lockRoot:root}})
+ let acquisitions=0,attempts=0,profiles=0,pins=0,pinAttempts=0;let original!:Awaited<ReturnType<typeof real.acquireDocumentLease>>
  const failLease=mode!=='pin',failPin=mode!=='lease'
- const ownership={...real,async acquireLease(name:string){acquisitions++;original=await real.acquireLease(name);return {...original,get held(){return original.held},async release(){if(++attempts===1&&failLease)throw Error('original lease close failed');await original.release()}}},async pinOwnership(id:string){pins++;const pin=await real.pinOwnership(id);return {...pin,async release(){if(++pinAttempts===1&&failPin)throw Error('original pin close failed');await pin.release()}}}}
+ const ownership={...real,async acquireDocumentLease(name:string){acquisitions++;original=await real.acquireDocumentLease(name);return {...original,get held(){return original.held},async release(){if(++attempts===1&&failLease)throw Error('original lease close failed');await original.release()}}},async pinOwnership(id:string){pins++;const pin=await real.pinOwnership(id);return {...pin,async release(){if(++pinAttempts===1&&failPin)throw Error('original pin close failed');await pin.release()}}}}
  const bindings=createBindingObservations({...backend,async profile(id:string){profiles++;await backend.profile(id);throw Error('source profile failed')}},ownership)
  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  try {
   const error=await bindings.acquireSelectedBindingRead({sessionIds:['source']}).catch(error=>error)
-  expect(error).toBeInstanceOf(AggregateError);expect(original.held).toBe(failLease);expect(real.ownerOf('source')).toBe(failPin)
-  const cleanup=bindings.cleanupForError(error);expect(cleanup).toBeDefined();await cleanup!.retry()
+  expect(error).toBeInstanceOf(AggregateError);expect(original.held).toBe(failLease);expect(real.ownerOf('source')).toBe(failLease || failPin)
+  const cleanup=bindings.cleanupForError(error);expect(cleanup).toBeDefined();if(mode==='both')await expect(cleanup!.retry()).rejects.toBeInstanceOf(AggregateError);await cleanup!.retry()
   expect(original.held).toBe(false);expect(real.ownerOf('source')).toBe(false);expect({acquisitions,pins,profiles}).toEqual({acquisitions:1,pins:1,profiles:1})
   expect(attempts).toBe(failLease?2:1);expect(pinAttempts).toBe(failPin?2:1)
   await cleanup!.retry();expect(attempts).toBe(failLease?2:1);expect(pinAttempts).toBe(failPin?2:1)
@@ -58,7 +58,7 @@ it.each(['lease','pin','both'] as const)('returns original cleanup debt when acq
 })
 
 it('refuses a dependent close joining its own binding retirement',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-dependent-self-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),bindings=createBindingObservations(backend,ownership)
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-dependent-self-')),backend=createJsonlBackend(root),ownership=createOwnership(backend,{lock:{enabled:true,lockRoot:root}}),bindings=createBindingObservations(backend,ownership)
  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  try {
   const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']});let selfError:unknown
@@ -68,8 +68,8 @@ it('refuses a dependent close joining its own binding retirement',async()=>{
 })
 
 it('drains the original dependent after active use and before binding resources',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-dependent-')),backend=createJsonlBackend(root),real=createOwnership({lockRoot:root},{lock:{enabled:true}}),order:string[]=[]
- const ownership={...real,async acquireLease(name:string){const original=await real.acquireLease(name);return {...original,get held(){return original.held},async release(){order.push('lock');await original.release()}}},async pinOwnership(id:string){const original=await real.pinOwnership(id);return {...original,async release(){order.push('pin');await original.release()}}}}
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-dependent-')),backend=createJsonlBackend(root),real=createOwnership(backend,{lock:{enabled:true,lockRoot:root}}),order:string[]=[]
+ const ownership={...real,async acquireDocumentLease(name:string){const original=await real.acquireDocumentLease(name);return {...original,get held(){return original.held},async release(){order.push('lock');await original.release()}}},async pinOwnership(id:string){const original=await real.pinOwnership(id);return {...original,async release(){order.push('pin');await original.release()}}}}
  const bindings=createBindingObservations(backend,ownership);await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']}),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),closing=Promise.withResolvers<void>(),closed=Promise.withResolvers<void>()
  try {
@@ -82,9 +82,9 @@ it('drains the original dependent after active use and before binding resources'
 })
 
 it('keeps the original resources when dependent close fails and retries that same dependency',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-dependent-debt-')),backend=createJsonlBackend(root),real=createOwnership({lockRoot:root},{lock:{enabled:true}})
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'retained-dependent-debt-')),backend=createJsonlBackend(root),real=createOwnership(backend,{lock:{enabled:true,lockRoot:root}})
  let attempts=0,acquisitions=0,releases=0
- const ownership={...real,async acquireLease(name:string){acquisitions++;const original=await real.acquireLease(name);return {...original,get held(){return original.held},async release(){releases++;await original.release()}}}}
+ const ownership={...real,async acquireDocumentLease(name:string){acquisitions++;const original=await real.acquireDocumentLease(name);return {...original,get held(){return original.held},async release(){releases++;await original.release()}}}}
  const bindings=createBindingObservations(backend,ownership);await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  try {
   const retained=await bindings.acquireSelectedBindingRead({sessionIds:['source']});let revoked=0
@@ -97,7 +97,7 @@ it('keeps the original resources when dependent close fails and retries that sam
 })
 import { createSelectedResultsIntent,readSelectedResultsCore } from '../src/selected-results-fork-contract.ts'
 it('selected target admission revokes and joins the original binding owner before work',async()=>{
- const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-target-fence-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),bindings=createBindingObservations(backend,ownership);await backend.create('target',{sessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-target-fence-')),backend=createJsonlBackend(root),ownership=createOwnership(backend,{lock:{enabled:true,lockRoot:root}}),bindings=createBindingObservations(backend,ownership);await backend.create('target',{sessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'unmanaged'}),route={protocol:'public-results-v1' as const,request:{core,requestIntent:intent,invocation:{version:1 as const,operationId:'op',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}}
  const held=await bindings.acquireSelectedBindingRead({sessionIds:['target']}),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),active=held.use(async()=>{entered.resolve();await leave.promise}).catch(error=>error);await entered.promise
  let reached=false;const work=bindings.withSelectedBootstrapMutation(route,async()=>{reached=true;return 'done'});expect(()=>held.assertCurrent()).toThrow();await Promise.resolve();expect(reached).toBe(false);leave.resolve();await active;expect(await work).toBe('done');await held.release();await bindings.closeAdmission()()

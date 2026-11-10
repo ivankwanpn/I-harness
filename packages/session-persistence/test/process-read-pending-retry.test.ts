@@ -3,13 +3,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import type { BatchKey } from '@i-harness/core-session';
-import { createJsonlBackend } from '@i-harness/session-persistence-jsonl';
-import { createSessionCoordinator } from '../src/index.ts';
-import { createOwnership } from '../src/coordinator/ownership.ts';
-import { createMutations } from '../src/coordinator/mutations.ts';
-import { createLoads } from '../src/coordinator/load.ts';
-import { createManagedDocuments } from '../src/coordinator/managed-documents.ts';
-import { createProcessReadLatches } from '../src/coordinator/process-read-latches.ts';
+import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, ownedControls } from './helpers/composed.ts';
+import type { createManagedDocuments } from '../src/coordinator/managed-documents.ts';
+import type { createProcessReadLatches } from '../src/coordinator/process-read-latches.ts';
+
+const constructed = vi.hoisted(() => ({ latches: [] as Array<{ value: unknown; begins: number; ends: number }>, registry: undefined as unknown }))
+vi.mock('../src/coordinator/process-read-latches.ts', async load => {
+  const api = await load<typeof import('../src/coordinator/process-read-latches.ts')>()
+  return { ...api, createProcessReadLatches: (...args: Parameters<typeof api.createProcessReadLatches>) => {
+    const value = api.createProcessReadLatches(...args), begin = value.beginMutation
+    const record = { value, begins: 0, ends: 0 }
+    value.beginMutation = input => { record.begins++; const token = Reflect.apply(begin, value, [input]); return { end(outcome) { record.ends++; token.end(outcome) } } }
+    constructed.latches.push(record); return value
+  } }
+})
+vi.mock('../src/coordinator/managed-documents.ts', async load => {
+  const api = await load<typeof import('../src/coordinator/managed-documents.ts')>()
+  return { ...api, createManagedDocuments: (...args: Parameters<typeof api.createManagedDocuments>) => { const value = api.createManagedDocuments(...args); constructed.registry = value; return value } }
+})
 
 const installation = vi.hoisted(() => ({ fail: false }));
 vi.mock('@i-harness/core-session', async importOriginal => {
@@ -26,31 +37,28 @@ vi.mock('@i-harness/core-session', async importOriginal => {
 for (const terminal of ['committed', 'absent', 'failed-install'] as const) it(`retains bounded original pending witnesses through repeated unknown and ${terminal}`, async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-pending-')), backend = createJsonlBackend(root), opts = { lock: { enabled: true } };
     const initial = createSessionCoordinator(backend, opts); await initial.create({ sessionId: 's' }); await initial.close();
-    const ownership = createOwnership(backend, opts), originalLatches = createProcessReadLatches();
-    let begins = 0, ends = 0;
-    const latches = { ...originalLatches, beginMutation(input: Parameters<typeof originalLatches.beginMutation>[0]) {
-        begins++; const token = originalLatches.beginMutation(input);
-        return { end(outcome: 'settled' | 'unknown') { ends++; token.end(outcome); } };
-    } };
-    const mutations = createMutations(backend, ownership, 200, () => {}), loads = createLoads(backend, ownership, mutations);
-    const registry = createManagedDocuments(backend, ownership, loads.loadOwned, opts, () => {}, mutations, latches);
-    const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!;
+    const coordinator = createSessionCoordinator(backend, opts)
+    const registry = constructed.registry as ReturnType<typeof createManagedDocuments>
+    const measured = constructed.latches.at(-1)!
+    const originalLatches = measured.value as ReturnType<typeof createProcessReadLatches>
+    const append = ownedControls(backend).originalAppend, reconcile = ownedControls(backend).originalReconcile
     let key: BatchKey | undefined, unknown = true;
     try {
         const document = await registry.open('s');
-        backend.appendOwnedBatch = async (...args) => {
+        ownedControls(backend).append = async (...args) => {
             key = args[3].key;
             if (terminal !== 'absent') await append(...args);
+            else args[1].beforeIssue(); // Original issue boundary, lost acknowledgment with no bytes.
             return { kind: 'unknown', key };
         };
-        backend.reconcileOwnedBatch = (...args) => unknown ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args);
+        ownedControls(backend).reconcile = (...args) => unknown ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args);
         expect(await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'unknown' });
         expect(() => originalLatches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).toThrow();
-        const before = begins;
+        const before = measured.begins;
         for (let retry = 0; retry < 5; retry++) expect(await document.reconcile(key!)).toMatchObject({ kind: 'unknown' });
         expect((await Promise.all([document.reconcile(key!), document.reconcile(key!)])).map(outcome => outcome.kind)).toEqual(['unknown', 'unknown']);
-        expect(begins - before).toBe(1);
-        expect(begins - ends).toBe(3); // Admission, original reconciliation and original quarantine; bounded across retries.
+        expect(measured.begins - before).toBe(1);
+        expect(measured.begins - measured.ends).toBe(3); // Admission, original reconciliation and original quarantine; bounded across retries.
         unknown = false; installation.fail = terminal === 'failed-install';
         const outcome = await document.reconcile(key!);
         expect(outcome.kind).toBe(terminal === 'absent' ? 'absent' : terminal === 'failed-install' ? 'recovery-required' : 'committed');
@@ -59,14 +67,14 @@ for (const terminal of ['committed', 'absent', 'failed-install'] as const) it(`r
             installation.fail = false;
             expect(await document.reconcile(key!)).toMatchObject({ kind: 'committed' });
         }
-        expect(begins - ends).toBe(0);
+        expect(measured.begins - measured.ends).toBe(0);
         const reader = originalLatches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' }); reader.retire();
         expect(document.view.events).toHaveLength(terminal === 'absent' ? 0 : 1);
         const unrelated = originalLatches.beginMutation({ sessionIds: ['other'], documentKeys: [], kind: 'other' }); unrelated.end('unknown');
         await document.metadata.admit({ type: 'plan/mode', mode: 'off' });
         expect(() => originalLatches.capture({ sessionId: 'other', documentKeys: [], mode: 'cold' })).toThrow();
     } finally {
-        installation.fail = false; backend.appendOwnedBatch = append; backend.reconcileOwnedBatch = reconcile;
-        await registry.close().catch(() => {}); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true });
+        installation.fail = false; ownedControls(backend).append = append; ownedControls(backend).reconcile = reconcile;
+        await coordinator.close().catch(() => {}); await rm(root, { recursive: true, force: true });
     }
 });

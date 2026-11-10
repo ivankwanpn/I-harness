@@ -4,24 +4,27 @@
 import { describe, expect, it } from "vitest"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 describe("subagent/* persistence", () => {
   it("survives append + JSONL load (KNOWN_EVENT_TYPES accepts them)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-subagent-event-"))
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
-      const { id } = await coordinator.create({})
-      coordinator.enqueue(id, [
-        { type: "subagent/start", version: 1, taskId: "task-1", agentPath: "root/helper", role: "general", description: "helper" },
-        { type: "subagent/end", version: 1, taskId: "task-1", outcome: "completed", resultText: "done" },
-      ])
-      await coordinator.flush(id)
-      const loaded = await coordinator.load(id)
+      const id = 'legacy-subagent'
+      const events = [
+        { type: 'subagent/start', version: 1, seq: 0, taskId: 'task-1', agentPath: 'root/helper', role: 'general', description: 'helper' },
+        { type: 'subagent/end', version: 1, seq: 1, taskId: 'task-1', outcome: 'completed', resultText: 'done' },
+      ]
+      // Legacy import bytes exercise the public read-only load gate. They do not
+      // impersonate a current native subagent invocation through ordinary append.
+      writeFileSync(join(dir, id + '.jsonl'), [JSON.stringify({ formatVersion: 2, sessionId: id, createdAt: 'fixture' }), ...events.map(event => JSON.stringify(event))].join('\n') + '\n')
+      const loaded = await coordinator.snapshot!(id)
       expect(loaded.session.events.map((e) => e.type)).toEqual(["subagent/start", "subagent/end"])
     } finally {
+      await coordinator.close()
       rmSync(dir, { recursive: true, force: true })
     }
   })

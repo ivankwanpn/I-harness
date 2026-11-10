@@ -30,8 +30,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { committedFactSeqs, deliveryInputId, readDeliveries, validateDeliveryFrame, createManagedSessionState, readGenerationActions, AsyncInbox, readInbox, type SessionEvent } from '@i-harness/core-session';
-import { createSessionCoordinator } from '../src/index.ts';
-import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts';
+import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, ownedControls } from './helpers/composed.ts';
 async function ownedDeliveryHistory(admitReceipt = true) {
   const root = await mkdtemp(join(tmpdir(), 'delivery-owned-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } });
   await coordinator.create({ sessionId: 'parent' });
@@ -134,8 +133,8 @@ it('revokes executable pending synchronously and guards original promotion at ba
   try {
     const inbox = new AsyncInbox(f.document.view, () => f.action.facts.inputs);
     expect(inbox.isPending(f.inputId)).toBe(true);
-    const append = f.backend.appendOwnedBatch!.bind(f.backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = ownedControls(f.backend).originalAppend.bind(f.backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    ownedControls(f.backend).append = async (...args) => {
       if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
         type: string;
       }) => e.type === 'agent/input/promoted')) {
@@ -192,8 +191,8 @@ it('keeps a claimed steer inside the current finite action and grants no raw ali
 it('retires only a native never-issued stale receipt while preserving its immutable failure and later closed checks', async () => {
   const f = await ownedDeliveryHistory(false);
   try {
-    const append = f.backend.appendOwnedBatch!.bind(f.backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = ownedControls(f.backend).originalAppend.bind(f.backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    ownedControls(f.backend).append = async (...args) => {
       if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
         type: string;
       }) => e.type === 'agent/delivery-received')) {
@@ -221,9 +220,9 @@ it('retires only a native never-issued stale receipt while preserving its immuta
 it('retains original issued-unknown receipt debt through Stop and settles only its original key', async () => {
   const f = await ownedDeliveryHistory(false);
   try {
-    const append = f.backend.appendOwnedBatch!.bind(f.backend), reconcile = f.backend.reconcileOwnedBatch!.bind(f.backend);
+    const append = ownedControls(f.backend).originalAppend.bind(f.backend), reconcile = ownedControls(f.backend).originalReconcile.bind(f.backend);
     let receiptWrites = 0, unknown = true;
-    f.backend.appendOwnedBatch = async (...args) => {
+    ownedControls(f.backend).append = async (...args) => {
       const result = await append(...args); if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
         type: string;
       }) => e.type === 'agent/delivery-received')) {
@@ -231,7 +230,7 @@ it('retains original issued-unknown receipt debt through Stop and settles only i
         throw Error('lost receipt after sync');
       } return result;
     };
-    f.backend.reconcileOwnedBatch = async (...args) => unknown ? { kind: 'unknown', key: args[3].key } : reconcile(...args);
+    ownedControls(f.backend).reconcile = async (...args) => unknown ? { kind: 'unknown', key: args[3].key } : reconcile(...args);
     const captured = f.received.captureDeliveryAdmission(f.receipt, f.admitted, () => true), first = await captured.admit();
     expect(first.kind).toBe('unknown');
     const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'unknown-stop', reason: 'user-stop' });
@@ -255,8 +254,8 @@ it.each(['absent', 'conflict'] as const)('never retires a receipt with original 
   const f = await ownedDeliveryHistory(false);
   let recovered = false;
   try {
-    const append = f.backend.appendOwnedBatch!.bind(f.backend), reconcile = f.backend.reconcileOwnedBatch!.bind(f.backend);
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = ownedControls(f.backend).originalAppend.bind(f.backend), reconcile = ownedControls(f.backend).originalReconcile.bind(f.backend);
+    ownedControls(f.backend).append = async (...args) => {
       if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
         type: string;
       }) => e.type === 'agent/delivery-received')) {
@@ -267,11 +266,11 @@ it.each(['absent', 'conflict'] as const)('never retires a receipt with original 
     const captured = f.received.captureDeliveryAdmission(f.receipt, f.admitted, () => true), first = await captured.admit();
     expect(first.kind).toBe(disposition);
     if (disposition === 'conflict') {
-      f.backend.reconcileOwnedBatch = async (...args) => ({ kind: 'conflict', key: args[3].key });
+      ownedControls(f.backend).reconcile = async (...args) => ({ kind: 'conflict', key: args[3].key });
       await expect(f.received.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' });
       expect(await captured.observe()).toEqual(first);
       // Real backend proves the original frame absent; only explicit same-capture retry may write.
-      f.backend.reconcileOwnedBatch = reconcile;
+      ownedControls(f.backend).reconcile = reconcile;
       expect((await captured.reconcile()).kind).toBe('absent');
     }
     const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'after-absence', reason: 'user-stop' });
@@ -335,9 +334,11 @@ it('does not retire a synthetic handle fallback before the original native admis
 it('retains an original close with unknown acknowledgment and admits new generation only after its exact reconciliation', async () => {
   const f = await ownedDeliveryHistory();
   try {
-    const append = f.backend.appendOwnedBatch!.bind(f.backend);
-    let closeWrites = 0;
-    f.backend.appendOwnedBatch = async (...args) => {
+    const append = ownedControls(f.backend).originalAppend.bind(f.backend);
+    let closeWrites = 0, acknowledgmentUnknown = true;
+    const originalReconcile = ownedControls(f.backend).originalReconcile;
+    ownedControls(f.backend).reconcile = (...args) => acknowledgmentUnknown ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : originalReconcile(...args);
+    ownedControls(f.backend).append = async (...args) => {
       const result = await append(...args); if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
         type: string;
         op?: string;
@@ -349,6 +350,7 @@ it('retains an original close with unknown acknowledgment and admits new generat
     const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'physical-stop', reason: 'user-stop' }), outcome = await close.admit();
     expect(outcome.kind).toBe('unknown');
     expect(new AsyncInbox(f.document.view, () => f.action.facts.inputs).isPending(f.inputId)).toBe(false);
+    acknowledgmentUnknown = false;
     const settled = await close.reconcile();
     expect(settled.kind).toBe('committed');
     if (outcome.kind === 'unknown' && settled.kind === 'committed')
@@ -409,8 +411,8 @@ const f = await ownedDeliveryHistory(); try {
 it.each(['before','after'] as const)('checks a new finite delivery action at the actual backend issue boundary (%s promotion)',async order=>{const f=await ownedDeliveryHistory();try{
  const admission=f.document.view.events.find(e=>e.type==='agent/input/admitted'&&e.inputId===f.inputId)!
  if(order==='after')committedFactSeqs(await f.action.facts.inputs.start({type:'agent/input/promoted',version:1,inputId:f.inputId},{type:'user/message',text:f.admitted.text,input:{inputId:f.inputId,intent:'system',synthetic:f.admitted.synthetic},provenance:f.admitted.provenance}))
- const raw=f.document.view.events.at(-1)!,append=f.backend.appendOwnedBatch!.bind(f.backend),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
- f.backend.appendOwnedBatch=async(...args)=>{if(JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e:{type:string;op?:string})=>e.type==='context/action'&&e.op==='open')){entered.resolve();await release.promise}return append(...args)}
+ const raw=f.document.view.events.at(-1)!,append=ownedControls(f.backend).originalAppend.bind(f.backend),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ ownedControls(f.backend).append =async(...args)=>{if(JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e:{type:string;op?:string})=>e.type==='context/action'&&e.op==='open')){entered.resolve();await release.promise}return append(...args)}
  const fact=f.action.captureGeneration([open(0,'crossed-action',order==='before'?{kind:'observation-input',seq:admission.seq!,inputId:f.inputId}:{kind:'input',seq:raw.seq!})],()=>true),pending=fact.admit()
  await entered.promise
  const close=f.received.captureDeliveryClose({type:'agent/delivery-generation',version:1,op:'close',recipientSessionId:'parent',fenceId:'action-stop',reason:'user-stop'})

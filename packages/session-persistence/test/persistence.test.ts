@@ -2,12 +2,14 @@ import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it, vi } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
 import {
-  createSessionCoordinator,
+  createSessionCoordinator as createRawSessionCoordinator,
   registerUpgrade,
   SessionFormatUnsupportedError,
   type PersistenceBackend,
   type SessionMeta,
 } from "../src/index.ts"
+
+import { createStorageUnits } from './helpers/storage-units.ts'
 
 // In-memory fake backend so coordinator logic is tested without disk I/O.
 function fakeBackend(): PersistenceBackend {
@@ -53,7 +55,7 @@ describe("session coordinator", () => {
   it("reports failed final flush while still draining the other sessions", async () => {
     const backend = fakeBackend()
     const append = backend.append.bind(backend)
-    const coordinator = createSessionCoordinator(backend, { maxDelayMs: 60000, reportBackgroundFailure: () => {} })
+    const coordinator = createStorageUnits(backend, { maxDelayMs: 60000, reportBackgroundFailure: () => {} })
     const bad = (await coordinator.create()).id
     const good = (await coordinator.create()).id
     backend.append = async (id, events) => {
@@ -63,11 +65,11 @@ describe("session coordinator", () => {
     coordinator.enqueue(bad, [{ type: "assistant/message", text: "lost until retried" }])
     coordinator.enqueue(good, [{ type: "assistant/message", text: "saved" }])
     await expect(coordinator.close()).rejects.toThrow(/persist/)
-    expect((await backend.read(good)).events).toContainEqual({ type: "assistant/message", text: "saved" })
+    expect((await backend.read(good)).events).toContainEqual(expect.objectContaining({ type: "assistant/message", text: "saved" }))
   })
   it("create generates an id and writes the header via the backend", async () => {
     const backend = fakeBackend()
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { id } = await coordinator.create()
     expect(id).toMatch(/^sess-/)
     expect(await backend.list()).toEqual([id])
@@ -75,7 +77,7 @@ describe("session coordinator", () => {
 
   it("append then load round-trips events into a Session", async () => {
     const backend = fakeBackend()
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { id } = await coordinator.create()
     // M27 R-A3 adaptation: load() semantically repairs an OPEN last turn
     // (synthetic closers), so the round-trip fixture closes its turn first —
@@ -93,7 +95,7 @@ describe("session coordinator", () => {
     const backend = fakeBackend()
     await backend.create("old", { formatVersion: 0, sessionId: "old", createdAt: "x" })
     await backend.append("old", [{ type: "turn/start" }])
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { session } = await coordinator.load("old")
     expect(session.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(session.events[0]).toMatchObject({ type: "turn/start", migrated: true })
@@ -103,7 +105,7 @@ describe("session coordinator", () => {
     const backend = fakeBackend()
     await backend.create("future", { formatVersion: 99, sessionId: "future", createdAt: "x" })
     await backend.append("future", [{ type: "turn/start" }])
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     await expect(coordinator.load("future")).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
   })
 
@@ -125,7 +127,7 @@ describe("session coordinator", () => {
       async profile() { throw new Error("unused") },
       async updateMeta() { throw new Error("unused") },
     }
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     await expect(coordinator.load("future")).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
     expect(repairCalled).toBe(false)
   })
@@ -138,7 +140,7 @@ describe("session coordinator", () => {
       { type: "future/thing", payload: "x", ignorable: true } as unknown as SessionEvent,
       { type: "turn/end" },
     ])
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { session } = await coordinator.load("s1")
     expect(session.events.map((e) => e.type)).toEqual(["turn/start", "turn/end"])
 
@@ -157,13 +159,13 @@ describe("session coordinator", () => {
       // add closers — this test pins the load gate, not torn-tail repair.
       { type: "turn/end" },
     ] as SessionEvent[])
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { session } = await coordinator.load("s1")
     expect(session.events.map((e) => e.type)).toEqual(["turn/start", "compaction/reset", "user/message", "turn/end"])
   })
 
   it("flush on a session with no write-behind resolves (no pending writes)", async () => {
-    const coordinator = createSessionCoordinator(fakeBackend())
+    const coordinator = createStorageUnits(fakeBackend())
     const { id } = await coordinator.create()
     await expect(coordinator.flush(id)).resolves.toBeUndefined()
   })
@@ -172,7 +174,7 @@ describe("session coordinator", () => {
 describe("session coordinator documents", () => {
   it("putDocument/getDocument round-trips arbitrary data", async () => {
     const backend = fakeBackend()
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const doc = { jobs: [], agentTable: [], roles: [] }
     await coordinator.putDocument("subagent-state", doc)
     expect(await coordinator.getDocument("subagent-state")).toEqual(doc)
@@ -183,7 +185,7 @@ describe("session coordinator documents", () => {
 describe("session coordinator write-behind (M7)", () => {
   it("enqueue then flush persists events through the backend", async () => {
     const backend = fakeBackend()
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { id } = await coordinator.create()
     coordinator.enqueue(id, [{ type: "turn/start" }, { type: "turn/end" }])
     await coordinator.flush(id)
@@ -192,13 +194,13 @@ describe("session coordinator write-behind (M7)", () => {
   })
 
   it("flush on a session with no write-behind resolves", async () => {
-    const coordinator = createSessionCoordinator(fakeBackend())
+    const coordinator = createStorageUnits(fakeBackend())
     await expect(coordinator.flush("sess-none")).resolves.toBeUndefined()
   })
 
   it("close drains sessions and documents and is idempotent", async () => {
     const backend = fakeBackend()
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { id } = await coordinator.create()
     coordinator.enqueue(id, [{ type: "turn/start" }])
     await coordinator.putDocument("k", { a: 1 })
@@ -209,12 +211,12 @@ describe("session coordinator write-behind (M7)", () => {
     expect(await backend.getDocument("k")).toEqual({ a: 1 })
   })
 
-  it("putDocument never rejects and reports background failures", async () => {
+  it("putDocument rejects and reports background failures without poisoning later writes", async () => {
     const backend = fakeBackend()
     const report = vi.fn()
-    const coordinator = createSessionCoordinator(backend, { reportBackgroundFailure: report })
+    const coordinator = createStorageUnits(backend, { reportBackgroundFailure: report })
     const failing = vi.spyOn(backend, "putDocument").mockRejectedValueOnce(new Error("disk"))
-    await expect(coordinator.putDocument("k", {})).resolves.toBeUndefined()
+    await expect(coordinator.putDocument("k", {})).rejects.toThrow("disk")
     expect(report).toHaveBeenCalledTimes(1)
     expect(failing).toHaveBeenCalledTimes(1)
     // the chain stays alive: the next putDocument still lands
@@ -226,7 +228,7 @@ describe("session coordinator write-behind (M7)", () => {
 describe("session coordinator lineage (M8)", () => {
   it("create with a lineage meta persists it and load returns the header", async () => {
     const backend = fakeBackend()
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { id } = await coordinator.create({
       sessionId: "child-abc",
       parentSession: "sess-parent",
@@ -240,7 +242,7 @@ describe("session coordinator lineage (M8)", () => {
   })
 
   it("create without a sessionId still generates sess-... and no header", async () => {
-    const coordinator = createSessionCoordinator(fakeBackend())
+    const coordinator = createStorageUnits(fakeBackend())
     const { id } = await coordinator.create()
     expect(id).toMatch(/^sess-/)
     const { session } = await coordinator.load(id)
@@ -255,14 +257,14 @@ describe("session coordinator lineage (M8)", () => {
       { type: "subagent/inbox", messageId: "m1", message: "ping" },
       { type: "turn/end" },
     ])
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     const { session } = await coordinator.load("child-abc")
     expect(session.events.map((e) => e.type)).toContain("subagent/inbox")
   })
 
   it("load tolerates compaction events (known types), returned intact", async () => {
     const backend = fakeBackend()
-    const coordinator = createSessionCoordinator(backend)
+    const coordinator = createStorageUnits(backend)
     await coordinator.create({ sessionId: "sess-compacted" })
     await coordinator.append("sess-compacted", [
       { type: "turn/start" },
@@ -286,4 +288,11 @@ describe("session coordinator lineage (M8)", () => {
     expect(summary.text).toBe("SUMMARY")
     expect(summary.shadowedSeqs).toEqual([1])
   })
+})
+
+it('raw public factory does not lend durable mutation authority to a structural fake backend', async () => {
+  const coordinator = createRawSessionCoordinator(fakeBackend())
+  await expect(coordinator.create()).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED')
+  await expect(coordinator.append('s', [])).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED')
+  await coordinator.close()
 })

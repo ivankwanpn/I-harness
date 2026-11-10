@@ -3,8 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { committedFactSeqs, readInbox } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../src/index.ts'
-import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, ownedControls } from './helpers/composed.ts'
 import { cancellationRetirementFor } from '../src/coordinator/received-input-cancellation.ts'
 
 const cancel = { type: 'agent/input/cancelled' as const, version: 1 as const, inputId: 'one', reason: 'original' }
@@ -80,11 +79,11 @@ it('pins owned identity and original admission, rejects malformed/seed/unbound/c
 })
 
 it('does not treat a declared seed-region admission as own cancellation retirement authority', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'cancel-seed-')), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const root = await mkdtemp(join(tmpdir(), 'cancel-seed-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   try {
     await coordinator.create({ sessionId: 'child', parentSession: 'other', origin: 'subagent', seedLength: 1 })
+    await backend.append('child', [{ ...input, seq: 0 }])
     const document = await coordinator.openManagedDocument('child'), source = document.registerReceivedInputSource(async () => {})
-    committedFactSeqs(await source.captureAdmitted(input).admit())
     expect(document.view.events[0]?.seq).toBe(0)
     expect(cancellationRetirementFor(document.view, document)(cancel)).toBeUndefined()
     await source.close()
@@ -106,14 +105,18 @@ it.each(['unbound', 'malformed', 'still-pending'] as const)('keeps a genuinely i
 
 it('keeps an issued unknown cancellation on its original key until genuine backend reconciliation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cancel-issued-')), backend = createJsonlBackend(root)
-  const append = backend.appendOwnedBatch!.bind(backend), reconcile = backend.reconcileOwnedBatch!.bind(backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  let issued = 0, reconciles = 0
-  backend.appendOwnedBatch = async (...args) => {
+  const append = ownedControls(backend).originalAppend.bind(backend), reconcile = ownedControls(backend).originalReconcile.bind(backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let issued = 0, reconciles = 0, closingReconcile = false
+  ownedControls(backend).append = async (...args) => {
     const outcome = await append(...args)
     if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((event: { type: string }) => event.type === 'agent/input/cancelled')) { issued++; throw Error('Receipt lost after irreversible cancellation write') }
     return outcome
   }
-  backend.reconcileOwnedBatch = async (...args) => { reconciles++; entered.resolve(); await release.promise; return reconcile(...args) }
+  ownedControls(backend).reconcile = async (...args) => {
+    if (!issued) return reconcile(...args)
+    if (!closingReconcile) return { kind: 'unknown', key: args[3].key }
+    reconciles++; entered.resolve(); await release.promise; return reconcile(...args)
+  }
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   try {
     await coordinator.create({ sessionId: 'parent' })
@@ -122,6 +125,7 @@ it('keeps an issued unknown cancellation on its original key until genuine backe
     const fact = source.captureCancellation(cancel), outcome = await fact.admit()
     expect(outcome.kind).toBe('unknown'); expect(readInbox(document.view).isPending('one')).toBe(true)
     let closed = false
+    closingReconcile = true
     const closing = source.close().then(() => { closed = true })
     await entered.promise; expect(closed).toBe(false); expect(issued).toBe(1)
     release.resolve(); await closing

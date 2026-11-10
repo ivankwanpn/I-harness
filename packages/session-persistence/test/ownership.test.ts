@@ -1,3 +1,4 @@
+import { createStorageUnits } from './helpers/storage-units.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it, vi, beforeAll, afterAll, afterEach } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -6,10 +7,8 @@ import { join } from "node:path"
 import { acquireSessionLock, lockPathFor, SessionLockConflictError } from "@i-harness/fs-lock"
 import type { SessionEvent } from "@i-harness/core-session"
 import {
-  createSessionCoordinator,
   type CoordinatorOptions,
   type PersistenceBackend,
-  type SessionCoordinator,
   type SessionMeta,
 } from "../src/index.ts"
 
@@ -65,9 +64,9 @@ function fakeBackend(): PersistenceBackend {
 const FAST = { acquireRetryMs: 2, acquireDeadlineMs: 40 }
 
 let root: string
-const coordinators: SessionCoordinator[] = []
-const tracked = (backend: PersistenceBackend, opts: CoordinatorOptions = {}): SessionCoordinator => {
-  const c = createSessionCoordinator(backend, opts)
+const coordinators: ReturnType<typeof createStorageUnits>[] = []
+const tracked = (backend: PersistenceBackend, opts: CoordinatorOptions = {}): ReturnType<typeof createStorageUnits> => {
+  const c = createStorageUnits(backend, opts)
   coordinators.push(c)
   return c
 }
@@ -219,7 +218,7 @@ describe("session ownership lease", () => {
       const seed = tracked(shared)
       const id = (await seed.create({ sessionId: "sess-load-owned" })).id
       const contender = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
-      let owner!: SessionCoordinator
+      let owner!: ReturnType<typeof createStorageUnits>
       const observed: PersistenceBackend = {
         ...shared,
         async read(sessionId) {
@@ -396,7 +395,7 @@ describe("session ownership lease", () => {
       const key = "ownership-doc"
       const docLock = await acquireSessionLock({ lockPath: lockPathFor(root, `doc:${key}`), retryMs: 2, deadlineMs: 40 })
       try {
-        await c.putDocument(key, { hello: true }) // never rejects (M6 contract); reports instead
+        await expect(c.putDocument(key, { hello: true })).rejects.toBeInstanceOf(SessionLockConflictError)
         expect(report).toHaveBeenCalledTimes(1)
         expect(report.mock.calls[0]![0]).toBeInstanceOf(SessionLockConflictError)
         expect(await c.getDocument(key)).toBeUndefined() // fail-closed: nothing was written

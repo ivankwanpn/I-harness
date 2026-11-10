@@ -1,3 +1,6 @@
+import { createStorageUnits } from './helpers/storage-units.ts'
+import { createSessionCoordinator as createRawSessionCoordinator } from '../src/index.ts'
+import { createSessionCoordinator } from './helpers/composed.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
@@ -5,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { append, createSession, contextUsageAnchorId, encodeFactBatch, type ContextUsageCheckpointV2 } from '@i-harness/core-session'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator, ownedContextReadiness, remapConversationSeed } from '../src/index.ts'
+import { ownedContextReadiness, remapConversationSeed } from '../src/index.ts'
 import { conversationIndexes } from '../../core-session/src/events/state.ts'
 const roots: string[] = [], d = 'a'.repeat(64)
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
@@ -20,18 +23,31 @@ function history() {
   const checkpoint: ContextUsageCheckpointV2 = { ...facts, anchorId: contextUsageAnchorId(facts) }
   return { session, sample: { type: 'context/usage' as const, version: 2 as const, op: 'sample' as const, checkpoint, seq: 4 } }
 }
-async function store(version = 3) {
+async function store(version = 3, noUpgrade = false) {
   const root = await mkdtemp(join(tmpdir(), 'ih-r2b2-')); roots.push(root)
   const path = join(root, 's.jsonl'); await writeFile(path, JSON.stringify({ formatVersion: version, sessionId: 's', createdAt: 'fixture' }) + '\n')
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { maxDelayMs: 60000,lock:{enabled:true} })
-  return { backend, coordinator, path }
+  const probes = { upgrade: vi.fn(), repair: vi.fn() }
+  const backend = createJsonlBackend(root, { wrap(original) {
+    const upgrade = original.upgradeSessionFormat, repair = original.repair
+    if (noUpgrade) original.upgradeSessionFormat = undefined
+    else if (upgrade) original.upgradeSessionFormat = (...args) => { probes.upgrade(...args); return Reflect.apply(upgrade, original, args) }
+    original.repair = (...args) => { probes.repair(...args); return Reflect.apply(repair, original, args) }
+  } }), coordinator = (noUpgrade ? createRawSessionCoordinator : createSessionCoordinator)(backend, { maxDelayMs: 60000,lock:{enabled:true} })
+  return { backend, coordinator, path, probes }
+}
+// Prefix/DTO unit tests use the actual storage units and original JSONL bytes;
+// task-transition recovery is a separate integration contract.
+async function storageStore() {
+  const fixture = await store(4)
+  await fixture.coordinator.close()
+  return { ...fixture, coordinator: createStorageUnits(fixture.backend, { lock: { enabled: true } }) }
 }
 it('makes backend3 durably current before the owned view can append v2 and cold-loads exact lineage', async () => {
-  const { backend, coordinator } = await store(), { session, sample } = history()
-  const calls = vi.spyOn(backend, 'upgradeSessionFormat')
+  const { backend, coordinator, probes } = await store(), { session, sample } = history()
+  const calls = probes.upgrade
   const document=await coordinator.openManagedDocument('s')
   await ownedContextReadiness(coordinator, 's', document.view)()
-  expect((await backend.profile('s')).meta.formatVersion).toBe(CURRENT_FORMAT_VERSION); expect(calls).toHaveBeenCalledTimes(1)
+  expect((await backend.profile('s')).meta.formatVersion).toBe(CURRENT_FORMAT_VERSION); expect(calls).not.toHaveBeenCalled()
   await document.agent.lifecycle({type:'conversation/semantics',version:1,mode:'accepted-exchange-v1'})
   await document.agent.lifecycle({type:'step/start',actionId:'action',attemptId:'attempt'})
   const accepted=session.events[3]!
@@ -44,7 +60,7 @@ it('makes backend3 durably current before the owned view can append v2 and cold-
   await coordinator.close()
 })
 it('rereads accepted facts from each current durable prefix, after index creation', async () => {
-  const { coordinator, path } = await store(4), { session, sample } = history()
+  const { coordinator, path } = await storageStore(), { session, sample } = history()
   await coordinator.append('s', session.events)
   const lines = (await readFile(path, 'utf8')).trimEnd().split('\n'), frame = JSON.parse(lines[1]!)
   frame.events[3].request.sendId = 'mutated'
@@ -54,9 +70,8 @@ it('rereads accepted facts from each current durable prefix, after index creatio
   await coordinator.close()
 })
 it('refuses unsupported or interrupted readiness before any v2 append', async () => {
-  const { backend, coordinator, path } = await store(), raw = await readFile(path, 'utf8')
-  backend.upgradeSessionFormat = undefined
-  await expect(coordinator.ensureWritableFormat!('s')).rejects.toThrow(/cannot upgrade/)
+  const { coordinator, path } = await store(3, true), raw = await readFile(path, 'utf8')
+  await expect(coordinator.ensureWritableFormat!('s')).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED')
   expect(await readFile(path, 'utf8')).toBe(raw)
   const s = createSession()
   await expect(ownedContextReadiness({ ...coordinator, openManagedDocument: undefined } as unknown as typeof coordinator, 's', s)()).rejects.toMatchObject({code:'FACT_OWNER_UNSUPPORTED'})
@@ -95,16 +110,18 @@ it('detaches a cached format3 alias while its owned current view admits actual a
   await coordinator.close()
 })
 it('refuses undeclared DTO payloads before durable append and refuses an imported malformed DTO before repair', async () => {
-  const { backend, coordinator, path } = await store(4), prepared = history()
+  const { coordinator, path, probes } = await storageStore(), prepared = history()
   await coordinator.append('s', prepared.session.events)
-  const event = structuredClone(prepared.sample)
+  await coordinator.append('s', [{ type: 'step/end', seq: 4 }])
+  const event = { ...structuredClone(prepared.sample), seq: 5 }
   Object.defineProperty(event.checkpoint, 'constructor', { value: { payload: 'unexpected-private-payload' }, enumerable: true })
   const before = await readFile(path, 'utf8')
   await expect(coordinator.append('s', [event])).rejects.toThrow()
   expect(await readFile(path, 'utf8')).toBe(before)
   const imported = before + JSON.stringify(event) + '\n'
   await writeFile(path, imported)
-  const repair = vi.spyOn(backend, 'repair')
+  const repair = probes.repair
+  repair.mockClear()
   await expect(coordinator.snapshot!('s')).rejects.toThrow()
   await expect(coordinator.loadOwned('s')).rejects.toThrow()
   expect(repair).not.toHaveBeenCalled()

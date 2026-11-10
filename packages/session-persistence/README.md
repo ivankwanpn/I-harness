@@ -7,6 +7,14 @@ the ownership service. This keeps the original option getter order. Acquisition
 retry/deadline options remain lazy reads inside each lease acquisition. Backend
 methods remain calls on the live backend object, including reads after awaits.
 
+Current-format durable mutation uses the storage package's native task-transition
+composition. The raw `createSessionCoordinator` factory supports structural
+snapshot reads and refuses current-format creation, append, repairing load and
+owned load with `TASK_TRANSITION_UNSUPPORTED` when that composition is absent.
+Production JSONL hosts use the existing composed constructor. Storage algorithm
+unit tests can instantiate their underlying ownership, mutation and load modules,
+while integration tests use the native composition.
+
 | Module | Responsibility and state authority |
 | --- | --- |
 | `coordinator/types.ts` | Backend, coordinator, metadata, model selection, options and artifact manifest contracts. |

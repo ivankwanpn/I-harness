@@ -1,16 +1,16 @@
+import { createSessionCoordinator as createRawSessionCoordinator } from '../src/index.ts'
 import { expect, it } from 'vitest'
-import { createSessionCoordinator } from '../src/index.ts'
+import { createSessionCoordinator, createControlledJsonlBackend as createJsonlBackend, ownedControls } from './helpers/composed.ts'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 
 const terminal = { type: 'context/recovery' as const, version: 1 as const, ownerSessionId: 'owner', recoveryId: 'original', logicalStepSeq: 0, bindingFingerprint: 'a'.repeat(64), rejectedInputFingerprint: 'b'.repeat(64), state: 'blocked' as const, retryConsumed: true }
 
 it('refuses managed activation without actual exclusive ownership and owned batch backend', async () => {
   const backend = { id: 'jsonl', capabilities: { seekableRead: false, rawArtifacts: false } } as any
-  const coordinator = createSessionCoordinator(backend)
-  await expect(coordinator.openManagedDocument('s')).rejects.toMatchObject({ code: 'FACT_OWNER_UNSUPPORTED' })
+  const coordinator = createRawSessionCoordinator(backend)
+  await expect(coordinator.openManagedDocument('s')).rejects.toThrow('TASK_TRANSITION_UNSUPPORTED')
 })
 
 it('uses the original managed metadata frame for immutable held terminal recovery after Stop', async () => {
@@ -63,8 +63,8 @@ it('captures ordinary acceptance bytes once and never issues a canceled original
     await action.facts.agent.lifecycle({ type: 'step/end' })
     await action.facts.agent.lifecycle({ type: 'step/start', actionId: 'next', attemptId: 'next' })
     const canceled = action.captureModelExchange({ type: 'assistant/message', text: 'never issued' }, { ...accepted, actionId: 'next', attemptId: 'next', exchangeId: 'canceled', stepStartSeq: { kind: 'prior', seq: 5, expectedType: 'step/start' } })
-    const append = backend.appendOwnedBatch!; let writes = 0
-    backend.appendOwnedBatch = async (...args) => { writes++; return append(...args) }
+    const append = ownedControls(backend).originalAppend; let writes = 0
+    ownedControls(backend).append = async (...args) => { writes++; return append(...args) }
     action.stop()
     expect(await canceled.admit()).toEqual({ kind: 'not-issued', code: 'FACT_CANCELLED' })
     expect(await canceled.reconcile()).toEqual({ kind: 'not-issued', code: 'FACT_CANCELLED' })
@@ -123,10 +123,10 @@ it('shares one finite original source attempt, retains actual failures and permi
 it('never retries an absent original required fact', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-managed-absent-')), backend = createJsonlBackend(root), store = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await store.create(), document = await store.openManagedDocument(id), action = document.beginAction(), source = action.registerSettlementSource(async () => {})
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+  const append = ownedControls(backend).originalAppend, reconcile = ownedControls(backend).originalReconcile
   let key: import('@i-harness/core-session').BatchKey | undefined, issues = 0, ready = false
-  backend.appendOwnedBatch = async (...args) => { if (!key) { issues++; key = args[3].key; return { kind: 'unknown', key } }; return append(...args) }
-  backend.reconcileOwnedBatch = (...args) => ready ? reconcile(...args) : Promise.resolve({ kind: 'unknown', key: args[3].key })
+  ownedControls(backend).append = async (...args) => { if (!key) { issues++; key = args[3].key; return { kind: 'unknown', key } }; return append(...args) }
+  ownedControls(backend).reconcile = (...args) => ready ? reconcile(...args) : Promise.resolve({ kind: 'unknown', key: args[3].key })
   try {
     const fact = source.recovery.capture({ ...terminal, ownerSessionId: id })
     expect(await fact.admit()).toMatchObject({ kind: 'unknown' })
@@ -177,23 +177,23 @@ it.each(['active', 'never-close', 'same-action-never-close', 'received-input'] a
   const eligible = action.registerSettlementSource(async () => { if (++eligibleCalls === 1) throw new Error('original close failed') })
   const other = kind === 'same-action-never-close' ? action : document.beginAction()
   const producer = kind === 'received-input' ? document.registerReceivedInputSource(async () => { producerCalls++ }) : other.registerSettlementSource(async () => { producerCalls++ })
-  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+  const append = ownedControls(backend).originalAppend, reconcile = ownedControls(backend).originalReconcile
   let key: import('@i-harness/core-session').BatchKey | undefined
   try {
     await expect(eligible.close()).rejects.toThrow(); action.finish()
     if (kind === 'never-close') other.finish()
-    backend.appendOwnedBatch = async (...args) => { key = args[3].key; return { kind: 'unknown', key } }
+    ownedControls(backend).append = async (...args) => { key = args[3].key; return { kind: 'unknown', key } }
     const outcome = 'captureAdmitted' in producer
       ? await producer.captureAdmitted({ type: 'agent/input/admitted', version: 1, inputId: 'original', text: 'original', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } }).admit()
       : await producer.recovery.capture({ ...terminal, ownerSessionId: id }).admit()
     expect(outcome).toMatchObject({ kind: 'unknown' })
-    backend.appendOwnedBatch = append
-    backend.reconcileOwnedBatch = (...args) => { reconciles++; return reconcile(...args) }
+    ownedControls(backend).append = append
+    ownedControls(backend).reconcile = (...args) => { reconciles++; return reconcile(...args) }
     await expect(document.settleFinishedActions()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     expect(reconciles).toBe(0); expect(producerCalls).toBe(0)
     if ('recovery' in producer) producer.assertHeld()
     expect(await document.reconcile(key!)).toMatchObject({ kind: 'absent' }); expect(reconciles).toBe(1)
-  } finally { other.finish(); backend.appendOwnedBatch = append; await store.close().catch(() => {}) }
+  } finally { other.finish(); ownedControls(backend).append = append; await store.close().catch(() => {}) }
 })
 
 it('takes one finite eligible snapshot and preserves every original source failure', async () => {

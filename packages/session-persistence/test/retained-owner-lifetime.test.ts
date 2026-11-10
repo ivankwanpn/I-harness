@@ -11,12 +11,14 @@ import { assertRetainedBindingReferenceFor } from '../src/coordinator/retained-b
 
 async function fixture() {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'retained-'))
-  const backend = createJsonlBackend(root), read = backend.profile
   let hook: (() => Promise<void>) | undefined, reads = 0
+  const backend = createJsonlBackend(root, { wrap(original) {
+    const read = original.profile!
+    original.profile = async id => { reads++; await hook?.(); return Reflect.apply(read, original, [id]) }
+  } })
   const options = { lock: { enabled: true, lockRoot: root }, acquireRetryMs: 1, acquireDeadlineMs: 25 }
   const coordinator = createSessionCoordinator(backend, options), other = createSessionCoordinator(createJsonlBackend(root), options)
   await coordinator.create({ sessionId: 'source' }); await coordinator.releaseOwnership('source')
-  backend.profile = async id => { reads++; await hook?.(); return read.call(backend, id) }
   return { coordinator, other, setHook(value?: () => Promise<void>) { hook = value }, reads: () => reads,
     async close() { hook = undefined; await coordinator.close(); await other.close(); await rm(root, { recursive: true, force: true }) } }
 }

@@ -161,7 +161,8 @@ it('E01 accepts exactly 64 real existing IDs and acquires no target lease or ext
   expect(paths).toEqual([...ids.toSorted().flatMap(id => sessionPaths(root, id)), ...ids.map(key).sort().flatMap(binding => documentPaths(root, binding))])
   expect(read.mock.calls.map(([binding]) => binding).sort()).toEqual(ids.map(key).sort())
   console.info(JSON.stringify({ control: 'E01 exact64 native', acquired: paths.length, sessions: 64, documents: read.mock.calls.length }))
-})
+// 63 durable native-backed births plus 256 real leases take about75s on Windows.
+}, 120000)
 
 it('E02 captures actual current immutable metadata and strict binding from the preawait ID set', async () => {
   const { backend, c } = await fixture(true)

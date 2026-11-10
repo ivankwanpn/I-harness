@@ -1,10 +1,11 @@
+import { createStorageUnits as createSessionCoordinator } from './helpers/storage-units.ts'
+import { createControlledJsonlBackend as createJsonlBackend, backendControls } from './helpers/composed.ts'
 import { afterEach, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CURRENT_FORMAT_VERSION, deriveMessages, type SessionEvent } from "@i-harness/core-session"
-import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { createSessionCoordinator, SessionFormatUnsupportedError } from "../src/index.ts"
+import { SessionFormatUnsupportedError } from "../src/index.ts"
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
@@ -33,7 +34,7 @@ it("admits acceptance references into an earlier durable batch", async () => {
 it("rejects malformed complete format3 before any repair, retaining cause", async () => {
   const broken = events(); broken[5] = { ...broken[5], assistantSeq: 3 } as SessionEvent
   const { coordinator, backend, path } = await fixture(broken)
-  const raw = await readFile(path, "utf8"), repair = vi.spyOn(backend, "repair")
+  const raw = await readFile(path, "utf8"), repair = vi.spyOn(backendControls(backend).methods, "repair")
   const error = await coordinator.loadOwned("s").catch(error => error)
   expect(error).toBeInstanceOf(SessionFormatUnsupportedError)
   expect(error.cause).toMatchObject({ code: "SESSION_CONVERSATION_FORMAT" })
@@ -63,9 +64,9 @@ it("upgrades format2 header to10 preserving exact body before new facts", async 
 })
 it("rereads an uncertain append and does not duplicate an accepted record", async () => {
   const { coordinator, backend } = await fixture(events().slice(0, 5))
-  const append = backend.append.bind(backend)
+  const append = backendControls(backend).original.append.bind(backend)
   let fault = true
-  backend.append = async (id, batch) => { await append(id, batch); if (fault) { fault = false; throw new Error("uncertain") } }
+  backendControls(backend).methods.append = async (id, batch) => { await append(id, batch); if (fault) { fault = false; throw new Error("uncertain") } }
   coordinator.enqueue("s", events().slice(5))
   await expect(coordinator.flush("s")).rejects.toThrow("uncertain")
   await coordinator.flush("s")
@@ -92,7 +93,7 @@ it.each([3, 4, 5, 6, 7])("recovers a crash after prefix length %s without accept
 })
 it("rejects actual future format12 before repairing its file", async () => {
   const { coordinator, backend, path } = await fixture([], CURRENT_FORMAT_VERSION + 1)
-  const raw = await readFile(path, "utf8"), repair = vi.spyOn(backend, "repair")
+  const raw = await readFile(path, "utf8"), repair = vi.spyOn(backendControls(backend).methods, "repair")
   await expect(coordinator.loadOwned("s")).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
   expect(repair).not.toHaveBeenCalled(); expect(await readFile(path, "utf8")).toBe(raw)
   await coordinator.close()
