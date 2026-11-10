@@ -428,7 +428,8 @@ export async function dispatchDesktopRequest(
       const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId'), request = readForkPrepareRequest(value.request)
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies), versions = runtime.info.capabilities['session-fork-bootstrap']
       if (!Array.isArray(versions) || !versions.includes('1')) throw new Error('Session fork unavailable')
-      const result = readForkPrepareResult(await runtime.client.request('session/fork/prepare', request))
+      // Durable fork phases follow the owned connection lifetime, like SDK run.
+      const result = readForkPrepareResult(await runtime.client.request('session/fork/prepare', request, 0))
       if (result.kind === 'prepared' && (result.prepared.core.sourceSessionId !== request.sourceSessionId
         || JSON.stringify(result.prepared.core.selection) !== JSON.stringify(request.selection ?? { kind: 'completed' }))) throw new Error('Invalid fork preparation response')
       return result
@@ -439,7 +440,7 @@ export async function dispatchDesktopRequest(
       const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId'), operation = readForkOperation(value.operation)
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies), versions = runtime.info.capabilities['session-fork-bootstrap']
       if (!Array.isArray(versions) || !versions.includes('1')) throw new Error('Session fork unavailable')
-      try { return readForkOutcome(await runtime.client.request(value.kind === 'desktop/session/fork/begin' ? 'session/fork/begin' : 'session/fork/retry', { operation }), operation) }
+      try { return readForkOutcome(await runtime.client.request(value.kind === 'desktop/session/fork/begin' ? 'session/fork/begin' : 'session/fork/retry', { operation }, 0), operation) }
       catch (cause) {
         if (!(cause instanceof RpcError)) throw cause
         // Electron invocation errors omit custom data. Only this existing,

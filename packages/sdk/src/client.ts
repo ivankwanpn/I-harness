@@ -257,7 +257,9 @@ export class HarnessClient {
     const request = readForkPrepareRequest(input)
     if (!this.hasForkCapability()) return { kind: 'unavailable', reason: 'unsupported' }
     let reply: unknown
-    try { reply = await this.request('session/fork/prepare', request) }
+    // Durable preparation can outlive an ordinary RPC deadline. Client close
+    // and transport failure still settle this request.
+    try { reply = await this.request('session/fork/prepare', request, 0) }
     catch (cause) { throw new ForkPreparationError('transport', undefined, { cause }) }
     try { return readForkPrepareResult(reply) }
     catch (cause) { throw new ForkPreparationError('protocol', undefined, { cause }) }
@@ -298,7 +300,7 @@ export class HarnessClient {
   private async executeForkOperation(operation: ForkOperation, mode: 'begin'|'retry'): Promise<ForkOutcome> {
     if (!this.hasForkCapability()) return readForkOutcome({ version: 1, kind: 'not-issued', operation, capture: 'unknown', reason: 'unsupported' }, operation)
     let reply: unknown
-    try { reply = await this.request('session/fork/' + mode, { operation }) }
+    try { reply = await this.request('session/fork/' + mode, { operation }, 0) }
     catch (cause) {
       if (cause instanceof RpcError) {
         let data
