@@ -10,11 +10,10 @@
 // (the SAME root the TUI writes), so this shows what the TUI actually stored.
 //
 // Read-only: the listing never adopts ownership and never writes (a session
-// live in another process is still listed — the row just carries what the
-// header says).
+// live in another process is still listed from its committed snapshot).
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
-import { deriveMessages, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
+import { deriveMessages, deriveSessionTitle, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
 import {
   createSessionCoordinator,
   resolveSessionStoreRoot,
@@ -34,7 +33,7 @@ const d = diagnosticsFor("session")
 export interface StoredSessionRow {
   id: string
   title?: string
-  /** Artifact mtime, createdAt fallback. */
+  /** Store-reported update time, legacy artifact mtime, then createdAt fallback. */
   updatedAt?: number
   /** turn/start count from a full-log read; absent when the read failed. */
   turnCount?: number
@@ -89,14 +88,18 @@ export async function listStoredSessions(coordinator: SessionCoordinator, storeR
   const rows: StoredSessionRow[] = []
   for (const id of ids) {
     try {
-      const { meta } = await coordinator.profile(id)
+      const { meta, updatedAt: profileUpdatedAt } = await coordinator.profile(id)
       const row: StoredSessionRow = { id, ...(meta.title !== undefined ? { title: meta.title } : {}) }
-      const artifact = await stat(join(storeRoot, `${id}.jsonl`)).then((s) => s.mtimeMs).catch(() => undefined)
+      const artifact = typeof profileUpdatedAt === "number" && Number.isFinite(profileUpdatedAt)
+        ? profileUpdatedAt
+        : await stat(join(storeRoot, `${id}.jsonl`)).then((s) => s.mtimeMs).catch(() => undefined)
       const created = Date.parse(meta.createdAt)
       const updatedAt = artifact ?? (Number.isNaN(created) ? undefined : created)
       if (updatedAt !== undefined) row.updatedAt = updatedAt
       try {
         const { session } = await coordinator.snapshot!(id)
+        const committedTitle = deriveSessionTitle(session)
+        if (committedTitle && (committedTitle.source === "user" || row.title === undefined)) row.title = committedTitle.title
         row.turnCount = session.events.filter((ev) => ev.type === "turn/start").length
         // M3 §3.4: the durable run-end record rides the full-log read the turn
         // count already pays for. The LAST one wins — a run whose success
