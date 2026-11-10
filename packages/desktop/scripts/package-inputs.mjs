@@ -48,8 +48,8 @@ export function validateGatewayRuntime(gatewayDir, version) {
   const manifest = file => JSON.parse(readFileSync(requireFile(file), "utf8"))
   const gateway = manifest("cli/package.json")
   if (gateway.name !== "@i-harness/desktop-gateway" || gateway.version !== version) throw new Error("gateway manifest identity or version differs from the Desktop app")
-  for (const file of ["cli/src/cli.ts", "cli/src/host.ts", "node_modules/tsx/dist/loader.mjs"]) requireFile(file)
-  for (const name of ["tsx", ...Object.keys(gateway.dependencies ?? {})]) {
+  for (const file of ["cli/src/cli.js", "cli/src/host.js"]) requireFile(file)
+  for (const name of Object.keys(gateway.dependencies ?? {})) {
     if (!/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/i.test(name)) throw new Error(`invalid gateway dependency name: ${name}`)
     if (manifest(`node_modules/${name}/package.json`).name !== name) throw new Error(`gateway dependency manifest mismatch: ${name}`)
   }

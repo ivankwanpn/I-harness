@@ -60,8 +60,7 @@ export function validatePayload(input) {
     "resources/app/out/main/node_modules/@napi-rs/canvas/package.json",
     "resources/app/LICENSE", "resources/app/THIRD_PARTY_NOTICES",
     "resources/app/licenses/opencode/LICENSE", "resources/app/licenses/zcode/LICENSE",
-    "resources/gateway/cli/src/cli.ts", "resources/gateway/cli/src/host.ts",
-    "resources/gateway/node_modules/tsx/package.json", "resources/gateway/node_modules/tsx/dist/loader.mjs",
+    "resources/gateway/cli/src/cli.js", "resources/gateway/cli/src/host.js",
   ]
   for (const path of required) requireFile(appDir, path)
   for (const directory of ["cmaps", "standard_fonts", "wasm"]) {

@@ -9,7 +9,8 @@
 // provider model catalogue, tsx loader). Copying the actual package trees with
 // their resolved dependencies keeps the packaged runtime identical to the
 // launch path the e2e tests already exercise.
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { transformSync } from "esbuild"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
@@ -59,6 +60,42 @@ function copyDependency(name, fromDir, required = false) {
   }
 }
 
+/** Compile the shipped workspace packages in place: esbuild strips TypeScript,
+ * then relative .ts specifiers and package export maps move to .js. The point is
+ * to remove the runtime tsx loader from the packaged gateway entirely. */
+function rewriteSpecifiers(code) {
+  return code
+    .replace(/(\bfrom\s*|\bimport\s*\(\s*)(["'])([^"']+)\.ts\2/g, (_, lead, quote, spec) => `${lead}${quote}${spec}.js${quote}`)
+    .replace(/(\bimport\s*)(["'])([^"']+)\.ts\2/g, (_, lead, quote, spec) => `${lead}${quote}${spec}.js${quote}`)
+}
+function rewritePackageJson(value) {
+  if (typeof value === "string") return value.endsWith(".ts") ? value.slice(0, -3) + ".js" : value
+  if (Array.isArray(value)) return value.map(rewritePackageJson)
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, rewritePackageJson(item)]))
+  return value
+}
+function compileTree(root) {
+  const pending = [root]
+  while (pending.length) {
+    const current = pending.pop()
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name)
+      if (entry.isDirectory()) { pending.push(full); continue }
+      if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".d.ts")) continue
+      const source = readFileSync(full, "utf8")
+      const result = transformSync(source, { loader: "ts", format: "esm", target: "node24", sourcefile: full, legalComments: "none" })
+      writeFileSync(full.slice(0, -3) + ".js", rewriteSpecifiers(result.code))
+      rmSync(full)
+    }
+  }
+  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || entry.name !== "package.json") continue
+    const file = join(entry.parentPath, entry.name)
+    const parsed = JSON.parse(readFileSync(file, "utf8"))
+    writeFileSync(file, JSON.stringify(rewritePackageJson(parsed), null, 2) + "\n")
+  }
+}
+
 rmSync(outDir, { recursive: true, force: true })
 mkdirSync(modulesDir, { recursive: true })
 
@@ -84,8 +121,8 @@ for (const dependency of dependenciesOf(gatewayRoot)) {
   copyDependency(dependency.name, gatewayRoot, dependency.required)
 }
 
-// tsx transpiles both the gateway and the workspace packages it imports.
-copyDependency("tsx", repoRoot, true)
+compileTree(join(modulesDir, "@i-harness"))
+compileTree(join(outDir, "cli"))
 verifyNativeAssets(join(modulesDir, "@i-harness/sandbox-windows-psec"))
 const wslWorker = join(modulesDir, "@i-harness/sandbox-wsl/worker")
 copyWslAssets(join(repoRoot, "packages/sandbox-wsl/worker/runner.py"), wslWorker)

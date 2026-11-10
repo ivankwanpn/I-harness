@@ -113,9 +113,8 @@ export function launchBundledGateway(
   sessionDir: string,
 ): LaunchedRuntime {
   const gatewayRoot = join(resourcesPath, "gateway")
-  const tsxLoader = pathToFileURL(join(gatewayRoot, "node_modules", "tsx", "dist", "loader.mjs")).href
-  const gatewayEntry = join(gatewayRoot, "cli", "src", "cli.ts")
-  const child = spawn(process.execPath, ["--import", tsxLoader, gatewayEntry, "--session-dir", sessionDir], {
+  const gatewayEntry = join(gatewayRoot, "cli", "src", "cli.js")
+  const child = spawn(process.execPath, [gatewayEntry, "--session-dir", sessionDir], {
     cwd: workspace.path,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["pipe", "pipe", "pipe"],
