@@ -7,6 +7,8 @@ import type { BatchCall, BatchSlot, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchCancellation } from "./cancel.ts"
 import {isManagedBatchSource,type BatchSource} from './managed-source.ts'
 
+const withheldProjection = Object.freeze({ code: 'TOOL_RESULT_PROJECTION_UNAVAILABLE', error: 'Tool output was withheld after its processing rules changed.' })
+
 export function createBatchRecords(ctx: PluginContext, session: BatchSource, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions, cancellation: () => Pick<BatchCancellation, "observeAbort" | "aborted" | "disqualify">) {
   const slots: (BatchSlot | undefined)[] = batch.map(() => undefined)
   const preparedCalls=new Map<number,import('@i-harness/core-tools').PreparedCall>()
@@ -27,12 +29,24 @@ export function createBatchRecords(ctx: PluginContext, session: BatchSource, too
     control.observeAbort()
     if (!slot.fact) {
       if ('synthetic' in slot) {
-        slot.projected ??= { output: isManagedBatchSource(session)?await session.projectSynthetic({name:slot.name,output:slot.output}):await ctx.cascade('tools/project-synthetic-result', { name: slot.name, output: slot.output }, async () => slot.output) }
+        slot.projected ??= isManagedBatchSource(session)
+          ? await session.projectSynthetic({name:slot.name,output:slot.output})
+          : { kind: 'projected', output: await ctx.cascade('tools/project-synthetic-result', { name: slot.name, output: slot.output }, async () => slot.output) }
+        if (slot.projected.kind === 'revoked') {
+          const execution = slot.execution, prepared = preparedCalls.get(index)
+          if (!execution || execution.outcome !== 'failed' && execution.outcome !== 'canceled') throw Object.assign(new FactRecoveryRequiredError(), {cause:slot.projected.cause})
+          const original = prepared && resultExecution(prepared)
+          const knownFailure = execution.dispatch === 'not-dispatched'
+            ? !original || original.dispatch === 'not-dispatched'
+            : execution.dispatch === 'dispatched' && original?.dispatch === execution.dispatch && original.outcome === execution.outcome
+          if (!knownFailure) throw Object.assign(new FactRecoveryRequiredError(), {cause:slot.projected.cause})
+        }
+        const output = slot.projected.kind === 'revoked' ? withheldProjection : slot.projected.output
         const context=synthetic(index)
-        slot.finalization ??= 'domain'in context?tools.captureManagedSyntheticResult?.(context,slot.projected.output,slot.execution??{outcome:'unknown',dispatch:'unknown'}):tools.captureSyntheticResult?.(context, slot.projected.output, slot.execution ?? { outcome: 'unknown', dispatch: 'unknown' })
+        slot.finalization ??= 'domain'in context?tools.captureManagedSyntheticResult?.(context,output,slot.execution??{outcome:'unknown',dispatch:'unknown'}):tools.captureSyntheticResult?.(context, output, slot.execution ?? { outcome: 'unknown', dispatch: 'unknown' })
         const retained = await slot.finalization?.settle()
         if (retained && retained.kind !== 'ready') { holdOriginal(slot,index); throw new FactRecoveryRequiredError() }
-        slot.fact = opts.sourceFacts!.captureResult({ type: 'tool/result', callId: slot.callId, name: slot.name, ...(retained?.kind === 'ready' ? { envelope: retained.envelope } : { output: slot.projected.output, isError: true }) })
+        slot.fact = opts.sourceFacts!.captureResult({ type: 'tool/result', callId: slot.callId, name: slot.name, ...(retained?.kind === 'ready' ? { envelope: retained.envelope } : { output, isError: true }) })
       } else {
         if ('retained' in slot && !slot.resolved) {
           const result = await slot.retained.take()
@@ -63,11 +77,19 @@ export function createBatchRecords(ctx: PluginContext, session: BatchSource, too
       }
     }
     try { committedFactSeqs(await (reconcile?slot.fact.reconcile():slot.fact.admit())) }
-    catch (error) { holdOriginal(slot,index); throw error }
+    catch (error) {
+      holdOriginal(slot,index)
+      if ('synthetic' in slot && slot.projected?.kind === 'revoked')
+        throw Object.assign(new FactRecoveryRequiredError(), {cause:new AggregateError([slot.projected.cause,error], 'Original result projection and settlement failed')})
+      throw error
+    }
     slot.recorded = true
     if(!('synthetic'in slot)){acknowledgeTeamResult(slot.prepared);releaseFinalizedToolResult(slot.prepared)}
     while (slots[committed]?.recorded) committed++
-    if ('synthetic' in slot) return
+    if ('synthetic' in slot) {
+      if (slot.projected?.kind === 'revoked') throw slot.projected.cause
+      return
+    }
     control.observeAbort()
     opts.telemetry?.emit({ type: 'tool/end', ts: Date.now(), data: { tool: slot.name, callId: slot.callId } })
     if (!control.aborted) {const payload={name: call.name, args: call.args, ...(slot.finalized!.program?.kind === 'unavailable' ? { program: slot.finalized!.program } : { output: slot.finalized!.output }),signal:opts.signal};if(isManagedBatchSource(session))await session.postTool(payload);else await ctx.emit('agent/post-tool',{...payload,session})}

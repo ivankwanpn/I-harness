@@ -1,8 +1,8 @@
 import { canonicalJsonData, type SessionView, type ManagedAction, type FactOutcome, type SettlementFacts } from '@i-harness/core-session';
-import { isManagedExecutionSource, readManagedActionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
-import type { ExecutionHookChannel } from '@i-harness/core-plugin';
+import { isManagedExecutionDomain, isManagedExecutionSource, readManagedActionMembers, type ManagedExecutionDomain } from '@i-harness/core-session/internal/execution';
+import { isExecutionHookChannel, type ExecutionHookChannel, type PluginContext } from '@i-harness/core-plugin';
 import type { PreparedCall } from '@i-harness/core-tools';
-import type { BatchCall } from './types.ts';
+import type { BatchCall, SyntheticProjection } from './types.ts';
 import type { ManagedFactWitness, createManagedModelInvocation } from './managed-model-origin.ts';
 const originals = new WeakSet<object>();
 export interface ManagedBatchSource {
@@ -26,12 +26,14 @@ export interface ManagedBatchSource {
     projectSynthetic(payload: {
         name: string;
         output: unknown;
-    }): Promise<unknown>;
+    }): Promise<SyntheticProjection>;
     release(): void;
 }
 export type BatchSource = SessionView | ManagedBatchSource;
 export function isManagedBatchSource(source: BatchSource): source is ManagedBatchSource { return originals.has(source); }
 export function createManagedBatchSource(domain: ManagedExecutionDomain, action: ManagedAction<FactOutcome>, invocation: ReturnType<typeof createManagedModelInvocation>, batch: object, calls: readonly BatchCall[], witnesses: readonly ManagedFactWitness[], hooks: ExecutionHookChannel, register: (drain: () => Promise<void>) => SettlementFacts<FactOutcome>): ManagedBatchSource {
+    // The nominal map comparison uses the domain's original context identity.
+    if (!isManagedExecutionDomain(domain) || !isExecutionHookChannel(hooks, domain.context as PluginContext)) throw TypeError('Original batch hook channel required');
     domain.assertCurrent();
     if (!domain.owner.ownsAction(action) || calls.length !== witnesses.length)
         throw TypeError('Original batch action/captures required');
@@ -148,13 +150,20 @@ export function createManagedBatchSource(domain: ManagedExecutionDomain, action:
                 throw TypeError('Original batch receiver required');
             return hooks.emit('agent/post-tool', { ...payload, domain }, surface);
         },
-        projectSynthetic(payload: {
-            name: string;
-            output: unknown;
-        }) {
-            if (this !== source)
-                throw TypeError('Original batch receiver required');
-            return hooks.cascade('tools/project-synthetic-result', payload, async () => payload.output, surface);
+        async projectSynthetic(payload: { name: string; output: unknown }): Promise<SyntheticProjection> {
+            if (this !== source) throw TypeError('Original batch receiver required');
+            try {
+                return { kind: 'projected', output: await hooks.cascade('tools/project-synthetic-result', payload, async () => payload.output, surface) };
+            } catch (cause) {
+                // Only the original channel can prove its captured authority
+                // permanently changed. An opaque hook error is not that proof.
+                try { hooks.assertCurrent(surface); }
+                catch (revocation) {
+                    if (revocation instanceof Error && Object.getOwnPropertyDescriptor(revocation, 'code')?.value === 'EXECUTION_HOOK_SURFACE_CHANGED')
+                        return { kind: 'revoked', cause };
+                }
+                throw cause;
+            }
         },
         release() {
             if (this !== source)

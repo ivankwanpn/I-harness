@@ -106,6 +106,14 @@ Later settled outputs wait behind earlier slots. Real outputs finalize before
 result append; the cursor advances before end/post-tool observation. Synthetic
 outputs append directly and never run finalize or post-tool effects.
 
+A managed synthetic failure keeps its original projection outcome across
+settlement retries. If that original hook surface was permanently revoked,
+only a verified failed or cancelled execution can publish the constant
+`TOOL_RESULT_PROJECTION_UNAVAILABLE` result; unprojected output is withheld.
+The original projection error still reaches the caller after the durable
+acknowledgement. Unknown physical outcomes remain recovery obligations, and
+neither replacement hooks nor the tool body run to settle the old call.
+
 Preparation can await policy. The started boundary advances only after it
 succeeds and cancellation is rechecked. The durable dispatch marker is appended,
 the current host checkpoint is awaited, cancellation is rechecked again, and

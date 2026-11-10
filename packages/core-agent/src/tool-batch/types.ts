@@ -44,7 +44,9 @@ export interface ExecuteToolCallsOptions {
 
 
 export interface Slot { name: string; callId: string; prepared: PreparedCall; output: unknown; finalized?: import('@i-harness/core-tools').ToolResult; finalization?: import('@i-harness/core-tools').ResultFinalization; finalizing?: Promise<import('@i-harness/core-tools').ToolResult>; fact?: CapturedSettlementFact<ProducerFactOutcome>; recorded?: true }
+export type SyntheticProjection = { kind: 'projected'; output: unknown } | { kind: 'revoked'; cause: unknown }
+
 // Synthetic results have no finalize/post-tool authority.
-export interface SyntheticSlot { name: string; callId: string; output: unknown; synthetic: true; execution?: import('@i-harness/core-session').ResultExecution; finalization?: import('@i-harness/core-tools').ResultFinalization; projected?: { output: unknown }; fact?: CapturedSettlementFact<ProducerFactOutcome>; recorded?: true }
+export interface SyntheticSlot { name: string; callId: string; output: unknown; synthetic: true; execution?: import('@i-harness/core-session').ResultExecution; finalization?: import('@i-harness/core-tools').ResultFinalization; projected?: SyntheticProjection; fact?: CapturedSettlementFact<ProducerFactOutcome>; recorded?: true }
 export interface RetainedSlot extends Omit<Slot, 'output'> { retained: RetainedToolOutcome; recoveryCause: unknown; resolved?: { output: unknown } }
 export type BatchSlot = Slot | SyntheticSlot | RetainedSlot

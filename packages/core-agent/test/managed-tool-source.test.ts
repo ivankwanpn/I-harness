@@ -13,7 +13,7 @@ import { acquireManagedExecution } from '../../session-persistence/src/execution
 import { createManagedAgentModelOriginOwner, consumeManagedAgentModelOrigin, createManagedModelInvocation } from '../src/tool-batch/managed-model-origin.ts';
 import { createManagedBatchSource } from '../src/tool-batch/managed-source.ts';
 import { executeToolCalls } from '../src/execute-tool-calls.ts';
-it.each(['healthy', 'stop', 'copied-call', 'foreign-action', 'mutated-call', 'twice', 'falsey-body'] as const)('private rolling pool requires original same-action accepted members (%s)', async (mode) => {
+it.each(['forged-hooks', 'healthy', 'stop', 'copied-call', 'foreign-action', 'mutated-call', 'twice', 'falsey-body'] as const)('private rolling pool requires original same-action accepted members (%s)', async (mode) => {
     const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'private-tool-')), coordinator = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true } }, taskDocumentStorageContract), { id } = await coordinator.create(), execution = await acquireManagedExecution(coordinator, id), ctx = createContext(), origin = createManagedAgentModelOriginOwner(ctx, execution);
     let effects = 0, post = 0;
     onExecutionEvent(ctx, 'agent/post-tool', () => { post++; });
@@ -64,6 +64,16 @@ it.each(['healthy', 'stop', 'copied-call', 'foreign-action', 'mutated-call', 'tw
             expect(build).toThrow();
             expect(effects).toBe(0);
             return;
+        }
+        if (mode === 'forged-hooks') {
+            const channel = captureExecutionHookChannel(ctx)
+            let calls = 0
+            const fake = { ...channel, assertCurrent() { calls++; throw Object.assign(Error('forged'), {code:'EXECUTION_HOOK_SURFACE_CHANGED'}) } }
+            const register = (drain: () => Promise<void>) => action.registerSettlementSource(drain)
+            expect(() => createManagedBatchSource(origin.domain, action, invocation, token, batch, [witness], fake, register)).toThrow('Original batch hook channel')
+            expect(() => createManagedBatchSource(origin.domain, action, invocation, token, batch, [witness], captureExecutionHookChannel(createContext()), register)).toThrow('Original batch hook channel')
+            expect(calls).toBe(0);expect(effects).toBe(0)
+            return
         }
         const source = build(), inspectionSource = action.registerSettlementSource(async () => { });
         sources.add(inspectionSource);
