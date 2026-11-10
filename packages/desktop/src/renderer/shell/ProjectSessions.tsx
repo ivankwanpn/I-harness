@@ -50,6 +50,8 @@ export function ProjectSessions(props: ProjectSessionsProps) {
   const tickets = useRef<Record<string, number>>({})
   const supplied = useRef({ workspaceId: selectedWorkspaceId, dashboard: props.dashboard })
   supplied.current = { workspaceId: selectedWorkspaceId, dashboard: props.dashboard }
+  const activeWorkspace = useRef(selectedWorkspaceId)
+  activeWorkspace.current = selectedWorkspaceId
 
   const read = useCallback(async (workspaceId: string, loadDashboard = true) => {
     if (!active.current) return
@@ -93,7 +95,13 @@ export function ProjectSessions(props: ProjectSessionsProps) {
     for (const workspace of workspaces) void read(workspace.id, supplied.current.workspaceId !== workspace.id || supplied.current.dashboard === undefined)
     // Reconcile low-frequency changes that have no live notification (for
     // example an empty durable draft created before its first send).
-    const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") for (const workspace of workspaces) void read(workspace.id) }, 5000)
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return
+      // Poll only the active workspace; polling every workspace kept every
+      // gateway alive and defeated idle eviction.
+      const active = workspaces.find(workspace => workspace.id === activeWorkspace.current)
+      if (active) void read(active.id)
+    }, 5000)
     return () => { active.current = false; epoch.current++; window.clearInterval(timer); for (const refresh of refreshers.values()) refresh.dispose(); unsubscribe() }
   }, [bridge, workspaceKey, read, props.revision])
 

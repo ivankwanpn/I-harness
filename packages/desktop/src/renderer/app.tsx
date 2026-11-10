@@ -116,6 +116,16 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     if (historyTarget && (historyTarget.workspaceId !== selectedWorkspaceId || historyTarget.sessionId !== selectedSessionId)) setHistoryTarget(undefined)
   }, [selectedWorkspaceId, selectedSessionId, historyTarget])
   const [retryNonce, setRetryNonce] = useState(0)
+  const reconnectAttempt = useRef(0)
+  useEffect(() => {
+    if (connection !== "offline") { reconnectAttempt.current = 0; return }
+    const delay = Math.min(500 * 2 ** Math.min(reconnectAttempt.current++, 4), 5_000)
+    const timer = window.setTimeout(() => {
+      setConnection((current) => current === "offline" ? "reconnecting" : current)
+      setRetryNonce((value) => value + 1)
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [connection])
   const cursorRef = useRef(0)
   const chunkBuffer = useRef<WireEvent[]>([])
   const chunkFrame = useRef<number | undefined>(undefined)
