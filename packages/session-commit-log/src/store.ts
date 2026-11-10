@@ -108,7 +108,7 @@ async function writeAll(handle: FileHandle, text: string, position: number): Pro
 /** Publish a brand-new session generation atomically: temp write + fsync, then a
  *  no-overwrite link. A crash before the link leaves only a temporary file, so the
  *  session never existed; the link itself is the single commit point. */
-async function publish(io: CommitLogIo, root: string, sessionId: string, line: string, replaceDeleted = false): Promise<void> {
+async function publish(io: CommitLogIo, root: string, sessionId: string, line: string, deletedGeneration?: string): Promise<void> {
   const directory = sessionDirectory(root, sessionId)
   await io.mkdir(directory)
   const finalPath = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
@@ -121,8 +121,25 @@ async function publish(io: CommitLogIo, root: string, sessionId: string, line: s
     await handle.close().catch(() => {})
   }
   try {
-    if (replaceDeleted) await io.rename(temporary, finalPath)
-    else await io.link(temporary, finalPath)
+    if (deletedGeneration !== undefined) {
+      const deadline = performance.now() + 500
+      let delayMs = 10
+      for (;;) {
+        // Keep the original tombstone and completed stage under the same writer
+        // lease. A sharing retry must never replace a changed/live generation.
+        const current = await readGeneration(io, finalPath)
+        if (current === undefined || sha256Hex(current) !== deletedGeneration) throw new CommitLogConflictError(sessionId)
+        try { await io.rename(temporary, finalPath); break }
+        catch (error) {
+          const remaining = deadline - performance.now()
+          const code = (error as NodeJS.ErrnoException | null)?.code
+          if (process.platform !== 'win32' || !['EPERM', 'EBUSY'].includes(code ?? '') || remaining <= 0) throw error
+          await new Promise(resolve => setTimeout(resolve, Math.min(delayMs, remaining)))
+          if (performance.now() >= deadline) throw error
+          delayMs = Math.min(delayMs * 2, 80)
+        }
+      }
+    } else await io.link(temporary, finalPath)
   } catch (error) {
     if (isAlreadyExists(error)) throw new CommitLogConflictError(sessionId)
     throw error
@@ -157,16 +174,16 @@ export async function createCommitLog(options: CommitLogOptions, first: CreateIn
     const line = encodeCommit(payload) + '\n'
     const record = decodeCommit(line.slice(0, -1))
     const view = foldCommits([record])
-    let replaceDeleted = false
+    let deletedGeneration: string | undefined
     if (options.recreateDeleted) {
       const existing = await readGeneration(io, generationPath(root, sessionId, COMMIT_LOG_GENERATION))
       if (existing) {
         if (!foldCommits(scanCommitLog(existing).records).deleted) throw new CommitLogConflictError(sessionId)
-        replaceDeleted = true
+        deletedGeneration = sha256Hex(existing)
       }
     }
     // Atomic file replacement keeps the durable tombstone until new birth commits.
-    await publish(io, root, sessionId, line, replaceDeleted)
+    await publish(io, root, sessionId, line, deletedGeneration)
     const handle = await io.open(generationPath(root, sessionId, COMMIT_LOG_GENERATION), 'r+')
     const state = openState([record], view, Buffer.byteLength(line))
     state.handle = handle
