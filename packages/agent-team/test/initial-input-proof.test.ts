@@ -18,16 +18,28 @@ it.each(['pending','unknown'] as const)('preserves exact initial-input evidence 
   const root=await mkdtemp(join(tmpdir(),'ih-f1-initial-proof-'))
   const table=createAgentTable(),jobs=createJobRegistry(),agents=createAgentRegistry(),ctx=createContext(),tools=createToolRegistry(ctx)
   const entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),modelRelease=Promise.withResolvers<void>()
+  const unknownInjected=Promise.withResolvers<void>()
+  const reconciling=Promise.withResolvers<void>(),reconcileRelease=Promise.withResolvers<void>()
+  let appendCalls=0
   let key:BatchKey|undefined
   let hook: ((original: NonNullable<import('@i-harness/session-persistence').PersistenceBackend['appendOwnedBatch']>) => NonNullable<import('@i-harness/session-persistence').PersistenceBackend['appendOwnedBatch']>) | undefined
-  const backend=createJsonlBackend(root,{wrapOwnedBatch:original=>(...args)=>(hook?hook(original):original)(...args)})
+  const backend=createJsonlBackend(root,{
+    wrapOwnedBatch:original=>(...args)=>{appendCalls++;return (hook?hook(original):original)(...args)},
+    wrapOwnedReconcile:original=>async(...args)=>{
+      if(mode==='unknown'&&key&&args[3].key.batchId===key.batchId){reconciling.resolve();await reconcileRelease.promise}
+      return original(...args)
+    },
+  })
   const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract)
   hook = actual => async(...args)=>{
     if(decodeFactBatch(args[3].bytes).events.some(event=>event.type==='turn/start')){
       key=args[3].key;entered.resolve()
-      if(mode==='pending')await release.promise
+      // Both cases first hold a genuinely active append. The unknown case
+      // advances to a second, separately observed disposition below.
+      await release.promise
       const outcome=await actual(...args)
-      return mode==='unknown'?{kind:'unknown',key}:outcome
+      if(mode==='unknown'){expect(outcome.kind).toBe('committed');unknownInjected.resolve();return {kind:'unknown',key}}
+      return outcome
     }
     return actual(...args)
   }
@@ -36,7 +48,13 @@ it.each(['pending','unknown'] as const)('preserves exact initial-input evidence 
   try{
     await entered.promise
     expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(true)
-    await expect(coordinator.snapshot!(out.sessionId!)).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+    const beforeRead=appendCalls
+    const committed=await coordinator.snapshot!(out.sessionId!)
+    expect(committed.session.events).toHaveLength(key!.firstSeq)
+    expect(committed.session.events.map(event=>event.seq)).toEqual(Array.from({length:key!.firstSeq},(_,index)=>index))
+    expect(committed.session.events.some(event=>event.type==='turn/start')).toBe(false)
+    expect(committed.session.events[0]).toMatchObject({type:'agent/input/admitted',text:'exact initial prompt'})
+    expect(appendCalls).toBe(beforeRead)
     const owner=entry.factOwner;entry.factOwner=undefined
     expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(false);entry.factOwner=owner
     const foreign=await coordinator.openManagedDocument((await coordinator.create()).id),view=entry.session
@@ -47,15 +65,31 @@ it.each(['pending','unknown'] as const)('preserves exact initial-input evidence 
     expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(false)
     table.add(out.path,entry)
     table.remove(out.path)
-    // Without a live entry the probe falls back to the durable snapshot; if the
-    // admission is already durable, honest evidence is true (legacy snapshot was
-    // unavailable, which made this false).
-    expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(mode === 'unknown')
+    // The cold snapshot exposes the installed committed prefix and its original
+    // admitted prompt while the next write is known active.
+    expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(true)
+    table.add(out.path,entry)
     release.resolve()
-    if(mode==='unknown'){await entry.followupChain;await (await coordinator.openManagedDocument(out.sessionId!)).reconcile(key!)}
+    if(mode==='unknown'){
+      await unknownInjected.promise
+      // The real child cleanup reconciles its exact unknown frame. Keep that
+      // original read held until recovery refusal has been observed.
+      await reconciling.promise
+      const beforeUnknownRead=appendCalls
+      await expect(coordinator.snapshot!(out.sessionId!)).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+      expect(appendCalls).toBe(beforeUnknownRead)
+      expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(true)
+      table.remove(out.path)
+      expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(false)
+      reconcileRelease.resolve()
+      await entry.followupChain
+      await (await coordinator.openManagedDocument(out.sessionId!)).reconcile(key!)
+      expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(true)
+      table.add(out.path,entry)
+    }
     else {modelRelease.resolve();await entry.followupChain}
     expect(await probe.realHoldsPrompt(out.sessionId!)).toBe(true)
-  }finally{release.resolve();modelRelease.resolve();table.add(out.path,entry);await entry.dispose?.().catch(()=>{});await coordinator.close().catch(()=>{})}
+  }finally{release.resolve();reconcileRelease.resolve();modelRelease.resolve();table.add(out.path,entry);await entry.dispose?.().catch(()=>{});await coordinator.close().catch(()=>{})}
 })
 
 it('refuses an actual unrelated admission or foreign receipt as the private initial-input evidence', async () => {
