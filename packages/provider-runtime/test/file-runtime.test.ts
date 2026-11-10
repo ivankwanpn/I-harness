@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { afterEach, expect, it, vi } from "vitest"
 import { createFileProviderRuntime } from "../src/file-runtime.ts"
 import { SettingsStore } from "@i-harness/settings"
+import { defaultProviderRegistry } from "@i-harness/provider"
 
 it("applies a changed retry limit to the next request of an already resolved binding", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-live-retry-")); roots.push(root)
@@ -106,4 +107,19 @@ it("refreshes wait deadlines from disk for the next request of an existing bindi
  const store = new SettingsStore({ path: settingsPath }); await store.load(); await store.set({ modelWait: { firstResponseSeconds: 30, progressSeconds: 0 } })
  for await (const _ of ready.binding.client.stream({ messages: [], tools: [], systemPrompt: "" })) {}
  expect(policies.at(-1)).toEqual({ firstResponseMs: 30000, progressMs: 0 })
+})
+
+it('allows builtin key configuration but refuses an unknown custom route before storing a credential', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-provider-files-')); roots.push(root)
+  const options = { settingsPath: join(root, 'settings.json'), credentialsPath: join(root, 'credentials.json') }
+  const runtime = createFileProviderRuntime(options)
+  const registry = defaultProviderRegistry()
+  registry.register({ name: 'registered-fixture', displayName: 'Registered fixture', protocol: 'openai-compatible', baseUrl: 'https://fixture.invalid' })
+  try {
+    await runtime.setApiKey('registered-fixture', 'owned-builtin-key')
+    const saved = await readFile(options.credentialsPath, 'utf8')
+    await expect(runtime.setApiKey('unknown-custom-fixture', 'must-not-store')).rejects.toThrow('No provider route')
+    expect(await readFile(options.credentialsPath, 'utf8')).toBe(saved)
+    expect((await runtime.directory()).some(row => row.id === 'unknown-custom-fixture')).toBe(false)
+  } finally { registry.remove('registered-fixture') }
 })

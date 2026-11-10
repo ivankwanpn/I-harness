@@ -13,7 +13,8 @@
  */
 
 import { builtinRoles } from "@i-harness/subagent"
-import type { Settings } from "@i-harness/settings"
+import { SettingsStore, resolveSettingsPath, type Settings } from "@i-harness/settings"
+import { acquireSessionLock } from "@i-harness/fs-lock"
 import { PROVIDER_PROTOCOLS, type CliProtocol } from "./provider.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -242,59 +243,74 @@ export async function runRolesCommand(args: string[]): Promise<number> {
     return 0
   }
 
-  const { settings } = await loadProviderRuntime()
-  // The whole table is copied out and written back: `set` replaces one entry
-  // and `unset` drops one, and each lands as the same single `agents` write —
-  // a per-field merge is what design §2 rule 2 rejected, because the unit here
-  // is "which model this role runs on", not a bag of independent fields.
-  const roles = { ...settings.get().agents.roles }
+  const execute = async (settings: SettingsStore): Promise<number> => {
+    // The whole table is copied out and written back: `set` replaces one entry
+    // and `unset` drops one, and each lands as the same single `agents` write —
+    // a per-field merge is what design §2 rule 2 rejected, because the unit here
+    // is "which model this role runs on", not a bag of independent fields.
+    const roles = { ...settings.get().agents.roles }
 
-  try {
-    if (parsed.subcommand === "list") {
-      // The switch travels with the read: without it the note above the rows
-      // would be a guess, and with it the listing says which of these entries
-      // can actually run.
-      console.log(renderRoles(rowsOf(roles), settings.get().plugins.subagentModel))
-      return 0
-    }
-    const name = parsed.role!
-    if (parsed.subcommand === "unset") {
-      // A no-op SAYS it is one instead of reporting a removal that did not
-      // happen — and stays exit 0, because the role already has the state the
-      // user asked for. This is `models set`'s "nothing to change", not
-      // `models rm`'s absent row, which failed because the user named
-      // something that was not there.
-      if (roles[name] === undefined) {
-        console.log(`role "${name}": nothing to unset — it already inherits the parent's client`)
+    try {
+      if (parsed.subcommand === "list") {
+        // The switch travels with the read: without it the note above the rows
+        // would be a guess, and with it the listing says which of these entries
+        // can actually run.
+        console.log(renderRoles(rowsOf(roles), settings.get().plugins.subagentModel))
         return 0
       }
-      delete roles[name]
+      const name = parsed.role!
+      if (parsed.subcommand === "unset") {
+        // A no-op SAYS it is one instead of reporting a removal that did not
+        // happen — and stays exit 0, because the role already has the state the
+        // user asked for. This is `models set`'s "nothing to change", not
+        // `models rm`'s absent row, which failed because the user named
+        // something that was not there.
+        if (roles[name] === undefined) {
+          console.log(`role "${name}": nothing to unset — it already inherits the parent's client`)
+          return 0
+        }
+        delete roles[name]
+        await settings.set({ agents: { roles } })
+        console.log(`role "${name}" now inherits the parent's client`)
+        return 0
+      }
+      // §2 rule 1 was enforced at parse time, so both halves are present here.
+      const entry: RoleSelection = {
+        provider: parsed.values.provider!,
+        model: parsed.values.model!,
+        ...(parsed.values.protocol !== undefined ? { protocol: parsed.values.protocol } : {}),
+        ...(parsed.values.reasoningEffort !== undefined ? { reasoningEffort: parsed.values.reasoningEffort } : {}),
+      }
+      roles[name] = entry
       await settings.set({ agents: { roles } })
-      console.log(`role "${name}" now inherits the parent's client`)
+      // The RESULTING entry is printed, not a bare "updated": this verb replaces
+      // the whole entry, so re-running it to change the model clears a protocol
+      // set earlier — the printed line is what makes that visible (the ruling
+      // `models use` made for the default model's reasoning effort).
+      console.log(`role "${name}": ${describeSelection(entry)}`)
+      // Setting a model the gate will refuse is a stop, not a surprise — say it
+      // HERE, where the user just asked for it, rather than at the next spawn
+      // that fails somewhere else. A DIAGNOSTIC (stderr) and NOT an error: the
+      // write succeeded and is exactly what was asked for, so the exit stays 0.
+      if (!settings.get().plugins.subagentModel) {
+        console.error("note: plugins.subagentModel is false — spawns of this role will be refused until it is enabled")
+      }
       return 0
+    } catch (error) {
+      d.error(`roles: ${error instanceof Error ? error.message : String(error)}`)
+      return 1
     }
-    // §2 rule 1 was enforced at parse time, so both halves are present here.
-    const entry: RoleSelection = {
-      provider: parsed.values.provider!,
-      model: parsed.values.model!,
-      ...(parsed.values.protocol !== undefined ? { protocol: parsed.values.protocol } : {}),
-      ...(parsed.values.reasoningEffort !== undefined ? { reasoningEffort: parsed.values.reasoningEffort } : {}),
-    }
-    roles[name] = entry
-    await settings.set({ agents: { roles } })
-    // The RESULTING entry is printed, not a bare "updated": this verb replaces
-    // the whole entry, so re-running it to change the model clears a protocol
-    // set earlier — the printed line is what makes that visible (the ruling
-    // `models use` made for the default model's reasoning effort).
-    console.log(`role "${name}": ${describeSelection(entry)}`)
-    // Setting a model the gate will refuse is a stop, not a surprise — say it
-    // HERE, where the user just asked for it, rather than at the next spawn
-    // that fails somewhere else. A DIAGNOSTIC (stderr) and NOT an error: the
-    // write succeeded and is exactly what was asked for, so the exit stays 0.
-    if (!settings.get().plugins.subagentModel) {
-      console.error("note: plugins.subagentModel is false — spawns of this role will be refused until it is enabled")
-    }
-    return 0
+  }
+  if (parsed.subcommand === "list") return execute((await loadProviderRuntime()).settings)
+  const path = resolveSettingsPath()
+  const lockPath = `${process.platform === "win32" ? path.toLowerCase() : path}.provider.lock`
+  try {
+    const lock = await acquireSessionLock({ lockPath, deadlineMs: 10000 })
+    try {
+      const settings = new SettingsStore({ path })
+      await settings.loadObserved()
+      return await execute(settings)
+    } finally { await lock.release() }
   } catch (error) {
     d.error(`roles: ${error instanceof Error ? error.message : String(error)}`)
     return 1

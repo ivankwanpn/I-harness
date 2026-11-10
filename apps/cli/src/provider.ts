@@ -23,7 +23,7 @@ import {
 } from "@i-harness/provider"
 import type { ProviderRuntimeEntry } from "@i-harness/provider-runtime"
 import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
-import { loadProviderRuntime } from "./provider-runtime.ts"
+import { createProviderCommandRuntime } from "./provider-runtime.ts"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 
 // W6 T5: this file's call sites all report the `provider` command's own
@@ -261,7 +261,7 @@ export async function runProviderCommand(args: string[], options: ProviderComman
     return 0
   }
 
-  const { runtime } = await loadProviderRuntime()
+  const runtime = createProviderCommandRuntime()
   try {
     if (parsed.subcommand === "list") {
       console.log(renderProviderList(await runtime.directory(), resolveModelCatalogProvenance()))

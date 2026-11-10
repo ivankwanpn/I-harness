@@ -14,7 +14,7 @@ import { listModelCatalogFamily, resolveModelCard, type ModelCard } from "@i-har
 import type { ProviderRuntime, ProviderRuntimeEntry } from "@i-harness/provider-runtime"
 import type { SettingsModel } from "@i-harness/settings"
 import { PROVIDER_PROTOCOLS, type CliProtocol } from "./provider.ts"
-import { loadProviderRuntime } from "./provider-runtime.ts"
+import { createProviderCommandRuntime } from "./provider-runtime.ts"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 
 // W6 T5: one module-scope handle — every site here reports the `models`
@@ -386,7 +386,7 @@ export async function runModelsCommand(args: string[]): Promise<number> {
     return 0
   }
 
-  const { runtime } = await loadProviderRuntime()
+  const runtime = createProviderCommandRuntime()
   const fields: ModelFieldValues = {
     ...(parsed.values.contextWindow !== undefined
       ? { contextWindow: parsed.values.contextWindow.kind === "clear" ? null : parsed.values.contextWindow.value }

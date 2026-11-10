@@ -9,6 +9,14 @@ import {
 import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
 import type { SessionServiceOptions } from "@i-harness/session-executor"
 import { createWorkspaceRuntime } from "@i-harness/workspace-runtime"
+import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
+
+/** CLI configuration commands cooperate with the existing file-owner leases.
+ * Execution keeps loadProviderRuntime's original settings/credential handles. */
+export function createProviderCommandRuntime(): ProviderRuntime {
+  const settingsPath = resolveSettingsPath()
+  return createFileProviderRuntime({ settingsPath, credentialsPath: join(dirname(settingsPath), "credentials.json") })
+}
 
 /** SDK and ACP use the same persisted execution settings as the run surface.
  * Capture configuration synchronously; resolve dependencies only for a new WSL

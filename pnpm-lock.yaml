@@ -76,6 +76,9 @@ importers:
       '@i-harness/fs':
         specifier: workspace:*
         version: link:../../packages/fs
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../../packages/fs-lock
       '@i-harness/fs-search':
         specifier: workspace:*
         version: link:../../packages/fs-search

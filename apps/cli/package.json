@@ -26,6 +26,7 @@
     "@i-harness/diagnostics": "workspace:*",
     "@i-harness/exec": "workspace:*",
     "@i-harness/fs": "workspace:*",
+    "@i-harness/fs-lock": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
     "@i-harness/guard-approval": "workspace:*",
     "@i-harness/guard-repeat-tool": "workspace:*",

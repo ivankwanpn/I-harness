@@ -98,6 +98,9 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
           for (const path of paths) locks.push(await acquireSessionLock({ lockPath: `${path}.provider.lock`, deadlineMs: 10000 }))
           for (const path of paths) await validateDocument(path)
           await settings.load()
+          // A CLI may have waited for a key on stdin after its directory read.
+          // Recheck existence under this mutation's actual file leases.
+          if (key === "setApiKey" && !(await runtime.directory()).some(row => row.id === args[0])) throw new Error(`No provider route "${String(args[0])}"`)
           if (key === "probeModels") {
             // A read-only network probe uses its own settings snapshot. Release
             // shared file locks before waiting for an endpoint response.

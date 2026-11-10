@@ -49,9 +49,10 @@ single-store `reset()` retains its explicit tolerant repair behavior.
 
 Cross-process read-dependent transactions use an external write lease covering
 load, derivation and mutation. Desktop settings and file-provider-runtime
-cooperate on the normalized settings path's `.provider.lock`. Independent CLI
-role edits currently derive replacement sections outside that lease, leaving a
-race between concurrent writers. [CLI role edits](D:/codex-ih-development/apps/cli/src/roles.ts:245)
+cooperate on the normalized settings path's `.provider.lock`. CLI role mutations
+hold the same lease across a fresh read, whole-entry change and save. Provider
+and model commands use the file-backed runtime's settings and credential leases.
+Other independent read-derived callers require the same external ownership.
 
 The watcher uses `@i-harness/fs-watch` by package name so packaging includes its
 dependency. It establishes an initial baseline, observes only selected paths
