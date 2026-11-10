@@ -1,7 +1,8 @@
 /**
  * Session ownership lease primitive (M23). One process owns a session's write
  * lease: a process-level EXCLUSIVE OS byte-range lock held for the writer's
- * whole lifetime. The OS handle lock auto-releases on process death, so there
+ * whole lifetime. Explicit shared mode supports reader retention namespaces.
+ * The OS handle lock auto-releases on process death, so there
  * is NO stale-lock problem (unlike a lockfile+PID scheme, whose orphaned file
  * deadlocks every later writer).
  *
@@ -30,6 +31,8 @@ export { SessionLockConflictError, SessionLockUnsupportedError }
 /** Options for {@link acquireSessionLock}. */
 export interface AcquireOptions {
   lockPath: string
+  /** Shared readers can coexist. Exclusive ownership remains the default. */
+  mode?: "shared" | "exclusive"
   /** Initial backoff sleep between acquire attempts (default 20). */
   retryMs?: number
   /** Backoff ceiling (default 200). */
@@ -74,6 +77,8 @@ export function lockPathFor(storeRoot: string, sessionId: string): string {
  * @throws {SessionLockConflictError} when another holder keeps the lease past deadlineMs.
  */
 export async function acquireSessionLock(opts: AcquireOptions): Promise<SessionLock> {
+  const mode = opts.mode ?? "exclusive"
+  if (mode !== "shared" && mode !== "exclusive") throw new TypeError("Invalid file lock mode")
   const platform = process.platform
   if (platform !== "win32" && platform !== "linux") {
     // Platform boundary: only Windows (LockFileEx) and Linux (flock) ship
@@ -84,8 +89,8 @@ export async function acquireSessionLock(opts: AcquireOptions): Promise<SessionL
   mkdirSync(dirname(opts.lockPath), { recursive: true })
   if (platform === "win32") {
     const { acquireWin32 } = await import("./win32.ts")
-    return acquireWin32(opts)
+    return acquireWin32(opts, mode)
   }
   const { acquireLinux } = await import("./linux.ts")
-  return acquireLinux(opts)
+  return acquireLinux(opts, mode)
 }

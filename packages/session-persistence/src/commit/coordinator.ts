@@ -151,7 +151,7 @@ export function createCommitCoordinator(options: CommitCoordinatorOptions): Comm
   const now = options.now ?? (() => new Date())
   const reportFailure = options.reportBackgroundFailure ?? ((error: unknown) => console.warn('[i-harness] background persistence failure:', error))
   if (options.lock?.enabled === false) throw new Error('Commit coordinator requires the writer lease')
-  const logOptions = (sessionId: string) => ({ root, sessionId, now, lockRoot: options.lock?.lockRoot ?? root, lease: { retryMs: options.acquireRetryMs, deadlineMs: options.acquireDeadlineMs } })
+  const logOptions = (sessionId: string) => ({ root, sessionId, now, compactDocuments: sessionId === DOCUMENT_SESSION, lockRoot: options.lock?.lockRoot ?? root, lease: { retryMs: options.acquireRetryMs, deadlineMs: options.acquireDeadlineMs } })
   const open = (sessionId: string, mode: CommitLogMode): Promise<CommitLog> => openCommitLog(logOptions(sessionId), mode)
   const owned = new Map<string, CommitLog>()
   let ownedAdmissionClosed = false

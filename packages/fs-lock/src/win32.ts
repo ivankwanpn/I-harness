@@ -1,7 +1,7 @@
 /**
  * Win32 binding for the session ownership lease: koffi-bound CreateFileW +
  * LockFileEx/UnlockFileEx in NON-BLOCKING mode
- * (LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY) with the retry/backoff
+ * (LOCKFILE_FAIL_IMMEDIATELY with the selected lock mode) with the retry/backoff
  * loop in JS, so the event loop is never blocked by a synchronous FFI wait.
  *
  * Attribution: the binding-table shape and call pattern are absorbed from
@@ -145,7 +145,7 @@ function bindings(): FsLockBindings {
  * @param overlapped - the zeroed OVERLAPPED used for lock/unlock.
  * @returns the held lease.
  */
-export function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: string, overlapped: NativePtr): SessionLock {
+export function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: string, overlapped: NativePtr, mode: 'shared' | 'exclusive' = 'exclusive'): SessionLock {
   let held = true
   const lock:SessionLock = {
     get held(): boolean {
@@ -162,7 +162,8 @@ export function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: strin
       if (closeCode !== 0) throw new Error(`CloseHandle failed (Win32 ${closeCode}) for ${lockPath}`)
     },
   }
-  associateOriginalHeldState(lock);return lock
+  if (mode === 'exclusive') associateOriginalHeldState(lock)
+  return lock
 }
 
 /**
@@ -176,7 +177,7 @@ export function heldLock(api: FsLockBindings, handle: NativePtr, lockPath: strin
  * @param opts - the acquire options (lockPath + backoff/deadline tuning).
  * @returns the held lease.
  */
-export async function acquireWin32(opts: AcquireOptions): Promise<SessionLock> {
+export async function acquireWin32(opts: AcquireOptions, mode: 'shared' | 'exclusive' = opts.mode ?? 'exclusive'): Promise<SessionLock> {
   const api = bindings()
   const retryMs = opts.retryMs ?? DEFAULT_RETRY_MS
   const retryMaxMs = opts.retryMaxMs ?? DEFAULT_RETRY_MAX_MS
@@ -210,8 +211,9 @@ export async function acquireWin32(opts: AcquireOptions): Promise<SessionLock> {
         handle = opened
       }
 
-      if (api.lockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, overlapped) !== 0) {
-        return heldLock(api, handle, opts.lockPath, overlapped)
+      const flags = LOCKFILE_FAIL_IMMEDIATELY | (mode === 'exclusive' ? LOCKFILE_EXCLUSIVE_LOCK : 0)
+      if (api.lockFileEx(handle, flags, 0, 1, 0, overlapped) !== 0) {
+        return heldLock(api, handle, opts.lockPath, overlapped, mode)
       }
       const code = api.getLastError()
       if (!isConflictCode(code)) {

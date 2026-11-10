@@ -269,7 +269,7 @@ it('preserves the durable tombstone when recreation publication fails', async ()
   const recreated = await createCommitLog({ root: base, sessionId: 's1', recreateDeleted: true }, { header: { incarnation: 'new' } })
   expect(recreated.header().incarnation).toBe('new'); await recreated.close()
 })
-it('closes a newly opened writer handle and lease if initialization fails', async () => {
+it('releases the writer lease when collection fails before opening the generation handle', async () => {
   const base = await root()
   const log = await createCommitLog({ root: base, sessionId: 's1' }, { header: {} }); await log.close()
   let closed = 0
@@ -285,8 +285,29 @@ it('closes a newly opened writer handle and lease if initialization fails', asyn
     },
   }
   await expect(openCommitLog({ root: base, sessionId: 's1', io }, 'write')).rejects.toThrow('collection failure')
-  expect(closed).toBe(1)
+  expect(closed).toBe(0)
   const reopened = await openCommitLog({ root: base, sessionId: 's1', lease: { deadlineMs: 100 } }, 'write'); await reopened.close()
+})
+
+it('closes the opened generation handle when torn-tail repair fails', async () => {
+  const base = await root()
+  const log = await createCommitLog({ root: base, sessionId: 's1' }, { header: {} }); await log.close()
+  await appendFile(path(base), '{"incomplete":')
+  let closed = 0
+  const io: CommitLogIo = { ...nodeIo, async open(file, flags) {
+    const handle = await nodeIo.open(file, flags)
+    if (flags !== 'r+') return handle
+    return new Proxy(handle, { get(target, key) {
+      if (key === 'truncate') return async () => { throw Error('injected repair failure') }
+      if (key === 'close') return async () => { closed++; await target.close() }
+      const value = Reflect.get(target, key, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    } })
+  } }
+  await expect(openCommitLog({ root: base, sessionId: 's1', io }, 'write')).rejects.toThrow('repair failure')
+  expect(closed).toBe(1)
+  const reopened = await openCommitLog({ root: base, sessionId: 's1', lease: { deadlineMs: 100 } }, 'write')
+  await reopened.close()
 })
 
 it('retries a failed original close without reopening mutation admission', async () => {

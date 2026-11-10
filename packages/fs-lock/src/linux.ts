@@ -43,6 +43,7 @@ interface FsLockBindings {
 // ---- sys/file.h / errno.h constants (stable across glibc and musl) ----
 /** LOCK_EX: request an exclusive lock (sys/file.h). */
 const LOCK_EX = 2
+const LOCK_SH = 1
 /** LOCK_NB: non-blocking — fail with EAGAIN instead of waiting (sys/file.h). */
 const LOCK_NB = 4
 /** LOCK_UN: release an existing lock (sys/file.h). */
@@ -117,7 +118,7 @@ function bindings(): FsLockBindings {
  * @param lockPath - the lock file path (error reporting).
  * @returns the held lease.
  */
-function heldLock(api: FsLockBindings, fd: number, lockPath: string): SessionLock {
+function heldLock(api: FsLockBindings, fd: number, lockPath: string, mode: 'shared' | 'exclusive' = 'exclusive'): SessionLock {
   let held = true
   const lock:SessionLock = {
     get held(): boolean {
@@ -141,7 +142,8 @@ function heldLock(api: FsLockBindings, fd: number, lockPath: string): SessionLoc
       }
     },
   }
-  associateOriginalHeldState(lock);return lock
+  if (mode === 'exclusive') associateOriginalHeldState(lock)
+  return lock
 }
 
 /**
@@ -155,7 +157,7 @@ function heldLock(api: FsLockBindings, fd: number, lockPath: string): SessionLoc
  * @param opts - the acquire options (lockPath + backoff/deadline tuning).
  * @returns the held lease.
  */
-export async function acquireLinux(opts: AcquireOptions): Promise<SessionLock> {
+export async function acquireLinux(opts: AcquireOptions, mode: 'shared' | 'exclusive' = opts.mode ?? 'exclusive'): Promise<SessionLock> {
   const api = bindings()
   const retryMs = opts.retryMs ?? DEFAULT_RETRY_MS
   const retryMaxMs = opts.retryMaxMs ?? DEFAULT_RETRY_MAX_MS
@@ -172,8 +174,8 @@ export async function acquireLinux(opts: AcquireOptions): Promise<SessionLock> {
         fd = openSync(opts.lockPath, "a+")
       }
 
-      if (api.flock(fd, LOCK_EX | LOCK_NB) === 0) {
-        return heldLock(api, fd, opts.lockPath)
+      if (api.flock(fd, (mode === 'shared' ? LOCK_SH : LOCK_EX) | LOCK_NB) === 0) {
+        return heldLock(api, fd, opts.lockPath, mode)
       }
       const code = api.lastErrno()
       if (!isConflictCode(code)) {

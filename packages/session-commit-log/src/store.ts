@@ -4,7 +4,9 @@ import type { SessionEvent } from '@i-harness/core-session'
 import { CommitFormatError } from './errors.ts'
 import { COMMIT_FORMAT_VERSION, GENESIS_PREV, decodeCommit, encodeCommit, parseOps, type CommitOp, type CommitPayload, type CommitRecord } from './format.ts'
 import { foldCommits, type CommitDocument, type CommitView } from './fold.ts'
-import { acquireCommitLease, type CommitLease } from './lease.ts'
+import { acquireCommitLease, acquireCommitSnapshotLease, type CommitLease } from './lease.ts'
+import { SessionLockConflictError } from '@i-harness/fs-lock'
+import { documentCheckpoint } from './document-checkpoint.ts'
 import { generationPath, sessionDirectory, sidecarDirectory, sidecarPath, temporaryPath } from './paths.ts'
 import { isAlreadyExists, isNotFound, nodeIo, type CommitLogIo } from './io.ts'
 import { scanCommitLog } from './scanner.ts'
@@ -34,8 +36,10 @@ export type CommitLogOptions = {
   readonly sessionId: string
   readonly io?: CommitLogIo
   readonly recreateDeleted?: boolean
+  /** Checkpoint the coordinator's current-value document namespace. */
+  readonly compactDocuments?: boolean
   readonly now?: () => Date
-  /** Lease root; defaults to the store root. */
+  /** Writable coordination directory for writer and reader leases. Defaults to the store root. */
   readonly lockRoot?: string
   readonly lease?: { readonly retryMs?: number; readonly deadlineMs?: number }
 }
@@ -77,6 +81,7 @@ type State = {
   size: number
   handle?: FileHandle
   lease?: CommitLease
+  snapshotLease?: CommitLease
   closed: boolean
 }
 
@@ -108,7 +113,7 @@ async function writeAll(handle: FileHandle, text: string, position: number): Pro
 /** Publish a brand-new session generation atomically: temp write + fsync, then a
  *  no-overwrite link. A crash before the link leaves only a temporary file, so the
  *  session never existed; the link itself is the single commit point. */
-async function publish(io: CommitLogIo, root: string, sessionId: string, line: string, deletedGeneration?: string): Promise<void> {
+async function publish(io: CommitLogIo, root: string, sessionId: string, line: string, expectedGeneration?: string): Promise<void> {
   const directory = sessionDirectory(root, sessionId)
   await io.mkdir(directory)
   const finalPath = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
@@ -121,14 +126,14 @@ async function publish(io: CommitLogIo, root: string, sessionId: string, line: s
     await handle.close().catch(() => {})
   }
   try {
-    if (deletedGeneration !== undefined) {
+    if (expectedGeneration !== undefined) {
       const deadline = performance.now() + 500
       let delayMs = 10
       for (;;) {
-        // Keep the original tombstone and completed stage under the same writer
-        // lease. A sharing retry must never replace a changed/live generation.
+        // The writer retains the original generation and completed stage.
+        // Every sharing retry rechecks the same original content identity.
         const current = await readGeneration(io, finalPath)
-        if (current === undefined || sha256Hex(current) !== deletedGeneration) throw new CommitLogConflictError(sessionId)
+        if (current === undefined || sha256Hex(current) !== expectedGeneration) throw new CommitLogConflictError(sessionId)
         try { await io.rename(temporary, finalPath); break }
         catch (error) {
           const remaining = deadline - performance.now()
@@ -209,18 +214,47 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
   const { root, sessionId } = options
   const path = generationPath(root, sessionId, COMMIT_LOG_GENERATION)
   let lease: CommitLease | undefined
+  let snapshotLease: CommitLease | undefined
   let handle: FileHandle | undefined
   try {
     if (mode === 'write') lease = await acquireCommitLease(sessionId, { lockRoot: options.lockRoot ?? root, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs })
-    const bytes = await readGeneration(io, path)
+    else {
+      // An absent read stays passive. Read the actual generation only after
+      // its retention lease is held, so concurrent maintenance stays ordered.
+      try { handle = await io.open(path, 'r') }
+      catch (error) { if (isNotFound(error)) throw new CommitLogNotFoundError(sessionId); throw error }
+      await handle.close(); handle = undefined
+      snapshotLease = await acquireCommitSnapshotLease(sessionId, { lockRoot: options.lockRoot ?? root, retryMs: options.lease?.retryMs, deadlineMs: options.lease?.deadlineMs }, 'shared')
+    }
+    let bytes = await readGeneration(io, path)
     if (!bytes) throw new CommitLogNotFoundError(sessionId)
     // Content identity also detects replacement with an equal-length generation.
     const cacheKey = root + '|' + sessionId
     const cached = mode === 'read' && SCAN_CACHE_ENABLED ? scanCache.get(cacheKey) : undefined
     const fingerprint = sha256Hex(bytes)
-    const scan = cached?.fingerprint === fingerprint ? { records: cached.records, tornBytes: 0 } : scanCommitLog(bytes)
+    let scan = cached?.fingerprint === fingerprint ? { records: cached.records, tornBytes: 0 } : scanCommitLog(bytes)
     if (scan.tornBytes === 0 && mode === 'read' && SCAN_CACHE_ENABLED && (!cached || cached.fingerprint !== fingerprint)) cacheScan(cacheKey, fingerprint, scan.records)
     if (scan.records.length === 0) throw new CommitFormatError('corrupt', 'commit log has no complete commit')
+    let view = foldCommits(scan.records)
+    if (mode === 'write') {
+      let maintenance: CommitLease | undefined
+      try { maintenance = await acquireCommitSnapshotLease(sessionId, { lockRoot: options.lockRoot ?? root, deadlineMs: 0 }, 'exclusive') }
+      catch (error) { if (!(error instanceof SessionLockConflictError)) throw error }
+      if (maintenance) {
+        try {
+          const checkpoint = options.compactDocuments && documentCheckpoint(scan.records, view)
+          if (checkpoint) {
+            await publish(io, root, sessionId, checkpoint.line, fingerprint)
+            bytes = Buffer.from(checkpoint.line)
+            scan = { records: [checkpoint.record], tornBytes: 0 }
+            view = checkpoint.view
+          }
+        } finally { await maintenance.release() }
+        // New readers observe this generation. The writer lease prevents a
+        // concurrent mutation from creating a reference during this cleanup.
+        await collectGarbage(options, scan.records)
+      }
+    }
     let size = bytes.length
     if (mode === 'write') {
       handle = await io.open(path, 'r+')
@@ -230,15 +264,15 @@ export async function openCommitLog(options: CommitLogOptions, mode: CommitLogMo
         await handle.sync()
       }
     }
-    const view = foldCommits(scan.records)
     const state = openState(scan.records, view, size)
     state.handle = handle
     state.lease = lease
+    state.snapshotLease = snapshotLease
     const log = makeLog(options, mode, state, lease)
-    if (mode === 'write') await collectGarbage(options, scan.records)
     return log
   } catch (error) {
     await handle?.close().catch(() => {})
+    if (snapshotLease) await snapshotLease.release().catch(() => {})
     if (lease) await lease.release().catch(() => {})
     throw error
   }
@@ -363,6 +397,7 @@ function makeLog(options: CommitLogOptions, mode: CommitLogMode, state: State, l
         state.handle = undefined
       }
       if (lease) await lease.release()
+      if (state.snapshotLease) await state.snapshotLease.release()
       state.closed = true
     },
   }
