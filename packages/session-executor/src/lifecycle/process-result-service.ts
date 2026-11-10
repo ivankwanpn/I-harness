@@ -49,9 +49,9 @@ export function createProcessAwareResultService(policy: Policy) {
         const deny = () => { if (process) failScope(access.sessionId); return false }
         if (metadata.workspaceId !== policy.workspaceId || !metadata.owner.source) return deny()
         const source = await policy.sourceFor(access.sessionId); process?.assertCurrent()
-        // A restarted session may read its own earlier result even though its
-        // source id changed; process pages still require the original source.
-        if (source.sourceId !== metadata.owner.source.sourceId && (metadata.visibleVia || access.sessionId !== metadata.owner.sessionId)) return deny()
+        // Source identity is stable across restart. Session ownership does not
+        // authorize a result captured under a different current scope.
+        if (source.sourceId !== metadata.owner.source.sourceId) return deny()
         if (!metadata.visibleVia && access.sessionId === metadata.owner.sessionId) return true
         const expected = metadata.visibleVia ?? metadata.ref
         if (process) return process.containsVisibleResult(expected) || deny()

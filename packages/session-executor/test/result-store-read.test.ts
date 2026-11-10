@@ -12,7 +12,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'result-lease-')), settings = join(root, 'settings.json')
   await writeFile(settings, '{}')
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const options = { workspace: root, coordinator, contextOutputSettingsPath: settings, sessionId: 'parent' }
   return { root, settings, coordinator, options, async close() { await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
 }
