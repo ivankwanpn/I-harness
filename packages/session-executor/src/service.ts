@@ -377,8 +377,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const managedWorkflowOwners=new Map<string,{list():import('@i-harness/exec').BackgroundJobView[];kill(id:string):'cancellation-requested'|'already-finished';journal():Promise<void>}>()
   const managedCodeMounts=new Map<string,import('@i-harness/code-mode').CodeModeMount>()
   const managedShellOwners=new Map<string,import('./owned-shell.ts').OwnedShellMount>()
-  const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean}>()
-  const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>}>()
+  const managedCodeStops=new Map<string,{flight:Promise<void>;failed:boolean;settled:boolean}>()
+  type StopSettlement = { acknowledged: boolean; settlement?: Promise<import('@i-harness/core-session').DeliveryCloseReceipt> }
+  const managedStopReceipts=new Map<string,{recipient:ReturnType<ReturnType<typeof receivedExecutionInputsFor>['execDelivery']>;fenceId:string;settleSources?:()=>Promise<void>} & StopSettlement>()
   const laneControls=(id:string):Omit<SessionTurnLane,'runAdmitted'>|undefined=>managedRuntimes.get(id)?.lane??lanes.get(id)
   type TeamRecovery={domain:import('@i-harness/core-session/internal/execution').ManagedExecutionDomain;handle:TeamMountHandle;port:ReturnType<typeof createOriginalTeamRecoveryPort>;resume:()=>Promise<void>;close:()=>Promise<void>;gate:PromiseWithResolvers<void>;pending:boolean;stopped:boolean;retry?:Promise<void>;stop?:Promise<void>}
   type CreatingAssembly = { teamRecovery?:TeamRecovery; work: Promise<unknown>; publicWork?:Promise<SessionAssembly>; managedWork?:Promise<ManagedRuntime>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
@@ -523,7 +524,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return attempt
   }
   const deliveryDrains = new Map<string, ReturnType<typeof createDeliveryDrain>>()
-  const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
+  const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> } & StopSettlement>()
   function stopTeamRecovery(id:string){
     const state=creating.get(id)?.teamRecovery;if(!state||!state.pending&&!state.stopped)return false
     if(!state.stopped){state.stopped=true;state.pending=false;state.gate.reject(new Error('agent aborted'))}
@@ -539,23 +540,51 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
   function requestDeliveryStop(id: string) {
     const recipient=managedRecipients.get(id)
-    if(recipient){if(managedStopReceipts.has(id))return;const request=recipient.requestClose('user-stop'),workflow=managedWorkflowOwners.get(id),task=managedTaskOwners.get(id),prepub=managedPrepubSettlers.get(id);managedStopReceipts.set(id,{recipient,fenceId:request.fenceId,...workflow||task||prepub?{settleSources:async()=>{if(prepub)await prepub();else{await workflow?.journal();await task?.journal()}}}:{}});void request.settled.catch(error=>d.warn('[i-harness] private delivery Stop requires reconciliation: '+String(error)));return}
+    if (recipient) {
+      if (managedStopReceipts.has(id)) return
+      const request = recipient.requestClose('user-stop')
+      const workflow = managedWorkflowOwners.get(id), task = managedTaskOwners.get(id), prepub = managedPrepubSettlers.get(id)
+      const settleSources = workflow || task || prepub ? async () => {
+        if (prepub) await prepub()
+        else { await workflow?.journal(); await task?.journal() }
+      } : undefined
+      managedStopReceipts.set(id, { recipient, fenceId: request.fenceId, acknowledged: false, ...(settleSources ? { settleSources } : {}) })
+      void request.settled.catch(error => d.warn('[i-harness] private delivery Stop requires reconciliation: ' + String(error)))
+      return
+    }
     const assembly = liveAssembly(id)
     if (!assembly) return
     const delivery = receivedInputsFor(assembly.factOwner, id).delivery
     const request = delivery.requestClose('user-stop')
-    deliveryStops.set(id, { delivery, fenceId: request.fenceId, settleSources: assembly.settleParentDeliveryJournalDebt?.bind(assembly) })
+    deliveryStops.set(id, { delivery, fenceId: request.fenceId, acknowledged: false, settleSources: assembly.settleParentDeliveryJournalDebt?.bind(assembly) })
     void request.settled.catch(error => d.warn(`[i-harness] delivery Stop requires reconciliation: ${String(error)}`))
+  }
+  function joinStopSettlement(record: StopSettlement, settle: () => Promise<import('@i-harness/core-session').DeliveryCloseReceipt>) {
+    if (record.settlement) return record.settlement
+    record.acknowledged = false
+    const flight = Promise.resolve().then(settle).then(receipt => { record.acknowledged = true; return receipt })
+    record.settlement = flight
+    // Concurrent waiters join this operation. A later explicit wait still
+    // rechecks source journals, including late terminal facts behind the fence.
+    const release = () => { if (record.settlement === flight) record.settlement = undefined }
+    void flight.then(release, release)
+    return flight
   }
   async function awaitDeliveryStop(id: string) {
     const team=creating.get(id)?.teamRecovery;if(team?.stopped&&!team.stop)stopTeamRecovery(id)
     await creating.get(id)?.teamRecovery?.stop
     await managedCodeStops.get(id)?.flight
     const pending=managedStopReceipts.get(id)
-    if(pending){await pending.settleSources?.();return pending.recipient.closeReceipt(pending.fenceId)}
+    if (pending) return joinStopSettlement(pending, async () => {
+      await pending.settleSources?.()
+      return pending.recipient.closeReceipt(pending.fenceId)
+    })
     const request = deliveryStops.get(id)
-    await request?.settleSources?.()
-    return request?.delivery.closeReceipt(request.fenceId)
+    if (!request) return undefined
+    return joinStopSettlement(request, async () => {
+      await request.settleSources?.()
+      return request.delivery.closeReceipt(request.fenceId)
+    })
   }
   function stopNotifications(id: string, attempts?: Map<NotificationStop, Promise<boolean>>): void {
     cancelledParents.add(id)
@@ -1547,7 +1576,17 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     requestDeliveryStop(sessionId)
     const code=managedCodeMounts.get(sessionId)
     const priorCodeStop=managedCodeStops.get(sessionId)
-    if(code&&(!priorCodeStop||priorCodeStop.failed)){const record={flight:Promise.resolve(),failed:false};try{record.flight=Promise.resolve(code.cancel('user-stop')).catch(error=>{record.failed=true;throw error})}catch(error){record.failed=true;record.flight=Promise.reject(error)};managedCodeStops.set(sessionId,record);void record.flight.catch(error=>d.warn('[i-harness] private Code Stop requires cleanup: '+String(error)))}
+    if (code && (!priorCodeStop || priorCodeStop.failed)) {
+      const record = { flight: Promise.resolve(), failed: false, settled: false }
+      try {
+        record.flight = Promise.resolve(code.cancel('user-stop')).then(
+          () => { record.settled = true },
+          error => { record.failed = true; throw error },
+        )
+      } catch (error) { record.failed = true; record.flight = Promise.reject(error) }
+      managedCodeStops.set(sessionId, record)
+      void record.flight.catch(error => d.warn('[i-harness] private Code Stop requires cleanup: ' + String(error)))
+    }
     stopNotifications(sessionId)
     const current = laneControls(sessionId)?.currentInput()
     if (current !== undefined && laneControls(sessionId)?.cancelCurrent !== undefined) {
@@ -1852,7 +1891,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           resources ||= schedules.kind !== 'available' || (schedules.snapshot as { active: readonly unknown[] }).active.length > 0
         }
       } catch { resources = true }
-      const pending = (creating.has(sessionId) && !assembly && !runtime) || firstPartyFlights.has(sessionId) || chains.has(sessionId) || closing.has(sessionId) || failedClose.has(sessionId) || notificationAdmissions.has(sessionId) || managedPrepubSettlers.has(sessionId) || deliveryStops.has(sessionId) || managedStopReceipts.has(sessionId) || managedCodeStops.has(sessionId)
+      const codeStop = managedCodeStops.get(sessionId)
+      const stopPending = deliveryStops.get(sessionId)?.acknowledged === false
+        || managedStopReceipts.get(sessionId)?.acknowledged === false
+        || !!codeStop && (!codeStop.settled || codeStop.failed)
+      const pending = (creating.has(sessionId) && !assembly && !runtime)
+        || firstPartyFlights.has(sessionId) || chains.has(sessionId) || closing.has(sessionId)
+        || failedClose.has(sessionId) || notificationAdmissions.has(sessionId)
+        || managedPrepubSettlers.has(sessionId) || stopPending
       return { live: !!assembly || !!runtime, ...state, tasks, active: state.running || state.queued > 0 || tasks > 0 || resources || pending }
     },
     queueState,
