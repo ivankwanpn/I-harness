@@ -1,6 +1,17 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
+const browserPlatform = await vi.hoisted(async () => {
+  const original = { AbortController: globalThis.AbortController, AbortSignal: globalThis.AbortSignal, EventTarget: globalThis.EventTarget }
+  // Native host modules capture these methods at module initialization.
+  const { transferableAbortController } = await import('node:util')
+  const native = transferableAbortController()
+  globalThis.AbortController = native.constructor as typeof AbortController
+  globalThis.AbortSignal = native.signal.constructor as typeof AbortSignal
+  globalThis.EventTarget = Object.getPrototypeOf(Object.getPrototypeOf(native.signal)).constructor as typeof EventTarget
+  return original
+})
+afterAll(() => Object.assign(globalThis, browserPlatform))
 import { InstructionSettings } from '../src/renderer/settings/InstructionSettings.tsx'
 import { InstructionsPane } from '../src/renderer/session/InstructionsPane.tsx'
 import { createHostFixtureModel } from '../../desktop-gateway/test/host-fixture-model.ts'
@@ -77,14 +88,23 @@ it('renders metadata from an actual live gateway RPC and refreshes without anoth
   const refreshed = Promise.withResolvers<void>()
   const rpc = async (method: string, params: unknown = {}) => { const id = ++nextId; await host.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params })); const frame = frames.find(value => value.id === id); if (frame?.error) throw new Error(JSON.stringify(frame.error)); return frame?.result }
   const bridge = { request: async (input: any) => { const { kind, workspaceId: _, ...params } = input; const result = await rpc(kind, params); if (kind === 'desktop/instructions/refresh') refreshed.resolve(); return result }, onEvent: (listener: (event: any) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
+  let primaryFailure: unknown
   try {
     await rpc('initialize'); const { sessionId } = await rpc('session/create'); await rpc('session/prompt', { sessionId, prompt: 'hello' })
     const rendered = render(<InstructionsPane workspaceId="w" sessionId={sessionId} bridge={bridge} />)
     expect(await screen.findByText(join(workspace, 'AGENTS.md'))).toBeTruthy(); expect(screen.queryByText('LIVE_UI_RULE')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' })); await refreshed.promise; expect(server.requests).toHaveLength(1)
     rendered.unmount(); await waitFor(() => expect(listeners.size).toBe(0)); expect(server.errors).toEqual([])
-  } finally { cleanup(); await host.close(); await server.close(); globalThis.AbortController = previousController; globalThis.AbortSignal = previousSignal; await rm(root, { recursive: true, force: true }) }
-}, 20000)
+  } catch (error) { primaryFailure = error; throw error }
+  finally {
+    cleanup()
+    const closing = await Promise.allSettled([host.close(), server.close()])
+    globalThis.AbortController = previousController; globalThis.AbortSignal = previousSignal
+    const failures = closing.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (failures.length) throw new AggregateError([...(primaryFailure === undefined ? [] : [primaryFailure]), ...failures], 'Instruction fixture and cleanup failed')
+    await rm(root, { recursive: true, force: true })
+  }
+}, 60000)
 
 it('mounts instruction observation only while its workbench pane is visible', async () => {
   const { Workbench } = await import('../src/renderer/shell/Workbench.tsx'), { useUiStore } = await import('../src/renderer/shell/ui-store.ts')

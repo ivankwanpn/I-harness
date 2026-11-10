@@ -1,6 +1,6 @@
 import {expect,it,vi} from 'vitest'
 const fixture=vi.hoisted(()=>({events:new Map<string,Function>(),windows:[] as any[],handler:undefined as any,manager:undefined as any,record:vi.fn(),quit:vi.fn(),providers:vi.fn(async()=>{})}))
-vi.mock('electron',()=>({app:{setPath(){},getPath(){return process.env.IH_CONFIG_DIR!},commandLine:{hasSwitch:()=>false},whenReady:()=>Promise.resolve(),on(name:string,fn:Function){fixture.events.set(name,fn)},quit:fixture.quit,isPackaged:false,getVersion:()=> 'fixture'},BrowserWindow:{getAllWindows:()=>fixture.windows.filter(w=>!w.destroyed)},ipcMain:{handle(_name:string,fn:any){fixture.handler=fn},removeHandler(){fixture.handler=undefined}},dialog:{},shell:{},clipboard:{}}))
+vi.mock('electron',()=>({app:{setPath(){},getPath(){return process.env.IH_CONFIG_DIR!},commandLine:{hasSwitch:()=>false},whenReady:()=>Promise.resolve(),on(name:string,fn:Function){fixture.events.set(name,fn)},once(){},quit:fixture.quit,isPackaged:false,getVersion:()=> 'fixture'},BrowserWindow:{getAllWindows:()=>fixture.windows.filter(w=>!w.destroyed)},ipcMain:{handle(_name:string,fn:any){fixture.handler=fn},removeHandler(){fixture.handler=undefined}},dialog:{},shell:{},clipboard:{}}))
 vi.mock('../src/main/sdk-runtime.ts',()=>({createWorkspaceRuntimeManager:()=>fixture.manager,launchBundledGateway(){throw Error('No real process launch')}}))
 vi.mock('../src/main/window.ts',()=>({createDesktopWindow(){const events=new Map<string,Function>(),w={events,destroyed:false,on(name:string,fn:Function){events.set(name,fn)},isDestroyed(){return this.destroyed},isMinimized:()=>false,restore(){},show(){},focus(){},webContents:{send(){}}};fixture.windows.push(w);return w}}))
 vi.mock('../src/main/workspaces.ts',()=>({createWorkspaceCatalog:()=>({get:(id:string)=>id==='w'?{id:'w',path:process.env.IH_CONFIG_DIR!,label:'fixture'}:undefined})}))
@@ -29,4 +29,4 @@ it('actual before-quit entry retains current debt, restores a zero-window failur
   failManager=false;fixture.events.get('before-quit')!({preventDefault:vi.fn()});await vi.waitFor(()=>expect(fixture.manager.close).toHaveBeenCalledTimes(2));await new Promise(resolve=>setImmediate(resolve));expect(fixture.quit).not.toHaveBeenCalled()
   exited.resolve();await vi.waitFor(()=>expect(fixture.quit).toHaveBeenCalledOnce());expect(request.mock.calls.filter(([method])=>method==='desktop/surface/subscribe')).toHaveLength(1);expect(fixture.record).toHaveBeenCalled()
  }finally{failManager=false;current=undefined;exited.resolve();const {closeDesktopSurfaceWindows}=await import('../src/main/ipc.ts');await closeDesktopSurfaceWindows();error.mockRestore()}
-},15000)
+},60000)

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, readdir, rm, writeFile, mkdir, utimes, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createRuntimeDiagnostics } from "../src/main/runtime-diagnostics.ts"
+import { createRuntimeDiagnostics as createRuntimeDiagnosticsOwner } from "../src/main/runtime-diagnostics.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
 import { RpcError, SdkRunError } from "@i-harness/sdk"
 import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
@@ -45,7 +45,16 @@ it('persists, rereads, copies and exports the bounded final report through actua
 })
 
 const roots: string[] = []
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
+const diagnosticOwners: ReturnType<typeof createRuntimeDiagnosticsOwner>[] = []
+function createRuntimeDiagnostics(...args: Parameters<typeof createRuntimeDiagnosticsOwner>) {
+  const owner = createRuntimeDiagnosticsOwner(...args)
+  diagnosticOwners.push(owner)
+  return owner
+}
+afterEach(async () => {
+  await Promise.all(diagnosticOwners.splice(0).map(owner => owner.flush()))
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true })
+})
 async function root() { const value = await mkdtemp(join(tmpdir(), "ih-runtime-diagnostics-")); roots.push(value); return value }
 const event = (type: string, data: Record<string, unknown> = {}, sessionId = "s", workspaceId = "ws"): DesktopEvent => ({ kind: "sdk/notification", workspaceId, method: "session/event", params: { sessionId, event: { type, ...data } } })
 const status = (state: string, error?: string, sessionId = "s"): DesktopEvent => ({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId, status: state, error } })
@@ -172,8 +181,8 @@ describe("native runtime diagnostics", () => {
   })
 
   it("bounds views and exports, filters scope/severity/search, and keeps the writer free during a save picker", async () => {
-    let finishPicker: (value: string | undefined) => void = () => {}
-    const service = createRuntimeDiagnostics(await root(), { pickExport: () => new Promise(resolve => { finishPicker = resolve }) })
+    const picker = Promise.withResolvers<string | undefined>(), pickerEntered = Promise.withResolvers<void>()
+    const service = createRuntimeDiagnostics(await root(), { pickExport: () => { pickerEntered.resolve(); return picker.promise } })
     for (let i = 0; i < 1005; i++) { service.observe(event("turn/start", { seq: i + 1 })); service.observe(status("failed", "HTTP 503")) }
     expect((await service.list()).entries).toHaveLength(1000)
     expect((await service.list({ sessionId: "other" })).entries).toEqual([])
@@ -181,10 +190,10 @@ describe("native runtime diagnostics", () => {
     expect((await service.list({ query: "503" })).entries).toHaveLength(1000)
     const exporting = service.export()
     // Let the export take its snapshot and enter its injected picker.
-    await new Promise(resolve => setTimeout(resolve, 10))
+    await pickerEntered.promise
     service.observe(status("cancelled"))
     await service.flush()
-    finishPicker(undefined)
+    picker.resolve(undefined)
     expect(await exporting).toEqual({ exported: false, count: 0 })
   })
 

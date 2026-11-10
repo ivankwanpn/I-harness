@@ -20,6 +20,7 @@ interface Fixture {
   manager: WorkspaceRuntimeManager
   workspace: WorkspaceEntry
   outsidePath: string
+  providerCalls(): number
   close(): Promise<void>
 }
 
@@ -55,7 +56,7 @@ async function startFixture(mode: "text" | "slow" | "approval", outsidePath: str
             }],
           }
         : { content: "denied" }
-      response.end(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\ndata: [DONE]\n\n`)
+      response.end(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: calls === 1 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`)
       return
     }
     response.write(": keep-alive\n\n")
@@ -87,6 +88,9 @@ async function setup(mode: "text" | "slow" | "approval"): Promise<Fixture> {
   const outsidePath = join(root, "outside.txt")
   const provider = await startFixture(mode, outsidePath)
   writeFileSync(join(configDir, "settings.json"), JSON.stringify({
+    autoTitle: false,
+    codeMode: { mode: 'off' },
+    ...(mode === 'approval' ? { approvalMode: 'ask-all' } : {}),
     sandboxMode: "workspace-write",
     llm: {
       providers: {
@@ -94,7 +98,7 @@ async function setup(mode: "text" | "slow" | "approval"): Promise<Fixture> {
           protocol: "openai-completions",
           baseURL: provider.baseURL,
           apiKeyEnv: "FIXTURE_API_KEY",
-          models: [{ id: "fixture-model" }],
+          models: [{ id: "fixture-model", contextWindow: 32000, maxTokens: 4096 }],
         },
       },
       defaultModel: { provider: "fixture", model: "fixture-model" },
@@ -108,6 +112,7 @@ async function setup(mode: "text" | "slow" | "approval"): Promise<Fixture> {
     manager,
     workspace: { id: `ws-${mode}`, path: workspaceDir, label: "workspace" },
     outsidePath,
+    providerCalls: provider.providerCalls,
     async close() {
       await manager.close()
       await provider.close()
@@ -151,7 +156,7 @@ describe("Desktop SDK reconnect and cancel against the real gateway", () => {
       await new Promise((resolve) => setTimeout(resolve, 200))
       expect(events.disconnected()).toBe(1)
 
-      const restarted = await fixture.manager.get(fixture.workspace)
+      const restarted = await fixture.manager.recover!(fixture.workspace)
       expect(restarted.client).not.toBe(runtime.client)
       windowState = applyHistory(windowState, await restarted.client.history(sessionId, {
         afterSeq: windowState.cursor, limit: 1000,
@@ -199,12 +204,13 @@ describe("Desktop SDK reconnect and cancel against the real gateway", () => {
       })
 
       const prompt = runtime.client.request("session/prompt", { sessionId, prompt: "write outside" }, 60_000)
-      const settled = prompt.then(() => "resolved" as const, () => "rejected" as const)
+      let promptFailure: unknown
+      const settled = prompt.then(() => "resolved" as const, error => { promptFailure = error; return "rejected" as const })
       const deadline = Date.now() + 20_000
       while (seen.length === 0 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 100))
       }
-      expect(seen).toHaveLength(1)
+      expect(seen, `${String(promptFailure)}; provider calls: ${fixture.providerCalls()}`).toHaveLength(1)
 
       const listed = await runtime.client.request("desktop/interaction/pending", { sessionId }) as Array<{ requestId: string }>
       expect(listed).toHaveLength(1)

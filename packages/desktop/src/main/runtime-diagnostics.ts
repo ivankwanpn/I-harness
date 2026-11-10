@@ -108,7 +108,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     let requestMetrics: RuntimeDiagnosticEntry["requestMetrics"]
     try { if (value.requestMetrics !== undefined) requestMetrics = validateRequestMetrics(value.requestMetrics) } catch { /* Reject optional facts. */ }
     const compaction = safeCompactionDiagnostic(value.compaction)
-    const close = record(value.close) && integer(value.close.generation, 0, Number.MAX_SAFE_INTEGER) && typeof value.close.reason === "string" && ["scope-changed", "subprocess-exited", "manager-closed"].includes(value.close.reason)
+    const close = record(value.close) && integer(value.close.generation, 0, Number.MAX_SAFE_INTEGER) && typeof value.close.reason === "string" && ["scope-changed", "subprocess-exited", "manager-closed", "unhealthy", "initialization-failed"].includes(value.close.reason)
       ? { generation: value.close.generation, reason: value.close.reason as NonNullable<RuntimeDiagnosticEntry["close"]>["reason"] } : undefined
     const contextBudget = safeContextBudget(value.contextBudget)
     const contextAdmission = validAdmissionObservation(value.contextAdmission) ? structuredClone(value.contextAdmission) : undefined

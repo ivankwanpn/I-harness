@@ -55,6 +55,8 @@ export interface WorkspaceRuntimeManager {
   /** Publish current native folder authority to ready and starting gateways. */
   refreshProjectContexts?(): Promise<void>
   get(workspace: WorkspaceEntry): Promise<WorkspaceRuntime>
+  /** Explicit user recovery starts a fresh bounded failure window. */
+  recover?(workspace: WorkspaceEntry): Promise<WorkspaceRuntime>
   onEvent(listener: (event: DesktopEvent) => void): () => void
   /** Close-time SDK query. Unknown state retains the process. */
   hasActiveWork(): Promise<boolean>
@@ -142,7 +144,8 @@ export function createWorkspaceRuntimeManager(options: {
   const pending = new Map<string, Promise<WorkspaceRuntime>>()
   const children = new Map<string, LaunchedRuntime>()
   const generations = new Map<string, number>()
-  const restartWindow = new Map<string, { count: number; since: number }>()
+  type RecoveryState = { count: number; since: number; retryAt: number; timer?: NodeJS.Timeout }
+  const restartWindow = new Map<string, RecoveryState>()
   const healthTimers = new Map<string, NodeJS.Timeout>()
   const healthFailures = new Map<string, number>()
   const lastUsed = new Map<string, number>()
@@ -222,7 +225,38 @@ export function createWorkspaceRuntimeManager(options: {
     }
   }
 
+  function recoveryState(id: string) {
+    const state = restartWindow.get(id)
+    if (state && Date.now() - state.since <= 60_000) return state
+    if (state?.timer) clearTimeout(state.timer)
+    restartWindow.delete(id)
+    return undefined
+  }
+  function scheduleRecovery(workspace: WorkspaceEntry, generation: number): void {
+    if (closed || (generations.get(workspace.id) ?? 0) !== generation) return
+    const now = Date.now()
+    const state: RecoveryState = recoveryState(workspace.id) ?? { count: 0, since: now, retryAt: now }
+    if (state.timer) clearTimeout(state.timer)
+    state.count += 1
+    state.retryAt = now + 500 * state.count
+    restartWindow.set(workspace.id, state)
+    if (state.count >= 4) return
+    const attempt = state.count
+    state.timer = setTimeout(() => {
+      state.timer = undefined
+      if (recoveryState(workspace.id) !== state || state.count !== attempt) return
+      if (closed || (generations.get(workspace.id) ?? 0) !== generation || runtimes.has(workspace.id) || pending.has(workspace.id)) return
+      void manager.get(workspace).catch(() => { /* The manager owns the next bounded retry. */ })
+    }, state.retryAt - now)
+  }
   const manager: WorkspaceRuntimeManager = {
+    async recover(workspace) {
+      await manager.invalidate!(workspace.id)
+      const timer = restartWindow.get(workspace.id)?.timer
+      if (timer) clearTimeout(timer)
+      restartWindow.delete(workspace.id)
+      return manager.get(workspace)
+    },
     peek: (id) => runtimes.get(id),
     async invalidate(id) {
       const runtime = runtimes.get(id)
@@ -277,6 +311,10 @@ export function createWorkspaceRuntimeManager(options: {
       if (ready !== undefined) return Promise.resolve(ready)
       const inflight = pending.get(workspace.id)
       if (inflight !== undefined) return inflight
+      const recovery = recoveryState(workspace.id)
+      if (recovery && (recovery.count >= 4 || Date.now() < recovery.retryAt)) {
+        return Promise.reject(new Error(recovery.count >= 4 ? 'Gateway recovery limit reached. Use Reconnect to try again.' : 'Gateway recovery is pending.'))
+      }
       const generation = generations.get(workspace.id) ?? 0
       const started: Promise<WorkspaceRuntime> = start(workspace, generation)
         .then(async (runtime) => {
@@ -299,7 +337,7 @@ export function createWorkspaceRuntimeManager(options: {
           }
           // No await between checking the epoch/generation and publication.
           runtimes.set(workspace.id, runtime)
-          restartWindow.delete(workspace.id)
+          // Successful initialization does not erase a recent crash loop.
           const health = setInterval(() => {
             if (closed || (generations.get(workspace.id) ?? 0) !== generation || runtimes.get(workspace.id) !== runtime) return
             let timeout: NodeJS.Timeout | undefined
@@ -345,19 +383,17 @@ export function createWorkspaceRuntimeManager(options: {
               // dead transport until the user discovers Reconnect. A bounded
               // restart window prevents a crash loop from spawning forever.
               if (closed || (generations.get(workspace.id) ?? 0) !== generation) return
-              const now = Date.now()
-              const window = restartWindow.get(workspace.id)
-              const next = window === undefined || now - window.since > 60_000 ? { count: 0, since: now } : window
-              if (next.count >= 3) return
-              next.count += 1
-              restartWindow.set(workspace.id, next)
-              setTimeout(() => {
-                if (closed || (generations.get(workspace.id) ?? 0) !== generation || runtimes.has(workspace.id) || pending.has(workspace.id)) return
-                void manager.get(workspace).catch(() => { /* the next explicit open reports the failure */ })
-              }, 500 * next.count)
+              scheduleRecovery(workspace, generation)
             })
           }
           return runtime
+        })
+        .catch(error => {
+          if (!closed && (generations.get(workspace.id) ?? 0) === generation) {
+            scheduleRecovery(workspace, generation)
+            try { emit({ kind: 'sdk/disconnected', workspaceId: workspace.id, message: error instanceof Error ? error.message : String(error), close: { generation, reason: 'initialization-failed' } }) } catch { /* Keep the original startup failure. */ }
+          }
+          throw error
         })
         .finally(() => {
           if (pending.get(workspace.id) === started) pending.delete(workspace.id)
@@ -385,12 +421,16 @@ export function createWorkspaceRuntimeManager(options: {
           if (!dashboard || typeof dashboard !== "object" || !Array.isArray((dashboard as { sessions?: unknown }).sessions)
             || (dashboard as { listingUnavailable?: unknown }).listingUnavailable === true || !Array.isArray(interactions)) return true
           if (interactions.length > 0) return true
+          if ((dashboard as { active?: unknown }).active === true) return true
+          if ((dashboard as { active?: unknown }).active !== undefined && typeof (dashboard as { active?: unknown }).active !== 'boolean') return true
           for (const row of (dashboard as { sessions: unknown[] }).sessions) {
             if (!row || typeof row !== "object") return true
             const value = row as Record<string, unknown>
             if (typeof value.id !== "string" || value.id === "") return true
             if (typeof value.live !== "boolean" || value.live && typeof value.running !== "boolean") return true
             if (value.running === true) return true
+            if (value.active === true) return true
+            if (value.active !== undefined && typeof value.active !== 'boolean') return true
             if (value.running !== undefined && typeof value.running !== "boolean") return true
             for (const field of ["queued", "tasks"] as const) {
               const count = value[field]
@@ -409,19 +449,24 @@ export function createWorkspaceRuntimeManager(options: {
       let retired = 0
       for (const [id, runtime] of [...runtimes]) {
         if (now - (lastUsed.get(id) ?? 0) < ttlMs) continue
+        const checkedVersion = activityVersion
+        const checkedLastUsed = lastUsed.get(id)
         try {
           const dashboard = await runtime.client.request("session/dashboard", {}, 2_500) as { sessions?: unknown }
-          if (!dashboard || typeof dashboard !== "object" || !Array.isArray(dashboard.sessions)) continue
+          if (!dashboard || typeof dashboard !== "object" || !Array.isArray(dashboard.sessions) || (dashboard as { listingUnavailable?: unknown }).listingUnavailable === true) continue
+          if ((dashboard as { active?: unknown }).active === true) continue
+          if ((dashboard as { active?: unknown }).active !== undefined && typeof (dashboard as { active?: unknown }).active !== 'boolean') continue
           const busy = dashboard.sessions.some(row => {
             if (!row || typeof row !== "object") return true
             const value = row as Record<string, unknown>
-            return value.running === true || Number(value.queued ?? 0) > 0 || Number(value.tasks ?? 0) > 0
+            if (typeof value.id !== 'string' || typeof value.live !== 'boolean' || (value.live && typeof value.running !== 'boolean') || (value.active !== undefined && typeof value.active !== 'boolean')) return true
+            return value.active === true || value.running === true || Number(value.queued ?? 0) > 0 || Number(value.tasks ?? 0) > 0
           })
           if (busy) continue
           const interactions = await runtime.client.request("desktop/interaction/pending", {}, 2_500)
-          if (Array.isArray(interactions) && interactions.length > 0) continue
+          if (!Array.isArray(interactions) || interactions.length > 0) continue
         } catch { continue }
-        if (closed || runtimes.get(id) !== runtime) continue
+        if (closed || runtimes.get(id) !== runtime || activityVersion !== checkedVersion || lastUsed.get(id) !== checkedLastUsed || pending.has(id)) continue
         generations.set(id, (generations.get(id) ?? 0) + 1)
         runtimes.delete(id)
         children.delete(id)
@@ -437,6 +482,8 @@ export function createWorkspaceRuntimeManager(options: {
     async close() {
       if (closed) return
       closed = true
+      for (const state of restartWindow.values()) if (state.timer) clearTimeout(state.timer)
+      restartWindow.clear()
       for (const timer of healthTimers.values()) clearInterval(timer)
       healthTimers.clear()
       const closingIds = [...new Set([...runtimes.keys(), ...children.keys()])]

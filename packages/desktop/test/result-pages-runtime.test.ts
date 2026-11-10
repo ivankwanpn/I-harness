@@ -3,7 +3,9 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PassThrough } from "node:stream"
-import { createSessionCoordinator } from "../../session-persistence/src/index.ts"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1] = {}) => composeJsonlTaskTransitionCoordinator(backend, { ...options, lock: { enabled: true, ...options.lock } }, taskDocumentStorageContract)
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { contextWorkspaceLocation, contextSourceIdentity, createContextOutputService } from "../../context-output/src/index.ts"
 import { createDesktopHost } from "../../desktop-gateway/src/host.ts"
@@ -14,7 +16,7 @@ it("reads original cold retained bytes through actual Desktop main, SDK client a
   const root=await mkdtemp(join(tmpdir(),"desktop-result-pages-")), workspace=join(root,"workspace"), sessionDir=join(root,"sessions"), settingsPath=join(root,"settings.json")
   await mkdir(workspace);await mkdir(sessionDir);await writeFile(settingsPath,"{}")
   const coordinator=createSessionCoordinator(createJsonlBackend(sessionDir),{lock:{enabled:true}})
-  for(const sessionId of ["conversation","foreign","archived","hidden"]) await coordinator.create({sessionId,...(sessionId==="archived"?{archived:true}:sessionId==="hidden"?{origin:"subagent",parentSession:"conversation"}:{})})
+  for(const sessionId of ["conversation","foreign","archived","hidden"]) await coordinator.create({sessionId,...(sessionId==="archived"?{archived:true}:sessionId==="hidden"?{origin:"subagent",parentSession:"conversation",seedLength:0}:{})})
   await coordinator.flush("conversation")
   const location=await contextWorkspaceLocation(workspace,sessionDir)
   const owner=createContextOutputService({root:location.serviceRoot,workspaceId:location.workspaceKey,authorizeResult:async()=>true})

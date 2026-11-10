@@ -116,16 +116,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     if (historyTarget && (historyTarget.workspaceId !== selectedWorkspaceId || historyTarget.sessionId !== selectedSessionId)) setHistoryTarget(undefined)
   }, [selectedWorkspaceId, selectedSessionId, historyTarget])
   const [retryNonce, setRetryNonce] = useState(0)
-  const reconnectAttempt = useRef(0)
-  useEffect(() => {
-    if (connection !== "offline") { reconnectAttempt.current = 0; return }
-    const delay = Math.min(500 * 2 ** Math.min(reconnectAttempt.current++, 4), 5_000)
-    const timer = window.setTimeout(() => {
-      setConnection((current) => current === "offline" ? "reconnecting" : current)
-      setRetryNonce((value) => value + 1)
-    }, delay)
-    return () => window.clearTimeout(timer)
-  }, [connection])
   const cursorRef = useRef(0)
   const chunkBuffer = useRef<WireEvent[]>([])
   const chunkFrame = useRef<number | undefined>(undefined)
@@ -383,6 +373,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       if (event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/ready") {
+        setRetryNonce(value => value + 1)
         executionRevision.current = undefined
         setConnection("online")
         setError(undefined)
@@ -940,7 +931,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         forkOperations.current!.retireNavigation()
         setConnection("reconnecting")
         setError(undefined)
-        setRetryNonce((current) => current + 1)
+        if (selectedWorkspaceId === undefined) { setRetryNonce(current => current + 1); return }
+        const recoveryScope = workspaceSelection.current, recoveryNonce = retryNonce
+        void bridge.request({ kind: 'desktop/runtime/recover', workspaceId: selectedWorkspaceId }).then(
+          () => { if (workspaceSelection.current === recoveryScope) setRetryNonce(current => current === recoveryNonce ? current + 1 : current) },
+          reason => { if (workspaceSelection.current === recoveryScope) { setConnection('offline'); setError(reason instanceof Error ? reason.message : String(reason)) } },
+        )
       }}
       onSessionsChanged={() => {
         if (selectedWorkspaceId !== undefined) void forkOperations.current!.refresh(selectedWorkspaceId)

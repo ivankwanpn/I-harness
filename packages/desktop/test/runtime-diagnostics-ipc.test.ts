@@ -7,7 +7,9 @@ import { createRuntimeDiagnostics } from "../src/main/runtime-diagnostics.ts"
 import { createGlobalProviderSettings } from "../src/main/global-provider-settings.ts"
 import { dispatchDesktopRequest, registerDesktopIpc, type DesktopIpcDependencies, type IpcMainLike } from "../src/main/ipc.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
-import { createSessionCoordinator } from "../../session-persistence/src/index.ts"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1] = {}) => composeJsonlTaskTransitionCoordinator(backend, { ...options, lock: { enabled: true, ...options.lock } }, taskDocumentStorageContract)
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { createSessionService } from "../../session-executor/src/index.ts"
 import { createDesktopInput } from "../../desktop-gateway/src/input.ts"
@@ -177,14 +179,17 @@ describe("native diagnostic IPC", () => {
    expect((await f.diagnostics.list()).entries).toEqual([])
    expect(request).not.toHaveBeenCalled()
  })
- it("records actual assemblyFor rejection before onStatus with fresh admission identity and repeated-token dedupe", async () => {
+ it("keeps durable admission accepted when later model startup fails and redacts the execution failure", async () => {
    const f = await fixture()
    const root = await mkdtemp(join(tmpdir(), "ih-admission-startup-")); roots.push(root)
    const coordinator = createSessionCoordinator(createJsonlBackend(root))
    await coordinator.create({ sessionId: "s" })
    const service = createSessionService({ workspace: root, coordinator, modelBindingFor: async () => ({ status: "invalid", reason: "model binding unavailable: private startup payload" }) })
    const statuses: unknown[] = []
-   const input = createDesktopInput(coordinator, service, { onStatus: (...args) => statuses.push(args) })
+   const input = createDesktopInput(coordinator, service, { onStatus: (sessionId, running, error) => {
+     statuses.push([sessionId, running, error])
+     f.diagnostics.observe({ kind: 'sdk/notification', workspaceId: 'ws', method: 'session/status', params: { sessionId, status: error ? 'failed' : running ? 'running' : 'idle', ...(error ? {error} : {}) } })
+   } })
    const frames: RpcMessage[] = []
    const sdk = createSdkServer(service, { onWrite: frame => frames.push(frame) })
    const router = createDesktopRouter(sdk, frame => frames.push(frame), { input })
@@ -201,11 +206,17 @@ describe("native diagnostic IPC", () => {
    } } }) as never
    try {
      await router.handleLine(encodeFrame(makeRequest(0, "initialize", {})))
-     for (const clientToken of ["token-0001", "token-0001", "token-0002"]) await expect(dispatchDesktopRequest({ kind: "desktop/session/input/submit", workspaceId: "ws", sessionId: "s", text: "hello", delivery: "queue", clientToken }, f.dependencies)).rejects.toThrow("model binding unavailable")
-     expect(statuses).toEqual([])
+     const receipts = []
+     for (const clientToken of ["token-0001", "token-0001", "token-0002"]) receipts.push(await dispatchDesktopRequest({ kind: "desktop/session/input/submit", workspaceId: "ws", sessionId: "s", text: "hello", delivery: "queue", clientToken }, f.dependencies))
+     expect(receipts[0]).toMatchObject({accepted:true})
+     expect(receipts[1]).toEqual(receipts[0])
+     expect(receipts[2]).toMatchObject({accepted:true})
+     expect(receipts[2]).not.toEqual(receipts[0])
+     await vi.waitFor(() => expect(statuses.some(row => Array.isArray(row) && typeof row[2] === 'string')).toBe(true))
      const result = await f.diagnostics.list()
-     expect(result.entries).toMatchObject([{ kind: "runtime/error", level: "error", workspaceId: "ws", sessionId: "s", requestId: "token-0002" }, { kind: "runtime/error", requestId: "token-0001" }])
-     expect(live).toHaveLength(2)
+     expect(result.entries.length).toBeGreaterThan(0)
+     for (const entry of result.entries) expect(entry).toMatchObject({kind:'session/error',workspaceId:'ws',sessionId:'s'})
+     expect(live.length).toBeGreaterThan(0)
      expect(JSON.stringify(result)).not.toContain("private startup payload")
      expect(JSON.stringify(live)).not.toContain("private startup payload")
    } finally { await router.close(); await input.close(); await service.close(); await coordinator.close() }

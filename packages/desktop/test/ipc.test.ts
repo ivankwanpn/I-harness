@@ -57,6 +57,16 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it('routes explicit recovery to its known workspace owner without resetting on ordinary reads', async () => {
+    const f = fixture(), recover = vi.fn(async () => ({} as never))
+    f.dependencies.runtimes.recover = recover
+    await expect(dispatchDesktopRequest({kind:'desktop/runtime/recover',workspaceId:ENTRY.id},f.dependencies)).resolves.toEqual({recovered:true})
+    expect(recover).toHaveBeenCalledWith(ENTRY)
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest({kind:'desktop/runtime/recover',workspaceId:'unknown'},f.dependencies)).rejects.toThrow('unknown workspace')
+    await expect(dispatchDesktopRequest({kind:'desktop/runtime/recover',workspaceId:ENTRY.id,automatic:true},f.dependencies)).rejects.toThrow('Invalid')
+    expect(recover).toHaveBeenCalledOnce()
+  })
   it('validates new fork commands before runtime work and forwards only a known capable workspace', async () => {
     const f = fixture(), request = { kind: 'desktop/session/fork/prepare', workspaceId: ENTRY.id, request: { version: 1, sourceSessionId: 'a' } }
     for (const invalid of [{ ...request, extra: true }, { ...request, request: { ...request.request, signal: {} } }, { ...request, request: { version: 1, sourceSessionId: '' } }]) await expect(dispatchDesktopRequest(invalid, f.dependencies)).rejects.toThrow()
@@ -423,6 +433,12 @@ describe("Desktop scoped IPC", () => {
     expect(f.get).not.toHaveBeenCalled()
     await expect(handler?.({ sender: window.webContents }, { kind: "workspace/list" } satisfies DesktopRequest))
       .resolves.toEqual([ENTRY])
+
+    const recovery = new RpcError(-32603, 'Original writer dependency cleanup unresolved', { kind: 'FACT_RECOVERY_REQUIRED' })
+    f.history.mockRejectedValueOnce(recovery)
+    await expect(handler?.({ sender: window.webContents }, { kind: "session/history", workspaceId: ENTRY.id, sessionId: "s", afterSeq: 0, limit: 100 })).rejects.toBe(recovery)
+    expect(f.history).toHaveBeenCalledTimes(1)
+    expect(f.request.mock.calls.some(call => (call as unknown[])[0] === 'desktop/session/reload')).toBe(false)
 
     f.emitEvent({ kind: "sdk/disconnected", workspaceId: "ws-1", message: "gone" })
     expect(send).toHaveBeenCalledWith(DESKTOP_EVENT_CHANNEL, { kind: "sdk/disconnected", workspaceId: "ws-1", message: "gone" })

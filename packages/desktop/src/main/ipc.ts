@@ -13,7 +13,6 @@ import { dispatchResultReadRequest } from "./result-pages.ts"
 import { contextQuery, contextReference, type ContextItem } from "../../../desktop-gateway/src/context-picker.ts"
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
 import { dispatchProjectFilesRequest } from "./project-files.ts"
-import { isRecoveryFailure, isSessionScopedRequest, isTransientReadRetry } from "./session-recovery.ts"
 import { createDesktopProjectContentSearch, notifyDesktopProjectContentScopesChanged } from "./project-content-search.ts"
 import type { createGlobalProviderSettings } from "./global-provider-settings.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
@@ -78,6 +77,15 @@ export async function dispatchDesktopRequest(
   if(!kind||!('value' in kind))throw Error('Invalid Desktop request kind')
   if(typeof value.kind==='string'&&value.kind.startsWith('desktop/surface/')) {if(!dependencies.surfaceObservation)throw Error('Native surface window unavailable');return dependencies.surfaceObservation.request(value)}
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
+  if (value.kind === 'desktop/runtime/recover') {
+    if (Object.keys(value).some(key => !['kind', 'workspaceId'].includes(key))) throw Error('Invalid runtime recovery request')
+    const workspaceId = requireNonEmpty(value.workspaceId, 'workspaceId')
+    const workspace = dependencies.catalog.get(workspaceId)
+    if (!workspace) throw Error(`unknown workspace id: ${workspaceId}`)
+    if (!dependencies.runtimes.recover) throw Error('Explicit gateway recovery is unavailable')
+    await dependencies.runtimes.recover(workspace)
+    return { recovered: true }
+  }
   if (value.kind === "desktop/session/force-stop") {
     if (Object.keys(value).some(key => !["kind", "workspaceId", "sessionId"].includes(key))) throw new Error("Invalid force-stop request")
     const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
@@ -805,41 +813,13 @@ export function registerDesktopIpc(
   let removed = false
   let windows=ipcWindows.get(ipc)
   if(!windows){windows=new Map();ipcWindows.set(ipc,windows);ipc.handle(DESKTOP_REQUEST_CHANNEL,async(event,request)=>{const owned=windows!.get(event.sender);if(!owned)throw Error('untrusted IPC sender');
-    try{
       const result=await dispatchDesktopRequest(request,owned)
       const created=request as {kind?:unknown;workspaceId?:unknown}|null, sessionId=(result as {sessionId?:unknown}|null)?.sessionId
       if(created&&created.kind==="session/create"&&typeof created.workspaceId==="string"&&typeof sessionId==="string"){
         try{window.webContents.send(DESKTOP_EVENT_CHANNEL,{kind:"sdk/notification",workspaceId:created.workspaceId,method:"desktop/session/navigation/changed",params:{sessionId}})}catch{/* A destroyed window needs no refresh. */}
       }
       return result
-    }
-    catch(error){
-      // Recovery-gated failures are repairable: the journal is durable, only the
-      // in-memory execution is poisoned. Rebuild the session once, then tell the
-      // user to retry instead of surfacing an opaque RpcError.
-      if(!isRecoveryFailure(error)||!isSessionScopedRequest(request))throw error
-      // A turn's writer refuses unrelated session work with a dependency-cleanup
-      // message while it prepares. That is transient, not corruption: retry the
-      // read briefly instead of reloading (a reload drains the live turn).
-      if(isTransientReadRetry(error,request)){
-        let last:unknown=error
-        for(let attempt=0;attempt<12;attempt+=1){
-          await new Promise(resolve=>setTimeout(resolve,150))
-          try{return await dispatchDesktopRequest(request,owned)}
-          catch(next){if(!isTransientReadRetry(next,request))throw next;last=next}
-        }
-        error=last
-      }
-      try{await dispatchDesktopRequest({kind:'desktop/session/reload',workspaceId:request.workspaceId,sessionId:request.sessionId},owned)}
-      catch{throw error}
-      // A durable input submit is idempotent by clientToken. Retrying it once
-      // after the reload repairs the poisoned in-memory writer without asking
-      // the user to press Send again.
-      if((request as {kind?:unknown}).kind==='desktop/session/input/submit'){
-        try{return await dispatchDesktopRequest(request,owned)}catch{/* retain the recovery message */}
-      }
-      throw new Error('會話狀態已重新載入，請重試剛才的操作。')
-    }})}
+    })}
   if(windows.has(registeredWebContents))throw Error('Desktop window already registered')
   windows.set(registeredWebContents,ownedDependencies)
   const offEvent = dependencies.runtimes.onEvent((desktopEvent) => {

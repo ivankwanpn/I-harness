@@ -124,7 +124,10 @@ describe("Desktop runtime forwards interaction notifications", () => {
       listener({ method: "desktop/unknown", params: {} })
     }
 
-    expect(events).toEqual([
+    expect(events.filter(event => event.kind === 'sdk/ready')).toEqual([
+      { kind: 'sdk/ready', method: 'sdk/ready', workspaceId: 'ws-1', runtimeGeneration: 0 },
+    ])
+    expect(events.filter(event => event.kind === 'sdk/notification')).toEqual([
       { kind: "sdk/notification", workspaceId: "ws-1", method: "desktop/interaction/request", params: { requestId: "r1" } },
       { kind: "sdk/notification", workspaceId: "ws-1", method: "desktop/interaction/closed", params: { requestId: "r1", reason: "reply" } },
     ])

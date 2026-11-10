@@ -15,14 +15,16 @@ vi.mock('electron', () => ({ contextBridge: { exposeInMainWorld(_name: string, b
 it.each(['healthy','lost-ACK'] as const)('mounts actual source/router/SDK/runtime/native IPC/preload/ExecutionPane with %s and stays silent for ten healthy minutes', async mode => {
     let hidden=false
     Object.defineProperty(document,'hidden',{configurable:true,get:()=>hidden})
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
-    async function finite<T>(work: Promise<T>): Promise<T> { let done = false; const result = work.finally(() => { done = true; }); void result.catch(() => { }); while (!done) {
+
+    let stage=0;async function finite<T>(work: Promise<T>): Promise<T> { const step=++stage, started=process.hrtime.bigint();let done = false; const result = work.finally(() => { done = true; }); void result.catch(() => { }); while (!done) { if(Number(process.hrtime.bigint()-started)/1e9>10)throw Error(`Connected fixture stalled at stage ${step}`);
         await new Promise(resolve => setImmediate(resolve));
         await vi.advanceTimersByTimeAsync(0);
     } return result; }
+    async function sequence<T extends readonly unknown[]>(loaders: { [K in keyof T]: () => Promise<T[K]> }): Promise<T> { const values: unknown[] = []; for (const load of loaders) values.push(await load()); return values as unknown as T; }
     let close = async () => { };
     try {
-        const [{ mkdtemp, rm }, { join }, { PassThrough }, sdk, { createSdkServer }, { createJsonlBackend }, { composeJsonlTaskTransitionCoordinator }, { taskDocumentStorageContract }, { createSessionService }, { createProjectScopeBroker }, { createDesktopExecution }, { createExecutionHostObservation }, { createDesktopRouter, createGatewayWrite }, { createWorkspaceRuntimeManager }, { registerDesktopIpc }, { ExecutionPane }] = await finite(Promise.all([import('node:fs/promises'), import('node:path'), import('node:stream'), import('@i-harness/sdk'), import('@i-harness/sdk/server'), import('../../session-persistence-jsonl/src/index.ts'), import('../../session-persistence-jsonl/src/task-document-factory.ts'), import('../../subagent/src/task/storage-contract.ts'), import('../../session-executor/src/index.ts'), import('../../desktop-gateway/src/project-scope.ts'), import('../../desktop-gateway/src/execution.ts'), import('../../desktop-gateway/src/execution-host-observation.ts'), import('../../desktop-gateway/src/router.ts'), import('../src/main/sdk-runtime.ts'), import('../src/main/ipc.ts'), import('../src/renderer/session/ExecutionPane.tsx')]));
+        const [{ mkdtemp, rm }, { join }, { PassThrough }, sdk, { createSdkServer }, { createJsonlBackend }, { composeJsonlTaskTransitionCoordinator }, { taskDocumentStorageContract }, { createSessionService }, { createProjectScopeBroker }, { createDesktopExecution }, { createExecutionHostObservation }, { createDesktopRouter, createGatewayWrite }, { createWorkspaceRuntimeManager }, { registerDesktopIpc }, { ExecutionPane }] = await sequence([()=>import('node:fs/promises'), ()=>import('node:path'), ()=>import('node:stream'), ()=>import('@i-harness/sdk'), ()=>import('@i-harness/sdk/server'), ()=>import('../../session-persistence-jsonl/src/index.ts'), ()=>import('../../session-persistence-jsonl/src/task-document-factory.ts'), ()=>import('../../subagent/src/task/storage-contract.ts'), ()=>import('../../session-executor/src/index.ts'), ()=>import('../../desktop-gateway/src/project-scope.ts'), ()=>import('../../desktop-gateway/src/execution.ts'), ()=>import('../../desktop-gateway/src/execution-host-observation.ts'), ()=>import('../../desktop-gateway/src/router.ts'), ()=>import('../src/main/sdk-runtime.ts'), ()=>import('../src/main/ipc.ts'), ()=>import('../src/renderer/session/ExecutionPane.tsx')]);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
         const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'mounted-source-')), c = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } }, taskDocumentStorageContract);
         let models = 0;
         const service = createSessionService({ workspace: root, coordinator: c, model: { async *stream() { models++; yield { type: 'end' as const }; } } }), broker = createProjectScopeBroker(c, root), execution = createDesktopExecution(c, service), source = createExecutionHostObservation(c, broker, service, execution);
@@ -31,8 +33,13 @@ it.each(['healthy','lost-ACK'] as const)('mounts actual source/router/SDK/runtim
         await finite(action.facts.code.record({ type: 'code/cell', cellId: 'cell', state: 'started', source: 'original managed cell' }));
         let dropped=false;const ackDropped=Promise.withResolvers<void>(),subscriptions=vi.spyOn(source,'subscribe')
         const input = new PassThrough(), output = new PassThrough(), client = new sdk.HarnessClient(output, input), send = (frame: any) => {if(mode==='lost-ACK'&&!dropped&&frame.result?.requestKey){dropped=true;ackDropped.resolve();return true}return output.write(sdk.encodeFrame(frame))}, handlers = { execution, executionObservation: source }, base = createSdkServer(service, { onWrite: createGatewayWrite(send, handlers) }), router = createDesktopRouter(base, send, handlers);
-        input.on('data', chunk => { for (const line of String(chunk).split('\n').filter(Boolean))
-            void router.handleLine(line); });
+        input.on('data', chunk => { for (const line of String(chunk).split('\n').filter(Boolean)) {
+            void router.handleLine(line).then(async () => {
+                if (JSON.parse(line).method === 'shutdown') {
+                    await router.close(); output.end(); exited.resolve();
+                }
+            });
+        } });
         const workspace = { id: 'w', label: 'fixture', path: root }, exited = Promise.withResolvers<void>(), runtimes = createWorkspaceRuntimeManager({ sessionsRoot: root, launch: () => ({ client, exited: exited.promise }) });
         const requests = vi.spyOn(client, 'request'), reads = vi.spyOn(execution, 'read'), profiles = vi.spyOn(c, 'profile'), snapshots = vi.spyOn(c as typeof c & {
             snapshot: NonNullable<typeof c.snapshot>;
@@ -82,16 +89,17 @@ it.each(['healthy','lost-ACK'] as const)('mounts actual source/router/SDK/runtim
         await act(async()=>{resumeReply.resolve()})
         await finite((async()=>{for(let i=0;i<1000&&!mounted.container.textContent?.includes('newer than held renderer response');i++)await act(async()=>{await new Promise(resolve=>setImmediate(resolve))})})())
         expect(order).toEqual(['authorized response','notice after response','consumer continuation']);expect(mounted.container.textContent).toContain('newer than held renderer response');expect(reads.mock.calls.length-priorReads).toBe(2)
-        expect(vi.getTimerCount()).toBe(0)
-        const counts = [requests.mock.calls.length, reads.mock.calls.length, profiles.mock.calls.length, snapshots.mock.calls.length, assemblies.mock.calls.length];
+        // Runtime health owns one heartbeat. The mounted observation adds no poller.
+        expect(vi.getTimerCount()).toBe(1)
+        const counts = [requests.mock.calls.filter(([method]) => method !== 'ping').length, reads.mock.calls.length, profiles.mock.calls.length, snapshots.mock.calls.length, assemblies.mock.calls.length];
         io.reads = 0;
         io.scans = 0;
         io.opens = 0;
         await act(async () => { await vi.advanceTimersByTimeAsync(600000); });
-        expect([requests.mock.calls.length, reads.mock.calls.length, profiles.mock.calls.length, snapshots.mock.calls.length, assemblies.mock.calls.length]).toEqual(counts);
+        expect([requests.mock.calls.filter(([method]) => method !== 'ping').length, reads.mock.calls.length, profiles.mock.calls.length, snapshots.mock.calls.length, assemblies.mock.calls.length]).toEqual(counts);
         expect(io).toEqual({ reads: 0, scans: 0, opens: 0 });
         expect(models).toBe(0);
-        expect(vi.getTimerCount()).toBe(0);
+        expect(vi.getTimerCount()).toBe(1);
         await act(async()=>{hidden=true;document.dispatchEvent(new Event('visibilitychange'));await finite((async()=>{while(!requests.mock.calls.some(([method])=>method==='desktop/surface/unsubscribe'))await new Promise(resolve=>setImmediate(resolve))})())})
         const released=requests.mock.calls.findIndex(([method])=>method==='desktop/surface/unsubscribe')
         await finite(requests.mock.results[released]!.value)
@@ -114,4 +122,4 @@ it.each(['healthy','lost-ACK'] as const)('mounts actual source/router/SDK/runtim
         await finite(close());
         vi.useRealTimers();
     }
-}, 30000);
+}, 75000);

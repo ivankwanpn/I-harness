@@ -130,6 +130,7 @@ export type DesktopRequest =
   | { kind: "workspace/list" }
   | { kind: "workspace/sandbox/state"; workspaceId: string }
   | { kind: "desktop/capabilities"; workspaceId: string }
+  | { kind: "desktop/runtime/recover"; workspaceId: string }
   | { kind: "session/list"; workspaceId: string }
   | { kind: "session/dashboard"; workspaceId: string }
   | { kind: "session/create"; workspaceId: string; projectId?: string; clientToken?: string }

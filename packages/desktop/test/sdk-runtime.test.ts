@@ -163,7 +163,7 @@ describe("Desktop SDK runtime manager", () => {
     expect(events.filter(event=>event.kind!=='sdk/ready')).toEqual([
       { kind: "sdk/disconnected", workspaceId: "ws-exit", message: expect.stringContaining("exited"), close: { generation: 0, reason: "subprocess-exited" } },
     ])
-    const second = await manager.get(workspace("ws-exit"))
+    const second = await manager.recover!(workspace("ws-exit"))
     expect(launch).toHaveBeenCalledTimes(2)
     expect(second.client).not.toBe(first.client)
 
@@ -446,6 +446,89 @@ describe("Desktop close-time active work", () => {
     await manager.get(workspace())
     expect(await manager.hasActiveWork()).toBe(true)
     await manager.close()
+  })
+
+  it("retains a host when activity arrives during idle inspection", async () => {
+    let release!: (value: unknown) => void
+    const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: new Promise(resolve => { release = resolve }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    await manager.get(workspace())
+    await new Promise(resolve => setTimeout(resolve, 5))
+    const eviction = manager.evictIdle!(1)
+    await vi.waitFor(() => expect(host.request).toHaveBeenCalledWith("session/dashboard", {}, 2_500))
+    for (const listener of host.listeners) listener({ jsonrpc: "2.0", method: "session/status", params: { sessionId: "s", status: "queued" } })
+    release({ sessions: [] })
+    expect(await eviction).toBe(0)
+    await manager.close()
+  })
+
+  it("retains idle lanes with owned schedules or background cleanup", async () => {
+    const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { sessions: [{ id: 's', live: true, running: false, active: true }] } })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), 'sessions'), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    await manager.get(workspace())
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(await manager.hasActiveWork()).toBe(true)
+    expect(await manager.evictIdle!(1)).toBe(0)
+    await manager.close()
+  })
+
+  it("bounds restarts even when every child initializes successfully", async () => {
+    vi.useFakeTimers()
+    const exits: Array<() => void> = []
+    const launch = vi.fn(() => ({ client: fakeClient().client, exited: new Promise<void>(resolve => { exits.push(resolve) }) }))
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), 'sessions'), launch })
+    try {
+      await manager.get(workspace())
+      for (let index = 0; index < 4; index++) {
+        if (index > 0) await manager.get(workspace())
+        exits[index]!()
+        for (let flush = 0; flush < 10; flush++) await Promise.resolve()
+        await expect(manager.get(workspace())).rejects.toThrow(/recovery/)
+        await vi.advanceTimersByTimeAsync(2_000)
+      }
+      expect(launch).toHaveBeenCalledTimes(4)
+      await expect(manager.get(workspace())).rejects.toThrow(/limit/)
+      await manager.get(workspace('unrelated'))
+      expect(launch).toHaveBeenCalledTimes(5)
+      await manager.recover!(workspace())
+      expect(launch).toHaveBeenCalledTimes(6)
+    } finally { await manager.close(); vi.useRealTimers() }
+  })
+
+  it('bounds initialization failures across repeated automatic gets and permits explicit recovery', async () => {
+    vi.useFakeTimers()
+    const launch = vi.fn(() => {
+      const host = fakeClient()
+      host.client.initialize = vi.fn(async () => { throw Error('fixture startup failed') })
+      return { client: host.client, exited: new Promise<void>(() => {}) }
+    })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), 'sessions'), launch })
+    try {
+      await expect(manager.get(workspace())).rejects.toThrow('startup failed')
+      for (let attempt = 1; attempt < 4; attempt++) {
+        await expect(manager.get(workspace())).rejects.toThrow('recovery')
+        await vi.advanceTimersByTimeAsync(2_000)
+        await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(attempt + 1))
+        await vi.waitFor(async () => { await expect(manager.get(workspace())).rejects.toThrow(/startup failed|recovery/) })
+      }
+      await expect(manager.get(workspace())).rejects.toThrow('limit')
+      expect(launch).toHaveBeenCalledTimes(4)
+      await expect(manager.recover!(workspace())).rejects.toThrow('startup failed')
+      expect(launch).toHaveBeenCalledTimes(5)
+    } finally { await manager.close(); expect(vi.getTimerCount()).toBe(0); vi.useRealTimers() }
+  })
+
+  it('explicit recovery replaces an owned transport even before its child exits', async () => {
+    const first = fakeClient(), second = fakeClient()
+    const launch = vi.fn().mockReturnValueOnce({client:first.client,exited:new Promise<void>(()=>{})}).mockReturnValueOnce({client:second.client,exited:new Promise<void>(()=>{})})
+    const manager = createWorkspaceRuntimeManager({sessionsRoot:join(tempRoot(),'sessions'),launch})
+    try {
+      const original = await manager.get(workspace())
+      const recovered = await manager.recover!(workspace())
+      expect(first.close).toHaveBeenCalledOnce()
+      expect(recovered.client).not.toBe(original.client)
+      expect(launch).toHaveBeenCalledTimes(2)
+    } finally { await manager.close() }
   })
 
   it("includes a structured fatal notification in the exit diagnostic", async () => {

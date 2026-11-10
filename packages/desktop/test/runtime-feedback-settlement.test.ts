@@ -1,8 +1,11 @@
+import { controlledModel } from "../../session-executor/test/controlled-model.ts"
 import { expect, it } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createSessionCoordinator } from "../../session-persistence/src/index.ts"
+import { composeJsonlTaskTransitionCoordinator } from "../../session-persistence-jsonl/src/backend-factory.ts"
+import { taskDocumentStorageContract } from "../../subagent/src/task/storage-contract.ts"
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1] = {}) => composeJsonlTaskTransitionCoordinator(backend, { ...options, lock: { enabled: true, ...options.lock } }, taskDocumentStorageContract)
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { subscribe } from "../../core-session/src/index.ts"
 import { createDurableSessionLoader, createSessionService } from "../../session-executor/src/index.ts"
@@ -31,17 +34,19 @@ it("keeps a newer physical attempt live while an older Goal saves its failure re
   diagnostics.onActivity(value => phases.push(value.activity.phase))
   const send = (event: DesktopEvent) => diagnostics.observe(event)
   let calls = 0
-  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: {
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: controlledModel(request => ({
     async *stream() {
       if (++calls === 1) throw new Error("first goal failure")
       const activity = { requestId: "physical-second", phase: "connecting" as const, startedAt: Date.now(), waitingFor: "first-response" as const }
-      yield { type: "activity", activity }
+      // Explicit producer feed at the controlled physical transport boundary.
+      send({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "s", event: { type: "model/activity", version: 1, activity } } })
       secondEntered.release(); await secondProgress.promise
-      yield { type: "activity", activity: { ...activity, phase: "quiet" } }
+      send({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "s", event: { type: "model/activity", version: 1, activity: { ...activity, phase: "quiet" } } } })
       yield { type: "text/chunk", text: "new turn done" }
+      send({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "s", event: { type: "model/activity", version: 1, activity: { requestId: "physical-second", phase: "settled", startedAt: 1, waitingFor: "progress", outcome: "completed" } } } })
       yield { type: "end" }
     },
-  } })
+  } as import("../../llm-seam/src/index.ts").ModelClient).stream(request)) })
   service.onAssembly(assembly => subscribe(assembly.session, event => send({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "s", event } })))
   service.onExecutionState!(state => send({ kind: "sdk/notification", workspaceId: "w", method: "session/execution-state", params: state }))
   const workflow = createDesktopWorkflow(coordinator, service, { onRunningChanged(sessionId, running, error) {
@@ -56,6 +61,7 @@ it("keeps a newer physical attempt live while an older Goal saves its failure re
     await secondEntered.promise
     recovery.release(); await workflowDone.promise
     expect(service.queueState("s")).toEqual({ running: true, queued: 0 })
+    expect(phases).toEqual(["connecting"])
     secondProgress.release(); await next
     expect(phases).toEqual(["connecting", "quiet", "settled"])
     expect((await diagnostics.list()).entries.filter(entry => entry.kind === "session/error")).toMatchObject([{ code: "model_error" }])
