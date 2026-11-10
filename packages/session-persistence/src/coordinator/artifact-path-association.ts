@@ -105,5 +105,28 @@ export function associateArtifactPaths(backend:PersistenceBackend,owner:Original
   if(isOriginalCanonicalPathOwner(owner))canonicalBindings.add(binding)
 }
 export function artifactPathsFor(backend:PersistenceBackend){const binding=associations.get(backend);binding?.assertOriginal();return binding}
-export type ArtifactExclusionScope = {keys:string[];ready?:boolean;assertCurrent():void}
-export function artifactScope(original:OriginalArtifactExclusion|undefined,ids:readonly string[],keys:readonly string[]):ArtifactExclusionScope{const captures=original?[...ids.map(id=>original.session(id)),...keys.map(key=>original.document(key))]:[],resources=original?captures.map(c=>c.kind==='ready'?c.key:c.provisionalKey!):[...ids.map(id=>'legacy-session:'+id),...keys.map(key=>'legacy-document:'+key)];return{keys:[...new Set(resources)],ready:captures.every(c=>c.kind==='ready'),assertCurrent(){original?.assertOriginal();for(const c of captures)c.assertCurrent()}}}
+export type ArtifactExclusionScope = {
+  keys: string[]
+  ready?: boolean
+  assertCurrent(): void
+  /** Validate only the original identities consumed by an acquisition step. */
+  assertCurrentFor?(ids: readonly string[], keys: readonly string[]): void
+}
+export function artifactScope(original: OriginalArtifactExclusion | undefined, ids: readonly string[], keys: readonly string[]): ArtifactExclusionScope {
+  const sessionIds = [...ids], documentKeys = [...keys]
+  const captures = original ? [...sessionIds.map(id => original.session(id)), ...documentKeys.map(key => original.document(key))] : []
+  const resources = original ? captures.map(capture => capture.kind === 'ready' ? capture.key : capture.provisionalKey!) : [...sessionIds.map(id => 'legacy-session:' + id), ...documentKeys.map(key => 'legacy-document:' + key)]
+  return {
+    keys: [...new Set(resources)],
+    ready: captures.every(capture => capture.kind === 'ready'),
+    assertCurrentFor(selectedIds, selectedKeys) {
+      original?.assertOriginal()
+      for (let index = 0; index < sessionIds.length; index++) if (selectedIds.includes(sessionIds[index]!)) captures[index]?.assertCurrent()
+      for (let index = 0; index < documentKeys.length; index++) if (selectedKeys.includes(documentKeys[index]!)) captures[sessionIds.length + index]?.assertCurrent()
+    },
+    assertCurrent() {
+      original?.assertOriginal()
+      for (const capture of captures) capture.assertCurrent()
+    },
+  }
+}

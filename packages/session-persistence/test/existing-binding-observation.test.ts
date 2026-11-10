@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
 import { legacyPrefixDigest } from '@i-harness/core-session'
+import { composeOriginalCurrentnessGuards, callOriginalCurrentnessMethod } from '../../core-session/src/managed/currentness-guards.ts'
 import { createSessionCoordinator as createBareSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionMeta, type ExistingSessionBindingObservation, type ExistingSessionBindingObservationRequest, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
 
 import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
@@ -111,7 +112,15 @@ function hold(c: SessionCoordinator, ids = ['source']) {
 it('E00 exposes the real optional owner only under the original supported capability gate', async () => {
   const { backend, c } = await fixture()
   expect(typeof c.withExistingSessionBindingObservation).toBe('function')
-  expect(await c.withExistingSessionBindingObservation!(request, async read => read.metadata('source').title)).toBe('original')
+  expect(await c.withExistingSessionBindingObservation!(request, async read => {
+    // Constructor-owned observation proofs can compose without treating an
+    // arbitrary callback as pure or replacing the original metadata receiver.
+    const guard = composeOriginalCurrentnessGuards(read.assertCurrent, read.assertCurrent)
+    expect(guard).toBeTypeOf('function')
+    guard!()
+    expect(callOriginalCurrentnessMethod(guard!, read, 'binding', ['source'])).toEqual({ kind: 'absent' })
+    return callOriginalCurrentnessMethod<SessionMeta>(guard!, read, 'metadata', ['source']).title
+  })).toBe('original')
   for (const candidate of [createBareSessionCoordinator(backend), createBareSessionCoordinator({ ...backend, readDocumentObserved: undefined } as PersistenceBackend, { lock: { enabled: true } })]) {
     coordinators.push(candidate)
     expect(candidate.withExistingSessionBindingObservation).toBeUndefined()
@@ -487,4 +496,17 @@ it('E17 metadata/binding observation permits actual managed fact append without 
     expect((await source.metadata.admit({ type: 'plan/mode', mode: 'on' })).kind).toBe('committed')
     expect(source.view.events.length).toBeGreaterThan(before); read.assertCurrent()
   })
+})
+
+it('self close and deletion refusal leave no shutdown debt or poisoned admission', async () => {
+  const { c } = await fixture()
+  await c.withExistingSessionBindingObservation!(request, async observation => {
+    await expect(c.close()).rejects.toMatchObject({ reason: 'conflict' })
+    observation.assertCurrent()
+    await expect(c.deleteOwnedSession!('source', { documents: [key('source')] })).rejects.toMatchObject({ reason: 'conflict' })
+    observation.assertCurrent()
+  })
+  await c.updateMeta('source', { title: 'still admitted' })
+  await expect(c.close()).resolves.toBeUndefined()
+  expect(c.ownerOf('source')).toBe(false)
 })

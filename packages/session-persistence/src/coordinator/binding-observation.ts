@@ -5,6 +5,7 @@ import { captureOriginalResultRevocationRequest, bindOriginalRevocationLocal, as
 import { captureChildBootstrapCaptureRequest, type ChildBootstrapCaptureRequest } from './child-bootstrap-intent.ts'
 import { captureSelectedResultsRoute, type SelectedResultsRoute } from './selected-results-route.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { createArtifactCurrentGuard, associateArtifactCurrentnessReader, withArtifactCurrentChecks } from './artifact-path-association.ts'
 import { createHash } from 'node:crypto'
 import { types as utilTypes } from 'node:util'
 import { canonicalJsonData, freezeJsonData, isStrictFactData } from '@i-harness/core-session'
@@ -482,11 +483,13 @@ export function createBindingObservations(
     snapshot(scope, [...scope.ids], [...scope.keys]); scopes.add(scope)
     scope.coldOwner=cold?.owned
     function guard(active = false) {
+      withArtifactCurrentChecks(() => {
       snapshot(scope, [...scope.ids], [...scope.keys])
       cold?.check()
       if (closed || isAborted(signal) || scope.state === 'revoked' || scope.state === 'releasing' || scope.state === 'done' || active && scope.state !== 'active') throw new Failure('revoked')
       for (const pin of scope.pins) try { pin.assertHeld() } catch (cause) { throw new Failure('revoked', { cause }) }
       if (scope.locks.some(lock => !lock.held)) throw new Failure('revoked')
+      })
     }
     const aborted = () => { scope.state = 'revoked' }
     let listenerAttached = false
@@ -525,6 +528,17 @@ export function createBindingObservations(
       void flight.finally(() => { if (cleanupFlight === flight) cleanupFlight = undefined }).catch(() => {})
       return flight
     }
+    // Acquisition consumes one captured item at a time; publication and active
+    // use still validate the entire original scope and every granted lease.
+    function acquiring(ids: readonly string[], keys: readonly string[]) {
+      withArtifactCurrentChecks(() => {
+        const original = snapshots.get(scope)!
+        if (original.assertCurrentFor) original.assertCurrentFor(ids, keys)
+        else original.assertCurrent()
+        cold?.check()
+        if (closed || isAborted(signal) || scope.state !== 'acquiring') throw new Failure('revoked')
+      })
+    }
     async function acquire() {
       guard()
       if (signal) {
@@ -533,8 +547,8 @@ export function createBindingObservations(
         listenerAttached = true
         Reflect.apply(signalAddListener, signal, ['abort', aborted, { once: true }])
       }
-      for (const id of ids) { scope.pins.push(await (coldAcquisitions ? ownership.pinOwnershipRetained!(id, cleanup => coldAcquisitions.pins.push(cleanup)) : ownership.pinOwnership!(id))); guard() }
-      for (const key of keys) { scope.locks.push(await (coldAcquisitions ? ownership.acquireDocumentLease!(key, cleanup => coldAcquisitions.locks.push(cleanup)) : ownership.acquireDocumentLease ? ownership.acquireDocumentLease(key) : ownership.acquireLease(`doc:${key}`))); guard() }
+      for (const id of ids) { acquiring([id], []); scope.pins.push(await (coldAcquisitions ? ownership.pinOwnershipRetained!(id, cleanup => coldAcquisitions.pins.push(cleanup)) : ownership.pinOwnership!(id))); acquiring([id], []); scope.pins.at(-1)!.assertHeld() }
+      for (const key of keys) { acquiring([], [key]); scope.locks.push(await (coldAcquisitions ? ownership.acquireDocumentLease!(key, cleanup => coldAcquisitions.locks.push(cleanup)) : ownership.acquireDocumentLease ? ownership.acquireDocumentLease(key) : ownership.acquireLease(`doc:${key}`))); acquiring([], [key]); if (!scope.locks.at(-1)!.held) throw new Failure('revoked') }
       const metadata = new Map<string, SessionMeta>(), bindings = new Map<string, ObservedDocument>()
       for (const id of existing) {
         if(cold){cold.check();if(!coldMetadata||coldMetadata.sessionId!==id||coldMetadata.formatVersion!==14)throw new Failure('unavailable');metadata.set(id,capture(coldMetadata));continue}
@@ -547,10 +561,12 @@ export function createBindingObservations(
       for (const id of ids) { guard(); const value = await backend.readDocumentObserved!(bindingKey(id)); guard(); bootstrapFields(value, ['kind'], value.kind === 'present' ? ['value'] : []); if (value.kind !== 'present' && value.kind !== 'absent') throw new Failure('unavailable'); bindings.set(id, capture(value)) }
       scope.state = 'active'
       const observation: SessionBindingObservation = Object.freeze({
-        assertCurrent() { guard(true) },
+        assertCurrent: createArtifactCurrentGuard(() => { guard(true) }),
         metadata(id: string) { guard(true); if (!metadata.has(id)) throw new Failure('invalid'); return metadata.get(id)! },
         binding(id: string) { guard(true); if (!bindings.has(id)) throw new Failure('invalid'); return bindings.get(id)! },
       })
+      associateArtifactCurrentnessReader(observation, 'metadata')
+      associateArtifactCurrentnessReader(observation, 'binding')
       if (cold && coldMetadata) coldBindings.set(observation, { metadata: coldMetadata, assertCurrent() { cold.check(); guard(true) } })
       return observation
     }

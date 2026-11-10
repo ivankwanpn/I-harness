@@ -5,6 +5,7 @@ import { createForkSourceWitness, createInlineForkHost } from '../../../session-
 import { associateForkHostCleanupOwner } from '../../../session-persistence/src/fork-controller.ts'
 import { observationCleanupFor, type ObservationCleanupHandle } from '../../../session-persistence/src/coordinator/binding-observation.ts'
 import { acquireResultReadStore } from './result-store.ts'
+import { createArtifactCurrentGuard, withImmediateArtifactCurrentChecks } from '../../../session-persistence/src/coordinator/artifact-path-association.ts'
 import { assertResultLineage, discoverResultLineage, legacyObservationFor } from './result-observation.ts'
 
 /** CLI composition over the existing reader lease, F0, L1 and managed owners. */
@@ -12,7 +13,11 @@ export function createCliForkHost(options: { workspace: string; coordinator: Ses
   const coordinator = options.coordinator, inline = createInlineForkHost(coordinator)
   const debt = new Map<string, () => Promise<void>>()
   const cleanupErrors = new WeakMap<object, ObservationCleanupHandle>()
-  function assertAvailable() { options.assertAvailable?.(); inline.assertAvailable() }
+  const suppliedAvailability = options.assertAvailable
+  function assertAvailable() {
+    if (suppliedAvailability) withImmediateArtifactCurrentChecks(() => Reflect.apply(suppliedAvailability, options, []))
+    inline.assertAvailable()
+  }
   const same = (a: unknown, b: unknown) => canonicalJsonData(a) === canonicalJsonData(b)
   const host: ForkHost = {
     assertAvailable,
@@ -78,16 +83,16 @@ export function createCliForkHost(options: { workspace: string; coordinator: Ses
       try {
         result = await coordinator.withSessionBindingObservation!({ existingSessionIds: ids, target: operation.invocation,
           ...(!passive && control.signal ? { signal: control.signal } : {}) }, async observation => {
-          const assertTargetCurrent = () => {
+          const assertTargetCurrent = createArtifactCurrentGuard(() => {
             assertAvailable(); observation.assertCurrent()
             if (!active || observation.binding(operation.invocation.targetSessionId).kind !== 'absent') throw new ForkTargetPolicyDeniedError()
-          }
-          const assertSourceCurrent = () => {
+          })
+          const assertSourceCurrent = createArtifactCurrentGuard(() => {
             assertTargetCurrent()
             if (passive || control.signal?.aborted || !source) throw new ForkAdmissionError('cancelled')
             assertResultLineage(observation, ids, sourceId); source.assertUnchanged()
             for (const id of ids) if (observation.binding(id).kind !== 'absent') throw new ForkAdmissionError('policy')
-          }
+          })
           if (!passive) assertSourceCurrent()
           let manifestDigest: string | undefined
           const targetPreparation = {
