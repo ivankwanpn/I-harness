@@ -56,6 +56,16 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         })
         return
       }
+      if (event.kind === "sdk/ready") {
+        // A successful reconnect supersedes the failure that took the gateway
+        // down; the native log keeps the historical diagnostic.
+        setScopes(previous => {
+          const next = new Map(previous)
+          for (const [key, current] of next) if (JSON.parse(key)[0] === event.workspaceId && current.error?.kind === "gateway/disconnected") next.set(key, { ...current, error: undefined })
+          return next
+        })
+        return
+      }
       if (event.kind === "sdk/disconnected") {
         for (const key of executionStates.current.keys()) if (JSON.parse(key)[0] === event.workspaceId) executionStates.current.delete(key)
         setScopes(previous => {
