@@ -97,3 +97,10 @@ Electron main → desktop-host child（compiled JS）
 - 單一 gateway cold start <1s（bundle 後）；
 - disconnect 後 renderer 自動 reconnect，不需要使用者按鈕；
 - host crash 有 structured reason／stderr／restart count。
+
+## rc85 idle eviction
+
+- idle TTL 5s／sweep 1s 的測試：gateway 由 10 個降到 2 個；
+- 回到 workspace dashboard 時 gateway 重新啟動，614ms 回應；
+- 有 running／queued／tasks／interaction 的 workspace 會跳過 eviction；
+- eviction 不發 sdk/disconnected，避免 toast。
