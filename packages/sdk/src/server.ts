@@ -1,6 +1,7 @@
 import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { captureBootstrapCaptureRequest, type ForkExecutionControl } from '@i-harness/session-persistence'
+import { hasForkActivity } from '@i-harness/session-persistence/internal/fork-activity'
 import { readForkPrepareRequest, readForkPrepareResult, readForkCommand, readForkOperation, readForkOutcome, readForkHostErrorData, ForkOperationError,
   type ForkPrepareRequest, type ForkPrepareResult, type ForkCommand, type ForkOutcome, type ForkOperation } from './fork.ts'
 import { readSelectedResultsPrepareRequest, readSelectedResultsPrepared, readSelectedResultsCommand, readSelectedResultsOutcome,
@@ -228,6 +229,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   let closed = false
   const forkAvailable = () => typeof opts.prepareForkSession === 'function' && typeof opts.executeForkSession === 'function'
   const selectedForkAvailable = () => typeof opts.prepareSelectedForkSession === 'function' && typeof opts.executeSelectedForkSession === 'function'
+  const ownedRequestActivity = () => inflight.size > 0 || requestFlights.size > 0 || (opts.coordinator !== undefined && hasForkActivity(opts.coordinator))
   function requestFlight(use: () => Promise<RpcMessage>): Promise<RpcMessage> {
     const scope = { active: true }
     const promise = Promise.resolve().then(() => requestContext.run(scope, use)).finally(() => { scope.active = false })
@@ -792,13 +794,14 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         // truth per session). Absent listing source → the honest
         // listingUnavailable blank (never rows the server did not provide).
         // The wire shape has NO cost/team member — serializable only.
-        if (opts.listSessions === undefined) {
-          return makeSuccess(id, { sessions: [], listingUnavailable: true })
-        }
         try {
+          if (opts.listSessions === undefined) {
+            const active = ownedRequestActivity() || (service.activitySessionIds?.() ?? []).some(sessionId => service.inspectActivity?.(sessionId).active === true)
+            return makeSuccess(id, { sessions: [], listingUnavailable: true, active })
+          }
           const listed = await opts.listSessions()
           const sessions: DashboardSessionRow[] = []
-          const active = (service.activitySessionIds?.() ?? []).some(sessionId => service.inspectActivity?.(sessionId).active === true)
+          const active = ownedRequestActivity() || (service.activitySessionIds?.() ?? []).some(sessionId => service.inspectActivity?.(sessionId).active === true)
           for (const row of listed.sessions) {
             const activity = service.inspectActivity?.(row.id)
             const live = activity?.live ?? service.hasAssembly(row.id)
@@ -831,7 +834,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             }
             sessions.push(out)
           }
-          return makeSuccess(id, { sessions, active })
+          return makeSuccess(id, { sessions, active: active || ownedRequestActivity() })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           return makeFailure(id, INTERNAL_ERROR, message)

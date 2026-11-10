@@ -38,7 +38,7 @@ class ForkSelectionError extends Error {
   constructor(readonly reason: ForkRefusal) { super('Fork selection ' + reason) }
 }
 type Holder = { operation: ForkOperation; flight?: Promise<ForkOutcome>; source?: ForkSourceWitness; attempted: boolean; enteredB2: boolean; retired: boolean; abort: AbortController; lastOutcome?: ForkOutcome; cleanupHandles?: Set<ObservationCleanupHandle>; provedAbsent?: boolean; observedReservation?: boolean }
-type Lifecycle = { assertOutside(): void; fence(): () => Promise<void> }
+type Lifecycle = { assertOutside(): void; fence(): () => Promise<void>; active(): boolean }
 const issued = new WeakMap<ForkSessionController, SessionCoordinator>()
 const lifecycle = new WeakMap<SessionCoordinator, Set<Lifecycle>>()
 const emptyClosureHosts = new WeakSet<ForkHost>()
@@ -54,6 +54,11 @@ export function assertForkControllerIssued(coordinator: SessionCoordinator, cont
   if (issued.get(controller) !== coordinator) throw new TypeError('Fork controller was not issued for this coordinator')
 }
 export function assertOutsideForkController(coordinator: SessionCoordinator): void { for (const item of lifecycle.get(coordinator) ?? []) item.assertOutside() }
+/** Process-local ownership only; completed operation receipts are not activity. */
+export function hasForkActivity(coordinator: SessionCoordinator): boolean {
+  for (const owner of lifecycle.get(coordinator) ?? []) if (owner.active()) return true
+  return false
+}
 export function closeForkControllerAdmission(coordinator: SessionCoordinator): () => Promise<void> {
   const joins = [...lifecycle.get(coordinator) ?? []].map(item => item.fence())
   return async () => { const results = await Promise.allSettled(joins.map(join => join())); const errors = results.flatMap(r => r.status === 'rejected' ? [r.reason] : []); if (errors.length) throw new AggregateError(errors, 'Fork cleanup unresolved') }
@@ -275,6 +280,6 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
   }
   issued.set(controller, coordinator)
   let owners = lifecycle.get(coordinator); if (!owners) lifecycle.set(coordinator, owners = new Set())
-  owners.add({ assertOutside, fence })
+  owners.add({ assertOutside, fence, active: () => flights.size > 0 || cleanupDebt.size > 0 || preparationDebt.size > 0 })
   return controller
 }

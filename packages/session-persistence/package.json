@@ -18,6 +18,7 @@
     "./internal/deletion-preparation": "./src/deletion-preparation-internal.ts",
     "./internal/project-binding-write": "./src/project-binding-write-internal.ts",
     "./internal/result-ordering": "./src/result-ordering-internal.ts",
+    "./internal/fork-activity": "./src/fork-activity-internal.ts",
     "./internal/commit": "./src/commit/coordinator.ts",
     "./internal/commit-facade": "./src/commit/facade.ts"
   },
