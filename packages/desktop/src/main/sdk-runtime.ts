@@ -58,6 +58,8 @@ export interface WorkspaceRuntimeManager {
   onEvent(listener: (event: DesktopEvent) => void): () => void
   /** Close-time SDK query. Unknown state retains the process. */
   hasActiveWork(): Promise<boolean>
+  /** Silently retire workspace gateways idle longer than ttlMs. */
+  evictIdle?(ttlMs: number): Promise<number>
   close(): Promise<void>
 }
 
@@ -143,6 +145,7 @@ export function createWorkspaceRuntimeManager(options: {
   const restartWindow = new Map<string, { count: number; since: number }>()
   const healthTimers = new Map<string, NodeJS.Timeout>()
   const healthFailures = new Map<string, number>()
+  const lastUsed = new Map<string, number>()
   const closingClients = new WeakMap<HarnessClient, Promise<void>>()
   let closed = false
   let activityVersion = 0
@@ -164,6 +167,7 @@ export function createWorkspaceRuntimeManager(options: {
   }
 
   function emit(event: DesktopEvent): void {
+    if ('workspaceId' in event && typeof event.workspaceId === 'string') lastUsed.set(event.workspaceId, Date.now())
     activityVersion += 1
     const failures:unknown[]=[]
     for (const listener of [...listeners]) {
@@ -178,6 +182,7 @@ export function createWorkspaceRuntimeManager(options: {
     await mkdir(sessionDir, { recursive: true })
     assertCurrent(workspace.id, generation)
     const launched = launch(workspace, sessionDir)
+    lastUsed.set(workspace.id, Date.now())
     children.set(workspace.id, launched)
     try {
       const info = await launched.client.initialize()
@@ -267,6 +272,7 @@ export function createWorkspaceRuntimeManager(options: {
     },
     get(workspace) {
       if (closed) return Promise.reject(new Error("runtime manager is closed"))
+      lastUsed.set(workspace.id, Date.now())
       const ready = runtimes.get(workspace.id)
       if (ready !== undefined) return Promise.resolve(ready)
       const inflight = pending.get(workspace.id)
@@ -396,6 +402,37 @@ export function createWorkspaceRuntimeManager(options: {
         } catch { return true }
       }))
       return results.some(Boolean) || pending.size > 0 || activityVersion !== version
+    },
+    async evictIdle(ttlMs) {
+      if (closed || ttlMs <= 0) return 0
+      const now = Date.now()
+      let retired = 0
+      for (const [id, runtime] of [...runtimes]) {
+        if (now - (lastUsed.get(id) ?? 0) < ttlMs) continue
+        try {
+          const dashboard = await runtime.client.request("session/dashboard", {}, 2_500) as { sessions?: unknown }
+          if (!dashboard || typeof dashboard !== "object" || !Array.isArray(dashboard.sessions)) continue
+          const busy = dashboard.sessions.some(row => {
+            if (!row || typeof row !== "object") return true
+            const value = row as Record<string, unknown>
+            return value.running === true || Number(value.queued ?? 0) > 0 || Number(value.tasks ?? 0) > 0
+          })
+          if (busy) continue
+          const interactions = await runtime.client.request("desktop/interaction/pending", {}, 2_500)
+          if (Array.isArray(interactions) && interactions.length > 0) continue
+        } catch { continue }
+        if (closed || runtimes.get(id) !== runtime) continue
+        generations.set(id, (generations.get(id) ?? 0) + 1)
+        runtimes.delete(id)
+        children.delete(id)
+        lastUsed.delete(id)
+        const health = healthTimers.get(id)
+        if (health !== undefined) { clearInterval(health); healthTimers.delete(id) }
+        healthFailures.delete(id)
+        await closeClient(runtime.client)
+        retired += 1
+      }
+      return retired
     },
     async close() {
       if (closed) return

@@ -51,6 +51,13 @@ app.whenReady().then(() => {
   })
   catalog = workspaces
   runtimes = manager
+  const idleMs = Number(process.env.IH_GATEWAY_IDLE_MS ?? 10 * 60_000)
+  const sweepMs = Number(process.env.IH_GATEWAY_IDLE_SWEEP_MS ?? 60_000)
+  if (Number.isFinite(idleMs) && idleMs > 0 && Number.isFinite(sweepMs) && sweepMs > 0) {
+    const idleSweep = setInterval(() => { void manager.evictIdle?.(idleMs).catch(() => undefined) }, sweepMs)
+    idleSweep.unref()
+    app.once("before-quit", () => clearInterval(idleSweep))
+  }
   const usageWarnings = createUsageWarnings(join(app.getPath("userData"), "usage-recording-warnings.json"))
   const stopUsageWarnings = manager.onEvent(usageWarnings.observe)
   const diagnostics = createRuntimeDiagnostics(join(app.getPath("userData"), "runtime-diagnostics-v1"), {
