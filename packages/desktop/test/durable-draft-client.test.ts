@@ -49,3 +49,19 @@ describe("durable draft client admission races", () => {
     expect(current.prompt).toBe("typed during clear"); expect(record.draft?.prompt).toBe("typed during clear")
   })
 })
+
+it('does not consume an explicitly new draft whose text matches an earlier admitted input', async () => {
+ let current = draft('same text'), clears = 0
+ const request = async (value: DraftRequest): Promise<DurableDraft> => {
+  if (value.kind === 'desktop/draft/clear') clears++
+  return { revision: 'fixture', draft: value.kind === 'desktop/draft/save' ? value.draft : null }
+ }
+ const client = new DurableDraftClient(scope, request, () => current, value => { current = value }, () => {})
+ await client.restore()
+ const original = client.capture()
+ current = draft('same text'); client.changed()
+ expect(await client.admitted(original, () => { current = draft('') })).toBe(false)
+ expect(clears).toBe(0)
+ expect(current.prompt).toBe('same text')
+ await client.flush()
+})

@@ -59,8 +59,17 @@ it("makes one initial read when StrictMode replays mount effects", async () => {
   expect(trigger().textContent).toBe("8.0%")
 })
 
-it("keeps estimated tokens, role breakdown, and the estimate disclaimer in the popup", async () => {
-  const request = vi.fn().mockResolvedValue({ ...ready(49000, 1000000), roleTokens: { user: 10000, assistant: 9000, tool: 30000 } })
+it("keeps prepared token totals, system/tool/message breakdown, and the estimate disclaimer in the popup", async () => {
+  const snapshot = {
+    version: 1, ownerSessionId: "s", modelId: "fixture", protocol: "anthropic-messages",
+    bindingFingerprint: "a".repeat(64), neutralFingerprint: "b".repeat(64), identityCoverage: "complete",
+    bindingRevision: 0, projectionRevision: 0, estimatedInputTokens: 49000, admissionInputTokens: 49000,
+    contextWindow: 1000000, outputReserve: 10000, effectiveOutputCap: 10000, safetyMargin: 1000,
+    estimateSource: "provider-anchor-plus-projection", confidence: "calibrated-mixed", coverage: "complete",
+    roleTokens: { user: 10000, assistant: 9000, tool: 11000 }, systemTokens: 10000, schemaTokens: 9000, reasoningTokens: 0,
+    capSupport: "supported", admission: "fit", recoveryRequired: false, fullByProvider: false,
+  }
+  const request = vi.fn().mockResolvedValue({ ...ready(49000, 1000000), snapshot })
   const { bridge } = connection(request)
   render(<ContextUsage bridge={bridge} workspaceId="w" sessionId="s" />)
   await flush()
@@ -68,11 +77,11 @@ it("keeps estimated tokens, role breakdown, and the estimate disclaimer in the p
   fireEvent.click(trigger())
   const dialog = screen.getByRole("dialog", { name: "上下文容量" })
   expect(within(dialog).getByText("49,000 / 1,000,000 (4.9%)")).toBeTruthy()
-  expect(within(dialog).getByText("10,000")).toBeTruthy()
-  expect(within(dialog).getByText("9,000")).toBeTruthy()
-  expect(within(dialog).getByText("30,000")).toBeTruthy()
-  expect(within(dialog).getByText("根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。")).toBeTruthy()
-  expect(within(dialog).getByRole("progressbar", { name: "估算已用 Token" }).getAttribute("value")).toBe("49000")
+  expect(within(dialog).getByText("~10,000")).toBeTruthy()
+  expect(within(dialog).getByText("~9,000")).toBeTruthy()
+  expect(within(dialog).getByText("~30,000")).toBeTruthy()
+  expect(within(dialog).getByText("根據已準備的供應商輸入估算，包含系統提示與工具定義；與帳單和快取計數分開。")).toBeTruthy()
+  expect(dialog.querySelectorAll('.context-usage-segment')).toHaveLength(3)
   expect(request).toHaveBeenCalledTimes(1)
 })
 

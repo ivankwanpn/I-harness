@@ -71,12 +71,12 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
     if (date.getTime() >= start - 86_400_000) return "昨天"
     return "更早"
   }
-  if (dashboard.sessions.length === 0) {
+  if (dashboard.sessions.length === 0 && !onNewSession) {
     return <><p className="notice">{t("尚無會話")}</p>{onManageArchived ? <button type="button" className="session-archived-button" onClick={onManageArchived}>{t("管理已封存會話")}</button> : null}</>
   }
-  if (visibleSessions.length === 0) return <p className="notice">{t("沒有符合的會話")}</p>
+  if (visibleSessions.length === 0 && (!onNewSession || needle)) return <p className="notice">{t("沒有符合的會話")}</p>
   return (
-    <>{onManageSessions && showBatchManagement ? <button type="button" className="session-archived-button" onClick={() => onManageSessions()}>{t("批次管理會話")}</button> : null}<ul className="session-list">
+    <>{dashboard.sessions.length === 0 ? <p className="notice">{t("尚無會話")}</p> : null}{onManageSessions && showBatchManagement ? <button type="button" className="session-archived-button" onClick={() => onManageSessions()}>{t("批次管理會話")}</button> : null}<ul className="session-list">
       {onNewSession && !needle ? <li className="session-list-row session-new-row">
         <button type="button" className="row-button" aria-current={newSessionActive ? "true" : undefined} onClick={onNewSession}>
           <span className="row-title">{t("新會話")}</span>

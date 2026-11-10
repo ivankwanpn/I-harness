@@ -18,6 +18,8 @@ const RPC_ERROR = /^RpcError:\s*/
 const ERROR = /^Error:\s*/
 
 const known = (value: string): string | undefined => {
+  if (/SdkTimeoutError|sdk-timeout/i.test(value))
+    return "操作逾時；服務仍可能在處理，請先查看工作狀態。"
   if (/SdkConnectionError|sdk subprocess exited|sdk-connection/i.test(value))
     return "桌面服務連線已中斷。請重試；若持續發生，請查看診斷記錄。"
   if (/FACT_RECOVERY_REQUIRED|requires recovery|needs reconciliation|cleanup unresolved/i.test(value))

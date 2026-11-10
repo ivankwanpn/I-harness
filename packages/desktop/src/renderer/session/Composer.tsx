@@ -39,23 +39,42 @@ const durableClients = new Map<string, DurableDraftClient>()
 const restoringDrafts = new Set<string>()
 const retiredRawKeys = new Set<string>()
 const documentLabels: Record<string, string> = { "video/mp4": "MP4", "video/quicktime": "MOV", "video/webm": "WebM", "application/pdf": "PDF", "application/zip": "ZIP", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX" }
-subscribeDraftChanges((workspace, session) => { const key = draftKey(workspace, session); if (!restoringDrafts.has(key)) durableClients.get(key)?.changed() })
+subscribeDraftChanges((workspace, session) => {
+  const key = draftKey(workspace, session)
+  if (restoringDrafts.has(key)) return
+  const current = sends.get(key)
+  if (current?.draftIdentity) publishSend(key, { ...current, draftIdentity: {} })
+  durableClients.get(key)?.changed()
+})
 let nextNativeImageId = -1
 /** Safe local preparation failures may be shown inline before model admission. */
 export class ComposerPreparationError extends Error {}
-type SendState = { sending: boolean; error?: string }
+// The same saved draft may reappear after navigation before admission replies.
+// User edits create a new identity even when their text is identical. Multiple
+// distinct inputs can await admission without acquiring a second scope map.
+type SendState = { sending: boolean; error?: string; draftIdentity?: object; pending?: readonly object[] }
 const idleSend: SendState = { sending: false }
 const sends = new Map<string, SendState>()
 const sendListeners = new Set<() => void>()
 export function useComposerSending(workspaceId?: string, sessionId?: string): boolean {
   return useSyncExternalStore(
     listener => { sendListeners.add(listener); return () => { sendListeners.delete(listener) } },
-    () => !!(workspaceId && sessionId && sends.get(draftKey(workspaceId, sessionId))?.sending),
+    () => {
+      const state = workspaceId && sessionId ? sends.get(draftKey(workspaceId, sessionId)) : undefined
+      return state?.sending === true || !!state?.pending?.length
+    },
   )
 }
 function publishSend(key: string, state: SendState) {
-  if (state === idleSend) sends.delete(key)
-  else sends.set(key, state)
+  if (retiredRawKeys.has(key)) {
+    sends.delete(key)
+    for (const listener of sendListeners) listener()
+    return
+  }
+  const previous = sends.get(key)
+  const pending = state.pending ?? previous?.pending
+  if (state === idleSend && !pending?.length) sends.delete(key)
+  else sends.set(key, { ...state, ...(pending?.length ? { pending, draftIdentity: state.draftIdentity ?? previous?.draftIdentity } : {}) })
   for (const listener of sendListeners) listener()
 }
 
@@ -436,7 +455,7 @@ function SessionComposer({
       else client.configure(read, apply, status)
       void client.restore().then(() => { if (mounted) { setValue(readDraft(workspaceId, sessionId)); setContextRefs(read().contextRefs) } }).catch(() => {}).finally(() => { if (mounted) setDraftLoading(false) })
     } else setDraftLoading(false)
-    const changed = (changedKey: string) => { if (!mounted) return; if (changedKey === refsKey) setContextRefs(read().contextRefs); if (changedKey === key && isDraftRetired(workspaceId, sessionId)) setValue("") }
+    const changed = (changedKey: string) => { if (!mounted) return; if (changedKey === refsKey) setContextRefs(read().contextRefs); if (changedKey === key) setValue(readDraft(workspaceId, sessionId)) }
     rawListeners.add(changed)
     return () => { mounted = false; rawListeners.delete(changed); if (draftRequest) void durableClients.get(key)?.flush().catch(() => {}) }
   }, [draftRequest, workspaceId, sessionId, key, refsKey])
@@ -452,19 +471,27 @@ function SessionComposer({
   const deliveryLabel = t(delivery === "steer" ? "引導目前執行" : "加入佇列")
   useEffect(() => { if (!running) setDeliveryOverride(null) }, [running])
   const hasPayload = value.trim() !== "" || references.length > 0 || images.length > 0 || texts.length > 0 || contextRefs.length > 0
-  const primaryBusy = (sending && !dispatching) || readingImages || draftLoading
+  const pendingDraft = sendState.pending?.includes(sendState.draftIdentity!) === true
+  const primaryBusy = (sending && !dispatching) || pendingDraft && hasPayload || readingImages || draftLoading
   const primaryStops = running && !hasPayload && !primaryBusy && !dispatching
   const primaryState = primaryBusy ? "sending" : running ? "running" : "idle"
   async function send(invertDelivery = false): Promise<void> {
     const text = value
-    const blocked = !canSend ? "!canSend" : readingImages ? "readingImages" : draftLoading ? "draftLoading" : !hasPayload ? "!hasPayload" : sends.get(key)?.sending ? "sending" : ""
+    const currentSend = sends.get(key)
+    const blocked = !canSend ? "!canSend" : readingImages ? "readingImages" : draftLoading ? "draftLoading" : !hasPayload ? "!hasPayload" : currentSend?.sending || currentSend?.pending?.includes(currentSend.draftIdentity!) ? "sending" : ""
     setSendDiagnostic(blocked || "started")
     if (blocked) return
     const client = draftRequest ? durableClients.get(key) : undefined
     const sentDraft = client?.capture()
-    publishSend(key, { sending: true })
+    const sentIdentity = currentSend?.draftIdentity ?? {}
+    publishSend(key, { sending: true, draftIdentity: sentIdentity, pending: [...currentSend?.pending ?? [], sentIdentity] })
+    const settleDraft = () => {
+      const current = sends.get(key)
+      if (current?.pending?.includes(sentIdentity)) publishSend(key, { ...current, pending: current.pending.filter(identity => identity !== sentIdentity) })
+    }
     const selectedDelivery = canSteer && invertDelivery ? delivery === "queue" ? "steer" : "queue" : delivery
     let remoteRequest = false
+    let admitted = false
     try {
       // A failed disk save is shown, while the in-memory input remains sendable.
       if (client) await client.flush().catch(() => {})
@@ -491,9 +518,9 @@ function SessionComposer({
       }
       const context = contextParts.length ? contextParts.join("\n\n") : undefined
       if (context && context.length > CONTEXT_LIMIT_LENGTH) throw new ComposerPreparationError(t("引用內容合計過長，請移除部分引用或附件；草稿仍保留。"))
-      let admitted = false
       let cleanupAccepted: Promise<unknown> | undefined
       const clearMemory = () => {
+        if (sends.get(key)?.draftIdentity !== sentIdentity) return
         if (rawRead(refsKey) === JSON.stringify(contextRefs)) saveContextRefs([])
         setDeliveryOverride(null)
         if (readDraft(workspaceId, sessionId) === text) { clearDraft(workspaceId, sessionId); setValue("") }
@@ -506,8 +533,9 @@ function SessionComposer({
       const clearAccepted = () => {
         if (admitted) return
         admitted = true
-        if (client && sentDraft !== undefined) { cleanupAccepted = client.admitted(sentDraft, clearMemory); void cleanupAccepted.catch(() => {}) }
+        if (client && sentDraft !== undefined && sends.get(key)?.draftIdentity === sentIdentity) { cleanupAccepted = client.admitted(sentDraft, clearMemory); void cleanupAccepted.catch(() => {}) }
         else clearMemory()
+        settleDraft()
       }
       const dispatch = selectedDelivery === "steer" && onSteer ? onSteer : onPrompt
       // Clear the editor as soon as the request is being dispatched. Admission
@@ -524,11 +552,17 @@ function SessionComposer({
       await cleanupAccepted
       publishSend(key, idleSend)
     } catch (reason) {
-      setValue(current => current === "" ? text : current)
+      if (!admitted && sends.get(key)?.draftIdentity === sentIdentity) {
+        rawWrite(key, text)
+        setValue(current => current === "" ? text : current)
+      }
       // Native diagnostics own remote request errors. Local validation and draft
       // cleanup still belong here, and rejected requests retain their input.
       publishSend(key, { sending: false, ...(!remoteRequest || reason instanceof ComposerPreparationError ? { error: reason instanceof Error ? reason.message : String(reason) } : {}) })
     } finally {
+      settleDraft()
+      const current = sends.get(key)
+      if (!current?.pending?.length && !current?.error) publishSend(key, idleSend)
       setDispatching(false)
     }
   }

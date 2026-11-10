@@ -26,20 +26,20 @@ function fixture(handle?: (request: DesktopRequest) => unknown) {
   }
   const props: ProjectSidebarProps = {
     bridge, projects, workspaces, selectedProjectId: "p1", selectedWorkspaceId: "w1", selectedSessionId: "s1", dashboard: dashboard("Current chat"),
-    canCreate: true, onCreate: vi.fn(),  onProjects: vi.fn(), onSettings: vi.fn(),
+    canCreate: true, onCreate: vi.fn(), onCreateSession: vi.fn(),  onProjects: vi.fn(), onSettings: vi.fn(),
     onSelectProject: vi.fn(), onSelectWorkspace: vi.fn(), onSelectSession: vi.fn(), onManageSession: vi.fn(async () => {}), onManageArchived: vi.fn(),
   }
   return { props, bridge, listeners, emit(event: DesktopEvent) { for (const listener of listeners) listener(event) } }
 }
 
 describe("project conversation sidebar", () => {
-  it("honors a valid project creation target even when the current conversation has no selected storage folder", () => {
+  it("honors a valid project creation target even when the current conversation has no selected storage folder", async () => {
     const { props } = fixture()
     render(<ProjectSidebar {...props} selectedWorkspaceId={undefined} selectedSessionId={undefined} canCreate />)
-    const create = screen.getByRole("button", { name: "新增會話" }) as HTMLButtonElement
+    const create = await screen.findByRole("button", { name: /新會話/ }) as HTMLButtonElement
     expect(create.disabled).toBe(false)
     fireEvent.click(create)
-    expect(props.onCreate).toHaveBeenCalledTimes(1)
+    expect(props.onCreateSession).toHaveBeenCalledWith("p1")
   })
 
   it("orders pinned projects first and collects all member conversations directly under an expanded project", async () => {
@@ -146,14 +146,14 @@ describe("project conversation sidebar", () => {
     let pinned = false
     const { props } = fixture((request) => request.kind === "desktop/session/navigation/state" && request.workspaceId === "w2" ? { s1: { projectId: "p1", pinned, unread: false } } : undefined)
     props.onManageSession = vi.fn(async () => { pinned = true })
-    render(<ProjectSidebar {...props} />)
+    const view = render(<ProjectSidebar {...props} />)
     const session = await screen.findByText("Chat w2")
     const scope = within(session.closest("li")! as HTMLElement)
     fireEvent.click(scope.getByRole("button", { name: "更多會話操作 Chat w2" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "釘選會話" }))
     await waitFor(() => expect(props.onManageSession).toHaveBeenCalledWith("w2", "s1", "pin", undefined))
-    await waitFor(() => expect(scope.getByLabelText("已釘選")).toBeTruthy())
-    fireEvent.change(screen.getByRole("combobox", { name: "選擇來源資料夾" }), { target: { value: "w2" } })
+    await waitFor(() => expect(within(screen.getByText("Chat w2").closest("li")!).getByLabelText("已釘選")).toBeTruthy())
+    view.rerender(<ProjectSidebar {...props} selectedWorkspaceId="w2" />)
     fireEvent.click(screen.getByRole("button", { name: "管理已封存會話" }))
     expect(props.onManageArchived).toHaveBeenCalledWith("w2")
   })
@@ -178,15 +178,15 @@ describe("project conversation sidebar", () => {
   it("opens ungrouped conversations without inventing project membership and gates new chat by the native selection", async () => {
     const { props } = fixture()
     const view = render(<ProjectSidebar {...props} canCreate={false} />)
-    expect((screen.getByRole("button", { name: "新增會話" }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole("button", { name: /新會話/ })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "未分類會話" }))
     await screen.findByText("Chat wu")
     fireEvent.click(screen.getByText("Chat wu"))
     expect(props.onSelectSession).toHaveBeenCalledWith("wu", "s1", undefined)
     expect(props.onSelectWorkspace).not.toHaveBeenCalled()
     view.rerender(<ProjectSidebar {...props} canCreate={true} />)
-    fireEvent.click(screen.getByRole("button", { name: "新增會話" }))
-    expect(props.onCreate).toHaveBeenCalledTimes(1)
+    fireEvent.click(within(screen.getByRole("button", { name: "Product" }).closest("li")!).getByRole("button", { name: /新會話/ }))
+    expect(props.onCreateSession).toHaveBeenCalledWith("p1")
   })
 
   it("routes folder reveal and copied conversation ID through the selected row scope", async () => {
@@ -214,7 +214,7 @@ describe("project conversation sidebar", () => {
 })
 
 it("shows a moved conversation in its destination project through its original storage folder", async () => {
-  const { props } = fixture(request => request.kind === "desktop/session/navigation/state" ? request.workspaceId === "w1" ? { s1: { projectId: "p2", pinned: false, unread: false } } : {} : undefined)
+  const { props } = fixture(request => request.kind === "desktop/session/navigation/state" ? request.workspaceId === "w1" ? { s1: { projectId: "p2", pinned: false, unread: true } } : {} : undefined)
   render(<ProjectSidebar {...props} selectedProjectId="p2" selectedWorkspaceId="w1" />)
   const chat = await screen.findByText("Current chat")
   fireEvent.click(chat)
@@ -242,7 +242,7 @@ it("keeps a confirmed removed-project conversation discoverable without changing
 
 it("distinguishes duplicate native conversation IDs across member folders for selection, attention and mutations", async () => {
   let pinned = false
-  const { props } = fixture(request => request.kind === "desktop/session/navigation/state" ? { s1: { projectId: "p1", pinned: request.workspaceId === "w2" && pinned, unread: false } } : undefined)
+  const { props } = fixture(request => request.kind === "desktop/session/navigation/state" ? { s1: { projectId: "p1", pinned: request.workspaceId === "w2" && pinned, unread: request.workspaceId === "w2" } } : undefined)
   props.onManageSession = vi.fn(async (workspaceId, _id, action) => { if (workspaceId === "w2" && action === "pin") pinned = true })
   const view = render(<ProjectSidebar {...props} attentionBySession={{ s1: 2 }} />)
   const current = await screen.findByText("Current chat")
@@ -257,7 +257,7 @@ it("distinguishes duplicate native conversation IDs across member folders for se
   fireEvent.click(screen.getByRole("button", { name: "更多會話操作 Chat w2" }))
   fireEvent.click(screen.getByRole("menuitem", { name: "釘選會話" }))
   await waitFor(() => expect(props.onManageSession).toHaveBeenCalledWith("w2", "s1", "pin", undefined))
-  await waitFor(() => expect(within(other.closest("li")! as HTMLElement).getByLabelText("已釘選")).toBeTruthy())
+  await waitFor(() => expect(within(screen.getByText("Chat w2").closest("li")!).getByLabelText("已釘選")).toBeTruthy())
   expect(within(current.closest("li")! as HTMLElement).queryByLabelText("已釘選")).toBeNull()
   expect(view.container.textContent).not.toContain('["w2","s1"]')
 })
@@ -297,16 +297,15 @@ it("does not infer selected project membership for an existing unclassified or r
 it("routes row management and consolidated batch/archive controls to the selected native source folder", async () => {
   const { props } = fixture()
   props.onManageSessions = vi.fn()
-  render(<ProjectSidebar {...props} />)
+  const view = render(<ProjectSidebar {...props} />)
   await screen.findByText("Chat w2")
   fireEvent.click(screen.getByRole("button", { name: "更多會話操作 Chat w2" }))
   fireEvent.click(screen.getByRole("menuitem", { name: "管理此會話" }))
   expect(props.onManageSessions).toHaveBeenCalledWith("w2", "s1")
-  fireEvent.change(screen.getByRole("combobox", { name: "選擇來源資料夾" }), { target: { value: "w2" } })
-  fireEvent.click(screen.getByRole("button", { name: "批次管理會話" }))
+  view.rerender(<ProjectSidebar {...props} selectedWorkspaceId="w2" />)
+  fireEvent.click(screen.getByRole("button", { name: "管理會話…" }))
   expect(props.onManageSessions).toHaveBeenCalledWith("w2", undefined)
-  fireEvent.click(screen.getByRole("button", { name: "管理已封存會話" }))
-  expect(props.onManageArchived).toHaveBeenCalledWith("w2")
+  expect(props.onManageArchived).not.toHaveBeenCalled()
 })
 
 it("retains a failed rename draft through unrelated folder refresh without retargeting duplicate IDs", async () => {

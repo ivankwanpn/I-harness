@@ -104,7 +104,7 @@ it("mounts the batch manager, confirms the action and retains only failed select
   const bridge = bridgeFor(request => request.kind === "session/list" ? { sessions } : request.kind === "desktop/session/navigation/state" ? { moved: { projectId: "original" }, blocked: { projectId: "original" } } : [])
   const batch = vi.fn(async () => ({ results: [{ sessionId: "moved", ok: true as const }, { sessionId: "blocked", ok: false as const, error: "Live work prevents archive" }] }))
   render(<Workbench {...base(bridge)} dashboard={{ sessions }} capabilities={{ "desktop-sessions": ["1"] }} onBatchSessions={batch} onManageSessionInWorkspace={async () => {}} />)
-  fireEvent.click(screen.getByRole("button", { name: "批次管理會話" }))
+  fireEvent.click(screen.getByRole("button", { name: "管理會話…" }))
   fireEvent.click(await screen.findByRole("checkbox", { name: "選取 First" }))
   fireEvent.click(screen.getByRole("checkbox", { name: "選取 Busy" }))
   fireEvent.click(screen.getByRole("button", { name: "封存所選會話" }))

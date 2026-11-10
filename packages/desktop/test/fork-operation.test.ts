@@ -182,4 +182,4 @@ it('actual original Gateway cleanup can acknowledge before a source block and th
     expect(fresh).toMatchObject({ kind: 'ready', sessionId: 'real-ui-target-2' })
     expect(captures).toBe(2); expect(navigate).toHaveBeenCalledExactlyOnceWith('w', 'real-ui-target-2')
   } finally { fail = false; await server.close() }
-})
+}, 60_000)

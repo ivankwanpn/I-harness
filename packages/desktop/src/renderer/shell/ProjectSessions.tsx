@@ -30,6 +30,7 @@ interface ProjectSessionsProps {
   onNewSession?(projectId?: string): void
   newSessionActive?: boolean
   filter?: string
+  onOwners?(workspaceId: string, owners: (string | undefined)[]): void
 }
 
 function confirmedDashboard(value: unknown): value is SessionDashboardResult {
@@ -63,6 +64,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
     ])
     if (!active.current || scope !== epoch.current || ticket !== tickets.current[workspaceId]) return
     const confirmedNavigation = navigation.status === "fulfilled" && isSessionNavigationState(navigation.value) ? navigation.value : undefined
+    if (confirmedNavigation) props.onOwners?.(workspaceId, [...new Set(Object.values(confirmedNavigation).flatMap(row => confirmedSessionNavigation(row) ? [row.projectId] : []))])
     const failed = [sessions, navigation].find(result => result.status === "rejected")
     const invalidDashboard = loadDashboard && (sessions.status !== "fulfilled" || !confirmedDashboard(sessions.value))
     setSnapshots(current => ({ ...current, [workspaceId]: {
@@ -72,7 +74,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
         : invalidDashboard ? en ? "Conversation list is unavailable" : "無法取得會話列表"
           : confirmedNavigation ? undefined : en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認",
     } }))
-  }, [bridge, en])
+  }, [bridge, en, props.onOwners])
 
   useEffect(() => {
     active.current = true

@@ -3,7 +3,7 @@ import type { ProjectEntry } from "../../main/projects.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { SessionAction } from './SessionActions.tsx'
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { ChevronRight, FolderOpen, Pin, Settings, SlidersHorizontal } from "lucide-react"
 import { useText, useLocale } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
@@ -44,6 +44,9 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   const en = useLocale(state => state.locale) === "en"
   const { projects, workspaces, selectedProjectId, selectedWorkspaceId, selectedSessionId, bridge } = props
   const [workspaceOwners, setWorkspaceOwners] = useState<Record<string, (string | undefined)[]>>({})
+  const onOwners = useCallback((workspaceId: string, owners: (string | undefined)[]) => {
+    setWorkspaceOwners(previous => JSON.stringify(previous[workspaceId]) === JSON.stringify(owners) ? previous : { ...previous, [workspaceId]: owners })
+  }, [])
   const [search, setSearch] = useState("")
   const [ownerError, setOwnerError] = useState<string>()
   const workspaceKey = JSON.stringify(workspaces.map(row => row.id))
@@ -94,12 +97,12 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   function renderSessions(folders: WorkspaceEntry[], project?: ProjectEntry) {
     if (folders.length === 0) return <p className="notice project-sidebar-empty">{t("尚未加入資料夾")}</p>
     const selected = project?.id === effectiveProjectId
-    return <ProjectSessions bridge={bridge} revision={props.revision} workspaces={folders} projectId={project?.id} primaryWorkspaceId={project?.primaryWorkspaceId}
+    return <ProjectSessions bridge={bridge} revision={props.revision} workspaces={folders} projectId={project?.id} primaryWorkspaceId={project?.primaryWorkspaceId} onOwners={onOwners}
       memberWorkspaceIds={new Set(project?.workspaceIds ?? [])} assignedWorkspaceIds={assigned} knownProjectIds={knownProjectIds}
       selectedWorkspaceId={selected ? selectedWorkspaceId : undefined} selectedSessionId={selected ? selectedSessionId : undefined}
       dashboard={selected ? props.dashboard : undefined} attentionBySession={selected ? props.attentionBySession : undefined}
       onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived} onManageSessions={props.onManageSessions} filter={search}
-      onNewSession={props.onCreateSession ? (projectId) => props.onCreateSession!(projectId ?? project?.id) : undefined}
+      onNewSession={props.canCreate && props.onCreateSession ? (projectId) => props.onCreateSession!(projectId ?? project?.id) : undefined}
       newSessionActive={selected && selectedSessionId === undefined} />
   }
 

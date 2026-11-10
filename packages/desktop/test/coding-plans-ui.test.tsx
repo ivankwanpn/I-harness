@@ -10,7 +10,7 @@ import type { CodingPlanAccount, CodingPlansRequest, CodingPlansState } from "..
 const account: CodingPlanAccount = { id: "account-1", provider: "openai-codex", email: "person@example.test", label: "Personal", status: "connected", models: [{ id: "model-one", name: "First model" }, { id: "model-two", name: "Second model" }] }
 const empty: CodingPlansState = { accounts: [], welcomePending: false }
 const connected: CodingPlansState = { accounts: [account], welcomePending: false }
-const management: CodingPlansState = { ...connected, openaiManagement: { status: "connected", accountId: "account-1", email: "person@example.test", plan: "Pro", availableCount: 2, windows: [{ name: "Weekly", usedPercent: 65, resetsAt: 1792000000000 }], credits: [{ id: "credit-1", status: "available", resetType: "codex_rate_limits", title: "Weekly reset", expiresAt: 1793000000000 }, { id: "credit-2", status: "available", resetType: "codex_rate_limits", title: "Second reset" }] } }
+const management: CodingPlansState = { ...connected, openaiManagement: { status: "connected", accountId: "account-1", email: "person@example.test", plan: "Pro", availableCount: 2, windows: [{ name: "Weekly", usedPercent: 65, resetsAt: 1792000000000 }], credits: [{ id: "credit-1", status: "available", resetType: "codex_rate_limits", title: "Weekly reset", expiresAt: Date.now() + 86_400_000 }, { id: "credit-2", status: "available", resetType: "codex_rate_limits", title: "Second reset" }] } }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 beforeEach(() => useLocale.getState().setLocale("en"))
 afterEach(() => { cleanup(); vi.useRealTimers(); useLocale.getState().setLocale("zh-TW") })

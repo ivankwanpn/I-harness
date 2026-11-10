@@ -172,11 +172,12 @@ it("refreshes retained Home unread metadata after a successful native read witho
 it("keeps source-folder batch and archive management discoverable without projects or a project-manager callback", async () => {
   const request = vi.fn(async (input: DesktopRequest) => input.kind === "desktop/session/navigation/state" ? {} : input.kind === "session/list" ? { sessions: [] } : input.kind === "desktop/session/archived" ? [] : undefined)
   render(<Workbench projects={[]} bridge={{ request, onEvent: () => () => {} }} workspaces={[{ id: "legacy", label: "Legacy source", path: "D:/owned-legacy" }]} selectedWorkspaceId="legacy" capabilities={{ "desktop-sessions": ["1"] }} onManageSession={async () => {}} onSelectSession={() => {}} onSelectWorkspace={() => {}} />)
-  fireEvent.click(screen.getByRole("button", { name: "批次管理會話" }))
+  fireEvent.click(screen.getByRole("button", { name: "管理會話…" }))
   expect(screen.getByRole("dialog", { name: "管理會話" })).toBeTruthy()
   expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: "session/list", workspaceId: "legacy" }))
   fireEvent.click(screen.getByRole("button", { name: "關閉" }))
-  fireEvent.click(screen.getByRole("button", { name: "管理已封存會話" }))
+  fireEvent.click(screen.getByRole("button", { name: "管理會話…" }))
+  fireEvent.click(screen.getByRole("button", { name: "已封存會話" }))
   expect(screen.getByRole("dialog", { name: "管理會話" })).toBeTruthy()
   expect(request).toHaveBeenCalledWith(expect.objectContaining({ kind: "desktop/session/archived", workspaceId: "legacy" }))
 })
@@ -203,7 +204,7 @@ it.each([
   ["wide preview", "管理已封存會話", "desktop/session/archived"],
   ["narrow drawer", "批次管理會話", "session/list"],
   ["narrow drawer", "管理已封存會話", "desktop/session/archived"],
-] as const)("keeps %s management return focus valid after opening %s in a real inert root", async (layout, action, kind) => {
+] as const)("keeps %s management return focus valid after opening %s in a real inert root", async (layout, _action, kind) => {
   window.matchMedia = vi.fn(query => ({ matches: layout === "narrow drawer" && query === "(max-width: 759px)", addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList)
   vi.useFakeTimers()
   const { props, request } = fixture()
@@ -217,9 +218,10 @@ it.each([
       await act(async () => { vi.advanceTimersByTime(220) })
     } else fireEvent.click(homeButton())
     const home = screen.getByRole("navigation", { name: "專案" })
-    const trigger = within(home).getByRole("button", { name: action })
+    const trigger = within(home).getByRole("button", { name: "管理會話…" })
     act(() => trigger.focus()); fireEvent.click(trigger)
     const dialog = screen.getByRole("dialog", { name: "管理會話" })
+    if (kind === "desktop/session/archived") fireEvent.click(within(dialog).getByRole("button", { name: "已封存會話" }))
     expect(root.hasAttribute("inert")).toBe(true)
     expect(root.contains(dialog)).toBe(false)
     const control = within(dialog).getByRole("button", { name: "目前會話" })

@@ -15,3 +15,9 @@ describe("displayError", () => {
     expect(displayError("EACCES: permission denied").summary).toContain("權限")
   })
 })
+
+it('keeps task deadlines distinct from connection loss', () => {
+ const result = displayError('SdkTimeoutError: Request "session/prompt" timed out after 100ms')
+ expect(result.summary).toContain('仍可能在處理')
+ expect(result.summary).not.toContain('連線已中斷')
+})

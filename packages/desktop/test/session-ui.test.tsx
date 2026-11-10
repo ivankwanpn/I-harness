@@ -334,3 +334,35 @@ describe("TaskPane", () => {
     expect(screen.getByText("next turn")).toBeTruthy()
   })
 })
+
+it('allows an explicitly new identical input while an earlier admission is pending and fences late acknowledgements', async () => {
+ const acknowledgements: (() => void)[] = [], releases: (() => void)[] = []
+ const onPrompt = vi.fn((_text: string, _context?: string, _images?: unknown, ack?: () => void) => new Promise<void>(resolve => { acknowledgements.push(ack!); releases.push(resolve) }))
+ render(<Composer {...base} canSend onPrompt={onPrompt} />)
+ fireEvent.change(textarea(), { target: { value: 'same text' } })
+ fireEvent.click(screen.getByRole('button', { name: '送出' }))
+ expect(textarea().value).toBe('')
+ fireEvent.change(textarea(), { target: { value: 'same text' } })
+ fireEvent.click(screen.getByRole('button', { name: '送出' }))
+ expect(onPrompt).toHaveBeenCalledTimes(2)
+ fireEvent.change(textarea(), { target: { value: 'next distinct input' } })
+ await act(async () => { acknowledgements[0]!(); releases[0]!() })
+ expect(textarea().value).toBe('next distinct input')
+ await act(async () => { acknowledgements[1]!(); releases[1]!() })
+ expect(textarea().value).toBe('next distinct input')
+})
+
+it('restores a rejected unadmitted draft after navigation and permits its explicit retry', async () => {
+ let reject!: (error: Error) => void
+ const onPrompt = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail }))
+ const view = render(<Composer {...base} canSend onPrompt={onPrompt} />)
+ fireEvent.change(textarea(), { target: { value: 'retry this draft' } })
+ fireEvent.click(screen.getByRole('button', { name: '送出' }))
+ view.rerender(<Composer {...base} sessionId='s2' canSend onPrompt={onPrompt} />)
+ await act(async () => { reject(new Error('Admission refused')) })
+ expect(textarea().value).toBe('')
+ view.rerender(<Composer {...base} canSend onPrompt={onPrompt} />)
+ expect(textarea().value).toBe('retry this draft')
+ expect((screen.getByRole('button', { name: '送出' }) as HTMLButtonElement).disabled).toBe(false)
+ fireEvent.change(textarea(), { target: { value: 'a new draft' } })
+})
